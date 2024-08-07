@@ -1,0 +1,26 @@
+name: Terraform Check
+
+on:
+  pull_request:
+    paths:
+      - "modules/**"
+
+jobs:
+  terraform_check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup GCP credentials
+        run: echo "${{ secrets.GCP_SA_KEY_BASE64 }}" | base64 -d > /tmp/creds.json
+        shell: bash
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Format Check
+        run: terraform fmt -recursive -check
+
+      - name: Terraform Validate
+        run: terraform validate
