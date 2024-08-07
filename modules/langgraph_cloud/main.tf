@@ -1,7 +1,7 @@
 data "aws_availability_zones" "available" {}
 
 module "langgraph_cloud_vpc" {
-  count = var.vpc_id ? 1 : 0
+  count   = var.vpc_id ? 1 : 0
   source  = "terraform-aws-modules/vpc/aws"
   version = "5.0.0"
 
@@ -49,7 +49,7 @@ resource "aws_iam_role" "langgraph_cloud_role" {
 
 // Attach the necessary policies to the role
 resource "aws_iam_policy_attachment" "role_attachments" {
-  for_each = ["AmazonVPCReadOnlyAccess", "AmazonECS_FullAccess", "SecretsManagerReadWrite", "CloudWatchReadOnlyAccess", "AmazonRDSFullAccess"]
+  for_each   = ["AmazonVPCReadOnlyAccess", "AmazonECS_FullAccess", "SecretsManagerReadWrite", "CloudWatchReadOnlyAccess", "AmazonRDSFullAccess"]
   name       = "LangGraphCloudRoleAttachment-${each.key}"
   policy_arn = "arn:aws:iam::aws:policy/service-role/${each.key}"
   roles      = [aws_iam_role.langgraph_cloud_role.name]
