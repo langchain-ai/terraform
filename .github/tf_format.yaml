@@ -12,10 +12,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Setup GCP credentials
-        run: echo "${{ secrets.GCP_SA_KEY_BASE64 }}" | base64 -d > /tmp/creds.json
-        shell: bash
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
 
