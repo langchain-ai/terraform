@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "modules/**"
+      - ".github/workflows/tf_format.yaml"
 
 jobs:
   terraform_check:
