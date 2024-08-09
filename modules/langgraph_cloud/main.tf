@@ -86,8 +86,3 @@ resource "aws_iam_role_policy_attachment" "ecs_role_policy" {
   role       = aws_iam_role.langgraph_cloud_ecs_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
-
-resource "aws_iam_role_policy_attachment" "ecs_role_policy_2" {
-  role       = aws_iam_role.langgraph_cloud_ecs_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerServiceforEC2Role"
-}
