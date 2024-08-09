@@ -91,6 +91,3 @@ resource "aws_iam_role_policy_attachment" "ecs_role_policy_2" {
   role       = aws_iam_role.langgraph_cloud_ecs_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerServiceforEC2Role"
 }
-
-// Attach role to ECS cluster
-
