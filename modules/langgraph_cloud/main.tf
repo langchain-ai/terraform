@@ -66,3 +66,21 @@ data "aws_iam_policy_document" "assume_role" {
     }
   }
 }
+
+resource "aws_cloudwatch_log_group" "langgraph_cloud_log_group" {
+  name = "/aws/ecs/langgraph-cloud"
+}
+
+// Create an ECS cluster
+resource "aws_ecs_cluster" "langgraph_cloud_cluster" {
+  name = "langgraph-cloud-cluster"
+
+  configuration {
+    execute_command_configuration {
+      logging = "OVERRIDE"
+      log_configuration {
+        cloudwatch_log_group_arn = aws_cloudwatch_log_group.langgraph_cloud_log_group.arn
+      }
+    }
+  }
+}
