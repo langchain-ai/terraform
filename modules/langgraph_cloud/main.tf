@@ -14,11 +14,11 @@ module "langgraph_cloud_vpc" {
 
   private_subnet_tags = {
     "langgraph-cloud-enabled" = 1
-    "private" = 1
+    "private"                 = 1
   }
 
   public_subnet_tags = {
-    "private" = 0
+    "private"                 = 0
     "langgraph-cloud-enabled" = 1
   }
 
@@ -67,7 +67,7 @@ resource "aws_ecs_cluster" "langgraph_cloud_cluster" {
 
 // Create ECS role with ECR access
 resource "aws_iam_role" "langgraph_cloud_ecs_role" {
-  name = "LangGraphCloudECSTaskRole"
+  name               = "LangGraphCloudECSTaskRole"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
 }
 
