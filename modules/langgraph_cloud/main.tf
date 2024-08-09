@@ -1,7 +1,6 @@
 data "aws_availability_zones" "available" {}
 
 module "langgraph_cloud_vpc" {
-  count   = var.vpc_id ? 1 : 0
   source  = "terraform-aws-modules/vpc/aws"
   version = "5.0.0"
 
@@ -13,32 +12,22 @@ module "langgraph_cloud_vpc" {
   private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
   public_subnets  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 
+  private_subnet_tags = {
+    "langgraph-cloud-enabled" = 1
+    "private"                 = 1
+  }
+
+  public_subnet_tags = {
+    "private"                 = 0
+    "langgraph-cloud-enabled" = 1
+  }
+
   enable_nat_gateway   = true
   single_nat_gateway   = true
   enable_dns_hostnames = true
-}
-
-// Fetch VPC and subnets using data resource
-data "aws_vpc" "langgraph_cloud_vpc" {
-  id = var.vpc_id ? var.vpc_id : module.langgraph_cloud_vpc[0].vpc_id
-}
-
-data "aws_subnets" "langgraph_cloud_subnets" {
-  vpc_id = data.aws_vpc.langgraph_cloud_vpc.id
-}
-
-// Tag the VPC and subnets with `langgraph-cloud-enabled` tag so we can identify them later
-resource "aws_ec2_tag" "langgraph_cloud_vpc" {
-  resource_id = data.aws_vpc.langgraph_cloud_vpc.id
-  key         = "langgraph-cloud-enabled"
-  value       = "1"
-}
-
-resource "aws_ec2_tag" "langgraph_cloud_enabled" {
-  for_each    = toset(data.aws_subnets.langgraph_cloud_subnets.ids)
-  resource_id = each.value
-  key         = "langgraph-cloud-enabled"
-  value       = "1"
+  tags = {
+    "langgraph-cloud-enabled" = "1"
+  }
 }
 
 // Create a role with access to provision ECS and RDS resources in the account
@@ -49,9 +38,9 @@ resource "aws_iam_role" "langgraph_cloud_role" {
 
 // Attach the necessary policies to the role
 resource "aws_iam_policy_attachment" "role_attachments" {
-  for_each   = ["AmazonVPCReadOnlyAccess", "AmazonECS_FullAccess", "SecretsManagerReadWrite", "CloudWatchReadOnlyAccess", "AmazonRDSFullAccess"]
+  for_each   = toset(["AmazonVPCReadOnlyAccess", "AmazonECS_FullAccess", "SecretsManagerReadWrite", "CloudWatchReadOnlyAccess", "AmazonRDSFullAccess"])
   name       = "LangGraphCloudRoleAttachment-${each.key}"
-  policy_arn = "arn:aws:iam::aws:policy/service-role/${each.key}"
+  policy_arn = "arn:aws:iam::aws:policy/${each.key}"
   roles      = [aws_iam_role.langgraph_cloud_role.name]
 }
 
@@ -74,13 +63,26 @@ resource "aws_cloudwatch_log_group" "langgraph_cloud_log_group" {
 // Create an ECS cluster
 resource "aws_ecs_cluster" "langgraph_cloud_cluster" {
   name = "langgraph-cloud-cluster"
+}
 
-  configuration {
-    execute_command_configuration {
-      logging = "OVERRIDE"
-      log_configuration {
-        cloudwatch_log_group_arn = aws_cloudwatch_log_group.langgraph_cloud_log_group.arn
-      }
+// Create ECS role with ECR access
+resource "aws_iam_role" "langgraph_cloud_ecs_role" {
+  name               = "LangGraphCloudECSTaskRole"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
+}
+
+data "aws_iam_policy_document" "ecs_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
     }
   }
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_role_policy" {
+  role       = aws_iam_role.langgraph_cloud_ecs_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
