@@ -1,38 +1,31 @@
-data "aws_availability_zones" "available" {}
+// Tag vpc/subnets with the LangGraph Cloud enabled tag
+resource "aws_ec2_tag" "langgraph_cloud_enabled_tags" {
+  for_each = toset(concat([var.vpc_id], var.private_subnet_ids, var.public_subnet_ids))
 
-module "langgraph_cloud_vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.0.0"
+  resource_id = each.key
+  key         = "langgraph-cloud-enabled"
+  value       = "1"
+}
 
-  name = "langgraph-cloud-vpc"
-
-  cidr = "10.0.0.0/16"
-  azs  = slice(data.aws_availability_zones.available.names, 0, 3)
-
-  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
-  public_subnets  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
-
-  private_subnet_tags = {
-    "langgraph-cloud-enabled" = 1
-    "private"                 = 1
-  }
-
-  public_subnet_tags = {
-    "private"                 = 0
-    "langgraph-cloud-enabled" = 1
-  }
-
-  enable_nat_gateway   = true
-  single_nat_gateway   = true
-  enable_dns_hostnames = true
-  tags = {
-    "langgraph-cloud-enabled" = "1"
-  }
+// Tag all private subnets with the LangGraph Cloud tag. Private subnets are used to deploy ECS tasks and RDS instances.
+resource "aws_ec2_tag" "langgraph_cloud_private_subnet_tags" {
+  for_each    = toset(var.private_subnet_ids)
+  resource_id = each.value
+  key         = "langgraph-cloud-private"
+  value       = "1"
 }
 
 resource "aws_db_subnet_group" "langgraph_cloud_db_subnet_group" {
   name       = "langgraph-cloud-db-subnet-group"
-  subnet_ids = module.langgraph_cloud_vpc.private_subnets
+  subnet_ids = var.private_subnet_ids
+}
+
+// Tag all public subnets with LangGraph cloud tags. Load Balancers will be deployed in public subnets.
+resource "aws_ec2_tag" "langgraph_cloud_public_subnet_tags" {
+  for_each    = toset(var.public_subnet_ids)
+  resource_id = each.value
+  key         = "langgraph-cloud-private"
+  value       = "0"
 }
 
 // Create a role with access to provision ECS and RDS resources in the account
@@ -58,11 +51,17 @@ data "aws_iam_policy_document" "assume_role" {
       type        = "AWS"
       identifiers = [var.langgraph_role_arn]
     }
+
+    condition {
+      test     = "StringEquals"
+      variable = "sts:ExternalId"
+      values   = var.langgraph_external_ids
+    }
   }
 }
 
 resource "aws_cloudwatch_log_group" "langgraph_cloud_log_group" {
-  name = "langgraph-cloud"
+  name = "/aws/ecs/langgraph-cloud"
 }
 
 // Create an ECS cluster
@@ -87,7 +86,6 @@ data "aws_iam_policy_document" "ecs_assume_role" {
   }
 }
 
-// TODO: Scope the GetSecretValue to only langgraph-cloud secrets
 resource "aws_iam_role_policy_attachment" "ecs_role_policy" {
   role       = aws_iam_role.langgraph_cloud_ecs_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
@@ -104,6 +102,11 @@ resource "aws_iam_policy" "secrets_read" {
           "Effect" : "Allow",
           "Action" : "secretsmanager:GetSecretValue",
           "Resource" : "*",
+          "Condition" : {
+            "StringLike" : {
+              "aws:ResourceTag/langgraph-cloud" : "*"
+            }
+          }
         }
       ]
     }
@@ -129,4 +132,70 @@ data "aws_iam_policy_document" "lb_assume_role" {
 
 resource "aws_iam_service_linked_role" "elastic_load_balancing" {
   aws_service_name = "elasticloadbalancing.amazonaws.com"
+}
+
+resource "aws_security_group" "langgraph_cloud_lb_sg" {
+  name        = "langgraph-cloud-lb-sg"
+  description = "Security group for LangGraph Cloud Load Balancer"
+  vpc_id      = var.vpc_id
+
+  // HTTP and HTTPS ingress
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  // Egress to the internet
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    langgraph-cloud-enabled = "1"
+  }
+}
+
+resource "aws_security_group" "langgraph_cloud_service_sg" {
+  name        = "langgraph-cloud-service-sg"
+  description = "Security group for LangGraph Cloud ECS services/RDS instances"
+  vpc_id      = var.vpc_id
+
+  // Ingress from lbs
+  ingress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    security_groups = [aws_security_group.langgraph_cloud_lb_sg.id]
+  }
+
+  // Ingress from Self
+  ingress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    self      = true
+  }
+
+  // Egress to the internet
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    langgraph-cloud-enabled = "1"
+  }
 }
