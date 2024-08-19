@@ -43,9 +43,9 @@ resource "aws_iam_policy_attachment" "role_attachments" {
 }
 
 resource "aws_iam_policy" "custom_permissions" {
-  name   = "LangGraphCloudCustomPermissions"
+  name = "LangGraphCloudCustomPermissions"
   policy = jsonencode({
-    Version   = "2012-10-17",
+    Version = "2012-10-17",
     Statement = [
       {
         Effect = "Allow",
@@ -92,7 +92,7 @@ resource "aws_ecs_cluster" "langgraph_cloud_cluster" {
   name = "langgraph-cloud-cluster"
 
   setting {
-    name = "containerInsights"
+    name  = "containerInsights"
     value = "enabled"
   }
 
