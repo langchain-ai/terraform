@@ -147,18 +147,7 @@ resource "aws_iam_role_policy_attachment" "secrets_read" {
   policy_arn = aws_iam_policy.secrets_read.arn
 }
 
-// Create Load Balancer Role
-data "aws_iam_policy_document" "lb_assume_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["elasticloadbalancing.amazonaws.com"]
-    }
-  }
-}
-
+// Create Load Balancer Service Linked Role
 resource "aws_iam_service_linked_role" "elastic_load_balancing" {
   aws_service_name = "elasticloadbalancing.amazonaws.com"
 }
