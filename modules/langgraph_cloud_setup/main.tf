@@ -42,6 +42,29 @@ resource "aws_iam_policy_attachment" "role_attachments" {
   roles      = [aws_iam_role.langgraph_cloud_role.name]
 }
 
+resource "aws_iam_policy" "custom_permissions" {
+  name   = "LangGraphCloudCustomPermissions"
+  policy = jsonencode({
+    Version   = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "application-autoscaling:*",
+        ],
+        Resource = "*",
+      },
+    ],
+  })
+}
+
+resource "aws_iam_policy_attachment" "custom_policy" {
+  name       = "LangGraphCloudRoleAttachment-CustomPermissions"
+  policy_arn = aws_iam_policy.custom_permissions.arn
+  roles      = [aws_iam_role.langgraph_cloud_role.name]
+}
+
+
 // Allow LangGraph Cloud role to assume role in the account
 data "aws_iam_policy_document" "assume_role" {
   statement {
@@ -67,9 +90,15 @@ resource "aws_cloudwatch_log_group" "langgraph_cloud_log_group" {
 // Create an ECS cluster
 resource "aws_ecs_cluster" "langgraph_cloud_cluster" {
   name = "langgraph-cloud-cluster"
+
+  setting {
+    name = "containerInsights"
+    value = "enabled"
+  }
+
 }
 
-// Create ECS role with ECR access
+// Create ECS role with ECR access and access to its own secret
 resource "aws_iam_role" "langgraph_cloud_ecs_role" {
   name               = "LangGraphCloudECSTaskExecutionRole"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
