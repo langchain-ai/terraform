@@ -14,3 +14,4 @@ module "langgraph_cloud_setup" {
   langgraph_role_arn     = "arn:aws:iam::640174622193:role/HostBackendRoleProd"
   langgraph_external_ids = ["Your Organization ID"]
 }
+```

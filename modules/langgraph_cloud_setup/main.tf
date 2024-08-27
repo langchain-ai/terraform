@@ -217,3 +217,14 @@ resource "aws_security_group" "langgraph_cloud_service_sg" {
     langgraph-cloud-enabled = "1"
   }
 }
+
+// Create AWS Cloud Map namespace for Redis ECS service discovery
+resource "aws_service_discovery_private_dns_namespace" "langgraph_cloud_redis" {
+  name        = "langgraph-cloud-redis"
+  description = "LangGraph Cloud Redis service discovery namespace"
+  vpc         = var.vpc_id
+
+  tags = {
+    langgraph-cloud-enabled = "1"
+  }
+}
