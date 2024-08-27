@@ -35,11 +35,10 @@ resource "aws_iam_role" "langgraph_cloud_role" {
 }
 
 // Attach the necessary policies to the role
-resource "aws_iam_policy_attachment" "role_attachments" {
+resource "aws_iam_role_policy_attachment" "role_attachments" {
   for_each   = toset(["AmazonVPCReadOnlyAccess", "AmazonECS_FullAccess", "SecretsManagerReadWrite", "CloudWatchReadOnlyAccess", "AmazonRDSFullAccess"])
-  name       = "LangGraphCloudRoleAttachment-${each.key}"
   policy_arn = "arn:aws:iam::aws:policy/${each.key}"
-  roles      = [aws_iam_role.langgraph_cloud_role.name]
+  role       = aws_iam_role.langgraph_cloud_role.name
 }
 
 resource "aws_iam_policy" "custom_permissions" {
@@ -58,10 +57,9 @@ resource "aws_iam_policy" "custom_permissions" {
   })
 }
 
-resource "aws_iam_policy_attachment" "custom_policy" {
-  name       = "LangGraphCloudRoleAttachment-CustomPermissions"
+resource "aws_iam_role_policy_attachment" "custom_policy" {
   policy_arn = aws_iam_policy.custom_permissions.arn
-  roles      = [aws_iam_role.langgraph_cloud_role.name]
+  role       = aws_iam_role.langgraph_cloud_role.name
 }
 
 
