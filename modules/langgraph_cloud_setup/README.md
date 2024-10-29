@@ -3,6 +3,8 @@ This module sets up the LangGraph Cloud BYOC (Bring Your Own Cloud) environment.
 It will provision the necessary resources in your account and also grant the necessary permissions to the LangSmith Role.
 This role will be used by the LangSmith service to interact with your cloud environment.
 
+For license checking, services deployed on the ECS cluster must have access to the public internet (i.e. egress). This Terraform module does not set up the required infrastructure to enable this. A NAT gateway or other alternative may be required and should be configured outside the scope of this module.
+
 ## Usage
 ```hcl
 module "langgraph_cloud_setup" {
