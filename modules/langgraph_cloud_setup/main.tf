@@ -69,7 +69,7 @@ data "aws_iam_policy_document" "assume_role" {
     actions = ["sts:AssumeRole"]
 
     principals {
-      type        = "AWS"
+      type = "AWS"
       identifiers = lookup(
         {
           us = ["arn:aws:iam::640174622193:role/HostBackendRoleProd"]
