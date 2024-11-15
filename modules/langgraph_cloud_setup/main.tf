@@ -70,7 +70,14 @@ data "aws_iam_policy_document" "assume_role" {
 
     principals {
       type        = "AWS"
-      identifiers = [var.langgraph_role_arn]
+      identifiers = lookup(
+        {
+          us = ["arn:aws:iam::640174622193:role/HostBackendRoleProd"]
+          eu = ["arn:aws:iam::640174622193:role/HostBackendRoleProdEu"]
+        },
+        var.langsmith_data_region,
+        ["arn:aws:iam::640174622193:role/HostBackendRoleProd"]
+      )
     }
 
     condition {
