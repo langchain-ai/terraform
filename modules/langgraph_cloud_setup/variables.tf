@@ -13,10 +13,10 @@ variable "public_subnet_ids" {
   type        = list(string)
 }
 
-variable "langgraph_role_arn" {
-  description = "Role ARN for LangGraph Cloud that will be used to access resources. Needs to be able to assume role in your AWS account."
+variable "langsmith_data_region" {
+  description = "The data region of the LangSmith account. Valid values: us, eu."
   type        = string
-  default     = "arn:aws:iam::640174622193:role/HostBackendRoleProd"
+  default     = "us"
 }
 
 variable "langgraph_external_ids" {
