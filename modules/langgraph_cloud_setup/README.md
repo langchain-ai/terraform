@@ -16,6 +16,6 @@ module "langgraph_cloud_setup" {
   private_subnet_ids     = ["YOUR PRIVATE SUBNET IDS"]
   public_subnet_ids      = ["YOUR PUBLIC SUBNET IDS"]
   langsmith_data_region  = "us"
-  langgraph_external_ids = ["Your Organization ID"]
+  langgraph_external_ids = ["Your LangSmith Organization ID"]
 }
 ```
