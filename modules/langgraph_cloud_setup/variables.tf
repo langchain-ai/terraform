@@ -23,3 +23,9 @@ variable "langgraph_external_ids" {
   description = "External IDs for LangGraph Cloud that will be used to access resources. Needs to be able to assume role in your AWS account. These will typically be your organization ids."
   type        = list(string)
 }
+
+variable "create_elb_service_linked_role" {
+  description = "Whether to create the ELB Service Linked Role"
+  type        = bool
+  default     = true
+}
