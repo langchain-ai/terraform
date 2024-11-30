@@ -25,7 +25,7 @@ variable "langgraph_external_ids" {
 }
 
 variable "create_elb_service_linked_role" {
-  description = "Whether to create the ELB Service Linked Role"
+  description = "Whether to create the ELB service-linked role."
   type        = bool
   default     = true
 }
