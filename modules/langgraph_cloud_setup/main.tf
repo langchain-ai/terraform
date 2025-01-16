@@ -101,6 +101,9 @@ resource "aws_ecs_cluster" "langgraph_cloud_cluster" {
     value = "enabled"
   }
 
+  tags = {
+    langgraph-cloud-enabled = "1"
+  }
 }
 
 // Create ECS role with ECR access and access to its own secret
