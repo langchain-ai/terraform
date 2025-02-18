@@ -22,3 +22,5 @@ module "langgraph_cloud_setup" {
   create_elb_service_linked_role = true
 }
 ```
+
+**Note**: The resources defined in the Terraform module must be created exactly as specified. For example, resource names must be specified exactly as they are in the Terraform module (e.g. case sensitive).
