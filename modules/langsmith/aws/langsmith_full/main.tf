@@ -1,7 +1,7 @@
 locals {
-  vpc_name = "langsmith-vpc-full"
+  vpc_name     = "langsmith-vpc-full"
   cluster_name = "langsmith-eks-full"
-  redis_name = "langsmith-redis-full"
+  redis_name   = "langsmith-redis-full"
 }
 
 provider "aws" {
@@ -19,25 +19,25 @@ provider "aws" {
 # }
 
 module "vpc" {
-  source = "../submodules/vpc"
-  vpc_name = local.vpc_name
+  source       = "../submodules/vpc"
+  vpc_name     = local.vpc_name
   cluster_name = local.cluster_name
 }
 
 module "eks" {
-  source = "../submodules/eks"
+  source       = "../submodules/eks"
   cluster_name = local.cluster_name
-  vpc_id = module.vpc.vpc_id
-  subnet_ids = concat(module.vpc.private_subnets, module.vpc.public_subnets)
+  vpc_id       = module.vpc.vpc_id
+  subnet_ids   = concat(module.vpc.private_subnets, module.vpc.public_subnets)
 }
 
 module "redis" {
-    source = "../submodules/redis"
-    name = local.redis_name
-    vpc_id = module.vpc.vpc_id
-    subnet_ids = module.vpc.private_subnets
-    instance_type = "cache.m6g.16xlarge"
-    ingress_cidrs = [module.vpc.vpc_cidr_block]
+  source        = "../submodules/redis"
+  name          = local.redis_name
+  vpc_id        = module.vpc.vpc_id
+  subnet_ids    = module.vpc.private_subnets
+  instance_type = "cache.m6g.16xlarge"
+  ingress_cidrs = [module.vpc.vpc_cidr_block]
 }
 
 # module "postgres" {

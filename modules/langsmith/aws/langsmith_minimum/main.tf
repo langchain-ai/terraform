@@ -1,6 +1,6 @@
 locals {
-  base_name = "langsmith-min"
-  vpc_name = "${local.base_name}-vpc"
+  base_name    = "langsmith-min"
+  vpc_name     = "${local.base_name}-vpc"
   cluster_name = "${local.base_name}-eks"
 }
 
@@ -19,14 +19,14 @@ provider "aws" {
 # }
 
 module "vpc" {
-  source = "../submodules/vpc"
-  vpc_name = local.vpc_name
+  source       = "../submodules/vpc"
+  vpc_name     = local.vpc_name
   cluster_name = local.cluster_name
 }
 
 module "eks" {
-  source = "../submodules/eks"
+  source       = "../submodules/eks"
   cluster_name = local.cluster_name
-  vpc_id = module.vpc.vpc_id
-  subnet_ids = concat(module.vpc.private_subnets, module.vpc.public_subnets)
+  vpc_id       = module.vpc.vpc_id
+  subnet_ids   = concat(module.vpc.private_subnets, module.vpc.public_subnets)
 }
