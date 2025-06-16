@@ -1,0 +1,38 @@
+config:
+  langsmithLicenseKey: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZXYiLCJpYXQiOjE2OTc4MzI0ODYsImV4cCI6MjAwMDIzMjQ4NiwiYXVkIjoibGFuZ3NtaXRoIn0.ZwciDM36lWndVrQZEhYBX48PqjTCbbXy_czEJ1Lhh2HRActSm8zzCt1PM7OHBIO0SeFqHpnIa6ODZMuAinPEQjMX3d8m-YCF5EnjH7R8s0fnjzPtga7KFkdJVWMVI71TnylkCDaCYgD_MBJcEfSTsOZuUKf4-HrB-HddfaPlHtq4xUUM_0C1pKj5Dc6caCwego6sE7904G7MVj9lmYw5IRF6gEL8bbW3WJHhCDlh0beY8yZOq2RHYcLFGBpYcYMiXQor20ROVWBm-_7KTuD2q2UtNv387Fd6DMHKbJy_ZlwLJHDbRZkjQ_IXqtvK2RueHU1yds0Xef7yUC34Ag2Bd8yqfYCUa8geupc6yqy0Nan91oFEc1m5_6cUCS-UyuS7F-RO7JiigBK6CNEfDIwu47iHs23FKmZ4Z_1BKAaWjbi9MhGInl-Lo0xLKuZf5GOTRBHomxPAnXvc8t654JBpLZHPDjTELZwVItzatWwF11W2DyCSIOlLcRAeIrl9fLR6oBkCw52d4p0C6Z8CC5GyBhLTzplA_KMia8qFIXrE-dE500zJcQWEsI8K7TULod0LT_RfI-MSErBIaYFyElmvmSl-fr8beIk6dWP0jf9iJjUSLCpJl5WJqWhFZVc7XMV-OcGkljmwb4cZHoUFquG3m8S1M9YxMvtI8eA19XB1GpE"
+  authType: "mixed"
+  apiKeySalt: "something"
+  basicAuth:
+    enabled: true
+    initialOrgAdminEmail: "joaquin@langchain.dev"
+    initialOrgAdminPassword: "SecretPassword123!"
+    jwtSecret: "something"
+
+redis:
+  external:
+    enabled: true
+    connectionUrl: "redis://langsmith-redis-full.wdbogk.0001.usw2.cache.amazonaws.com:6379"
+
+platformBackend:
+  deployment:
+    replicas: 20
+    resources:
+      requests:
+        cpu: "1.6"
+
+queue:
+  deployment:
+    replicas: 150
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "7"
+        memory: "24Gi"
+
+frontend:
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "external"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
