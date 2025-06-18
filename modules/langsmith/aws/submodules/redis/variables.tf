@@ -21,5 +21,5 @@ variable "ingress_cidrs" {
 variable "instance_type" {
   description = "The instance type of the redis instance"
   type        = string
-  default     = "cache.t3.medium"
+  default     = "cache.m5.large"  # 2 vCPU and 6 GB of memory
 }
