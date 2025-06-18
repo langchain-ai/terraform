@@ -66,6 +66,6 @@ module "postgres" {
     subnet_ids = local.private_subnets
     ingress_cidrs = [local.vpc_cidr_block]
 
-    username = "postgres"
-    password = "postgres123!"
+    username = var.postgres_username
+    password = var.postgres_password
 }

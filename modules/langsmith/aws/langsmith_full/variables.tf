@@ -27,3 +27,13 @@ variable "vpc_cidr_block" {
   description = "VPC CIDR block. Required if create_vpc is false."
   default     = null
 }
+
+variable "postgres_username" {
+  type        = string
+  description = "Username for the postgres database"
+}
+
+variable "postgres_password" {
+  type        = string
+  description = "Password for the postgres database"
+}
