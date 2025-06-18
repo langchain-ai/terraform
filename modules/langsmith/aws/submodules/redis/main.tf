@@ -1,4 +1,4 @@
-# Define the Redis instance
+# Define the Redis security group
 resource "aws_security_group" "redis_sg" {
   name        = "${var.name}-sg"
   description = "Allow inbound traffic from EKS to Redis"
@@ -24,6 +24,7 @@ resource "aws_elasticache_subnet_group" "elasticache_subnet_group" {
   subnet_ids = var.subnet_ids
 }
 
+# The actual Redis instance
 resource "aws_elasticache_cluster" "redis" {
   cluster_id           = var.name
   engine               = "redis"
