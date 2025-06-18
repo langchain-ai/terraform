@@ -39,8 +39,8 @@ module "eks" {
 
       instance_types = [var.small_node_instance_type]
 
-      min_size     = 1
-      max_size     = 10
+      min_size = 1
+      max_size = 10
     }
 
     // Larger node group for pods that require more resources (ex. ClickHouse).
@@ -49,8 +49,8 @@ module "eks" {
 
       instance_types = [var.large_node_instance_type]
 
-      min_size     = 0
-      max_size     = 4
+      min_size = 0
+      max_size = 4
 
       labels = {
         "compute-type" = "stateful-heavy"

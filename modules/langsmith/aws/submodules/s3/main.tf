@@ -26,7 +26,7 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
         Sid       = "AllowAccessViaVPCE",
         Effect    = "Allow",
         Principal = "*",
-        Action    = [
+        Action = [
           "s3:*",
         ],
         Resource = [

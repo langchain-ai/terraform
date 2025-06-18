@@ -38,3 +38,7 @@ The default instance is a `db.t3.large` which has 2 vCPUs and 8 GB of memory. We
 
 ## S3 module
 This module creates an S3 bucket and enables access only from a desired VPC endpoint. This will enable access from the Kubernetes cluster.
+
+
+## Values file
+In the `langsmith_full` folder, you will also see a `values_full.yaml` file which provides a lot of the configuration required to connect to these external resources. Feel free to use that as a starting point.

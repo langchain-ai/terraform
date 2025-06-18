@@ -60,12 +60,12 @@ module "s3" {
 }
 
 module "postgres" {
-    source = "../submodules/postgres"
-    name = local.postgres_name
-    vpc_id = local.vpc_id
-    subnet_ids = local.private_subnets
-    ingress_cidrs = [local.vpc_cidr_block]
+  source        = "../submodules/postgres"
+  name          = local.postgres_name
+  vpc_id        = local.vpc_id
+  subnet_ids    = local.private_subnets
+  ingress_cidrs = [local.vpc_cidr_block]
 
-    username = var.postgres_username
-    password = var.postgres_password
+  username = var.postgres_username
+  password = var.postgres_password
 }

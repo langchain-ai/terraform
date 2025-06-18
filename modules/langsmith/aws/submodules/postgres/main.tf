@@ -25,16 +25,16 @@ resource "aws_security_group" "this" {
 }
 
 resource "aws_db_instance" "this" {
-  identifier              = var.name
-  engine                  = "postgres"
-  engine_version          = var.engine_version
-  instance_class          = var.instance_type
-  allocated_storage       = var.storage_gb
-  username                = var.username
-  password                = var.password
+  identifier        = var.name
+  engine            = "postgres"
+  engine_version    = var.engine_version
+  instance_class    = var.instance_type
+  allocated_storage = var.storage_gb
+  username          = var.username
+  password          = var.password
 
-  db_subnet_group_name    = aws_db_subnet_group.this.name
-  vpc_security_group_ids  = [aws_security_group.this.id]
-  publicly_accessible     = false
-  deletion_protection     = true
+  db_subnet_group_name   = aws_db_subnet_group.this.name
+  vpc_security_group_ids = [aws_security_group.this.id]
+  publicly_accessible    = false
+  deletion_protection    = true
 }
