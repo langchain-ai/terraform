@@ -1,4 +1,4 @@
-### LangSmith AWS modules
+# LangSmith AWS modules
 This folder containers helpful starting terraform modules to get a self-hosted version of LangSmith up and running. Keep in mind that these are meant to be starting points. You may want to modify some of these Terraform modules depending on any internal standards you may want to adhere to (example: adding certain tags to resources).
 
 We provide the following modules here:
@@ -39,6 +39,8 @@ The default instance is a `db.t3.large` which has 2 vCPUs and 8 GB of memory. We
 ## S3 module
 This module creates an S3 bucket and enables access only from a desired VPC endpoint. This will enable access from the Kubernetes cluster.
 
+# Helm values
+We also provide some guidance around deploying LangSmith onto these resources.
 
 ## Values file
 In the `langsmith_full` folder, you will also see a `values_full.yaml` file which provides a lot of the configuration required to connect to these external resources. Feel free to use that as a starting point.
