@@ -1,0 +1,29 @@
+variable "create_vpc" {
+  type        = bool
+  description = "Whether to create a new VPC"
+  default     = true
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "ID of the VPC. Required if create_vpc is false."
+  default     = null
+}
+
+variable "private_subnets" {
+  type        = list(string)
+  description = "Private subnets. Required if create_vpc is false."
+  default     = []
+}
+
+variable "public_subnets" {
+  type        = list(string)
+  description = "Public subnets. Required if create_vpc is false."
+  default     = []
+}
+
+variable "vpc_cidr_block" {
+  type        = string
+  description = "VPC CIDR block. Required if create_vpc is false."
+  default     = null
+}

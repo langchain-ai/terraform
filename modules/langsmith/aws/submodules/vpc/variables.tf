@@ -13,7 +13,7 @@ variable "cluster_name" {
 variable "cidr_block" {
   type        = string
   description = "The CIDR block for the VPC"
-  default     = "10.0.0.0/16" # a /16 CIDR has 64K IP addresses
+  default     = "10.0.0.0/16"  # a /16 CIDR has 64K IP addresses
 }
 
 variable "private_subnets" {

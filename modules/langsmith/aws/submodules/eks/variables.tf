@@ -24,3 +24,15 @@ variable "public_cluster_enabled" {
   description = "Whether to enable public cluster access"
   default     = true
 }
+
+variable "small_node_instance_type" {
+  type        = string
+  description = "The instance type of the small node group"
+  default     = "t3.large"
+}
+
+variable "large_node_instance_type" {
+  type        = string
+  description = "The instance type of the large node group"
+  default     = "m5.4xlarge"
+}

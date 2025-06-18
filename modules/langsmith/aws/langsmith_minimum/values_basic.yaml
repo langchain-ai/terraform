@@ -1,9 +1,0 @@
-config:
-  langsmithLicenseKey: ""
-  authType: "mixed"
-  apiKeySalt: "something"
-  basicAuth:
-    enabled: true
-    initialOrgAdminEmail: "joaquin@langchain.dev"
-    initialOrgAdminPassword: "SecretPassword123!"
-    jwtSecret: "something"

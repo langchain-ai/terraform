@@ -37,22 +37,20 @@ module "eks" {
     one = {
       name = "node-group-small"
 
-      instance_types = ["t3.large"]
+      instance_types = [var.small_node_instance_type]
 
       min_size     = 1
-      max_size     = 15
-      desired_size = 2
+      max_size     = 10
     }
 
-    // Add a third node pool to scale up clickhouse. 8 cores and 32GB of memory.
+    // Larger node group for pods that require more resources (ex. ClickHouse).
     stateful-heavy = {
       name = "node-group-large"
 
-      instance_types = ["m5.2xlarge"]
+      instance_types = [var.large_node_instance_type]
 
       min_size     = 0
-      max_size     = 2
-      desired_size = 1
+      max_size     = 4
 
       labels = {
         "compute-type" = "stateful-heavy"
@@ -79,6 +77,7 @@ module "irsa-ebs-csi" {
   depends_on = [module.eks]
 }
 
+# Create the EBS CSI Driver addon for volume provisioning.
 resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
@@ -111,7 +110,10 @@ module "eks_blueprints_addons" {
     Environment = "langsmith"
   }
 
-  depends_on = [module.eks]
+  providers = {
+    kubernetes = kubernetes
+    helm       = helm
+  }
+
+  depends_on = [module.eks, data.aws_eks_cluster_auth.this]
 }
-
-
