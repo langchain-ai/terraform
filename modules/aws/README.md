@@ -1,5 +1,5 @@
 # LangSmith AWS modules
-This folder containers helpful starting terraform modules to get a self-hosted version of LangSmith up and running. Keep in mind that these are meant to be starting points. You may want to modify some of these Terraform modules depending on any internal standards you may want to adhere to (example: adding certain tags to resources).
+This folder containers helpful starting terraform modules to get a self-hosted version of LangSmith up and running. Keep in mind that these are meant to be starting points. You may want to modify some of these Terraform modules depending on any internal standards (example: adding certain tags to resources).
 
 We provide the following modules here:
 - VPC module

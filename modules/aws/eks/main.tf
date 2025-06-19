@@ -7,7 +7,6 @@ provider "kubernetes" {
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
-    # config_path            = "~/.kube/config"
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
     token                  = data.aws_eks_cluster_auth.this.token
   }
@@ -90,6 +89,7 @@ module "eks_blueprints_addons" {
   depends_on = [module.eks, data.aws_eks_cluster_auth.this]
 }
 
+# Create a default storage class for the EKS cluster.
 resource "kubernetes_storage_class" "gp2_default" {
   metadata {
     name = "gp2"
