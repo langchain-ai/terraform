@@ -34,6 +34,12 @@ variable "vpc_cidr_block" {
   default     = null
 }
 
+variable "eks_tags" {
+  type        = map(string)
+  description = "Tags to apply to the EKS cluster"
+  default     = {}
+}
+
 variable "postgres_username" {
   type        = string
   description = "Username for the postgres database"
