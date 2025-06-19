@@ -2,28 +2,26 @@
 # You can use this as a starting point for your own values.yaml file.
 
 config:
-  existingSecretName: "langsmith-secret-joaquin"  # Add your secret name here
+  existingSecretName: "<your-secret-name>"  # Add your secret name here
   authType: "mixed"
   basicAuth:
     enabled: true
-    initialOrgAdminEmail: "joaquin@langchain.dev"  # Add your email here
+    initialOrgAdminEmail: "<your-admin-email>"  # Add your email here
   blobStorage:
     enabled: true
     engine: "S3"
-    bucketName: "langsmith-s3-joaquin"  # Add your bucket name here
-    apiURL: "https://s3.us-west-2.amazonaws.com"  # Add your bucket API URL here
+    bucketName: "<your-bucket-name>"  # Add your bucket name here
+    apiURL: "<your-bucket-api-url>"  # Add your bucket API URL here
 
 redis:
   external:
     enabled: true
-    existingSecretName: "langsmith-redis-secret-joaquin"
-    # existingSecretName: "<your-secret-name>" # Add your redis connection URL to the secret mentioned here.
+    existingSecretName: "<your-secret-name>" # Add your redis connection URL to the secret mentioned here.
 
 postgres:
   external:
     enabled: true
-    connectionUrl: "postgres://joaquin:joaquin123@langsmith-postgres-joaquin.cidvpg3q5pls.us-west-2.rds.amazonaws.com:5432/postgres"
-    # existingSecretName: "<your-secret-name>" # Add your postgres connection URL to the secret mentioned here.
+    existingSecretName: "<your-secret-name>" # Add your postgres connection URL to the secret mentioned here.
 
 frontend:
   # This ensures you get a public endpoint for the application. It will be accessible over http with these settings.
@@ -44,9 +42,3 @@ frontend:
 # frontend:
 #   service:
 #     type: ClusterIP
-
-platformBackend:
-  deployment:
-    extraEnv:
-      - name: AWS_REGION
-        value: "us-west-2"

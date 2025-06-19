@@ -64,4 +64,4 @@ This module creates an S3 bucket and enables access only from a desired VPC endp
 We also provide some guidance around deploying LangSmith onto these resources.
 
 ### Values file
-In the `langsmith_full` folder, you will also see a `values_full.yaml` file which provides a lot of the configuration required to connect to these external resources. Feel free to use that as a starting point.
+In the `langsmith` folder, you will also see a `values_aws.yaml` file which provides a lot of the configuration required to connect to these external resources. Feel free to use that as a starting point.
