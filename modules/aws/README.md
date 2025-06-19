@@ -10,6 +10,26 @@ We provide the following modules here:
 
 You can use an existing VPC instead of creating one by setting the `create_vpc` variable to false. If you bring your own VPC, you will need to provide a couple of variables mentioned in `langsmith_full/variables.tf`
 
+## Quick Start
+You can clone or fork this repo. Decide where you want to keep your terraform state:
+- (Recommended) If you want to keep your terraform state in an S3 bucket, comment out backend.tf and update as needed.
+- If you want to keep your terraform state locally, then no changes are needed.
+
+Determine if you want to create a new VPC or use an existing one. If you want to use an existing VPC, set the `create_vpc` variable to false and you will need to provide `vpc_id`, `private_subnets`, `public_subnets`, and `vpc_cidr_block` as variables.
+
+Note that the default region for this module is `us-west-2`. You can change that variable as needed.
+
+Make sure you have valid AWS credentials locally that have the permissions to create the resources, or you can add relevant fields to the `provider "aws"` block. See the [official Terraform provider page](https://registry.terraform.io/providers/hashicorp/aws/latest/docs) for more information.
+
+Then run the following commands from the `langsmith` folder:
+
+$ terraform init
+$ terraform apply
+
+You will be prompted to enter your desired postgres_password and postgres_username for the database that will be created. Check out the terraform plan and confirm to create the resources.
+
+Once everything is created, fill out the values_aws.yaml file with your [desired configuration](https://docs.smith.langchain.com/self_hosting/configuration) and follow our [helm installation instructions](https://docs.smith.langchain.com/self_hosting/installation/kubernetes#deploying-to-kubernetes)
+
 ### VPC module
 This module will create a new VPC with a single NAT gateway as well as some subnet tags to assist in load balancer creation. By default, this module will create 5 private subnets and 3 public subnets in this VPC. Other resources that require its own subnet (like the Postgres database) can use a subset of the private subnets.
 
