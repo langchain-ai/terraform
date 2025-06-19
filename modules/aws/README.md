@@ -23,8 +23,10 @@ Make sure you have valid AWS credentials locally that have the permissions to cr
 
 Then run the following commands from the `langsmith` folder:
 
+```
 $ terraform init
 $ terraform apply
+```
 
 You will be prompted to enter your desired postgres_password and postgres_username for the database that will be created. Check out the terraform plan and confirm to create the resources.
 
