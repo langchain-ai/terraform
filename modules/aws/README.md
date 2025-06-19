@@ -28,6 +28,13 @@ $ terraform apply
 
 You will be prompted to enter your desired postgres_password and postgres_username for the database that will be created. Check out the terraform plan and confirm to create the resources.
 
+Afterwards, you may want to fetch the kubeconfig locally with a command like this:
+```
+aws eks update-kubeconfig \
+  --region <your-region> \
+  --name <your-cluster-name>
+```
+
 Once everything is created, fill out the values_aws.yaml file with your [desired configuration](https://docs.smith.langchain.com/self_hosting/configuration) and follow our [helm installation instructions](https://docs.smith.langchain.com/self_hosting/installation/kubernetes#deploying-to-kubernetes)
 
 ### VPC module
@@ -39,14 +46,6 @@ This module will provision an Elastic Kubernetes Service (EKS) cluster. The foll
 - Load balancer controller
 - Cluster autoscaler
 - EBS CSI driver
-
-
-Afterwards, you may want to fetch the kubeconfig locally with a command like this:
-```
-aws eks update-kubeconfig \
-  --region <your-region> \
-  --name <your-cluster-name>
-```
 
 ### Redis cache module
 This module will create a Redis Elasticache in the provided subnets and enable inbound traffic from the EKS module. The default instance type created by the module is a `cache.m5.large` which has 2 vCPUs and 6 GB of memory. Feel free to update this based on your desired scale and our [scaling recommendations](https://docs.smith.langchain.com/self_hosting/configuration/scale).
