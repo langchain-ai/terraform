@@ -19,13 +19,13 @@ variable "cidr_block" {
 variable "private_subnets" {
   type        = list(string)
   description = "The private subnets for the VPC"
-  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24", "10.0.12.0/24", "10.0.13.0/24"]
+  default     = ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21", "10.0.24.0/21", "10.0.32.0/21"]
 }
 
 variable "public_subnets" {
   type        = list(string)
   description = "The public subnets for the VPC"
-  default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+  default     = ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 }
 
 variable "extra_public_subnet_tags" {
