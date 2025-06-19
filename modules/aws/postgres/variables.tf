@@ -1,6 +1,12 @@
-variable "name" {
+variable "identifier" {
+  type        = string
+  description = "Identifier for the database and related resources"
+}
+
+variable "db_name" {
   type        = string
   description = "Name of the database"
+  default     = "postgres"
 }
 
 variable "instance_type" {

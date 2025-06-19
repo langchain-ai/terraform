@@ -1,10 +1,10 @@
 resource "aws_db_subnet_group" "this" {
-  name       = "${var.name}-subnet-group"
+  name       = "${var.identifier}-subnet-group"
   subnet_ids = var.subnet_ids
 }
 
 resource "aws_security_group" "this" {
-  name        = "${var.name}-sg"
+  name        = "${var.identifier}-sg"
   description = "Allow PostgreSQL access"
   vpc_id      = var.vpc_id
 
@@ -25,7 +25,8 @@ resource "aws_security_group" "this" {
 }
 
 resource "aws_db_instance" "this" {
-  identifier        = var.name
+  identifier        = var.identifier
+  db_name           = var.db_name
   engine            = "postgres"
   engine_version    = var.engine_version
   instance_class    = var.instance_type

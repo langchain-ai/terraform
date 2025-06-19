@@ -7,6 +7,7 @@ provider "kubernetes" {
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
+    # config_path            = "~/.kube/config"
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
     token                  = data.aws_eks_cluster_auth.this.token
   }
@@ -33,30 +34,9 @@ module "eks" {
     ami_type = "AL2_x86_64"
   }
 
-  eks_managed_node_groups = {
-    one = {
-      name = "node-group-small"
+  eks_managed_node_groups = var.eks_managed_node_groups
 
-      instance_types = [var.small_node_instance_type]
-
-      min_size = 1
-      max_size = 10
-    }
-
-    // Larger node group for pods that require more resources (ex. ClickHouse).
-    stateful-heavy = {
-      name = "node-group-large"
-
-      instance_types = [var.large_node_instance_type]
-
-      min_size = 0
-      max_size = 4
-
-      labels = {
-        "compute-type" = "stateful-heavy"
-      }
-    }
-  }
+  tags = var.tags
 }
 
 # https://aws.amazon.com/blogs/containers/amazon-ebs-csi-driver-is-now-generally-available-in-amazon-eks-add-ons/
@@ -81,12 +61,8 @@ module "irsa-ebs-csi" {
 resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
-  addon_version            = "v1.20.0-eksbuild.1"
   service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
-  tags = {
-    "eks_addon" = "ebs-csi"
-    "terraform" = "true"
-  }
+  tags = var.tags
 
   depends_on = [module.eks]
 }
@@ -106,14 +82,28 @@ module "eks_blueprints_addons" {
   enable_metrics_server               = true
   enable_cluster_autoscaler           = true
 
-  tags = {
-    Environment = "langsmith"
-  }
-
   providers = {
     kubernetes = kubernetes
     helm       = helm
   }
 
   depends_on = [module.eks, data.aws_eks_cluster_auth.this]
+}
+
+resource "kubernetes_storage_class" "gp2_default" {
+  metadata {
+    name = "gp2"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
+  }
+
+  storage_provisioner     = "ebs.csi.aws.com"
+  reclaim_policy          = "Delete"
+  volume_binding_mode     = "WaitForFirstConsumer"
+  allow_volume_expansion  = true
+
+  parameters = {
+    type = "gp2"
+  }
 }

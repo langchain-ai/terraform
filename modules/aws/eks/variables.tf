@@ -25,14 +25,21 @@ variable "public_cluster_enabled" {
   default     = true
 }
 
-variable "small_node_instance_type" {
-  type        = string
-  description = "The instance type of the small node group"
-  default     = "t3.large"
+variable "eks_managed_node_groups" {
+  type        = map(any)
+  description = "EKS managed node groups"
+  default     = {
+    default = {
+      name = "node-group-default"
+      instance_types = ["m5.4xlarge"]
+      min_size = 1
+      max_size = 10
+    }
+  }
 }
 
-variable "large_node_instance_type" {
-  type        = string
-  description = "The instance type of the large node group"
-  default     = "m5.4xlarge"
+variable "tags" {
+  type        = map(string)
+  description = "Tags to apply to the resources"
+  default     = {}
 }

@@ -1,3 +1,9 @@
+variable "region" {
+  type        = string
+  description = "AWS region for all resources"
+  default     = "us-west-2"
+}
+
 variable "create_vpc" {
   type        = bool
   description = "Whether to create a new VPC"

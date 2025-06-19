@@ -1,3 +1,18 @@
+locals {
+  public_subnet_tags = merge(
+    {
+      "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    },
+    var.extra_public_subnet_tags
+  )
+  private_subnet_tags = merge(
+    {
+      "kubernetes.io/cluster/${var.cluster_name}" = "shared"
+    },
+    var.extra_private_subnet_tags
+  )
+}
+
 data "aws_availability_zones" "available" {
   filter {
     name   = "opt-in-status"
@@ -22,13 +37,7 @@ module "vpc" {
   single_nat_gateway   = true
   enable_dns_hostnames = true
 
-  public_subnet_tags = {
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
-    "kubernetes.io/role/elb"                    = 1
-  }
+  public_subnet_tags = local.public_subnet_tags
 
-  private_subnet_tags = {
-    "kubernetes.io/cluster/${var.cluster_name}" = "shared"
-    "kubernetes.io/role/internal-elb"           = 1
-  }
+  private_subnet_tags = local.private_subnet_tags
 }

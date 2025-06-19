@@ -27,3 +27,19 @@ variable "public_subnets" {
   description = "The public subnets for the VPC"
   default     = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
 }
+
+variable "extra_public_subnet_tags" {
+  type        = map(string)
+  description = "The tags for the public subnets"
+  default     = {
+    "kubernetes.io/role/elb"                    = 1
+  }
+}
+
+variable "extra_private_subnet_tags" {
+  type        = map(string)
+  description = "The tags for the private subnets"
+  default     = {
+    "kubernetes.io/role/internal-elb"           = 1
+  }
+}
