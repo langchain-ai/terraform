@@ -28,12 +28,12 @@ variable "public_cluster_enabled" {
 variable "eks_managed_node_groups" {
   type        = map(any)
   description = "EKS managed node groups"
-  default     = {
+  default = {
     default = {
-      name = "node-group-default"
+      name           = "node-group-default"
       instance_types = ["m5.4xlarge"]
-      min_size = 1
-      max_size = 10
+      min_size       = 1
+      max_size       = 10
     }
   }
 }

@@ -61,7 +61,7 @@ resource "aws_eks_addon" "ebs-csi" {
   cluster_name             = module.eks.cluster_name
   addon_name               = "aws-ebs-csi-driver"
   service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
-  tags = var.tags
+  tags                     = var.tags
 
   depends_on = [module.eks]
 }
@@ -98,10 +98,10 @@ resource "kubernetes_storage_class" "gp2_default" {
     }
   }
 
-  storage_provisioner     = "ebs.csi.aws.com"
-  reclaim_policy          = "Delete"
-  volume_binding_mode     = "WaitForFirstConsumer"
-  allow_volume_expansion  = true
+  storage_provisioner    = "ebs.csi.aws.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
 
   parameters = {
     type = "gp2"

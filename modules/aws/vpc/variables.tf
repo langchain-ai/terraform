@@ -31,15 +31,15 @@ variable "public_subnets" {
 variable "extra_public_subnet_tags" {
   type        = map(string)
   description = "The tags for the public subnets"
-  default     = {
-    "kubernetes.io/role/elb"                    = 1
+  default = {
+    "kubernetes.io/role/elb" = 1
   }
 }
 
 variable "extra_private_subnet_tags" {
   type        = map(string)
   description = "The tags for the private subnets"
-  default     = {
-    "kubernetes.io/role/internal-elb"           = 1
+  default = {
+    "kubernetes.io/role/internal-elb" = 1
   }
 }
