@@ -24,6 +24,12 @@ resource "azurerm_kubernetes_cluster" "main" {
     service_cidr = "10.0.64.0/20"
     dns_service_ip = "10.0.64.10"
   }
+
+  lifecycle {
+    ignore_changes = [
+      default_node_pool[0].upgrade_settings
+    ]
+  }
 }
 
 # Larger node pool

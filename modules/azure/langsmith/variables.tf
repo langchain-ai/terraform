@@ -1,3 +1,9 @@
+variable "location" {
+  type        = string
+  description = "The location of the LangSmith deployment"
+  default     = "eastus"
+}
+
 variable "enable_external_postgres" {
   type        = bool
   description = "Enable external Postgres for your LangSmith deployment. This will provision a Postgres server in the same VNet as your LangSmith deployment."
@@ -49,9 +55,11 @@ variable "blob_ttl_long_days" {
 variable "postgres_admin_username" {
   type        = string
   description = "The username of the Postgres administrator"
+  default     = "joaquin"
 }
 
 variable "postgres_admin_password" {
   type        = string
   description = "The password of the Postgres administrator"
+  default     = "joaquin123"
 }

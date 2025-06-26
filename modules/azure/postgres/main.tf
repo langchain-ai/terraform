@@ -14,6 +14,10 @@ resource "azurerm_postgresql_flexible_server" "db" {
   public_network_access_enabled = false
   delegated_subnet_id = var.subnet_id
   private_dns_zone_id = azurerm_private_dns_zone.db_dns_zone.id
+
+  lifecycle {
+    ignore_changes = [zone]
+  }
 }
 
 # Private DNS zone needed when using a delegated subnet for the database
@@ -31,7 +35,7 @@ resource "azurerm_private_dns_zone_virtual_network_link" "dns_zone_vnet_link" {
 }
 
 # These are extensions that are required for a full LangSmith deployment
-resource "azurerm_postgresql_flexible_server_configuration" "pgcrypto" {
+resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name                = "azure.extensions"
   server_id           = azurerm_postgresql_flexible_server.db.id
   value               = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT"
