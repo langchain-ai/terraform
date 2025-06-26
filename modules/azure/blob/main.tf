@@ -13,15 +13,15 @@ resource "azurerm_storage_container" "container" {
 }
 
 resource "azurerm_storage_management_policy" "lifecycle_policy" {
-  count = var.ttl_enabled ? 1 : 0
+  count              = var.ttl_enabled ? 1 : 0
   storage_account_id = azurerm_storage_account.storage_account.id
 
   rule {
-    name = "base"
+    name    = "base"
     enabled = true
     filters {
       prefix_match = ["${var.container_name}/ttl_s"]
-      blob_types = ["blockBlob"]
+      blob_types   = ["blockBlob"]
     }
     actions {
       base_blob {
@@ -37,13 +37,13 @@ resource "azurerm_storage_management_policy" "lifecycle_policy" {
   }
 
   rule {
-    name = "extended"
+    name    = "extended"
     enabled = true
     filters {
       prefix_match = ["${var.container_name}/ttl_l"]
-      blob_types = ["blockBlob"]
+      blob_types   = ["blockBlob"]
     }
-     actions {
+    actions {
       base_blob {
         delete_after_days_since_creation_greater_than = var.ttl_long_days
       }

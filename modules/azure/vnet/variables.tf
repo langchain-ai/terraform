@@ -16,13 +16,13 @@ variable "resource_group_name" {
 variable "address_space" {
   type        = list(string)
   description = "Address space of the virtual network"
-  default     = ["10.0.0.0/17"]  # 32k IP addresses
+  default     = ["10.0.0.0/17"] # 32k IP addresses
 }
 
 variable "main_subnet_address_prefix" {
   type        = list(string)
   description = "Prefix for the main subnet. Can be disjoint IP ranges."
-  default     = ["10.0.0.0/19"]  # 8k IP addresses
+  default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
 variable "enable_external_postgres" {

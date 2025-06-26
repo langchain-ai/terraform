@@ -15,11 +15,11 @@ resource "azurerm_subnet" "subnet_main" {
 
 # Independent subnet for Postgres
 resource "azurerm_subnet" "subnet_postgres" {
-  count = var.enable_external_postgres ? 1 : 0
+  count                = var.enable_external_postgres ? 1 : 0
   name                 = "${var.network_name}-subnet-postgres"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.32.0/20"]  # 4k IP addresses
+  address_prefixes     = ["10.0.32.0/20"] # 4k IP addresses
 
   delegation {
     name = "postgresql-delegation"
@@ -36,9 +36,9 @@ resource "azurerm_subnet" "subnet_postgres" {
 
 # Independent subnet for Redis
 resource "azurerm_subnet" "subnet_redis" {
-  count = var.enable_external_redis ? 1 : 0
+  count                = var.enable_external_redis ? 1 : 0
   name                 = "${var.network_name}-subnet-redis"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.48.0/20"]  # 4k IP addresses
+  address_prefixes     = ["10.0.48.0/20"] # 4k IP addresses
 }
