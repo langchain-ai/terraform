@@ -34,6 +34,13 @@ module "aks" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
   subnet_id           = module.vnet.subnet_main_id
+
+  large_node_pool_enabled = var.large_node_pool_enabled
+  large_node_pool_vm_size = var.large_node_pool_vm_size
+  large_node_pool_max_count = var.large_node_pool_max_count
+
+  default_node_pool_vm_size = var.default_node_pool_vm_size
+  default_node_pool_max_count = var.default_node_pool_max_count
 }
 
 module "postgres" {

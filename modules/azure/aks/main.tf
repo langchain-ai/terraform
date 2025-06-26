@@ -10,7 +10,7 @@ resource "azurerm_kubernetes_cluster" "main" {
     vm_size                     = var.default_node_pool_vm_size
     auto_scaling_enabled        = true
     min_count                   = 1
-    max_count                   = 10
+    max_count                   = var.default_node_pool_max_count
     vnet_subnet_id              = var.subnet_id
     temporary_name_for_rotation = "defaulttmp"
   }
@@ -42,7 +42,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "large" {
   auto_scaling_enabled        = true
   vnet_subnet_id              = var.subnet_id
   min_count                   = 0
-  max_count                   = 2
+  max_count                   = var.large_node_pool_max_count
   mode                        = "User"
   temporary_name_for_rotation = "largetmp"
 }

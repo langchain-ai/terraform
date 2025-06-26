@@ -30,6 +30,12 @@ variable "default_node_pool_vm_size" {
   default     = "Standard_D4_v5" # 4 vCPU, 16GB RAM
 }
 
+variable "default_node_pool_max_count" {
+  type        = number
+  description = "Max count of the default node pool"
+  default     = 10
+}
+
 variable "large_node_pool_enabled" {
   type        = bool
   description = "Whether to enable the large node pool"
@@ -40,4 +46,10 @@ variable "large_node_pool_vm_size" {
   type        = string
   description = "VM size of the large node pool"
   default     = "Standard_D8_v5" # 8 vCPU, 32GB RAM
+}
+
+variable "large_node_pool_max_count" {
+  type        = number
+  description = "Max count of the large node pool"
+  default     = 2
 }
