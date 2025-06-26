@@ -1,3 +1,9 @@
+variable "location" {
+  type        = string
+  description = "The location of the LangSmith deployment"
+  default     = "eastus"
+}
+
 variable "enable_external_postgres" {
   type        = bool
   description = "Enable external Postgres for your LangSmith deployment. This will provision a Postgres server in the same VNet as your LangSmith deployment."

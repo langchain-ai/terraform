@@ -43,9 +43,11 @@ variable "eks_tags" {
 variable "postgres_username" {
   type        = string
   description = "Username for the postgres database"
+  default = "joaquin"
 }
 
 variable "postgres_password" {
   type        = string
   description = "Password for the postgres database"
+  default = "joaquin123"
 }

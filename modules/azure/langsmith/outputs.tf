@@ -1,9 +1,11 @@
 output "postgres_connection_url" {
-  value = module.postgres.connection_url
+  sensitive = true
+  value     = module.postgres.connection_url
 }
 
 output "redis_connection_url" {
-  value = module.redis.connection_url
+  sensitive = true
+  value     = module.redis.connection_url
 }
 
 output "storage_account_name" {

@@ -1,6 +1,6 @@
 locals {
   # Feel free to update these local variables for your use case if needed.
-  identifier    = ""
+  identifier    = "-replicated-ch"
   vpc_name      = "langsmith-vpc${local.identifier}"
   cluster_name  = "langsmith-eks${local.identifier}"
   redis_name    = "langsmith-redis${local.identifier}"
@@ -17,6 +17,29 @@ provider "aws" {
   region = var.region
 }
 
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name]
+    }
+  }
+}
+
+
+provider "kubernetes" {
+  host                   = module.eks.endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name]
+  }
+}
+
 module "vpc" {
   source = "../vpc"
 
@@ -31,6 +54,21 @@ module "eks" {
   vpc_id       = local.vpc_id
   subnet_ids   = concat(local.private_subnets, local.public_subnets)
   tags         = var.eks_tags
+
+  eks_managed_node_groups = {
+    default = {
+      name           = "node-group-default"
+      instance_types = ["m5.4xlarge"]
+      min_size       = 1
+      max_size       = 10
+    }
+    large = {
+      name           = "node-group-large"
+      instance_types = ["m5.16xlarge"]
+      min_size       = 1
+      max_size       = 3
+    }
+  }
 }
 
 module "redis" {
@@ -58,4 +96,30 @@ module "postgres" {
 
   username = var.postgres_username
   password = var.postgres_password
+}
+
+module "cluster_bootstrap" {
+  source      = "../../../../deployments/modules/kubernetes/cluster_bootstrap"
+  environment = "dev-aws"
+
+  datadog_enabled       = true
+  datadog_agent_enabled = true
+  datadog_api_key       = "5d42ff397041a44f9396a933acc4360f"
+  cloud_provider        = "aws"
+
+  nginx_ingress_enabled              = false
+  cert_manager_service_account_email = "joaquin@langchain.dev"
+
+  external_secrets_enabled    = false
+  keda_enabled                = false
+  velero_enabled              = false
+  external_dns_enabled        = false
+  clickhouse_operator_enabled = false
+
+  clickhouse_host     = "clickhouse-replicated.ch-operator.svc.cluster.local"
+  clickhouse_password = "password"
+  clickhouse_user     = "default"
+  clickhouse_port     = 9000
+  clickhouse_tls      = false
+  redis_hosts         = [module.redis.instance_info]
 }

@@ -37,7 +37,7 @@ resource "azurerm_subnet" "subnet_postgres" {
 # Independent subnet for Redis
 resource "azurerm_subnet" "subnet_redis" {
   count = var.enable_external_redis ? 1 : 0
-  name                 = "${var.cluster_name}-subnet-redis"
+  name                 = "${var.network_name}-subnet-redis"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = ["10.0.48.0/20"]  # 4k IP addresses
