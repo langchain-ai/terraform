@@ -55,11 +55,9 @@ variable "blob_ttl_long_days" {
 variable "postgres_admin_username" {
   type        = string
   description = "The username of the Postgres administrator"
-  default     = "joaquin"
 }
 
 variable "postgres_admin_password" {
   type        = string
   description = "The password of the Postgres administrator"
-  default     = "joaquin123"
 }

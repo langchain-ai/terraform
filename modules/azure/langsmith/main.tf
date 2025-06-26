@@ -1,5 +1,5 @@
 locals {
-  identifier          = "-joaquin"
+  identifier          = ""
   resource_group_name = "langsmith-rg${local.identifier}"
   vnet_name           = "langsmith-vnet${local.identifier}"
   aks_name            = "langsmith-aks${local.identifier}"
@@ -9,7 +9,7 @@ locals {
 }
 
 provider "azurerm" {
-  subscription_id = "014c3098-b01f-4585-a922-c5617c204ec2"
+  subscription_id = "<subscription_id>"
   features {}
 }
 
@@ -34,9 +34,6 @@ module "aks" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
   subnet_id           = module.vnet.subnet_main_id
-
-  default_node_pool_vm_size = "Standard_D3_v2"
-  large_node_pool_vm_size   = "Standard_D4_v2"
 }
 
 module "postgres" {
