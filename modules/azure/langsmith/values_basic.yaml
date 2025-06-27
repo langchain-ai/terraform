@@ -1,0 +1,25 @@
+# Checkout our documentation for most up to date installation instructions: https://docs.smith.langchain.com/self_hosting/installation/kubernetes
+
+config:
+  existingSecretName: "<your-secret-name>"  # Add your secret name here
+  authType: "mixed"
+  basicAuth:
+    enabled: true
+    initialOrgAdminEmail: "<your-admin-email>"  # Add your email here
+
+  blobStorage:
+    enabled: true
+    engine: "Azure"
+    azureStorageContainerName: "<your-container-name>" # Add your container name here and make sure the appropriate auth values are set in the existing secret.
+
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "<your-secret-name>" # Add your postgres connection URL to the secret mentioned here. Check the terraform output for the connection URL.
+
+redis:
+  external:
+    enabled: true
+    existingSecretName: "<your-secret-name>" # Add your redis connection URL to the secret mentioned here. Check the terraform output for the connection URL.
+
+
