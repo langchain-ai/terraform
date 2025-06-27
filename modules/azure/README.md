@@ -36,4 +36,4 @@ Afterwards, you may want to fetch the kubeconfig locally with a command like thi
 az aks get-credentials --resource-group <resource-group> --name <cluster-name>
 ```
 
-Once everything is created, fill out the values_azure.yaml file with your [desired configuration](https://docs.smith.langchain.com/self_hosting/configuration) and follow our [helm installation instructions](https://docs.smith.langchain.com/self_hosting/installation/kubernetes#deploying-to-kubernetes)
+Once everything is created, fill out the values_azure.yaml file with your [desired configuration](https://docs.smith.langchain.com/self_hosting/configuration) and follow our [helm installation instructions](https://docs.smith.langchain.com/self_hosting/installation/kubernetes#deploying-to-kubernetes). You can use the terraform output from the LangSmith module to fill in things like the redis and postgres connection URL and blob storage authentication.
