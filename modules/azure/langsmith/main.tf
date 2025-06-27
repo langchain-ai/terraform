@@ -6,10 +6,15 @@ locals {
   postgres_name       = "langsmith-postgres${local.identifier}"
   redis_name          = "langsmith-redis${local.identifier}"
   blob_name           = "langsmith-blob${local.identifier}"
+
+  vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
+  aks_subnet_id      = var.create_vnet ? module.vnet.subnet_main_id : var.aks_subnet_id
+  postgres_subnet_id = var.create_vnet ? module.vnet.subnet_postgres_id : var.postgres_subnet_id
+  redis_subnet_id    = var.create_vnet ? module.vnet.subnet_redis_id : var.redis_subnet_id
 }
 
 provider "azurerm" {
-  subscription_id = "<subscription_id>"
+  subscription_id = var.subscription_id
   features {}
 }
 
@@ -33,13 +38,13 @@ module "aks" {
   cluster_name        = local.aks_name
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
-  subnet_id           = module.vnet.subnet_main_id
+  subnet_id           = local.aks_subnet_id
 
-  large_node_pool_enabled = var.large_node_pool_enabled
-  large_node_pool_vm_size = var.large_node_pool_vm_size
+  large_node_pool_enabled   = var.large_node_pool_enabled
+  large_node_pool_vm_size   = var.large_node_pool_vm_size
   large_node_pool_max_count = var.large_node_pool_max_count
 
-  default_node_pool_vm_size = var.default_node_pool_vm_size
+  default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_max_count = var.default_node_pool_max_count
 }
 
@@ -48,8 +53,8 @@ module "postgres" {
   name                = local.postgres_name
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
-  vnet_id             = module.vnet.vnet_id
-  subnet_id           = module.vnet.subnet_postgres_id
+  vnet_id             = local.vnet_id
+  subnet_id           = local.postgres_subnet_id
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
@@ -60,7 +65,7 @@ module "redis" {
   name                = local.redis_name
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
-  subnet_id           = module.vnet.subnet_redis_id
+  subnet_id           = local.redis_subnet_id
   capacity            = var.redis_capacity
 
   enable_redis_cluster   = var.enable_redis_cluster

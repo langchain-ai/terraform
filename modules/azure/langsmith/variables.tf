@@ -4,6 +4,41 @@ variable "location" {
   default     = "eastus"
 }
 
+variable "subscription_id" {
+  type        = string
+  description = "The subscription id of the LangSmith deployment"
+}
+
+variable "create_vnet" {
+  type        = bool
+  description = "Whether to create a new VNet. If false, you will need to provide a vnet id and subnet ids."
+  default     = true
+}
+
+variable "vnet_id" {
+  type        = string
+  description = "The id of the existing VNet to use. If create_vnet is false, this is required."
+  default     = ""
+}
+
+variable "aks_subnet_id" {
+  type        = string
+  description = "The id of the existing subnet to use for the AKS cluster. If create_vnet is false, this is required."
+  default     = ""
+}
+
+variable "postgres_subnet_id" {
+  type        = string
+  description = "The id of the existing subnet to use for the Postgres server. If create_vnet is false, this is required."
+  default     = ""
+}
+
+variable "redis_subnet_id" {
+  type        = string
+  description = "The id of the existing subnet to use for the Redis server. If create_vnet is false, this is required."
+  default     = ""
+}
+
 variable "enable_external_postgres" {
   type        = bool
   description = "Enable external Postgres for your LangSmith deployment. This will provision a Postgres server in the same VNet as your LangSmith deployment."
