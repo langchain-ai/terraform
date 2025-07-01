@@ -9,8 +9,3 @@ output "container_name" {
 output "k8s_managed_identity_client_id" {
   value = azurerm_user_assigned_identity.k8s_app.client_id
 }
-
-# output "connection_string" {
-#   sensitive = true
-#   value     = azurerm_storage_account.storage_account.primary_connection_string
-# }

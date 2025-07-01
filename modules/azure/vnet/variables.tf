@@ -36,3 +36,15 @@ variable "enable_external_redis" {
   description = "Enable external Redis"
   default     = true
 }
+
+variable "redis_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the Redis subnet. Can be disjoint IP ranges."
+  default     = ["10.0.48.0/20"] # 4k IP addresses
+}
+
+variable "postgres_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the Postgres subnet. Can be disjoint IP ranges."
+  default     = ["10.0.32.0/20"] # 4k IP addresses
+}

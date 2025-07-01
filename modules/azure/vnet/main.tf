@@ -19,7 +19,7 @@ resource "azurerm_subnet" "subnet_postgres" {
   name                 = "${var.network_name}-subnet-postgres"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.32.0/20"] # 4k IP addresses
+  address_prefixes     = var.postgres_subnet_address_prefix
 
   delegation {
     name = "postgresql-delegation"
@@ -40,5 +40,5 @@ resource "azurerm_subnet" "subnet_redis" {
   name                 = "${var.network_name}-subnet-redis"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vnet.name
-  address_prefixes     = ["10.0.48.0/20"] # 4k IP addresses
+  address_prefixes     = var.redis_subnet_address_prefix
 }

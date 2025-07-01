@@ -31,6 +31,9 @@ module "vnet" {
 
   enable_external_postgres = var.enable_external_postgres
   enable_external_redis    = var.enable_external_redis
+
+  postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
+  redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 }
 
 module "aks" {
