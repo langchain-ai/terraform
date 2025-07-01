@@ -8,7 +8,7 @@ We provide the following modules here:
 - PostgreSQL DB module
 - S3 module
 
-You can use an existing VPC instead of creating one by setting the `create_vpc` variable to false. If you bring your own VPC, you will need to provide a couple of variables mentioned in `langsmith_full/variables.tf`
+You can use an existing VPC instead of creating one by setting the `create_vpc` variable to false. If you bring your own VPC, you will need to provide a couple of variables mentioned in `langsmith/variables.tf`
 
 ## Quick Start
 You can clone or fork this repo. Decide where you want to keep your terraform state:
