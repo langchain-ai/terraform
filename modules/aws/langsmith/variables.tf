@@ -1,3 +1,9 @@
+variable "identifier" {
+  type        = string
+  description = "Identifier for the LangSmith resources. Example: '-prod' or '-staging'"
+  default     = ""
+}
+
 variable "region" {
   type        = string
   description = "AWS region for all resources"

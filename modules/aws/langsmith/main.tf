@@ -1,6 +1,6 @@
 locals {
   # Feel free to update these local variables for your use case if needed.
-  identifier    = ""
+  identifier    = var.identifier
   vpc_name      = "langsmith-vpc${local.identifier}"
   cluster_name  = "langsmith-eks${local.identifier}"
   redis_name    = "langsmith-redis${local.identifier}"
