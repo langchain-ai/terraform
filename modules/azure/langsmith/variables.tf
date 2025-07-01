@@ -84,24 +84,6 @@ variable "default_node_pool_vm_size" {
 variable "default_node_pool_max_count" {
   type        = number
   description = "Max count of the default node pool"
-  default     = 10
-}
-
-variable "large_node_pool_enabled" {
-  type        = bool
-  description = "Whether to enable the large node pool"
-  default     = true
-}
-
-variable "large_node_pool_vm_size" {
-  type        = string
-  description = "VM size of the large node pool"
-  default     = "Standard_D8_v5" # 8 vCPU, 32GB RAM
-}
-
-variable "large_node_pool_max_count" {
-  type        = number
-  description = "Max count of the large node pool"
   default     = 2
 }
 
@@ -131,6 +113,18 @@ variable "additional_node_pools" {
       max_count = 2
     }
   }
+}
+
+variable "langsmith_namespace" {
+  type        = string
+  description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
+  default     = "default"
+}
+
+variable "nginx_ingress_enabled" {
+  type        = bool
+  description = "Install the nginx ingress helm chart on the AKS cluster."
+  default     = true
 }
 
 variable "postgres_admin_username" {

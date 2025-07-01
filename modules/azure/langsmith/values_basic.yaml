@@ -2,6 +2,7 @@
 
 config:
   existingSecretName: "<your-secret-name>"  # Add your secret name here
+
   authType: "mixed"
   basicAuth:
     enabled: true
@@ -10,7 +11,8 @@ config:
   blobStorage:
     enabled: true
     engine: "Azure"
-    azureStorageContainerName: "<your-container-name>" # Add your container name here and make sure the appropriate auth values are set in the existing secret.
+    azureStorageContainerName: "<your-container-name>"  # Available in the terraform output
+    azureStorageAccountName: "<your-storage-account-name>"  # Available in the terraform output
 
 postgres:
   external:
@@ -22,4 +24,43 @@ redis:
     enabled: true
     existingSecretName: "<your-secret-name>" # Add your redis connection URL to the secret mentioned here. Check the terraform output for the connection URL.
 
+# When using workload identity, you will need to add the following annotations to the service accounts.
+# See docs for latest instructions: https://docs.smith.langchain.com/self_hosting/configuration/blob_storage#azure-blob-storage
+# queue:
+#   deployment:
+#     labels:
+#       azure.workload.identity/use: "true"
+#   serviceAccount:
+#     annotations:
+#       azure.workload.identity/client-id: <storage_account_k8s_managed_identity_client_id>  # Available in the terraform output
 
+# backend:
+#   deployment:
+#     labels:
+#       azure.workload.identity/use: "true"
+#   serviceAccount:
+#     annotations:
+#       azure.workload.identity/client-id: <storage_account_k8s_managed_identity_client_id>  # Available in the terraform output
+
+# platformBackend:
+#   deployment:
+#     labels:
+#       azure.workload.identity/use: "true"
+#   serviceAccount:
+#     annotations:
+#       azure.workload.identity/client-id: <storage_account_k8s_managed_identity_client_id>  # Available in the terraform output
+
+
+# To setup Ingress, you can follow the instructions here: https://docs.smith.langchain.com/self_hosting/configuration/ingress
+# You will need a block like this in your values file:
+# ingress:
+#   enabled: true
+#   hostname: "" # Main domain for LangSmith
+#   subdomain: "" # If you want to serve langsmith on a subdomain
+#   ingressClassName: "nginx" # If not set, the default ingress class will be used
+#   annotations: {} # Add annotations here if needed
+#   labels: {} # Add labels here if needed
+#   tls: [] # Add TLS configuration here if needed
+# frontend:
+#   service:
+#       type: ClusterIP

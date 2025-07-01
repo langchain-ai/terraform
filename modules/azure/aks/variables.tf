@@ -63,3 +63,9 @@ variable "additional_node_pools" {
     }
   }
 }
+
+variable "nginx_ingress_enabled" {
+  type        = bool
+  description = "Install the nginx ingress helm chart on the AKS cluster."
+  default     = true
+}

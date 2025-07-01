@@ -1,3 +1,11 @@
+locals {
+  service_accounts_for_workload_identity = [
+    "${var.langsmith_release_name}-platform-backend",
+    "${var.langsmith_release_name}-queue",
+    "${var.langsmith_release_name}-backend",
+  ]
+}
+
 resource "azurerm_storage_account" "storage_account" {
   name                     = replace(var.storage_account_name, "-", "")
   resource_group_name      = var.resource_group_name
@@ -18,10 +26,25 @@ resource "azurerm_user_assigned_identity" "k8s_app" {
   location            = var.location
 }
 
-resource "azurerm_role_assignment" "blob_reader" {
+resource "azurerm_role_assignment" "blob_data_contributor" {
   principal_id         = azurerm_user_assigned_identity.k8s_app.principal_id
   role_definition_name = "Storage Blob Data Contributor"
   scope                = azurerm_storage_account.storage_account.id
+}
+
+resource "azurerm_federated_identity_credential" "k8s_app" {
+  for_each = toset(local.service_accounts_for_workload_identity)
+
+  name                = "langsmith-federated-${each.value}"
+  resource_group_name = var.resource_group_name
+  parent_id           = azurerm_user_assigned_identity.k8s_app.id
+
+  audience = [
+    "api://AzureADTokenExchange"
+  ]
+
+  issuer  = var.aks_oidc_issuer_url
+  subject = "system:serviceaccount:${var.langsmith_namespace}:${each.value}"
 }
 
 resource "azurerm_storage_management_policy" "lifecycle_policy" {

@@ -1,9 +1,20 @@
+provider "helm" {
+  kubernetes = {
+    host                   = azurerm_kubernetes_cluster.main.kube_config[0].host
+    client_certificate     = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].client_certificate)
+    client_key             = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].cluster_ca_certificate)
+  }
+}
+
 resource "azurerm_kubernetes_cluster" "main" {
-  name                = var.cluster_name
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  dns_prefix          = var.cluster_name
-  kubernetes_version  = var.kubernetes_version
+  name                      = var.cluster_name
+  location                  = var.location
+  resource_group_name       = var.resource_group_name
+  dns_prefix                = var.cluster_name
+  kubernetes_version        = var.kubernetes_version
+  oidc_issuer_enabled       = true
+  workload_identity_enabled = true
 
   default_node_pool {
     name                        = "default"
@@ -45,4 +56,26 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   max_count                   = each.value.max_count
   mode                        = "User"
   temporary_name_for_rotation = "${each.key}tmp"
+}
+
+resource "helm_release" "nginx_ingress" {
+  count      = var.nginx_ingress_enabled ? 1 : 0
+  name       = "ingress-nginx"
+  namespace  = "ingress-nginx"
+  repository = "https://kubernetes.github.io/ingress-nginx"
+  chart      = "ingress-nginx"
+
+  create_namespace = true
+
+  values = [
+    yamlencode({
+      controller = {
+        replicaCount = 2
+
+        service = {
+          type = "LoadBalancer"
+        }
+      }
+    })
+  ]
 }

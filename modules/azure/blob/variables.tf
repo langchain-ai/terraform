@@ -35,3 +35,20 @@ variable "ttl_long_days" {
   description = "Time to live for long-lived blobs in days"
   default     = 400
 }
+
+variable "aks_oidc_issuer_url" {
+  type        = string
+  description = "OIDC issuer URL of the AKS cluster. Used to set up workload identity for blob storage."
+}
+
+variable "langsmith_namespace" {
+  type        = string
+  description = "Namespace of the LangSmith deployment"
+  default     = "default"
+}
+
+variable "langsmith_release_name" {
+  type        = string
+  description = "Release name of the LangSmith Helm deployment. Used to set up workload identity for blob storage."
+  default     = "langsmith"
+}
