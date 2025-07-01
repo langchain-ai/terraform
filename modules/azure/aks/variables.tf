@@ -36,20 +36,30 @@ variable "default_node_pool_max_count" {
   default     = 10
 }
 
-variable "large_node_pool_enabled" {
-  type        = bool
-  description = "Whether to enable the large node pool"
-  default     = true
-}
-
-variable "large_node_pool_vm_size" {
+variable "service_cidr" {
   type        = string
-  description = "VM size of the large node pool"
-  default     = "Standard_D8_v5" # 8 vCPU, 32GB RAM
+  description = "Service CIDR of the cluster"
+  default     = "10.0.64.0/20"
 }
 
-variable "large_node_pool_max_count" {
-  type        = number
-  description = "Max count of the large node pool"
-  default     = 2
+variable "dns_service_ip" {
+  type        = string
+  description = "DNS service IP of the cluster"
+  default     = "10.0.64.10"
+}
+
+variable "additional_node_pools" {
+  type = map(object({
+    vm_size   = string
+    min_count = number
+    max_count = number
+  }))
+  description = "Node pools to be created"
+  default = {
+    large = {
+      vm_size   = "Standard_D8_v5"
+      min_count = 0
+      max_count = 2
+    }
+  }
 }

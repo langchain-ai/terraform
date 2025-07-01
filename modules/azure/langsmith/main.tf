@@ -39,6 +39,8 @@ module "aks" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
   subnet_id           = local.aks_subnet_id
+  service_cidr        = var.aks_service_cidr
+  dns_service_ip      = var.aks_dns_service_ip
 
   large_node_pool_enabled   = var.large_node_pool_enabled
   large_node_pool_vm_size   = var.large_node_pool_vm_size
@@ -46,6 +48,8 @@ module "aks" {
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_max_count = var.default_node_pool_max_count
+
+  additional_node_pools = var.additional_node_pools
 }
 
 module "postgres" {
@@ -67,9 +71,6 @@ module "redis" {
   resource_group_name = azurerm_resource_group.resource_group.name
   subnet_id           = local.redis_subnet_id
   capacity            = var.redis_capacity
-
-  enable_redis_cluster   = var.enable_redis_cluster
-  redis_cluster_sku_name = var.redis_cluster_sku_name
 }
 
 module "blob" {

@@ -57,18 +57,6 @@ variable "redis_capacity" {
   default     = 2
 }
 
-variable "enable_redis_cluster" {
-  type        = bool
-  description = "Enable Redis cluster for your LangSmith deployment. This will provision a Redis cluster in addition to the Redis server."
-  default     = false
-}
-
-variable "redis_cluster_sku_name" {
-  type        = string
-  description = "The SKU name of the Redis cluster"
-  default     = ""
-}
-
 variable "blob_ttl_enabled" {
   type        = bool
   description = "Enable TTL for the blob container"
@@ -117,6 +105,33 @@ variable "large_node_pool_max_count" {
   default     = 2
 }
 
+variable "aks_service_cidr" {
+  type        = string
+  description = "The service CIDR of the AKS cluster"
+  default     = "10.0.64.0/20"
+}
+
+variable "aks_dns_service_ip" {
+  type        = string
+  description = "The DNS service IP of the AKS cluster"
+  default     = "10.0.64.10"
+}
+
+variable "additional_node_pools" {
+  type = map(object({
+    vm_size   = string
+    min_count = number
+    max_count = number
+  }))
+  description = "Additional node pools to be created"
+  default = {
+    large = {
+      vm_size   = "Standard_D8_v5"
+      min_count = 0
+      max_count = 2
+    }
+  }
+}
 
 variable "postgres_admin_username" {
   type        = string

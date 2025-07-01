@@ -12,6 +12,18 @@ resource "azurerm_storage_container" "container" {
   container_access_type = "private"
 }
 
+resource "azurerm_user_assigned_identity" "k8s_app" {
+  name                = "k8s-app-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+}
+
+resource "azurerm_role_assignment" "blob_reader" {
+  principal_id         = azurerm_user_assigned_identity.k8s_app.principal_id
+  role_definition_name = "Storage Blob Data Contributor"
+  scope                = azurerm_storage_account.storage_account.id
+}
+
 resource "azurerm_storage_management_policy" "lifecycle_policy" {
   count              = var.ttl_enabled ? 1 : 0
   storage_account_id = azurerm_storage_account.storage_account.id

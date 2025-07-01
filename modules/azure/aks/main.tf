@@ -21,8 +21,8 @@ resource "azurerm_kubernetes_cluster" "main" {
 
   network_profile {
     network_plugin = "azure"
-    service_cidr   = "10.0.64.0/20"
-    dns_service_ip = "10.0.64.10"
+    service_cidr   = var.service_cidr
+    dns_service_ip = var.dns_service_ip
   }
 
   lifecycle {
@@ -32,17 +32,17 @@ resource "azurerm_kubernetes_cluster" "main" {
   }
 }
 
-# Larger node pool
-resource "azurerm_kubernetes_cluster_node_pool" "large" {
-  count = var.large_node_pool_enabled ? 1 : 0
+# Other node pools
+resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
+  for_each = var.additional_node_pools
 
-  name                        = "large"
+  name                        = each.key
   kubernetes_cluster_id       = azurerm_kubernetes_cluster.main.id
-  vm_size                     = var.large_node_pool_vm_size
+  vm_size                     = each.value.vm_size
   auto_scaling_enabled        = true
   vnet_subnet_id              = var.subnet_id
-  min_count                   = 0
-  max_count                   = var.large_node_pool_max_count
+  min_count                   = each.value.min_count
+  max_count                   = each.value.max_count
   mode                        = "User"
-  temporary_name_for_rotation = "largetmp"
+  temporary_name_for_rotation = "${each.key}tmp"
 }

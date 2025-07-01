@@ -36,15 +36,3 @@ variable "capacity" {
   description = "Capacity of the Redis instance"
   default     = 2
 }
-
-variable "enable_redis_cluster" {
-  type        = bool
-  description = "Enable Redis cluster"
-  default     = false
-}
-
-variable "redis_cluster_sku_name" {
-  type        = string
-  description = "SKU name of the Redis enterprise cluster"
-  default     = "Enterprise_E200-2"
-}
