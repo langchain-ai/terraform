@@ -46,9 +46,9 @@ variable "eks_tags" {
   default     = {}
 }
 
-variable "patch_storage_class" {
+variable "create_gp3_storage_class" {
   type        = bool
-  description = "Whether to patch the gp2 storage class to make it default and allow volume expansion."
+  description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
   default     = true
 }
 

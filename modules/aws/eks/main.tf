@@ -89,27 +89,48 @@ module "eks_blueprints_addons" {
   depends_on = [module.eks, data.aws_eks_cluster_auth.this]
 }
 
-# Patch the default storage class for the EKS cluster.
-resource "null_resource" "patch_storage_class" {
-  count = var.patch_storage_class ? 1 : 0
-  depends_on = [
-    module.eks,
-    aws_eks_addon.ebs-csi,
-    data.aws_eks_cluster_auth.this
-  ]
+# # Patch the default storage class for the EKS cluster.
+# resource "null_resource" "patch_storage_class" {
+#   count = var.patch_storage_class ? 1 : 0
+#   depends_on = [
+#     module.eks,
+#     aws_eks_addon.ebs-csi,
+#     data.aws_eks_cluster_auth.this
+#   ]
 
-  provisioner "local-exec" {
-    command = <<EOT
-      kubectl patch storageclass gp2 \
-        --type merge \
-        -p '{
-          "metadata": {
-            "annotations": {
-              "storageclass.kubernetes.io/is-default-class": "true"
-            }
-          },
-          "allowVolumeExpansion": true
-        }'
-    EOT
+#   provisioner "local-exec" {
+#     command = <<EOT
+#       kubectl patch storageclass gp2 \
+#         --type merge \
+#         -p '{
+#           "metadata": {
+#             "annotations": {
+#               "storageclass.kubernetes.io/is-default-class": "true"
+#             }
+#           },
+#           "allowVolumeExpansion": true
+#         }'
+#     EOT
+#   }
+# }
+
+resource "kubernetes_storage_class" "gp3_default" {
+  count = var.create_gp3_storage_class ? 1 : 0
+  metadata {
+    name = "gp3"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
   }
+
+  storage_provisioner    = "ebs.csi.aws.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    type = "gp3"
+  }
+
+  depends_on = [aws_eks_addon.ebs-csi]
 }
