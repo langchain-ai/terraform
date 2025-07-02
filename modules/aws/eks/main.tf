@@ -89,10 +89,11 @@ module "eks_blueprints_addons" {
   depends_on = [module.eks, data.aws_eks_cluster_auth.this]
 }
 
-# Create a default storage class for the EKS cluster.
-resource "kubernetes_storage_class" "gp2_default" {
+# Create the gp3 storage class, make it the default storage class, and allow volume expansion.
+resource "kubernetes_storage_class" "gp3_default" {
+  count = var.create_gp3_storage_class ? 1 : 0
   metadata {
-    name = "gp2"
+    name = "gp3"
     annotations = {
       "storageclass.kubernetes.io/is-default-class" = "true"
     }
@@ -104,6 +105,8 @@ resource "kubernetes_storage_class" "gp2_default" {
   allow_volume_expansion = true
 
   parameters = {
-    type = "gp2"
+    type = "gp3"
   }
+
+  depends_on = [aws_eks_addon.ebs-csi]
 }

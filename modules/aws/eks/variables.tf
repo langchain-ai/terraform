@@ -43,3 +43,9 @@ variable "tags" {
   description = "Tags to apply to the resources"
   default     = {}
 }
+
+variable "create_gp3_storage_class" {
+  type        = bool
+  description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
+  default     = true
+}

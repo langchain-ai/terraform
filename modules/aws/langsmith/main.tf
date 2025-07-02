@@ -26,11 +26,12 @@ module "vpc" {
 }
 
 module "eks" {
-  source       = "../eks"
-  cluster_name = local.cluster_name
-  vpc_id       = local.vpc_id
-  subnet_ids   = concat(local.private_subnets, local.public_subnets)
-  tags         = var.eks_tags
+  source                   = "../eks"
+  cluster_name             = local.cluster_name
+  vpc_id                   = local.vpc_id
+  subnet_ids               = concat(local.private_subnets, local.public_subnets)
+  tags                     = var.eks_tags
+  create_gp3_storage_class = var.create_gp3_storage_class
 }
 
 module "redis" {
