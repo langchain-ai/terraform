@@ -43,3 +43,9 @@ variable "tags" {
   description = "Tags to apply to the resources"
   default     = {}
 }
+
+variable "patch_storage_class" {
+  type        = bool
+  description = "Whether to patch the gp2 storage class to make it default and allow volume expansion."
+  default     = true
+}

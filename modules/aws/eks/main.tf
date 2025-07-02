@@ -89,27 +89,9 @@ module "eks_blueprints_addons" {
   depends_on = [module.eks, data.aws_eks_cluster_auth.this]
 }
 
-# # Create a default storage class for the EKS cluster.
-# resource "kubernetes_storage_class" "gp2_default" {
-#   metadata {
-#     name = "gp2"
-#     annotations = {
-#       "storageclass.kubernetes.io/is-default-class" = "true"
-#     }
-#   }
-
-#   storage_provisioner    = "ebs.csi.aws.com"
-#   reclaim_policy         = "Delete"
-#   volume_binding_mode    = "WaitForFirstConsumer"
-#   allow_volume_expansion = true
-
-#   parameters = {
-#     type = "gp2"
-#   }
-# }
-
 # Patch the default storage class for the EKS cluster.
-resource "null_resource" "patch_gp2_default" {
+resource "null_resource" "patch_storage_class" {
+  count = var.patch_storage_class ? 1 : 0
   depends_on = [
     module.eks,
     aws_eks_addon.ebs-csi,
@@ -129,5 +111,5 @@ resource "null_resource" "patch_gp2_default" {
           "allowVolumeExpansion": true
         }'
     EOT
-   }
- }
+  }
+}

@@ -46,6 +46,12 @@ variable "eks_tags" {
   default     = {}
 }
 
+variable "patch_storage_class" {
+  type        = bool
+  description = "Whether to patch the gp2 storage class to make it default and allow volume expansion."
+  default     = true
+}
+
 variable "postgres_username" {
   type        = string
   description = "Username for the postgres database"
