@@ -62,11 +62,6 @@ module "eks_blueprints_addons" {
   enable_metrics_server               = true
   enable_cluster_autoscaler           = true
 
-  providers = {
-    kubernetes = kubernetes
-    helm       = helm
-  }
-
   depends_on = [module.eks]
 }
 
