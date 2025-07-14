@@ -1,3 +1,22 @@
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  token                  = data.aws_eks_cluster_auth.this.token
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    token                  = data.aws_eks_cluster_auth.this.token
+  }
+}
+
+data "aws_eks_cluster_auth" "this" {
+  name       = module.eks.cluster_name
+  depends_on = [module.eks]
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "20.10.0"
@@ -62,7 +81,7 @@ module "eks_blueprints_addons" {
   enable_metrics_server               = true
   enable_cluster_autoscaler           = true
 
-  depends_on = [module.eks]
+  depends_on = [module.eks, data.aws_eks_cluster_auth.this]
 }
 
 # Create the gp3 storage class, make it the default storage class, and allow volume expansion.
