@@ -51,7 +51,7 @@ variable "create_gp3_storage_class" {
 }
 
 variable "enable_cluster_creator_admin_permissions" {
-    type        = bool
-    description = "Whether to enable cluster creator admin permissions. It can be helpful to disable this when performing applies in both CI"
-    default     = true
+  type        = bool
+  description = "Whether to enable cluster creator admin permissions. It can be helpful to disable this when performing applies in both CI"
+  default     = true
 }
