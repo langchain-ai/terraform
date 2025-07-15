@@ -49,3 +49,9 @@ variable "create_gp3_storage_class" {
   description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
   default     = true
 }
+
+variable "enable_cluster_creator_admin_permissions" {
+    type        = bool
+    description = "Whether to enable cluster creator admin permissions. It can be helpful to disable this when performing applies in both CI"
+    default     = true
+}
