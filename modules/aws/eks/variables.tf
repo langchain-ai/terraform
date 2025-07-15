@@ -44,11 +44,6 @@ variable "tags" {
   default     = {}
 }
 
-variable "create_gp3_storage_class" {
-  type        = bool
-  description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
-  default     = true
-}
 
 variable "enable_cluster_creator_admin_permissions" {
   type        = bool
