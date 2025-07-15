@@ -20,6 +20,57 @@ Determine if you want to create a new VPC or use an existing one. If you want to
 Note that the default region for this module is `us-west-2`. You can change that variable as needed.
 
 Make sure you have valid AWS credentials locally that have the permissions to create the resources, or you can add relevant fields to the `provider "aws"` block. See the [official Terraform provider page](https://registry.terraform.io/providers/hashicorp/aws/latest/docs) for more information.
+You will also need to wait for the EKS cluster to be created to bootstrap some of the resources. Here is a sample `main.tf` file that you can use to get started:
+
+```hcl
+locals {
+  region    = "us-west-2"
+}
+
+provider "aws" {
+  region = local.region
+}
+
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.eks.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.eks.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.eks.token
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = data.aws_eks_cluster.eks.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.eks.certificate_authority[0].data)
+    token                  = data.aws_eks_cluster_auth.eks.token
+  }
+}
+
+resource "null_resource" "wait_for_cluster" {
+  provisioner "local-exec" {
+    command = "aws eks wait cluster-active --name ${module.langsmith.cluster_name} --region ${local.region}"
+  }
+}
+
+data "aws_eks_cluster" "eks" {
+  name = module.langsmith.cluster_name
+
+  depends_on = [null_resource.wait_for_cluster]
+}
+
+data "aws_eks_cluster_auth" "eks" {
+  name = module.langsmith.cluster_name
+
+  depends_on = [null_resource.wait_for_cluster]
+}
+
+module "langsmith" {
+  source = "git::https://github.com/langchain-ai/terraform.git//modules/aws/langsmith?ref=infra/dont-use-eks-module-add-outputs-2"
+  
+  region            = local.region
+  postgres_username = "pgusername"
+  postgres_password = "your postgres password"
+}
+```
 
 Then run the following commands from the `langsmith` folder:
 
