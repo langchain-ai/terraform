@@ -62,8 +62,8 @@ variable "eks_managed_node_groups" {
       min_size       = 1
       max_size       = 10
     }
-    large = {
-      name           = "node-group-large"
+    large-node = {
+      name           = "node-group-large-node"
       instance_types = ["m5.8xlarge"]
       min_size       = 3
       max_size       = 5
