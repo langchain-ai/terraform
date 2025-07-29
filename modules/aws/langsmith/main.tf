@@ -40,7 +40,7 @@ module "redis" {
   name          = local.redis_name
   vpc_id        = local.vpc_id
   subnet_ids    = local.private_subnets
-  instance_type = "cache.m6g.xlarge"
+  instance_type = var.redis_instance_type
   ingress_cidrs = [local.vpc_cidr_block]
 }
 

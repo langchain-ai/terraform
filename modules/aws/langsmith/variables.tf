@@ -65,10 +65,16 @@ variable "eks_managed_node_groups" {
     large-node = {
       name           = "node-group-large-node"
       instance_types = ["m5.8xlarge"]
-      min_size       = 3
+      min_size       = 1
       max_size       = 5
     }
   }
+}
+
+variable "redis_instance_type" {
+  type        = string
+  description = "Instance type for the redis cache"
+  default     = "cache.m6g.xlarge"
 }
 
 variable "postgres_username" {
