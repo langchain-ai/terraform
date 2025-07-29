@@ -32,6 +32,7 @@ module "eks" {
   subnet_ids               = concat(local.private_subnets, local.public_subnets)
   tags                     = var.eks_tags
   create_gp3_storage_class = var.create_gp3_storage_class
+  eks_managed_node_groups  = var.eks_managed_node_groups
 }
 
 module "redis" {

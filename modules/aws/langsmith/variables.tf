@@ -52,6 +52,25 @@ variable "create_gp3_storage_class" {
   default     = true
 }
 
+variable "eks_managed_node_groups" {
+  type        = map(any)
+  description = "EKS managed node groups"
+  default = {
+    default = {
+      name           = "node-group-default"
+      instance_types = ["m5.4xlarge"]
+      min_size       = 1
+      max_size       = 10
+    }
+    large = {
+      name           = "node-group-large"
+      instance_types = ["m5.8xlarge"]
+      min_size       = 3
+      max_size       = 5
+    }
+  }
+}
+
 variable "postgres_username" {
   type        = string
   description = "Username for the postgres database"
