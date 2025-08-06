@@ -28,10 +28,13 @@ module "vpc" {
 module "eks" {
   source                   = "../eks"
   cluster_name             = local.cluster_name
+  cluster_version          = var.eks_cluster_version
   vpc_id                   = local.vpc_id
   subnet_ids               = concat(local.private_subnets, local.public_subnets)
   tags                     = var.eks_tags
   create_gp3_storage_class = var.create_gp3_storage_class
+  eks_managed_node_groups  = var.eks_managed_node_groups
+  public_cluster_enabled   = var.enable_public_eks_cluster
 }
 
 module "redis" {
@@ -39,7 +42,7 @@ module "redis" {
   name          = local.redis_name
   vpc_id        = local.vpc_id
   subnet_ids    = local.private_subnets
-  instance_type = "cache.m6g.xlarge"
+  instance_type = var.redis_instance_type
   ingress_cidrs = [local.vpc_cidr_block]
 }
 
@@ -51,11 +54,14 @@ module "s3" {
 }
 
 module "postgres" {
-  source        = "../postgres"
-  identifier    = local.postgres_name
-  vpc_id        = local.vpc_id
-  subnet_ids    = local.private_subnets
-  ingress_cidrs = [local.vpc_cidr_block]
+  source         = "../postgres"
+  identifier     = local.postgres_name
+  vpc_id         = local.vpc_id
+  subnet_ids     = local.private_subnets
+  ingress_cidrs  = [local.vpc_cidr_block]
+  instance_type  = var.postgres_instance_type
+  storage_gb     = var.postgres_storage_gb
+  max_storage_gb = var.postgres_max_storage_gb
 
   username = var.postgres_username
   password = var.postgres_password

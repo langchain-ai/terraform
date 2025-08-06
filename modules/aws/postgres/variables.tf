@@ -21,6 +21,12 @@ variable "storage_gb" {
   default     = 10
 }
 
+variable "max_storage_gb" {
+  type        = number
+  description = "Maximum storage size in GB"
+  default     = 100
+}
+
 variable "engine_version" {
   type        = string
   description = "Engine version"

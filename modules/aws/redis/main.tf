@@ -35,4 +35,5 @@ resource "aws_elasticache_cluster" "redis" {
   port                 = 6379
   security_group_ids   = [aws_security_group.redis_sg.id]
   subnet_group_name    = aws_elasticache_subnet_group.elasticache_subnet_group.name
+  apply_immediately    = true
 }

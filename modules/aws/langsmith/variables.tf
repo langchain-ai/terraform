@@ -40,6 +40,18 @@ variable "vpc_cidr_block" {
   default     = null
 }
 
+variable "enable_public_eks_cluster" {
+  type        = bool
+  description = "Whether to enable public access to the EKS cluster."
+  default     = true
+}
+
+variable "eks_cluster_version" {
+  type        = string
+  description = "The EKS version of the kubernetes cluster"
+  default     = "1.31"
+}
+
 variable "eks_tags" {
   type        = map(string)
   description = "Tags to apply to the EKS cluster"
@@ -50,6 +62,43 @@ variable "create_gp3_storage_class" {
   type        = bool
   description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
   default     = true
+}
+
+variable "eks_managed_node_groups" {
+  type        = map(any)
+  description = "EKS managed node groups"
+  default = {
+    default = {
+      name           = "node-group-default"
+      instance_types = ["m5.4xlarge"]
+      min_size       = 1
+      max_size       = 10
+    }
+  }
+}
+
+variable "redis_instance_type" {
+  type        = string
+  description = "Instance type for the redis cache"
+  default     = "cache.m6g.xlarge"
+}
+
+variable "postgres_instance_type" {
+  type        = string
+  description = "Instance type for the postgres database"
+  default     = "db.t3.large"
+}
+
+variable "postgres_storage_gb" {
+  type        = number
+  description = "Storage size in GB for the postgres database"
+  default     = 10
+}
+
+variable "postgres_max_storage_gb" {
+  type        = number
+  description = "Maximum storage size in GB for the postgres database. This is used to enable volume expansion."
+  default     = 100
 }
 
 variable "postgres_username" {
