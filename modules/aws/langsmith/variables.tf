@@ -40,6 +40,18 @@ variable "vpc_cidr_block" {
   default     = null
 }
 
+variable "enable_public_eks_cluster" {
+  type        = bool
+  description = "Whether to enable public access to the EKS cluster."
+  default     = true
+}
+
+variable "eks_cluster_version" {
+  type        = string
+  description = "The EKS version of the kubernetes cluster"
+  default     = "1.31"
+}
+
 variable "eks_tags" {
   type        = map(string)
   description = "Tags to apply to the EKS cluster"
