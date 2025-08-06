@@ -62,12 +62,6 @@ variable "eks_managed_node_groups" {
       min_size       = 1
       max_size       = 10
     }
-    large-node = {
-      name           = "node-group-large-node"
-      instance_types = ["m5.8xlarge"]
-      min_size       = 1
-      max_size       = 5
-    }
   }
 }
 
@@ -75,6 +69,24 @@ variable "redis_instance_type" {
   type        = string
   description = "Instance type for the redis cache"
   default     = "cache.m6g.xlarge"
+}
+
+variable "postgres_instance_type" {
+  type        = string
+  description = "Instance type for the postgres database"
+  default     = "db.t3.large"
+}
+
+variable "postgres_storage_gb" {
+  type        = number
+  description = "Storage size in GB for the postgres database"
+  default     = 10
+}
+
+variable "postgres_max_storage_gb" {
+  type        = number
+  description = "Maximum storage size in GB for the postgres database. This is used to enable volume expansion."
+  default     = 100
 }
 
 variable "postgres_username" {

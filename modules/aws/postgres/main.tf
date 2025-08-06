@@ -25,14 +25,15 @@ resource "aws_security_group" "this" {
 }
 
 resource "aws_db_instance" "this" {
-  identifier        = var.identifier
-  db_name           = var.db_name
-  engine            = "postgres"
-  engine_version    = var.engine_version
-  instance_class    = var.instance_type
-  allocated_storage = var.storage_gb
-  username          = var.username
-  password          = var.password
+  identifier            = var.identifier
+  db_name               = var.db_name
+  engine                = "postgres"
+  engine_version        = var.engine_version
+  instance_class        = var.instance_type
+  allocated_storage     = var.storage_gb
+  max_allocated_storage = var.max_storage_gb
+  username              = var.username
+  password              = var.password
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.this.id]

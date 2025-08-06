@@ -52,11 +52,14 @@ module "s3" {
 }
 
 module "postgres" {
-  source        = "../postgres"
-  identifier    = local.postgres_name
-  vpc_id        = local.vpc_id
-  subnet_ids    = local.private_subnets
-  ingress_cidrs = [local.vpc_cidr_block]
+  source         = "../postgres"
+  identifier     = local.postgres_name
+  vpc_id         = local.vpc_id
+  subnet_ids     = local.private_subnets
+  ingress_cidrs  = [local.vpc_cidr_block]
+  instance_type  = var.postgres_instance_type
+  storage_gb     = var.postgres_storage_gb
+  max_storage_gb = var.postgres_max_storage_gb
 
   username = var.postgres_username
   password = var.postgres_password
