@@ -43,6 +43,6 @@ resource "aws_db_instance" "this" {
   # Prevents terraform from trying to downsize a database that scaled up automatically.
   # To manually increase the storage, you can use the AWS console.
   lifecycle {
-    ignore_changes = var.max_allocated_storage > 0 ? [allocated_storage] : []
+    ignore_changes = [allocated_storage]
   }
 }
