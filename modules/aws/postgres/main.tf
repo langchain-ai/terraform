@@ -39,4 +39,10 @@ resource "aws_db_instance" "this" {
   vpc_security_group_ids = [aws_security_group.this.id]
   publicly_accessible    = false
   deletion_protection    = true
+
+  # Prevents terraform from trying to downsize a database that scaled up automatically.
+  # To manually increase the storage, you can use the AWS console.
+  lifecycle {
+    ignore_changes = var.max_allocated_storage > 0 ? [allocated_storage] : []
+  }
 }
