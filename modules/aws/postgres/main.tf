@@ -75,7 +75,7 @@ resource "aws_iam_policy" "rds_iam_auth" {
 # NOTE: The IAM database user must be created manually in PostgreSQL.
 # Connect as the admin user and run:
 #
-#   CREATE USER <iam_database_user> WITH LOGIN;
+#   CREATE USER <iam_database_user>;
 #   GRANT rds_iam TO <iam_database_user>;
 #   GRANT ALL PRIVILEGES ON DATABASE <db_name> TO <iam_database_user>;
 #   GRANT ALL PRIVILEGES ON SCHEMA public TO <iam_database_user>;
