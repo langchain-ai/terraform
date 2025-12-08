@@ -63,3 +63,9 @@ variable "iam_database_authentication_enabled" {
   description = "Whether to enable IAM database authentication"
   default     = true
 }
+
+variable "iam_database_user" {
+  type        = string
+  description = "Database username for IAM authentication. This user must be created in PostgreSQL with 'GRANT rds_iam TO <user>'"
+  default     = null
+}

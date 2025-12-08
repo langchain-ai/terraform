@@ -48,3 +48,39 @@ resource "aws_db_instance" "this" {
     ignore_changes = [allocated_storage]
   }
 }
+
+# IAM policy for RDS IAM authentication
+# This policy allows connecting to the database using IAM credentials
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+resource "aws_iam_policy" "rds_iam_auth" {
+  count = var.iam_database_authentication_enabled && var.iam_database_user != null ? 1 : 0
+
+  name        = "${var.identifier}-rds-iam-auth"
+  description = "Allows IAM authentication to RDS PostgreSQL instance ${var.identifier}"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "rds-db:connect"
+        Resource = "arn:aws:rds-db:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_db_instance.this.resource_id}/${var.iam_database_user}"
+      }
+    ]
+  })
+}
+
+# NOTE: The IAM database user must be created manually in PostgreSQL.
+# Connect as the admin user and run:
+#
+#   CREATE USER <iam_database_user> WITH LOGIN;
+#   GRANT rds_iam TO <iam_database_user>;
+#   GRANT ALL PRIVILEGES ON DATABASE <db_name> TO <iam_database_user>;
+#   GRANT ALL PRIVILEGES ON SCHEMA public TO <iam_database_user>;
+#   GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO <iam_database_user>;
+#   GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO <iam_database_user>;
+#   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO <iam_database_user>;
+#   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO <iam_database_user>;
+#
