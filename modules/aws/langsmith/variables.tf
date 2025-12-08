@@ -110,3 +110,9 @@ variable "postgres_password" {
   type        = string
   description = "Password for the postgres database"
 }
+
+variable "postgres_iam_database_authentication_enabled" {
+  type        = bool
+  description = "Whether to enable IAM database authentication for the postgres database"
+  default     = true
+}

@@ -40,6 +40,8 @@ resource "aws_db_instance" "this" {
   publicly_accessible    = false
   deletion_protection    = true
 
+  iam_database_authentication_enabled = var.iam_database_authentication_enabled
+
   # Prevents terraform from trying to downsize a database that scaled up automatically.
   # To manually increase the storage, you can use the AWS console.
   lifecycle {

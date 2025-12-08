@@ -57,3 +57,9 @@ variable "password" {
   type        = string
   description = "Password for the database"
 }
+
+variable "iam_database_authentication_enabled" {
+  type        = bool
+  description = "Whether to enable IAM database authentication"
+  default     = true
+}
