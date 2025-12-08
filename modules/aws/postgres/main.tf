@@ -78,9 +78,9 @@ resource "aws_iam_policy" "rds_iam_auth" {
 #   CREATE USER <iam_database_user>;
 #   GRANT rds_iam TO <iam_database_user>;
 #   GRANT ALL PRIVILEGES ON DATABASE <db_name> TO <iam_database_user>;
+#   GRANT USAGE ON SCHEMA public TO <iam_database_user>;
 #   GRANT ALL PRIVILEGES ON SCHEMA public TO <iam_database_user>;
 #   GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO <iam_database_user>;
 #   GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO <iam_database_user>;
 #   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO <iam_database_user>;
 #   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO <iam_database_user>;
-#
