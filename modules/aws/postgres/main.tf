@@ -64,8 +64,8 @@ resource "aws_iam_policy" "rds_iam_auth" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = "rds-db:connect"
+        Effect   = "Allow"
+        Action   = "rds-db:connect"
         Resource = "arn:aws:rds-db:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:dbuser:${aws_db_instance.this.resource_id}/${var.iam_database_user}"
       }
     ]
