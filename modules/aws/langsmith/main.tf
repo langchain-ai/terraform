@@ -67,5 +67,5 @@ module "postgres" {
   password = var.postgres_password
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
-  iam_database_user = var.postgres_iam_database_user
+  iam_database_user                   = var.postgres_iam_database_user
 }
