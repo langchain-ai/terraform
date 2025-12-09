@@ -92,7 +92,7 @@ resource "kubernetes_storage_class" "gp3_default" {
 resource "aws_iam_role" "langsmith" {
   count = var.create_langsmith_irsa_role ? 1 : 0
 
-  name = "langsmith-${module.eks.cluster_name}"
+  name = "${module.eks.cluster_name}-irsa-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
