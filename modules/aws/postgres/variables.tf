@@ -63,3 +63,15 @@ variable "iam_database_authentication_enabled" {
   description = "Whether to enable IAM database authentication"
   default     = true
 }
+
+variable "iam_database_user" {
+  type        = string
+  description = "Database username for IAM authentication. This user must be created in PostgreSQL with 'GRANT rds_iam TO <user>'"
+  default     = null
+}
+
+variable "iam_auth_role_name" {
+  type        = string
+  description = "Name of the IAM role to attach the RDS IAM auth policy to (e.g., IRSA role for K8s pods)"
+  default     = null
+}

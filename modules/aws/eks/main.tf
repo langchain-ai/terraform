@@ -86,3 +86,31 @@ resource "kubernetes_storage_class" "gp3_default" {
 
   depends_on = [aws_eks_addon.ebs-csi]
 }
+
+# IRSA role for LangSmith pods
+# Allows any service account in the cluster to assume this role
+resource "aws_iam_role" "langsmith" {
+  count = var.create_langsmith_irsa_role ? 1 : 0
+
+  name = "${module.eks.cluster_name}-irsa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = module.eks.oidc_provider_arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${module.eks.oidc_provider}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [module.eks]
+}

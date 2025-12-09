@@ -116,3 +116,16 @@ variable "postgres_iam_database_authentication_enabled" {
   description = "Whether to enable IAM database authentication for the postgres database"
   default     = true
 }
+
+variable "postgres_iam_database_user" {
+  type        = string
+  description = "Database username for IAM authentication. This user must be created in PostgreSQL with 'GRANT rds_iam TO <user>'"
+  default     = null
+}
+
+# IRSA (IAM Roles for Service Accounts) settings
+variable "create_langsmith_irsa_role" {
+  type        = bool
+  description = "Whether to create an IRSA role for LangSmith pods"
+  default     = true
+}
