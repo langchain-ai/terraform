@@ -35,6 +35,9 @@ module "eks" {
   create_gp3_storage_class = var.create_gp3_storage_class
   eks_managed_node_groups  = var.eks_managed_node_groups
   public_cluster_enabled   = var.enable_public_eks_cluster
+
+  # IRSA settings
+  create_langsmith_irsa_role = var.create_langsmith_irsa_role
 }
 
 module "redis" {
@@ -68,4 +71,7 @@ module "postgres" {
 
   iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
   iam_database_user                   = var.postgres_iam_database_user
+  iam_auth_role_name                  = module.eks.langsmith_irsa_role_name
+
+  depends_on = [module.eks]
 }

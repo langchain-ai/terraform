@@ -49,3 +49,10 @@ variable "create_gp3_storage_class" {
   description = "Whether to create the gp3 storage class. The gp3 storage class will be patched to make it default and allow volume expansion."
   default     = true
 }
+
+# IRSA (IAM Roles for Service Accounts) settings
+variable "create_langsmith_irsa_role" {
+  type        = bool
+  description = "Whether to create an IRSA role for LangSmith pods"
+  default     = false
+}

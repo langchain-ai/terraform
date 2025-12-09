@@ -72,6 +72,14 @@ resource "aws_iam_policy" "rds_iam_auth" {
   })
 }
 
+# Attach the policy to the specified IAM role (e.g., IRSA role for K8s pods)
+resource "aws_iam_role_policy_attachment" "rds_iam_auth" {
+  count = var.iam_database_authentication_enabled && var.iam_database_user != null && var.iam_auth_role_name != null ? 1 : 0
+
+  role       = var.iam_auth_role_name
+  policy_arn = aws_iam_policy.rds_iam_auth[0].arn
+}
+
 # NOTE: The IAM database user must be created manually in PostgreSQL.
 # Connect as the admin user and run:
 #
