@@ -409,12 +409,12 @@ resource "null_resource" "apply_letsencrypt_issuer" {
   count = var.install_cert_manager && var.letsencrypt_email != "" ? 1 : 0
 
   triggers = {
-    issuer_content = local_file.letsencrypt_issuer[0].content
+    issuer_content     = local_file.letsencrypt_issuer[0].content
     cert_manager_ready = helm_release.cert_manager[0].status
   }
 
   provisioner "local-exec" {
-    command     = <<-EOT
+    command    = <<-EOT
       # Wait for cert-manager CRDs to be available
       for i in {1..30}; do
         if kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
@@ -437,7 +437,7 @@ resource "null_resource" "apply_letsencrypt_issuer" {
       echo "ERROR: Failed to apply ClusterIssuer after 5 attempts"
       exit 1
     EOT
-    on_failure  = continue
+    on_failure = continue
   }
 
   depends_on = [time_sleep.wait_for_cert_manager, local_file.letsencrypt_issuer, helm_release.cert_manager]
@@ -486,12 +486,12 @@ resource "null_resource" "apply_certificate" {
   count = var.tls_certificate_source == "letsencrypt" && var.langsmith_domain != "" && var.tls_secret_name != "" ? 1 : 0
 
   triggers = {
-    certificate_content = local_file.certificate[0].content
+    certificate_content  = local_file.certificate[0].content
     cluster_issuer_ready = null_resource.apply_letsencrypt_issuer[0].id
   }
 
   provisioner "local-exec" {
-    command     = <<-EOT
+    command    = <<-EOT
       # Wait for Certificate CRD to be available
       for i in {1..30}; do
         if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
@@ -514,7 +514,7 @@ resource "null_resource" "apply_certificate" {
       echo "ERROR: Failed to apply Certificate after 5 attempts"
       exit 1
     EOT
-    on_failure  = continue
+    on_failure = continue
   }
 
   depends_on = [time_sleep.wait_for_cluster_issuer, local_file.certificate, null_resource.apply_letsencrypt_issuer]

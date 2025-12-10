@@ -357,7 +357,7 @@ output "helm_tls_upgrade_command" {
     "  --set 'ingress.tls[0].hosts[0]=${var.langsmith_domain}' \\",
     "  --set blobStorage.gcs.bucket=\"${module.storage.bucket_name}\" \\",
     "  --set blobStorage.gcs.projectId=\"${var.project_id}\""
-  ]) : var.tls_certificate_source == "existing" ? join("\n", [
+    ]) : var.tls_certificate_source == "existing" ? join("\n", [
     "# Enable HTTPS with existing certificate (secret already created by Terraform):",
     "helm upgrade langsmith langchain/langsmith \\",
     "  -f langsmith-values.yaml \\",
