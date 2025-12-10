@@ -1,0 +1,506 @@
+# LangSmith Helm Chart - Unified Values File
+# ============================================
+# Reference: https://docs.langchain.com/langsmith/kubernetes
+# Deployment: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
+#
+# This configuration uses:
+# - External PostgreSQL (Cloud SQL) - provisioned by Terraform
+# - External Redis (Memorystore) - provisioned by Terraform  
+# - In-cluster ClickHouse - managed by Helm
+# - GCS for blob storage - bucket provisioned by Terraform
+# - LangSmith Deployment enabled (requires KEDA)
+#
+# Prerequisites:
+#   1. Terraform infrastructure deployed
+#   2. KEDA installed (done by Terraform kubernetes module)
+#
+# Install with:
+#   helm install langsmith langchain/langsmith \
+#     -f langsmith-values.yaml \
+#     -n langsmith \
+#     --set config.langsmithLicenseKey="YOUR_LICENSE_KEY" \
+#     --set config.apiKeySalt="$(openssl rand -base64 32)" \
+#     --set config.basicAuth.jwtSecret="$(openssl rand -base64 32)" \
+#     --set blobStorage.gcs.bucket="YOUR_BUCKET_NAME"
+#
+# To switch ingress type via command line:
+#   # For NGINX (default):
+#   --set ingress.enabled=true --set gateway.enabled=false
+#
+#   # For Envoy Gateway:
+#   --set ingress.enabled=false --set gateway.enabled=true
+
+#------------------------------------------------------------------------------
+# Core Configuration (REQUIRED)
+#------------------------------------------------------------------------------
+config:
+  # Your LangSmith hostname - must match Ingress/Gateway configuration
+  # Override with: --set config.hostname="langsmith.yourdomain.com"
+  hostname: "langsmith.example.com"
+  
+  # Base path (leave empty for root)
+  basePath: ""
+  
+  # License key (REQUIRED) - get from LangChain sales
+  # Override with: --set config.langsmithLicenseKey="YOUR_KEY"
+  # langsmithLicenseKey: "YOUR_LICENSE_KEY"
+  
+  # API Key Salt (REQUIRED) - generate with: openssl rand -base64 32
+  # Override with: --set config.apiKeySalt="YOUR_SALT"
+  # apiKeySalt: "YOUR_API_KEY_SALT"
+  
+  # Authentication type
+  authType: "mixed"
+  
+  # Basic auth configuration
+  basicAuth:
+    enabled: true
+    # Initial admin email (REQUIRED) - change this!
+    # Override with: --set config.basicAuth.initialOrgAdminEmail="your-email@example.com"
+    initialOrgAdminEmail: "YOUR_ADMIN_EMAIL"
+    # Initial admin password (REQUIRED) - must be 12+ chars with lowercase, uppercase, and symbol
+    # Override with: --set config.basicAuth.initialOrgAdminPassword="YourSecurePassword123!"
+    initialOrgAdminPassword: "YOUR_ADMIN_PASSWORD"
+    # JWT Secret (REQUIRED) - generate with: openssl rand -base64 32
+    # Override with: --set config.basicAuth.jwtSecret="YOUR_SECRET"
+    # jwtSecret: "YOUR_JWT_SECRET"
+
+  #----------------------------------------------------------------------------
+  # LangSmith Deployment Configuration (LangGraph Platform)
+  # Enables deploying agents/apps directly from the LangSmith UI
+  # Requires: KEDA installed, Ingress/Gateway configured
+  # Reference: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
+  #----------------------------------------------------------------------------
+  deployment:
+    enabled: true
+
+#==============================================================================
+# INGRESS CONFIGURATION - Choose ONE of the following options
+#==============================================================================
+# Option 1: NGINX Ingress (simpler, default)
+# Option 2: Envoy Gateway (advanced features, Gateway API)
+#
+# Toggle via Helm --set flags or edit the enabled values below.
+
+#------------------------------------------------------------------------------
+# Option 1: NGINX Ingress Controller (DEFAULT)
+#------------------------------------------------------------------------------
+ingress:
+  enabled: true  # Set to false if using Envoy Gateway
+  className: "nginx"  # Modern way to specify ingress class (replaces deprecated kubernetes.io/ingress.class annotation)
+  annotations:
+    # Proxy settings for large payloads
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    # CORS configuration
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Authorization, Content-Type, X-Requested-With, X-Api-Key, Accept, Origin"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    # SSL redirect (enable after TLS is configured)
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # For cert-manager TLS automation
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: "langsmith.example.com"  # Must match config.hostname
+      paths:
+        - path: /
+          pathType: Prefix
+  # TLS configuration (uncomment after setting up cert-manager)
+  # tls:
+  #   - secretName: langsmith-tls
+  #     hosts:
+  #       - langsmith.example.com
+
+#------------------------------------------------------------------------------
+# Option 2: Envoy Gateway (Gateway API)
+#------------------------------------------------------------------------------
+gateway:
+  enabled: false  # Set to true to use Envoy Gateway (and set ingress.enabled=false)
+  # Name of your Gateway resource (created by Terraform ingress module)
+  name: "langsmith-gateway"
+  # Namespace where the Gateway is deployed
+  namespace: "envoy-gateway-system"
+  # Specific listener section name
+  sectionName: "http"
+  annotations: {}
+  labels:
+    app.kubernetes.io/managed-by: "helm"
+
+#==============================================================================
+# SERVICE CONFIGURATION
+#==============================================================================
+
+#------------------------------------------------------------------------------
+# Backend Service (API Server)
+#------------------------------------------------------------------------------
+backend:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2000Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1984
+
+#------------------------------------------------------------------------------
+# Frontend Service (Web UI)
+#------------------------------------------------------------------------------
+frontend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 80
+
+#------------------------------------------------------------------------------
+# Platform Backend Service
+#------------------------------------------------------------------------------
+platformBackend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1986
+
+#------------------------------------------------------------------------------
+# Hub Backend Service
+#------------------------------------------------------------------------------
+hubBackend:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1985
+
+#------------------------------------------------------------------------------
+# Playground Service
+#------------------------------------------------------------------------------
+playground:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 3001
+
+#------------------------------------------------------------------------------
+# Queue Service (Background Jobs)
+#------------------------------------------------------------------------------
+queue:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+
+#==============================================================================
+# DATA STORES
+#==============================================================================
+
+#------------------------------------------------------------------------------
+# PostgreSQL - EXTERNAL (Cloud SQL via Terraform)
+#------------------------------------------------------------------------------
+# The Terraform kubernetes module creates a secret named "langsmith-postgres-credentials"
+# with keys: host, port, database, username, password
+postgres:
+  external:
+    enabled: true
+    # Secret created by Terraform module (../k8s-bootstrap/main.tf)
+    existingSecretName: "langsmith-postgres-credentials"
+  internal:
+    enabled: false
+
+#------------------------------------------------------------------------------
+# Redis - EXTERNAL (Memorystore via Terraform)
+#------------------------------------------------------------------------------
+# The Terraform kubernetes module creates a secret named "langsmith-redis-credentials"
+# with keys: host, port
+redis:
+  external:
+    enabled: true
+    # Secret created by Terraform module (../k8s-bootstrap/main.tf)
+    existingSecretName: "langsmith-redis-credentials"
+  internal:
+    enabled: false
+
+#------------------------------------------------------------------------------
+# ClickHouse - IN-CLUSTER (Managed by Helm)
+#------------------------------------------------------------------------------
+# ClickHouse runs in the cluster for trace storage (OLAP)
+# For e2-standard-4 nodes (~4 vCPU, ~13GB allocatable):
+#   Use reduced resources below
+# For production (e2-standard-8 nodes):
+#   cpu requests: 3500m, memory requests: 15Gi
+clickhouse:
+  external:
+    enabled: false
+  statefulSet:
+    resources:
+      limits:
+        cpu: 4000m
+        memory: 12Gi
+      requests:
+        cpu: 2000m
+        memory: 8Gi
+    persistence:
+      enabled: true
+      size: "500Gi"
+      # Use SSD-backed storage class for performance
+      # GKE: premium-rwo (SSD) or standard-rwo (balanced)
+      storageClass: "premium-rwo"
+
+#------------------------------------------------------------------------------
+# Blob Storage - GCS (Bucket via Terraform)
+#------------------------------------------------------------------------------
+# The Terraform storage module creates a GCS bucket
+# Bucket name format: {project_id}-{prefix}-{env}-traces-{suffix}
+blobStorage:
+  enabled: true
+  bucketType: "gcs"
+  gcs:
+    # Set via --set blobStorage.gcs.bucket="$(terraform output -raw storage_bucket_name)"
+    bucket: ""
+    # Set via --set blobStorage.gcs.projectId="YOUR_PROJECT_ID" (optional, auto-detected if not set)
+    # projectId: ""
+    # Workload Identity handles authentication - no credentials needed
+
+#==============================================================================
+# SECURITY & SERVICE ACCOUNT
+#==============================================================================
+
+#------------------------------------------------------------------------------
+# Service Account (Created by Terraform)
+#------------------------------------------------------------------------------
+# Terraform creates a Kubernetes service account "langsmith-ksa" with
+# Workload Identity binding to the GCP service account
+serviceAccount:
+  create: false
+  name: "langsmith-ksa"
+  # Annotations are set by Terraform on the service account
+
+#------------------------------------------------------------------------------
+# Pod Disruption Budget
+#------------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+#------------------------------------------------------------------------------
+# Security Context
+#------------------------------------------------------------------------------
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+#==============================================================================
+# LANGSMITH DEPLOYMENT (LangGraph Platform)
+#==============================================================================
+
+#------------------------------------------------------------------------------
+# Operator Configuration
+#------------------------------------------------------------------------------
+# The operator manages LangGraph Platform CRDs for agent deployments
+# Reference: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
+operator:
+  enabled: true
+  # Watch specific namespaces (leave empty for all)
+  # watchNamespaces: []
+  
+  # Deployment templates for agent servers
+  # Customize this to add imagePullSecrets for private registries
+  templates:
+    deployment: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${name}
+        namespace: ${namespace}
+      spec:
+        replicas: ${replicas}
+        revisionHistoryLimit: 10
+        selector:
+          matchLabels:
+            app: ${name}
+        template:
+          metadata:
+            labels:
+              app: ${name}
+          spec:
+            enableServiceLinks: false
+            serviceAccountName: langsmith-ksa
+            # Uncomment to use private registries
+            # imagePullSecrets:
+            # - name: langsmith-registry-secret
+            containers:
+            - name: api-server
+              image: ${image}
+              ports:
+              - name: api-server
+                containerPort: 8000
+                protocol: TCP
+              livenessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              readinessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+
+#------------------------------------------------------------------------------
+# Host Backend (Control Plane)
+#------------------------------------------------------------------------------
+hostBackend:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+  service:
+    type: ClusterIP
+    port: 1987
+
+#------------------------------------------------------------------------------
+# Listener Service
+#------------------------------------------------------------------------------
+listener:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+#==============================================================================
+# ADVANCED CONFIGURATION
+#==============================================================================
+
+#------------------------------------------------------------------------------
+# Image Configuration (for air-gapped environments)
+#------------------------------------------------------------------------------
+# Uncomment to mirror images to your private registry
+# hostBackendImage:
+#   repository: "your-registry.com/langchain/hosted-langserve-backend"
+#   pullPolicy: IfNotPresent
+# operatorImage:
+#   repository: "your-registry.com/langchain/langgraph-operator"
+#   pullPolicy: IfNotPresent
+
+#------------------------------------------------------------------------------
+# Node Selection (Optional)
+#------------------------------------------------------------------------------
+# Uncomment to target specific node pools
+# nodeSelector:
+#   cloud.google.com/gke-nodepool: "langsmith-pool"
+
+affinity: {}
+tolerations: []
+nodeSelector: {}
+

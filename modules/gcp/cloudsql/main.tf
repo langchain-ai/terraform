@@ -1,0 +1,133 @@
+# Cloud SQL Module - PostgreSQL Instance
+
+#------------------------------------------------------------------------------
+# Random Password for PostgreSQL
+#------------------------------------------------------------------------------
+resource "random_password" "postgres_password" {
+  length           = 24
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
+}
+
+#------------------------------------------------------------------------------
+# Cloud SQL Instance
+#------------------------------------------------------------------------------
+resource "google_sql_database_instance" "postgres" {
+  name                = var.instance_name
+  project             = var.project_id
+  region              = var.region
+  database_version    = var.database_version
+  deletion_protection = var.deletion_protection
+
+  settings {
+    tier              = var.tier
+    availability_type = var.high_availability ? "REGIONAL" : "ZONAL"
+    disk_size         = var.disk_size
+    disk_type         = "PD_SSD"
+    disk_autoresize   = true
+
+    # IP Configuration - Private or Public based on var.use_private_ip
+    ip_configuration {
+      ipv4_enabled    = !var.use_private_ip
+      private_network = var.use_private_ip ? var.network_id : null
+      # ssl_mode replaces deprecated require_ssl
+      # ENCRYPTED_ONLY = require SSL for public IP access
+      # ALLOW_UNENCRYPTED_AND_ENCRYPTED = allow both (for private IP within VPC)
+      ssl_mode = var.use_private_ip ? "ALLOW_UNENCRYPTED_AND_ENCRYPTED" : "ENCRYPTED_ONLY"
+
+      # Only enable private path when using private IP
+      enable_private_path_for_google_cloud_services = var.use_private_ip
+
+      # Authorized networks for public IP access
+      dynamic "authorized_networks" {
+        for_each = var.use_private_ip ? [] : var.authorized_networks
+        content {
+          name  = authorized_networks.value.name
+          value = authorized_networks.value.value
+        }
+      }
+    }
+
+    # Backup configuration
+    backup_configuration {
+      enabled                        = true
+      start_time                     = "02:00"
+      point_in_time_recovery_enabled = true
+      transaction_log_retention_days = 7
+      backup_retention_settings {
+        retained_backups = 30
+        retention_unit   = "COUNT"
+      }
+    }
+
+    # Maintenance window
+    maintenance_window {
+      day          = 7 # Sunday
+      hour         = 3
+      update_track = "stable"
+    }
+
+    # Insights
+    insights_config {
+      query_insights_enabled  = true
+      query_string_length     = 1024
+      record_application_tags = true
+      record_client_address   = true
+    }
+
+    # Database flags
+    database_flags {
+      name  = "max_connections"
+      value = "500"
+    }
+
+    database_flags {
+      name  = "log_checkpoints"
+      value = "on"
+    }
+
+    database_flags {
+      name  = "log_connections"
+      value = "on"
+    }
+
+    database_flags {
+      name  = "log_disconnections"
+      value = "on"
+    }
+
+    # Labels
+    user_labels = merge(var.labels, {
+      "component" = "database"
+    })
+  }
+
+  # Only depend on VPC peering when using private IP
+  # Note: depends_on doesn't support conditionals, so we always include it
+  # but the connection will be null when not using private IP
+
+  timeouts {
+    create = "30m"
+    update = "30m"
+    delete = "30m"
+  }
+}
+
+#------------------------------------------------------------------------------
+# Database
+#------------------------------------------------------------------------------
+resource "google_sql_database" "langsmith" {
+  name     = var.database_name
+  project  = var.project_id
+  instance = google_sql_database_instance.postgres.name
+}
+
+#------------------------------------------------------------------------------
+# Database User
+#------------------------------------------------------------------------------
+resource "google_sql_user" "langsmith" {
+  name     = var.username
+  project  = var.project_id
+  instance = google_sql_database_instance.postgres.name
+  password = random_password.postgres_password.result
+}
