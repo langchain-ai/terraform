@@ -102,44 +102,6 @@ resource "kubernetes_manifest" "gateway" {
 }
 
 #------------------------------------------------------------------------------
-# Reference Grant for cross-namespace access
-#------------------------------------------------------------------------------
-resource "kubernetes_manifest" "reference_grant" {
-  count = var.ingress_type == "envoy" ? 1 : 0
-
-  manifest = {
-    apiVersion = "gateway.networking.k8s.io/v1beta1"
-    kind       = "ReferenceGrant"
-    metadata = {
-      name      = "allow-gateway-to-langsmith"
-      namespace = var.langsmith_namespace
-    }
-    spec = {
-      from = [
-        {
-          group     = "gateway.networking.k8s.io"
-          kind      = "HTTPRoute"
-          namespace = var.langsmith_namespace
-        },
-        {
-          group     = "gateway.networking.k8s.io"
-          kind      = "Gateway"
-          namespace = "envoy-gateway-system"
-        }
-      ]
-      to = [
-        {
-          group = ""
-          kind  = "Service"
-        }
-      ]
-    }
-  }
-
-  depends_on = [kubernetes_manifest.gateway]
-}
-
-#------------------------------------------------------------------------------
 # Data source for external IP
 #------------------------------------------------------------------------------
 data "kubernetes_service" "envoy_gateway" {
