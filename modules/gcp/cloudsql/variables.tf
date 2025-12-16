@@ -96,6 +96,35 @@ variable "deletion_protection" {
 }
 
 #------------------------------------------------------------------------------
+# Database Flags
+#------------------------------------------------------------------------------
+variable "database_flags" {
+  description = "List of database flags to set on the Cloud SQL instance"
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = [
+    {
+      name  = "max_connections"
+      value = "500"
+    },
+    {
+      name  = "log_checkpoints"
+      value = "on"
+    },
+    {
+      name  = "log_connections"
+      value = "on"
+    },
+    {
+      name  = "log_disconnections"
+      value = "on"
+    }
+  ]
+}
+
+#------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------
 variable "labels" {

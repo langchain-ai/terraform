@@ -227,6 +227,32 @@ variable "postgres_deletion_protection" {
   default     = true
 }
 
+variable "postgres_database_flags" {
+  description = "List of database flags to set on the Cloud SQL instance"
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  default = [
+    {
+      name  = "max_connections"
+      value = "500"
+    },
+    {
+      name  = "log_checkpoints"
+      value = "on"
+    },
+    {
+      name  = "log_connections"
+      value = "on"
+    },
+    {
+      name  = "log_disconnections"
+      value = "on"
+    }
+  ]
+}
+
 variable "postgres_password" {
   description = "PostgreSQL database password (sensitive - use TF_VAR_postgres_password env var)"
   type        = string

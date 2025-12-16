@@ -51,25 +51,12 @@ resource "google_sql_database_instance" "postgres" {
       record_client_address   = true
     }
 
-    # Database flags
-    database_flags {
-      name  = "max_connections"
-      value = "500"
-    }
-
-    database_flags {
-      name  = "log_checkpoints"
-      value = "on"
-    }
-
-    database_flags {
-      name  = "log_connections"
-      value = "on"
-    }
-
-    database_flags {
-      name  = "log_disconnections"
-      value = "on"
+    dynamic "database_flags" {
+      for_each = var.database_flags
+      content {
+        name  = database_flags.value.name
+        value = database_flags.value.value
+      }
     }
 
     # Labels

@@ -230,6 +230,7 @@ module "cloudsql" {
   disk_size           = var.postgres_disk_size
   high_availability   = var.postgres_high_availability
   deletion_protection = local.deletion_protection
+  database_flags      = var.postgres_database_flags
 
   network_id                 = module.networking.vpc_id
   private_network_connection = module.networking.private_service_connection
