@@ -27,23 +27,8 @@ variable "service_account_email" {
 #------------------------------------------------------------------------------
 # Database Credentials
 #------------------------------------------------------------------------------
-variable "postgres_host" {
-  description = "PostgreSQL host"
-  type        = string
-}
-
-variable "postgres_database" {
-  description = "PostgreSQL database name"
-  type        = string
-}
-
-variable "postgres_username" {
-  description = "PostgreSQL username"
-  type        = string
-}
-
-variable "postgres_password" {
-  description = "PostgreSQL password"
+variable "postgres_connection_url" {
+  description = "PostgreSQL connection URL (format: postgresql://user:password@host:port/database)"
   type        = string
   sensitive   = true
 }
@@ -57,16 +42,11 @@ variable "use_managed_redis" {
   default     = true
 }
 
-variable "redis_host" {
-  description = "Redis host (only used when use_managed_redis = true)"
+variable "redis_connection_url" {
+  description = "Redis connection URL (format: redis://host:port) - only used when use_managed_redis = true"
   type        = string
   default     = ""
-}
-
-variable "redis_port" {
-  description = "Redis port (only used when use_managed_redis = true)"
-  type        = number
-  default     = 6379
+  sensitive   = true
 }
 
 #------------------------------------------------------------------------------

@@ -273,7 +273,7 @@ queue:
 # PostgreSQL - EXTERNAL (Cloud SQL via Terraform)
 #------------------------------------------------------------------------------
 # The Terraform kubernetes module creates a secret named "langsmith-postgres-credentials"
-# with keys: host, port, database, username, password
+# with key: connection_url
 postgres:
   external:
     enabled: true
@@ -286,7 +286,7 @@ postgres:
 # Redis - EXTERNAL (Memorystore via Terraform)
 #------------------------------------------------------------------------------
 # The Terraform kubernetes module creates a secret named "langsmith-redis-credentials"
-# with keys: host, port
+# with key: connection_url
 redis:
   external:
     enabled: true

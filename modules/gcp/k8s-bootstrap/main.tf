@@ -45,12 +45,7 @@ resource "kubernetes_secret" "postgres_credentials" {
   }
 
   data = {
-    host           = var.postgres_host
-    port           = "5432"
-    database       = var.postgres_database
-    username       = var.postgres_username
-    password       = var.postgres_password
-    connection_url = "postgresql://${urlencode(var.postgres_username)}:${urlencode(var.postgres_password)}@${var.postgres_host}:5432/${var.postgres_database}"
+    connection_url = var.postgres_connection_url
   }
 
   type = "Opaque"
@@ -72,9 +67,7 @@ resource "kubernetes_secret" "redis_credentials" {
   }
 
   data = {
-    host           = var.redis_host
-    port           = tostring(var.redis_port)
-    connection_url = "redis://${var.redis_host}:${var.redis_port}"
+    connection_url = var.redis_connection_url
   }
 
   type = "Opaque"

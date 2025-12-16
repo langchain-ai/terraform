@@ -325,15 +325,11 @@ module "k8s_bootstrap" {
   langsmith_namespace   = var.langsmith_namespace
   service_account_email = module.iam.service_account_email
 
-  postgres_host     = module.cloudsql.connection_ip
-  postgres_database = module.cloudsql.database_name
-  postgres_username = module.cloudsql.username
-  postgres_password = module.cloudsql.password
+  postgres_connection_url = "postgresql://${urlencode(module.cloudsql.username)}:${urlencode(module.cloudsql.password)}@${module.cloudsql.connection_ip}:5432/${module.cloudsql.database_name}"
 
   # Redis credentials - only when using managed Redis (private networking)
-  use_managed_redis = var.use_private_networking
-  redis_host        = var.use_private_networking ? module.redis[0].host : ""
-  redis_port        = var.use_private_networking ? module.redis[0].port : 6379
+  use_managed_redis    = var.use_private_networking
+  redis_connection_url = var.use_private_networking ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
 
   # KEDA for LangSmith Deployment feature
   install_keda = var.enable_langsmith_deployment
