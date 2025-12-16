@@ -309,9 +309,6 @@ module "iam" {
   gke_namespace          = var.langsmith_namespace
   workload_identity_pool = local.workload_identity_pool
 
-  # Storage access
-  bucket_name = module.storage.bucket_name
-
   depends_on = [module.gke_cluster, module.storage]
 }
 

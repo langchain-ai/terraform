@@ -36,11 +36,3 @@ variable "workload_identity_pool" {
   description = "Workload Identity pool (usually PROJECT_ID.svc.id.goog)"
   type        = string
 }
-
-#------------------------------------------------------------------------------
-# Resource Access
-#------------------------------------------------------------------------------
-variable "bucket_name" {
-  description = "Cloud Storage bucket name"
-  type        = string
-}

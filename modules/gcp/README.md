@@ -68,10 +68,10 @@ This module creates a Cloud SQL PostgreSQL instance with private IP only (requir
 This module will create a Memorystore Redis instance when using private networking mode. The default memory size is 5GB with high availability enabled. When using public networking mode, Redis is deployed in-cluster via the Helm chart.
 
 ### Cloud Storage module
-This module creates a GCS bucket for storing LangSmith trace data. The bucket is configured with lifecycle policies for data retention and is accessible from the Kubernetes cluster via Workload Identity.
+This module creates a GCS bucket for storing LangSmith trace data. The bucket is configured with lifecycle policies for data retention. To access the bucket from LangSmith, configure GCS HMAC credentials (access key and secret) in your Helm values. See the [LangSmith blob storage documentation](https://docs.langchain.com/langsmith/self-host-blob-storage) for details.
 
 ### IAM module
-This module creates a service account with appropriate permissions for LangSmith to access GCS, and sets up Workload Identity binding to allow the Kubernetes service account to authenticate as the GCP service account.
+This module creates a service account and sets up Workload Identity binding to allow the Kubernetes service account to authenticate as the GCP service account. The service account is granted permissions for logging, monitoring, and Secret Manager access.
 
 ### Kubernetes bootstrap module
 This module handles Kubernetes-specific setup including namespace creation, secret management for database and Redis credentials, and optional installation of cert-manager and KEDA for LangSmith Deployment features.

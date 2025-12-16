@@ -58,13 +58,3 @@ resource "google_storage_bucket" "langsmith_traces" {
   # Force destroy (set to false for production)
   force_destroy = var.force_destroy
 }
-
-#------------------------------------------------------------------------------
-# IAM for Service Account Access
-#------------------------------------------------------------------------------
-resource "google_storage_bucket_iam_member" "langsmith_sa_access" {
-  count  = var.service_account_email != "" ? 1 : 0
-  bucket = google_storage_bucket.langsmith_traces.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${var.service_account_email}"
-}

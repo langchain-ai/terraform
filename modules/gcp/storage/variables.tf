@@ -38,12 +38,6 @@ variable "force_destroy" {
   default     = false
 }
 
-variable "service_account_email" {
-  description = "Service account email for bucket access"
-  type        = string
-  default     = ""
-}
-
 #------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------

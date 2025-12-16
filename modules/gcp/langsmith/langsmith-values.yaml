@@ -334,7 +334,8 @@ blobStorage:
     bucket: ""
     # Set via --set blobStorage.gcs.projectId="YOUR_PROJECT_ID" (optional, auto-detected if not set)
     # projectId: ""
-    # Workload Identity handles authentication - no credentials needed
+    # Note: LangSmith does not use IAM/Workload Identity for GCS access.
+    # Configure authentication using service account keys or HMAC credentials.
 
 #==============================================================================
 # SECURITY & SERVICE ACCOUNT
