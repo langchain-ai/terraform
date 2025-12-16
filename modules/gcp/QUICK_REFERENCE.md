@@ -258,5 +258,7 @@ kubectl describe ingress -n langsmith
 ## Important Notes
 
 - **TLS Configuration**: Set `tls_certificate_source` in `terraform.tfvars` to `"letsencrypt"` or `"existing"` before running `terraform apply` to enable TLS in the Helm install command output.
+- **Cloud SQL**: Always uses private IP only (requires VPC peering). Connection details are automatically configured via Kubernetes secrets.
 - **Private Networking**: When using private networking mode, Redis will be managed by Memorystore. When using public networking, Redis is deployed in-cluster via Helm.
+- **GCS Authentication**: The bucket and projectId are set via Helm flags. For GCS access, you'll need to configure HMAC credentials (access key and secret) separately. See `langsmith-values.yaml` comments or the [LangSmith blob storage documentation](https://docs.langchain.com/langsmith/self-host-blob-storage) for details.
 - **State Management**: Consider using a GCS backend for Terraform state in production (uncomment backend configuration in `main.tf`).
