@@ -26,10 +26,16 @@ variable "bucket_name" {
 #------------------------------------------------------------------------------
 # Bucket Configuration
 #------------------------------------------------------------------------------
-variable "retention_days" {
-  description = "Number of days to retain objects (0 = no deletion)"
+variable "ttl_short_days" {
+  description = "Short term TTL in days (for ttl_s/ prefix, default: 14 days per LangSmith docs)"
   type        = number
-  default     = 90
+  default     = 14
+}
+
+variable "ttl_long_days" {
+  description = "Long term TTL in days (for ttl_l/ prefix, default: 400 days per LangSmith docs)"
+  type        = number
+  default     = 400
 }
 
 variable "force_destroy" {

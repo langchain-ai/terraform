@@ -310,14 +310,25 @@ variable "redis_high_availability" {
 #------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------
-variable "storage_retention_days" {
-  description = "Number of days to retain trace data (0 = no automatic deletion)"
+variable "storage_ttl_short_days" {
+  description = "Short term TTL in days for ttl_s/ prefix (default: 14 days per LangSmith docs)"
   type        = number
-  default     = 90
+  default     = 14
 
   validation {
-    condition     = var.storage_retention_days >= 0 && var.storage_retention_days <= 3650
-    error_message = "Retention days must be between 0 and 3650 (10 years)."
+    condition     = var.storage_ttl_short_days > 0 && var.storage_ttl_short_days <= 3650
+    error_message = "TTL short days must be between 1 and 3650 (10 years)."
+  }
+}
+
+variable "storage_ttl_long_days" {
+  description = "Long term TTL in days for ttl_l/ prefix (default: 400 days per LangSmith docs)"
+  type        = number
+  default     = 400
+
+  validation {
+    condition     = var.storage_ttl_long_days > 0 && var.storage_ttl_long_days <= 3650
+    error_message = "TTL long days must be between 1 and 3650 (10 years)."
   }
 }
 

@@ -19,16 +19,24 @@ resource "google_storage_bucket" "langsmith_traces" {
     enabled = false
   }
 
-  # Lifecycle rules for automatic deletion
-  dynamic "lifecycle_rule" {
-    for_each = var.retention_days > 0 ? [1] : []
-    content {
-      condition {
-        age = var.retention_days
-      }
-      action {
-        type = "Delete"
-      }
+  # Lifecycle rules for TTL prefixes (matching LangSmith TTL structure)
+  lifecycle_rule {
+    condition {
+      age            = var.ttl_short_days
+      matches_prefix = ["ttl_s/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  lifecycle_rule {
+    condition {
+      age            = var.ttl_long_days
+      matches_prefix = ["ttl_l/"]
+    }
+    action {
+      type = "Delete"
     }
   }
 

@@ -106,8 +106,9 @@ redis_high_availability = true # Standard HA tier
 #------------------------------------------------------------------------------
 # Optional: Storage Configuration
 #------------------------------------------------------------------------------
-storage_retention_days = 90    # Days to retain traces (0 = no deletion)
-storage_force_destroy  = false # Prevent bucket deletion with objects
+storage_ttl_short_days = 14   # Short term TTL for ttl_s/ prefix (default: 14 days)
+storage_ttl_long_days  = 400  # Long term TTL for ttl_l/ prefix (default: 400 days)
+storage_force_destroy   = false # Prevent bucket deletion with objects
 
 #------------------------------------------------------------------------------
 # Optional: ClickHouse Configuration

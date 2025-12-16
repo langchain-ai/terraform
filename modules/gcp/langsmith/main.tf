@@ -285,7 +285,8 @@ module "storage" {
   bucket_name = local.bucket_name
 
   # Configuration
-  retention_days = var.storage_retention_days
+  ttl_short_days = var.storage_ttl_short_days
+  ttl_long_days  = var.storage_ttl_long_days
   force_destroy  = var.storage_force_destroy
 
   # Labels
