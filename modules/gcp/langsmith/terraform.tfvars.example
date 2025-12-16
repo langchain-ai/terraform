@@ -70,6 +70,10 @@ postgres_disk_size           = 50                   # GB
 postgres_high_availability   = true                 # REGIONAL for HA
 postgres_deletion_protection = true                 # Prevent accidental deletion
 
+# PostgreSQL password (sensitive - prefer using environment variable)
+# Set via: export TF_VAR_postgres_password="your-secure-password"
+# postgres_password = "your-secure-password"
+
 #------------------------------------------------------------------------------
 # Optional: Redis Configuration
 #------------------------------------------------------------------------------

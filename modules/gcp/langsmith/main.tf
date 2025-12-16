@@ -222,6 +222,7 @@ module "cloudsql" {
   instance_name = local.postgres_instance_name
   database_name = local.postgres_database_name
   username      = local.postgres_user_name
+  password      = var.postgres_password
 
   # Configuration
   database_version    = var.postgres_version

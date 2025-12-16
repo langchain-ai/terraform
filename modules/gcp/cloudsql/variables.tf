@@ -35,6 +35,17 @@ variable "username" {
   default     = "langsmith"
 }
 
+variable "password" {
+  description = "PostgreSQL database password"
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.password) >= 8
+    error_message = "Password must be at least 8 characters long."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Instance Configuration
 #------------------------------------------------------------------------------

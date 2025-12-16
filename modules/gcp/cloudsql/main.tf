@@ -1,15 +1,6 @@
 # Cloud SQL Module - PostgreSQL Instance
 
 #------------------------------------------------------------------------------
-# Random Password for PostgreSQL
-#------------------------------------------------------------------------------
-resource "random_password" "postgres_password" {
-  length           = 24
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
-}
-
-#------------------------------------------------------------------------------
 # Cloud SQL Instance
 #------------------------------------------------------------------------------
 resource "google_sql_database_instance" "postgres" {
@@ -129,5 +120,5 @@ resource "google_sql_user" "langsmith" {
   name     = var.username
   project  = var.project_id
   instance = google_sql_database_instance.postgres.name
-  password = random_password.postgres_password.result
+  password = var.password
 }

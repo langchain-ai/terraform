@@ -42,6 +42,6 @@ output "username" {
 
 output "password" {
   description = "Database password"
-  value       = random_password.postgres_password.result
+  value       = var.password
   sensitive   = true
 }

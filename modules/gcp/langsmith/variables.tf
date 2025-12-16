@@ -227,6 +227,18 @@ variable "postgres_deletion_protection" {
   default     = true
 }
 
+variable "postgres_password" {
+  description = "PostgreSQL database password (sensitive - use TF_VAR_postgres_password env var)"
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = length(var.postgres_password) >= 8
+    error_message = "Password must be at least 8 characters long."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Redis (Memorystore) Configuration
 #------------------------------------------------------------------------------
