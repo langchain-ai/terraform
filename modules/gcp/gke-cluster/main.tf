@@ -74,10 +74,9 @@ resource "google_container_cluster" "primary" {
     }
   }
 
-  # Network policy
   network_policy {
     enabled  = true
-    provider = "CALICO"
+    provider = var.network_policy_provider
   }
 
   # Logging and monitoring

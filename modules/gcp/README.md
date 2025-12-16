@@ -59,7 +59,7 @@ Once everything is created, fill out the `langsmith-values.yaml` file with your 
 This module will create a new VPC with subnets, Cloud NAT, and router configuration. It also sets up private service connection for managed services like Cloud SQL (always private) and Memorystore Redis (when using private networking mode).
 
 ### GKE cluster module
-This module will provision a Google Kubernetes Engine (GKE) cluster. You can choose between Standard mode or Autopilot mode. The module configures node pools with autoscaling, network policies, and Workload Identity for secure access to GCP services.
+This module will provision a Google Kubernetes Engine (GKE) cluster. You can choose between Standard mode or Autopilot mode. The module configures node pools with autoscaling, network policies (configurable provider: CALICO or DATA_PLANE_V2), and Workload Identity for secure access to GCP services.
 
 ### Cloud SQL module
 This module creates a Cloud SQL PostgreSQL instance with private IP only (requires VPC peering). The default instance tier is `db-custom-2-8192` which has 2 vCPUs and 8 GB of memory. High availability can be enabled for production workloads. Storage size and other configurations are customizable via module variables. You must provide a PostgreSQL password via the `postgres_password` variable (minimum 8 characters). It is recommended to set this via the `TF_VAR_postgres_password` environment variable for security.

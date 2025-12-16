@@ -102,6 +102,17 @@ variable "release_channel" {
   default     = "REGULAR"
 }
 
+variable "network_policy_provider" {
+  description = "Network policy provider: CALICO (legacy) or DATA_PLANE_V2 (Cilium-based, recommended)"
+  type        = string
+  default     = "DATA_PLANE_V2"
+
+  validation {
+    condition     = contains(["CALICO", "DATA_PLANE_V2"], var.network_policy_provider)
+    error_message = "Network policy provider must be CALICO or DATA_PLANE_V2."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Protection
 #------------------------------------------------------------------------------

@@ -184,6 +184,17 @@ variable "gke_deletion_protection" {
   default     = true
 }
 
+variable "gke_network_policy_provider" {
+  description = "GKE network policy provider: CALICO (legacy) or DATA_PLANE_V2 (Cilium-based, recommended). Note: Autopilot clusters always use Dataplane V2."
+  type        = string
+  default     = "DATA_PLANE_V2"
+
+  validation {
+    condition     = contains(["CALICO", "DATA_PLANE_V2"], var.gke_network_policy_provider)
+    error_message = "Network policy provider must be CALICO or DATA_PLANE_V2."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Cloud SQL (PostgreSQL) Configuration
 #------------------------------------------------------------------------------

@@ -193,14 +193,15 @@ module "gke_cluster" {
   services_range_name = module.networking.services_range_name
 
   # Cluster configuration
-  use_autopilot       = var.gke_use_autopilot
-  node_count          = var.gke_node_count
-  min_node_count      = var.gke_min_nodes
-  max_node_count      = var.gke_max_nodes
-  machine_type        = var.gke_machine_type
-  disk_size_gb        = var.gke_disk_size
-  release_channel     = var.gke_release_channel
-  deletion_protection = var.gke_deletion_protection
+  use_autopilot           = var.gke_use_autopilot
+  node_count              = var.gke_node_count
+  min_node_count          = var.gke_min_nodes
+  max_node_count          = var.gke_max_nodes
+  machine_type            = var.gke_machine_type
+  disk_size_gb            = var.gke_disk_size
+  release_channel         = var.gke_release_channel
+  deletion_protection     = var.gke_deletion_protection
+  network_policy_provider = var.gke_network_policy_provider
 
   # Labels
   labels = local.common_labels

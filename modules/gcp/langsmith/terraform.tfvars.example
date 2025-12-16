@@ -61,6 +61,7 @@ gke_machine_type    = "e2-standard-4"
 gke_disk_size           = 100          # GB
 gke_release_channel     = "REGULAR"    # RAPID, REGULAR, or STABLE
 gke_deletion_protection = true         # Prevent accidental cluster deletion
+gke_network_policy_provider = "DATA_PLANE_V2"  # CALICO (legacy) or DATA_PLANE_V2 (recommended)
 
 #------------------------------------------------------------------------------
 # Optional: Cloud SQL Configuration
