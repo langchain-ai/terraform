@@ -75,25 +75,9 @@ variable "network_id" {
   type        = string
 }
 
-variable "use_private_ip" {
-  description = "Use private IP for Cloud SQL (requires VPC peering). When false, uses public IP with SSL."
-  type        = bool
-  default     = true
-}
-
 variable "private_network_connection" {
-  description = "Private service connection ID (required when use_private_ip = true)"
+  description = "Private service connection ID (required for Cloud SQL private IP)"
   type        = string
-  default     = null
-}
-
-variable "authorized_networks" {
-  description = "Authorized networks for public IP access (only used when use_private_ip = false)"
-  type = list(object({
-    name  = string
-    value = string
-  }))
-  default = []
 }
 
 #------------------------------------------------------------------------------

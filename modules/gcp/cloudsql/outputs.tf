@@ -15,19 +15,9 @@ output "private_ip" {
   value       = google_sql_database_instance.postgres.private_ip_address
 }
 
-output "public_ip" {
-  description = "Cloud SQL public IP address"
-  value       = google_sql_database_instance.postgres.public_ip_address
-}
-
 output "connection_ip" {
-  description = "Cloud SQL connection IP (private or public based on configuration)"
-  value       = var.use_private_ip ? google_sql_database_instance.postgres.private_ip_address : google_sql_database_instance.postgres.public_ip_address
-}
-
-output "uses_private_ip" {
-  description = "Whether Cloud SQL is using private IP"
-  value       = var.use_private_ip
+  description = "Cloud SQL private IP address"
+  value       = google_sql_database_instance.postgres.private_ip_address
 }
 
 output "database_name" {

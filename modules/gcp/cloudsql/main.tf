@@ -17,26 +17,11 @@ resource "google_sql_database_instance" "postgres" {
     disk_type         = "PD_SSD"
     disk_autoresize   = true
 
-    # IP Configuration - Private or Public based on var.use_private_ip
     ip_configuration {
-      ipv4_enabled    = !var.use_private_ip
-      private_network = var.use_private_ip ? var.network_id : null
-      # ssl_mode replaces deprecated require_ssl
-      # ENCRYPTED_ONLY = require SSL for public IP access
-      # ALLOW_UNENCRYPTED_AND_ENCRYPTED = allow both (for private IP within VPC)
-      ssl_mode = var.use_private_ip ? "ALLOW_UNENCRYPTED_AND_ENCRYPTED" : "ENCRYPTED_ONLY"
-
-      # Only enable private path when using private IP
-      enable_private_path_for_google_cloud_services = var.use_private_ip
-
-      # Authorized networks for public IP access
-      dynamic "authorized_networks" {
-        for_each = var.use_private_ip ? [] : var.authorized_networks
-        content {
-          name  = authorized_networks.value.name
-          value = authorized_networks.value.value
-        }
-      }
+      ipv4_enabled                                  = false
+      private_network                               = var.network_id
+      ssl_mode                                      = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      enable_private_path_for_google_cloud_services = true
     }
 
     # Backup configuration
@@ -93,9 +78,6 @@ resource "google_sql_database_instance" "postgres" {
     })
   }
 
-  # Only depend on VPC peering when using private IP
-  # Note: depends_on doesn't support conditionals, so we always include it
-  # but the connection will be null when not using private IP
 
   timeouts {
     create = "30m"

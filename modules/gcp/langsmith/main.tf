@@ -231,18 +231,8 @@ module "cloudsql" {
   high_availability   = var.postgres_high_availability
   deletion_protection = local.deletion_protection
 
-  # Network - Private or Public IP based on use_private_networking
   network_id                 = module.networking.vpc_id
-  use_private_ip             = var.use_private_networking
-  private_network_connection = var.use_private_networking ? module.networking.private_service_connection : null
-
-  # Authorized networks for public IP access (when use_private_networking = false)
-  authorized_networks = var.use_private_networking ? [] : [
-    {
-      name  = "allow-all" # In production, restrict to specific IPs
-      value = "0.0.0.0/0"
-    }
-  ]
+  private_network_connection = module.networking.private_service_connection
 
   # Labels
   labels = local.common_labels
@@ -336,7 +326,6 @@ module "k8s_bootstrap" {
   langsmith_namespace   = var.langsmith_namespace
   service_account_email = module.iam.service_account_email
 
-  # Database credentials - uses connection_ip which returns private or public IP
   postgres_host     = module.cloudsql.connection_ip
   postgres_database = module.cloudsql.database_name
   postgres_username = module.cloudsql.username

@@ -56,13 +56,13 @@ gcloud container clusters get-credentials <cluster-name> --region <region> --pro
 Once everything is created, fill out the `langsmith-values.yaml` file with your [desired configuration](https://docs.smith.langchain.com/self_hosting/configuration) and follow our [helm installation instructions](https://docs.smith.langchain.com/self_hosting/installation/kubernetes#deploying-to-kubernetes). You can use the terraform outputs from the LangSmith module to fill in things like the Cloud SQL connection details, Redis host, and GCS bucket name.
 
 ### Networking module
-This module will create a new VPC with subnets, Cloud NAT, and router configuration. It also sets up private service connection for managed services like Cloud SQL and Memorystore Redis when using private networking mode. The module supports both private and public networking configurations.
+This module will create a new VPC with subnets, Cloud NAT, and router configuration. It also sets up private service connection for managed services like Cloud SQL (always private) and Memorystore Redis (when using private networking mode).
 
 ### GKE cluster module
 This module will provision a Google Kubernetes Engine (GKE) cluster. You can choose between Standard mode or Autopilot mode. The module configures node pools with autoscaling, network policies, and Workload Identity for secure access to GCP services.
 
 ### Cloud SQL module
-This module will create a private or public Cloud SQL PostgreSQL instance. The default instance tier is `db-custom-2-8192` which has 2 vCPUs and 8 GB of memory. High availability can be enabled for production workloads. Storage size and other configurations are customizable via module variables. You must provide a PostgreSQL password via the `postgres_password` variable (minimum 8 characters). It is recommended to set this via the `TF_VAR_postgres_password` environment variable for security.
+This module creates a Cloud SQL PostgreSQL instance with private IP only (requires VPC peering). The default instance tier is `db-custom-2-8192` which has 2 vCPUs and 8 GB of memory. High availability can be enabled for production workloads. Storage size and other configurations are customizable via module variables. You must provide a PostgreSQL password via the `postgres_password` variable (minimum 8 characters). It is recommended to set this via the `TF_VAR_postgres_password` environment variable for security.
 
 ### Redis module
 This module will create a Memorystore Redis instance when using private networking mode. The default memory size is 5GB with high availability enabled. When using public networking mode, Redis is deployed in-cluster via the Helm chart.

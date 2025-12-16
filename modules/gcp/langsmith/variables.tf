@@ -70,7 +70,7 @@ variable "unique_suffix" {
 # Networking Configuration
 #------------------------------------------------------------------------------
 variable "use_private_networking" {
-  description = "Use private IPs for Cloud SQL and Redis (requires servicenetworking.networksAdmin role). When false, uses public IPs and in-cluster Redis."
+  description = "Use private IPs for Redis (requires servicenetworking.networksAdmin role). Cloud SQL always uses private IP. When false, Redis is deployed in-cluster via Helm."
   type        = bool
   default     = true
 }

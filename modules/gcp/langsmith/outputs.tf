@@ -52,23 +52,13 @@ output "postgres_instance_name" {
 }
 
 output "postgres_connection_ip" {
-  description = "Cloud SQL connection IP (private or public based on use_private_networking)"
+  description = "Cloud SQL private IP address"
   value       = module.cloudsql.connection_ip
 }
 
 output "postgres_private_ip" {
   description = "Cloud SQL private IP address"
   value       = module.cloudsql.private_ip
-}
-
-output "postgres_public_ip" {
-  description = "Cloud SQL public IP address"
-  value       = module.cloudsql.public_ip
-}
-
-output "postgres_uses_private_ip" {
-  description = "Whether Cloud SQL is using private IP"
-  value       = module.cloudsql.uses_private_ip
 }
 
 output "postgres_database" {
@@ -241,7 +231,7 @@ output "resource_summary" {
     subnet               = module.networking.subnet_name
     gke_cluster          = module.gke_cluster.cluster_name
     postgres_instance    = module.cloudsql.instance_name
-    postgres_ip_type     = var.use_private_networking ? "private" : "public"
+    postgres_ip_type     = "private"
     redis_instance       = var.use_private_networking ? module.redis[0].instance_name : "in-cluster (Helm)"
     clickhouse           = var.clickhouse_source == "in-cluster" ? "in-cluster (Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"
     storage_bucket       = module.storage.bucket_name
@@ -263,12 +253,12 @@ output "next_steps" {
     ============================================
     
     Naming Convention: ${var.name_prefix}-${var.environment}-{resource}${var.unique_suffix ? "-${random_id.suffix.hex}" : ""}
-    Networking Mode: ${var.use_private_networking ? "Private (VPC peering)" : "Public IPs"}
+    Networking Mode: ${var.use_private_networking ? "Private (VPC peering)" : "Public IPs (Redis only)"}
     
     Resources Created:
     - VPC: ${module.networking.vpc_name}
     - GKE Cluster: ${module.gke_cluster.cluster_name}
-    - Cloud SQL: ${module.cloudsql.instance_name} (${var.use_private_networking ? "private IP" : "public IP"})
+    - Cloud SQL: ${module.cloudsql.instance_name} (private IP)
     - Redis: ${var.use_private_networking ? module.redis[0].instance_name : "In-cluster (via Helm)"}
     - ClickHouse: ${var.clickhouse_source == "in-cluster" ? "In-cluster (via Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"}
     - Storage: ${module.storage.bucket_name}
@@ -307,7 +297,7 @@ output "next_steps" {
     5. Access LangSmith:
        https://${var.langsmith_domain}
        Login: Use the credentials from langsmith-values.yaml (YOUR_ADMIN_EMAIL / YOUR_ADMIN_PASSWORD)
-    ${var.use_private_networking ? "" : "\n    NOTE: Using public networking mode. Cloud SQL uses public IP with SSL.\n    Redis will be deployed in-cluster via Helm chart."}
+    ${var.use_private_networking ? "" : "\n    NOTE: Using public networking mode for Redis. Redis will be deployed in-cluster via Helm chart.\n    Cloud SQL always uses private IP."}
     ${var.tls_certificate_source == "none" ? "\n    NOTE: TLS is not configured. To enable HTTPS:\n    - Set tls_certificate_source = 'letsencrypt' for automatic certificates\n    - Set tls_certificate_source = 'existing' to use your own certificates\n    - Then run: terraform apply" : ""}
   EOT
 }

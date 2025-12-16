@@ -31,14 +31,15 @@ zone   = "us-west2-a"
 #------------------------------------------------------------------------------
 # Optional: Networking
 #------------------------------------------------------------------------------
-# Private vs Public networking mode:
-# - true (default): Uses private IPs for Cloud SQL and Memorystore Redis
+# Private vs Public networking mode for Redis:
+# - true (default): Uses private IPs for Memorystore Redis
 #   Requires: servicenetworking.networksAdmin role (for VPC peering)
 #   More secure: Resources not exposed to internet
+#   Note: Cloud SQL always uses private IP regardless of this setting
 #
-# - false: Uses public IPs for Cloud SQL, in-cluster Redis (via Helm)
+# - false: Redis is deployed in-cluster (via Helm)
 #   Fewer permissions needed, easier setup
-#   Less secure: Cloud SQL exposed to internet (with SSL + authorized networks)
+#   Note: Cloud SQL always uses private IP regardless of this setting
 use_private_networking = true
 
 # Ensure these don't overlap with existing ranges in your project
