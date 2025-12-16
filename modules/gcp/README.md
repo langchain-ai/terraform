@@ -77,7 +77,7 @@ This module creates a service account and sets up Workload Identity binding to a
 This module handles Kubernetes-specific setup including namespace creation, secret management for database and Redis credentials, and optional installation of cert-manager and KEDA for LangSmith Deployment features.
 
 ### Ingress module
-This module optionally installs and configures an ingress controller (NGINX or Envoy Gateway) for exposing LangSmith services. TLS can be configured via cert-manager with Let's Encrypt or using existing certificates.
+This module optionally installs and configures Envoy Gateway (Gateway API) for exposing LangSmith services. The Gateway uses HTTPS only (port 443) - TLS must be configured via cert-manager with Let's Encrypt or using existing certificates. The module supports extensibility for future ingress types (Istio, etc.), but currently only Envoy Gateway is implemented.
 
 # Helm values
 We also provide some guidance around deploying LangSmith onto these resources.

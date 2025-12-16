@@ -111,44 +111,11 @@ terraform output -raw cluster_name
 
 ### 11. Install LangSmith via Helm
 
-#### Basic Installation (No TLS)
+**Note:** The Gateway uses HTTPS only (port 443). TLS must be configured in `terraform.tfvars` before installing the ingress. Set `tls_certificate_source = "letsencrypt"` or `"existing"` and provide the required TLS configuration, then run `terraform apply` before installing Helm.
 
-```bash
-helm install langsmith langchain/langsmith \
-  -f langsmith-values.yaml \
-  -n langsmith \
-  --set config.langsmithLicenseKey="YOUR_LICENSE_KEY" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="langsmith.example.com" \
-  --set blobStorage.gcs.bucket="$(terraform output -raw storage_bucket_name)" \
-  --set blobStorage.gcs.projectId="$(gcloud config get-value project)" \
-  --set 'config.basicAuth.initialOrgAdminEmail=your-email@example.com' \
-  --set 'config.basicAuth.initialOrgAdminPassword=YourSecurePassword123!'
-```
+#### Installation
 
-#### Installation with Let's Encrypt TLS
-
-```bash
-helm install langsmith langchain/langsmith \
-  -f langsmith-values.yaml \
-  -n langsmith \
-  --set config.langsmithLicenseKey="YOUR_LICENSE_KEY" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="langsmith.example.com" \
-  --set blobStorage.gcs.bucket="$(terraform output -raw storage_bucket_name)" \
-  --set blobStorage.gcs.projectId="$(gcloud config get-value project)" \
-  --set 'config.basicAuth.initialOrgAdminEmail=your-email@example.com' \
-  --set 'config.basicAuth.initialOrgAdminPassword=YourSecurePassword123!' \
-  --set 'ingress.annotations.cert-manager\.io/cluster-issuer=letsencrypt-prod' \
-  --set-string 'ingress.annotations.nginx\.ingress\.kubernetes\\.io/ssl-redirect=true' \
-  --set 'ingress.hosts[0].host=langsmith.example.com' \
-  --set 'ingress.tls[0].secretName=langsmith-tls' \
-  --set 'ingress.tls[0].hosts[0]=langsmith.example.com'
-```
-
-#### Installation with Existing TLS Certificate
+TLS is configured in the Gateway resource via Terraform. The Gateway uses HTTPS only (port 443). Set `tls_certificate_source` to `"letsencrypt"` or `"existing"` in `terraform.tfvars` before running `terraform apply`. No additional Helm flags are needed for TLS.
 
 ```bash
 helm install langsmith langchain/langsmith \
@@ -162,29 +129,22 @@ helm install langsmith langchain/langsmith \
   --set blobStorage.gcs.projectId="$(gcloud config get-value project)" \
   --set 'config.basicAuth.initialOrgAdminEmail=your-email@example.com' \
   --set 'config.basicAuth.initialOrgAdminPassword=YourSecurePassword123!' \
-  --set-string 'ingress.annotations.nginx\.ingress\.kubernetes\.io/ssl-redirect=true' \
-  --set 'ingress.hosts[0].host=langsmith.example.com' \
-  --set 'ingress.tls[0].secretName=langsmith-tls' \
-  --set 'ingress.tls[0].hosts[0]=langsmith.example.com'
-```
-
-#### For Envoy Gateway (instead of NGINX)
-
-Add these flags to any of the above commands:
-```bash
-  --set ingress.enabled=false --set gateway.enabled=true
+  --set gateway.enabled=true \
+  --set ingress.enabled=false \
+  --set gateway.name="$(terraform output -raw gateway_name 2>/dev/null || echo 'langsmith-gateway')" \
+  --set gateway.namespace="envoy-gateway-system"
 ```
 
 ### 12. Configure DNS
 
-Point your domain to the ingress external IP:
+Point your domain to the Gateway external IP:
 
 ```bash
-# Get the external IP
-kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-
-# Or if using Envoy Gateway
+# Get the external IP from Envoy Gateway
 kubectl get svc -n envoy-gateway-system envoy-envoy-gateway-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+# Or get it from Terraform output
+terraform output -raw ingress_ip
 ```
 
 Then configure your DNS:
@@ -248,11 +208,16 @@ kubectl logs -n langsmith -l app=langsmith-backend --tail=100
 kubectl logs -n langsmith -l app=langsmith-frontend --tail=100
 ```
 
-### Check Ingress Configuration
+### Check Gateway Configuration
 
 ```bash
-kubectl get ingress -n langsmith
-kubectl describe ingress -n langsmith
+# Check Gateway resource
+kubectl get gateway -n envoy-gateway-system
+kubectl describe gateway -n envoy-gateway-system
+
+# Check HTTPRoute (created by Helm)
+kubectl get httproute -n langsmith
+kubectl describe httproute -n langsmith
 ```
 
 ## Important Notes

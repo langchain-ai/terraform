@@ -23,12 +23,8 @@
 #     --set config.basicAuth.jwtSecret="$(openssl rand -base64 32)" \
 #     --set blobStorage.gcs.bucket="YOUR_BUCKET_NAME"
 #
-# To switch ingress type via command line:
-#   # For NGINX (default):
-#   --set ingress.enabled=true --set gateway.enabled=false
-#
-#   # For Envoy Gateway:
-#   --set ingress.enabled=false --set gateway.enabled=true
+# Envoy Gateway is the default and only implemented ingress type.
+# Other ingress types (Istio, etc.) are reserved for future implementation.
 
 #------------------------------------------------------------------------------
 # Core Configuration (REQUIRED)
@@ -75,51 +71,17 @@ config:
     enabled: true
 
 #==============================================================================
-# INGRESS CONFIGURATION - Choose ONE of the following options
+# GATEWAY CONFIGURATION - Envoy Gateway (Gateway API)
 #==============================================================================
-# Option 1: NGINX Ingress (simpler, default)
-# Option 2: Envoy Gateway (advanced features, Gateway API)
-#
-# Toggle via Helm --set flags or edit the enabled values below.
+# Envoy Gateway is the default and only implemented ingress type.
+# TLS is configured in the Gateway resource via Terraform (not via Helm values).
+# Other ingress types (Istio, etc.) are reserved for future implementation.
 
 #------------------------------------------------------------------------------
-# Option 1: NGINX Ingress Controller (DEFAULT)
-#------------------------------------------------------------------------------
-ingress:
-  enabled: true  # Set to false if using Envoy Gateway
-  className: "nginx"  # Modern way to specify ingress class (replaces deprecated kubernetes.io/ingress.class annotation)
-  annotations:
-    # Proxy settings for large payloads
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
-    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
-    # CORS configuration
-    nginx.ingress.kubernetes.io/enable-cors: "true"
-    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-    nginx.ingress.kubernetes.io/cors-allow-headers: "Authorization, Content-Type, X-Requested-With, X-Api-Key, Accept, Origin"
-    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
-    # SSL redirect (enable after TLS is configured)
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    # For cert-manager TLS automation
-    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
-  hosts:
-    - host: "langsmith.example.com"  # Must match config.hostname
-      paths:
-        - path: /
-          pathType: Prefix
-  # TLS configuration (uncomment after setting up cert-manager)
-  # tls:
-  #   - secretName: langsmith-tls
-  #     hosts:
-  #       - langsmith.example.com
-
-#------------------------------------------------------------------------------
-# Option 2: Envoy Gateway (Gateway API)
+# Envoy Gateway (Gateway API)
 #------------------------------------------------------------------------------
 gateway:
-  enabled: false  # Set to true to use Envoy Gateway (and set ingress.enabled=false)
+  enabled: true  # Envoy Gateway is the default
   # Name of your Gateway resource (created by Terraform ingress module)
   name: "langsmith-gateway"
   # Namespace where the Gateway is deployed
@@ -129,6 +91,10 @@ gateway:
   annotations: {}
   labels:
     app.kubernetes.io/managed-by: "helm"
+
+# Ingress is disabled when using Envoy Gateway
+ingress:
+  enabled: false
 
 #==============================================================================
 # SERVICE CONFIGURATION

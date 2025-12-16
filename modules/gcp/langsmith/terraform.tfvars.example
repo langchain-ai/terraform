@@ -146,7 +146,8 @@ langsmith_domain    = "langsmith.example.com"
 # Optional: Ingress Configuration
 #------------------------------------------------------------------------------
 install_ingress = true
-ingress_type    = "nginx"  # "nginx" or "envoy"
+ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved for future)
+# Note: Gateway uses HTTPS only (port 443). TLS must be configured (see TLS Configuration section above).
 
 #------------------------------------------------------------------------------
 # Optional: LangSmith Deployment (Deploy agents from UI)

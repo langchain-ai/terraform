@@ -214,13 +214,6 @@ resource "kubernetes_network_policy" "langsmith_default" {
       from {
         namespace_selector {
           match_labels = {
-            name = "ingress-nginx"
-          }
-        }
-      }
-      from {
-        namespace_selector {
-          match_labels = {
             name = "envoy-gateway-system"
           }
         }
@@ -373,8 +366,13 @@ locals {
         solvers = [
           {
             http01 = {
-              ingress = {
-                class = "nginx"
+              gatewayHTTPRoute = {
+                parentRefs = [
+                  {
+                    name      = var.gateway_name
+                    namespace = "envoy-gateway-system"
+                  }
+                ]
               }
             }
           }

@@ -369,19 +369,19 @@ variable "langsmith_license_key" {
 # Ingress Configuration
 #------------------------------------------------------------------------------
 variable "install_ingress" {
-  description = "Whether to install ingress controller via Terraform"
+  description = "Whether to install ingress controller via Terraform. Note: Gateway uses HTTPS only, so TLS must be configured (tls_certificate_source must be 'letsencrypt' or 'existing')."
   type        = bool
   default     = true
 }
 
 variable "ingress_type" {
-  description = "Type of ingress to install: 'nginx' or 'envoy'"
+  description = "Type of ingress to install: 'envoy' (implemented), 'istio' or 'other' (reserved for future implementation)"
   type        = string
-  default     = "nginx"
+  default     = "envoy"
 
   validation {
-    condition     = contains(["nginx", "envoy"], var.ingress_type)
-    error_message = "Ingress type must be 'nginx' or 'envoy'."
+    condition     = contains(["envoy", "istio", "other"], var.ingress_type)
+    error_message = "Ingress type must be 'envoy' (currently implemented), 'istio', or 'other' (reserved for future)."
   }
 }
 

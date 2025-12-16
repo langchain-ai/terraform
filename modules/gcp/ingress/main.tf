@@ -1,60 +1,9 @@
-# Ingress Module - NGINX Ingress Controller or Envoy Gateway
+# Ingress Module - Envoy Gateway (Gateway API)
+# Note: Currently only Envoy Gateway is implemented. Other ingress types (Istio, etc.) are reserved for future implementation.
+# The Gateway uses HTTPS only (port 443) - TLS must be configured.
 
 #------------------------------------------------------------------------------
-# NGINX Ingress Controller
-#------------------------------------------------------------------------------
-resource "helm_release" "nginx_ingress" {
-  count = var.ingress_type == "nginx" ? 1 : 0
-
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  version          = "4.9.0"
-  namespace        = "ingress-nginx"
-  create_namespace = true
-
-  values = [
-    yamlencode({
-      controller = {
-        service = {
-          type = "LoadBalancer"
-          annotations = {
-            "cloud.google.com/load-balancer-type" = "External"
-          }
-        }
-        config = {
-          "proxy-body-size"    = "100m"
-          "proxy-read-timeout" = "300"
-          "proxy-send-timeout" = "300"
-        }
-        resources = {
-          requests = {
-            cpu    = "100m"
-            memory = "128Mi"
-          }
-          limits = {
-            cpu    = "500m"
-            memory = "512Mi"
-          }
-        }
-        autoscaling = {
-          enabled     = true
-          minReplicas = 2
-          maxReplicas = 10
-        }
-        metrics = {
-          enabled = true
-        }
-      }
-    })
-  ]
-
-  wait    = true
-  timeout = 600
-}
-
-#------------------------------------------------------------------------------
-# Gateway API CRDs (for Envoy Gateway)
+# Gateway API CRDs (required for Envoy Gateway)
 #------------------------------------------------------------------------------
 resource "helm_release" "gateway_api_crds" {
   count = var.ingress_type == "envoy" ? 1 : 0
@@ -120,15 +69,25 @@ resource "kubernetes_manifest" "gateway" {
     metadata = {
       name      = var.gateway_name
       namespace = "envoy-gateway-system"
+      annotations = var.tls_certificate_source == "letsencrypt" ? {
+        "cert-manager.io/cluster-issuer" = "letsencrypt-prod"
+      } : {}
     }
     spec = {
       gatewayClassName = "envoy-gateway-class"
       listeners = [
         {
-          name     = "http"
-          protocol = "HTTP"
-          port     = 80
+          name     = "https"
+          protocol = "HTTPS"
+          port     = 443
           hostname = var.langsmith_domain
+          tls = {
+            mode = "Terminate"
+            certificateRefs = [{
+              name = var.tls_secret_name
+              kind = "Secret"
+            }]
+          }
           allowedRoutes = {
             namespaces = {
               from = "All"
@@ -181,19 +140,8 @@ resource "kubernetes_manifest" "reference_grant" {
 }
 
 #------------------------------------------------------------------------------
-# Data sources for external IP
+# Data source for external IP
 #------------------------------------------------------------------------------
-data "kubernetes_service" "nginx_ingress" {
-  count = var.ingress_type == "nginx" ? 1 : 0
-
-  metadata {
-    name      = "ingress-nginx-controller"
-    namespace = "ingress-nginx"
-  }
-
-  depends_on = [helm_release.nginx_ingress]
-}
-
 data "kubernetes_service" "envoy_gateway" {
   count = var.ingress_type == "envoy" ? 1 : 0
 

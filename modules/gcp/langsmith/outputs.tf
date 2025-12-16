@@ -161,7 +161,7 @@ output "use_private_networking" {
 # Ingress Outputs
 #------------------------------------------------------------------------------
 output "ingress_type" {
-  description = "Type of ingress installed"
+  description = "Type of ingress/gateway installed"
   value       = var.install_ingress ? var.ingress_type : "not installed"
 }
 
@@ -276,7 +276,7 @@ output "next_steps" {
     3. Install LangSmith via Helm:
        helm repo add langchain https://langchain-ai.github.io/helm
        
-       # For NGINX Ingress (default):
+       # For Envoy Gateway (default):
        helm install langsmith langchain/langsmith \
          -f langsmith-values.yaml \
          -n ${var.langsmith_namespace} \
@@ -286,10 +286,10 @@ output "next_steps" {
          --set config.hostname="${var.langsmith_domain}" \
          --set blobStorage.gcs.bucket="${module.storage.bucket_name}" \
          --set blobStorage.gcs.projectId="${var.project_id}" \
-         --set ingress.className=nginx${var.use_private_networking ? "" : " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false"}${var.tls_certificate_source == "letsencrypt" ? " \\\n         --set 'ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod' \\\n         --set-string 'ingress.annotations.nginx\\.ingress\\.kubernetes\\.io/ssl-redirect=true' \\\n         --set 'ingress.hosts[0].host=${var.langsmith_domain}' \\\n         --set 'ingress.tls[0].secretName=${var.tls_secret_name}' \\\n         --set 'ingress.tls[0].hosts[0]=${var.langsmith_domain}'" : var.tls_certificate_source == "existing" ? " \\\n         --set-string 'ingress.annotations.nginx\\.ingress\\.kubernetes\\.io/ssl-redirect=true' \\\n         --set 'ingress.hosts[0].host=${var.langsmith_domain}' \\\n         --set 'ingress.tls[0].secretName=${var.tls_secret_name}' \\\n         --set 'ingress.tls[0].hosts[0]=${var.langsmith_domain}'" : ""}
-       
-       # For Envoy Gateway (add these flags):
-       --set ingress.enabled=false --set gateway.enabled=true
+         --set gateway.enabled=true \
+         --set ingress.enabled=false \
+         --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
+         --set gateway.namespace="envoy-gateway-system"${var.use_private_networking ? "" : " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false"}
     
     4. Configure DNS:
        ${var.langsmith_domain} -> ${var.install_ingress ? try(module.ingress[0].external_ip, "PENDING") : "YOUR_LOAD_BALANCER_IP"}
@@ -312,7 +312,7 @@ output "helm_install_command" {
     export API_KEY_SALT=$(openssl rand -base64 32)
     export JWT_SECRET=$(openssl rand -base64 32)
     
-    # Then install (NGINX Ingress by default):
+    # Then install (Envoy Gateway by default):
     helm install langsmith langchain/langsmith \
       -f langsmith-values.yaml \
       -n ${var.langsmith_namespace} \
@@ -322,16 +322,21 @@ output "helm_install_command" {
       --set config.hostname="${var.langsmith_domain}" \
       --set blobStorage.gcs.bucket="${module.storage.bucket_name}" \
       --set blobStorage.gcs.projectId="${var.project_id}" \
-      --set ingress.className=nginx
-    
-    # For Envoy Gateway, add: --set ingress.enabled=false --set gateway.enabled=true
+      --set gateway.enabled=true \
+      --set ingress.enabled=false \
+      --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
+      --set gateway.namespace="envoy-gateway-system"
   EOT
 }
 
 output "helm_tls_upgrade_command" {
-  description = "Helm upgrade command to enable HTTPS (varies by TLS source)"
-  value = var.tls_certificate_source == "letsencrypt" ? join("\n", [
-    "# Enable HTTPS with Let's Encrypt (run after DNS is configured):",
+  description = "Helm upgrade command (TLS is configured in Gateway, not via Helm)"
+  value = var.tls_certificate_source != "none" ? join("\n", [
+    "# TLS is configured in the Gateway resource via Terraform.",
+    "# The Gateway uses HTTPS only (port 443) - TLS is required.",
+    "# No additional Helm flags needed for TLS when using Envoy Gateway.",
+    "#",
+    "# To upgrade LangSmith with current configuration:",
     "helm upgrade langsmith langchain/langsmith \\",
     "  -f langsmith-values.yaml \\",
     "  -n ${var.langsmith_namespace} \\",
@@ -339,29 +344,11 @@ output "helm_tls_upgrade_command" {
     "  --set config.apiKeySalt=\"$API_KEY_SALT\" \\",
     "  --set config.basicAuth.jwtSecret=\"$JWT_SECRET\" \\",
     "  --set config.hostname=\"${var.langsmith_domain}\" \\",
-    "  --set ingress.className=nginx \\",
-    "  --set 'ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-prod' \\",
-    "  --set-string 'ingress.annotations.nginx\\.ingress\\.kubernetes\\.io/ssl-redirect=true' \\",
-    "  --set 'ingress.hosts[0].host=${var.langsmith_domain}' \\",
-    "  --set 'ingress.tls[0].secretName=${var.tls_secret_name}' \\",
-    "  --set 'ingress.tls[0].hosts[0]=${var.langsmith_domain}' \\",
+    "  --set gateway.enabled=true \\",
+    "  --set ingress.enabled=false \\",
+    "  --set gateway.name=\"${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}\" \\",
+    "  --set gateway.namespace=\"envoy-gateway-system\" \\",
     "  --set blobStorage.gcs.bucket=\"${module.storage.bucket_name}\" \\",
     "  --set blobStorage.gcs.projectId=\"${var.project_id}\""
-    ]) : var.tls_certificate_source == "existing" ? join("\n", [
-    "# Enable HTTPS with existing certificate (secret already created by Terraform):",
-    "helm upgrade langsmith langchain/langsmith \\",
-    "  -f langsmith-values.yaml \\",
-    "  -n ${var.langsmith_namespace} \\",
-    "  --set config.langsmithLicenseKey=\"$LANGSMITH_LICENSE_KEY\" \\",
-    "  --set config.apiKeySalt=\"$API_KEY_SALT\" \\",
-    "  --set config.basicAuth.jwtSecret=\"$JWT_SECRET\" \\",
-    "  --set config.hostname=\"${var.langsmith_domain}\" \\",
-    "  --set ingress.className=nginx \\",
-    "  --set-string 'ingress.annotations.nginx\\.ingress\\.kubernetes\\.io/ssl-redirect=true' \\",
-    "  --set 'ingress.hosts[0].host=${var.langsmith_domain}' \\",
-    "  --set 'ingress.tls[0].secretName=${var.tls_secret_name}' \\",
-    "  --set 'ingress.tls[0].hosts[0]=${var.langsmith_domain}' \\",
-    "  --set blobStorage.gcs.bucket=\"${module.storage.bucket_name}\" \\",
-    "  --set blobStorage.gcs.projectId=\"${var.project_id}\""
-  ]) : "TLS not configured. Set tls_certificate_source = 'letsencrypt' or 'existing' to enable."
+  ]) : "TLS not configured. The Gateway uses HTTPS only (port 443). Set tls_certificate_source = 'letsencrypt' or 'existing' in terraform.tfvars before running terraform apply."
 }

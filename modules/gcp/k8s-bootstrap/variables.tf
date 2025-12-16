@@ -94,6 +94,12 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+variable "gateway_name" {
+  description = "Name of the Gateway resource for cert-manager HTTP01 challenges (Envoy Gateway)"
+  type        = string
+  default     = "langsmith-gateway"
+}
+
 #------------------------------------------------------------------------------
 # Existing TLS Certificate (when tls_certificate_source = "existing")
 #------------------------------------------------------------------------------

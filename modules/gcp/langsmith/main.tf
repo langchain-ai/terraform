@@ -346,6 +346,9 @@ module "k8s_bootstrap" {
   tls_secret_name     = var.tls_secret_name
   langsmith_domain    = var.langsmith_domain
 
+  # Gateway name for cert-manager HTTP01 challenges
+  gateway_name = var.install_ingress && var.ingress_type == "envoy" ? "${local.base_name}-gateway" : "langsmith-gateway"
+
   # License key (optional)
   langsmith_license_key = var.langsmith_license_key
 
@@ -379,6 +382,10 @@ module "ingress" {
 
   # Use centralized naming for gateway
   gateway_name = "${local.base_name}-gateway"
+
+  # TLS configuration for Gateway HTTPS listener
+  tls_certificate_source = var.tls_certificate_source
+  tls_secret_name        = var.tls_secret_name
 
   depends_on = [module.k8s_bootstrap]
 }
