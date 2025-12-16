@@ -163,7 +163,8 @@ module "networking" {
   services_cidr = var.services_cidr
 
   # Private service connection (requires servicenetworking.networksAdmin role)
-  enable_private_service_connection = var.use_private_networking
+  # Always enable private service connection for external PostgreSQL and Redis
+  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external"
 
   # Labels
   labels = local.common_labels
@@ -210,10 +211,11 @@ module "gke_cluster" {
 }
 
 #------------------------------------------------------------------------------
-# Cloud SQL Module
+# Cloud SQL Module (only created when using external PostgreSQL)
 #------------------------------------------------------------------------------
 module "cloudsql" {
   source = "../cloudsql"
+  count  = var.postgres_source == "external" ? 1 : 0
 
   project_id  = var.project_id
   region      = var.region
@@ -243,12 +245,12 @@ module "cloudsql" {
 }
 
 #------------------------------------------------------------------------------
-# Redis Module (only created when using private networking)
+# Redis Module (only created when using external Redis)
 # Memorystore Redis requires private service access
 #------------------------------------------------------------------------------
 module "redis" {
   source = "../redis"
-  count  = var.use_private_networking ? 1 : 0
+  count  = var.redis_source == "external" ? 1 : 0
 
   project_id  = var.project_id
   region      = var.region
@@ -326,11 +328,12 @@ module "k8s_bootstrap" {
   langsmith_namespace   = var.langsmith_namespace
   service_account_email = module.iam.service_account_email
 
-  postgres_connection_url = "postgresql://${urlencode(module.cloudsql.username)}:${urlencode(module.cloudsql.password)}@${module.cloudsql.connection_ip}:5432/${module.cloudsql.database_name}"
+  # PostgreSQL connection - only when using external PostgreSQL
+  postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}" : ""
 
-  # Redis credentials - only when using managed Redis (private networking)
-  use_managed_redis    = var.use_private_networking
-  redis_connection_url = var.use_private_networking ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+  # Redis connection - only when using external Redis
+  use_managed_redis    = var.redis_source == "external"
+  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
 
   # KEDA for LangSmith Deployment feature
   install_keda = var.enable_langsmith_deployment

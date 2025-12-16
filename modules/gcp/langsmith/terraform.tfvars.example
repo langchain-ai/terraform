@@ -31,16 +31,8 @@ zone   = "us-west2-a"
 #------------------------------------------------------------------------------
 # Optional: Networking
 #------------------------------------------------------------------------------
-# Private vs Public networking mode for Redis:
-# - true (default): Uses private IPs for Memorystore Redis
-#   Requires: servicenetworking.networksAdmin role (for VPC peering)
-#   More secure: Resources not exposed to internet
-#   Note: Cloud SQL always uses private IP regardless of this setting
-#
-# - false: Redis is deployed in-cluster (via Helm)
-#   Fewer permissions needed, easier setup
-#   Note: Cloud SQL always uses private IP regardless of this setting
-use_private_networking = true
+# Note: External PostgreSQL and Redis always use private connections (VPC peering)
+# Requires: servicenetworking.networksAdmin role (for VPC peering)
 
 # Ensure these don't overlap with existing ranges in your project
 subnet_cidr   = "10.0.0.0/20"
@@ -64,15 +56,18 @@ gke_deletion_protection = true         # Prevent accidental cluster deletion
 gke_network_policy_provider = "DATA_PLANE_V2"  # CALICO (legacy) or DATA_PLANE_V2 (recommended)
 
 #------------------------------------------------------------------------------
-# Optional: Cloud SQL Configuration
+# Optional: PostgreSQL Configuration
 #------------------------------------------------------------------------------
-postgres_version             = "POSTGRES_15"
+postgres_source = "external"  # "external" (default, Cloud SQL with private IP) or "in-cluster" (via Helm)
+
+# Configuration for external PostgreSQL (Cloud SQL)
+postgres_version             = "POSTGRES_18"
 postgres_tier                = "db-custom-2-8192"  # 2 vCPU, 8GB RAM
 postgres_disk_size           = 50                   # GB
 postgres_high_availability   = true                 # REGIONAL for HA
 postgres_deletion_protection = true                 # Prevent accidental deletion
 
-# PostgreSQL password (sensitive - prefer using environment variable)
+# PostgreSQL password (required for external, sensitive - prefer using environment variable)
 # Set via: export TF_VAR_postgres_password="your-secure-password"
 # postgres_password = "your-secure-password"
 
@@ -99,7 +94,8 @@ postgres_deletion_protection = true                 # Prevent accidental deletio
 #------------------------------------------------------------------------------
 # Optional: Redis Configuration
 #------------------------------------------------------------------------------
-redis_version           = "REDIS_7_0"
+redis_source = "external"  # "external" (default, Memorystore) or "in-cluster" (via Helm)
+redis_version           = "REDIS_7_2"
 redis_memory_size       = 5    # GB
 redis_high_availability = true # Standard HA tier
 

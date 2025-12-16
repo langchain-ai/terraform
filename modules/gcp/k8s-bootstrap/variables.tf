@@ -28,8 +28,9 @@ variable "service_account_email" {
 # Database Credentials
 #------------------------------------------------------------------------------
 variable "postgres_connection_url" {
-  description = "PostgreSQL connection URL (format: postgresql://user:password@host:port/database)"
+  description = "PostgreSQL connection URL (format: postgresql://user:password@host:port/database) - only used when using external PostgreSQL"
   type        = string
+  default     = ""
   sensitive   = true
 }
 

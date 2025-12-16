@@ -236,30 +236,34 @@ queue:
 #==============================================================================
 
 #------------------------------------------------------------------------------
-# PostgreSQL - EXTERNAL (Cloud SQL via Terraform)
+# PostgreSQL Configuration
 #------------------------------------------------------------------------------
+# Set postgres.external.enabled=true when postgres_source="external" (Cloud SQL via Terraform)
+# Set postgres.internal.enabled=true when postgres_source="in-cluster" (deployed via Helm)
 # The Terraform kubernetes module creates a secret named "langsmith-postgres-credentials"
-# with key: connection_url
+# with key: connection_url (only when postgres_source="external")
 postgres:
   external:
-    enabled: true
+    enabled: true  # Set to false if using in-cluster PostgreSQL
     # Secret created by Terraform module (../k8s-bootstrap/main.tf)
     existingSecretName: "langsmith-postgres-credentials"
   internal:
-    enabled: false
+    enabled: false  # Set to true if using in-cluster PostgreSQL
 
 #------------------------------------------------------------------------------
-# Redis - EXTERNAL (Memorystore via Terraform)
+# Redis Configuration
 #------------------------------------------------------------------------------
+# Set redis.external.enabled=true when redis_source="external" (Memorystore via Terraform)
+# Set redis.internal.enabled=true when redis_source="in-cluster" (deployed via Helm)
 # The Terraform kubernetes module creates a secret named "langsmith-redis-credentials"
-# with key: connection_url
+# with key: connection_url (only when redis_source="external")
 redis:
   external:
-    enabled: true
+    enabled: true  # Set to false if using in-cluster Redis
     # Secret created by Terraform module (../k8s-bootstrap/main.tf)
     existingSecretName: "langsmith-redis-credentials"
   internal:
-    enabled: false
+    enabled: false  # Set to true if using in-cluster Redis
 
 #------------------------------------------------------------------------------
 # ClickHouse - IN-CLUSTER (Managed by Helm)

@@ -46,58 +46,63 @@ output "get_credentials_command" {
 #------------------------------------------------------------------------------
 # Database Outputs
 #------------------------------------------------------------------------------
+output "postgres_source" {
+  description = "PostgreSQL deployment type"
+  value       = var.postgres_source
+}
+
 output "postgres_instance_name" {
-  description = "Cloud SQL instance name"
-  value       = module.cloudsql.instance_name
+  description = "Cloud SQL instance name (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.cloudsql[0].instance_name : null
 }
 
 output "postgres_connection_ip" {
-  description = "Cloud SQL private IP address"
-  value       = module.cloudsql.connection_ip
+  description = "Cloud SQL private IP address (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.cloudsql[0].connection_ip : null
 }
 
 output "postgres_private_ip" {
-  description = "Cloud SQL private IP address"
-  value       = module.cloudsql.private_ip
+  description = "Cloud SQL private IP address (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.cloudsql[0].private_ip : null
 }
 
 output "postgres_database" {
-  description = "PostgreSQL database name"
-  value       = module.cloudsql.database_name
+  description = "PostgreSQL database name (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.cloudsql[0].database_name : null
 }
 
 output "postgres_username" {
-  description = "PostgreSQL username"
-  value       = module.cloudsql.username
+  description = "PostgreSQL username (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.cloudsql[0].username : null
 }
 
 output "postgres_password" {
-  description = "PostgreSQL password"
-  value       = module.cloudsql.password
+  description = "PostgreSQL password (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.cloudsql[0].password : null
   sensitive   = true
 }
 
 #------------------------------------------------------------------------------
 # Redis Outputs
 #------------------------------------------------------------------------------
+output "redis_source" {
+  description = "Redis deployment type"
+  value       = var.redis_source
+}
+
 output "redis_instance_name" {
   description = "Redis instance name (null if using in-cluster Redis)"
-  value       = var.use_private_networking ? module.redis[0].instance_name : null
+  value       = var.redis_source == "external" ? module.redis[0].instance_name : null
 }
 
 output "redis_host" {
   description = "Redis host address (null if using in-cluster Redis)"
-  value       = var.use_private_networking ? module.redis[0].host : null
+  value       = var.redis_source == "external" ? module.redis[0].host : null
 }
 
 output "redis_port" {
   description = "Redis port (null if using in-cluster Redis)"
-  value       = var.use_private_networking ? module.redis[0].port : null
-}
-
-output "uses_managed_redis" {
-  description = "Whether using managed Redis (Memorystore) or in-cluster Redis"
-  value       = var.use_private_networking
+  value       = var.redis_source == "external" ? module.redis[0].port : null
 }
 
 #------------------------------------------------------------------------------
@@ -152,10 +157,6 @@ output "subnet_name" {
   value       = module.networking.subnet_name
 }
 
-output "use_private_networking" {
-  description = "Whether private networking is enabled (affects Cloud SQL and Redis)"
-  value       = var.use_private_networking
-}
 
 #------------------------------------------------------------------------------
 # Ingress Outputs
@@ -230,14 +231,16 @@ output "resource_summary" {
     vpc                  = module.networking.vpc_name
     subnet               = module.networking.subnet_name
     gke_cluster          = module.gke_cluster.cluster_name
-    postgres_instance    = module.cloudsql.instance_name
-    postgres_ip_type     = "private"
-    redis_instance       = var.use_private_networking ? module.redis[0].instance_name : "in-cluster (Helm)"
+    postgres_source      = var.postgres_source
+    postgres_instance    = var.postgres_source == "external" ? module.cloudsql[0].instance_name : "in-cluster (Helm)"
+    postgres_ip_type     = var.postgres_source == "external" ? "private" : "N/A"
+    redis_source         = var.redis_source
+    redis_instance       = var.redis_source == "external" ? module.redis[0].instance_name : "in-cluster (Helm)"
+    clickhouse_source    = var.clickhouse_source
     clickhouse           = var.clickhouse_source == "in-cluster" ? "in-cluster (Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"
     storage_bucket       = module.storage.bucket_name
     service_account      = module.iam.service_account_email
     kubernetes_namespace = var.langsmith_namespace
-    networking_mode      = var.use_private_networking ? "private" : "public"
   }
 }
 
@@ -253,13 +256,12 @@ output "next_steps" {
     ============================================
     
     Naming Convention: ${var.name_prefix}-${var.environment}-{resource}${var.unique_suffix ? "-${random_id.suffix.hex}" : ""}
-    Networking Mode: ${var.use_private_networking ? "Private (VPC peering)" : "Public IPs (Redis only)"}
     
     Resources Created:
     - VPC: ${module.networking.vpc_name}
     - GKE Cluster: ${module.gke_cluster.cluster_name}
-    - Cloud SQL: ${module.cloudsql.instance_name} (private IP)
-    - Redis: ${var.use_private_networking ? module.redis[0].instance_name : "In-cluster (via Helm)"}
+    - PostgreSQL: ${var.postgres_source == "external" ? "${module.cloudsql[0].instance_name} (Cloud SQL, private IP)" : "In-cluster (via Helm)"}
+    - Redis: ${var.redis_source == "external" ? "${module.redis[0].instance_name} (Memorystore, private IP)" : "In-cluster (via Helm)"}
     - ClickHouse: ${var.clickhouse_source == "in-cluster" ? "In-cluster (via Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"}
     - Storage: ${module.storage.bucket_name}
     - Service Account: ${module.iam.service_account_email}
@@ -289,7 +291,7 @@ output "next_steps" {
          --set gateway.enabled=true \
          --set ingress.enabled=false \
          --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
-         --set gateway.namespace="envoy-gateway-system"${var.use_private_networking ? "" : " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false"}
+         --set gateway.namespace="envoy-gateway-system"${var.postgres_source == "in-cluster" ? " \\\n         --set postgres.internal.enabled=true --set postgres.external.enabled=false" : ""}${var.redis_source == "in-cluster" ? " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false" : ""}
     
     4. Configure DNS:
        ${var.langsmith_domain} -> ${var.install_ingress ? try(module.ingress[0].external_ip, "PENDING") : "YOUR_LOAD_BALANCER_IP"}
@@ -297,7 +299,8 @@ output "next_steps" {
     5. Access LangSmith:
        https://${var.langsmith_domain}
        Login: Use the credentials from langsmith-values.yaml (YOUR_ADMIN_EMAIL / YOUR_ADMIN_PASSWORD)
-    ${var.use_private_networking ? "" : "\n    NOTE: Using public networking mode for Redis. Redis will be deployed in-cluster via Helm chart.\n    Cloud SQL always uses private IP."}
+    ${var.postgres_source == "in-cluster" ? "\n    NOTE: PostgreSQL is deployed in-cluster via Helm chart." : "\n    NOTE: PostgreSQL is external (Cloud SQL) with private IP connection."}
+    ${var.redis_source == "in-cluster" ? "\n    NOTE: Redis is deployed in-cluster via Helm chart." : "\n    NOTE: Redis is external (Memorystore) with private IP connection."}
     ${var.tls_certificate_source == "none" ? "\n    NOTE: TLS is not configured. To enable HTTPS:\n    - Set tls_certificate_source = 'letsencrypt' for automatic certificates\n    - Set tls_certificate_source = 'existing' to use your own certificates\n    - Then run: terraform apply" : ""}
   EOT
 }

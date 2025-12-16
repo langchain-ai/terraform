@@ -29,7 +29,7 @@ Make sure you have valid GCP credentials locally that have the permissions to cr
 The service account or user running Terraform needs the following IAM roles:
 - `roles/serviceusage.serviceUsageAdmin` - Enable required APIs
 - `roles/compute.networkAdmin` - Create and manage VPC, subnets, and networking resources
-- `roles/servicenetworking.networksAdmin` - Set up private service connection (required for private networking mode)
+- `roles/servicenetworking.networksAdmin` - Set up private service connection (required when using external PostgreSQL or Redis)
 - `roles/container.admin` - Create and manage GKE clusters
 - `roles/cloudsql.admin` - Create and manage Cloud SQL instances
 - `roles/redis.admin` - Create and manage Memorystore Redis instances
@@ -56,16 +56,16 @@ gcloud container clusters get-credentials <cluster-name> --region <region> --pro
 Once everything is created, fill out the `langsmith-values.yaml` file with your [desired configuration](https://docs.smith.langchain.com/self_hosting/configuration) and follow our [helm installation instructions](https://docs.smith.langchain.com/self_hosting/installation/kubernetes#deploying-to-kubernetes). You can use the terraform outputs from the LangSmith module to fill in things like the Cloud SQL connection details, Redis host, and GCS bucket name.
 
 ### Networking module
-This module will create a new VPC with subnets, Cloud NAT, and router configuration. It also sets up private service connection for managed services like Cloud SQL (always private) and Memorystore Redis (when using private networking mode).
+This module will create a new VPC with subnets, Cloud NAT, and router configuration. It also sets up private service connection for managed services (Cloud SQL and Memorystore Redis) when using external PostgreSQL or Redis. External PostgreSQL and Redis always use private IP connections via VPC peering.
 
 ### GKE cluster module
 This module will provision a Google Kubernetes Engine (GKE) cluster. You can choose between Standard mode or Autopilot mode. The module configures node pools with autoscaling, network policies (configurable provider: CALICO or DATA_PLANE_V2), and Workload Identity for secure access to GCP services.
 
 ### Cloud SQL module
-This module creates a Cloud SQL PostgreSQL instance with private IP only (requires VPC peering). The default instance tier is `db-custom-2-8192` which has 2 vCPUs and 8 GB of memory. High availability can be enabled for production workloads. Storage size and other configurations are customizable via module variables. You must provide a PostgreSQL password via the `postgres_password` variable (minimum 8 characters). It is recommended to set this via the `TF_VAR_postgres_password` environment variable for security.
+This module creates a Cloud SQL PostgreSQL instance with private IP only (requires VPC peering). It is only created when `postgres_source = "external"` (default). The default instance tier is `db-custom-2-8192` which has 2 vCPUs and 8 GB of memory. High availability can be enabled for production workloads. Storage size and other configurations are customizable via module variables. You must provide a PostgreSQL password via the `postgres_password` variable (minimum 8 characters) when using external PostgreSQL. It is recommended to set this via the `TF_VAR_postgres_password` environment variable for security. When `postgres_source = "in-cluster"`, PostgreSQL is deployed via the Helm chart.
 
 ### Redis module
-This module will create a Memorystore Redis instance when using private networking mode. The default memory size is 5GB with high availability enabled. When using public networking mode, Redis is deployed in-cluster via the Helm chart.
+This module creates a Memorystore Redis instance with private IP only (requires VPC peering). It is only created when `redis_source = "external"` (default). The default memory size is 5GB with high availability enabled. When `redis_source = "in-cluster"`, Redis is deployed in-cluster via the Helm chart.
 
 ### Cloud Storage module
 This module creates a GCS bucket for storing LangSmith trace data. The bucket is configured with lifecycle policies matching LangSmith's TTL structure: `ttl_s/` prefix (14 days default) and `ttl_l/` prefix (400 days default). To access the bucket from LangSmith, configure GCS HMAC credentials (access key and secret) in your Helm values. See the [LangSmith blob storage documentation](https://docs.langchain.com/langsmith/self-host-blob-storage) for details.

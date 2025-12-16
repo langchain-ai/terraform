@@ -69,11 +69,7 @@ variable "unique_suffix" {
 #------------------------------------------------------------------------------
 # Networking Configuration
 #------------------------------------------------------------------------------
-variable "use_private_networking" {
-  description = "Use private IPs for Redis (requires servicenetworking.networksAdmin role). Cloud SQL always uses private IP. When false, Redis is deployed in-cluster via Helm."
-  type        = bool
-  default     = true
-}
+# Note: External PostgreSQL and Redis always use private connections (VPC peering)
 
 variable "subnet_cidr" {
   description = "CIDR range for the subnet (must not overlap with existing ranges)"
@@ -264,21 +260,43 @@ variable "postgres_database_flags" {
   ]
 }
 
+variable "postgres_source" {
+  description = "PostgreSQL deployment type: 'external' (default, Cloud SQL with private IP), or 'in-cluster' (deployed via Helm)"
+  type        = string
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.postgres_source)
+    error_message = "postgres_source must be one of: external, in-cluster"
+  }
+}
+
 variable "postgres_password" {
-  description = "PostgreSQL database password (sensitive - use TF_VAR_postgres_password env var)"
+  description = "PostgreSQL database password (required for 'external', sensitive - use TF_VAR_postgres_password env var)"
   type        = string
   default     = ""
   sensitive   = true
 
   validation {
-    condition     = length(var.postgres_password) >= 8
-    error_message = "Password must be at least 8 characters long."
+    condition     = var.postgres_source == "in-cluster" || length(var.postgres_password) >= 8
+    error_message = "PostgreSQL password must be at least 8 characters long when using external PostgreSQL."
   }
 }
 
 #------------------------------------------------------------------------------
-# Redis (Memorystore) Configuration
+# Redis Configuration
 #------------------------------------------------------------------------------
+variable "redis_source" {
+  description = "Redis deployment type: 'external' (default, Memorystore with private IP), or 'in-cluster' (deployed via Helm)"
+  type        = string
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.redis_source)
+    error_message = "redis_source must be one of: external, in-cluster"
+  }
+}
+
 variable "redis_version" {
   description = "Redis version"
   type        = string
