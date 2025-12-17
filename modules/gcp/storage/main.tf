@@ -21,13 +21,13 @@ resource "google_storage_bucket" "langsmith_traces" {
 
   # Lifecycle rules for TTL prefixes (matching LangSmith TTL structure)
   lifecycle_rule {
-      condition {
+    condition {
       age            = var.ttl_short_days
       matches_prefix = ["ttl_s/"]
-      }
-      action {
-        type = "Delete"
-      }
+    }
+    action {
+      type = "Delete"
+    }
   }
 
   lifecycle_rule {

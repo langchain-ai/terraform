@@ -6,7 +6,7 @@
 locals {
   # Use standard-install.yaml (v1.4.1) for production stability
   gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
-          }
+}
 
 resource "null_resource" "install_gateway_api_crds" {
   count = var.ingress_type == "envoy" ? 1 : 0
@@ -145,7 +145,7 @@ locals {
               kind      = "Secret"
               namespace = var.langsmith_namespace
             }]
-    }
+          }
           allowedRoutes = {
             namespaces = {
               from = "All"
@@ -203,12 +203,12 @@ locals {
     }
     spec = {
       from = [{
-          group     = "gateway.networking.k8s.io"
-          kind      = "Gateway"
-          namespace = "envoy-gateway-system"
+        group     = "gateway.networking.k8s.io"
+        kind      = "Gateway"
+        namespace = "envoy-gateway-system"
       }]
       to = [{
-          group = ""
+        group = ""
         kind  = "Secret"
         name  = var.tls_secret_name
       }]
