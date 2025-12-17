@@ -8,8 +8,6 @@
 #------------------------------------------------------------------------------
 locals {
   # Use standard-install.yaml (v1.4.1) for production stability
-  # standard-install.yaml contains stable, production-ready features (GA)
-  # experimental-install.yaml includes experimental features that may change
   gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
 }
 
@@ -47,10 +45,11 @@ resource "helm_release" "envoy_gateway" {
   namespace        = "envoy-gateway-system"
   create_namespace = true
 
-  # Configure Envoy Gateway to use LoadBalancer service type
+  # Control plane service should be ClusterIP (not LoadBalancer)
+  # The data plane service (created automatically for each Gateway resource) will be LoadBalancer
   set {
     name  = "service.type"
-    value = "LoadBalancer"
+    value = "ClusterIP"
   }
 
   wait    = true
@@ -307,7 +306,7 @@ locals {
       namespace = var.langsmith_namespace
       labels = {
         "app.kubernetes.io/managed-by" = "terraform"
-        "app.kubernetes.io/name"        = "langsmith"
+        "app.kubernetes.io/name"       = "langsmith"
       }
     }
     spec = {
@@ -359,9 +358,9 @@ resource "null_resource" "apply_httproute" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
   triggers = {
-    httproute_content = local_file.httproute[0].content
-    gateway_ready     = null_resource.apply_gateway[0].id
-    reference_grant_ready = var.tls_certificate_source == "letsencrypt" ? null_resource.apply_reference_grant[0].id : "not-needed"
+    httproute_content     = local_file.httproute[0].content
+    gateway_ready         = null_resource.apply_gateway[0].id
+    reference_grant_ready = var.tls_certificate_source == "letsencrypt" && var.ingress_type == "envoy" ? null_resource.apply_reference_grant[0].id : "not-needed"
   }
 
   provisioner "local-exec" {
@@ -397,8 +396,9 @@ resource "null_resource" "apply_httproute" {
     EOT
   }
 
-  depends_on = concat(
-    [null_resource.install_gateway_api_crds[0], null_resource.apply_gateway[0], local_file.httproute[0]],
-    var.tls_certificate_source == "letsencrypt" ? [null_resource.apply_reference_grant[0]] : []
-  )
+  depends_on = [
+    null_resource.install_gateway_api_crds[0],
+    null_resource.apply_gateway[0],
+    local_file.httproute[0]
+  ]
 }
