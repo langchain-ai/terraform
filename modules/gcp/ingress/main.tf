@@ -6,7 +6,7 @@
 locals {
   # Use standard-install.yaml (v1.4.1) for production stability
   gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
-}
+          }
 
 resource "null_resource" "install_gateway_api_crds" {
   count = var.ingress_type == "envoy" ? 1 : 0
@@ -145,7 +145,7 @@ locals {
               kind      = "Secret"
               namespace = var.langsmith_namespace
             }]
-          }
+    }
           allowedRoutes = {
             namespaces = {
               from = "All"
@@ -203,12 +203,12 @@ locals {
     }
     spec = {
       from = [{
-        group     = "gateway.networking.k8s.io"
-        kind      = "Gateway"
-        namespace = "envoy-gateway-system"
+          group     = "gateway.networking.k8s.io"
+          kind      = "Gateway"
+          namespace = "envoy-gateway-system"
       }]
       to = [{
-        group = ""
+          group = ""
         kind  = "Secret"
         name  = var.tls_secret_name
       }]
@@ -288,110 +288,7 @@ data "local_file" "external_ip" {
 }
 
 #------------------------------------------------------------------------------
-# HTTPRoute for HTTP and HTTPS listeners
+# HTTPRoute - Managed by Helm
 #------------------------------------------------------------------------------
-locals {
-  httproute_yaml = var.ingress_type == "envoy" ? yamlencode({
-    apiVersion = "gateway.networking.k8s.io/v1"
-    kind       = "HTTPRoute"
-    metadata = {
-      name      = "langsmith"
-      namespace = var.langsmith_namespace
-      labels = {
-        "app.kubernetes.io/managed-by" = "terraform"
-        "app.kubernetes.io/name"       = "langsmith"
-      }
-    }
-    spec = {
-      hostnames = [var.langsmith_domain]
-      parentRefs = concat(
-        # HTTP listener (always present when TLS is configured for ACME challenge)
-        var.tls_certificate_source == "letsencrypt" ? [{
-          group       = "gateway.networking.k8s.io"
-          kind        = "Gateway"
-          name        = var.gateway_name
-          namespace   = "envoy-gateway-system"
-          sectionName = "http"
-        }] : [],
-        # HTTPS listener (when TLS is configured)
-        var.tls_certificate_source != "none" ? [{
-          group       = "gateway.networking.k8s.io"
-          kind        = "Gateway"
-          name        = var.gateway_name
-          namespace   = "envoy-gateway-system"
-          sectionName = "https"
-        }] : []
-      )
-      rules = [{
-        backendRefs = [{
-          group  = ""
-          kind   = "Service"
-          name   = "langsmith-frontend"
-          port   = 80
-          weight = 1
-        }]
-        matches = [{
-          path = {
-            type  = "PathPrefix"
-            value = "/"
-          }
-        }]
-      }]
-    }
-  }) : ""
-}
-
-resource "local_file" "httproute" {
-  count    = var.ingress_type == "envoy" ? 1 : 0
-  filename = "${path.module}/httproute.yaml"
-  content  = local.httproute_yaml
-}
-
-resource "null_resource" "apply_httproute" {
-  count = var.ingress_type == "envoy" ? 1 : 0
-
-  triggers = {
-    httproute_content     = local_file.httproute[0].content
-    gateway_ready         = null_resource.apply_gateway[0].id
-    reference_grant_ready = var.tls_certificate_source == "letsencrypt" && var.ingress_type == "envoy" ? null_resource.apply_reference_grant[0].id : "not-needed"
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      # Wait for HTTPRoute CRD to be available
-      for i in {1..30}; do
-        if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
-          break
-        fi
-        echo "Waiting for HTTPRoute CRD... ($i/30)"
-        sleep 2
-      done
-      
-      # Wait for Gateway to be ready
-      for i in {1..60}; do
-        if kubectl get gateway -n envoy-gateway-system ${var.gateway_name} >/dev/null 2>&1; then
-          # If TLS is configured, wait for HTTPS listener to be programmed
-          if [ "${var.tls_certificate_source}" != "none" ]; then
-            STATUS=$(kubectl get gateway -n envoy-gateway-system ${var.gateway_name} -o jsonpath='{.status.listeners[?(@.name=="https")].conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
-            if [ "$STATUS" = "True" ]; then
-              break
-            fi
-          else
-            break
-          fi
-        fi
-        echo "Waiting for Gateway to be ready... ($i/60)"
-        sleep 5
-      done
-      
-      # Apply the unified HTTPRoute (this will replace any Helm-managed HTTPRoute)
-      kubectl apply -f ${local_file.httproute[0].filename}
-    EOT
-  }
-
-  depends_on = [
-    null_resource.install_gateway_api_crds[0],
-    null_resource.apply_gateway[0],
-    local_file.httproute[0]
-  ]
-}
+# HTTPRoute is created by the LangSmith Helm chart when gateway.enabled=true
+# Terraform only manages the Gateway resource (infrastructure-level)

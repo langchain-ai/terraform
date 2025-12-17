@@ -279,7 +279,7 @@ output "next_steps" {
        helm repo add langchain https://langchain-ai.github.io/helm
        
        # For Envoy Gateway (default):
-       helm install langsmith langchain/langsmith \
+       helm upgrade --install langsmith langchain/langsmith \
          -f langsmith-values.yaml \
          -n ${var.langsmith_namespace} \
          --set config.langsmithLicenseKey="YOUR_LICENSE_KEY" \
@@ -288,7 +288,9 @@ output "next_steps" {
          --set config.hostname="${var.langsmith_domain}" \
          --set blobStorage.gcs.bucket="${module.storage.bucket_name}" \
          --set blobStorage.gcs.projectId="${var.project_id}" \
-         --set gateway.enabled=false \
+         --set gateway.enabled=true \
+         --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
+         --set gateway.namespace="envoy-gateway-system" \
          --set ingress.enabled=false${var.postgres_source == "in-cluster" ? " \\\n         --set postgres.internal.enabled=true --set postgres.external.enabled=false" : ""}${var.redis_source == "in-cluster" ? " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false" : ""}
     
     4. Configure DNS:
@@ -307,14 +309,14 @@ output "next_steps" {
 # Helm Install Command (Copy-Paste Ready)
 #------------------------------------------------------------------------------
 output "helm_install_command" {
-  description = "Ready-to-use Helm install command (replace YOUR_LICENSE_KEY)"
+  description = "Ready-to-use Helm install/upgrade command (replace YOUR_LICENSE_KEY)"
   value       = <<-EOT
     # Generate secrets first:
     export API_KEY_SALT=$(openssl rand -base64 32)
     export JWT_SECRET=$(openssl rand -base64 32)
     
-    # Then install (Envoy Gateway by default):
-    helm install langsmith langchain/langsmith \
+    # Then install/upgrade (Envoy Gateway by default):
+    helm upgrade --install langsmith langchain/langsmith \
       -f langsmith-values.yaml \
       -n ${var.langsmith_namespace} \
       --set config.langsmithLicenseKey="YOUR_LICENSE_KEY" \
