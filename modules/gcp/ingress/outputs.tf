@@ -2,7 +2,7 @@
 
 output "external_ip" {
   description = "External IP address of the ingress/gateway"
-  value       = var.ingress_type == "envoy" ? try(data.kubernetes_service.envoy_gateway[0].status[0].load_balancer[0].ingress[0].ip, "pending") : "not implemented"
+  value       = var.ingress_type == "envoy" ? try(trimspace(data.local_file.external_ip[0].content), "pending") : "not implemented"
 }
 
 output "ingress_type" {

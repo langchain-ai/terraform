@@ -288,10 +288,8 @@ output "next_steps" {
          --set config.hostname="${var.langsmith_domain}" \
          --set blobStorage.gcs.bucket="${module.storage.bucket_name}" \
          --set blobStorage.gcs.projectId="${var.project_id}" \
-         --set gateway.enabled=true \
-         --set ingress.enabled=false \
-         --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
-         --set gateway.namespace="envoy-gateway-system"${var.postgres_source == "in-cluster" ? " \\\n         --set postgres.internal.enabled=true --set postgres.external.enabled=false" : ""}${var.redis_source == "in-cluster" ? " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false" : ""}
+         --set gateway.enabled=false \
+         --set ingress.enabled=false${var.postgres_source == "in-cluster" ? " \\\n         --set postgres.internal.enabled=true --set postgres.external.enabled=false" : ""}${var.redis_source == "in-cluster" ? " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false" : ""}
     
     4. Configure DNS:
        ${var.langsmith_domain} -> ${var.install_ingress ? try(module.ingress[0].external_ip, "PENDING") : "YOUR_LOAD_BALANCER_IP"}

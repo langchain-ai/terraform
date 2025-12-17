@@ -29,6 +29,9 @@ resource "google_container_cluster" "primary" {
     services_secondary_range_name = var.services_range_name
   }
 
+  # Dataplane V2 is enabled via datapath_provider when network_policy provider is PROVIDER_UNSPECIFIED
+  datapath_provider = var.network_policy_provider == "DATA_PLANE_V2" ? "ADVANCED_DATAPATH" : "DATAPATH_PROVIDER_UNSPECIFIED"
+
   # Workload Identity
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
@@ -38,7 +41,7 @@ resource "google_container_cluster" "primary" {
   private_cluster_config {
     enable_private_nodes    = true
     enable_private_endpoint = false
-    master_ipv4_cidr_block  = "172.16.0.0/28"
+    master_ipv4_cidr_block  = "172.17.0.0/28"
   }
 
   # Master authorized networks
@@ -74,9 +77,13 @@ resource "google_container_cluster" "primary" {
     }
   }
 
-  network_policy {
-    enabled  = true
-    provider = var.network_policy_provider
+  # NetworkPolicy is built into Dataplane V2, so only enable it for CALICO
+  dynamic "network_policy" {
+    for_each = var.network_policy_provider == "CALICO" ? [1] : []
+    content {
+      enabled  = true
+      provider = "CALICO"
+    }
   }
 
   # Logging and monitoring

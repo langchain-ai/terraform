@@ -27,8 +27,14 @@ variable "service_account_email" {
 #------------------------------------------------------------------------------
 # Database Credentials
 #------------------------------------------------------------------------------
+variable "use_external_postgres" {
+  description = "Whether using external PostgreSQL (Cloud SQL). When false, skips PostgreSQL secret creation."
+  type        = bool
+  default     = true
+}
+
 variable "postgres_connection_url" {
-  description = "PostgreSQL connection URL (format: postgresql://user:password@host:port/database) - only used when using external PostgreSQL"
+  description = "PostgreSQL connection URL (format: postgresql://user:password@host:port/database) - only used when use_external_postgres = true"
   type        = string
   default     = ""
   sensitive   = true

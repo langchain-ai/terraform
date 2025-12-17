@@ -35,7 +35,7 @@ resource "kubernetes_service_account" "langsmith" {
 # PostgreSQL Credentials Secret (only created when using external PostgreSQL)
 #------------------------------------------------------------------------------
 resource "kubernetes_secret" "postgres_credentials" {
-  count = var.postgres_connection_url != "" ? 1 : 0
+  count = var.use_external_postgres ? 1 : 0
 
   metadata {
     name      = "langsmith-postgres-credentials"

@@ -12,7 +12,7 @@ output "service_account_name" {
 
 output "postgres_secret_name" {
   description = "PostgreSQL credentials secret name (null if using in-cluster PostgreSQL)"
-  value       = var.postgres_connection_url != "" ? kubernetes_secret.postgres_credentials[0].metadata[0].name : null
+  value       = var.use_external_postgres ? kubernetes_secret.postgres_credentials[0].metadata[0].name : null
 }
 
 output "redis_secret_name" {

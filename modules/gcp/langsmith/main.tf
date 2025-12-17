@@ -71,19 +71,21 @@ provider "google-beta" {
   default_labels = local.common_labels
 }
 
-# Configure Kubernetes provider (after cluster creation)
+# Configure Kubernetes provider
+# Uses try() to fallback to module outputs if data source isn't available yet
+# This allows plan to work even when cluster doesn't exist
 provider "kubernetes" {
-  host                   = "https://${module.gke_cluster.endpoint}"
+  host                   = try("https://${data.google_container_cluster.gke.endpoint}", "https://${module.gke_cluster.endpoint}")
   token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(module.gke_cluster.ca_certificate)
+  cluster_ca_certificate = try(base64decode(data.google_container_cluster.gke.master_auth[0].cluster_ca_certificate), base64decode(module.gke_cluster.ca_certificate))
 }
 
 # Configure Helm provider
 provider "helm" {
   kubernetes {
-    host                   = "https://${module.gke_cluster.endpoint}"
+    host                   = try("https://${data.google_container_cluster.gke.endpoint}", "https://${module.gke_cluster.endpoint}")
     token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = base64decode(module.gke_cluster.ca_certificate)
+    cluster_ca_certificate = try(base64decode(data.google_container_cluster.gke.master_auth[0].cluster_ca_certificate), base64decode(module.gke_cluster.ca_certificate))
   }
 }
 
@@ -95,6 +97,58 @@ data "google_client_config" "default" {}
 # Get project information
 data "google_project" "current" {
   project_id = var.project_id
+}
+
+# Wait for GKE cluster to be fully ready and API server accessible
+resource "null_resource" "wait_for_cluster" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Waiting for GKE cluster to be ready..."
+      
+      # Wait for cluster to be in RUNNING state
+      for i in {1..60}; do
+        STATUS=$(gcloud container clusters describe ${module.gke_cluster.cluster_name} \
+          --region ${var.region} \
+          --project ${var.project_id} \
+          --format="value(status)" 2>/dev/null || echo "UNKNOWN")
+        if [ "$STATUS" = "RUNNING" ]; then
+          echo "Cluster status: RUNNING"
+          break
+        fi
+        echo "Waiting for cluster status... ($i/60) - Current: $STATUS"
+        sleep 10
+      done
+      
+      # Wait for API server to be accessible
+      echo "Waiting for API server to be accessible..."
+      for i in {1..30}; do
+        if gcloud container clusters get-credentials ${module.gke_cluster.cluster_name} \
+          --region ${var.region} \
+          --project ${var.project_id} >/dev/null 2>&1; then
+          if kubectl cluster-info >/dev/null 2>&1; then
+            echo "API server is accessible!"
+            exit 0
+          fi
+        fi
+        echo "Waiting for API server... ($i/30)"
+        sleep 5
+      done
+      
+      echo "ERROR: API server did not become accessible in time"
+      exit 1
+    EOT
+  }
+
+  depends_on = [module.gke_cluster]
+}
+
+# Get GKE cluster information (after it's ready)
+data "google_container_cluster" "gke" {
+  name     = module.gke_cluster.cluster_name
+  location = var.region
+  project  = var.project_id
+
+  depends_on = [null_resource.wait_for_cluster]
 }
 
 #------------------------------------------------------------------------------
@@ -329,6 +383,7 @@ module "k8s_bootstrap" {
   service_account_email = module.iam.service_account_email
 
   # PostgreSQL connection - only when using external PostgreSQL
+  use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}" : ""
 
   # Redis connection - only when using external Redis
@@ -369,7 +424,7 @@ module "k8s_bootstrap" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [module.gke_cluster, module.cloudsql, module.iam]
+  depends_on = [null_resource.wait_for_cluster, module.cloudsql, module.iam]
 }
 
 #------------------------------------------------------------------------------
@@ -390,5 +445,5 @@ module "ingress" {
   tls_certificate_source = var.tls_certificate_source
   tls_secret_name        = var.tls_secret_name
 
-  depends_on = [module.k8s_bootstrap]
+  depends_on = [null_resource.wait_for_cluster, module.k8s_bootstrap]
 }

@@ -272,14 +272,14 @@ variable "postgres_source" {
 }
 
 variable "postgres_password" {
-  description = "PostgreSQL database password (required for 'external', sensitive - use TF_VAR_postgres_password env var)"
+  description = "PostgreSQL database password (required when postgres_source='external', sensitive - use TF_VAR_postgres_password env var)"
   type        = string
   default     = ""
   sensitive   = true
 
   validation {
-    condition     = var.postgres_source == "in-cluster" || length(var.postgres_password) >= 8
-    error_message = "PostgreSQL password must be at least 8 characters long when using external PostgreSQL."
+    condition     = var.postgres_password == "" || length(var.postgres_password) >= 8
+    error_message = "PostgreSQL password must be at least 8 characters long when provided."
   }
 }
 

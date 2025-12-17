@@ -80,17 +80,13 @@ config:
 #------------------------------------------------------------------------------
 # Envoy Gateway (Gateway API)
 #------------------------------------------------------------------------------
+# NOTE: Gateway and HTTPRoute are managed by Terraform, not Helm
+# Terraform creates:
+#   - Gateway resource with HTTP and HTTPS listeners
+#   - Unified HTTPRoute with both HTTP and HTTPS parentRefs
+#   - ReferenceGrant for cross-namespace secret access
 gateway:
-  enabled: true  # Envoy Gateway is the default
-  # Name of your Gateway resource (created by Terraform ingress module)
-  name: "langsmith-gateway"
-  # Namespace where the Gateway is deployed
-  namespace: "envoy-gateway-system"
-  # Specific listener section name
-  sectionName: "http"
-  annotations: {}
-  labels:
-    app.kubernetes.io/managed-by: "helm"
+  enabled: false  # Disabled - managed by Terraform ingress module
 
 # Ingress is disabled when using Envoy Gateway
 ingress:
