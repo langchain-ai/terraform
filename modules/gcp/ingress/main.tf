@@ -1,10 +1,7 @@
 # Ingress Module - Envoy Gateway (Gateway API)
-# Note: Currently only Envoy Gateway is implemented. Other ingress types (Istio, etc.) are reserved for future implementation.
-# The Gateway uses HTTPS only (port 443) - TLS must be configured.
 
 #------------------------------------------------------------------------------
-# Gateway API CRDs (required for Envoy Gateway)
-# Install via kubectl since Helm chart repository is not available
+# Gateway API CRDs
 #------------------------------------------------------------------------------
 locals {
   # Use standard-install.yaml (v1.4.1) for production stability
@@ -45,8 +42,7 @@ resource "helm_release" "envoy_gateway" {
   namespace        = "envoy-gateway-system"
   create_namespace = true
 
-  # Control plane service should be ClusterIP (not LoadBalancer)
-  # The data plane service (created automatically for each Gateway resource) will be LoadBalancer
+  # Control plane service (internal management only)
   set {
     name  = "service.type"
     value = "ClusterIP"
@@ -195,8 +191,7 @@ resource "null_resource" "apply_gateway" {
 }
 
 #------------------------------------------------------------------------------
-# ReferenceGrant for cross-namespace secret reference
-# Required for Gateway in envoy-gateway-system to reference TLS secret in langsmith namespace
+# ReferenceGrant for cross-namespace secret access
 #------------------------------------------------------------------------------
 locals {
   reference_grant_yaml = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? yamlencode({
@@ -254,7 +249,7 @@ resource "null_resource" "apply_reference_grant" {
 }
 
 #------------------------------------------------------------------------------
-# Get external IP via kubectl (avoids Kubernetes provider dependency)
+# Get external IP from data plane service
 #------------------------------------------------------------------------------
 resource "null_resource" "get_external_ip" {
   count = var.ingress_type == "envoy" ? 1 : 0
@@ -293,9 +288,7 @@ data "local_file" "external_ip" {
 }
 
 #------------------------------------------------------------------------------
-# Unified HTTPRoute for both HTTP and HTTPS listeners
-# This replaces the Helm-managed HTTPRoute to ensure both listeners are configured
-# Gateway API supports multiple parentRefs in a single HTTPRoute
+# HTTPRoute for HTTP and HTTPS listeners
 #------------------------------------------------------------------------------
 locals {
   httproute_yaml = var.ingress_type == "envoy" ? yamlencode({

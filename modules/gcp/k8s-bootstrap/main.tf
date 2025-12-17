@@ -32,7 +32,7 @@ resource "kubernetes_service_account" "langsmith" {
 }
 
 #------------------------------------------------------------------------------
-# PostgreSQL Credentials Secret (only created when using external PostgreSQL)
+# PostgreSQL Credentials Secret
 #------------------------------------------------------------------------------
 resource "kubernetes_secret" "postgres_credentials" {
   count = var.use_external_postgres ? 1 : 0
@@ -54,7 +54,7 @@ resource "kubernetes_secret" "postgres_credentials" {
 }
 
 #------------------------------------------------------------------------------
-# Redis Credentials Secret (only created when using managed Redis)
+# Redis Credentials Secret
 #------------------------------------------------------------------------------
 resource "kubernetes_secret" "redis_credentials" {
   count = var.use_managed_redis ? 1 : 0
@@ -76,7 +76,7 @@ resource "kubernetes_secret" "redis_credentials" {
 }
 
 #------------------------------------------------------------------------------
-# LangSmith License Secret (placeholder - update manually or via CI/CD)
+# LangSmith License Secret
 #------------------------------------------------------------------------------
 resource "kubernetes_secret" "langsmith_license" {
   count = var.langsmith_license_key != "" ? 1 : 0
@@ -230,8 +230,6 @@ resource "kubernetes_network_policy" "langsmith_default" {
 
 #------------------------------------------------------------------------------
 # KEDA - Kubernetes Event-driven Autoscaling
-# Required for LangSmith Deployment feature (agent autoscaling)
-# Reference: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
 #------------------------------------------------------------------------------
 resource "helm_release" "keda" {
   count = var.install_keda ? 1 : 0
@@ -347,9 +345,6 @@ resource "helm_release" "cert_manager" {
 
 #------------------------------------------------------------------------------
 # Let's Encrypt ClusterIssuer
-# Creates a YAML file and applies it after cert-manager is ready
-# Using local_file + null_resource because kubernetes_manifest validates
-# CRDs during plan phase (before cert-manager is installed)
 #------------------------------------------------------------------------------
 locals {
   letsencrypt_issuer_yaml = var.install_cert_manager && var.letsencrypt_email != "" ? yamlencode({
@@ -437,8 +432,7 @@ resource "null_resource" "apply_letsencrypt_issuer" {
 }
 
 #------------------------------------------------------------------------------
-# Let's Encrypt Certificate Resource
-# Creates a Certificate that cert-manager will use to provision the TLS secret
+# Let's Encrypt Certificate
 #------------------------------------------------------------------------------
 locals {
   certificate_yaml = var.tls_certificate_source == "letsencrypt" && var.langsmith_domain != "" && var.tls_secret_name != "" ? yamlencode({
