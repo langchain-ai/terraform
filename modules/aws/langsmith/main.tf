@@ -26,15 +26,16 @@ module "vpc" {
 }
 
 module "eks" {
-  source                   = "../eks"
-  cluster_name             = local.cluster_name
-  cluster_version          = var.eks_cluster_version
-  vpc_id                   = local.vpc_id
-  subnet_ids               = concat(local.private_subnets, local.public_subnets)
-  tags                     = var.eks_tags
-  create_gp3_storage_class = var.create_gp3_storage_class
-  eks_managed_node_groups  = var.eks_managed_node_groups
-  public_cluster_enabled   = var.enable_public_eks_cluster
+  source                          = "../eks"
+  cluster_name                    = local.cluster_name
+  cluster_version                 = var.eks_cluster_version
+  vpc_id                          = local.vpc_id
+  subnet_ids                      = concat(local.private_subnets, local.public_subnets)
+  tags                            = var.eks_tags
+  create_gp3_storage_class        = var.create_gp3_storage_class
+  eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
+  eks_managed_node_groups         = var.eks_managed_node_groups
+  public_cluster_enabled          = var.enable_public_eks_cluster
 
   # IRSA settings
   create_langsmith_irsa_role = var.create_langsmith_irsa_role

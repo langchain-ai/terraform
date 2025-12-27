@@ -64,6 +64,14 @@ variable "create_gp3_storage_class" {
   default     = true
 }
 
+variable "eks_managed_node_group_defaults" {
+  type        = any
+  description = "Default configuration for EKS managed node groups"
+  default = {
+    ami_type = "AL2023_x86_64_STANDARD"
+  }
+}
+
 variable "eks_managed_node_groups" {
   type        = map(any)
   description = "EKS managed node groups"
