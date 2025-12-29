@@ -137,3 +137,10 @@ variable "create_langsmith_irsa_role" {
   description = "Whether to create an IRSA role for LangSmith pods"
   default     = true
 }
+
+# EKS Blueprints Addons
+variable "eks_addons" {
+  type        = any
+  description = "Map of EKS managed add-on configurations to enable for the cluster (coredns, kube-proxy, vpc-cni, etc.)"
+  default     = {}
+}

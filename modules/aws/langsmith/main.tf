@@ -39,6 +39,9 @@ module "eks" {
 
   # IRSA settings
   create_langsmith_irsa_role = var.create_langsmith_irsa_role
+
+  # EKS managed addons
+  eks_addons = var.eks_addons
 }
 
 module "redis" {
