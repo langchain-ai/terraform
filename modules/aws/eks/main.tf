@@ -65,6 +65,9 @@ module "eks_blueprints_addons" {
     chart_version = "9.47.0"
   }
 
+  # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
+  eks_addons = var.eks_addons
+
   depends_on = [module.eks]
 }
 
