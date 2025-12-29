@@ -48,7 +48,7 @@ resource "aws_eks_addon" "ebs-csi" {
 # Create some important addons for the EKS cluster.
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
-  version = "1.16.3"
+  version = "1.23.0"
 
   cluster_name      = module.eks.cluster_name
   cluster_endpoint  = module.eks.cluster_endpoint
@@ -59,6 +59,11 @@ module "eks_blueprints_addons" {
   enable_karpenter                    = false
   enable_metrics_server               = true
   enable_cluster_autoscaler           = true
+
+  # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
+  cluster_autoscaler = {
+    chart_version = "9.47.0"
+  }
 
   depends_on = [module.eks]
 }
