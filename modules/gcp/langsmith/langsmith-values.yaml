@@ -1,0 +1,277 @@
+# LangSmith Helm Chart Values
+# Gateway is managed by Terraform, HTTPRoute is managed by Helm
+
+ingress:
+  enabled: false
+
+gateway:
+  enabled: true
+  name: ""
+  namespace: "envoy-gateway-system"
+
+config:
+  hostname: "langsmith.example.com"
+  basePath: ""
+  authType: "mixed"
+  basicAuth:
+    enabled: true
+    initialOrgAdminEmail: "YOUR_ADMIN_EMAIL"
+    initialOrgAdminPassword: "YOUR_ADMIN_PASSWORD"
+  deployment:
+    enabled: true
+
+backend:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2000Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1984
+
+frontend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 80
+
+platformBackend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1986
+
+hubBackend:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1985
+
+playground:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 3001
+
+queue:
+  deployment:
+    resources:
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-postgres-credentials"
+  internal:
+    enabled: false
+
+redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-credentials"
+  internal:
+    enabled: false
+
+clickhouse:
+  external:
+    enabled: false
+  statefulSet:
+    resources:
+      limits:
+        cpu: 4000m
+        memory: 12Gi
+      requests:
+        cpu: 2000m
+        memory: 8Gi
+    persistence:
+      enabled: true
+      size: "500Gi"
+      storageClass: "premium-rwo"
+
+blobStorage:
+  enabled: true
+  bucketType: "gcs"
+  gcs:
+    bucket: ""
+
+serviceAccount:
+  create: false
+  name: "langsmith-ksa"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+operator:
+  enabled: true
+  templates:
+    deployment: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${name}
+        namespace: ${namespace}
+      spec:
+        replicas: ${replicas}
+        revisionHistoryLimit: 10
+        selector:
+          matchLabels:
+            app: ${name}
+        template:
+          metadata:
+            labels:
+              app: ${name}
+          spec:
+            enableServiceLinks: false
+            serviceAccountName: langsmith-ksa
+            containers:
+            - name: api-server
+              image: ${image}
+              ports:
+              - name: api-server
+                containerPort: 8000
+                protocol: TCP
+              livenessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              readinessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi
+
+hostBackend:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+  service:
+    type: ClusterIP
+    port: 1987
+
+listener:
+  enabled: true
+  deployment:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+affinity: {}
+tolerations: []
+nodeSelector: {}
