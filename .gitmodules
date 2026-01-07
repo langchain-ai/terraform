@@ -1,0 +1,3 @@
+[submodule "modules/aws/self-hosted-reference"]
+	path = modules/aws/self-hosted-reference
+	url = git@github.com:langchain-ai/langsmith-self-hosted-reference-aws.git
