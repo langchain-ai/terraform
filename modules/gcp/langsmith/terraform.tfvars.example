@@ -1,0 +1,201 @@
+# Example Terraform Variables
+# Copy this file to terraform.tfvars and customize for your environment
+#
+# cp terraform.tfvars.example terraform.tfvars
+
+#------------------------------------------------------------------------------
+# Required Variables
+#------------------------------------------------------------------------------
+project_id = "your-gcp-project-id"
+
+#------------------------------------------------------------------------------
+# Naming Configuration (IMPORTANT: Prevents resource collisions)
+#------------------------------------------------------------------------------
+# Prefix for all resource names - use your company/team name
+# Format: {prefix}-{environment}-{resource}-{suffix}
+# Example with prefix="myco": myco-prod-gke-a1b2c3d4
+name_prefix = "myco"  # Change to your company/team prefix (max 11 chars)
+
+# Add random suffix to resource names (recommended for multi-tenant projects)
+unique_suffix = true
+
+# Environment name
+environment = "test"  # dev, staging, prod, test, uat
+
+#------------------------------------------------------------------------------
+# Optional: Regional Configuration
+#------------------------------------------------------------------------------
+region = "us-west2"
+zone   = "us-west2-a"
+
+#------------------------------------------------------------------------------
+# Optional: Networking
+#------------------------------------------------------------------------------
+# Note: External PostgreSQL and Redis always use private connections (VPC peering)
+# Requires: servicenetworking.networksAdmin role (for VPC peering)
+
+# Ensure these don't overlap with existing ranges in your project
+subnet_cidr   = "10.0.0.0/20"
+pods_cidr     = "10.4.0.0/14"
+services_cidr = "10.8.0.0/20"
+
+#------------------------------------------------------------------------------
+# Optional: GKE Configuration
+#------------------------------------------------------------------------------
+gke_use_autopilot   = false        # Set to true for Autopilot mode
+gke_node_count      = 2            # Initial nodes per zone (Standard mode)
+gke_min_nodes       = 2            # Min nodes for autoscaling
+gke_max_nodes       = 10           # Max nodes for autoscaling
+# Machine type - ClickHouse requires nodes with 4+ vCPU and 16GB+ RAM
+# Recommended: e2-standard-8 (8 vCPU, 32GB) for medium workloads
+# Minimum: e2-standard-4 (4 vCPU, 16GB) for small workloads
+gke_machine_type    = "e2-standard-4"
+gke_disk_size           = 100          # GB
+gke_release_channel     = "REGULAR"    # RAPID, REGULAR, or STABLE
+gke_deletion_protection = true         # Prevent accidental cluster deletion
+gke_network_policy_provider = "DATA_PLANE_V2"  # CALICO (legacy) or DATA_PLANE_V2 (recommended)
+
+#------------------------------------------------------------------------------
+# Optional: PostgreSQL Configuration
+#------------------------------------------------------------------------------
+postgres_source = "external"  # "external" (default, Cloud SQL with private IP) or "in-cluster" (via Helm)
+
+# Configuration for external PostgreSQL (Cloud SQL)
+postgres_version             = "POSTGRES_18"
+postgres_tier                = "db-custom-2-8192"  # 2 vCPU, 8GB RAM
+postgres_disk_size           = 50                   # GB
+postgres_high_availability   = true                 # REGIONAL for HA
+postgres_deletion_protection = true                 # Prevent accidental deletion
+
+# PostgreSQL password (required for external, sensitive - prefer using environment variable)
+# Set via: export TF_VAR_postgres_password="your-secure-password"
+# postgres_password = "your-secure-password"
+
+# PostgreSQL database flags (optional - uses defaults if not specified)
+# postgres_database_flags = [
+#   {
+#     name  = "max_connections"
+#     value = "500"
+#   },
+#   {
+#     name  = "log_checkpoints"
+#     value = "on"
+#   },
+#   {
+#     name  = "log_connections"
+#     value = "on"
+#   },
+#   {
+#     name  = "log_disconnections"
+#     value = "on"
+#   }
+# ]
+
+#------------------------------------------------------------------------------
+# Optional: Redis Configuration
+#------------------------------------------------------------------------------
+redis_source = "external"  # "external" (default, Memorystore) or "in-cluster" (via Helm)
+redis_version           = "REDIS_7_2"
+redis_memory_size       = 5    # GB
+redis_high_availability = true # Standard HA tier
+
+#------------------------------------------------------------------------------
+# Optional: Storage Configuration
+#------------------------------------------------------------------------------
+storage_ttl_short_days = 14   # Short term TTL for ttl_s/ prefix (default: 14 days)
+storage_ttl_long_days  = 400  # Long term TTL for ttl_l/ prefix (default: 400 days)
+storage_force_destroy   = false # Prevent bucket deletion with objects
+
+#------------------------------------------------------------------------------
+# Optional: ClickHouse Configuration
+# Reference: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
+#------------------------------------------------------------------------------
+# ClickHouse deployment type:
+#   "in-cluster"       - (default) Deployed as a pod in the cluster via Helm
+#   "langsmith-managed" - Managed by LangChain team (contact sales@langchain.dev)
+#   "external"         - Self-hosted external ClickHouse instance
+clickhouse_source = "in-cluster"
+
+# --- For langsmith-managed or external ClickHouse ---
+# clickhouse_host      = "your-clickhouse-host.example.com"
+# clickhouse_port      = 9440     # Native port (9440 for TLS, 9000 for non-TLS)
+# clickhouse_http_port = 8443     # HTTP port (8443 for TLS, 8123 for non-TLS)
+# clickhouse_user      = "default"
+# clickhouse_password  = "your-password"  # Or use TF_VAR_clickhouse_password env var
+# clickhouse_database  = "default"
+# clickhouse_tls       = true
+
+# Optional: Custom CA certificate for ClickHouse TLS verification
+# clickhouse_ca_cert = file("${path.module}/certs/clickhouse-ca.crt")
+
+#------------------------------------------------------------------------------
+# Optional: LangSmith Configuration
+#------------------------------------------------------------------------------
+langsmith_namespace = "langsmith"
+langsmith_domain    = "langsmith.example.com"
+
+# License key (sensitive - prefer using environment variable)
+# Set via: export TF_VAR_langsmith_license_key="your-license-key"
+# langsmith_license_key = "your-license-key"
+
+#------------------------------------------------------------------------------
+# Optional: Ingress Configuration
+#------------------------------------------------------------------------------
+install_ingress = true
+ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved for future)
+# Note: Gateway uses HTTPS only (port 443). TLS must be configured (see TLS Configuration section above).
+
+#------------------------------------------------------------------------------
+# Optional: LangSmith Deployment (Deploy agents from UI)
+# Reference: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
+#------------------------------------------------------------------------------
+# Enables deploying agents/apps directly from LangSmith UI
+# This installs KEDA (Kubernetes Event-driven Autoscaling)
+enable_langsmith_deployment = true
+
+#------------------------------------------------------------------------------
+# Optional: TLS / HTTPS Configuration
+#------------------------------------------------------------------------------
+# Choose TLS certificate source:
+#   "none"        - No TLS (HTTP only) - not recommended for production
+#   "letsencrypt" - Automatic certificates via Let's Encrypt + cert-manager
+#   "existing"    - Provide your own TLS certificate and key
+tls_certificate_source = "letsencrypt"
+
+# --- Option 1: Let's Encrypt (automatic) ---
+# Set tls_certificate_source = "letsencrypt" and configure:
+letsencrypt_email = "your-email@example.com"
+
+# --- Option 2: Existing Certificates ---
+# Set tls_certificate_source = "existing" and provide cert/key:
+# Option A: Inline PEM content
+# tls_certificate_crt = <<-EOT
+#   -----BEGIN CERTIFICATE-----
+#   ... your certificate ...
+#   -----END CERTIFICATE-----
+# EOT
+# tls_certificate_key = <<-EOT
+#   -----BEGIN PRIVATE KEY-----
+#   ... your private key ...
+#   -----END PRIVATE KEY-----
+# EOT
+
+# Option B: Load from files (recommended)
+# tls_certificate_crt = file("${path.module}/certs/langsmith.crt")
+# tls_certificate_key = file("${path.module}/certs/langsmith.key")
+
+# Name for the TLS secret in Kubernetes
+tls_secret_name = "langsmith-tls"
+
+#------------------------------------------------------------------------------
+# Optional: Labels/Tags (Applied to all resources)
+#------------------------------------------------------------------------------
+owner       = "platform-team"  # Team or individual responsible
+cost_center = "engineering"    # For billing attribution
+
+# Additional custom labels
+labels = {
+  # Add any custom labels here
+  # "department" = "engineering"
+  # "project"    = "langsmith"
+}
