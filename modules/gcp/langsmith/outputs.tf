@@ -137,14 +137,6 @@ output "storage_bucket_url" {
 }
 
 #------------------------------------------------------------------------------
-# IAM Outputs
-#------------------------------------------------------------------------------
-output "service_account_email" {
-  description = "LangSmith service account email"
-  value       = module.iam.service_account_email
-}
-
-#------------------------------------------------------------------------------
 # Networking Outputs
 #------------------------------------------------------------------------------
 output "vpc_name" {
@@ -239,7 +231,6 @@ output "resource_summary" {
     clickhouse_source    = var.clickhouse_source
     clickhouse           = var.clickhouse_source == "in-cluster" ? "in-cluster (Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"
     storage_bucket       = module.storage.bucket_name
-    service_account      = module.iam.service_account_email
     kubernetes_namespace = var.langsmith_namespace
   }
 }
@@ -264,7 +255,6 @@ output "next_steps" {
     - Redis: ${var.redis_source == "external" ? "${module.redis[0].instance_name} (Memorystore, private IP)" : "In-cluster (via Helm)"}
     - ClickHouse: ${var.clickhouse_source == "in-cluster" ? "In-cluster (via Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"}
     - Storage: ${module.storage.bucket_name}
-    - Service Account: ${module.iam.service_account_email}
     
     Next Steps:
     

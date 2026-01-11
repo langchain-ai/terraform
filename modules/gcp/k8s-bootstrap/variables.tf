@@ -19,11 +19,6 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
-variable "service_account_email" {
-  description = "GCP service account email for Workload Identity"
-  type        = string
-}
-
 #------------------------------------------------------------------------------
 # Database Credentials
 #------------------------------------------------------------------------------

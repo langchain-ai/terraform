@@ -350,26 +350,6 @@ module "storage" {
 }
 
 #------------------------------------------------------------------------------
-# IAM Module
-#------------------------------------------------------------------------------
-module "iam" {
-  source = "../iam"
-
-  project_id  = var.project_id
-  environment = var.environment
-
-  # Use centralized naming
-  service_account_id   = local.service_account_id
-  service_account_name = local.service_account_name
-
-  # Workload Identity configuration
-  gke_namespace          = var.langsmith_namespace
-  workload_identity_pool = local.workload_identity_pool
-
-  depends_on = [module.gke_cluster, module.storage]
-}
-
-#------------------------------------------------------------------------------
 # K8s Bootstrap Module
 #------------------------------------------------------------------------------
 module "k8s_bootstrap" {
@@ -379,8 +359,7 @@ module "k8s_bootstrap" {
   environment = var.environment
 
   # Namespace configuration
-  langsmith_namespace   = var.langsmith_namespace
-  service_account_email = module.iam.service_account_email
+  langsmith_namespace = var.langsmith_namespace
 
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
@@ -424,7 +403,7 @@ module "k8s_bootstrap" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [null_resource.wait_for_cluster, module.cloudsql, module.iam]
+  depends_on = [null_resource.wait_for_cluster, module.cloudsql]
 }
 
 #------------------------------------------------------------------------------

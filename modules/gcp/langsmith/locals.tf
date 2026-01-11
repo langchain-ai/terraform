@@ -39,10 +39,6 @@ locals {
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
 
-  # IAM
-  service_account_name = "${local.base_name}-sa"
-  service_account_id   = "${local.base_name}-sa"
-
   #----------------------------------------------------------------------------
   # Common Labels (applied to all resources)
   #----------------------------------------------------------------------------
@@ -76,12 +72,6 @@ locals {
   #----------------------------------------------------------------------------
   # Computed Values
   #----------------------------------------------------------------------------
-
-  # Service account email (computed after creation)
-  service_account_email = "${local.service_account_id}@${var.project_id}.iam.gserviceaccount.com"
-
-  # Workload Identity pool
-  workload_identity_pool = "${var.project_id}.svc.id.goog"
 
   #----------------------------------------------------------------------------
   # Feature Flags
