@@ -265,7 +265,16 @@ output "next_steps" {
        export API_KEY_SALT=$(openssl rand -base64 32)
        export JWT_SECRET=$(openssl rand -base64 32)
     
-    3. Install LangSmith via Helm:
+    3. Configure GCS HMAC credentials for blob storage:
+       - Go to GCP Console: Storage > Settings > Interoperability
+       - Create a service account (or use existing) with "Storage Admin" role
+       - Create HMAC key for the service account
+       - Export the access key and secret:
+         export GCS_ACCESS_KEY="your-hmac-access-key"
+         export GCS_ACCESS_SECRET="your-hmac-secret"
+       - Note: The bucket ${module.storage.bucket_name} must be accessible by this service account
+    
+    4. Install LangSmith via Helm:
        helm repo add langchain https://langchain-ai.github.io/helm
        
        # For Envoy Gateway (default):
@@ -276,21 +285,23 @@ output "next_steps" {
          --set config.apiKeySalt="$API_KEY_SALT" \
          --set config.basicAuth.jwtSecret="$JWT_SECRET" \
          --set config.hostname="${var.langsmith_domain}" \
-         --set blobStorage.gcs.bucket="${module.storage.bucket_name}" \
-         --set blobStorage.gcs.projectId="${var.project_id}" \
+         --set config.blobStorage.bucketName="${module.storage.bucket_name}" \
+         --set config.blobStorage.accessKey="$GCS_ACCESS_KEY" \
+         --set config.blobStorage.accessKeySecret="$GCS_ACCESS_SECRET" \
          --set gateway.enabled=true \
          --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
          --set gateway.namespace="envoy-gateway-system" \
          --set ingress.enabled=false${var.postgres_source == "in-cluster" ? " \\\n         --set postgres.internal.enabled=true --set postgres.external.enabled=false" : ""}${var.redis_source == "in-cluster" ? " \\\n         --set redis.internal.enabled=true --set redis.external.enabled=false" : ""}
     
-    4. Configure DNS:
+    5. Configure DNS:
        ${var.langsmith_domain} -> ${var.install_ingress ? try(module.ingress[0].external_ip, "PENDING") : "YOUR_LOAD_BALANCER_IP"}
     
-    5. Access LangSmith:
+    6. Access LangSmith:
        https://${var.langsmith_domain}
        Login: Use the credentials from langsmith-values.yaml (YOUR_ADMIN_EMAIL / YOUR_ADMIN_PASSWORD)
     ${var.postgres_source == "in-cluster" ? "\n    NOTE: PostgreSQL is deployed in-cluster via Helm chart." : "\n    NOTE: PostgreSQL is external (Cloud SQL) with private IP connection."}
     ${var.redis_source == "in-cluster" ? "\n    NOTE: Redis is deployed in-cluster via Helm chart." : "\n    NOTE: Redis is external (Memorystore) with private IP connection."}
+    \n    NOTE: GCS blob storage requires HMAC credentials. Create them in GCP Console (Storage > Settings > Interoperability) and export as GCS_ACCESS_KEY and GCS_ACCESS_SECRET before running the Helm command.
     ${var.tls_certificate_source == "none" ? "\n    NOTE: TLS is not configured. To enable HTTPS:\n    - Set tls_certificate_source = 'letsencrypt' for automatic certificates\n    - Set tls_certificate_source = 'existing' to use your own certificates\n    - Then run: terraform apply" : ""}
   EOT
 }
@@ -305,6 +316,10 @@ output "helm_install_command" {
     export API_KEY_SALT=$(openssl rand -base64 32)
     export JWT_SECRET=$(openssl rand -base64 32)
     
+    # Configure GCS HMAC credentials (create in GCP Console: Storage > Settings > Interoperability):
+    export GCS_ACCESS_KEY="your-hmac-access-key"
+    export GCS_ACCESS_SECRET="your-hmac-secret"
+    
     # Then install/upgrade (Envoy Gateway by default):
     helm upgrade --install langsmith langchain/langsmith \
       -f langsmith-values.yaml \
@@ -313,8 +328,9 @@ output "helm_install_command" {
       --set config.apiKeySalt="$API_KEY_SALT" \
       --set config.basicAuth.jwtSecret="$JWT_SECRET" \
       --set config.hostname="${var.langsmith_domain}" \
-      --set blobStorage.gcs.bucket="${module.storage.bucket_name}" \
-      --set blobStorage.gcs.projectId="${var.project_id}" \
+      --set config.blobStorage.bucketName="${module.storage.bucket_name}" \
+      --set config.blobStorage.accessKey="$GCS_ACCESS_KEY" \
+      --set config.blobStorage.accessKeySecret="$GCS_ACCESS_SECRET" \
       --set gateway.enabled=true \
       --set ingress.enabled=false \
       --set gateway.name="${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}" \
@@ -341,7 +357,8 @@ output "helm_tls_upgrade_command" {
     "  --set ingress.enabled=false \\",
     "  --set gateway.name=\"${var.install_ingress && var.ingress_type == "envoy" ? module.ingress[0].gateway_name : "langsmith-gateway"}\" \\",
     "  --set gateway.namespace=\"envoy-gateway-system\" \\",
-    "  --set blobStorage.gcs.bucket=\"${module.storage.bucket_name}\" \\",
-    "  --set blobStorage.gcs.projectId=\"${var.project_id}\""
+    "  --set config.blobStorage.bucketName=\"${module.storage.bucket_name}\" \\",
+    "  --set config.blobStorage.accessKey=\"$GCS_ACCESS_KEY\" \\",
+    "  --set config.blobStorage.accessKeySecret=\"$GCS_ACCESS_SECRET\""
   ]) : "TLS not configured. The Gateway uses HTTPS only (port 443). Set tls_certificate_source = 'letsencrypt' or 'existing' in terraform.tfvars before running terraform apply."
 }

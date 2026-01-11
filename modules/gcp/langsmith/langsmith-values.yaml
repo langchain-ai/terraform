@@ -21,8 +21,12 @@ config:
     enabled: true
   blobStorage:
     enabled: true
-    engine: "GCS"
+    engine: "S3"
     bucketName: ""
+    apiURL: "https://storage.googleapis.com"
+    accessKey: ""
+    accessKeySecret: ""
+    s3UsePathStyle: false
 
 aceBackend:
   deployment:
