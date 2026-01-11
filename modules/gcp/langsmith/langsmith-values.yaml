@@ -19,6 +19,29 @@ config:
     initialOrgAdminPassword: "YOUR_ADMIN_PASSWORD"
   deployment:
     enabled: true
+  blobStorage:
+    enabled: true
+    engine: "GCS"
+    bucketName: ""
+
+aceBackend:
+  deployment:
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 200m
+        memory: 1000Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
+  service:
+    type: ClusterIP
+    port: 1987
 
 backend:
   deployment:
@@ -28,7 +51,7 @@ backend:
         memory: 4Gi
       requests:
         cpu: 1000m
-        memory: 2000Mi
+        memory: 2Gi
   autoscaling:
     enabled: true
     minReplicas: 3
@@ -38,6 +61,22 @@ backend:
   service:
     type: ClusterIP
     port: 1984
+
+clickhouse:
+  external:
+    enabled: false
+  statefulSet:
+    resources:
+      limits:
+        cpu: 4000m
+        memory: 12Gi
+      requests:
+        cpu: 2000m
+        memory: 8Gi
+    persistence:
+      enabled: true
+      size: 500Gi
+      storageClassName: "premium-rwo"
 
 frontend:
   deployment:
@@ -58,26 +97,7 @@ frontend:
     type: ClusterIP
     port: 80
 
-platformBackend:
-  deployment:
-    resources:
-      limits:
-        cpu: 1000m
-        memory: 2Gi
-      requests:
-        cpu: 500m
-        memory: 1Gi
-  autoscaling:
-    enabled: true
-    minReplicas: 1
-    maxReplicas: 10
-    targetCPUUtilizationPercentage: 50
-    targetMemoryUtilizationPercentage: 80
-  service:
-    type: ClusterIP
-    port: 1986
-
-hubBackend:
+hostBackend:
   enabled: true
   deployment:
     resources:
@@ -85,8 +105,8 @@ hubBackend:
         cpu: 1000m
         memory: 2Gi
       requests:
-        cpu: 500m
-        memory: 1Gi
+        cpu: 200m
+        memory: 1000Mi
   autoscaling:
     enabled: true
     minReplicas: 1
@@ -97,27 +117,18 @@ hubBackend:
     type: ClusterIP
     port: 1985
 
-playground:
+listener:
   enabled: true
   deployment:
     resources:
       limits:
+        cpu: 2000m
+        memory: 4Gi
+      requests:
         cpu: 1000m
         memory: 2Gi
-      requests:
-        cpu: 500m
-        memory: 1Gi
-  autoscaling:
-    enabled: true
-    minReplicas: 1
-    maxReplicas: 10
-    targetCPUUtilizationPercentage: 50
-    targetMemoryUtilizationPercentage: 80
-  service:
-    type: ClusterIP
-    port: 3001
 
-queue:
+platformBackend:
   deployment:
     resources:
       limits:
@@ -132,64 +143,9 @@ queue:
     maxReplicas: 10
     targetCPUUtilizationPercentage: 50
     targetMemoryUtilizationPercentage: 80
-
-postgres:
-  external:
-    enabled: true
-    existingSecretName: "langsmith-postgres-credentials"
-  internal:
-    enabled: false
-
-redis:
-  external:
-    enabled: true
-    existingSecretName: "langsmith-redis-credentials"
-  internal:
-    enabled: false
-
-clickhouse:
-  external:
-    enabled: false
-  statefulSet:
-    resources:
-      limits:
-        cpu: 4000m
-        memory: 12Gi
-      requests:
-        cpu: 2000m
-        memory: 8Gi
-    persistence:
-      enabled: true
-      size: "500Gi"
-      storageClass: "premium-rwo"
-
-blobStorage:
-  enabled: true
-  bucketType: "gcs"
-  gcs:
-    bucket: ""
-
-serviceAccount:
-  create: false
-  name: "langsmith-ksa"
-
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
-
-podSecurityContext:
-  fsGroup: 1000
-  runAsNonRoot: true
-  runAsUser: 1000
-
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-      - ALL
-  readOnlyRootFilesystem: false
-  runAsNonRoot: true
-  runAsUser: 1000
+  service:
+    type: ClusterIP
+    port: 1986
 
 operator:
   enabled: true
@@ -242,13 +198,13 @@ operator:
                   cpu: 1000m
                   memory: 1Gi
 
-hostBackend:
+playground:
   enabled: true
   deployment:
     resources:
       limits:
         cpu: 1000m
-        memory: 2Gi
+        memory: 8Gi
       requests:
         cpu: 500m
         memory: 1Gi
@@ -257,21 +213,33 @@ hostBackend:
     minReplicas: 1
     maxReplicas: 5
     targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
   service:
     type: ClusterIP
-    port: 1987
+    port: 1988
 
-listener:
-  enabled: true
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-postgres-credentials"
+
+queue:
   deployment:
     resources:
       limits:
-        cpu: 500m
-        memory: 1Gi
+        cpu: 2000m
+        memory: 4Gi
       requests:
-        cpu: 250m
-        memory: 512Mi
+        cpu: 1000m
+        memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 50
+    targetMemoryUtilizationPercentage: 80
 
-affinity: {}
-tolerations: []
-nodeSelector: {}
+redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-credentials"
