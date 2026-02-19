@@ -1,0 +1,4 @@
+# Post-install validation script (validate_install.py)
+click>=8.0
+PyYAML>=6.0
+kubernetes>=28.0

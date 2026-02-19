@@ -1,0 +1,55 @@
+# Post-install validation config (validate_install.py)
+# Copy to validate_config.yaml and adjust namespaces/releases to match your deployment.
+
+namespaces:
+  - langsmith
+  # - envoy-gateway-system   # optional: if validating Envoy Gateway in a separate namespace
+
+helm_releases:
+  - name: langsmith
+    namespace: langsmith
+    selector_labels:
+      app.kubernetes.io/instance: langsmith
+    required_kinds:
+      - Deployment
+      - StatefulSet
+      - Service
+    allow_no_resources: false
+
+  # Example: second release in same or different namespace
+  # - name: envoy-gateway
+  #   namespace: envoy-gateway-system
+  #   selector_labels:
+  #     app.kubernetes.io/name: envoy-gateway
+  #   required_kinds:
+  #     - Deployment
+  #     - Service
+  #   allow_no_resources: false
+
+resource_checks:
+  deployments:
+    min_available_seconds: 0   # not used for polling; readiness is checked per Deployment
+  statefulsets:
+    require_updated_replicas: true
+  daemonsets:
+    require_number_ready: true
+  pods:
+    require_ready: true
+    ignore_completed: true
+    allowed_phases:
+      - Running
+      - Succeeded
+  jobs:
+    require_complete: true
+    forbid_failed: true
+  services:
+    require_endpoints_for_clusterip: false
+    require_loadbalancer_ip_or_hostname: false
+  ingress:
+    require_address: false
+
+exclusions:
+  namespaces: []
+  label_selectors:
+    - job-name=helm-test   # skip Helm test pods
+  resource_names: []       # e.g. ["*-test-*"] to ignore resources whose name matches
