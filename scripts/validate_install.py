@@ -56,13 +56,13 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(d)
 
 
-def setup_logging(json_logs: bool, show_passing: bool) -> None:
+def setup_logging(json_logs: bool) -> None:
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     for h in list(root.handlers):
         root.removeHandler(h)
     handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(logging.DEBUG if show_passing else logging.INFO)
+    handler.setLevel(logging.INFO)
     handler.setFormatter(JsonFormatter() if json_logs else HumanFormatter())
     root.addHandler(handler)
 
@@ -667,7 +667,7 @@ def run_validations(
         )
 
 
-def print_report(report: ValidationReport, show_passing: bool) -> None:
+def print_report(report: ValidationReport) -> None:
     failed = report.failed()
     for r in report.results:
         if not r.passed:
@@ -676,7 +676,7 @@ def print_report(report: ValidationReport, show_passing: bool) -> None:
                 print(f"        {r.details}", file=sys.stderr)
         elif r.warning:
             print(f"  WARN  {r.name}: {r.message}", file=sys.stderr)
-        elif show_passing:
+        else:
             print(f"  OK    {r.name}: {r.message}", file=sys.stderr)
     print("", file=sys.stderr)
     print(f"--- Summary ({report.elapsed_seconds():.1f}s) ---", file=sys.stderr)
@@ -707,7 +707,6 @@ def print_report(report: ValidationReport, show_passing: bool) -> None:
 @click.option("--poll-seconds", type=int, default=DEFAULT_POLL_SECONDS, help="Seconds between poll rounds")
 @click.option("--fail-fast", is_flag=True, default=False, help="Stop on first failure")
 @click.option("--json-logs", is_flag=True, default=False, help="Emit logs as JSON lines")
-@click.option("--show-passing", is_flag=True, default=False, help="Show passing checks in output")
 @click.option("--namespace", type=str, default=None, help="Override namespaces: check only this namespace")
 @click.option("--require-loadbalancer-addresses", is_flag=True, default=False, help="Require LoadBalancer Services to have addresses")
 @click.option("--require-ingress-addresses", is_flag=True, default=False, help="Require Ingress/Gateway to have addresses")
@@ -723,7 +722,6 @@ def main(
     poll_seconds: int,
     fail_fast: bool,
     json_logs: bool,
-    show_passing: bool,
     namespace: Optional[str],
     require_loadbalancer_addresses: bool,
     require_ingress_addresses: bool,
@@ -733,7 +731,7 @@ def main(
     skip_services: bool,
 ) -> None:
     """Post-apply validation for Kubernetes (Terraform + Helm)."""
-    setup_logging(json_logs, show_passing)
+    setup_logging(json_logs)
     logger = logging.getLogger(__name__)
 
     cli_options = {
@@ -772,23 +770,23 @@ def main(
 
         # Connectivity is checked fresh each round (result added to report)
         if not check_cluster_connectivity(core, report):
-            print_report(report, show_passing)
+            print_report(report)
             sys.exit(1)
 
         run_validations(core, apps, batch, netv1, custom, cfg, report, cli_options)
 
         if report.passed_all():
-            print_report(report, show_passing)
+            print_report(report)
             sys.exit(0)
 
         if fail_fast:
-            print_report(report, show_passing)
+            print_report(report)
             sys.exit(1)
 
         logger.info("Some checks failed; retrying in %ds (timeout in %.0fs)", poll_seconds, deadline - time.monotonic())
         time.sleep(poll_seconds)
 
-    print_report(report, show_passing)
+    print_report(report)
     logger.error("Validation timed out after %d seconds", timeout_seconds)
     sys.exit(1)
 
