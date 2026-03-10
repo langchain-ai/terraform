@@ -167,8 +167,8 @@ def load_kubeconfig(
 def check_cluster_connectivity(core: client.CoreV1Api, report: ValidationReport) -> bool:
     try:
         core.list_namespace(limit=1)
-        version = core.api_client.call_api("/version", "GET", response_type="object")
-        report.add("cluster_connectivity", True, "Cluster API reachable", details=str(version.get("gitVersion", "")))
+        ver = client.VersionApi(core.api_client).get_code()
+        report.add("cluster_connectivity", True, "Cluster API reachable", details=ver.git_version)
         return True
     except ApiException as e:
         report.add("cluster_connectivity", False, f"Cluster API error: {e.reason}", details=str(e.body))
