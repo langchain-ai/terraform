@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
 Post-apply validation script for Kubernetes deployments (Terraform + Helm).
-Validates cluster connectivity, Helm releases, workloads, Jobs, Services, and optional Ingress/Gateway.
+Validates cluster connectivity, Helm releases, workloads, Jobs, Services,
+Ingress/Gateway, PVCs, Secrets, external services, pod logs, HTTP endpoints,
+node capacity, and beacon connectivity.
 Read-only and idempotent.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -17,9 +21,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import click
+import requests
 import yaml
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
+from kubernetes.stream import stream as k8s_stream
 
 # -----------------------------------------------------------------------------
 # Constants
@@ -28,6 +34,33 @@ DEFAULT_KUBECONFIG = os.path.expanduser("~/.kube/config")
 DEFAULT_TIMEOUT_SECONDS = 900
 DEFAULT_POLL_SECONDS = 10
 BAD_POD_REASONS = {"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError"}
+
+VALID_TOP_LEVEL_KEYS = {"namespaces", "helm_releases", "resource_checks", "exclusions"}
+VALID_RESOURCE_CHECK_KEYS = {
+    "deployments", "statefulsets", "daemonsets", "pods", "jobs", "services",
+    "ingress", "pvcs", "secrets", "external_services", "pod_logs", "endpoints",
+    "node_capacity", "beacon",
+}
+
+LANGSMITH_SERVICE_HEALTH_MAP: list[dict[str, Any]] = [
+    {"name": "frontend", "port": 8080, "path": "/health"},
+    {"name": "backend", "port": 1984, "path": "/health"},
+    {"name": "platform-backend", "port": 1986, "path": "/ok"},
+    {"name": "ace-backend", "port": 1987, "path": "/ok"},
+    {"name": "playground", "port": 1988, "path": "/ok"},
+]
+
+NODE_PRESSURE_CONDITIONS = {"DiskPressure", "MemoryPressure", "PIDPressure"}
+
+BEACON_ENV_KEYS = {"BEACON_LOGGING_ENABLED", "BEACON_METRICS_ENABLED", "BEACON_TRACING_ENABLED"}
+BEACON_ERROR_PATTERNS = [
+    r"beacon.*connection refused",
+    r"beacon.*timeout",
+    r"beacon.*unreachable",
+    r"beacon.*failed",
+    r"BEACON.*error",
+    r"telemetry.*failed",
+]
 
 # -----------------------------------------------------------------------------
 # Logging
@@ -132,6 +165,124 @@ def get_resource_checks(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def get_exclusions(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg.get("exclusions") or {}
+
+
+# -----------------------------------------------------------------------------
+# Dry-run config validation
+# -----------------------------------------------------------------------------
+
+
+def _validate_config_schema(cfg: dict[str, Any]) -> list[str]:
+    """Return a list of human-readable issues found in the config structure."""
+    issues: list[str] = []
+
+    unknown_top = set(cfg.keys()) - VALID_TOP_LEVEL_KEYS
+    if unknown_top:
+        issues.append(f"Unknown top-level keys: {sorted(unknown_top)}")
+
+    ns = cfg.get("namespaces")
+    if ns is not None:
+        if not isinstance(ns, list):
+            issues.append(f"'namespaces' should be a list, got {type(ns).__name__}")
+        elif len(ns) == 0:
+            issues.append("'namespaces' is empty — no namespaces will be checked")
+
+    releases = cfg.get("helm_releases")
+    if releases is not None:
+        if not isinstance(releases, list):
+            issues.append(f"'helm_releases' should be a list, got {type(releases).__name__}")
+        else:
+            for i, rel in enumerate(releases):
+                if not isinstance(rel, dict):
+                    issues.append(f"helm_releases[{i}] should be a mapping")
+                    continue
+                if not rel.get("name"):
+                    issues.append(f"helm_releases[{i}] missing 'name'")
+                if not rel.get("namespace"):
+                    issues.append(f"helm_releases[{i}] missing 'namespace'")
+
+    rc = cfg.get("resource_checks")
+    if rc is not None:
+        if not isinstance(rc, dict):
+            issues.append(f"'resource_checks' should be a mapping, got {type(rc).__name__}")
+        else:
+            unknown_rc = set(rc.keys()) - VALID_RESOURCE_CHECK_KEYS
+            if unknown_rc:
+                issues.append(f"Unknown resource_checks keys: {sorted(unknown_rc)}")
+
+    excl = cfg.get("exclusions")
+    if excl is not None:
+        if not isinstance(excl, dict):
+            issues.append(f"'exclusions' should be a mapping, got {type(excl).__name__}")
+        else:
+            for sel in excl.get("label_selectors") or []:
+                if isinstance(sel, str) and "=" not in sel:
+                    issues.append(f"Malformed label selector (missing '='): '{sel}'")
+
+    return issues
+
+
+def _compute_check_plan(cfg: dict[str, Any], cli_options: dict[str, Any]) -> list[str]:
+    """Return a list of check names that would execute given the config and CLI flags."""
+    plan: list[str] = ["cluster_connectivity"]
+    rc = get_resource_checks(cfg)
+
+    if not cli_options.get("skip_helm_release_checks") and get_helm_releases(cfg):
+        plan.append("helm_releases")
+
+    plan.extend(["deployments", "statefulsets", "daemonsets", "pods"])
+
+    if not cli_options.get("skip_jobs"):
+        plan.append("jobs")
+    if not cli_options.get("skip_services"):
+        plan.append("services")
+    if not cli_options.get("skip_ingress"):
+        plan.append("ingress")
+    if not cli_options.get("skip_pvcs"):
+        plan.append("pvcs")
+    if not cli_options.get("skip_secrets") and rc.get("secrets"):
+        plan.append("secrets")
+    if not cli_options.get("skip_external_services"):
+        ext = rc.get("external_services") or {}
+        enabled = [k for k, v in ext.items() if isinstance(v, dict) and v.get("enabled")]
+        if enabled:
+            plan.append(f"external_services ({', '.join(enabled)})")
+    if not cli_options.get("skip_pod_logs") and (rc.get("pod_logs") or {}).get("enabled"):
+        plan.append("pod_logs")
+    if not cli_options.get("skip_endpoints"):
+        ep = rc.get("endpoints") or {}
+        if ep.get("external_url") or (ep.get("in_cluster") or {}).get("enabled"):
+            plan.append("endpoints")
+    if not cli_options.get("skip_node_capacity"):
+        plan.append("node_capacity")
+    if not cli_options.get("skip_beacon") and (rc.get("beacon") or {}).get("enabled"):
+        plan.append("beacon")
+
+    return plan
+
+
+def run_dry_run(cfg: dict[str, Any], cli_options: dict[str, Any]) -> int:
+    """Validate config and print check plan. Returns exit code 0 or 2."""
+    issues = _validate_config_schema(cfg)
+    if issues:
+        print("Config validation issues:", file=sys.stderr)
+        for issue in issues:
+            print(f"  - {issue}", file=sys.stderr)
+        print("", file=sys.stderr)
+
+    plan = _compute_check_plan(cfg, cli_options)
+    namespaces = get_namespaces(cfg, cli_options.get("namespace"))
+    print("--- Dry-run: check plan ---", file=sys.stderr)
+    print(f"  Namespaces: {namespaces or '(none)'}", file=sys.stderr)
+    print(f"  Checks ({len(plan)}):", file=sys.stderr)
+    for name in plan:
+        print(f"    - {name}", file=sys.stderr)
+
+    if issues:
+        print("\nConfig has issues — fix them before running.", file=sys.stderr)
+        return 2
+    print("\nConfig OK — ready to run.", file=sys.stderr)
+    return 0
 
 
 # -----------------------------------------------------------------------------
@@ -611,6 +762,535 @@ def check_ingress(
 
 
 # -----------------------------------------------------------------------------
+# New validators
+# -----------------------------------------------------------------------------
+
+
+def check_pvcs(
+    core: client.CoreV1Api,
+    namespaces: list[str],
+    report: ValidationReport,
+    options: dict[str, Any],
+    exclusions: dict[str, Any],
+) -> None:
+    opts = options.get("pvcs") or {}
+    require_bound = opts.get("require_bound", True)
+    for ns in namespaces:
+        try:
+            pvcs = core.list_namespaced_persistent_volume_claim(ns)
+        except ApiException as e:
+            report.add(f"pvcs:{ns}", False, f"Failed to list PVCs: {e.reason}", details=str(e.body))
+            continue
+        for pvc in pvcs.items:
+            if _matches_exclusions(pvc.metadata.name, ns, pvc.metadata.labels or {}, exclusions):
+                continue
+            phase = pvc.status.phase if pvc.status else "Unknown"
+            sc = pvc.spec.storage_class_name or "(default)"
+            if phase == "Bound":
+                report.add(f"pvc:{ns}/{pvc.metadata.name}", True, f"Bound, storageClass={sc}")
+            elif phase == "Pending" and require_bound:
+                event_msg = _get_pvc_events(core, pvc.metadata.name, ns)
+                report.add(
+                    f"pvc:{ns}/{pvc.metadata.name}",
+                    False,
+                    f"PVC stuck in Pending, storageClass={sc}",
+                    details=event_msg or None,
+                )
+            elif phase == "Lost":
+                report.add(
+                    f"pvc:{ns}/{pvc.metadata.name}",
+                    False,
+                    f"PVC Lost, storageClass={sc}",
+                    details=None,
+                    warning=True,
+                )
+            else:
+                report.add(f"pvc:{ns}/{pvc.metadata.name}", True, f"phase={phase}, storageClass={sc}")
+
+
+def _get_pvc_events(core: client.CoreV1Api, name: str, namespace: str) -> str:
+    """Fetch recent warning events for a PVC to explain why it is Pending."""
+    try:
+        events = core.list_namespaced_event(
+            namespace,
+            field_selector=f"involvedObject.name={name},involvedObject.kind=PersistentVolumeClaim",
+        )
+        warnings = [
+            e.message for e in (events.items or [])
+            if e.type == "Warning" and e.message
+        ]
+        return "; ".join(warnings[-3:]) if warnings else ""
+    except ApiException:
+        return ""
+
+
+def check_secrets_existence(
+    core: client.CoreV1Api,
+    namespaces: list[str],
+    report: ValidationReport,
+    options: dict[str, Any],
+    exclusions: dict[str, Any],
+) -> None:
+    secret_specs = options.get("secrets") or []
+    if not isinstance(secret_specs, list):
+        return
+    for spec in secret_specs:
+        name = spec.get("name", "")
+        ns = spec.get("namespace") or (namespaces[0] if namespaces else "default")
+        required_keys = spec.get("required_keys") or []
+        if _matches_exclusions(name, ns, {}, exclusions):
+            continue
+        try:
+            secret = core.read_namespaced_secret(name, ns)
+        except ApiException as e:
+            if e.status == 404:
+                report.add(f"secret:{ns}/{name}", False, "Secret not found")
+            else:
+                report.add(f"secret:{ns}/{name}", False, f"Failed to read secret: {e.reason}")
+            continue
+        existing_keys = set((secret.data or {}).keys())
+        missing = [k for k in required_keys if k not in existing_keys]
+        if missing:
+            report.add(
+                f"secret:{ns}/{name}",
+                False,
+                f"Secret missing keys: {missing}",
+                details=f"present keys: {sorted(existing_keys)}",
+            )
+        else:
+            report.add(f"secret:{ns}/{name}", True, f"exists with {len(existing_keys)} keys")
+
+
+def check_external_services(
+    core: client.CoreV1Api,
+    namespaces: list[str],
+    report: ValidationReport,
+    options: dict[str, Any],
+    exclusions: dict[str, Any],
+) -> None:
+    ext_cfg = options.get("external_services") or {}
+    for svc_name, svc_opts in ext_cfg.items():
+        if not isinstance(svc_opts, dict) or not svc_opts.get("enabled"):
+            continue
+        secret_name = svc_opts.get("secret_name", "")
+        secret_ns = svc_opts.get("secret_namespace") or (namespaces[0] if namespaces else "default")
+        host_key = svc_opts.get("host_key", "")
+        port_key = svc_opts.get("port_key")
+
+        if not secret_name:
+            report.add(f"external:{svc_name}", False, "No secret_name configured")
+            continue
+
+        try:
+            secret = core.read_namespaced_secret(secret_name, secret_ns)
+        except ApiException as e:
+            report.add(
+                f"external:{svc_name}",
+                False,
+                f"Cannot read secret {secret_ns}/{secret_name}: {e.reason}",
+            )
+            continue
+
+        data = secret.data or {}
+        if host_key and host_key not in data:
+            report.add(
+                f"external:{svc_name}",
+                False,
+                f"Secret missing key '{host_key}'",
+                details=f"secret={secret_ns}/{secret_name}",
+            )
+            continue
+
+        host_val = _decode_secret_value(data.get(host_key, ""))
+        port_val = _decode_secret_value(data.get(port_key, "")) if port_key and port_key in data else None
+
+        _check_external_via_endpoints(core, svc_name, namespaces, report)
+
+        if svc_opts.get("probe_from_pod"):
+            _probe_external_from_pod(core, svc_name, host_val, port_val, namespaces, report)
+        else:
+            detail_parts = [f"host_key={host_key} present in secret"]
+            if port_val:
+                detail_parts.append(f"port_key={port_key} present")
+            report.add(f"external:{svc_name}", True, "Secret credentials found", details="; ".join(detail_parts))
+
+
+def _decode_secret_value(encoded: str) -> str:
+    try:
+        return base64.b64decode(encoded).decode("utf-8")
+    except Exception:
+        return encoded
+
+
+def _check_external_via_endpoints(
+    core: client.CoreV1Api,
+    svc_name: str,
+    namespaces: list[str],
+    report: ValidationReport,
+) -> None:
+    """Check if a K8s Service matching the external service name has endpoints."""
+    for ns in namespaces:
+        try:
+            ep = core.read_namespaced_endpoints(svc_name, ns)
+            subsets = ep.subsets or []
+            if subsets:
+                addrs = sum(len(s.addresses or []) for s in subsets)
+                report.add(
+                    f"external_endpoints:{svc_name}/{ns}",
+                    True,
+                    f"Service has {addrs} endpoint(s)",
+                )
+                return
+        except ApiException:
+            pass
+
+
+def _probe_external_from_pod(
+    core: client.CoreV1Api,
+    svc_name: str,
+    host: str,
+    port: Optional[str],
+    namespaces: list[str],
+    report: ValidationReport,
+) -> None:
+    """Exec a lightweight connectivity test from a running pod."""
+    target_pod = _find_running_pod(core, namespaces)
+    if not target_pod:
+        report.add(f"external_probe:{svc_name}", False, "No running pod found for exec probe", warning=True)
+        return
+
+    pod_name, pod_ns, container = target_pod
+    probe_cmds = {
+        "postgres": f"pg_isready -h {host}" + (f" -p {port}" if port else ""),
+        "redis": f"redis-cli -h {host}" + (f" -p {port}" if port else "") + " ping",
+        "clickhouse": f"wget -q -O- http://{host}:{port or '8123'}/ping",
+    }
+    cmd = probe_cmds.get(svc_name, f"wget -q -O- http://{host}:{port or '80'}/")
+
+    try:
+        result = k8s_stream(
+            core.connect_get_namespaced_pod_exec,
+            pod_name,
+            pod_ns,
+            container=container,
+            command=["/bin/sh", "-c", cmd],
+            stderr=True,
+            stdout=True,
+            stdin=False,
+            tty=False,
+        )
+        report.add(f"external_probe:{svc_name}", True, f"Probe OK from {pod_ns}/{pod_name}", details=result[:200])
+    except Exception as e:
+        report.add(f"external_probe:{svc_name}", False, f"Probe failed: {e}", warning=True)
+
+
+def _find_running_pod(core: client.CoreV1Api, namespaces: list[str]) -> Optional[tuple[str, str, str]]:
+    """Find a running pod to exec into. Returns (name, namespace, container) or None."""
+    for ns in namespaces:
+        try:
+            pods = core.list_namespaced_pod(ns, field_selector="status.phase=Running")
+            for p in pods.items:
+                containers = p.spec.containers or []
+                if containers:
+                    return (p.metadata.name, ns, containers[0].name)
+        except ApiException:
+            pass
+    return None
+
+
+def check_pod_error_logs(
+    core: client.CoreV1Api,
+    namespaces: list[str],
+    report: ValidationReport,
+    options: dict[str, Any],
+    exclusions: dict[str, Any],
+) -> None:
+    opts = options.get("pod_logs") or {}
+    tail_lines = opts.get("tail_lines", 100)
+    patterns_raw = opts.get("error_patterns") or ["FATAL", "panic:", "OOMKilled"]
+    max_matches = opts.get("max_matches_per_pod", 5)
+
+    compiled = [re.compile(p, re.IGNORECASE) for p in patterns_raw]
+
+    for ns in namespaces:
+        try:
+            pods = core.list_namespaced_pod(ns)
+        except ApiException as e:
+            report.add(f"pod_logs:{ns}", False, f"Failed to list pods: {e.reason}")
+            continue
+        for p in pods.items:
+            if _matches_exclusions(p.metadata.name, ns, p.metadata.labels or {}, exclusions):
+                continue
+            phase = p.status.phase if p.status else "Unknown"
+            if phase not in ("Running", "Failed", "CrashLoopBackOff"):
+                if phase == "Succeeded":
+                    continue
+            for container in p.spec.containers or []:
+                try:
+                    logs = core.read_namespaced_pod_log(
+                        p.metadata.name,
+                        ns,
+                        container=container.name,
+                        tail_lines=tail_lines,
+                    )
+                except ApiException:
+                    continue
+                if not logs:
+                    continue
+                matches: list[str] = []
+                for line in logs.splitlines():
+                    if len(matches) >= max_matches:
+                        break
+                    for pat in compiled:
+                        if pat.search(line):
+                            matches.append(line.strip()[:200])
+                            break
+                if matches:
+                    report.add(
+                        f"pod_logs:{ns}/{p.metadata.name}/{container.name}",
+                        False,
+                        f"Found {len(matches)} error(s) in logs",
+                        details="\n".join(matches),
+                        warning=True,
+                    )
+
+
+def check_langsmith_endpoints(
+    core: client.CoreV1Api,
+    namespaces: list[str],
+    report: ValidationReport,
+    options: dict[str, Any],
+) -> None:
+    opts = options.get("endpoints") or {}
+    external_url = (opts.get("external_url") or "").rstrip("/")
+    external_paths = opts.get("external_paths") or ["/ok"]
+    in_cluster_cfg = opts.get("in_cluster") or {}
+    in_cluster_enabled = in_cluster_cfg.get("enabled", False)
+    timeout = opts.get("timeout_seconds", 10)
+
+    if external_url:
+        for path in external_paths:
+            url = f"{external_url}{path}"
+            try:
+                resp = requests.get(url, timeout=timeout, allow_redirects=True)
+                if resp.status_code < 400:
+                    report.add(f"endpoint_ext:{path}", True, f"GET {url} -> {resp.status_code}")
+                else:
+                    report.add(
+                        f"endpoint_ext:{path}",
+                        False,
+                        f"GET {url} -> {resp.status_code}",
+                        details=resp.text[:200],
+                    )
+            except requests.RequestException as e:
+                report.add(f"endpoint_ext:{path}", False, f"GET {url} failed: {e}")
+
+    if in_cluster_enabled:
+        for svc_info in LANGSMITH_SERVICE_HEALTH_MAP:
+            svc_name = svc_info["name"]
+            port = svc_info["port"]
+            path = svc_info["path"]
+            for ns in namespaces:
+                try:
+                    resp_body = core.connect_get_namespaced_service_proxy_with_path(
+                        f"{svc_name}:{port}",
+                        ns,
+                        path.lstrip("/"),
+                    )
+                    report.add(
+                        f"endpoint_cluster:{ns}/{svc_name}{path}",
+                        True,
+                        f"Service proxy OK",
+                        details=str(resp_body)[:200] if resp_body else None,
+                    )
+                except ApiException as e:
+                    report.add(
+                        f"endpoint_cluster:{ns}/{svc_name}{path}",
+                        False,
+                        f"Service proxy failed: {e.reason}",
+                        details=str(e.body)[:200] if e.body else None,
+                    )
+                break
+
+
+def check_node_capacity(
+    core: client.CoreV1Api,
+    report: ValidationReport,
+    options: dict[str, Any],
+) -> None:
+    opts = options.get("node_capacity") or {}
+    warn_pct = opts.get("warn_threshold_percent", 90)
+    check_conditions = opts.get("check_conditions", True)
+
+    try:
+        nodes = core.list_node()
+    except ApiException as e:
+        report.add("node_capacity", False, f"Failed to list nodes: {e.reason}")
+        return
+
+    all_pods_by_node: dict[str, list] = {}
+    try:
+        all_pods = core.list_pod_for_all_namespaces()
+        for p in all_pods.items:
+            node = p.spec.node_name
+            if node:
+                all_pods_by_node.setdefault(node, []).append(p)
+    except ApiException:
+        pass
+
+    for node in nodes.items:
+        name = node.metadata.name
+        allocatable = node.status.allocatable or {}
+        alloc_cpu = _parse_cpu(allocatable.get("cpu", "0"))
+        alloc_mem = _parse_memory(allocatable.get("memory", "0"))
+
+        req_cpu = 0.0
+        req_mem = 0
+        for p in all_pods_by_node.get(name, []):
+            for c in p.spec.containers or []:
+                res = (c.resources.requests or {}) if c.resources else {}
+                req_cpu += _parse_cpu(res.get("cpu", "0"))
+                req_mem += _parse_memory(res.get("memory", "0"))
+
+        cpu_pct = (req_cpu / alloc_cpu * 100) if alloc_cpu > 0 else 0
+        mem_pct = (req_mem / alloc_mem * 100) if alloc_mem > 0 else 0
+
+        detail = (
+            f"cpu: {req_cpu:.1f}/{alloc_cpu:.1f} cores ({cpu_pct:.0f}%), "
+            f"memory: {_format_memory(req_mem)}/{_format_memory(alloc_mem)} ({mem_pct:.0f}%)"
+        )
+
+        over_threshold = cpu_pct >= warn_pct or mem_pct >= warn_pct
+        if over_threshold:
+            report.add(f"node_capacity:{name}", False, f"Resource usage high", details=detail, warning=True)
+        else:
+            report.add(f"node_capacity:{name}", True, detail)
+
+        if check_conditions:
+            for cond in node.status.conditions or []:
+                if cond.type in NODE_PRESSURE_CONDITIONS and cond.status == "True":
+                    report.add(
+                        f"node_condition:{name}/{cond.type}",
+                        False,
+                        f"{cond.type} is True: {cond.message}",
+                        warning=True,
+                    )
+
+
+def _parse_cpu(val: str) -> float:
+    """Parse K8s CPU quantity (e.g. '500m', '2') to float cores."""
+    val = str(val).strip()
+    if not val or val == "0":
+        return 0.0
+    if val.endswith("m"):
+        return float(val[:-1]) / 1000.0
+    return float(val)
+
+
+def _parse_memory(val: str) -> int:
+    """Parse K8s memory quantity (e.g. '512Mi', '2Gi') to bytes."""
+    val = str(val).strip()
+    if not val or val == "0":
+        return 0
+    suffixes = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
+    for suffix, multiplier in suffixes.items():
+        if val.endswith(suffix):
+            return int(float(val[: -len(suffix)]) * multiplier)
+    if val.endswith("k"):
+        return int(float(val[:-1]) * 1000)
+    if val.endswith("M"):
+        return int(float(val[:-1]) * 1_000_000)
+    if val.endswith("G"):
+        return int(float(val[:-1]) * 1_000_000_000)
+    return int(val)
+
+
+def _format_memory(mem_bytes: int) -> str:
+    if mem_bytes >= 1024**3:
+        return f"{mem_bytes / 1024**3:.1f}Gi"
+    if mem_bytes >= 1024**2:
+        return f"{mem_bytes / 1024**2:.0f}Mi"
+    return f"{mem_bytes}B"
+
+
+def check_beacon_connectivity(
+    core: client.CoreV1Api,
+    namespaces: list[str],
+    report: ValidationReport,
+    options: dict[str, Any],
+    exclusions: dict[str, Any],
+) -> None:
+    opts = options.get("beacon") or {}
+    check_pod_logs = opts.get("check_pod_logs", True)
+
+    beacon_enabled = False
+    for ns in namespaces:
+        try:
+            cms = core.list_namespaced_config_map(ns)
+        except ApiException:
+            continue
+        for cm in cms.items:
+            if not cm.data:
+                continue
+            for key in BEACON_ENV_KEYS:
+                if cm.data.get(key, "").lower() == "true":
+                    beacon_enabled = True
+                    break
+            if beacon_enabled:
+                break
+        if beacon_enabled:
+            break
+
+    if not beacon_enabled:
+        report.add("beacon", True, "Beacon telemetry is disabled — skipping")
+        return
+
+    report.add("beacon_config", True, "Beacon telemetry is enabled")
+
+    if not check_pod_logs:
+        return
+
+    compiled = [re.compile(p, re.IGNORECASE) for p in BEACON_ERROR_PATTERNS]
+    beacon_errors: list[str] = []
+
+    for ns in namespaces:
+        try:
+            pods = core.list_namespaced_pod(ns, field_selector="status.phase=Running")
+        except ApiException:
+            continue
+        for p in pods.items:
+            if _matches_exclusions(p.metadata.name, ns, p.metadata.labels or {}, exclusions):
+                continue
+            for container in p.spec.containers or []:
+                try:
+                    logs = core.read_namespaced_pod_log(
+                        p.metadata.name, ns, container=container.name, tail_lines=50,
+                    )
+                except ApiException:
+                    continue
+                if not logs:
+                    continue
+                for line in logs.splitlines():
+                    for pat in compiled:
+                        if pat.search(line):
+                            beacon_errors.append(f"{p.metadata.name}/{container.name}: {line.strip()[:200]}")
+                            break
+                    if len(beacon_errors) >= 10:
+                        break
+
+    if beacon_errors:
+        report.add(
+            "beacon_logs",
+            False,
+            f"Found {len(beacon_errors)} beacon-related error(s) in pod logs",
+            details="\n".join(beacon_errors),
+            warning=True,
+        )
+    else:
+        report.add("beacon_logs", True, "No beacon errors found in pod logs")
+
+
+# -----------------------------------------------------------------------------
 # Main run loop
 # -----------------------------------------------------------------------------
 
@@ -666,6 +1346,29 @@ def run_validations(
             exclusions,
         )
 
+    if not cli_options.get("skip_pvcs", False):
+        check_pvcs(core, namespaces, report, resource_checks, exclusions)
+
+    if not cli_options.get("skip_secrets", False):
+        check_secrets_existence(core, namespaces, report, resource_checks, exclusions)
+
+    if not cli_options.get("skip_external_services", False):
+        check_external_services(core, namespaces, report, resource_checks, exclusions)
+
+    if not cli_options.get("skip_pod_logs", False) and (resource_checks.get("pod_logs") or {}).get("enabled"):
+        check_pod_error_logs(core, namespaces, report, resource_checks, exclusions)
+
+    if not cli_options.get("skip_endpoints", False):
+        ep_cfg = resource_checks.get("endpoints") or {}
+        if ep_cfg.get("external_url") or (ep_cfg.get("in_cluster") or {}).get("enabled"):
+            check_langsmith_endpoints(core, namespaces, report, resource_checks)
+
+    if not cli_options.get("skip_node_capacity", False):
+        check_node_capacity(core, report, resource_checks)
+
+    if not cli_options.get("skip_beacon", False) and (resource_checks.get("beacon") or {}).get("enabled"):
+        check_beacon_connectivity(core, namespaces, report, resource_checks, exclusions)
+
 
 def print_report(report: ValidationReport) -> None:
     failed = report.failed()
@@ -714,6 +1417,14 @@ def print_report(report: ValidationReport) -> None:
 @click.option("--skip-jobs", is_flag=True, default=False, help="Skip Job completion checks")
 @click.option("--skip-ingress", is_flag=True, default=False, help="Skip Ingress/Gateway checks")
 @click.option("--skip-services", is_flag=True, default=False, help="Skip Service checks")
+@click.option("--skip-pvcs", is_flag=True, default=False, help="Skip PersistentVolumeClaim checks")
+@click.option("--skip-secrets", is_flag=True, default=False, help="Skip Secrets existence checks")
+@click.option("--skip-external-services", is_flag=True, default=False, help="Skip external service connectivity checks")
+@click.option("--skip-pod-logs", is_flag=True, default=False, help="Skip pod error log scanning")
+@click.option("--skip-endpoints", is_flag=True, default=False, help="Skip LangSmith HTTP endpoint liveness checks")
+@click.option("--skip-node-capacity", is_flag=True, default=False, help="Skip node capacity checks")
+@click.option("--skip-beacon", is_flag=True, default=False, help="Skip beacon connectivity checks")
+@click.option("--dry-run", is_flag=True, default=False, help="Validate config and show check plan without connecting to K8s")
 def main(
     kubeconfig: Optional[str],
     kube_context: Optional[str],
@@ -729,6 +1440,14 @@ def main(
     skip_jobs: bool,
     skip_ingress: bool,
     skip_services: bool,
+    skip_pvcs: bool,
+    skip_secrets: bool,
+    skip_external_services: bool,
+    skip_pod_logs: bool,
+    skip_endpoints: bool,
+    skip_node_capacity: bool,
+    skip_beacon: bool,
+    dry_run: bool,
 ) -> None:
     """Post-apply validation for Kubernetes (Terraform + Helm)."""
     setup_logging(json_logs)
@@ -742,6 +1461,13 @@ def main(
         "skip_jobs": skip_jobs,
         "skip_ingress": skip_ingress,
         "skip_services": skip_services,
+        "skip_pvcs": skip_pvcs,
+        "skip_secrets": skip_secrets,
+        "skip_external_services": skip_external_services,
+        "skip_pod_logs": skip_pod_logs,
+        "skip_endpoints": skip_endpoints,
+        "skip_node_capacity": skip_node_capacity,
+        "skip_beacon": skip_beacon,
     }
 
     try:
@@ -749,6 +1475,9 @@ def main(
     except FileNotFoundError as e:
         logger.error(str(e))
         sys.exit(2)
+
+    if dry_run:
+        sys.exit(run_dry_run(cfg, cli_options))
 
     namespaces = get_namespaces(cfg, namespace)
     if not namespaces:
@@ -768,7 +1497,6 @@ def main(
         report.results.clear()
         report.start_time = time.monotonic()
 
-        # Connectivity is checked fresh each round (result added to report)
         if not check_cluster_connectivity(core, report):
             print_report(report)
             sys.exit(1)

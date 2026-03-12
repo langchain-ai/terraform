@@ -48,6 +48,87 @@ resource_checks:
   ingress:
     require_address: false
 
+  # --- New checks below ---
+
+  pvcs:
+    require_bound: true        # FAIL if any PVC is stuck in Pending
+
+  secrets:
+    # List of secrets to verify exist with the expected keys.
+    # Never logs actual secret values — only checks key presence.
+    - name: langsmith-secrets
+      namespace: langsmith
+      required_keys:
+        - langsmith_license_key
+        - api_key_salt
+    - name: langsmith-postgres
+      namespace: langsmith
+      required_keys:
+        - connection_url
+    - name: langsmith-redis
+      namespace: langsmith
+      required_keys:
+        - connection_url
+    - name: langsmith-clickhouse
+      namespace: langsmith
+      required_keys:
+        - clickhouse_host
+        - clickhouse_user
+        - clickhouse_password
+        - clickhouse_db
+
+  external_services:
+    postgres:
+      enabled: false           # set true when using external Postgres
+      secret_name: "langsmith-postgres"
+      secret_namespace: "langsmith"
+      host_key: "connection_url"
+      probe_from_pod: false    # exec pg_isready from a running pod
+    redis:
+      enabled: false           # set true when using external Redis
+      secret_name: "langsmith-redis"
+      secret_namespace: "langsmith"
+      host_key: "connection_url"
+      probe_from_pod: false
+    clickhouse:
+      enabled: false           # set true when using external ClickHouse
+      secret_name: "langsmith-clickhouse"
+      secret_namespace: "langsmith"
+      host_key: "clickhouse_host"
+      port_key: "clickhouse_port"
+      probe_from_pod: false
+
+  pod_logs:
+    enabled: false             # set true to scan pod logs for errors
+    tail_lines: 100
+    error_patterns:
+      - "FATAL"
+      - "panic:"
+      - "Postgres unavailable"
+      - "Redis unavailable"
+      - "readiness check failed"
+      - "OOMKilled"
+    max_matches_per_pod: 5
+
+  endpoints:
+    # External URL check — confirms end-to-end ingress from the script host
+    external_url: ""           # e.g. "https://langsmith.example.com"
+    external_paths:
+      - "/ok"
+      - "/api/health"
+    timeout_seconds: 10
+    # In-cluster check — uses K8s service proxy to hit each LangSmith service
+    in_cluster:
+      enabled: false
+
+  node_capacity:
+    warn_threshold_percent: 90 # WARN if cpu or memory requests exceed this %
+    check_conditions: true     # WARN on DiskPressure, MemoryPressure, PIDPressure
+
+  beacon:
+    enabled: false             # set true to check beacon/telemetry connectivity
+    check_pod_logs: true       # grep pod logs for beacon-related errors
+
 exclusions:
   namespaces: []
   label_selectors:
