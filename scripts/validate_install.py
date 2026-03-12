@@ -1370,7 +1370,7 @@ def run_validations(
         check_beacon_connectivity(core, namespaces, report, resource_checks, exclusions)
 
 
-def print_report(report: ValidationReport) -> None:
+def print_report(report: ValidationReport, show_passing: bool = False) -> None:
     failed = report.failed()
     for r in report.results:
         if not r.passed:
@@ -1379,7 +1379,7 @@ def print_report(report: ValidationReport) -> None:
                 print(f"        {r.details}", file=sys.stderr)
         elif r.warning:
             print(f"  WARN  {r.name}: {r.message}", file=sys.stderr)
-        else:
+        elif show_passing:
             print(f"  OK    {r.name}: {r.message}", file=sys.stderr)
     print("", file=sys.stderr)
     print(f"--- Summary ({report.elapsed_seconds():.1f}s) ---", file=sys.stderr)
@@ -1410,6 +1410,7 @@ def print_report(report: ValidationReport) -> None:
 @click.option("--poll-seconds", type=int, default=DEFAULT_POLL_SECONDS, help="Seconds between poll rounds")
 @click.option("--fail-fast", is_flag=True, default=False, help="Stop on first failure")
 @click.option("--json-logs", is_flag=True, default=False, help="Emit logs as JSON lines")
+@click.option("--show-passing", is_flag=True, default=False, help="Include passing checks in output (default: only failures and warnings)")
 @click.option("--namespace", type=str, default=None, help="Override namespaces: check only this namespace")
 @click.option("--require-loadbalancer-addresses", is_flag=True, default=False, help="Require LoadBalancer Services to have addresses")
 @click.option("--require-ingress-addresses", is_flag=True, default=False, help="Require Ingress/Gateway to have addresses")
@@ -1433,6 +1434,7 @@ def main(
     poll_seconds: int,
     fail_fast: bool,
     json_logs: bool,
+    show_passing: bool,
     namespace: Optional[str],
     require_loadbalancer_addresses: bool,
     require_ingress_addresses: bool,
@@ -1498,23 +1500,23 @@ def main(
         report.start_time = time.monotonic()
 
         if not check_cluster_connectivity(core, report):
-            print_report(report)
+            print_report(report, show_passing)
             sys.exit(1)
 
         run_validations(core, apps, batch, netv1, custom, cfg, report, cli_options)
 
         if report.passed_all():
-            print_report(report)
+            print_report(report, show_passing)
             sys.exit(0)
 
         if fail_fast:
-            print_report(report)
+            print_report(report, show_passing)
             sys.exit(1)
 
         logger.info("Some checks failed; retrying in %ds (timeout in %.0fs)", poll_seconds, deadline - time.monotonic())
         time.sleep(poll_seconds)
 
-    print_report(report)
+    print_report(report, show_passing)
     logger.error("Validation timed out after %d seconds", timeout_seconds)
     sys.exit(1)
 
