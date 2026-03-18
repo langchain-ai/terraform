@@ -1,0 +1,33 @@
+# Customer-specific overrides for LangSmith on GCP.
+# Copy to values-overrides.yaml, fill in required fields, then run ../scripts/deploy.sh.
+
+config:
+  # Required
+  langsmithLicenseKey: ""
+  hostname: "langsmith.example.com"
+
+  # Required for first login
+  basicAuth:
+    initialOrgAdminEmail: "admin@example.com"
+    initialOrgAdminPassword: "CHANGE_ME"
+
+  # Required for GCS HMAC auth
+  blobStorage:
+    bucketName: ""       # Terraform output: storage_bucket_name
+    accessKey: ""        # GCS HMAC access key
+    accessKeySecret: ""  # GCS HMAC secret
+
+gateway:
+  enabled: true
+  name: "langsmith-gateway" # Terraform output: gateway_name
+  namespace: "envoy-gateway-system"
+
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-postgres-credentials"
+
+redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-credentials"
