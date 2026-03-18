@@ -124,7 +124,7 @@ aws/
 Copy and populate the variables file:
 
 ```bash
-cd aws/infra
+cd terraform/aws/infra
 cp terraform.tfvars.example terraform.tfvars  # if it exists
 ```
 
@@ -167,7 +167,7 @@ langsmith_domain = "langsmith.<your-domain>"
 
 ### Terraform state backend (recommended for production)
 
-Configure `aws/infra/backend.tf`:
+Configure `terraform/aws/infra/backend.tf`:
 
 ```hcl
 terraform {
@@ -186,7 +186,7 @@ terraform {
 Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC endpoint, ALB, IRSA role, ESO IRSA role, SSM secrets.
 
 ```bash
-cd aws/infra
+cd terraform/aws/infra
 
 terraform init
 terraform plan -var-file=terraform.tfvars
@@ -220,7 +220,7 @@ kubectl get sa langsmith -n langsmith -o jsonpath='{.metadata.annotations}' 2>/d
 
 ```bash
 # Get outputs
-cd aws/infra
+cd terraform/aws/infra
 terraform output -raw alb_dns_name
 terraform output -raw langsmith_irsa_role_arn
 
@@ -359,7 +359,7 @@ helm uninstall langsmith -n langsmith --wait
 kubectl delete namespace langsmith --timeout=60s
 
 # 4. Disable deletion protection, then destroy
-cd aws/infra
+cd terraform/aws/infra
 # Set postgres_deletion_protection = false in terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 terraform destroy

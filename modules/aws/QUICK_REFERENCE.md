@@ -10,7 +10,7 @@ aws configure
 aws sts get-caller-identity
 
 # Configure and deploy
-cd aws/infra
+cd terraform/aws/infra
 # Edit terraform.tfvars with your values
 
 terraform init
@@ -34,7 +34,7 @@ kubectl get pods -n cert-manager
 ## Pass 2 — LangSmith Helm Deploy
 
 ```bash
-cd aws/infra
+cd terraform/aws/infra
 
 # Get required outputs
 terraform output -raw alb_dns_name
@@ -202,7 +202,7 @@ helm uninstall langsmith -n langsmith --wait
 kubectl delete namespace langsmith --timeout=60s
 
 # 4. Set postgres_deletion_protection = false in terraform.tfvars, then:
-cd aws/infra
+cd terraform/aws/infra
 terraform apply -var-file=terraform.tfvars
 terraform destroy
 ```

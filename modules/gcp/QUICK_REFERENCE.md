@@ -11,7 +11,7 @@ gcloud config set project <your-project-id>
 gcloud auth application-default login
 
 # Configure
-cd gcp/infra
+cd terraform/gcp/infra
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your values
 
@@ -40,7 +40,7 @@ kubectl get secrets -n langsmith
 
 ```bash
 # Use the generated command (recommended)
-cd gcp/infra
+cd terraform/gcp/infra
 terraform output -raw helm_install_command
 
 # Or run manually:
@@ -98,7 +98,7 @@ kubectl get certificate -n langsmith
 # Add to terraform.tfvars:
 #   enable_langsmith_deployment = true
 
-cd gcp/infra
+cd terraform/gcp/infra
 terraform apply -var-file=terraform.tfvars
 
 kubectl get pods -n keda
@@ -239,6 +239,6 @@ helm uninstall langsmith -n langsmith --wait
 kubectl delete namespace langsmith --timeout=60s
 
 # 4. Set deletion protection = false in terraform.tfvars, then:
-cd gcp/infra
+cd terraform/gcp/infra
 terraform destroy
 ```

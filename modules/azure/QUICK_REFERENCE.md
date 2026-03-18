@@ -1,6 +1,6 @@
 # LangSmith Azure — Quick Reference
 
-Copy-paste commands for each deployment pass. **All commands run from `azure/infra/`** — no directory switching needed.
+Copy-paste commands for each deployment pass. **All commands run from `terraform/azure/infra/`** — no directory switching needed.
 
 For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
@@ -9,7 +9,7 @@ For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIG
 ## Pass 1 — Infrastructure
 
 ```bash
-cd azure/infra
+cd terraform/azure/infra
 
 # 1. Get your subscription ID
 az account show --query id -o tsv
@@ -129,7 +129,7 @@ langsmith_insights_encryption_key      = "<fernet-key>"
 **Why `secrets.auto.tfvars` and not environment variables:**
 Terraform automatically picks up any `*.auto.tfvars` file in the working directory — no `export TF_VAR_*` needed, no shell session coupling. The file is gitignored and `chmod 600`. On a new machine or CI, run `./setup-env.sh` to regenerate it from Key Vault.
 
-> **Never commit `secrets.auto.tfvars`.** It contains plaintext credentials. The `.gitignore` in `azure/infra/` blocks it, but double-check with `git status` before any commit.
+> **Never commit `secrets.auto.tfvars`.** It contains plaintext credentials. The `.gitignore` in `terraform/azure/infra/` blocks it, but double-check with `git status` before any commit.
 
 ```bash
 # 3. Run setup-env.sh
@@ -234,7 +234,7 @@ clusterissuers.cert-manager.io        2026-xx-xxTxx:xx:xxZ
 ```
 
 ```bash
-# Apply staging + prod ClusterIssuers (replace email) — path is relative to azure/infra/
+# Apply staging + prod ClusterIssuers (replace email) — path is relative to terraform/azure/infra/
 sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' ../kubectl/letsencrypt-issuers.yaml \
   | kubectl apply -f -
 ```
@@ -346,7 +346,7 @@ vi ../helm/values/values-overrides.yaml   # set initialOrgAdminEmail
 > `langsmith-postgres-secret` and `langsmith-redis-secret` are **already created by Terraform** (k8s-bootstrap module).
 > Only `langsmith-config-secret` needs to be created manually — it holds the application keys pulled from Key Vault.
 
-Run from `azure/infra/` (KV_NAME must be set from step 2a):
+Run from `terraform/azure/infra/` (KV_NAME must be set from step 2a):
 
 ```bash
 # Step 1 — fetch each secret into a variable (run one line at a time)
@@ -734,7 +734,7 @@ helm uninstall langsmith -n langsmith --wait
 # 2. Delete namespace (clears finalizers)
 kubectl delete namespace langsmith --timeout=60s
 
-# 3. Destroy infrastructure (from azure/infra/)
+# 3. Destroy infrastructure (from terraform/azure/infra/)
 terraform destroy
 ```
 
