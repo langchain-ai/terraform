@@ -7,6 +7,7 @@
 #   source ./set-kubeconfig.sh [cluster-name] [region]
 #
 # After sourcing, kubectl and k9s will use the cluster automatically.
+export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 TFVARS="$SCRIPT_DIR/../terraform.tfvars"

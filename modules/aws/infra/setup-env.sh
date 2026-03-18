@@ -15,6 +15,7 @@
 #   local .secret files for that run only, then migrate on the next run.
 
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced.
+export AWS_PAGER=""
 
 # Resolve script directory so this script works regardless of where it's sourced from.
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -81,8 +82,33 @@ _ssm_secret() {
   local val=""
   local _path="${_ssm_prefix}/${ssm_name}"
 
-  # 0. Already exported in the environment — use as-is
+  # 0. Already exported in the environment — use as-is, but backfill SSM if missing.
+  #    Without this backfill, pre-exported vars silently skip the SSM write, leaving
+  #    ESO unable to sync the secret into the K8s langsmith-config secret.
   if [[ -n "$(printenv "$varname")" ]]; then
+    if ! aws ssm get-parameter --region "$AWS_REGION" --name "$_path" \
+        --query Parameter.Name --output text &>/dev/null; then
+      echo "  $varname is set in env but missing from SSM — backfilling → $_path"
+      # Write value via JSON file to avoid shell expansion issues with special
+      # characters in passwords ($, !, backticks, etc.) that break --value "...".
+      local _tmpval _tmpjson
+      _tmpval="$(mktemp)"  || { echo "  WARNING: could not create temp file"; return; }
+      _tmpjson="$(mktemp)" || { rm -f "$_tmpval"; echo "  WARNING: could not create temp file"; return; }
+      printenv "$varname" > "$_tmpval"
+      python3 -c "
+import json, sys
+v = open(sys.argv[1]).read().rstrip('\n')
+json.dump({'Name':sys.argv[2],'Value':v,'Type':'SecureString','Overwrite':True}, open(sys.argv[3],'w'))
+" "$_tmpval" "$_path" "$_tmpjson"
+      if ! aws ssm put-parameter \
+          --region "$AWS_REGION" \
+          --cli-input-json "file://${_tmpjson}" \
+          --output text >/dev/null 2>&1; then
+        echo "  WARNING: SSM backfill failed for $_path"
+        echo "           Try manually: ./infra/scripts/manage-ssm.sh set $(basename "$_path") '<value>'"
+      fi
+      rm -f "$_tmpval" "$_tmpjson"
+    fi
     return
   fi
 
@@ -104,7 +130,7 @@ _ssm_secret() {
         --value "$val" \
         --type SecureString \
         --overwrite \
-        --output none 2>/dev/null; then
+        --output text >/dev/null 2>&1; then
       echo "  Migration complete. You may delete: $file_name"
     fi
   fi
@@ -123,20 +149,21 @@ _ssm_secret() {
     fi
 
     # Store in SSM; fall back to local file if SSM is not yet reachable
-    if [[ -n "$file_name" ]]; then
-      if aws ssm put-parameter \
-          --region "$AWS_REGION" \
-          --name "$_path" \
-          --value "$val" \
-          --type SecureString \
-          --overwrite \
-          --output none 2>/dev/null; then
-        echo "  Stored $varname → SSM: $_path"
-      else
-        printf '%s' "$val" > "$file_name"
-        chmod 600 "$file_name"
-        echo "  SSM unavailable — stored in $file_name (will migrate after Pass 1)"
-      fi
+    if aws ssm put-parameter \
+        --region "$AWS_REGION" \
+        --name "$_path" \
+        --value "$val" \
+        --type SecureString \
+        --overwrite \
+        --output text >/dev/null 2>&1; then
+      echo "  Stored $varname → SSM: $_path"
+    elif [[ -n "$file_name" ]]; then
+      printf '%s' "$val" > "$file_name"
+      chmod 600 "$file_name"
+      echo "  SSM unavailable — stored in $file_name (will migrate after Pass 1)"
+    else
+      echo "  WARNING: SSM unavailable and no local file fallback for $varname"
+      echo "           Value is exported for this session only and will be lost on shell exit."
     fi
   fi
 
