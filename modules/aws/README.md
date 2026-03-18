@@ -6,22 +6,25 @@ Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
 ## Overview
 
-This directory contains the Terraform configuration to deploy LangSmith on AWS. Infrastructure is provisioned in three passes:
+This directory contains the Terraform configuration to deploy LangSmith on AWS. Deployment is split into two passes:
 
-| Pass | What | Time |
-|------|------|------|
-| **Pass 1** | VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket, ALB, IRSA, ESO | ~20–25 min |
-| **Pass 2** | LangSmith Helm chart | ~10 min |
-| **Pass 3** | LangSmith Deployments (KEDA-based, optional) | ~5 min |
+| Pass | What | How | Time |
+|------|------|-----|------|
+| **Pass 1** | VPC, EKS cluster, RDS, ElastiCache, S3, ALB, IRSA, ESO | `make apply` | ~20–25 min |
+| **Pass 2** | LangSmith Helm chart + ESO wiring | `make deploy` (scripts) or `make apply-app` (Terraform) | ~10 min |
+
+A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
 
 ### Two deployment tiers
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster pod | Scalable / persistent |
+| **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
+>
+> **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ---
 
@@ -82,39 +85,49 @@ aws sts get-caller-identity
 
 ```
 aws/
-├── infra/
+├── Makefile                ← Task runner — run `make help` for all targets
+├── infra/                  ← Pass 1: Terraform infrastructure
 │   ├── main.tf             ← Root module — wires all sub-modules, IRSA + ESO setup
 │   ├── variables.tf        ← All input variables with defaults
 │   ├── locals.tf           ← Naming: {name_prefix}-{environment}-{resource}
 │   ├── outputs.tf          ← Cluster, DB, Redis, S3, ALB, IAM outputs
 │   ├── backend.tf          ← Remote state backend (configure before init)
 │   ├── versions.tf         ← Required provider versions
+│   ├── setup-env.sh        ← Create/manage secrets in SSM Parameter Store
 │   └── modules/
-│       ├── vpc/            ← VPC (10.0.0.0/16), 5 private + 3 public subnets, NAT
+│       ├── vpc/            ← VPC, subnets, NAT gateway
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
 │       ├── postgres/       ← RDS PostgreSQL, subnet group, security group, IAM auth
 │       ├── redis/          ← ElastiCache Redis, subnet group, security group, auth token
 │       ├── storage/        ← S3 bucket, VPC Gateway Endpoint, bucket policy, TTL lifecycle
 │       ├── alb/            ← Application Load Balancer, security group, ACM integration
-│       ├── k8s-bootstrap/  ← Namespace, cert-manager, ESO IRSA binding
-│       ├── secrets/        ← SSM Parameter Store secrets (Postgres password, Redis token)
-│       ├── iam/            ← Additional IAM roles and policies
-│       ├── dns/            ← Route 53 hosted zone (optional)
+│       ├── k8s-bootstrap/  ← Namespace, KEDA, cert-manager, ESO Helm release
+│       ├── bastion/        ← EC2 bastion host for private cluster access (optional)
 │       ├── cloudtrail/     ← CloudTrail trail to S3 (optional)
 │       └── waf/            ← WAFv2 Web ACL attached to ALB (optional)
-└── helm/
-    ├── scripts/
-    │   ├── deploy.sh               ← Helm deploy automation
-    │   ├── generate-secrets.sh     ← Generate API key salt, JWT secret, Fernet keys
-    │   ├── preflight-check.sh      ← Pre-deploy validation
-    │   ├── init-overrides.sh       ← Initialize values-overrides.yaml from Terraform outputs
-    │   └── uninstall.sh            ← Helm uninstall + cleanup
-    └── values/
-        ├── langsmith-values.yaml.example              ← Base values template
-        ├── langsmith-values-production.yaml.example   ← Production overlay
-        ├── langsmith-values-agent-deploys.yaml.example ← Pass 3 overlay
-        ├── langsmith-values-agent-builder.yaml.example ← Agent Builder overlay
-        └── langsmith-values-insights.yaml.example     ← Insights overlay
+├── helm/                   ← Pass 2 option A: script-driven Helm deploy
+│   ├── scripts/
+│   │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
+│   │   ├── init-overrides.sh       ← Generate values-overrides.yaml from Terraform outputs
+│   │   ├── preflight-check.sh      ← Pre-deploy validation
+│   │   ├── generate-secrets.sh     ← Generate API key salt, JWT secret, Fernet keys
+│   │   └── uninstall.sh            ← Helm uninstall + cleanup
+│   └── values/
+│       ├── langsmith-values.yaml.example              ← Base AWS values
+│       ├── langsmith-values-ha.yaml.example           ← HA sizing (production)
+│       ├── langsmith-values-dev.yaml.example          ← Reduced sizing (POC/test)
+│       ├── langsmith-values-agent-deploys.yaml.example ← Deployments feature
+│       ├── langsmith-values-agent-builder.yaml.example ← Agent Builder
+│       └── langsmith-values-insights.yaml.example     ← ClickHouse Insights
+└── app/                    ← Pass 2 option B: Terraform-managed Helm deploy
+    ├── main.tf             ← Providers, ESO resources, helm_release
+    ├── variables.tf        ← Infra inputs (auto-populated) + app config
+    ├── locals.tf           ← Variable resolution + validation
+    ├── outputs.tf          ← LangSmith URL, release status
+    ├── versions.tf
+    ├── terraform.tfvars.example
+    └── scripts/
+        └── pull-infra-outputs.sh  ← Reads infra outputs → infra.auto.tfvars.json
 ```
 
 ---
@@ -186,11 +199,15 @@ terraform {
 Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC endpoint, ALB, IRSA role, ESO IRSA role, SSM secrets.
 
 ```bash
-cd terraform/aws/infra
+cd terraform/aws
 
-terraform init
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+# Create and populate secrets in SSM Parameter Store
+source infra/setup-env.sh
+
+# Deploy infrastructure
+make init
+make plan
+make apply
 ```
 
 > **Duration:** ~20–25 minutes. EKS cluster creation takes 12–15 minutes. RDS takes additional 5–8 minutes. Do not interrupt.
@@ -198,96 +215,137 @@ terraform apply -var-file=terraform.tfvars
 ### After apply — get cluster credentials
 
 ```bash
-aws eks update-kubeconfig \
-  --region $(terraform output -raw region 2>/dev/null || echo us-west-2) \
-  --name $(terraform output -raw cluster_name)
+make kubeconfig
 
 kubectl get nodes
 kubectl get ns
 kubectl get pods -n kube-system
 ```
 
-### Verify IRSA for S3
+---
+
+## Pass 2 — LangSmith Application
+
+Two paths — pick one:
+
+### Option A: Script-driven Helm deploy
+
+Best for: production deployments with ESO, layered values, addon composition.
 
 ```bash
-terraform output langsmith_irsa_role_arn
-kubectl get sa langsmith -n langsmith -o jsonpath='{.metadata.annotations}' 2>/dev/null || true
+cd terraform/aws
+
+make init-overrides    # generate values-overrides.yaml from Terraform outputs
+make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
+
+Enable optional addons by copying `.example` files before deploying:
+
+```bash
+cp helm/values/langsmith-values-agent-deploys.yaml.example helm/values/langsmith-values-agent-deploys.yaml
+cp helm/values/langsmith-values-agent-builder.yaml.example helm/values/langsmith-values-agent-builder.yaml
+cp helm/values/langsmith-values-insights.yaml.example      helm/values/langsmith-values-insights.yaml
+```
+
+### Option B: Terraform-managed Helm deploy
+
+Best for: teams that want the full deployment in Terraform state, or "bring your own infra" scenarios.
+
+```bash
+cd terraform/aws
+
+# Pull infra outputs into app/infra.auto.tfvars.json
+make init-app
+
+# Configure app-specific settings
+cp app/terraform.tfvars.example app/terraform.tfvars
+# Edit app/terraform.tfvars — set admin_email, sizing, feature toggles
+
+# Deploy
+make plan-app
+make apply-app
+```
+
+The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_release` in Terraform. Feature toggles are variables:
+
+```hcl
+admin_email          = "admin@example.com"
+sizing               = "ha"           # ha | dev | none
+enable_agent_deploys = true
+enable_agent_builder = true
+enable_insights      = true
+clickhouse_host      = "clickhouse.example.com"
+```
+
+For "bring your own infra" — skip `make init-app` and set all variables manually in `app/terraform.tfvars`.
 
 ---
 
-## Pass 2 — LangSmith Helm Deploy
+## Private Cluster with Bastion Host
+
+For customers who require a fully private EKS cluster (`enable_public_eks_cluster = false`), the EKS API endpoint is only reachable from within the VPC. A bastion host provides the access point.
+
+### How it works
+
+1. **First run from your workstation** — Deploy infrastructure with `create_bastion = true` and `enable_public_eks_cluster = true` (temporarily). This creates the bastion alongside everything else.
+2. **Switch to private** — Set `enable_public_eks_cluster = false` and re-apply. The EKS API endpoint becomes private-only.
+3. **All future work happens on the bastion** — SSM into the bastion, clone the repo, copy your `terraform.tfvars` and secrets, and run Pass 1/2 from there.
+
+### Setup
+
+```hcl
+# terraform.tfvars
+enable_public_eks_cluster = false   # private API endpoint
+create_bastion            = true    # bastion for access
+
+# Optional SSH (SSM is the default — no key needed):
+# bastion_key_name          = "my-keypair"
+# bastion_enable_ssh        = true
+# bastion_ssh_allowed_cidrs = ["203.0.113.0/24"]
+```
+
+### Connect via SSM Session Manager
 
 ```bash
-# Get outputs
-cd terraform/aws/infra
-terraform output -raw alb_dns_name
-terraform output -raw langsmith_irsa_role_arn
+# After terraform apply, the SSM command is in the outputs:
+terraform output bastion_ssm_command
 
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
-
-export API_KEY_SALT=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 32)
-export AGENT_BUILDER_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export INSIGHTS_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="<strong-password>"
-
-helm upgrade --install langsmith langchain/langsmith \
-  --namespace langsmith \
-  --create-namespace \
-  -f ../helm/values/langsmith-values.yaml.example \
-  --set config.langsmithLicenseKey="<your-license-key>" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="$(terraform output -raw alb_dns_name)" \
-  --set config.basicAuth.initialOrgAdminEmail="$ADMIN_EMAIL" \
-  --set config.basicAuth.initialOrgAdminPassword="$ADMIN_PASSWORD" \
-  --set config.agentBuilder.encryptionKey="$AGENT_BUILDER_ENCRYPTION_KEY" \
-  --set config.insights.encryptionKey="$INSIGHTS_ENCRYPTION_KEY" \
-  --set config.blobStorage.provider="s3" \
-  --set config.blobStorage.bucketName="$(terraform output -raw bucket_name)" \
-  --set config.blobStorage.region="us-west-2" \
-  --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$(terraform output -raw langsmith_irsa_role_arn)" \
-  --wait --timeout 15m
+# Or connect directly:
+aws ssm start-session --target <instance-id> --region us-west-2
 ```
+
+> **Prerequisite:** Install the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) for the AWS CLI.
+
+### Working from the bastion
+
+The bastion comes pre-installed with kubectl, helm, terraform, git, and jq. Kubeconfig is pre-configured for the EKS cluster.
+
+```bash
+# After SSM-ing in:
+kubectl get nodes                        # verify cluster access
+git clone <your-repo-url>                # get the deployment code
+cd ps-control-plane/terraform/aws
+
+# Copy your terraform.tfvars and secrets, then run normally:
+source infra/setup-env.sh
+make plan
+make apply
+make deploy
+```
+
+### Important notes
+
+- The bastion's IAM role has `AmazonSSMManagedInstanceCore` and `AmazonEKSClusterPolicy` attached. Add additional policies if you need the bastion to manage other AWS resources.
+- The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
+- When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
+
+---
 
 ### Verify and get endpoint
 
 ```bash
 kubectl get pods -n langsmith
-
-# ALB DNS name (for DNS CNAME record)
-terraform output -raw alb_dns_name
-
-# Get ingress address
 kubectl get ingress -n langsmith
-```
-
----
-
-## Pass 3 — LangSmith Deployments (Optional)
-
-```bash
-# Install KEDA
-helm repo add kedacore https://kedacore.github.io/charts
-helm repo update
-helm upgrade --install keda kedacore/keda \
-  --namespace keda --create-namespace --wait
-
-# Upgrade LangSmith with Deployments enabled
-helm upgrade langsmith langchain/langsmith \
-  --namespace langsmith \
-  -f ../helm/values/langsmith-values.yaml.example \
-  -f ../helm/values/langsmith-values-agent-deploys.yaml.example \
-  --set config.deployment.enabled=true \
-  --set config.deployment.url="https://<your-langsmith-domain>" \
-  --wait --timeout 10m
-
-kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
 ```
 
 ---
@@ -333,6 +391,12 @@ kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `clickhouse_source` | `in-cluster` | no | `in-cluster` or `external` |
 | `alb_access_logs_enabled` | `false` | no | Enable ALB access logging to S3 |
+| `create_bastion` | `false` | no | Create EC2 bastion host for private cluster access (SSM or SSH) |
+| `bastion_instance_type` | `t3.micro` | no | EC2 instance type for bastion |
+| `bastion_key_name` | `null` | no | EC2 key pair for SSH (empty = SSM only) |
+| `bastion_enable_ssh` | `false` | no | Open port 22 on bastion security group |
+| `bastion_ssh_allowed_cidrs` | `[]` | no | CIDRs allowed to SSH to bastion |
+| `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
 | `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
 | `cloudtrail_log_retention_days` | `365` | no | Days to retain CloudTrail logs |
@@ -348,19 +412,27 @@ kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
 
 ## Teardown
 
+### If deployed via scripts (Option A)
+
 ```bash
-# 1. Remove LangSmith Deployments (if Pass 3 was enabled)
-kubectl delete lgp --all -n langsmith 2>/dev/null || true
+cd terraform/aws
+make uninstall
+```
 
-# 2. Uninstall LangSmith
-helm uninstall langsmith -n langsmith --wait
+### If deployed via Terraform (Option B)
 
-# 3. Delete namespace
-kubectl delete namespace langsmith --timeout=60s
+```bash
+cd terraform/aws
+make destroy-app
+```
 
-# 4. Disable deletion protection, then destroy
+### Destroy infrastructure
+
+```bash
+# Disable deletion protection first
+# Set postgres_deletion_protection = false in infra/terraform.tfvars
+
 cd terraform/aws/infra
-# Set postgres_deletion_protection = false in terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+terraform apply
 terraform destroy
 ```

@@ -19,13 +19,13 @@ Tracked gaps in the AWS LangSmith starter. Ordered by priority within each secti
 
 ### High
 
-- [ ] **EKS public API endpoint defaults to `true`** — flip default to `false`; add optional bastion module (EC2 + SSM, no port 22) and document SSM port-forwarding as the standard access pattern; add `cluster_endpoint_public_access_cidrs` variable as a middle ground for temporary onboarding access (`variables.tf`, new `modules/bastion/`)
+- [x] **EKS public API endpoint** — defaults to `true` for easy onboarding; bastion module added (`modules/bastion/`, SSM Session Manager) as the recommended production pattern; `eks_public_access_cidrs` variable available to lock down the public endpoint
 - [x] **IRSA trust policy missing `sub` condition** — any service account can assume the LangSmith role; scoped to `system:serviceaccount:${var.langsmith_namespace}:*` via `StringLike` (`modules/eks/main.tf`)
 - [ ] **No VPC Flow Logs** — add `aws_flow_log` resource to VPC module
 - [ ] **No CloudTrail** — no API-level audit trail; add CloudTrail logging to S3
 - [ ] **ALB: no access logging** — enable `access_logs` on the ALB (`modules/alb/main.tf`)
 - [ ] **ALB: no WAF association** — attach AWS WAF with rate limiting and managed rule groups
-- [ ] **Secrets Manager: no rotation runbook** — `api_key_salt` and `jwt_secret` must never be rotated on a schedule (rotation invalidates all API keys and active sessions respectively); document an emergency rotation procedure for breach scenarios with explicit acknowledgment of consequences; `postgres_password` and `redis_auth_token` can be rotated but require coordinated app restart
+- [ ] **SSM Parameter Store: no rotation runbook** — `api_key_salt` and `jwt_secret` must never be rotated on a schedule (rotation invalidates all API keys and active sessions respectively); document an emergency rotation procedure for breach scenarios with explicit acknowledgment of consequences; `postgres_password` and `redis_auth_token` can be rotated but require coordinated app restart
 - [ ] **RDS: missing `backup_retention_period`** — explicitly set (recommend ≥ 7 days) (`modules/postgres/main.tf`)
 - [ ] **EKS: no control plane audit logging** — `api`, `audit`, and `authenticator` logs are not enabled on the EKS cluster; add `cluster_enabled_log_types` to the EKS module call in `main.tf`
 - [ ] **RDS: no Multi-AZ** — single-AZ by default; AZ outage means database downtime with no auto-failover; add `multi_az = var.rds_multi_az` to `modules/postgres/main.tf`
@@ -46,8 +46,8 @@ Tracked gaps in the AWS LangSmith starter. Ordered by priority within each secti
 ### Low
 
 - [ ] **Redis resources missing tags** — add `tags` to all taggable resources (`modules/redis/main.tf`)
-- [ ] **No password complexity validation** on sensitive variables like `postgres_password` (`variables.tf`)
-- [ ] **Secrets Manager recovery window is 7 days** — increase to 30 for production (`modules/secrets/main.tf`)
+- [x] **~~No password complexity validation~~** — added validation on root `postgres_password` variable and module-level `password` variable rejecting `/ @ " '` and spaces
+- [x] **~~Secrets Manager module removed~~** — was duplicating secrets already managed via SSM Parameter Store + ESO; removed `modules/secrets/` and `modules/iam/`
 - [ ] **Empty stub modules** — `modules/k8s-cluster/` and `modules/networking/` are empty; remove or document intent
 
 ---

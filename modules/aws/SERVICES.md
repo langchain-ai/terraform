@@ -50,7 +50,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 ### `langsmith-clickhouse`
 - **What**: Columnar database — trace spans, run metadata, eval results
 - **Type**: StatefulSet · 500Gi PVC (EBS GP3) · requires memory-optimized node
-- **Notes**: Always in-cluster. External option requires LangChain-managed ClickHouse.
+- **Notes**: In-cluster is for dev/POC only (single pod, no replication, no backups). For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ### One-time Jobs (Pass 2)
 | Job | Purpose |
