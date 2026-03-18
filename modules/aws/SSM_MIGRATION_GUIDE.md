@@ -1,7 +1,6 @@
-# SSM Migration Plan — Legacy Path Recovery
+# SSM Migration Guide — Legacy Path Recovery
 
 **Date**: 2026-03-18
-**Status**: In progress — resuming tomorrow
 
 ---
 

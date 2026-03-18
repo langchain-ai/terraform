@@ -4,7 +4,7 @@ output "instance_id" {
 }
 
 output "public_ip" {
-  description = "Public IP of the bastion host (null if no public IP assigned)"
+  description = "Public IP of the bastion host (null if associate_public_ip = false)"
   value       = aws_instance.bastion.public_ip
 }
 

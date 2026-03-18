@@ -271,7 +271,8 @@ module "bastion" {
 
   name                = local.bastion_name
   vpc_id              = local.vpc_id
-  subnet_id           = local.public_subnets[0]
+  subnet_id           = var.bastion_enable_ssh ? local.public_subnets[0] : local.private_subnets[0]
+  associate_public_ip = var.bastion_enable_ssh
   cluster_name        = local.cluster_name
   region              = var.region
   instance_type       = var.bastion_instance_type

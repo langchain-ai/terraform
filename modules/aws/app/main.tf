@@ -46,6 +46,8 @@ provider "helm" {
 
 # ── ESO: ClusterSecretStore ───────────────────────────────────────────────────
 # Tells ESO how to reach AWS SSM Parameter Store.
+# Auth: uses the ESO controller pod's IRSA role (provisioned in infra/).
+# The ESO CRDs must exist before plan — run infra apply (k8s-bootstrap) first.
 
 resource "kubernetes_manifest" "cluster_secret_store" {
   manifest = {
@@ -142,8 +144,7 @@ resource "helm_release" "langsmith" {
   timeout          = var.helm_timeout
   wait             = true
 
-  # Use server-side apply to match deploy.sh behavior
-  force_update = true
+  force_update = var.helm_force_update
 
   # Base AWS values
   values = concat(

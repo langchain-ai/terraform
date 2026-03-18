@@ -9,7 +9,7 @@
 #       Run `source infra/setup-env.sh` directly instead.
 
 .PHONY: help status setup init plan apply preflight kubeconfig ssm \
-        init-overrides deploy uninstall deploy-all \
+        init-overrides deploy uninstall deploy-all deploy-all-tf \
         init-app plan-app apply-app destroy-app
 
 INFRA_DIR := infra
@@ -83,3 +83,7 @@ destroy-app: ## terraform destroy (app)
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
 deploy-all: apply init-overrides deploy ## Full deploy: infra apply → init-overrides → helm deploy
+
+deploy-all-tf: apply init-app ## Full deploy via Terraform: infra apply → app init+apply
+	terraform -chdir=$(APP_DIR) init -input=false
+	terraform -chdir=$(APP_DIR) apply

@@ -10,7 +10,13 @@ variable "vpc_id" {
 
 variable "subnet_id" {
   type        = string
-  description = "Public subnet ID for the bastion host"
+  description = "Subnet ID for the bastion host. Use a private subnet for SSM-only access (recommended) or a public subnet if SSH is needed."
+}
+
+variable "associate_public_ip" {
+  type        = bool
+  description = "Whether to assign a public IP. Set to false when using a private subnet with SSM-only access."
+  default     = false
 }
 
 variable "cluster_name" {

@@ -106,6 +106,12 @@ variable "helm_timeout" {
   default     = 1200
 }
 
+variable "helm_force_update" {
+  description = "Force a Helm upgrade on every apply, even when values haven't changed. Useful during initial bring-up; disable for steady-state."
+  type        = bool
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # Sizing
 #------------------------------------------------------------------------------

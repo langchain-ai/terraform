@@ -1,7 +1,8 @@
 # Bastion host for private EKS cluster access.
-# Provides a jump box in a public subnet with SSM Session Manager (default)
-# or optional SSH access. Pre-installs kubectl, helm, aws cli, and terraform
-# so operators can run Pass 1/2 from the bastion when the EKS API endpoint
+# Defaults to a private subnet with SSM Session Manager (no public IP needed).
+# Set enable_ssh = true + associate_public_ip = true for SSH access from a
+# public subnet. Pre-installs kubectl, helm, aws cli, and terraform so
+# operators can run Pass 1/2 from the bastion when the EKS API endpoint
 # is private-only.
 
 data "aws_ami" "al2023" {
@@ -109,7 +110,7 @@ resource "aws_instance" "bastion" {
   iam_instance_profile   = aws_iam_instance_profile.bastion.name
   key_name               = var.key_name
 
-  associate_public_ip_address = true
+  associate_public_ip_address = var.associate_public_ip
 
   root_block_device {
     volume_type           = "gp3"
