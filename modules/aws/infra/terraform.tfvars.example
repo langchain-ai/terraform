@@ -57,13 +57,17 @@ create_vpc = true
 #------------------------------------------------------------------------------
 # EKS Configuration
 #------------------------------------------------------------------------------
-eks_cluster_version       = "1.31"
-enable_public_eks_cluster = true   # Set false for private endpoint (requires VPN/bastion)
+eks_cluster_version = "1.31"
 
-# Restrict the public EKS API endpoint to specific CIDRs (e.g., corporate VPN egress IPs).
-# Default is unrestricted (0.0.0.0/0). Strongly recommended to set this for production.
-# Example: eks_public_access_cidrs = ["203.0.113.0/24", "198.51.100.5/32"]
-# eks_public_access_cidrs = ["0.0.0.0/0"]
+enable_public_eks_cluster = true
+
+# Restrict the public EKS API endpoint to specific CIDRs (e.g., your IP or VPN egress).
+# Strongly recommended — the default 0.0.0.0/0 is wide open.
+# eks_public_access_cidrs = ["203.0.113.0/24"]
+#
+# For production: set enable_public_eks_cluster = false and create_bastion = true.
+# Run Pass 1 and Pass 2 from the bastion via SSM Session Manager for a fully
+# private control plane. See the Bastion section below.
 
 # Node group sizing:
 #   ClickHouse requires nodes with 4+ vCPU and 16+ GB RAM.
@@ -137,14 +141,15 @@ redis_instance_type = "cache.m6g.xlarge"   # 2 vCPU, 8 GB RAM
 # ClickHouse
 # clickhouse_source controls where ClickHouse runs.
 #
-#   "in-cluster" — (default) deployed as a pod via the Helm chart
-#   "external"   — self-hosted or LangChain-managed ClickHouse; configure
-#                  connection details via Helm values overlay
+#   "in-cluster" — (default) deployed as a pod via the Helm chart.
+#                  ⚠️  Dev/POC only — single pod, no replication, no backups.
+#   "external"   — LangChain Managed ClickHouse (recommended for production).
+#                  See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
 #
 # Deployment tiers:
 #   1. All internal        — postgres_source="in-cluster", redis_source="in-cluster"
 #   2. External PG + Redis — postgres_source="external",   redis_source="external"  (recommended)
-#   3. All external        — requires external ClickHouse (marketplace subscription)
+#   3. All external        — production: uses LangChain Managed ClickHouse
 #------------------------------------------------------------------------------
 clickhouse_source = "in-cluster"
 
@@ -201,6 +206,10 @@ langsmith_namespace = "langsmith"
 # Security Add-ons (opt-in, all default off)
 #------------------------------------------------------------------------------
 
+# ALB scheme — "internet-facing" (default, public subnets) or "internal" (private subnets).
+# Use "internal" for private clusters accessible only via VPN, peering, or PrivateLink.
+# alb_scheme = "internet-facing"
+
 # ALB access logs — captures request details (IP, URI, latency, status) to S3.
 # Creates a dedicated bucket with the required ELB delivery policy.
 # alb_access_logs_enabled = false
@@ -210,6 +219,25 @@ langsmith_namespace = "langsmith"
 # create_cloudtrail             = false
 # cloudtrail_multi_region       = true   # recommended — catches global service events
 # cloudtrail_log_retention_days = 365
+
+# Bastion host — EC2 jump box for private EKS cluster access via SSM Session
+# Manager (default, no SSH key needed). This is the recommended production
+# pattern: set create_bastion = true with enable_public_eks_cluster = false,
+# then run both Pass 1 and Pass 2 from the bastion.
+#
+# After the first `terraform apply` (which can use a temporarily public
+# endpoint or an existing VPN), SSM into the bastion, clone the repo,
+# copy your terraform.tfvars + secrets, and run all subsequent operations
+# from there.
+#
+# create_bastion = true
+# bastion_instance_type = "t3.micro"
+# bastion_root_volume_size_gb = 20
+#
+# Optional SSH access (SSM is the default — no key needed):
+# bastion_key_name          = "my-keypair"
+# bastion_enable_ssh        = true
+# bastion_ssh_allowed_cidrs = ["203.0.113.0/24"]
 
 # WAF — attaches a WAFv2 Web ACL to the ALB.
 # Includes: OWASP Top 10, IP reputation list, known bad inputs (Log4Shell, etc.)

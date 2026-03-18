@@ -68,8 +68,8 @@ resource "aws_security_group" "alb" {
     from_port        = 80
     to_port          = 80
     protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    cidr_blocks      = var.internal ? [var.vpc_cidr_block] : ["0.0.0.0/0"]
+    ipv6_cidr_blocks = var.internal ? [] : ["::/0"]
   }
 
   dynamic "ingress" {
@@ -79,8 +79,8 @@ resource "aws_security_group" "alb" {
       from_port        = 443
       to_port          = 443
       protocol         = "tcp"
-      cidr_blocks      = ["0.0.0.0/0"]
-      ipv6_cidr_blocks = ["::/0"]
+      cidr_blocks      = var.internal ? [var.vpc_cidr_block] : ["0.0.0.0/0"]
+      ipv6_cidr_blocks = var.internal ? [] : ["::/0"]
     }
   }
 
@@ -99,11 +99,10 @@ resource "aws_security_group" "alb" {
 resource "aws_lb" "this" {
   name                       = var.name
   drop_invalid_header_fields = true
-  #trivy:ignore:AVD-AWS-0053 LangSmith requires an internet-facing ALB
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = var.public_subnets
+  internal                   = var.internal
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = var.subnets
 
   dynamic "access_logs" {
     for_each = var.access_logs_enabled ? [1] : []

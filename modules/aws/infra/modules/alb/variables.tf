@@ -8,9 +8,15 @@ variable "vpc_id" {
   description = "VPC ID where the ALB will be created"
 }
 
-variable "public_subnets" {
+variable "subnets" {
   type        = list(string)
-  description = "Public subnet IDs for the internet-facing ALB"
+  description = "Subnet IDs for the ALB. Use public subnets for internet-facing, private subnets for internal."
+}
+
+variable "internal" {
+  type        = bool
+  description = "If true, provisions an internal ALB on private subnets. If false, provisions an internet-facing ALB on public subnets."
+  default     = false
 }
 
 variable "tls_certificate_source" {
