@@ -1,0 +1,286 @@
+provider "aws" {
+  region = var.region
+
+  default_tags {
+    tags = local.common_tags
+  }
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
+  }
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    exec {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
+    }
+  }
+}
+
+# ── Input validation ──────────────────────────────────────────────────────────
+# Cross-variable checks that can't be expressed in variable validation blocks.
+# These fire at plan time with a clear error message.
+
+resource "terraform_data" "validate_inputs" {
+  lifecycle {
+    precondition {
+      condition     = var.postgres_source != "external" || var.postgres_password != ""
+      error_message = "postgres_password is required when postgres_source = 'external'. Run: source ./setup-env.sh, or set TF_VAR_postgres_password."
+    }
+
+    precondition {
+      condition     = var.redis_source != "external" || (var.redis_auth_token != "" && length(var.redis_auth_token) >= 16)
+      error_message = "redis_auth_token is required (min 16 chars) when redis_source = 'external'. Run: source ./setup-env.sh, or set TF_VAR_redis_auth_token."
+    }
+
+    precondition {
+      condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != ""
+      error_message = "acm_certificate_arn is required when tls_certificate_source = 'acm'."
+    }
+
+    precondition {
+      condition     = var.tls_certificate_source != "letsencrypt" || var.letsencrypt_email != ""
+      error_message = "letsencrypt_email is required when tls_certificate_source = 'letsencrypt'."
+    }
+
+    precondition {
+      condition     = var.create_vpc || (var.vpc_id != null && length(var.private_subnets) > 0 && var.vpc_cidr_block != null)
+      error_message = "When create_vpc = false, vpc_id, private_subnets, and vpc_cidr_block must all be provided."
+    }
+  }
+}
+
+module "vpc" {
+  source = "./modules/vpc"
+
+  count        = var.create_vpc ? 1 : 0
+  vpc_name     = local.vpc_name
+  cluster_name = local.cluster_name
+}
+
+module "eks" {
+  source = "./modules/eks"
+
+  cluster_name                    = local.cluster_name
+  cluster_version                 = var.eks_cluster_version
+  vpc_id                          = local.vpc_id
+  subnet_ids                      = concat(local.private_subnets, local.public_subnets)
+  tags                            = local.common_tags
+  create_gp3_storage_class        = var.create_gp3_storage_class
+  eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
+  eks_managed_node_groups         = var.eks_managed_node_groups
+  public_cluster_enabled          = var.enable_public_eks_cluster
+  public_access_cidrs             = var.eks_public_access_cidrs
+  create_langsmith_irsa_role      = var.create_langsmith_irsa_role
+  langsmith_namespace             = var.langsmith_namespace
+  eks_addons                      = var.eks_addons
+  cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
+}
+
+# State migration: adding count changes the module address.
+# These moved blocks tell Terraform the resources haven't changed — only their address has.
+moved {
+  from = module.postgres
+  to   = module.postgres[0]
+}
+
+moved {
+  from = module.redis
+  to   = module.redis[0]
+}
+
+module "redis" {
+  source = "./modules/redis"
+  count  = var.redis_source == "external" ? 1 : 0
+
+  name           = local.redis_name
+  vpc_id         = local.vpc_id
+  subnet_ids     = local.private_subnets
+  instance_type  = var.redis_instance_type
+  ingress_cidrs  = [local.vpc_cidr_block]
+  vpc_cidr_block = local.vpc_cidr_block
+  auth_token     = var.redis_auth_token
+}
+
+module "storage" {
+  source = "./modules/storage"
+
+  bucket_name             = local.bucket_name
+  region                  = var.region
+  vpc_id                  = local.vpc_id
+  langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
+  s3_ttl_enabled          = var.s3_ttl_enabled
+  s3_ttl_short_days       = var.s3_ttl_short_days
+  s3_ttl_long_days        = var.s3_ttl_long_days
+  kms_key_arn             = var.s3_kms_key_arn
+  versioning_enabled      = var.s3_versioning_enabled
+}
+
+module "postgres" {
+  source = "./modules/postgres"
+  count  = var.postgres_source == "external" ? 1 : 0
+
+  identifier     = local.postgres_name
+  vpc_id         = local.vpc_id
+  subnet_ids     = local.private_subnets
+  ingress_cidrs  = [local.vpc_cidr_block]
+  vpc_cidr_block = local.vpc_cidr_block
+  instance_type  = var.postgres_instance_type
+  storage_gb     = var.postgres_storage_gb
+  max_storage_gb = var.postgres_max_storage_gb
+  username       = var.postgres_username
+  password       = var.postgres_password
+
+  iam_database_authentication_enabled = var.postgres_iam_database_authentication_enabled
+  iam_database_user                   = var.postgres_iam_database_user
+  iam_auth_role_name                  = module.eks.langsmith_irsa_role_name
+  deletion_protection                 = var.postgres_deletion_protection
+  backup_retention_period             = var.postgres_backup_retention_period
+
+  depends_on = [module.eks]
+}
+
+resource "aws_iam_role_policy" "langsmith_s3" {
+  count = var.create_langsmith_irsa_role ? 1 : 0
+
+  name = "langsmith-s3-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3Access"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          module.storage.bucket_arn,
+          "${module.storage.bucket_arn}/*",
+        ]
+      }
+    ]
+  })
+}
+
+# ── ESO IRSA role (External Secrets Operator) ─────────────────────────────
+# Allows the ESO controller to read LangSmith secrets from SSM Parameter Store.
+
+resource "aws_iam_role" "eso" {
+  name = "${local.base_name}-eso"
+  tags = local.common_tags
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = module.eks.oidc_provider_arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${module.eks.oidc_provider}:sub" = "system:serviceaccount:external-secrets:external-secrets"
+          "${module.eks.oidc_provider}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "eso_ssm" {
+  name = "eso-ssm-read"
+  role = aws_iam_role.eso.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+      ]
+      Resource = "arn:aws:ssm:${var.region}:*:parameter/langsmith/${local.base_name}/*"
+    }]
+  })
+}
+
+module "secrets" {
+  source = "./modules/secrets"
+
+  project           = var.name_prefix
+  environment       = var.environment
+  postgres_password = var.postgres_source == "external" ? var.postgres_password : ""
+  redis_auth_token  = var.redis_source == "external" ? var.redis_auth_token : ""
+}
+
+module "alb" {
+  source = "./modules/alb"
+
+  name                   = local.alb_name
+  vpc_id                 = local.vpc_id
+  vpc_cidr_block         = local.vpc_cidr_block
+  public_subnets         = local.public_subnets
+  tls_certificate_source = var.tls_certificate_source
+  acm_certificate_arn    = var.acm_certificate_arn
+  access_logs_enabled    = var.alb_access_logs_enabled
+  tags                   = local.common_tags
+
+  depends_on = [module.vpc]
+}
+
+module "cloudtrail" {
+  source = "./modules/cloudtrail"
+  count  = var.create_cloudtrail ? 1 : 0
+
+  trail_name            = "${local.base_name}-trail"
+  bucket_name           = "${local.base_name}-cloudtrail-logs"
+  is_multi_region_trail = var.cloudtrail_multi_region
+  log_retention_days    = var.cloudtrail_log_retention_days
+  tags                  = local.common_tags
+}
+
+module "waf" {
+  source = "./modules/waf"
+  count  = var.create_waf ? 1 : 0
+
+  name    = "${local.base_name}-waf"
+  alb_arn = module.alb.alb_arn
+  tags    = local.common_tags
+
+  depends_on = [module.alb]
+}
+
+module "k8s_bootstrap" {
+  source = "./modules/k8s-bootstrap"
+
+  cluster_name           = local.cluster_name
+  cluster_endpoint       = module.eks.cluster_endpoint
+  cluster_ca_certificate = module.eks.cluster_certificate_authority_data
+  region                 = var.region
+  namespace              = var.langsmith_namespace
+
+  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
+  redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
+
+  tls_certificate_source = var.tls_certificate_source
+  letsencrypt_email      = var.letsencrypt_email
+
+  eso_irsa_role_arn = aws_iam_role.eso.arn
+}

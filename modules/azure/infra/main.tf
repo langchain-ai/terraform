@@ -1,0 +1,263 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Module: langsmith (root / orchestration)
+# Purpose: Wires all sub-modules together in the correct dependency order to
+#          produce a full LangSmith deployment on Azure.
+#
+# Deployment order (Terraform resolves via implicit dependencies):
+#   1. azurerm_resource_group  — must exist before everything else
+#   2. module.vnet             — network must exist before compute/DB
+#   3. module.aks              — cluster needed for OIDC issuer URL (blob module)
+#      module.postgres         — parallel with AKS (both need VNet)
+#      module.redis            — parallel with AKS and postgres
+#   4. module.blob             — needs AKS OIDC issuer URL for federated creds
+#   5. module.keyvault         — needs blob managed identity principal ID for RBAC
+#   6. module.k8s_bootstrap    — needs cluster credentials + all connection URLs
+#
+# Deployment pattern:
+#   Pass 1 (this module): terraform apply → Azure infra only (AKS, Postgres, Redis, Blob, KV)
+#   Pass 2+: helm/scripts/ → LangSmith Helm deploy, optional feature overlays
+# ══════════════════════════════════════════════════════════════════════════════
+
+locals {
+  # Identifier comes from var.identifier (set in terraform.tfvars).
+  # Examples: "-prod", "-staging", "" (no suffix for single-environment setups).
+  identifier = var.identifier
+
+  # Derived resource names — all prefixed with "langsmith-<identifier>"
+  resource_group_name = "langsmith-rg${local.identifier}"
+  vnet_name           = "langsmith-vnet${local.identifier}"
+  aks_name            = "langsmith-aks${local.identifier}"
+  postgres_name       = "langsmith-postgres${local.identifier}"
+  redis_name          = "langsmith-redis${local.identifier}"
+  blob_name           = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
+
+  # Key Vault name: max 24 chars, globally unique.
+  # Uses the user-supplied keyvault_name or derives from identifier.
+  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "langsmith-kv${local.identifier}"
+
+  # Subnet ID resolution: use newly-created VNet subnets OR bring-your-own
+  # existing ones (set create_vnet = false and supply the IDs via variables).
+  vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
+  aks_subnet_id      = var.create_vnet ? module.vnet.subnet_main_id : var.aks_subnet_id
+  postgres_subnet_id = var.create_vnet ? module.vnet.subnet_postgres_id : var.postgres_subnet_id
+  redis_subnet_id    = var.create_vnet ? module.vnet.subnet_redis_id : var.redis_subnet_id
+
+  # ── Common tags ─────────────────────────────────────────────────────────────
+  # Applied to every Azure resource in every sub-module.
+  # Sub-modules merge their own { module = "..." } tag on top.
+  # Customize via the environment/owner/cost_center variables.
+  common_tags = merge(
+    {
+      environment = var.environment
+      project     = "langsmith"
+      managed_by  = "terraform"
+    },
+    var.owner != "" ? { owner = var.owner } : {},
+    var.cost_center != "" ? { cost_center = var.cost_center } : {}
+  )
+}
+
+# The resource group that contains all LangSmith Azure resources.
+# Deleting this resource group will delete EVERYTHING inside it.
+resource "azurerm_resource_group" "resource_group" {
+  name     = local.resource_group_name
+  location = var.location
+  tags     = local.common_tags
+}
+
+# ── Networking ────────────────────────────────────────────────────────────────
+# Creates VNet + three dedicated subnets (AKS, PostgreSQL, Redis).
+# Skip this block (create_vnet = false) to reuse an existing VNet.
+
+module "vnet" {
+  source              = "./modules/networking"
+  network_name        = local.vnet_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+
+  # Controls whether the Postgres/Redis subnets are created.
+  # Set false if using in-cluster Postgres/Redis (no dedicated subnets needed).
+  enable_external_postgres = var.postgres_source == "external"
+  enable_external_redis    = var.redis_source == "external"
+
+  postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
+  redis_subnet_address_prefix    = var.redis_subnet_address_prefix
+
+  tags = local.common_tags
+}
+
+# ── Kubernetes Cluster ────────────────────────────────────────────────────────
+# AKS cluster with OIDC + Workload Identity enabled, NGINX ingress installed.
+# The OIDC issuer URL output is consumed by module.blob for federated credentials.
+
+module "aks" {
+  source              = "./modules/k8s-cluster"
+  cluster_name        = local.aks_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+  subnet_id           = local.aks_subnet_id
+  service_cidr        = var.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
+  dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
+
+  default_node_pool_vm_size   = var.default_node_pool_vm_size
+  default_node_pool_max_count = var.default_node_pool_max_count
+
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads)
+  additional_node_pools = var.additional_node_pools
+
+  # Deploys NGINX ingress controller via Helm — creates the Azure Load Balancer.
+  nginx_ingress_enabled = var.nginx_ingress_enabled
+
+  tags = local.common_tags
+}
+
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+# Managed PostgreSQL Flexible Server in a private subnet.
+# Only provisioned when postgres_source = "external".
+# When postgres_source = "in-cluster", the Helm chart manages its own Postgres pod.
+
+module "postgres" {
+  count               = var.postgres_source == "external" ? 1 : 0
+  source              = "./modules/postgres"
+  name                = local.postgres_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+  vnet_id             = local.vnet_id # needed to link the private DNS zone
+  subnet_id           = local.postgres_subnet_id
+
+  admin_username = var.postgres_admin_username
+  admin_password = var.postgres_admin_password
+
+  tags = local.common_tags
+}
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+# Managed Redis Cache (Premium) in a private subnet.
+# Only provisioned when redis_source = "external".
+# When redis_source = "in-cluster", the Helm chart manages its own Redis pod.
+
+module "redis" {
+  count               = var.redis_source == "external" ? 1 : 0
+  source              = "./modules/redis"
+  name                = local.redis_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+  subnet_id           = local.redis_subnet_id
+  capacity            = var.redis_capacity # P2 = 13 GB (default)
+
+  tags = local.common_tags
+}
+
+# ── Blob Storage ──────────────────────────────────────────────────────────────
+# Azure Blob Storage for trace objects + Workload Identity wiring.
+# Depends on AKS (needs oidc_issuer_url) and the blob module creates
+# federated credentials that allow K8s pods to assume the Managed Identity.
+
+module "blob" {
+  source               = "./modules/storage"
+  storage_account_name = local.blob_name
+  container_name       = "${local.blob_name}-container"
+  location             = var.location
+  resource_group_name  = azurerm_resource_group.resource_group.name
+
+  ttl_enabled    = var.blob_ttl_enabled
+  ttl_short_days = var.blob_ttl_short_days
+  ttl_long_days  = var.blob_ttl_long_days
+
+  # OIDC issuer from AKS — the trust anchor for federated identity credentials.
+  # AKS must be created first; Terraform resolves this implicitly.
+  aks_oidc_issuer_url    = module.aks.oidc_issuer_url
+  langsmith_namespace    = var.langsmith_namespace
+  langsmith_release_name = var.langsmith_release_name
+
+  tags = local.common_tags
+
+  depends_on = [
+    module.aks
+  ]
+}
+
+# ── Key Vault ─────────────────────────────────────────────────────────────────
+# Centralized secret storage for all LangSmith sensitive values.
+# Depends on blob module (needs the managed identity principal ID for RBAC).
+# Secrets stored here: postgres password, admin password, license key, JWT
+# secret, API key salt, and all Fernet encryption keys.
+#
+# First-apply: Key Vault is created and all current TF_VAR_* values are stored.
+# Subsequent applies: setup-env.sh reads from Key Vault instead of local files.
+
+module "keyvault" {
+  source              = "./modules/keyvault"
+  name                = local.keyvault_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+
+  # The managed identity used by LangSmith pods gets read-only access to
+  # all secrets so future CSI-driver integration requires no RBAC changes.
+  managed_identity_principal_id = module.blob.k8s_managed_identity_principal_id
+
+  # ── Secrets ─────────────────────────────────────────────────────────────────
+  # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
+  # on subsequent applies, eliminating local .secret files.
+  postgres_admin_password = var.postgres_admin_password
+  langsmith_admin_password = var.langsmith_admin_password
+  langsmith_license_key    = var.langsmith_license_key
+  langsmith_api_key_salt   = var.langsmith_api_key_salt
+  langsmith_jwt_secret     = var.langsmith_jwt_secret
+
+  langsmith_deployments_encryption_key   = var.langsmith_deployments_encryption_key
+  langsmith_agent_builder_encryption_key = var.langsmith_agent_builder_encryption_key
+  langsmith_insights_encryption_key      = var.langsmith_insights_encryption_key
+
+  purge_protection_enabled = var.keyvault_purge_protection
+
+  tags = local.common_tags
+
+  depends_on = [module.blob]
+}
+
+# ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
+# Connects to the AKS cluster and:
+#   1. Creates the langsmith namespace, service account, resource quota, network policies
+#   2. Installs cert-manager (TLS automation) and KEDA (autoscaling)
+#   3. Creates K8s secrets for PostgreSQL and Redis connection URLs
+#
+# LangSmith application deployment is handled outside Terraform:
+#   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
+#   Pass 1.6: ACME_EMAIL=... bash helm/scripts/apply-cluster-issuers.sh
+#   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
+#   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
+#
+# Note: This module configures its own kubernetes/helm providers internally,
+# so depends_on cannot be used here. Implicit deps via input variables ensure
+# correct ordering (AKS/postgres/redis/blob must be ready before this runs).
+
+module "k8s_bootstrap" {
+  source = "./modules/k8s-bootstrap"
+
+  # Cluster connection — passed directly to the kubernetes/helm providers
+  # inside the k8s-bootstrap module.
+  host                   = module.aks.host
+  client_certificate     = module.aks.client_certificate
+  client_key             = module.aks.client_key
+  cluster_ca_certificate = module.aks.cluster_ca_certificate
+
+  # K8s namespace for LangSmith workloads
+  langsmith_namespace = var.langsmith_namespace
+
+  # Backing services — connection URLs are injected as K8s secrets.
+  # generate-secrets.sh also writes these secrets with the full URL from KV.
+  use_external_postgres   = var.postgres_source == "external"
+  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
+  use_external_redis      = var.redis_source == "external"
+  redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
+
+  # Blob storage — Workload Identity client ID is added as a pod annotation
+  # so the OIDC token exchange can bind the pod to the Managed Identity.
+  blob_managed_identity_client_id = module.blob.k8s_managed_identity_client_id
+
+  # License key — stored in K8s secret langsmith-license.
+  # App secrets (api_key_salt, jwt_secret, admin_password) are written by
+  # helm/scripts/generate-secrets.sh from Azure Key Vault.
+  langsmith_license_key = var.langsmith_license_key
+}

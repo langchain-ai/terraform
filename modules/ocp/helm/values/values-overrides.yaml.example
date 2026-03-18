@@ -1,0 +1,39 @@
+# Customer-specific overrides for LangSmith on OpenShift.
+# Copy to values-overrides.yaml, fill in all required fields, then run deploy.sh.
+
+config:
+  langsmithLicenseKey: ""        # Required: your LangSmith license key
+  orgName: ""                    # Required: your organization name
+  hostname: langsmith.apps.cluster.example.com
+  blobStorageBackend: s3         # s3 | gcs | azure — match your object storage provider
+  blobStorageBucket: ""          # Bucket/container name
+
+postgres:
+  external:
+    enabled: true
+    host: ""       # Your PostgreSQL host
+    port: 5432
+    database: langsmith
+    existingSecretName: langsmith-postgres
+    existingSecretKey: password
+
+redis:
+  external:
+    enabled: true
+    host: ""       # Your Redis host
+    port: 6379
+
+# Object storage credentials (if not using workload identity / IAM)
+# blobStorage:
+#   accessKeyId: ""
+#   secretAccessKey: ""
+#   region: us-east-1
+
+# Uncomment to configure SSO
+# auth:
+#   sso:
+#     enabled: true
+#     provider: okta    # okta | google | azure-ad
+#     clientId: ""
+#     clientSecret: ""
+#     issuerUrl: ""

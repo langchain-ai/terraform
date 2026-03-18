@@ -1,0 +1,5 @@
+kubeconfig_path = "~/.kube/config"
+kube_context    = "my-ocp-cluster"
+environment     = "dev"
+project         = "my-project"
+hostname        = "langsmith.apps.cluster.example.com"

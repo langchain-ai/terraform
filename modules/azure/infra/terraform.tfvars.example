@@ -1,0 +1,139 @@
+# Example Terraform Variables — LangSmith on Azure
+# Copy this file to terraform.tfvars and customize for your environment.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Sensitive values (passwords, license key, secrets) are NOT set here.
+# Run: source ./setup-env.sh  — that script sets TF_VAR_* from Azure Key Vault
+# or prompts for them on first run.
+
+#------------------------------------------------------------------------------
+# Required Variables
+#------------------------------------------------------------------------------
+subscription_id = "your-azure-subscription-id"
+
+#------------------------------------------------------------------------------
+# Naming & Tagging
+#------------------------------------------------------------------------------
+# Short suffix appended to every resource name to distinguish environments.
+# Must start with a hyphen or be empty. Examples: "-prod", "-staging", ""
+# Format: langsmith-aks{identifier}, langsmith-rg{identifier}, etc.
+identifier  = ""         # suffix appended to all resource names, e.g. -prod or -staging
+environment = "dev"      # dev | staging | prod
+
+owner       = "platform-team"   # Team or individual responsible
+cost_center = "engineering"     # For billing attribution
+
+#------------------------------------------------------------------------------
+# Regional Configuration
+#------------------------------------------------------------------------------
+location = "eastus"   # Azure region (e.g. eastus, westus2, westeurope)
+
+#------------------------------------------------------------------------------
+# AKS Configuration
+#------------------------------------------------------------------------------
+# VM size for the default node pool. Must have 4+ vCPU and 14+ GB RAM.
+# DSv2 family has broad quota availability in most regions.
+default_node_pool_vm_size   = "Standard_DS3_v2"  # 4 vCPU, 14GB RAM
+default_node_pool_max_count = 4
+
+# Prevent accidental AKS cluster deletion. Set false for dev/test.
+aks_deletion_protection = false  # Set true for production
+
+# Additional node pools (e.g. for ClickHouse or memory-heavy workloads)
+# additional_node_pools = {
+#   large = {
+#     vm_size   = "Standard_DS4_v2"  # 8 vCPU, 28GB RAM
+#     min_count = 0
+#     max_count = 2
+#   }
+# }
+
+#------------------------------------------------------------------------------
+# PostgreSQL Configuration
+#------------------------------------------------------------------------------
+postgres_source = "external"  # "external" (Azure DB for PostgreSQL) or "in-cluster" (via Helm)
+
+# PostgreSQL admin username (password set via setup-env.sh)
+postgres_admin_username = "langsmith"
+
+# Prevent accidental PostgreSQL deletion. Set false for dev/test.
+postgres_deletion_protection = false  # Set true for production
+
+#------------------------------------------------------------------------------
+# Redis Configuration
+#------------------------------------------------------------------------------
+redis_source   = "external"  # "external" (Azure Cache for Redis) or "in-cluster" (via Helm)
+redis_capacity = 2           # P2 = 13 GB RAM. See: https://azure.microsoft.com/pricing/details/cache/
+
+#------------------------------------------------------------------------------
+# ClickHouse Configuration
+#------------------------------------------------------------------------------
+# ClickHouse deployment type:
+#   "in-cluster"  — (default) deployed as a pod in the cluster via Helm
+#   "external"    — self-hosted or LangChain-managed ClickHouse (contact sales@langchain.dev)
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# Blob Storage (Azure Blob) — always required
+#------------------------------------------------------------------------------
+# Payloads must not go into ClickHouse — blob storage is always enabled.
+# TTL settings control automatic object expiration.
+blob_ttl_enabled    = true
+blob_ttl_short_days = 14    # Short-lived objects (e.g. inline trace payloads)
+blob_ttl_long_days  = 400   # Long-lived objects (e.g. run attachments)
+
+#------------------------------------------------------------------------------
+# Key Vault
+#------------------------------------------------------------------------------
+# Key Vault name must be globally unique, 3–24 chars.
+# Defaults to "langsmith-kv{identifier}" — set explicitly to avoid collisions.
+# keyvault_name = "my-langsmith-kv"
+
+# Set false for dev environments where you need to destroy and recreate.
+keyvault_purge_protection = false  # Set true for production
+
+#------------------------------------------------------------------------------
+# LangSmith Application
+#------------------------------------------------------------------------------
+langsmith_namespace = "langsmith"
+langsmith_domain    = "langsmith.example.com"  # Your hostname (required for TLS)
+
+# Helm release name (used for Workload Identity federated credential subjects)
+langsmith_release_name = "langsmith"
+
+# Pin a specific LangSmith Helm chart version for reproducible deploys.
+# Empty = use latest available chart version.
+langsmith_helm_chart_version = ""
+
+# License key (sensitive — prefer using environment variable)
+# Set via: export TF_VAR_langsmith_license_key="your-license-key"
+# langsmith_license_key = "your-license-key"
+
+#------------------------------------------------------------------------------
+# TLS / HTTPS Configuration
+#------------------------------------------------------------------------------
+# Choose TLS certificate source:
+#   "none"        — HTTP only (demo/dev — no cert-manager required)
+#   "letsencrypt" — Automatic certificates via Let's Encrypt + cert-manager
+#   "existing"    — Provide your own TLS certificate
+tls_certificate_source = "letsencrypt"
+
+# --- Let's Encrypt (automatic) ---
+# Required when tls_certificate_source = "letsencrypt"
+letsencrypt_email = "your-email@example.com"
+
+#------------------------------------------------------------------------------
+# Networking (optional — override only if needed)
+#------------------------------------------------------------------------------
+# Set create_vnet = false to reuse an existing VNet.
+# Provide vnet_id, aks_subnet_id, postgres_subnet_id, redis_subnet_id.
+# create_vnet = true
+
+# Subnet address prefixes (must not overlap with existing ranges)
+# postgres_subnet_address_prefix = ["10.0.32.0/20"]
+# redis_subnet_address_prefix    = ["10.0.48.0/20"]
+
+# AKS internal service CIDR (must not overlap with VNet)
+# aks_service_cidr   = "10.0.64.0/20"
+# aks_dns_service_ip = "10.0.64.10"

@@ -1,0 +1,74 @@
+# Dev/test/POC resource overrides for LangSmith on AWS.
+#
+# Single replicas, reduced resource requests — suitable for POCs, trials, and
+# staging environments where cost matters more than resilience.
+# For production workloads, use langsmith-values-ha.yaml.example instead.
+#
+# Copy to langsmith-values-dev.yaml to activate:
+#   cp langsmith-values-dev.yaml.example langsmith-values-dev.yaml
+#
+# deploy.sh picks it up automatically if the file is present, applied after
+# langsmith-values-{env}.yaml so these settings win.
+
+platformBackend:
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+backend:
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+ingestQueue:
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+queue:
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"
+
+frontend:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+playground:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+aceBackend:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"

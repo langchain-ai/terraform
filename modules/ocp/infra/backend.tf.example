@@ -1,0 +1,24 @@
+# Choose a backend appropriate for your OCP environment.
+#
+# Option A: AWS S3 (for OCP on AWS / ROSA)
+# terraform {
+#   backend "s3" {
+#     bucket  = "my-terraform-state-bucket"
+#     key     = "langsmith/ocp/terraform.tfstate"
+#     region  = "us-east-1"
+#     encrypt = true
+#   }
+# }
+#
+# Option B: S3-compatible object storage (MinIO, NetApp StorageGRID, etc.)
+terraform {
+  backend "s3" {
+    bucket                      = "my-terraform-state-bucket"
+    key                         = "langsmith/ocp/terraform.tfstate"
+    region                      = "us-east-1"
+    endpoint                    = "https://s3.example.com" # remove for AWS S3
+    skip_credentials_validation = true                     # remove for AWS S3
+    skip_metadata_api_check     = true                     # remove for AWS S3
+    force_path_style            = true                     # remove for AWS S3
+  }
+}

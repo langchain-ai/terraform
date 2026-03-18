@@ -1,0 +1,110 @@
+# LangSmith Azure — Helm values overrides (Light / Demo — all in-cluster DBs)
+#
+# Use this file when terraform.tfvars has:
+#   postgres_source = "in-cluster"
+#   redis_source    = "in-cluster"
+#
+# HOW TO USE:
+#   cp values-overrides-demo.yaml.example values-overrides.yaml
+#   Fill every <placeholder> with real values (terraform outputs).
+#   values-overrides.yaml is gitignored — never commit it.
+#
+# HELM COMMAND:
+#   helm upgrade --install langsmith langsmith/langsmith \
+#     --version <VERSION> \
+#     --namespace langsmith --create-namespace \
+#     -f ../helm/values/values-overrides.yaml \
+#     --wait --timeout 15m
+
+# ── Core config ───────────────────────────────────────────────────────────────
+config:
+  hostname: "<your-domain.com>"               # e.g. 1-2-3-4.sslip.io
+  authType: "mixed"                           # basic auth + API keys
+  initialOrgAdminEmail: "<admin@example.com>"
+  existingSecretName: "langsmith-config-secret"
+
+  basicAuth:
+    enabled: true
+
+  # Azure Blob Storage — Workload Identity auth, no static key needed
+  blobStorage:
+    enabled: true
+    engine: "Azure"
+    azureStorageAccountName: "<tf output: storage_account_name>"
+    azureStorageContainerName: "<tf output: storage_container_name>"
+
+# ── In-cluster Postgres and Redis ─────────────────────────────────────────────
+# No postgres: or redis: external block — Helm chart manages both pods in-cluster.
+# In-cluster DBs are not HA and have no backup. For demos and POC only.
+
+# ── Workload Identity — pods that access Blob Storage ─────────────────────────
+backend:
+  deployment:
+    replicas: 1
+    labels:
+      azure.workload.identity/use: "true"
+    resources:
+      requests: { cpu: "100m", memory: "500Mi" }
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
+
+platformBackend:
+  deployment:
+    replicas: 1
+    labels:
+      azure.workload.identity/use: "true"
+    resources:
+      requests: { cpu: "100m", memory: "500Mi" }
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
+
+queue:
+  deployment:
+    replicas: 1
+    labels:
+      azure.workload.identity/use: "true"
+    resources:
+      requests: { cpu: "100m", memory: "500Mi" }
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
+
+# ingestQueue disabled — queue handles ingestion in lightweight mode
+ingestQueue:
+  enabled: false
+
+# ── Lightweight resource sizing ───────────────────────────────────────────────
+frontend:
+  service:
+    type: ClusterIP
+  deployment:
+    resources:
+      requests: { cpu: "100m", memory: "500Mi" }
+
+playground:
+  deployment:
+    resources:
+      requests: { cpu: "100m", memory: "500Mi" }
+
+aceBackend:
+  deployment:
+    resources:
+      requests: { cpu: "100m", memory: "500Mi" }
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests: { cpu: "200m", memory: "500Mi" }
+
+# ── Ingress (NGINX + cert-manager) ───────────────────────────────────────────
+ingress:
+  enabled: true
+  ingressClassName: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls:
+    - secretName: langsmith-tls
+      hosts:
+        - "<your-domain.com>"                 # must match config.hostname

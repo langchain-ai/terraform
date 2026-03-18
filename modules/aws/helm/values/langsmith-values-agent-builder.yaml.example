@@ -1,0 +1,32 @@
+# Agent Builder overrides — enable when deploying LangGraph Platform (self-hosted).
+#
+# Copy to langsmith-values-agent-builder.yaml to activate.
+# deploy.sh picks it up automatically if the file is present.
+#   cp langsmith-values-agent-builder.yaml.example langsmith-values-agent-builder.yaml
+#
+# Prerequisites:
+#   - Agent Builder / LangGraph Platform entitlement in your LangSmith license
+#   - Sufficient cluster resources (Agent Builder runs additional workloads)
+
+config:
+  agentBuilder:
+    enabled: true
+    # encryptionKey is pulled from SSM via ESO — do not set it here.
+    # Required SSM parameter: /langsmith/{prefix}-{env}/agent-builder-encryption-key
+    # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/agent-builder-encryption-key" \
+    #             --value "<key>" --type SecureString
+    # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
+
+backend:
+  agentBootstrap:
+    # Required: runs the post-install/post-upgrade job that creates the langsmith-agent-builder-config
+    # ConfigMap and registers Agent Builder as an LGP deployment. Without this the Agent Builder
+    # nav item will not appear in the UI.
+    enabled: true
+
+agentBuilderToolServer:
+  enabled: true
+
+agentBuilderTriggerServer:
+  enabled: true

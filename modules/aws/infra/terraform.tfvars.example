@@ -1,0 +1,234 @@
+# Example Terraform Variables for LangSmith on AWS
+# Copy to terraform.tfvars and customize:
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Sensitive values (postgres_password, redis_auth_token) should be set via
+# environment variables, not this file:
+#
+#   export TF_VAR_postgres_password="your-password"
+#   export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
+#
+# Or use setup-env.sh which manages secrets via SSM Parameter Store:
+#
+#   source ./setup-env.sh
+
+#------------------------------------------------------------------------------
+# Required Variables
+#------------------------------------------------------------------------------
+
+# Prefix for all resource names — use your company/team identifier (max 11 chars).
+# Format: {prefix}-{environment}-{resource}
+# Example with prefix="acme": acme-prod-eks, acme-prod-pg, acme-prod-redis
+name_prefix = "myco"
+
+#------------------------------------------------------------------------------
+# Environment & Tagging
+#------------------------------------------------------------------------------
+environment = "dev"   # dev | staging | prod | test | uat
+
+# Applied as tags to all resources
+owner       = "platform-team"   # Team or individual responsible
+cost_center = "engineering"     # For billing attribution
+
+# Additional custom tags
+tags = {
+  # "department" = "engineering"
+}
+
+#------------------------------------------------------------------------------
+# Region
+#------------------------------------------------------------------------------
+region = "us-west-2"
+
+#------------------------------------------------------------------------------
+# Networking
+# By default, a new VPC is created. To use an existing VPC, set create_vpc = false
+# and provide the BYOV variables below.
+#------------------------------------------------------------------------------
+create_vpc = true
+
+# BYOV (Bring Your Own VPC) — only needed if create_vpc = false
+# vpc_id          = "vpc-0123456789abcdef0"
+# vpc_cidr_block  = "10.0.0.0/16"
+# private_subnets = ["subnet-aaa", "subnet-bbb", "subnet-ccc"]
+# public_subnets  = ["subnet-ddd", "subnet-eee"]
+
+#------------------------------------------------------------------------------
+# EKS Configuration
+#------------------------------------------------------------------------------
+eks_cluster_version       = "1.31"
+enable_public_eks_cluster = true   # Set false for private endpoint (requires VPN/bastion)
+
+# Restrict the public EKS API endpoint to specific CIDRs (e.g., corporate VPN egress IPs).
+# Default is unrestricted (0.0.0.0/0). Strongly recommended to set this for production.
+# Example: eks_public_access_cidrs = ["203.0.113.0/24", "198.51.100.5/32"]
+# eks_public_access_cidrs = ["0.0.0.0/0"]
+
+# Node group sizing:
+#   ClickHouse requires nodes with 4+ vCPU and 16+ GB RAM.
+#   m5.4xlarge = 16 vCPU, 64 GB RAM (recommended for production)
+#   m5.2xlarge = 8 vCPU, 32 GB RAM (minimum viable)
+#
+#   min_size guidance:
+#     3  — base LangSmith (no addons). Avoids cold-start node provisioning on deploy.
+#     6  — recommended if installing agent-builder + agent-deploys + insights from the start.
+#          All workloads schedule immediately without waiting for autoscaler.
+eks_managed_node_groups = {
+  default = {
+    name           = "node-group-default"
+    instance_types = ["m5.4xlarge"]
+    min_size       = 3
+    max_size       = 10
+  }
+}
+
+# EKS control plane logging — sent to CloudWatch Logs (charges apply).
+# Default enables all 5 log types. Set to [] to disable.
+# eks_cluster_enabled_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+
+# Whether to create and set gp3 as the default StorageClass
+create_gp3_storage_class = true
+
+#------------------------------------------------------------------------------
+# PostgreSQL (RDS)
+# postgres_source controls whether RDS is provisioned by Terraform or
+# PostgreSQL runs in-cluster via the Helm chart.
+#
+#   "external"   — (default) RDS instance with private access from EKS
+#   "in-cluster" — PostgreSQL deployed as a pod via Helm; no RDS provisioned
+#------------------------------------------------------------------------------
+postgres_source = "external"
+
+# Configuration for external PostgreSQL (RDS) — ignored if postgres_source = "in-cluster"
+postgres_username       = "langsmith"
+postgres_instance_type  = "db.t3.large"   # 2 vCPU, 8 GB RAM
+postgres_storage_gb     = 20
+postgres_max_storage_gb = 100
+
+# Password — set via environment variable, not here:
+#   export TF_VAR_postgres_password="your-secure-password"
+
+# IAM authentication (recommended — allows passwordless connection from EKS via IRSA)
+postgres_iam_database_authentication_enabled = true
+# postgres_iam_database_user = "langsmith_iam"   # Must be created in RDS after apply
+
+# Deletion protection — set false for dev/test environments where you need to destroy and recreate
+postgres_deletion_protection = true
+
+# Backup retention — days to keep automated snapshots. 0 disables backups.
+# postgres_backup_retention_period = 7
+
+#------------------------------------------------------------------------------
+# Redis (ElastiCache)
+# redis_source controls whether ElastiCache is provisioned or Redis runs in-cluster.
+#
+#   "external"   — (default) ElastiCache with private access from EKS
+#   "in-cluster" — Redis deployed as a pod via Helm; no ElastiCache provisioned
+#------------------------------------------------------------------------------
+redis_source        = "external"
+redis_instance_type = "cache.m6g.xlarge"   # 2 vCPU, 8 GB RAM
+
+# Auth token — set via environment variable, not here:
+#   export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
+# Or use setup-env.sh which auto-generates and stores this in SSM.
+
+#------------------------------------------------------------------------------
+# ClickHouse
+# clickhouse_source controls where ClickHouse runs.
+#
+#   "in-cluster" — (default) deployed as a pod via the Helm chart
+#   "external"   — self-hosted or LangChain-managed ClickHouse; configure
+#                  connection details via Helm values overlay
+#
+# Deployment tiers:
+#   1. All internal        — postgres_source="in-cluster", redis_source="in-cluster"
+#   2. External PG + Redis — postgres_source="external",   redis_source="external"  (recommended)
+#   3. All external        — requires external ClickHouse (marketplace subscription)
+#------------------------------------------------------------------------------
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# TLS / HTTPS
+#
+# Option A — ACM (default, recommended):
+#   1. Create a certificate in AWS Certificate Manager for your domain
+#   2. Set tls_certificate_source = "acm"
+#   3. Set acm_certificate_arn to the certificate ARN
+#
+# Option B — Let's Encrypt (via cert-manager):
+#   1. Set tls_certificate_source = "letsencrypt"
+#   2. Ensure your domain's DNS points to the ALB after Pass 1
+#   3. Set letsencrypt_email
+#
+# Option C — None (HTTP only, not recommended for production):
+#   Set tls_certificate_source = "none"
+#------------------------------------------------------------------------------
+tls_certificate_source = "acm"
+# acm_certificate_arn  = "arn:aws:acm:us-west-2:123456789012:certificate/..."
+# letsencrypt_email    = "your-email@example.com"
+
+# Custom domain for LangSmith (e.g. langsmith.example.com).
+# Used in the langsmith_url output and DNS setup instructions.
+# Leave empty to use the ALB DNS name directly.
+# langsmith_domain = "langsmith.example.com"
+
+#------------------------------------------------------------------------------
+# Storage (S3) TTL
+# Lifecycle rules expire trace objects by prefix to bound storage costs.
+# Mirrors Azure Blob TTL pattern (ttl_s/ and ttl_l/ prefixes).
+#
+#   ttl_s/ — short-lived traces (default: 14 days)
+#   ttl_l/ — long-lived  traces (default: 400 days, ~13 months)
+#------------------------------------------------------------------------------
+s3_ttl_enabled    = true
+s3_ttl_short_days = 14
+s3_ttl_long_days  = 400
+
+# S3 KMS encryption — upgrades from SSE-S3 (AES256) to SSE-KMS with a customer-managed key.
+# Adds ~$1/mo per key plus $0.03/10k requests. Leave empty for default SSE-S3.
+# s3_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
+
+# S3 versioning — retains all previous versions of trace objects. Increases storage costs.
+# s3_versioning_enabled = false
+
+#------------------------------------------------------------------------------
+# LangSmith Kubernetes Namespace
+#------------------------------------------------------------------------------
+langsmith_namespace = "langsmith"
+
+#------------------------------------------------------------------------------
+# Security Add-ons (opt-in, all default off)
+#------------------------------------------------------------------------------
+
+# ALB access logs — captures request details (IP, URI, latency, status) to S3.
+# Creates a dedicated bucket with the required ELB delivery policy.
+# alb_access_logs_enabled = false
+
+# CloudTrail — records all AWS API calls (IAM, S3, EKS, RDS, etc.) to S3.
+# Skip if your organization already has an account-level or org-level trail.
+# create_cloudtrail             = false
+# cloudtrail_multi_region       = true   # recommended — catches global service events
+# cloudtrail_log_retention_days = 365
+
+# WAF — attaches a WAFv2 Web ACL to the ALB.
+# Includes: OWASP Top 10, IP reputation list, known bad inputs (Log4Shell, etc.)
+# Cost: ~$5/mo (ACL) + $1/mo per rule group + $0.60/million requests
+# create_waf = false
+
+#------------------------------------------------------------------------------
+# LangGraph Platform Encryption Keys
+# Required only when enabling optional feature overlays (Deployments, Agent
+# Builder, Insights). Generate once — never rotate on a live deployment.
+#
+# Generate a Fernet key:
+#   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+#
+# Set via environment variable (not this file) or let setup-env.sh manage them:
+#   export TF_VAR_langsmith_deployments_encryption_key="..."
+#   export TF_VAR_langsmith_agent_builder_encryption_key="..."
+#   export TF_VAR_langsmith_insights_encryption_key="..."
+#------------------------------------------------------------------------------
+# langsmith_deployments_encryption_key   = ""   # set via TF_VAR or setup-env.sh
+# langsmith_agent_builder_encryption_key = ""   # set via TF_VAR or setup-env.sh
+# langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh
