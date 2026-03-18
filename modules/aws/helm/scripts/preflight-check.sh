@@ -2,6 +2,7 @@
 # Verifies that all required tools are installed and the cluster is reachable
 # before deploying LangSmith on AWS.
 set -euo pipefail
+export AWS_PAGER=""
 
 REQUIRED_TOOLS=(aws kubectl helm terraform)
 MISSING=()

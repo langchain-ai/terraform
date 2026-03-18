@@ -5,6 +5,7 @@
 # updates kubeconfig to target the right cluster, then removes the Helm release
 # and ESO resources.
 set -euo pipefail
+export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."

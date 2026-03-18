@@ -13,6 +13,7 @@
 # Generate the env file with: ./scripts/init-overrides.sh
 # Enable sizing/addons by copying: cp values/langsmith-values-<name>.yaml.example values/langsmith-values-<name>.yaml
 set -euo pipefail
+export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
@@ -110,6 +111,13 @@ $(if aws ssm get-parameter --name "${_ssm_prefix}/insights-encryption-key" \
       remoteRef:
         key: ${_ssm_prefix}/insights-encryption-key
 IEOF
+fi)
+$(if aws ssm get-parameter --name "${_ssm_prefix}/deployments-encryption-key" \
+    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<DEOF
+    - secretKey: deployments_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/deployments-encryption-key
+DEOF
 fi)
 EOF
 
