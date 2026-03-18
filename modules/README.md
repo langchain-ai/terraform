@@ -103,11 +103,13 @@ cd terraform/aws/helm/scripts  # or azure/ gcp/ ocp/
 
 | Tier | Description |
 |---|---|
-| **1 — All internal** | Everything runs in-cluster |
-| **2 — External services** | External Redis + Postgres + Blob, internal ClickHouse (recommended) |
-| **3 — All external** | Fully managed external services |
+| **1 — All internal** | Everything runs in-cluster (dev/POC only) |
+| **2 — External services** | External Redis + Postgres + Blob, internal ClickHouse (dev/POC only) |
+| **3 — All external** | Production recommended — uses [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) |
 
 > Blob storage is always required — payloads in ClickHouse cause cluster issues.
+>
+> **In-cluster ClickHouse is for dev/POC only.** For production deployments, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ## Per-provider guides
 

@@ -112,9 +112,11 @@ storage_force_destroy   = false # Prevent bucket deletion with objects
 # Reference: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
 #------------------------------------------------------------------------------
 # ClickHouse deployment type:
-#   "in-cluster"       - (default) Deployed as a pod in the cluster via Helm
-#   "langsmith-managed" - Managed by LangChain team (contact sales@langchain.dev)
-#   "external"         - Self-hosted external ClickHouse instance
+#   "in-cluster"        - (default) Deployed as a pod in the cluster via Helm.
+#                         ⚠️  Dev/POC only — single pod, no replication, no backups.
+#   "langsmith-managed" - Managed by LangChain team (recommended for production).
+#                         See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
+#   "external"          - Self-hosted external ClickHouse instance
 clickhouse_source = "in-cluster"
 
 # --- For langsmith-managed or external ClickHouse ---

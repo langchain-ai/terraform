@@ -51,7 +51,7 @@ All passes verified during production deploy (external Postgres + Redis).
 ### `langsmith-clickhouse`
 - **What**: Columnar database — trace spans, run metadata, eval results
 - **Type**: StatefulSet · 500Gi PVC · large node pool (requires 15Gi RAM)
-- **Notes**: Always in-cluster. External option requires LangChain-managed ClickHouse.
+- **Notes**: In-cluster is for dev/POC only (single pod, no replication, no backups). For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ### One-time Jobs (Pass 2)
 | Job | Purpose |

@@ -118,7 +118,7 @@ variable "redis_source" {
 
 variable "clickhouse_source" {
   type        = string
-  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a pod via Helm (default). 'external' is reserved for self-hosted or LangChain-managed ClickHouse."
+  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a pod via Helm (dev/POC only). 'external' for LangChain Managed ClickHouse (recommended for production) — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
   default     = "in-cluster"
 
   validation {

@@ -19,9 +19,11 @@ This directory contains the Terraform configuration to deploy LangSmith on GCP. 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | Cloud SQL (private IP) | Memorystore (private IP) | In-cluster pod | Scalable / persistent |
+| **Production** | Cloud SQL (private IP) | Memorystore (private IP) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to GCS — never to ClickHouse.
+>
+> **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ---
 
