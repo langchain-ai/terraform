@@ -1,3 +1,6 @@
+# redis: Provisions an ElastiCache Redis replication group in a private subnet.
+# https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/WhatIs.html
+
 # Define the Redis security group
 resource "aws_security_group" "redis_sg" {
   name        = "${var.name}-sg"

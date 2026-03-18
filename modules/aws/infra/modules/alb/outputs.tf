@@ -23,6 +23,11 @@ output "https_listener_arn" {
   value       = var.tls_certificate_source == "acm" ? aws_lb_listener.https[0].arn : null
 }
 
+output "alb_zone_id" {
+  description = "Canonical hosted zone ID of the ALB (for Route 53 alias records)"
+  value       = aws_lb.this.zone_id
+}
+
 output "access_logs_bucket_name" {
   description = "Name of the S3 bucket receiving ALB access logs (null when access_logs_enabled = false)"
   value       = var.access_logs_enabled ? aws_s3_bucket.access_logs[0].id : null

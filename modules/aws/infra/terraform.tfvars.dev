@@ -1,0 +1,85 @@
+# =============================================================================
+# LangSmith on AWS — Dev Profile
+# =============================================================================
+# Opinionated defaults for development and testing.
+# Copy to terraform.tfvars and change name_prefix to get started:
+#
+#   cp terraform.tfvars.dev terraform.tfvars
+#
+# For the full annotated reference with every option explained, see:
+#   terraform.tfvars.example
+# =============================================================================
+
+#------------------------------------------------------------------------------
+# REQUIRED — Change these
+#------------------------------------------------------------------------------
+name_prefix = "myco"       # 1-11 chars, lowercase. Your company/team name.
+environment = "dev"
+region      = "us-west-2"
+
+#------------------------------------------------------------------------------
+# Tagging
+#------------------------------------------------------------------------------
+owner       = "platform-team"
+cost_center = "engineering"
+
+#------------------------------------------------------------------------------
+# Networking — create a fresh VPC (simplest path)
+#------------------------------------------------------------------------------
+create_vpc = true
+
+#------------------------------------------------------------------------------
+# EKS — public API for easy kubectl access from your laptop
+#------------------------------------------------------------------------------
+enable_public_eks_cluster = true
+eks_cluster_version       = "1.31"
+
+# Smaller node group for dev — 3 nodes, autoscales to 6.
+eks_managed_node_groups = {
+  default = {
+    name           = "node-group-default"
+    instance_types = ["m5.2xlarge"]   # 8 vCPU, 32 GB — sufficient for dev
+    min_size       = 3
+    max_size        = 6
+  }
+}
+
+#------------------------------------------------------------------------------
+# External Postgres + Redis (recommended even for dev)
+#------------------------------------------------------------------------------
+postgres_source        = "external"
+postgres_username      = "langsmith"
+postgres_instance_type = "db.t3.medium"    # 2 vCPU, 4 GB — fine for dev
+postgres_storage_gb    = 20
+postgres_max_storage_gb = 50
+
+# Deletion protection OFF so you can `terraform destroy` without extra steps.
+postgres_deletion_protection = false
+
+redis_source        = "external"
+redis_instance_type = "cache.t3.medium"    # 2 vCPU, 3 GB — fine for dev
+
+#------------------------------------------------------------------------------
+# ClickHouse — in-cluster for dev
+#------------------------------------------------------------------------------
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# TLS — start with HTTP, upgrade later
+#------------------------------------------------------------------------------
+tls_certificate_source = "none"
+# langsmith_domain = "langsmith-dev.example.com"   # uncomment to auto-provision Route 53 + ACM
+
+#------------------------------------------------------------------------------
+# Storage
+#------------------------------------------------------------------------------
+s3_ttl_enabled    = true
+s3_ttl_short_days = 7      # shorter retention for dev
+s3_ttl_long_days  = 90
+
+#------------------------------------------------------------------------------
+# Security add-ons — all off for dev
+#------------------------------------------------------------------------------
+# alb_access_logs_enabled = false
+# create_cloudtrail       = false
+# create_waf              = false

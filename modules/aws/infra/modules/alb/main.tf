@@ -1,7 +1,10 @@
 # alb: Pre-provisions an Application Load Balancer so its DNS name is a known
 # Terraform output before the Helm chart is deployed.
+# https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction.html
+#
 # The AWS Load Balancer Controller takes ownership of listener rules and target groups
 # via the Ingress annotation: alb.ingress.kubernetes.io/load-balancer-arn
+# https://kubernetes-sigs.github.io/aws-load-balancer-controller/
 
 terraform {
   required_providers {
@@ -64,23 +67,21 @@ resource "aws_security_group" "alb" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description      = "HTTP"
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = var.allowed_cidr_blocks
   }
 
   dynamic "ingress" {
     for_each = var.tls_certificate_source == "acm" ? [1] : []
     content {
-      description      = "HTTPS"
-      from_port        = 443
-      to_port          = 443
-      protocol         = "tcp"
-      cidr_blocks      = ["0.0.0.0/0"]
-      ipv6_cidr_blocks = ["::/0"]
+      description = "HTTPS"
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = var.allowed_cidr_blocks
     }
   }
 
@@ -99,11 +100,10 @@ resource "aws_security_group" "alb" {
 resource "aws_lb" "this" {
   name                       = var.name
   drop_invalid_header_fields = true
-  #trivy:ignore:AVD-AWS-0053 LangSmith requires an internet-facing ALB
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = var.public_subnets
+  internal                   = var.internal
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = var.subnets
 
   dynamic "access_logs" {
     for_each = var.access_logs_enabled ? [1] : []

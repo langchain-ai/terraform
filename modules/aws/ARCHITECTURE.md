@@ -36,14 +36,14 @@ LangSmith on AWS is deployed in three passes.
 │    • postgres       — metadata store (in-cluster or RDS)                     │
 │                                                                              │
 │  Storage:  RDS PostgreSQL → metadata / S3 → trace blobs (VPC endpoint)      │
-│  Ingress:  AWS ALB → HTTPS 443 → LangSmith frontend/backend                 │
+│  Ingress:  AWS ALB → HTTP 80 or HTTPS 443 (based on TLS config)             │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  Pass 1 — AWS Infrastructure                                                 │
 │                                                                              │
 │  Networking: VPC + private/public subnets + single NAT gateway               │
 │  Compute:    EKS cluster + managed node group + cluster autoscaler          │
 │  Database:   RDS PostgreSQL (db.t3.large, private subnets)                  │
-│  Cache:      ElastiCache Redis (cache.m5.large, private subnets)            │
+│  Cache:      ElastiCache Redis (cache.m6g.xlarge, private subnets)          │
 │  Storage:    S3 bucket (VPC Gateway Endpoint — no public internet)          │
 │  Add-ons:    ALB controller + EBS CSI driver + metrics server               │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -57,7 +57,7 @@ LangSmith on AWS is deployed in three passes.
 |-------------|------------------------------|-----------------------------------|
 | backend     | RDS PostgreSQL               | Private subnet, security group    |
 | backend     | S3 bucket                    | IRSA + VPC Gateway Endpoint       |
-| clickhouse  | EBS volume (GP3, GKE PVC)   | Local                             |
+| clickhouse  | EBS volume (GP3, EKS PVC)   | Local                             |
 | redis       | ElastiCache or in-cluster    | Private subnet, security group    |
 | LGP operator| RDS PostgreSQL (shared)      | Private subnet, security group    |
 
@@ -69,8 +69,8 @@ LangSmith on AWS is deployed in three passes.
 Internet
     │
     ▼
-AWS Application Load Balancer (ALB — port 443)
-    │  TLS via ACM certificate
+AWS Application Load Balancer (ALB — port 80 or 443)
+    │  TLS via ACM / Let's Encrypt (optional)
     ▼
 EKS Cluster (private subnets)
   ├── kube-system namespace
@@ -92,7 +92,7 @@ EKS Cluster (private subnets)
 IRSA is used instead of static credentials for S3 access:
 
 1. An IAM Role is created with a trust policy scoped to the EKS cluster's OIDC issuer.
-2. The role is granted `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on the LangSmith bucket.
+2. The role is granted `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` on the LangSmith bucket.
 3. The Kubernetes Service Account in `langsmith` namespace is annotated with the role ARN.
 4. Pods receive temporary credentials via the EKS token webhook — no static AWS keys required.
 
@@ -101,15 +101,16 @@ IRSA is used instead of static credentials for S3 access:
 ## Module Dependency Graph
 
 ```
-vpc  ──►  eks  ──►  k8s-bootstrap (cert-manager, KEDA, ALB controller)
+vpc  ──►  eks  ──►  k8s-bootstrap (cert-manager, KEDA, ESO)
 │
-├──►  postgres      (RDS, private subnets from VPC)
-├──►  redis         (ElastiCache, private subnets from VPC)
-├──►  s3            (bucket + VPC Gateway Endpoint)
-├──►  alb           (pre-provisioned ALB — opt-in)
-│     └──►  waf     (WAFv2 Web ACL attached to ALB — opt-in)
-│     └──►  alb_access_logs  (S3 bucket for ALB access logs — opt-in)
-└──►  cloudtrail    (CloudTrail trail + S3 bucket — opt-in)
+├──►  postgres    (RDS, private subnets from VPC)
+├──►  redis       (ElastiCache, private subnets from VPC)
+├──►  storage     (S3 bucket + VPC Gateway Endpoint)
+├──►  alb         (pre-provisioned ALB, public subnets)
+├──►  dns         (Route 53 zone + ACM cert, optional)
+├──►  secrets     (Secrets Manager)
+├──►  cloudtrail  (audit logging, optional)
+└──►  waf         (WAF ACL on ALB, optional)
           all ──►  langsmith (root module)
 ```
 
@@ -129,10 +130,35 @@ Three modules are disabled by default and can be enabled in `terraform.tfvars`:
 
 | Resource         | Default size        | vCPU | Memory  |
 |------------------|---------------------|------|---------|
-| EKS node         | `m5.xlarge`         | 4    | 16 GB   |
+| EKS node         | `m5.4xlarge`        | 16   | 64 GB   |
 | RDS PostgreSQL   | `db.t3.large`       | 2    | 8 GB    |
-| ElastiCache Redis| `cache.m5.large`    | 2    | 6.38 GB |
+| ElastiCache Redis| `cache.m6g.xlarge`  | 4    | 13.07 GB|
 | RDS storage      | 10 GB               | —    | —       |
+
+---
+
+## DNS & TLS (Custom Domain)
+
+Three paths for TLS, configured via `tls_certificate_source`:
+
+| Mode | Behavior |
+|------|----------|
+| `none` | HTTP:80 only. No certificate. |
+| `acm` | HTTPS:443 with HTTP→HTTPS redirect. ACM certificate required. |
+| `letsencrypt` | HTTPS via cert-manager. HTTP:80 kept for ACME challenge. |
+
+### Auto-provisioned DNS (recommended for new deployments)
+
+When `langsmith_domain` is set (and `acm_certificate_arn` is empty), Terraform activates the `dns` module which creates:
+- A Route 53 hosted zone for the domain
+- An ACM certificate with DNS validation records
+- A Route 53 alias record pointing the domain to the ALB
+
+**Staged deploy pattern:** You can set `langsmith_domain` with `tls_certificate_source = "none"` first. Terraform creates the zone and cert but does not block on validation. Delegate NS records at your registrar, then flip to `tls_certificate_source = "acm"` in a later apply — Terraform blocks until the cert validates, then wires it into the ALB HTTPS listener.
+
+### Bring-your-own certificate
+
+Set `acm_certificate_arn` directly to skip the dns module entirely.
 
 ---
 

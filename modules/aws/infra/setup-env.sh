@@ -199,6 +199,6 @@ echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-pass
 echo "  ssm_prefix        = $_ssm_prefix"
 echo ""
 echo "Next:  terraform -chdir=infra apply"
-echo "       aws eks update-kubeconfig --region $AWS_REGION --name ${_name_prefix}-${_environment}-eks"
 echo "       ./helm/scripts/init-overrides.sh"
+echo "       aws eks update-kubeconfig --region $AWS_REGION --name ${_name_prefix}-${_environment}-eks"
 echo "       ./helm/scripts/deploy.sh"

@@ -1,5 +1,7 @@
-# AWS DNS module
-# Provisions a Route 53 hosted zone and ACM certificate for LangSmith.
+# dns: Provisions a Route 53 hosted zone and ACM certificate for LangSmith.
+# Route 53: https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/Welcome.html
+# ACM:      https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html
+# DNS validation: https://docs.aws.amazon.com/acm/latest/userguide/dns-validation.html
 
 resource "aws_route53_zone" "langsmith" {
   count = var.create_zone ? 1 : 0
@@ -39,7 +41,8 @@ resource "aws_route53_record" "cert_validation" {
 }
 
 resource "aws_acm_certificate_validation" "langsmith" {
-  count                   = var.create_certificate ? 1 : 0
+  count                   = var.create_certificate && var.wait_for_validation ? 1 : 0
   certificate_arn         = aws_acm_certificate.langsmith[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }
+

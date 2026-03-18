@@ -1,4 +1,5 @@
 # waf: Attaches an AWS WAFv2 Web ACL to the LangSmith ALB.
+# https://docs.aws.amazon.com/waf/latest/developerguide/what-is-aws-waf.html
 # Opt-in — set create_waf = true in terraform.tfvars.
 #
 # Includes three AWS managed rule groups:
