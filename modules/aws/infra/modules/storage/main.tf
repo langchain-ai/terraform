@@ -40,6 +40,12 @@ data "aws_route_tables" "vpc" {
   }
 }
 
+# S3 VPC Gateway Endpoint — keeps all S3 traffic private.
+# https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html
+# With this in place, pods in the VPC reach S3 over AWS's private backbone
+# instead of the public internet. Combined with the bucket policy below
+# (which restricts access to this endpoint), the S3 bucket is not publicly
+# accessible and data never leaves the AWS network.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = var.vpc_id
   service_name      = "com.amazonaws.${var.region}.s3"
@@ -79,6 +85,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
   }
 }
 
+# Bucket policy: only the LangSmith IRSA role, and only via the VPC Gateway
+# Endpoint, can access this bucket. Requests from outside the VPC (including
+# the public internet) are implicitly denied. This is the enforcement layer
+# that guarantees the bucket stays private — even if someone misconfigures
+# the block-public-access settings above, this policy still blocks external access.
 resource "aws_s3_bucket_policy" "bucket_policy" {
   bucket = aws_s3_bucket.bucket.id
 

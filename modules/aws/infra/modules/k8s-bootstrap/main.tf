@@ -1,6 +1,11 @@
 # k8s-bootstrap: Provisions supporting Kubernetes resources for LangSmith.
 # Creates the namespace, database/cache secrets, KEDA, and cert-manager.
 # The LangSmith Helm chart itself is deployed separately via aws/helm/scripts/deploy.sh.
+#
+# Key dependencies installed here:
+#   KEDA              — https://keda.sh/docs/
+#   cert-manager      — https://cert-manager.io/docs/
+#   External Secrets  — https://external-secrets.io/latest/
 
 terraform {
   required_providers {
@@ -83,6 +88,7 @@ resource "kubernetes_secret" "redis" {
 
 # ── KEDA (Kubernetes Event-driven Autoscaling) ───────────────────────────────
 # Required for LangSmith Deployments feature.
+# https://keda.sh/docs/latest/concepts/
 
 resource "helm_release" "keda" {
   name             = "keda"

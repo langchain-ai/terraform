@@ -11,9 +11,13 @@ This guide walks through a clean teardown — from removing the application laye
 Teardown happens in reverse order of deployment:
 
 ```
-Pass 3 (if enabled) — Remove LangGraph deployments (LGP CRDs + pods)
-Pass 2              — Uninstall LangSmith Helm release
-Pass 1              — Destroy all AWS infrastructure (terraform destroy)
+Step 1  — Remove LangGraph deployments (if enabled)
+Step 2  — Uninstall LangSmith Helm release
+Step 3  — Empty S3 bucket
+Step 4  — Unblock RDS deletion (deletion protection + skip_final_snapshot)
+Step 5  — terraform destroy (handles all infra including k8s-bootstrap)
+Step 6  — Manual cleanup (only if Terraform state is broken)
+Step 7  — Verify cleanup
 ```
 
 ---
@@ -55,39 +59,23 @@ kubectl delete namespace langsmith
 
 ---
 
-## Step 3 — Remove Kubernetes Bootstrap Resources
+## Step 3 — Pre-Destroy: Empty S3 Bucket
 
-Uninstall in this order — the ALB controller must go last so it can deprovision any ingress-managed ALBs before its IAM permissions are removed.
-
-```bash
-# Uninstall KEDA
-helm uninstall keda -n keda
-kubectl delete namespace keda
-
-# Uninstall External Secrets Operator
-helm uninstall external-secrets -n external-secrets
-kubectl delete namespace external-secrets
-
-# Uninstall AWS Load Balancer Controller — LAST
-# Removing this triggers cleanup of any ALBs created by ingress objects
-helm uninstall aws-load-balancer-controller -n kube-system
-```
-
-cert-manager is not installed by default in this stack — skip it if `helm list -A` doesn't show it.
-
-After uninstalling the ALB controller, wait ~2 minutes and verify no ingress-provisioned ALBs remain:
+Terraform cannot delete a non-empty S3 bucket. Empty it before destroying:
 
 ```bash
-aws elbv2 describe-load-balancers --region <region> \
-  --query "LoadBalancers[?contains(LoadBalancerName, '<name_prefix>')].[LoadBalancerName,State.Code]" \
-  --output table
+# Check bucket name
+cd aws/infra && terraform output -raw bucket_name
+
+# Empty the bucket
+aws s3 rm s3://<bucket-name> --recursive --region <region>
 ```
 
-If a stale ALB remains after 2 minutes, delete it manually — it will block VPC subnet deletion during `terraform destroy`.
+> **Data warning:** This permanently deletes all trace blob data. Export anything you need to retain first.
 
 ---
 
-## Step 4 — Pre-Destroy: Unblock RDS
+## Step 4 — Pre-Destroy: Unblock RDS Deletion
 
 Two things will cause `terraform destroy` to fail on RDS if not addressed first.
 
@@ -135,6 +123,8 @@ terraform apply -target=module.postgres
 
 ## Step 5 — Destroy AWS Infrastructure
 
+`terraform destroy` handles all infrastructure including the k8s-bootstrap resources (KEDA, ESO, ALB controller, cert-manager). Do **not** manually `helm uninstall` these before running destroy — doing so puts Terraform state out of sync and causes confusing errors.
+
 Run from the `aws/infra` directory:
 
 ```bash
@@ -149,16 +139,26 @@ terraform destroy
 ```
 
 Terraform will destroy in dependency order:
-- k8s-bootstrap (cluster-autoscaler, metrics-server Helm releases)
+- k8s-bootstrap (KEDA, ESO, ALB controller, cert-manager, cluster-autoscaler, metrics-server)
 - RDS PostgreSQL instance
 - ElastiCache Redis cluster
-- S3 bucket
+- S3 bucket (must be empty — see Step 3)
 - ALB (pre-provisioned)
+- Route 53 zone, ACM certificate (if langsmith_domain was set)
+- CloudTrail, WAF (if enabled)
 - IAM roles (IRSA, ESO)
 - EKS node groups and cluster
 - VPC, subnets, NAT gateway, route tables
 
-> **Data warning:** `terraform destroy` permanently deletes the RDS instance and S3 bucket contents. Export any data you need to retain before proceeding.
+After destroy completes, verify no orphaned ALBs remain (ingress-provisioned ALBs can outlive the cluster if the ALB controller didn't clean up):
+
+```bash
+aws elbv2 describe-load-balancers --region <region> \
+  --query "LoadBalancers[?contains(LoadBalancerName, '<name_prefix>')].[LoadBalancerName,State.Code]" \
+  --output table
+```
+
+If a stale ALB remains, delete it manually — it will block VPC subnet deletion if you need to re-run destroy.
 
 **Note on `source ./setup-env.sh`:** The script sets `TF_VAR_postgres_password` and `TF_VAR_redis_auth_token`. If those SSM parameters don't exist (e.g. they were never stored there), the variables will be unset and Terraform will fail provider validation even during destroy. In that case, set them manually before running destroy:
 
@@ -171,7 +171,30 @@ export TF_VAR_redis_auth_token=$(openssl rand -hex 16)
 
 ## Step 6 — Manual Cleanup (if needed)
 
-If Terraform state is out of sync, clean up manually:
+If Terraform state is out of sync or destroy fails partway through, clean up manually.
+
+### Kubernetes bootstrap resources
+
+If the EKS cluster is still reachable, remove Terraform-managed Helm releases. Uninstall the ALB controller **last** so it can deprovision any ingress-managed ALBs before losing IAM permissions:
+
+```bash
+# cert-manager (only if tls_certificate_source = "letsencrypt")
+helm uninstall cert-manager -n cert-manager 2>/dev/null
+kubectl delete namespace cert-manager --ignore-not-found
+
+# KEDA
+helm uninstall keda -n keda
+kubectl delete namespace keda
+
+# External Secrets Operator
+helm uninstall external-secrets -n external-secrets
+kubectl delete namespace external-secrets
+
+# AWS Load Balancer Controller — LAST
+helm uninstall aws-load-balancer-controller -n kube-system
+```
+
+### AWS resources
 
 ```bash
 # Delete EKS cluster
@@ -222,6 +245,11 @@ aws s3 ls | grep <name_prefix>
 # No ALBs remaining
 aws elbv2 describe-load-balancers --region <region> \
   --query "LoadBalancers[?contains(LoadBalancerName, '<name_prefix>')].[LoadBalancerName,State.Code]" \
+  --output table
+
+# No Route 53 hosted zone remaining (if langsmith_domain was set)
+aws route53 list-hosted-zones \
+  --query "HostedZones[?contains(Name, '<langsmith_domain>')].[Name,Id]" \
   --output table
 
 # No VPC remaining

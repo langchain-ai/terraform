@@ -8,9 +8,21 @@ variable "vpc_id" {
   description = "VPC ID where the ALB will be created"
 }
 
-variable "public_subnets" {
+variable "subnets" {
   type        = list(string)
-  description = "Public subnet IDs for the internet-facing ALB"
+  description = "Subnet IDs for the ALB. Use public subnets for internet-facing, private subnets for internal."
+}
+
+variable "internal" {
+  type        = bool
+  description = "If true, the ALB is internal (private). If false, internet-facing (public)."
+  default     = false
+}
+
+variable "allowed_cidr_blocks" {
+  type        = list(string)
+  description = "CIDR blocks allowed to reach the ALB on HTTP/HTTPS. Defaults to open (0.0.0.0/0). Restrict to VPN/office CIDRs for internal deployments."
+  default     = ["0.0.0.0/0"]
 }
 
 variable "tls_certificate_source" {

@@ -213,6 +213,21 @@ variable "redis_auth_token" {
 }
 
 #------------------------------------------------------------------------------
+# ALB Network Access
+#------------------------------------------------------------------------------
+variable "alb_internal" {
+  type        = bool
+  description = "If true, the ALB is internal (private subnets, no public access). If false, internet-facing (public subnets). You can start internal and switch to public later by setting this to false and re-applying."
+  default     = false
+}
+
+variable "alb_allowed_cidr_blocks" {
+  type        = list(string)
+  description = "CIDR blocks allowed to reach the ALB on HTTP/HTTPS. Defaults to open. Restrict to VPN/office CIDRs for internal or limited-access deployments (e.g. [\"10.0.0.0/8\", \"172.16.0.0/12\"])."
+  default     = ["0.0.0.0/0"]
+}
+
+#------------------------------------------------------------------------------
 # ALB Access Logs
 #------------------------------------------------------------------------------
 variable "alb_access_logs_enabled" {
@@ -365,7 +380,7 @@ variable "letsencrypt_email" {
 
 variable "langsmith_domain" {
   type        = string
-  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in outputs and DNS instructions. Leave empty to use the ALB DNS name directly."
+  description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set (and acm_certificate_arn is empty), activates the dns module to auto-provision a Route 53 hosted zone, ACM certificate, and alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
   default     = ""
 }
 

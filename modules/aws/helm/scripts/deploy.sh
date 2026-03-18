@@ -237,3 +237,11 @@ if [[ -n "$ALB_HOST" ]]; then
 else
   echo "(Ingress not yet ready — re-run after a few minutes to get the ALB hostname)"
 fi
+
+echo ""
+echo "Access LangSmith:"
+echo "  Port-forward:  kubectl port-forward svc/${RELEASE_NAME}-frontend -n ${NAMESPACE} 8080:80"
+echo "  Then open:     http://localhost:8080"
+if [[ -n "${ALB_HOST:-}" ]]; then
+  echo "  ALB:           http://${ALB_HOST}"
+fi
