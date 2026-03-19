@@ -19,6 +19,12 @@ variable "internal" {
   default     = false
 }
 
+variable "allowed_cidr_blocks" {
+  type        = list(string)
+  description = "CIDR blocks allowed to reach the ALB on HTTP/HTTPS. Defaults to open (0.0.0.0/0). Restrict to VPN/office CIDRs for internal deployments."
+  default     = ["0.0.0.0/0"]
+}
+
 variable "tls_certificate_source" {
   type        = string
   description = "TLS mode: 'acm', 'letsencrypt', or 'none'"

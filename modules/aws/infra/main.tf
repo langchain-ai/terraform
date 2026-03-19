@@ -51,8 +51,8 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != ""
-      error_message = "acm_certificate_arn is required when tls_certificate_source = 'acm'."
+      condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != "" || var.langsmith_domain != ""
+      error_message = "When tls_certificate_source = 'acm', either acm_certificate_arn (existing cert) or langsmith_domain (auto-provision via Route 53) is required."
     }
 
     precondition {
@@ -193,6 +193,8 @@ resource "aws_iam_role_policy" "langsmith_s3" {
 
 # ── ESO IRSA role (External Secrets Operator) ─────────────────────────────
 # Allows the ESO controller to read LangSmith secrets from SSM Parameter Store.
+# IRSA: https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+# ESO:  https://external-secrets.io/latest/provider/aws-parameter-store/
 
 resource "aws_iam_role" "eso" {
   name = "${local.base_name}-eso"
@@ -234,6 +236,48 @@ resource "aws_iam_role_policy" "eso_ssm" {
   })
 }
 
+# ── DNS / ACM ────────────────────────────────────────────────────────────────
+# Activates whenever langsmith_domain is set (regardless of tls_certificate_source).
+# This lets you deploy with tls_certificate_source = "none" first, delegate
+# NS records at your leisure, then flip to "acm" in a later apply.
+#
+# When tls_certificate_source != "acm": creates the Route 53 zone, requests
+# the ACM certificate, writes DNS validation records, and creates the alias
+# record — but does NOT block waiting for certificate validation.
+#
+# When tls_certificate_source == "acm": additionally blocks until the ACM
+# certificate is validated (NS delegation must be complete), then wires the
+# validated cert into the ALB HTTPS listener.
+
+locals {
+  dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
+}
+
+module "dns" {
+  source = "./modules/dns"
+  count  = local.dns_enabled ? 1 : 0
+
+  domain_name         = var.langsmith_domain
+  create_zone         = true
+  create_certificate  = true
+  wait_for_validation = var.tls_certificate_source == "acm"
+}
+
+# Alias record lives here (not in the dns module) to avoid a circular
+# dependency: dns needs nothing from alb, and alb needs dns's cert ARN.
+resource "aws_route53_record" "langsmith_alb_alias" {
+  count   = local.dns_enabled ? 1 : 0
+  zone_id = module.dns[0].zone_id
+  name    = var.langsmith_domain
+  type    = "A"
+
+  alias {
+    name                   = module.alb.alb_dns_name
+    zone_id                = module.alb.alb_zone_id
+    evaluate_target_health = true
+  }
+}
+
 module "alb" {
   source = "./modules/alb"
 
@@ -242,8 +286,9 @@ module "alb" {
   vpc_cidr_block         = local.vpc_cidr_block
   subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
   internal               = var.alb_scheme == "internal"
+  allowed_cidr_blocks    = var.alb_allowed_cidr_blocks
   tls_certificate_source = var.tls_certificate_source
-  acm_certificate_arn    = var.acm_certificate_arn
+  acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
   tags                   = local.common_tags
 

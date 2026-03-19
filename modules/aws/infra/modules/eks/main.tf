@@ -99,8 +99,8 @@ resource "kubernetes_storage_class" "gp3_default" {
   depends_on = [aws_eks_addon.ebs-csi]
 }
 
-# IRSA role for LangSmith pods
-# Allows any service account in the cluster to assume this role
+# IRSA role for LangSmith pods — allows pods to access S3 via their service account.
+# https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
 resource "aws_iam_role" "langsmith" {
   count = var.create_langsmith_irsa_role ? 1 : 0
 

@@ -1,0 +1,99 @@
+# =============================================================================
+# LangSmith on AWS — Production Profile
+# =============================================================================
+# Opinionated defaults for production deployments.
+# Copy to terraform.tfvars and change name_prefix, region, and domain:
+#
+#   cp terraform.tfvars.prod terraform.tfvars
+#
+# For the full annotated reference with every option explained, see:
+#   terraform.tfvars.example
+# =============================================================================
+
+#------------------------------------------------------------------------------
+# REQUIRED — Change these
+#------------------------------------------------------------------------------
+name_prefix = "myco"        # 1-11 chars, lowercase. Your company/team name.
+environment = "prod"
+region      = "us-west-2"   # pick the region closest to your users
+
+#------------------------------------------------------------------------------
+# Tagging
+#------------------------------------------------------------------------------
+owner       = "platform-team"
+cost_center = "engineering"
+
+#------------------------------------------------------------------------------
+# Networking — create a fresh VPC (or set create_vpc = false for BYOV)
+#------------------------------------------------------------------------------
+create_vpc = true
+
+#------------------------------------------------------------------------------
+# EKS — private API endpoint (kubectl requires VPN or bastion)
+#------------------------------------------------------------------------------
+enable_public_eks_cluster = false
+eks_cluster_version       = "1.31"
+
+# Production node group — 6 nodes min so all pods schedule immediately.
+# m5.4xlarge required for in-cluster ClickHouse (16 vCPU, 64 GB).
+eks_managed_node_groups = {
+  default = {
+    name           = "node-group-default"
+    instance_types = ["m5.4xlarge"]
+    min_size       = 6
+    max_size        = 10
+  }
+}
+
+#------------------------------------------------------------------------------
+# External Postgres + Redis (required for production)
+#------------------------------------------------------------------------------
+postgres_source        = "external"
+postgres_username      = "langsmith"
+postgres_instance_type = "db.r6g.xlarge"   # 4 vCPU, 32 GB — production grade
+postgres_storage_gb    = 50
+postgres_max_storage_gb = 500
+
+# Deletion protection ON — must set false before `terraform destroy`.
+postgres_deletion_protection = true
+
+# IAM auth for no-password pod→RDS connections.
+postgres_iam_database_authentication_enabled = true
+
+redis_source        = "external"
+redis_instance_type = "cache.m6g.xlarge"   # 4 vCPU, 13 GB — production grade
+
+#------------------------------------------------------------------------------
+# ClickHouse — in-cluster unless you have ClickHouse Cloud
+#------------------------------------------------------------------------------
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# TLS — staged deploy: start HTTP, delegate DNS, flip to HTTPS
+#------------------------------------------------------------------------------
+# Step 1: Deploy with "none" to get infrastructure up immediately.
+# Step 2: Delegate DNS (terraform output dns_name_servers → your registrar).
+# Step 3: Change to "acm" after ACM cert shows ISSUED, then terraform apply.
+tls_certificate_source = "none"
+langsmith_domain       = "langsmith.example.com"   # ← change to your domain
+
+#------------------------------------------------------------------------------
+# Storage
+#------------------------------------------------------------------------------
+s3_ttl_enabled    = true
+s3_ttl_short_days = 14
+s3_ttl_long_days  = 400    # ~13 months
+
+#------------------------------------------------------------------------------
+# Security add-ons — recommended for production
+#------------------------------------------------------------------------------
+alb_access_logs_enabled = true
+
+# Enable CloudTrail ONLY if your org doesn't already have an account-level trail.
+# Check: aws cloudtrail describe-trails --query 'trailList[*].Name'
+create_cloudtrail             = false
+cloudtrail_multi_region       = true
+cloudtrail_log_retention_days = 365
+
+# WAF — OWASP Top 10, IP reputation, known bad inputs. ~$8-10/mo.
+create_waf = true

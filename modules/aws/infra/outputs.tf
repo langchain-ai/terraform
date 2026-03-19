@@ -131,11 +131,6 @@ output "alb_dns_name" {
   value       = module.alb.alb_dns_name
 }
 
-output "acm_certificate_arn" {
-  description = "ACM certificate ARN attached to the ALB (empty when tls_certificate_source != acm)"
-  value       = var.acm_certificate_arn
-}
-
 output "langsmith_url" {
   description = "LangSmith application URL. Uses custom domain if langsmith_domain is set, otherwise falls back to the ALB DNS name."
   value       = var.tls_certificate_source == "none" ? "http://${module.alb.alb_dns_name}" : (var.langsmith_domain != "" ? "https://${var.langsmith_domain}" : "https://${module.alb.alb_dns_name}")
@@ -170,6 +165,24 @@ output "langsmith_namespace" {
 output "tls_certificate_source" {
   description = "TLS certificate source: acm, letsencrypt, or none"
   value       = var.tls_certificate_source
+}
+
+#------------------------------------------------------------------------------
+# DNS / ACM (auto-provisioned)
+#------------------------------------------------------------------------------
+output "dns_name_servers" {
+  description = "Route 53 NS records — delegate these from your registrar to enable your custom domain and ACM certificate validation"
+  value       = local.dns_enabled ? module.dns[0].name_servers : []
+}
+
+output "dns_zone_id" {
+  description = "Route 53 hosted zone ID (null when dns module is not used)"
+  value       = local.dns_enabled ? module.dns[0].zone_id : null
+}
+
+output "acm_certificate_arn" {
+  description = "ACM certificate ARN (from dns module or provided directly)"
+  value       = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled ? module.dns[0].certificate_arn : null)
 }
 
 #------------------------------------------------------------------------------
@@ -209,12 +222,38 @@ output "next_steps" {
     - PostgreSQL:   ${var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"}
     - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
     - S3 Bucket:    ${local.bucket_name}
-    - ALB:          ${module.alb.alb_dns_name}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
+    - ALB:          ${module.alb.alb_dns_name}
+    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (Route 53 + ACM auto-provisioned)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
 
     Next Steps:
 
     1. Update kubeconfig:
        aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.region}
+${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
+
+    2. DELEGATE DNS — required before enabling HTTPS
+       Terraform created a Route 53 hosted zone for ${var.langsmith_domain}.
+       Add NS records at your registrar (or parent zone) pointing to:
+
+         terraform output dns_name_servers
+
+       Once delegated, the ACM certificate validates automatically (~5-30 min).
+       You can check certificate status in the AWS Console under Certificate Manager.
+
+    3. ENABLE HTTPS — after NS delegation is complete
+       In terraform.tfvars, change:
+         tls_certificate_source = "acm"
+       Then run: terraform apply
+       This adds the HTTPS listener to the ALB and redirects HTTP → HTTPS.
+
+    4. Run the Helm deployment:
+       cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh
+
+    5. Access LangSmith:
+       http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
+
+DNS
+: local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
 
     2. Deploy LangSmith (pick one):
 
@@ -227,14 +266,22 @@ output "next_steps" {
          cd terraform/aws
          make init-app
          cp app/terraform.tfvars.example app/terraform.tfvars
-         # Edit app/terraform.tfvars (set admin_email, sizing, features)
          make plan-app
          make apply-app
 
-    3. Configure DNS:
-       Point your domain to: ${module.alb.alb_dns_name}
+    3. Access LangSmith:
+       https://${var.langsmith_domain}
 
-    4. Access LangSmith:
-       ${var.tls_certificate_source == "none" ? "http://${module.alb.alb_dns_name}" : "https://YOUR_DOMAIN"}
+ACMDONE
+: <<-NODNS
+
+    2. Run the Helm deployment:
+       cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh
+
+    3. Access LangSmith:
+       ${var.tls_certificate_source == "none" ? "http://${module.alb.alb_dns_name}" : (var.langsmith_domain != "" ? "https://${var.langsmith_domain}" : "https://${module.alb.alb_dns_name}")}
+
+NODNS
+}
   EOT
 }

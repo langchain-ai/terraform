@@ -250,6 +250,12 @@ variable "alb_scheme" {
   }
 }
 
+variable "alb_allowed_cidr_blocks" {
+  type        = list(string)
+  description = "CIDR blocks allowed to reach the ALB on HTTP/HTTPS. Defaults to open. Restrict to VPN/office CIDRs for internal or limited-access deployments."
+  default     = ["0.0.0.0/0"]
+}
+
 variable "alb_access_logs_enabled" {
   type        = bool
   description = "Enable ALB access logging to a dedicated S3 bucket. Useful for traffic analysis and compliance."
@@ -439,7 +445,7 @@ variable "letsencrypt_email" {
 
 variable "langsmith_domain" {
   type        = string
-  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in outputs and DNS instructions. Leave empty to use the ALB DNS name directly."
+  description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set (and acm_certificate_arn is empty), activates the dns module to auto-provision a Route 53 hosted zone, ACM certificate, and alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
   default     = ""
 }
 

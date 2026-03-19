@@ -16,7 +16,14 @@ variable "existing_zone_id" {
 }
 
 variable "create_certificate" {
-  description = "Whether to create and validate an ACM certificate for the domain"
+  description = "Whether to create an ACM certificate and DNS validation records for the domain"
   type        = bool
   default     = true
 }
+
+variable "wait_for_validation" {
+  description = "Whether to block until ACM certificate validation completes. Set false to create the cert and validation records without waiting (useful for staged deploys where NS delegation hasn't happened yet)."
+  type        = bool
+  default     = true
+}
+

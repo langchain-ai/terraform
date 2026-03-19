@@ -1,4 +1,5 @@
 # cloudtrail: Provisions a CloudTrail trail logging all AWS API calls to S3.
+# https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-user-guide.html
 # Opt-in — set create_cloudtrail = true in terraform.tfvars.
 #
 # Note: Enterprise customers often have an org-level CloudTrail already.

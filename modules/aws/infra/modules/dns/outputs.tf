@@ -9,6 +9,10 @@ output "name_servers" {
 }
 
 output "certificate_arn" {
-  description = "ARN of the ACM certificate (empty string if create_certificate = false)"
-  value       = var.create_certificate ? aws_acm_certificate.langsmith[0].arn : ""
+  description = "ACM certificate ARN. When wait_for_validation = true, blocks until DNS validation completes. Empty string if create_certificate = false."
+  value = (
+    !var.create_certificate ? "" :
+    var.wait_for_validation ? aws_acm_certificate_validation.langsmith[0].certificate_arn :
+    aws_acm_certificate.langsmith[0].arn
+  )
 }

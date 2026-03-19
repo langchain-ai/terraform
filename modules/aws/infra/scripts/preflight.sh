@@ -50,9 +50,30 @@ error()   { printf "${RED}[ERROR]${NC}   %s\n" "$1"; }
 
 check_denied() { echo "$1" | grep -Eqi "$DENY_RE"; }
 
-# ── AWS CLI ───────────────────────────────────────────────────────────────────
-if ! command -v aws &>/dev/null; then
-  error "AWS CLI is not installed."
+# ── Required tools ────────────────────────────────────────────────────────────
+REQUIRED_TOOLS=(aws terraform kubectl helm)
+MISSING=()
+for tool in "${REQUIRED_TOOLS[@]}"; do
+  if ! command -v "$tool" &>/dev/null; then
+    MISSING+=("$tool")
+  fi
+done
+
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  error "Missing required tools: ${MISSING[*]}"
+  info "Install guide:"
+  info "  terraform  → https://developer.hashicorp.com/terraform/install"
+  info "  aws        → https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+  info "  kubectl    → https://kubernetes.io/docs/tasks/tools/"
+  info "  helm       → https://helm.sh/docs/intro/install/"
+  exit 1
+fi
+
+# Verify minimum versions
+TF_VERSION=$(terraform version -json 2>/dev/null | grep -o '"terraform_version":"[^"]*"' | cut -d'"' -f4 || terraform version | head -1 | grep -oE '[0-9]+\.[0-9]+')
+AWS_VERSION=$(aws --version 2>&1 | grep -oE 'aws-cli/[0-9]+' | cut -d/ -f2)
+if [[ -n "$AWS_VERSION" && "$AWS_VERSION" -lt 2 ]]; then
+  error "AWS CLI v2 required (found v${AWS_VERSION}). Upgrade: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
   exit 1
 fi
 
@@ -60,6 +81,22 @@ printf "\n"
 info "=== LangSmith AWS Preflight (Pass 1 — pre-Terraform) ==="
 info "Default mode: READ-ONLY. Use --create-test-resources to test resource creation."
 printf "\n"
+
+success "Required tools: $(printf '%s ' "${REQUIRED_TOOLS[@]}")"
+[[ -n "${TF_VERSION:-}" ]] && info "Terraform version: $TF_VERSION"
+
+# ── terraform.tfvars check ────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TFVARS="$SCRIPT_DIR/../terraform.tfvars"
+if [[ ! -f "$TFVARS" ]]; then
+  error "terraform.tfvars not found at $TFVARS"
+  info "Quick start:"
+  info "  cp terraform.tfvars.dev terraform.tfvars      # dev profile"
+  info "  cp terraform.tfvars.prod terraform.tfvars     # prod profile"
+  info "  cp terraform.tfvars.example terraform.tfvars  # full reference"
+  exit 1
+fi
+success "terraform.tfvars found"
 
 # ── Credentials ───────────────────────────────────────────────────────────────
 info "Checking AWS credentials..."
