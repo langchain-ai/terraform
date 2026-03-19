@@ -292,6 +292,15 @@ module "bastion" {
   depends_on = [module.vpc, module.eks]
 }
 
+# The ALB controller (installed by EKS blueprints) registers a mutating webhook
+# that intercepts Service creation. Its pods need time to become ready after the
+# EKS module completes. Without this delay, k8s-bootstrap Helm releases (ESO,
+# KEDA) fail with "no endpoints available for service aws-load-balancer-webhook-service".
+resource "time_sleep" "wait_for_alb_webhook" {
+  depends_on      = [module.eks]
+  create_duration = "30s"
+}
+
 module "k8s_bootstrap" {
   source = "./modules/k8s-bootstrap"
 
@@ -305,5 +314,5 @@ module "k8s_bootstrap" {
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
 
-  depends_on = [module.eks]
+  depends_on = [time_sleep.wait_for_alb_webhook]
 }

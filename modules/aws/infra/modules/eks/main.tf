@@ -14,7 +14,11 @@ module "eks" {
 
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
 
-  eks_managed_node_groups = var.eks_managed_node_groups
+  eks_managed_node_groups = {
+    for k, v in var.eks_managed_node_groups : k => merge(v, {
+      desired_size = coalesce(v.desired_size, v.min_size)
+    })
+  }
 
   tags = var.tags
 }
