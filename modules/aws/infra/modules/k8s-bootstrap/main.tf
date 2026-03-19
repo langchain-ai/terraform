@@ -98,31 +98,38 @@ resource "helm_release" "external_secrets" {
 }
 
 
-resource "kubernetes_manifest" "letsencrypt_cluster_issuer" {
+# ClusterIssuer for Let's Encrypt — applied via kubectl to avoid the
+# kubernetes_manifest plan-time CRD validation issue. On a fresh cluster,
+# cert-manager CRDs don't exist until apply, so kubernetes_manifest fails
+# at plan time. terraform_data + local-exec defers the apply to after
+# cert-manager is installed.
+resource "terraform_data" "letsencrypt_cluster_issuer" {
   count = var.tls_certificate_source == "letsencrypt" ? 1 : 0
 
-  manifest = {
-    apiVersion = "cert-manager.io/v1"
-    kind       = "ClusterIssuer"
-    metadata = {
-      name = "letsencrypt-prod"
-    }
-    spec = {
-      acme = {
-        server = "https://acme-v02.api.letsencrypt.org/directory"
-        email  = var.letsencrypt_email
-        privateKeySecretRef = {
-          name = "letsencrypt-prod"
-        }
-        solvers = [{
-          http01 = {
-            ingress = {
-              ingressClassName = "alb"
-            }
-          }
-        }]
-      }
-    }
+  triggers_replace = [
+    var.letsencrypt_email,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${var.letsencrypt_email}
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          ingressClassName: alb
+MANIFEST
+    EOT
   }
 
   depends_on = [helm_release.cert_manager]

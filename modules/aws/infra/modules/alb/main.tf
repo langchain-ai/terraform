@@ -13,6 +13,7 @@ terraform {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_elb_service_account" "current" {}
 
 # ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
 # Created only when access_logs_enabled = true.
@@ -43,6 +44,12 @@ resource "aws_s3_bucket_policy" "access_logs" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { AWS = data.aws_elb_service_account.current.arn }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.access_logs[0].arn}/${var.access_logs_prefix}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+      },
       {
         Effect    = "Allow"
         Principal = { Service = "logdelivery.elasticloadbalancing.amazonaws.com" }

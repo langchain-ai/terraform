@@ -182,7 +182,7 @@ resource "kubernetes_secret" "clickhouse" {
 # ── Helm Release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "langsmith" {
-  depends_on = [kubernetes_manifest.external_secret]
+  depends_on = [kubernetes_manifest.external_secret, kubernetes_secret.clickhouse]
 
   name             = var.release_name
   namespace        = local.namespace
