@@ -121,16 +121,11 @@ if [[ "$_release_status" == "pending-upgrade" ]]; then
   echo ""
 fi
 
-# Server-side apply + force-conflicts: the LangSmith operator manages resources
-# (agent deployment pods, langsmith-ksa SA) outside of Helm's ownership, causing
-# field manager conflicts on upgrade. --force-conflicts lets Helm reclaim fields.
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   "${VALUES_ARGS[@]}" \
-  --server-side true \
-  --force-conflicts \
   --wait \
   --timeout 20m
 
@@ -184,8 +179,6 @@ if [[ -n "$ALB_HOST" ]]; then
       --namespace "$NAMESPACE" \
       ${CHART_VERSION:+--version "$CHART_VERSION"} \
       "${VALUES_ARGS[@]}" \
-      --server-side true \
-      --force-conflicts \
       --wait \
       --timeout 20m
     echo ""

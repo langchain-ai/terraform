@@ -33,7 +33,6 @@ locals {
   # Ingress annotations — base set, then conditionals for TLS and pre-provisioned ALB
   ingress_annotations = merge(
     {
-      "kubernetes.io/ingress.class"            = "alb"
       "alb.ingress.kubernetes.io/scheme"       = var.alb_scheme
       "alb.ingress.kubernetes.io/target-type"  = "ip"
       "alb.ingress.kubernetes.io/listen-ports" = local.tls_certificate_source == "none" ? "[{\"HTTP\": 80}]" : "[{\"HTTP\": 80}, {\"HTTPS\": 443}]"

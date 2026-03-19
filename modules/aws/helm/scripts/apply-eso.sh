@@ -54,7 +54,7 @@ fi
 echo "Configuring External Secrets Operator..."
 
 kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ClusterSecretStore
 metadata:
   name: langsmith-ssm
@@ -68,7 +68,7 @@ EOF
 # ── Apply ExternalSecret ─────────────────────────────────────────────────────
 # Dynamically includes optional encryption keys only if the SSM parameter exists.
 kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
+apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: langsmith-config
