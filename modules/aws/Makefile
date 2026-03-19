@@ -97,6 +97,6 @@ destroy-app: ## terraform destroy (app)
 
 deploy-all: apply init-values deploy ## Full deploy: infra apply → init-values → helm deploy
 
-deploy-all-tf: apply init-app ## Full deploy via Terraform: infra apply → app init+apply
+deploy-all-tf: apply init-values init-app ## Full deploy via Terraform: infra apply → init-values → app init+apply
 	terraform -chdir=$(APP_DIR) init -input=false
 	terraform -chdir=$(APP_DIR) apply

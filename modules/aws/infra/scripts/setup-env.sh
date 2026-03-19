@@ -72,21 +72,26 @@ done
 # special characters in passwords ($, !, backticks, etc.) that break --value.
 _ssm_put_safe() {
   local _path="$1" _val="$2"
-  local _tmpval _tmpjson
-  _tmpval="$(mktemp)"  || return 1
-  _tmpjson="$(mktemp)" || { rm -f "$_tmpval"; return 1; }
-  printf '%s' "$_val" > "$_tmpval"
-  python3 -c "
-import json, sys
-v = open(sys.argv[1]).read()
-json.dump({'Name':sys.argv[2],'Value':v,'Type':'SecureString','Overwrite':True}, open(sys.argv[3],'w'))
-" "$_tmpval" "$_path" "$_tmpjson"
+  local _tmpjson
+  _tmpjson="$(mktemp)" || return 1
+
+  if command -v jq &>/dev/null; then
+    jq -n --arg name "$_path" --arg val "$_val" \
+      '{Name: $name, Value: $val, Type: "SecureString", Overwrite: true}' > "$_tmpjson"
+  else
+    # Pure bash fallback — escape JSON special characters in the value.
+    local _escaped_val
+    _escaped_val=$(printf '%s' "$_val" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g')
+    printf '{"Name":"%s","Value":"%s","Type":"SecureString","Overwrite":true}\n' \
+      "$_path" "$_escaped_val" > "$_tmpjson"
+  fi
+
   local _rc=0
   aws ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${_tmpjson}" \
     --output text >/dev/null 2>&1 || _rc=$?
-  rm -f "$_tmpval" "$_tmpjson"
+  rm -f "$_tmpjson"
   return $_rc
 }
 
@@ -244,7 +249,7 @@ fi
 # Auto-generated and stored in SSM on first run. Only created when the user
 # opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
-_fernet_gen='openssl rand -base64 32 | tr -d "\n"'
+_fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
 _ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
   "$_fernet_gen" "" "true"
