@@ -122,6 +122,10 @@ resource "aws_lb" "this" {
     }
   }
 
+  # AWS validates the bucket policy when enabling access logs — the policy must
+  # exist before the ALB attribute is modified, not just the bucket.
+  depends_on = [aws_s3_bucket_policy.access_logs]
+
   tags = var.tags
 }
 
