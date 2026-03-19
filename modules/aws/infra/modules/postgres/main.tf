@@ -49,7 +49,7 @@ resource "aws_db_instance" "this" {
   iam_database_authentication_enabled = var.iam_database_authentication_enabled
   # Uncomment before running terraform destroy — without this, destroy fails with:
   # "final_snapshot_identifier is required when skip_final_snapshot is false"
-  # skip_final_snapshot = true
+  skip_final_snapshot = true
 
   # Prevents terraform from trying to downsize a database that scaled up automatically.
   # To manually increase the storage, you can use the AWS console.
