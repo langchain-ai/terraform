@@ -280,6 +280,10 @@ aws wafv2 get-web-acl-for-resource --region "$REGION" \
 | `moved` block warnings | `Warning: Moved block still exists` | Safe to ignore — blocks kept for state migration compatibility |
 | `gp2` StorageClass still default | `kubectl get sc` shows `gp2 (default)` | Patch it: `kubectl patch sc gp2 -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'` |
 | IRSA trust policy error | `AssumeRoleWithWebIdentity` denied | Verify `langsmith_namespace` in tfvars matches the K8s namespace; IRSA trust is scoped to `system:serviceaccount:<namespace>:*` |
+| ALB webhook not ready | `failed calling webhook "mservice.elbv2.k8s.aws": no endpoints available for service "aws-load-balancer-webhook-service"` during ESO/KEDA Helm install | The ALB controller mutating webhook intercepts Service creation but its pods aren't ready yet. **Fixed**: a `time_sleep` (30s) between the EKS module and k8s-bootstrap gives the webhook time to become available. If you still hit this on a slow cluster, re-run `terraform apply`. |
+| KMS alias already exists | `AlreadyExistsException: An alias with the name alias/eks/<name>-eks already exists` | Orphaned from a prior incomplete destroy. Import it: `terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' 'alias/eks/<name>-eks'` then re-apply |
+| Node group `minSize > desiredSize` | `InvalidParameterException: minSize can't be greater than desiredSize` | **Fixed**: `desired_size` now defaults to `min_size` when omitted from `eks_managed_node_groups`. If using an older version, add `desired_size` to your tfvars node group config. |
+| `setup-env.sh` hangs in non-interactive shell | Script blocks on `read` when stdin is not a terminal (CI, piped, redirected) | **Fixed**: script now detects non-interactive shell via `[[ -t 0 ]]` and fails fast with instructions to pre-export env vars or populate SSM directly |
 
 ---
 

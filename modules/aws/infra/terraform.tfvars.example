@@ -106,6 +106,7 @@ postgres_source = "external"
 
 # Configuration for external PostgreSQL (RDS) — ignored if postgres_source = "in-cluster"
 postgres_username       = "langsmith"
+postgres_engine_version = "16"            # PG 14 reaches EOL Nov 2026; 16 recommended
 postgres_instance_type  = "db.t3.large"   # 2 vCPU, 8 GB RAM
 postgres_storage_gb     = 20
 postgres_max_storage_gb = 100

@@ -68,7 +68,7 @@ kubectl edit configmap aws-auth -n kube-system
 
 **Symptom:** `kubectl get ingress -n langsmith` shows no ADDRESS after several minutes.
 
-**Cause:** AWS Load Balancer Controller is not running or lacks the required IRSA permissions, or the Terraform-provisioned ALB is not being referenced correctly.
+**Cause:** AWS Load Balancer Controller is not running or lacks the required IRSA permissions, the Terraform-provisioned ALB is not being referenced correctly, or `alb_scheme = "internal"` is set (internal ALBs won't have a public address — see Issue #14).
 
 **Fix:**
 
@@ -227,7 +227,138 @@ terraform destroy
 
 ---
 
+### Issue #10 — ESO fails to sync: langsmith-config secret missing
+
+**Symptom:** Pods stuck in `CreateContainerConfigError`. No `langsmith-config` K8s secret exists:
+```
+kubectl get secret langsmith-config -n langsmith
+# Error from server (NotFound): secrets "langsmith-config" not found
+```
+
+**Cause:** ESO sync is all-or-nothing. If **any single** SSM parameter referenced by the ExternalSecret is missing, ESO refuses to create the K8s secret — all pods fail, not just the feature that needs the missing param.
+
+**Fix:**
+
+```bash
+# Check ExternalSecret status
+kubectl get externalsecret langsmith-config -n langsmith
+kubectl describe externalsecret langsmith-config -n langsmith
+
+# Validate all required SSM parameters exist
+./infra/scripts/manage-ssm.sh validate
+
+# If params are missing, re-run setup-env.sh (from aws/ directory)
+source ./infra/scripts/setup-env.sh
+
+# Re-apply ESO resources
+./helm/scripts/apply-eso.sh
+```
+
+The `describe` output shows which specific `remoteRef.key` failed — match it against the SSM prefix (`/langsmith/{name_prefix}-{environment}/`).
+
+---
+
+### Issue #11 — SSM parameter prefix mismatch
+
+**Symptom:** `manage-ssm.sh validate` passes, but ESO still can't sync. Or `setup-env.sh` wrote params under a different prefix than ESO expects.
+
+**Cause:** The SSM prefix is derived from `name_prefix` and `environment` in `terraform.tfvars`. If these changed after initial setup, the old params live under the old prefix and ESO looks under the new one.
+
+**Fix:**
+
+```bash
+# Check what prefix ESO is using
+kubectl get externalsecret langsmith-config -n langsmith -o yaml | grep 'key:'
+
+# List what's actually in SSM
+./infra/scripts/manage-ssm.sh list
+
+# If prefixes diverged, migrate params
+./infra/scripts/migrate-ssm.sh
+```
+
+**Prevention:** Never change `name_prefix` or `environment` on an existing deployment.
+
+---
+
+### Issue #12 — Postgres password rejected by Terraform validation
+
+**Symptom:**
+```
+Error: Invalid value for variable "postgres_password"
+RDS master password must not contain '/', '@', '"', single quotes, or spaces.
+```
+
+**Cause:** The password contains characters that RDS does not allow in the master password.
+
+**Fix:** Re-generate the password without restricted characters:
+
+```bash
+# If using setup-env.sh, it auto-generates a compliant password.
+# To manually update an existing password in SSM:
+./infra/scripts/manage-ssm.sh set postgres-password "$(openssl rand -base64 24 | tr -d '/+= ')"
+```
+
+Then re-export and apply:
+```bash
+source ./infra/scripts/setup-env.sh
+terraform apply -var-file=terraform.tfvars
+```
+
+---
+
+### Issue #13 — Private EKS cluster unreachable (bastion required)
+
+**Symptom:** `kubectl` and `terraform apply` timeout when `enable_public_eks_cluster = false`.
+
+**Cause:** The EKS API endpoint is private-only. You must run commands from within the VPC — either via the bastion host or a VPN connection.
+
+**Fix:**
+
+```bash
+# If bastion was provisioned (create_bastion = true):
+aws ssm start-session --target <bastion-instance-id>
+
+# From the bastion, update kubeconfig and proceed normally:
+aws eks update-kubeconfig --region <region> --name <cluster-name>
+kubectl get nodes
+```
+
+If the bastion wasn't provisioned, either set `create_bastion = true` and re-apply, or temporarily set `enable_public_eks_cluster = true`.
+
+---
+
+### Issue #14 — ALB has no public address (internal scheme)
+
+**Symptom:** `kubectl get ingress -n langsmith` shows an ADDRESS, but the hostname resolves only within the VPC. Browser access from outside the network fails.
+
+**Cause:** `alb_scheme = "internal"` was set in `terraform.tfvars`. Internal ALBs are only reachable from within the VPC (via VPN, peering, or PrivateLink).
+
+**Fix:** This is intentional for private deployments. To make it publicly reachable:
+
+```hcl
+# terraform.tfvars
+alb_scheme = "internet-facing"
+```
+
+```bash
+terraform apply -var-file=terraform.tfvars
+# Then redeploy Helm to pick up the new ALB
+```
+
+---
+
 ## Diagnostic Commands
+
+> **Quick start:** Before running individual commands, try the automated diagnostics:
+> ```bash
+> # Deployment status and next-step guidance
+> ./infra/scripts/status.sh
+> make status              # equivalent
+>
+> # SSM parameter validation
+> ./infra/scripts/manage-ssm.sh validate
+> ```
 
 ### Cluster access
 
@@ -264,6 +395,17 @@ kubectl get certificate -n langsmith
 kubectl describe certificate <cert-name> -n langsmith
 kubectl get challenges -n langsmith
 kubectl get clusterissuer
+```
+
+### ESO and secrets
+
+```bash
+kubectl get externalsecret -n langsmith
+kubectl describe externalsecret langsmith-config -n langsmith
+kubectl get clustersecretstore langsmith-ssm
+kubectl get secret langsmith-config -n langsmith -o jsonpath='{.data}' | jq 'keys'
+./infra/scripts/manage-ssm.sh validate
+./infra/scripts/manage-ssm.sh diff
 ```
 
 ### Helm
