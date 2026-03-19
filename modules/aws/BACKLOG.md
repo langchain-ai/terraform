@@ -91,3 +91,24 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 - [ ] **No tagging strategy** — tags inconsistent across modules; needed for cost allocation and compliance
 - [ ] **No `terraform.tfvars` validation** — add variable validation blocks for region format, instance types, etc.
 
+---
+
+## Testing
+
+### Shell Scripts
+
+- [ ] **Add ShellCheck to CI** — run `shellcheck scripts/*.sh` on all shell scripts; fix existing warnings
+- [ ] **Add Bats test suite for `setup-env.sh`** — cover: SSM write paths, auto-generation of `api_key_salt`/`jwt_secret`, `TF_VAR_*` export validation, idempotent re-runs, error on missing AWS credentials
+- [ ] **Add Bats tests for `deploy.sh`** — cover: two-pass ALB hostname flow, ESO manifest apply, Helm upgrade invocation, values file generation
+- [ ] **Add Bats tests for `manage-ssm.sh`** — cover: get/set/list/delete subcommands, prefix validation, missing-param error handling
+- [ ] **Add Bats tests for `quickstart.sh`** — cover: input validation (reject `"`), tfvars generation, end-to-end non-interactive mode
+- [ ] **Mock AWS CLI in Bats** — create `test/helpers/` with stub `aws` function returning canned SSM/STS responses; no real AWS calls in unit tests
+
+### Terraform Modules
+
+- [ ] **Add `terraform validate` + `tflint` CI step** — run against each module directory; add `.tflint.hcl` with AWS ruleset
+- [ ] **Add native `terraform test` files for pure-logic modules** — start with `modules/vpc` (CIDR outputs), `modules/storage` (bucket naming, policy), `modules/secrets` (parameter paths); use `command = plan` to avoid real provisioning
+- [ ] **Add Terratest integration suite** — Go tests that `apply`/`destroy` a minimal deployment (single-AZ, smallest instance types); validate: VPC connectivity, EKS cluster reachable, RDS accepts connections, S3 bucket accessible via IRSA
+- [ ] **Add plan-level snapshot tests** — `terraform plan -out=plan.tfplan && terraform show -json plan.tfplan` diffed against a baseline; catches unintended resource changes on module edits
+- [ ] **Document test strategy in `TESTING.md`** — which tests run locally vs CI, prerequisites (AWS sandbox account), how to add a test for a new module
+
