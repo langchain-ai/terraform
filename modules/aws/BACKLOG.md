@@ -22,6 +22,10 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 
 ### Medium
 
+- [ ] **`setup-env.sh`: temp files with plaintext secrets have default permissions** — `mktemp` creates files as 644 on macOS; if interrupted (Ctrl+C), temp files containing secrets are left in `/tmp` world-readable. Fix: `chmod 600` immediately after creation + `trap 'rm -f "$_tmpval" "$_tmpjson"' RETURN` (`setup-env.sh:76`)
+- [ ] **`manage-ssm.sh`: SSM delete swallows stderr** — `2>/dev/null` on `aws ssm delete-parameter` hides IAM, network, and throttling errors; user sees only "not found or could not be deleted". Fix: capture stderr and surface it (`manage-ssm.sh:236`)
+- [ ] **`manage-ssm.sh`: secret value passed via CLI arg** — `--value "$val"` is visible in `ps aux` / `/proc/<pid>/cmdline`. `setup-env.sh` avoids this via `_ssm_put_safe` (JSON temp file). Fix: extract `_ssm_put_safe` to `_common.sh` and use it in `cmd_set` (`manage-ssm.sh:198`)
+- [ ] **`quickstart.sh`: input validation doesn't reject double-quote** — a user value containing `"` produces malformed HCL like `name_prefix = "my"value"`. Fix: add `"` to the rejection regex in `_ask` (`quickstart.sh:35`)
 - [ ] **No pod security standards on `langsmith` namespace** — add `pod-security.kubernetes.io/enforce: baseline` label (`modules/k8s-bootstrap/main.tf`)
 - [ ] **No Kubernetes network policies** — east-west traffic is unrestricted
 - [ ] **EKS envelope encryption not enabled** — encrypt etcd secrets at rest via `encryption_config`
