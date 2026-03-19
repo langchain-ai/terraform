@@ -258,6 +258,7 @@ module "cloudtrail" {
   bucket_name           = "${local.base_name}-cloudtrail-logs"
   is_multi_region_trail = var.cloudtrail_multi_region
   log_retention_days    = var.cloudtrail_log_retention_days
+  force_destroy         = true
   tags                  = local.common_tags
 }
 
