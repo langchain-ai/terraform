@@ -25,8 +25,9 @@ _ssm_key_exists() {
   if echo "$_err" | grep -q "ParameterNotFound"; then
     return 1
   fi
-  echo "WARNING: SSM check for $1 failed: $_err" >&2
-  return 1
+  echo "ERROR: SSM check for $1 failed unexpectedly: $_err" >&2
+  echo "       Fix the underlying issue (expired credentials, network, IAM) before continuing." >&2
+  exit 1
 }
 
 NAMESPACE="${NAMESPACE:-langsmith}"

@@ -268,7 +268,7 @@ else
 fi
 
 # Report addon files
-for addon in ha dev agent-deploys agent-builder insights; do
+for addon in sizing-ha sizing-light agent-deploys agent-builder insights; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
   if [[ -f "$f" ]]; then
     pass "langsmith-values-${addon}.yaml (addon)"
@@ -438,7 +438,7 @@ fi
 header "Next Step"
 
 if [[ -n "$NEXT_ACTION" ]]; then
-  printf "\n  ${YELLOW}▶${RESET}  ${BOLD}%s${RESET}\n\n" "$NEXT_ACTION"
+  printf "\n  $(_yellow "▶")  $(_bold "%s")\n\n" "$NEXT_ACTION"
 else
-  printf "\n  ${GREEN}✔${RESET}  ${BOLD}All checks passed — deployment looks healthy${RESET}\n\n"
+  printf "\n  $(_green "✔")  $(_bold "All checks passed — deployment looks healthy")\n\n"
 fi

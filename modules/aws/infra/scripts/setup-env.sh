@@ -149,7 +149,16 @@ _ssm_secret() {
   # 3. Prompt or generate if still empty
   if [[ -z "$val" ]]; then
     if [[ -n "$generator" ]]; then
-      val=$(eval "$generator")
+      val=$(eval "$generator") || {
+        echo "ERROR: Secret generator failed for $varname." >&2
+        echo "       Command: $generator" >&2
+        echo "       Ensure required tools are installed (e.g. python3, openssl, cryptography)." >&2
+        return 1
+      }
+      if [[ -z "$val" ]]; then
+        echo "ERROR: Secret generator for $varname produced empty output." >&2
+        return 1
+      fi
     elif [[ "$silent" == "true" ]]; then
       printf "%s: " "$prompt_text"
       read -rs val
@@ -157,6 +166,12 @@ _ssm_secret() {
     else
       printf "%s: " "$prompt_text"
       read -r val
+    fi
+
+    # Guard against empty input (e.g. non-interactive shell)
+    if [[ -z "$val" ]]; then
+      echo "  ERROR: No value provided for $varname — skipping." >&2
+      return 1
     fi
 
     # Store in SSM; fall back to local file if SSM is not yet reachable
