@@ -208,7 +208,7 @@ output "next_steps" {
 
     2. Run the Helm deployment:
        cd ../helm
-       source ../infra/setup-env.sh --deploy
+       source ../infra/scripts/setup-env.sh --deploy
        ./scripts/deploy.sh
 
     3. Configure DNS:

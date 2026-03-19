@@ -1,15 +1,15 @@
 # LangSmith AWS Deployment — Task Runner
 #
-# Pass 1 (infra):  make init → make plan → make apply
-# Pass 2 (helm):   make init-overrides → make deploy
+# First time?      make quickstart
+# Pass 1 (infra):  make setup-env → make init → make plan → make apply
+# Pass 2 (helm):   make init-values → make deploy
 # Pass 2 (tf):     make init-app → make plan-app → make apply-app
 # Full deploy:     make deploy-all
-#
-# Note: `make setup` cannot source setup-env.sh into your shell.
-#       Run `source infra/setup-env.sh` directly instead.
+# Where am I?      make status
 
-.PHONY: help status setup init plan apply preflight kubeconfig ssm \
-        init-overrides deploy uninstall deploy-all deploy-all-tf \
+.PHONY: help quickstart status status-quick setup-env init plan apply \
+        preflight kubeconfig ssm \
+        init-values deploy apply-eso uninstall deploy-all deploy-all-tf \
         init-app plan-app apply-app destroy-app
 
 INFRA_DIR := infra
@@ -26,14 +26,24 @@ status: ## Check deployment state and show what to run next
 status-quick: ## Quick status check (skip SSM and K8s queries)
 	$(INFRA_DIR)/scripts/status.sh --quick
 
+quickstart: ## Interactive setup wizard — generates terraform.tfvars
+	$(INFRA_DIR)/scripts/quickstart.sh
+
 # ── Pass 1: Infrastructure ────────────────────────────────────────────────────
 
-setup: ## Remind how to source setup-env.sh (must be sourced, not run via Make)
+setup-env: ## Set up secrets in SSM (prints the source command you need to run)
 	@echo ""
-	@echo "  Cannot run setup-env.sh via Make — it must export vars into your shell."
-	@echo ""
-	@echo "  Run directly:"
-	@echo "    source $(INFRA_DIR)/setup-env.sh"
+	@if [ -n "$$TF_VAR_langsmith_api_key_salt" ]; then \
+		echo "  \033[32m✔\033[0m  Environment already configured (TF_VAR_* vars are set)."; \
+		echo "     To re-run: unset TF_VAR_langsmith_api_key_salt && source $(INFRA_DIR)/scripts/setup-env.sh"; \
+	else \
+		echo "  \033[1msetup-env.sh must be sourced so it can export variables into your shell.\033[0m"; \
+		echo "  Make runs commands in a subshell, so it cannot do this for you."; \
+		echo ""; \
+		echo "  Copy and run:"; \
+		echo ""; \
+		echo "    \033[36msource $(INFRA_DIR)/scripts/setup-env.sh\033[0m"; \
+	fi
 	@echo ""
 
 init: ## terraform init (infra)
@@ -56,11 +66,14 @@ ssm: ## Interactive SSM parameter manager (or: ./infra/scripts/manage-ssm.sh <cm
 
 # ── Pass 2: Helm Deployment (scripts) ────────────────────────────────────────
 
-init-overrides: ## Generate helm values-overrides.yaml from Terraform outputs
-	$(HELM_DIR)/scripts/init-overrides.sh
+init-values: ## Generate Helm values from Terraform outputs
+	$(HELM_DIR)/scripts/init-values.sh
 
 deploy: ## Deploy LangSmith via Helm
 	$(HELM_DIR)/scripts/deploy.sh
+
+apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy)
+	$(HELM_DIR)/scripts/apply-eso.sh
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
@@ -82,7 +95,7 @@ destroy-app: ## terraform destroy (app)
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
-deploy-all: apply init-overrides deploy ## Full deploy: infra apply → init-overrides → helm deploy
+deploy-all: apply init-values deploy ## Full deploy: infra apply → init-values → helm deploy
 
 deploy-all-tf: apply init-app ## Full deploy via Terraform: infra apply → app init+apply
 	terraform -chdir=$(APP_DIR) init -input=false

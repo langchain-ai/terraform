@@ -11,7 +11,7 @@
 #
 # Or use setup-env.sh which manages secrets via SSM Parameter Store:
 #
-#   source ./setup-env.sh
+#   source ./scripts/setup-env.sh
 
 #------------------------------------------------------------------------------
 # Required Variables

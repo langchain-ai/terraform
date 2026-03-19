@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# apply-eso.sh — Apply ESO ClusterSecretStore + ExternalSecret for LangSmith.
+#
+# Creates (or updates) the ESO resources that sync SSM Parameter Store secrets
+# into the langsmith-config Kubernetes Secret. Can be run standalone to re-sync
+# ESO without a full Helm redeploy.
+#
+# Usage (from aws/):
+#   ./helm/scripts/apply-eso.sh
+#
+# Reads: terraform.tfvars (name_prefix, environment, region)
+# Requires: kubectl access to the target cluster, ESO CRDs installed
+set -euo pipefail
+export AWS_PAGER=""
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INFRA_DIR="${INFRA_DIR:-$SCRIPT_DIR/../../infra}"
+source "$INFRA_DIR/scripts/_common.sh"
+
+NAMESPACE="${NAMESPACE:-langsmith}"
+
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-dev}"
+_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-us-east-2}"
+_ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
+
+if [[ -z "$_name_prefix" ]]; then
+  echo "ERROR: Could not read name_prefix from $INFRA_DIR/terraform.tfvars" >&2
+  exit 1
+fi
+
+# ── Apply ClusterSecretStore ─────────────────────────────────────────────────
+echo "Configuring External Secrets Operator..."
+
+kubectl apply -f - <<EOF
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
+metadata:
+  name: langsmith-ssm
+spec:
+  provider:
+    aws:
+      service: ParameterStore
+      region: ${_region}
+EOF
+
+# ── Apply ExternalSecret ─────────────────────────────────────────────────────
+# Dynamically includes optional encryption keys only if the SSM parameter exists.
+kubectl apply -f - <<EOF
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: langsmith-config
+  namespace: $NAMESPACE
+spec:
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: langsmith-ssm
+    kind: ClusterSecretStore
+  target:
+    name: langsmith-config
+    creationPolicy: Owner
+  data:
+    - secretKey: langsmith_license_key
+      remoteRef:
+        key: ${_ssm_prefix}/langsmith-license-key
+    - secretKey: api_key_salt
+      remoteRef:
+        key: ${_ssm_prefix}/langsmith-api-key-salt
+    - secretKey: jwt_secret
+      remoteRef:
+        key: ${_ssm_prefix}/langsmith-jwt-secret
+    - secretKey: initial_org_admin_password
+      remoteRef:
+        key: ${_ssm_prefix}/langsmith-admin-password
+$(if aws ssm get-parameter --name "${_ssm_prefix}/agent-builder-encryption-key" \
+    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<ABEOF
+    - secretKey: agent_builder_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/agent-builder-encryption-key
+ABEOF
+fi)
+$(if aws ssm get-parameter --name "${_ssm_prefix}/insights-encryption-key" \
+    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<IEOF
+    - secretKey: insights_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/insights-encryption-key
+IEOF
+fi)
+$(if aws ssm get-parameter --name "${_ssm_prefix}/deployments-encryption-key" \
+    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<DEOF
+    - secretKey: deployments_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/deployments-encryption-key
+DEOF
+fi)
+EOF
+
+# ── Wait for sync ────────────────────────────────────────────────────────────
+echo "Waiting for ESO to sync langsmith-config secret..."
+if ! kubectl wait externalsecret langsmith-config -n "$NAMESPACE" \
+    --for=condition=Ready=True --timeout=60s 2>/dev/null; then
+  echo "" >&2
+  echo "ERROR: ESO failed to sync langsmith-config from SSM within 60s." >&2
+  echo "       Diagnose with:" >&2
+  echo "         kubectl describe externalsecret langsmith-config -n $NAMESPACE" >&2
+  echo "       Common causes:" >&2
+  echo "         - SSM parameters not created: source aws/infra/scripts/setup-env.sh" >&2
+  echo "         - ESO IRSA role missing SSM permissions" >&2
+  echo "         - Wrong SSM prefix — check _name_prefix and _environment in setup-env.sh" >&2
+  exit 1
+fi
+echo "  langsmith-config secret ready."

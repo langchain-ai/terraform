@@ -42,12 +42,12 @@ resource "terraform_data" "validate_inputs" {
   lifecycle {
     precondition {
       condition     = var.postgres_source != "external" || var.postgres_password != ""
-      error_message = "postgres_password is required when postgres_source = 'external'. Run: source ./setup-env.sh, or set TF_VAR_postgres_password."
+      error_message = "postgres_password is required when postgres_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_postgres_password."
     }
 
     precondition {
       condition     = var.redis_source != "external" || (var.redis_auth_token != "" && length(var.redis_auth_token) >= 16)
-      error_message = "redis_auth_token is required (min 16 chars) when redis_source = 'external'. Run: source ./setup-env.sh, or set TF_VAR_redis_auth_token."
+      error_message = "redis_auth_token is required (min 16 chars) when redis_source = 'external'. Run: source ./scripts/setup-env.sh, or set TF_VAR_redis_auth_token."
     }
 
     precondition {

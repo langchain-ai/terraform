@@ -2,7 +2,7 @@
 # setup-env.sh — Configure Terraform variables for LangSmith on AWS
 #
 # Usage (from aws/):
-#   source ./infra/setup-env.sh
+#   source infra/scripts/setup-env.sh
 #
 # Run with `source` so exported variables persist in your shell session.
 # Do NOT commit terraform.tfvars with real passwords — use this script instead.
@@ -17,8 +17,9 @@
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced.
 export AWS_PAGER=""
 
-# Resolve script directory so this script works regardless of where it's sourced from.
-_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Resolve infra directory so this script works regardless of where it's sourced from.
+# setup-env.sh lives in infra/scripts/ but terraform.tfvars lives in infra/.
+_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # ── AWS ───────────────────────────────────────────────────────────────────────
 # Ensure AWS_PROFILE or AWS credentials are set before sourcing.
@@ -53,7 +54,7 @@ for _precheck_var in LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
   if [[ -n "$(printenv "$_precheck_var")" ]]; then
     echo "WARNING: $_precheck_var is already set in the environment."
     echo "         setup-env.sh will skip re-prompting and will NOT write to SSM for this key."
-    echo "         To rotate or re-store: unset $_precheck_var && source ./setup-env.sh"
+    echo "         To rotate or re-store: unset $_precheck_var && source infra/scripts/setup-env.sh"
     echo ""
   fi
 done
@@ -227,5 +228,5 @@ echo "  ssm_prefix        = $_ssm_prefix"
 echo ""
 echo "Next:  terraform -chdir=infra apply"
 echo "       aws eks update-kubeconfig --region $AWS_REGION --name ${_name_prefix}-${_environment}-eks"
-echo "       ./helm/scripts/init-overrides.sh"
+echo "       make init-values  (or: ./helm/scripts/init-values.sh)"
 echo "       ./helm/scripts/deploy.sh"

@@ -99,7 +99,7 @@ operator:
       memory: "512Mi"
   # Deployment template for operator-spawned agent pods.
   # IRSA: agent pods run as langsmith-ksa. That ServiceAccount must have the
-  # IRSA role annotation — init-overrides.sh writes it alongside the other
+  # IRSA role annotation — init-values.sh writes it alongside the other
   # component service accounts.
   templates:
     deployment: |

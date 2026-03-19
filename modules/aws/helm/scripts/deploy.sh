@@ -10,38 +10,36 @@
 #   5. langsmith-values-agent-builder.yaml  — Agent Builder feature (if present)
 #   6. langsmith-values-insights.yaml       — ClickHouse/Insights (if present)
 #
-# Generate the env file with: ./scripts/init-overrides.sh
+# Generate the env file with: make init-values (or ./scripts/init-values.sh)
 # Enable sizing/addons by copying: cp values/langsmith-values-<name>.yaml.example values/langsmith-values-<name>.yaml
 set -euo pipefail
 export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
+INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
+source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 CHART_VERSION="${CHART_VERSION:-}"
 
-# ── Resolve environment and SSM prefix from terraform.tfvars ──────────────────
-_environment=$(grep -E '^\s*environment\s*=' "$HELM_DIR/../infra/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _environment="${LANGSMITH_ENV:-production}"
-_name_prefix=$(grep -E '^\s*name_prefix\s*=' "$HELM_DIR/../infra/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
-_region=$(grep -E '^\s*region\s*=' "$HELM_DIR/../infra/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _region="${AWS_REGION:-us-east-2}"
-_ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
+# ── Resolve environment from terraform.tfvars ─────────────────────────────────
+_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-production}"
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-us-east-2}"
 
 ENV_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: $ENV_FILE not found." >&2
-  echo "Run: ./scripts/init-overrides.sh" >&2
+  echo "Run: make init-values  (or: ./helm/scripts/init-values.sh)" >&2
   exit 1
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────
-_cluster_name=$(terraform -chdir="$HELM_DIR/../infra" output -raw cluster_name 2>/dev/null) || {
+_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || {
   echo "ERROR: Could not read cluster_name. Is 'terraform apply' complete?" >&2
   exit 1
 }
@@ -57,84 +55,8 @@ echo ""
 # ── Apply ESO ClusterSecretStore + ExternalSecret ─────────────────────────────
 # These CRD resources can't be managed by Terraform (CRDs must exist at plan time).
 # Applied here after ESO is installed by terraform apply.
-echo "Configuring External Secrets Operator..."
-
-kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
-kind: ClusterSecretStore
-metadata:
-  name: langsmith-ssm
-spec:
-  provider:
-    aws:
-      service: ParameterStore
-      region: ${_region}
-EOF
-
-kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
-kind: ExternalSecret
-metadata:
-  name: langsmith-config
-  namespace: $NAMESPACE
-spec:
-  refreshInterval: "1h"
-  secretStoreRef:
-    name: langsmith-ssm
-    kind: ClusterSecretStore
-  target:
-    name: langsmith-config
-    creationPolicy: Owner
-  data:
-    - secretKey: langsmith_license_key
-      remoteRef:
-        key: ${_ssm_prefix}/langsmith-license-key
-    - secretKey: api_key_salt
-      remoteRef:
-        key: ${_ssm_prefix}/langsmith-api-key-salt
-    - secretKey: jwt_secret
-      remoteRef:
-        key: ${_ssm_prefix}/langsmith-jwt-secret
-    - secretKey: initial_org_admin_password
-      remoteRef:
-        key: ${_ssm_prefix}/langsmith-admin-password
-$(if aws ssm get-parameter --name "${_ssm_prefix}/agent-builder-encryption-key" \
-    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<ABEOF
-    - secretKey: agent_builder_encryption_key
-      remoteRef:
-        key: ${_ssm_prefix}/agent-builder-encryption-key
-ABEOF
-fi)
-$(if aws ssm get-parameter --name "${_ssm_prefix}/insights-encryption-key" \
-    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<IEOF
-    - secretKey: insights_encryption_key
-      remoteRef:
-        key: ${_ssm_prefix}/insights-encryption-key
-IEOF
-fi)
-$(if aws ssm get-parameter --name "${_ssm_prefix}/deployments-encryption-key" \
-    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<DEOF
-    - secretKey: deployments_encryption_key
-      remoteRef:
-        key: ${_ssm_prefix}/deployments-encryption-key
-DEOF
-fi)
-EOF
-
-echo "Waiting for ESO to sync langsmith-config secret..."
-if ! kubectl wait externalsecret langsmith-config -n "$NAMESPACE" \
-    --for=condition=Ready=True --timeout=60s 2>/dev/null; then
-  echo "" >&2
-  echo "ERROR: ESO failed to sync langsmith-config from SSM within 60s." >&2
-  echo "       Diagnose with:" >&2
-  echo "         kubectl describe externalsecret langsmith-config -n $NAMESPACE" >&2
-  echo "       Common causes:" >&2
-  echo "         - SSM parameters not created: source aws/infra/setup-env.sh" >&2
-  echo "         - ESO IRSA role missing SSM permissions" >&2
-  echo "         - Wrong SSM prefix — check _name_prefix and _environment in setup-env.sh" >&2
-  exit 1
-fi
-echo "  langsmith-config secret ready."
+# Run standalone to re-sync ESO without a full redeploy: ./helm/scripts/apply-eso.sh
+NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/apply-eso.sh"
 echo ""
 
 # ── Validate addon dependencies ───────────────────────────────────────────────
