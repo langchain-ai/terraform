@@ -159,18 +159,27 @@ _ssm_secret() {
         echo "ERROR: Secret generator for $varname produced empty output." >&2
         return 1
       fi
-    elif [[ "$silent" == "true" ]]; then
-      printf "%s: " "$prompt_text"
-      read -rs val
-      echo
+    elif [[ -t 0 ]]; then
+      # Interactive terminal — prompt the user
+      if [[ "$silent" == "true" ]]; then
+        printf "%s: " "$prompt_text"
+        read -rs val
+        echo
+      else
+        printf "%s: " "$prompt_text"
+        read -r val
+      fi
+      if [[ -z "$val" ]]; then
+        echo "  ERROR: No value provided for $varname." >&2
+        return 1
+      fi
     else
-      printf "%s: " "$prompt_text"
-      read -r val
-    fi
-
-    # Guard against empty input (e.g. non-interactive shell)
-    if [[ -z "$val" ]]; then
-      echo "  ERROR: No value provided for $varname — skipping." >&2
+      # Non-interactive (CI, piped stdin, redirected) — cannot prompt
+      echo "  ERROR: $varname is required but not set and no interactive terminal available." >&2
+      echo "         Pre-export it before sourcing this script:" >&2
+      echo "           export $varname='<value>'" >&2
+      echo "         Or populate SSM directly:" >&2
+      echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'" >&2
       return 1
     fi
 
@@ -234,8 +243,8 @@ fi
 # Fernet keys for Deployments, Agent Builder, and Insights addons.
 # Auto-generated and stored in SSM on first run. Only created when the user
 # opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
-# Generate manually: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-_fernet_gen='python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+# Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
+_fernet_gen='openssl rand -base64 32 | tr -d "\n"'
 
 _ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
   "$_fernet_gen" "" "true"
