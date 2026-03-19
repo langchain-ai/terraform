@@ -383,6 +383,7 @@ kubectl get ingress -n langsmith
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
 | `create_gp3_storage_class` | `true` | no | Create and set gp3 as default StorageClass |
+| `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
@@ -390,21 +391,26 @@ kubectl get ingress -n langsmith
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |
 | `postgres_max_storage_gb` | `100` | no | Maximum RDS storage in GB (autoscaling) |
 | `postgres_username` | `langsmith` | no | RDS database username |
+| `postgres_engine_version` | `16` | no | PostgreSQL engine version for RDS |
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
+| `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
 | `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
+| `s3_kms_key_arn` | `""` | no | KMS CMK ARN for S3 encryption (empty = SSE-S3) |
+| `s3_versioning_enabled` | `false` | no | Enable S3 bucket versioning |
 | `tls_certificate_source` | `acm` | no | `acm`, `letsencrypt`, or `none` |
 | `acm_certificate_arn` | `""` | when acm | ACM certificate ARN |
 | `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt |
 | `langsmith_domain` | `""` | no | Custom hostname (empty = use ALB DNS name) |
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `clickhouse_source` | `in-cluster` | no | `in-cluster` or `external` |
+| `alb_scheme` | `internet-facing` | no | ALB scheme: `internet-facing` or `internal` |
 | `alb_access_logs_enabled` | `false` | no | Enable ALB access logging to S3 |
 | `create_bastion` | `false` | no | Create EC2 bastion host for private cluster access (SSM or SSH) |
 | `bastion_instance_type` | `t3.micro` | no | EC2 instance type for bastion |

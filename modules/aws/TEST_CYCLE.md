@@ -169,10 +169,10 @@ Both role ARNs must be present — needed by Pass 2.
 
 ### ALB
 ```bash
-terraform -chdir=infra output alb_url
+terraform -chdir=infra output alb_dns_name
 ```
-Expected: `http://<cluster-name>.<region>.elb.amazonaws.com`
-(HTTP only when `tls_certificate_source = "none"`)
+Expected: `<name_prefix>-<environment>-alb-<id>.<region>.elb.amazonaws.com`
+(Use `terraform -chdir=infra output langsmith_url` for the full URL with protocol.)
 
 ---
 

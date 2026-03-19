@@ -112,3 +112,24 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 - [ ] **Add plan-level snapshot tests** — `terraform plan -out=plan.tfplan && terraform show -json plan.tfplan` diffed against a baseline; catches unintended resource changes on module edits
 - [ ] **Document test strategy in `TESTING.md`** — which tests run locally vs CI, prerequisites (AWS sandbox account), how to add a test for a new module
 
+---
+
+## Deployment Audit Findings
+
+Issues identified during the 2026-03-19 deployment audit. Items here don't block the happy path
+(Option A scripts, external Postgres/Redis, ACM TLS) but affect edge cases and Option B.
+
+### In-cluster mode
+
+- [ ] **Base values hardcode `postgres.external.enabled: true`** — when `postgres_source = "in-cluster"`, `init-values.sh` writes an override to disable it, but manual file copy skips that. Also, `k8s-bootstrap` creates an empty `langsmith-postgres` K8s secret for in-cluster mode. Fix: either make the base values neutral or add a guard in `deploy.sh` that validates the override exists for in-cluster. (`langsmith-values.yaml:57-67`, `k8s-bootstrap/main.tf:23-43`, `init-values.sh:349-360`)
+
+### App module (Option B)
+
+- [ ] **`kubernetes_manifest` for ESO CRDs fails at plan time on fresh cluster** — unlike the shell path (`kubectl apply`), `kubernetes_manifest` validates CRDs exist during `terraform plan`. Running `make plan-app` before `make apply` (infra) fails. Fix: document the hard dependency, or switch to `kubectl_manifest` provider, or use `null_resource` + `local-exec`. (`app/main.tf:52`)
+- [ ] **Missing `fileexists()` preconditions for sizing/addon YAML files** — the precondition only checks for the base `langsmith-values.yaml`. If `sizing = "ha"` but the HA file doesn't exist, `file()` errors with a confusing message instead of the friendly precondition. Fix: add `fileexists()` checks for each conditional file. (`app/locals.tf:122`, `app/main.tf:206-211`)
+- [ ] **`langsmith_domain` not propagated to app module** — infra has the variable but doesn't output it. The app module uses `alb_dns_name` as hostname unless `hostname` is separately set in `app/terraform.tfvars`. A customer setting `langsmith_domain` in infra tfvars won't see it carry over. Fix: add `langsmith_domain` to infra outputs and `pull-infra-outputs.sh`. (`pull-infra-outputs.sh`, `app/variables.tf`)
+
+### Cosmetic / minor
+
+- [ ] **Stale comment in base values example** — header references `langsmith-values-{env}.yaml` but the file is now `langsmith-values-overrides.yaml`. (`helm/values/examples/langsmith-values.yaml:14`)
+
