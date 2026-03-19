@@ -51,7 +51,7 @@ resource "helm_release" "keda" {
   chart            = "keda"
   namespace        = "keda"
   create_namespace = true
-  version          = "2.16.0"
+  version          = "2.19.0"
 
   set {
     name  = "resources.operator.requests.cpu"
@@ -73,7 +73,7 @@ resource "helm_release" "cert_manager" {
   chart            = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
-  version          = "v1.17.0"
+  version          = "v1.20.0"
 
   set {
     name  = "crds.enabled"
@@ -89,7 +89,7 @@ resource "helm_release" "external_secrets" {
   chart            = "external-secrets"
   namespace        = "external-secrets"
   create_namespace = true
-  version          = "0.10.7"
+  version          = "2.1.0"
 
   set {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"

@@ -1,6 +1,6 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "20.10.0"
+  version = "20.37.2"
 
   cluster_name    = var.cluster_name
   cluster_version = var.cluster_version
@@ -30,7 +30,7 @@ data "aws_iam_policy" "ebs_csi_policy" {
 
 module "irsa-ebs-csi" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role-with-oidc"
-  version = "4.7.0"
+  version = "4.24.1"
 
   create_role                   = true
   role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
@@ -68,7 +68,7 @@ module "eks_blueprints_addons" {
 
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
-    chart_version = "9.47.0"
+    chart_version = "9.56.0"
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
