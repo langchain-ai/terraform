@@ -26,7 +26,7 @@ _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 # Region is read from terraform.tfvars if present; falls back to AWS_REGION env var.
 _tfvars_region=$(grep -E '^\s*region\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _tfvars_region=""
-export AWS_REGION="${_tfvars_region:-${AWS_REGION:-us-east-2}}"
+export AWS_REGION="${_tfvars_region:-${AWS_REGION:-us-west-2}}"
 
 # ── Environment & tagging ─────────────────────────────────────────────────────
 # Read environment from terraform.tfvars first — only fall back to env var / default

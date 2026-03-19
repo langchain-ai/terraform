@@ -264,6 +264,9 @@ Best for: teams that want the full deployment in Terraform state, or "bring your
 ```bash
 cd terraform/aws
 
+# Generate Helm values files from templates (required — the app module reads these)
+make init-values
+
 # Pull infra outputs into app/infra.auto.tfvars.json
 make init-app
 
@@ -275,6 +278,8 @@ cp app/terraform.tfvars.example app/terraform.tfvars
 make plan-app
 make apply-app
 ```
+
+> **Important:** `make init-values` is required before `make plan-app`. The app module reads YAML values files from `helm/values/` — `init-values` copies them from `helm/values/examples/` based on your sizing and product choices.
 
 The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_release` in Terraform. Feature toggles are variables:
 

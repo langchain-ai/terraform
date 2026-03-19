@@ -38,9 +38,12 @@ locals {
       "alb.ingress.kubernetes.io/target-type"  = "ip"
       "alb.ingress.kubernetes.io/listen-ports" = local.tls_certificate_source == "none" ? "[{\"HTTP\": 80}]" : "[{\"HTTP\": 80}, {\"HTTPS\": 443}]"
     },
-    # ACM TLS: redirect HTTP→HTTPS and attach ACM certificate
+    # TLS: redirect HTTP→HTTPS
+    local.tls_certificate_source != "none" ? {
+      "alb.ingress.kubernetes.io/ssl-redirect" = "443"
+    } : {},
+    # ACM: attach certificate ARN
     local.tls_certificate_source == "acm" ? {
-      "alb.ingress.kubernetes.io/ssl-redirect"    = "443"
       "alb.ingress.kubernetes.io/certificate-arn" = var.acm_certificate_arn
     } : {},
     local.alb_arn != null && local.alb_arn != "" ? {
@@ -115,6 +118,10 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_insights || var.clickhouse_host != ""
       error_message = "clickhouse_host is required when enable_insights = true"
+    }
+    precondition {
+      condition     = fileexists("${local.values_path}/langsmith-values.yaml")
+      error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (copies templates from helm/values/examples/)"
     }
   }
 }

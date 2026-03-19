@@ -44,6 +44,8 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
+_postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
+_redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 
 if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -338,6 +340,25 @@ if [[ ! -f "$VALUES_DIR/langsmith-values.yaml" ]]; then
   echo "Created: langsmith-values.yaml (base)"
 fi
 
+# ── In-cluster overrides for postgres/redis ──────────────────────────────────
+# The base langsmith-values.yaml hardcodes postgres.external.enabled: true and
+# redis.external.enabled: true. When using in-cluster sources, we must override
+# those to false so the chart deploys its own pods instead of looking for the
+# (non-existent) external connection secrets.
+_external_services_block=""
+if [[ "$_postgres_source" == "in-cluster" ]]; then
+  _external_services_block+="
+postgres:
+  external:
+    enabled: false"
+fi
+if [[ "$_redis_source" == "in-cluster" ]]; then
+  _external_services_block+="
+redis:
+  external:
+    enabled: false"
+fi
+
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
 # Secrets (license key, api key salt, jwt secret, admin password) are NOT written
 # here. ESO pulls them from SSM and creates the 'langsmith-config' K8s Secret.
@@ -412,6 +433,7 @@ operator:
 #   kubectl annotate serviceaccount langsmith-ksa -n langsmith \
 #     eks.amazonaws.com/role-arn=<irsa_role_arn> --overwrite
 ${_ingress_block}
+${_external_services_block}
 YAML
 
 echo "Written: $OUT_FILE"
