@@ -176,84 +176,86 @@ else
 fi
 echo ""
 
-# ── Product tier choice ──────────────────────────────────────────────────────
+# ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
 
-_has_existing_addons="false"
-[[ -f "$_deploys_file" || -f "$_builder_file" || -f "$_insights_file" ]] && _has_existing_addons="true"
+_enable_deployments=false
+_enable_agent_builder=false
+_enable_insights=false
+_tfvar_is_true "enable_deployments"   && _enable_deployments=true
+_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
+_tfvar_is_true "enable_insights"      && _enable_insights=true
 
-if [[ "$_has_existing_addons" == "true" ]]; then
-  # Addons already chosen — respect existing choice on re-runs
-  echo "Product addons (existing):"
-  [[ -f "$_deploys_file" ]] && echo "  ✔ Deployments"
-  [[ -f "$_builder_file" ]] && echo "  ✔ Agent Builder"
-  [[ -f "$_insights_file" ]] && echo "  ✔ Insights"
-elif [[ "$_first_run" == "true" ]]; then
-  echo "Which LangSmith products do you need?"
-  echo ""
-  echo "  1) LangSmith only                                    (tracing, evaluation, monitoring)"
-  echo "  2) LangSmith + Deployments                           (+ LangGraph Platform)"
-  echo "  3) LangSmith + Deployments + Agent Builder           (+ visual agent builder)"
-  echo "  4) LangSmith + Deployments + Agent Builder + Insights (+ ClickHouse analytics)"
-  echo ""
-  printf "Choice [1]: "
-  read -r _tier_choice
-  _tier_choice="${_tier_choice:-1}"
+echo "Product addons (from terraform.tfvars):"
 
-  case "$_tier_choice" in
-    1) ;;
-    2)
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-      echo "  Created: langsmith-values-agent-deploys.yaml"
-      ;;
-    3)
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-      cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-      echo "  Created: langsmith-values-agent-deploys.yaml"
-      echo "  Created: langsmith-values-agent-builder.yaml"
-      ;;
-    4)
-      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-      cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-      cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
-      echo "  Created: langsmith-values-agent-deploys.yaml"
-      echo "  Created: langsmith-values-agent-builder.yaml"
-      echo "  Created: langsmith-values-insights.yaml"
-      echo ""
-      # Prompt for ClickHouse connection details
-      echo "  Insights requires an external ClickHouse instance."
-      printf "  ClickHouse host: "
-      read -r _ch_host
-      if [[ -z "$_ch_host" ]]; then
-        echo "ERROR: ClickHouse host is required." >&2
-        exit 1
-      fi
-      printf "  ClickHouse port [8123]: "
-      read -r _ch_port
-      _ch_port="${_ch_port:-8123}"
-      if ! [[ "$_ch_port" =~ ^[0-9]+$ ]]; then
-        echo "ERROR: ClickHouse port must be numeric." >&2
-        exit 1
-      fi
-      printf "  ClickHouse database [default]: "
-      read -r _ch_db
-      _ch_db="${_ch_db:-default}"
-      printf "  ClickHouse username [default]: "
-      read -r _ch_user
-      _ch_user="${_ch_user:-default}"
-      printf "  ClickHouse password: "
-      read -rs _ch_pass
-      echo ""
-      printf "  Enable TLS? [Y/n]: "
-      read -r _ch_tls
-      _ch_tls="${_ch_tls:-Y}"
-      [[ "$_ch_tls" =~ ^[Yy] ]] && _ch_tls_val="true" || _ch_tls_val="false"
+# Deployments
+if [[ "$_enable_deployments" == "true" ]]; then
+  if [[ ! -f "$_deploys_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
+    echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
+  else
+    echo "  ✔ Deployments (existing)"
+  fi
+else
+  echo "  ✗ Deployments (enable_deployments = false)"
+fi
 
-      # Write ClickHouse values using existingSecretName pattern.
-      # The password is stored in a K8s Secret, not in the values file.
-      cat > "$_insights_file" <<CHEOF
+# Agent Builder
+if [[ "$_enable_agent_builder" == "true" ]]; then
+  if [[ "$_enable_deployments" != "true" ]]; then
+    echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+    exit 1
+  fi
+  if [[ ! -f "$_builder_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
+    echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
+  else
+    echo "  ✔ Agent Builder (existing)"
+  fi
+else
+  echo "  ✗ Agent Builder (enable_agent_builder = false)"
+fi
+
+# Insights
+if [[ "$_enable_insights" == "true" ]]; then
+  if [[ ! -f "$_insights_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
+    echo "  ✔ Insights (created langsmith-values-insights.yaml)"
+    echo ""
+    # Prompt for ClickHouse connection details on first creation
+    echo "  Insights requires an external ClickHouse instance."
+    printf "  ClickHouse host: "
+    read -r _ch_host
+    if [[ -z "$_ch_host" ]]; then
+      echo "ERROR: ClickHouse host is required." >&2
+      exit 1
+    fi
+    printf "  ClickHouse port [8123]: "
+    read -r _ch_port
+    _ch_port="${_ch_port:-8123}"
+    if ! [[ "$_ch_port" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: ClickHouse port must be numeric." >&2
+      exit 1
+    fi
+    printf "  ClickHouse database [default]: "
+    read -r _ch_db
+    _ch_db="${_ch_db:-default}"
+    printf "  ClickHouse username [default]: "
+    read -r _ch_user
+    _ch_user="${_ch_user:-default}"
+    printf "  ClickHouse password: "
+    read -rs _ch_pass
+    echo ""
+    printf "  Enable TLS? [Y/n]: "
+    read -r _ch_tls
+    _ch_tls="${_ch_tls:-Y}"
+    [[ "$_ch_tls" =~ ^[Yy] ]] && _ch_tls_val="true" || _ch_tls_val="false"
+
+    # Write ClickHouse values using existingSecretName pattern.
+    # The password is stored in a K8s Secret, not in the values file.
+    cat > "$_insights_file" <<CHEOF
 # Auto-generated by init-values.sh — ClickHouse connection details.
 # Re-run init-values.sh or edit this file to update.
 # Password is stored in the langsmith-clickhouse K8s Secret (not this file).
@@ -271,34 +273,33 @@ clickhouse:
     tls: ${_ch_tls_val}
     existingSecretName: "langsmith-clickhouse"
 CHEOF
-      echo "  Updated: langsmith-values-insights.yaml"
-      echo ""
-      echo "  Creating langsmith-clickhouse K8s Secret..."
-      echo "  (deploy.sh will re-apply this if the namespace is recreated)"
-      if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
-        --from-literal=clickhouse_host="${_ch_host}" \
-        --from-literal=clickhouse_port="${_ch_port}" \
-        --from-literal=clickhouse_user="${_ch_user}" \
-        --from-literal=clickhouse_password="${_ch_pass}" \
-        --from-literal=clickhouse_db="${_ch_db}" \
-        --from-literal=clickhouse_tls="${_ch_tls_val}" \
-        --dry-run=client -o yaml | kubectl apply -f -; then
-        echo "  WARNING: Could not create langsmith-clickhouse K8s secret." >&2
-        echo "           Ensure kubectl is configured and re-run, or create the secret manually." >&2
-      else
-        echo "  Secret langsmith-clickhouse created/updated."
-      fi
-      ;;
-    *)
-      echo "ERROR: Invalid choice '$_tier_choice'. Expected 1, 2, 3, or 4." >&2
-      exit 1
-      ;;
-  esac
+    echo "  Updated: langsmith-values-insights.yaml"
+    echo ""
+    echo "  Creating langsmith-clickhouse K8s Secret..."
+    echo "  (deploy.sh will re-apply this if the namespace is recreated)"
+    if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
+      --from-literal=clickhouse_host="${_ch_host}" \
+      --from-literal=clickhouse_port="${_ch_port}" \
+      --from-literal=clickhouse_user="${_ch_user}" \
+      --from-literal=clickhouse_password="${_ch_pass}" \
+      --from-literal=clickhouse_db="${_ch_db}" \
+      --from-literal=clickhouse_tls="${_ch_tls_val}" \
+      --dry-run=client -o yaml | kubectl apply -f -; then
+      echo "  WARNING: Could not create langsmith-clickhouse K8s secret." >&2
+      echo "           Ensure kubectl is configured and re-run, or create the secret manually." >&2
+    else
+      echo "  Secret langsmith-clickhouse created/updated."
+    fi
+  else
+    echo "  ✔ Insights (existing)"
+  fi
+else
+  echo "  ✗ Insights (enable_insights = false)"
 fi
 
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
 # The example file defaults to false; fix it so deploys don't get stuck in DEPLOYING state.
-if [[ -f "$_deploys_file" ]]; then
+if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
   if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
     sed -i.bak 's/tlsEnabled: false/tlsEnabled: true/' "$_deploys_file" && rm -f "$_deploys_file.bak"
   fi

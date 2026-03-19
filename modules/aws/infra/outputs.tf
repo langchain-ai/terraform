@@ -186,21 +186,42 @@ output "acm_certificate_arn" {
 }
 
 #------------------------------------------------------------------------------
+# Product Features
+#------------------------------------------------------------------------------
+output "enable_deployments" {
+  description = "Whether LangGraph Platform Deployments addon is enabled"
+  value       = var.enable_deployments
+}
+
+output "enable_agent_builder" {
+  description = "Whether Agent Builder addon is enabled"
+  value       = var.enable_agent_builder
+}
+
+output "enable_insights" {
+  description = "Whether Insights addon is enabled"
+  value       = var.enable_insights
+}
+
+#------------------------------------------------------------------------------
 # Resource Summary
 #------------------------------------------------------------------------------
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster         = module.eks.cluster_name
-    postgres_source = var.postgres_source
-    postgres        = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
-    redis_source    = var.redis_source
-    redis           = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
-    storage_bucket  = local.bucket_name
-    namespace       = var.langsmith_namespace
-    tls             = var.tls_certificate_source
-    alb             = module.alb.alb_dns_name
-    bastion         = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    cluster            = module.eks.cluster_name
+    postgres_source    = var.postgres_source
+    postgres           = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    redis_source       = var.redis_source
+    redis              = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
+    storage_bucket     = local.bucket_name
+    namespace          = var.langsmith_namespace
+    tls                = var.tls_certificate_source
+    alb                = module.alb.alb_dns_name
+    bastion            = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    deployments        = var.enable_deployments
+    agent_builder      = var.enable_agent_builder
+    insights           = var.enable_insights
   }
 }
 

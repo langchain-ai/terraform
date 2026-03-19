@@ -487,16 +487,33 @@ langsmith_namespace = "langsmith"
 # create_waf = false
 
 #------------------------------------------------------------------------------
+# LANGGRAPH PLATFORM FEATURES (product addons)
+#------------------------------------------------------------------------------
+# These flags control which LangSmith product features are enabled.
+# Each requires the corresponding entitlement in your LangSmith license key.
+# deploy.sh reads these to decide which Helm values overlay files to include.
+#
+# If you're doing a base LangSmith deployment, leave all three as false.
+#
+#   enable_deployments   — LangGraph Platform (listener, operator, host-backend)
+#   enable_agent_builder — Visual agent builder UI (requires enable_deployments)
+#   enable_insights      — ClickHouse-backed analytics dashboard
+#
+enable_deployments   = false
+enable_agent_builder = false
+enable_insights      = false
+
+#------------------------------------------------------------------------------
 # LANGGRAPH PLATFORM ENCRYPTION KEYS (optional — for addons only)
 #------------------------------------------------------------------------------
-# These Fernet encryption keys are ONLY needed when you enable specific
-# LangSmith feature overlays in Helm (Pass 2). If you're doing a base
-# LangSmith deployment without addons, skip this entire section.
+# These Fernet encryption keys are ONLY needed when the corresponding
+# feature flag above is set to true. If all three flags are false, skip
+# this entire section.
 #
-# Each key corresponds to a Helm values overlay file:
-#   Deployments  → langsmith-values-agent-deploys.yaml
-#   Agent Builder → langsmith-values-agent-builder.yaml
-#   Insights     → langsmith-values-insights.yaml
+# Each key corresponds to a feature flag:
+#   Deployments  → enable_deployments   = true
+#   Agent Builder → enable_agent_builder = true
+#   Insights     → enable_insights      = true
 #
 # Generate a Fernet key (https://cryptography.io/en/latest/fernet/):
 #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'

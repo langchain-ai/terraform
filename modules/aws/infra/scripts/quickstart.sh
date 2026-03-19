@@ -560,6 +560,15 @@ s3_ttl_long_days  = ${S3_LONG}
 # Namespace
 #------------------------------------------------------------------------------
 langsmith_namespace = "langsmith"
+
+#------------------------------------------------------------------------------
+# Product Features
+# Set to true to enable addons. Each requires the matching license entitlement.
+# deploy.sh reads these flags to decide which Helm values overlays to include.
+#------------------------------------------------------------------------------
+enable_deployments   = false
+enable_agent_builder = false
+enable_insights      = false
 TFVARS
 
 # Security add-ons — only write non-default values

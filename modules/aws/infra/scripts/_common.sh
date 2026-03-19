@@ -21,6 +21,14 @@ _parse_tfvar() {
     | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
 }
 
+# Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
+_tfvar_is_true() {
+  local val
+  val=$(grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
+    | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]') || return 1
+  [[ "$val" == "true" ]]
+}
+
 # ── Color helpers ────────────────────────────────────────────────────────────
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }

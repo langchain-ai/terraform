@@ -65,12 +65,17 @@ echo ""
 NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/apply-eso.sh"
 echo ""
 
-# ── Validate addon dependencies ───────────────────────────────────────────────
-if [[ -f "$VALUES_DIR/langsmith-values-agent-builder.yaml" ]] && \
-   [[ ! -f "$VALUES_DIR/langsmith-values-agent-deploys.yaml" ]]; then
-  echo "ERROR: langsmith-values-agent-builder.yaml requires langsmith-values-agent-deploys.yaml." >&2
-  echo "Agent Builder depends on config.deployment.enabled, which is set in the agent-deploys file." >&2
-  echo "Run: make init-values  (choose product tier 3+)" >&2
+# ── Read product feature flags from terraform.tfvars ─────────────────────────
+_enable_deployments=false
+_enable_agent_builder=false
+_enable_insights=false
+_tfvar_is_true "enable_deployments"   && _enable_deployments=true
+_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
+_tfvar_is_true "enable_insights"      && _enable_insights=true
+
+# Validate addon dependencies
+if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
 
@@ -92,13 +97,44 @@ echo "Values chain:"
 echo "  ✔ langsmith-values.yaml (base)"
 echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 
-for addon in sizing-ha sizing-light agent-deploys agent-builder insights; do
-  f="$VALUES_DIR/langsmith-values-${addon}.yaml"
+# Sizing files: included if present on disk (not gated by tfvars flags).
+for sizing in sizing-ha sizing-light; do
+  f="$VALUES_DIR/langsmith-values-${sizing}.yaml"
   if [[ -f "$f" ]]; then
     VALUES_ARGS+=(-f "$f")
-    echo "  ✔ langsmith-values-${addon}.yaml"
+    echo "  ✔ langsmith-values-${sizing}.yaml"
   else
-    echo "  ✗ langsmith-values-${addon}.yaml (not found — skipped)"
+    echo "  ✗ langsmith-values-${sizing}.yaml (not found — skipped)"
+  fi
+done
+
+# Addon files: gated by enable_* flags in terraform.tfvars.
+# The file must exist AND the corresponding flag must be true.
+# addon:flag_name pairs — flag_name matches the terraform.tfvars variable
+_addon_gate=(
+  "agent-deploys:deployments:$_enable_deployments"
+  "agent-builder:agent_builder:$_enable_agent_builder"
+  "insights:insights:$_enable_insights"
+)
+for entry in "${_addon_gate[@]}"; do
+  addon="${entry%%:*}"
+  rest="${entry#*:}"
+  flag_name="${rest%%:*}"
+  enabled="${rest##*:}"
+  f="$VALUES_DIR/langsmith-values-${addon}.yaml"
+  if [[ "$enabled" == "true" ]]; then
+    if [[ -f "$f" ]]; then
+      VALUES_ARGS+=(-f "$f")
+      echo "  ✔ langsmith-values-${addon}.yaml"
+    else
+      echo "  ✗ langsmith-values-${addon}.yaml (enabled but file not found — run: make init-values)"
+    fi
+  else
+    if [[ -f "$f" ]]; then
+      echo "  ○ langsmith-values-${addon}.yaml (file exists but enable_${flag_name} = false in tfvars — skipped)"
+    else
+      echo "  ✗ langsmith-values-${addon}.yaml (not enabled — skipped)"
+    fi
   fi
 done
 

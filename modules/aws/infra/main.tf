@@ -69,6 +69,11 @@ resource "terraform_data" "validate_inputs" {
       condition     = var.create_vpc || var.alb_scheme == "internal" || length(var.public_subnets) > 0
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
+
+    precondition {
+      condition     = !var.enable_agent_builder || var.enable_deployments
+      error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
+    }
   }
 }
 

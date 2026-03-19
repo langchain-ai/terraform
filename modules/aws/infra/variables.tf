@@ -501,6 +501,30 @@ variable "langsmith_jwt_secret" {
 }
 
 #------------------------------------------------------------------------------
+# LangGraph Platform Features
+# Boolean flags that control which product addons are enabled in Helm (Pass 2).
+# deploy.sh reads these to decide which values overlay files to include.
+# Addons require the corresponding entitlement in your LangSmith license key.
+#------------------------------------------------------------------------------
+variable "enable_deployments" {
+  type        = bool
+  description = "Enable LangGraph Platform Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
+  default     = false
+}
+
+variable "enable_agent_builder" {
+  type        = bool
+  description = "Enable Agent Builder (visual agent building UI). Requires enable_deployments = true and Agent Builder entitlement in license."
+  default     = false
+}
+
+variable "enable_insights" {
+  type        = bool
+  description = "Enable Insights (ClickHouse-backed analytics). Requires Insights entitlement in license."
+  default     = false
+}
+
+#------------------------------------------------------------------------------
 # LangGraph Platform Encryption Keys
 # Fernet keys for optional feature modules. Generate once and never change.
 # Set via setup-env.sh (TF_VAR_*) — stored in SSM Parameter Store.
