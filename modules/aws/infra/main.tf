@@ -290,6 +290,7 @@ module "alb" {
   tls_certificate_source = var.tls_certificate_source
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
+  bucket_suffix          = random_id.bucket_suffix.hex
   tags                   = local.common_tags
 
   depends_on = [module.vpc]
@@ -300,7 +301,7 @@ module "cloudtrail" {
   count  = var.create_cloudtrail ? 1 : 0
 
   trail_name            = "${local.base_name}-trail"
-  bucket_name           = "${local.base_name}-cloudtrail-logs"
+  bucket_name           = "${local.base_name}-cloudtrail-logs-${random_id.bucket_suffix.hex}"
   is_multi_region_trail = var.cloudtrail_multi_region
   log_retention_days    = var.cloudtrail_log_retention_days
   force_destroy         = true

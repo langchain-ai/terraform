@@ -59,3 +59,9 @@ variable "access_logs_prefix" {
   description = "S3 key prefix for ALB access log objects"
   default     = "alb"
 }
+
+variable "bucket_suffix" {
+  type        = string
+  description = "Random suffix appended to S3 bucket names to ensure global uniqueness"
+  default     = ""
+}

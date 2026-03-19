@@ -8,12 +8,16 @@
 # Format: {name_prefix}-{environment}-{resource}
 # Example with name_prefix="acme", environment="prod": acme-prod-eks
 
+resource "random_id" "bucket_suffix" {
+  byte_length = 4
+}
+
 locals {
   base_name     = "${var.name_prefix}-${var.environment}"
   vpc_name      = "${local.base_name}-vpc"
   cluster_name  = "${local.base_name}-eks"
   redis_name    = "${local.base_name}-redis"
-  bucket_name   = "${local.base_name}-traces"
+  bucket_name   = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
   postgres_name = "${local.base_name}-pg"
   alb_name      = "${local.base_name}-alb"
   bastion_name  = "${local.base_name}-bastion"

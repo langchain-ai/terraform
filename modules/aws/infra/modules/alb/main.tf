@@ -25,7 +25,7 @@ data "aws_elb_service_account" "current" {}
 
 resource "aws_s3_bucket" "access_logs" {
   count         = var.access_logs_enabled ? 1 : 0
-  bucket        = "${var.name}-access-logs"
+  bucket        = var.bucket_suffix != "" ? "${var.name}-access-logs-${var.bucket_suffix}" : "${var.name}-access-logs"
   force_destroy = true
   tags          = var.tags
 }
