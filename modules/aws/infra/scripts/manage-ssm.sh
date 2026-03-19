@@ -14,13 +14,7 @@ set -euo pipefail
 export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/.."
-
-# ── Parse terraform.tfvars ──────────────────────────────────────────────────
-_parse_tfvar() {
-  grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
-}
+source "$SCRIPT_DIR/_common.sh"
 
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-dev}"
@@ -77,11 +71,6 @@ DIFF_K8S_KEYS=(
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-_bold()  { printf '\033[1m%s\033[0m' "$*"; }
-_green() { printf '\033[32m%s\033[0m' "$*"; }
-_red()   { printf '\033[31m%s\033[0m' "$*"; }
-_yellow(){ printf '\033[33m%s\033[0m' "$*"; }
-
 _is_stable() {
   local key="$1"
   for s in "${STABLE_PARAMS[@]}"; do
@@ -294,7 +283,7 @@ cmd_validate() {
   echo ""
   if [[ $missing -gt 0 ]]; then
     _red "FAIL"; echo ": $missing required parameter(s) missing. ESO sync will fail."
-    echo "  Run: source infra/setup-env.sh"
+    echo "  Run: source infra/scripts/setup-env.sh"
     exit 1
   elif [[ $warnings -gt 0 ]]; then
     _yellow "WARN"; echo ": $warnings parameter(s) need attention."

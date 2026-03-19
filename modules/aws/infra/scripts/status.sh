@@ -12,7 +12,8 @@
 export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/.."
+source "$SCRIPT_DIR/_common.sh"
+
 AWS_DIR="$INFRA_DIR/.."
 HELM_DIR="$AWS_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
@@ -21,31 +22,11 @@ APP_DIR="$AWS_DIR/app"
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
 
-# ── Colors & symbols ────────────────────────────────────────────────────────
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-DIM='\033[0;90m'
-BOLD='\033[1m'
-RESET='\033[0m'
-
-pass()  { printf "  ${GREEN}✔${RESET}  %s\n" "$1"; }
-warn()  { printf "  ${YELLOW}⚠${RESET}  %s\n" "$1"; }
-fail()  { printf "  ${RED}✘${RESET}  %s\n" "$1"; }
-skip()  { printf "  ${DIM}○${RESET}  %s\n" "$1"; }
-info()  { printf "  ${CYAN}ℹ${RESET}  %s\n" "$1"; }
-header(){ printf "\n${BOLD}── %s ──${RESET}\n" "$1"; }
-action(){ printf "  ${YELLOW}→${RESET}  %s\n" "$1"; }
-
 NEXT_ACTION=""
 set_next() { [[ -z "$NEXT_ACTION" ]] && NEXT_ACTION="$1"; }
 
-# ── Read terraform.tfvars ───────────────────────────────────────────────────
-_read_tfvar() {
-  grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]' || echo ""
-}
+# Alias for readability — _parse_tfvar comes from _common.sh
+_read_tfvar() { _parse_tfvar "$1"; }
 
 header "1. Configuration (terraform.tfvars)"
 
@@ -98,8 +79,8 @@ for var in TF_VAR_name_prefix TF_VAR_environment TF_VAR_region \
 done
 
 if [[ "$_env_ok" == "false" ]]; then
-  action "source infra/setup-env.sh"
-  set_next "source infra/setup-env.sh"
+  action "source infra/scripts/setup-env.sh"
+  set_next "source infra/scripts/setup-env.sh"
 fi
 
 # ── Check AWS credentials ──────────────────────────────────────────────────
@@ -164,7 +145,7 @@ else
     echo ""
     info "Missing SSM params must be resolved before ESO can sync secrets to K8s."
     info "Options:"
-    action "source infra/setup-env.sh  (backfills SSM from env vars, or prompts for new values)"
+    action "source infra/scripts/setup-env.sh  (backfills SSM from env vars, or prompts for new values)"
     action "./infra/scripts/manage-ssm.sh set <key> <value>  (write a specific param directly)"
     action "./infra/scripts/manage-ssm.sh validate  (check all required params)"
     echo ""
@@ -282,8 +263,8 @@ if [[ -f "$_overrides" ]]; then
   fi
 else
   fail "langsmith-values-overrides.yaml — not generated"
-  action "./helm/scripts/init-overrides.sh"
-  set_next "./helm/scripts/init-overrides.sh"
+  action "make init-values  (or: ./helm/scripts/init-values.sh)"
+  set_next "make init-values"
 fi
 
 # Report addon files

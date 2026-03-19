@@ -14,13 +14,7 @@ set -euo pipefail
 export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/.."
-
-# ── Parse terraform.tfvars ──────────────────────────────────────────────────
-_parse_tfvar() {
-  grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
-}
+source "$SCRIPT_DIR/_common.sh"
 
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-dev}"
@@ -67,12 +61,6 @@ if [[ -z "$OLD_PREFIX" ]]; then
   echo "Usage: migrate-ssm.sh --old-prefix /pge-test-dev-langsmith [--dry-run] [--delete-old]" >&2
   exit 1
 fi
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-_bold()  { printf '\033[1m%s\033[0m' "$*"; }
-_green() { printf '\033[32m%s\033[0m' "$*"; }
-_red()   { printf '\033[31m%s\033[0m' "$*"; }
-_yellow(){ printf '\033[33m%s\033[0m' "$*"; }
 
 # ── Discover old parameters ─────────────────────────────────────────────────
 echo "Migrating SSM parameters"
