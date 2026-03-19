@@ -182,6 +182,12 @@ else
 
   _ask "Public subnet IDs (comma-separated)" ""
   PUBLIC_SUBNETS="$_REPLY"
+
+  # No public subnets → ALB must be internal
+  if [[ -z "$PUBLIC_SUBNETS" ]]; then
+    ALB_SCHEME="internal"
+    printf '\n  %sNo public subnets provided — alb_scheme will be set to "internal"%s\n' "$DIM" "$RESET"
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -369,14 +375,16 @@ fi
 
 _section "7. Security Add-ons"
 
-ALB_SCHEME="internet-facing"
+ALB_SCHEME="${ALB_SCHEME:-internet-facing}"
 ALB_LOGS="false"
 CREATE_CLOUDTRAIL="false"
 CREATE_WAF="false"
 
 if [[ "$PROFILE" == "prod" ]]; then
   echo ""
-  if _ask_yn "Internal ALB? (private, no public access)" "n"; then
+  if [[ "$ALB_SCHEME" == "internal" ]]; then
+    printf '  %sALB scheme already set to "internal" (no public subnets)%s\n' "$DIM" "$RESET"
+  elif _ask_yn "Internal ALB? (private, no public access)" "n"; then
     ALB_SCHEME="internal"
   fi
   if _ask_yn "Enable ALB access logs?" "n"; then
