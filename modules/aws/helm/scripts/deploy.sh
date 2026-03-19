@@ -3,15 +3,15 @@
 #
 # Values files loaded (in order, last wins):
 #   1. langsmith-values.yaml              — base AWS config (always)
-#   2. langsmith-values-overrides.yaml          — env-specific: hostname, IRSA, S3 (required)
-#   3. langsmith-values-ha.yaml             — HA replica counts, resource limits (if present)
-#      OR langsmith-values-dev.yaml         — reduced resources for dev/test/POC (if present)
+#   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
+#   3. langsmith-values-sizing-ha.yaml    — HA sizing (if present)
+#      OR langsmith-values-sizing-light.yaml — light sizing for POC/test (if present)
 #   4. langsmith-values-agent-deploys.yaml  — Deployments feature (if present)
 #   5. langsmith-values-agent-builder.yaml  — Agent Builder feature (if present)
 #   6. langsmith-values-insights.yaml       — ClickHouse/Insights (if present)
 #
-# Generate the env file with: make init-values (or ./scripts/init-values.sh)
-# Enable sizing/addons by copying: cp values/langsmith-values-<name>.yaml.example values/langsmith-values-<name>.yaml
+# Generate all values files: make init-values (or ./scripts/init-values.sh)
+# Templates live in values/examples/ — init-values.sh copies them based on your choices.
 set -euo pipefail
 export AWS_PAGER=""
 
@@ -26,9 +26,15 @@ NAMESPACE="${NAMESPACE:-langsmith}"
 CHART_VERSION="${CHART_VERSION:-}"
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
-_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-production}"
+_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-us-east-2}"
+_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
+
+if [[ -z "$_environment" || -z "$_region" ]]; then
+  echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
+  echo "       Ensure terraform.tfvars has 'environment' and 'region' set." >&2
+  exit 1
+fi
 
 ENV_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
 
@@ -64,21 +70,39 @@ if [[ -f "$VALUES_DIR/langsmith-values-agent-builder.yaml" ]] && \
    [[ ! -f "$VALUES_DIR/langsmith-values-agent-deploys.yaml" ]]; then
   echo "ERROR: langsmith-values-agent-builder.yaml requires langsmith-values-agent-deploys.yaml." >&2
   echo "Agent Builder depends on config.deployment.enabled, which is set in the agent-deploys file." >&2
-  echo "Run: cp $VALUES_DIR/langsmith-values-agent-deploys.yaml.example $VALUES_DIR/langsmith-values-agent-deploys.yaml" >&2
+  echo "Run: make init-values  (choose product tier 3+)" >&2
   exit 1
 fi
 
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
-for addon in ha dev agent-deploys agent-builder insights; do
+# Sizing: ha and light are mutually exclusive — if both exist, error.
+_ha_file="$VALUES_DIR/langsmith-values-sizing-ha.yaml"
+_light_file="$VALUES_DIR/langsmith-values-sizing-light.yaml"
+if [[ -f "$_ha_file" && -f "$_light_file" ]]; then
+  echo "ERROR: Both langsmith-values-sizing-ha.yaml and langsmith-values-sizing-light.yaml exist." >&2
+  echo "       These are mutually exclusive — remove one before deploying." >&2
+  exit 1
+fi
+
+# Print values chain so the user knows exactly what's going into the release.
+echo ""
+echo "Values chain:"
+echo "  ✔ langsmith-values.yaml (base)"
+echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
+
+for addon in sizing-ha sizing-light agent-deploys agent-builder insights; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
   if [[ -f "$f" ]]; then
     VALUES_ARGS+=(-f "$f")
-    echo "Loading addon: langsmith-values-${addon}.yaml"
+    echo "  ✔ langsmith-values-${addon}.yaml"
+  else
+    echo "  ✗ langsmith-values-${addon}.yaml (not found — skipped)"
   fi
 done
 
+echo ""
 echo "Deploying LangSmith (environment: $_environment)..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
@@ -93,10 +117,13 @@ _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --outpu
 if [[ "$_release_status" == "pending-upgrade" ]]; then
   echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'pending-upgrade' state (interrupted upgrade)."
   echo "         Rolling back to clear the lock..."
-  helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --server-side true --force-conflicts
+  helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
   echo ""
 fi
 
+# Server-side apply + force-conflicts: the LangSmith operator manages resources
+# (agent deployment pods, langsmith-ksa SA) outside of Helm's ownership, causing
+# field manager conflicts on upgrade. --force-conflicts lets Helm reclaim fields.
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -140,16 +167,16 @@ if [[ -n "$ALB_HOST" ]]; then
   # Auto-update hostname in env values file if blank or stale (e.g. pre-provisioned ALB
   # DNS differs from the ingress-controller-managed ALB the chart actually receives).
   _current_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _current_hostname=""
+    | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_hostname=""
   if [[ "$_current_hostname" != "$ALB_HOST" ]]; then
     # Derive protocol from the existing deployment.url value so we don't need tfvars here.
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
-      | head -1 | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _current_url=""
+      | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i '' "s|hostname: \"[^\"]*\"|hostname: \"${ALB_HOST}\"|" "$ENV_FILE"
-    sed -i '' "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${ALB_HOST}\"|" "$ENV_FILE"
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${ALB_HOST}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${ALB_HOST}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → $ALB_HOST"
     echo "Re-running deploy for hostname to take effect..."
     echo ""

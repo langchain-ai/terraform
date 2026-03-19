@@ -12,6 +12,16 @@ output "name_prefix" {
   value       = var.name_prefix
 }
 
+output "environment" {
+  description = "Environment name (dev, staging, prod, etc.)"
+  value       = var.environment
+}
+
+output "region" {
+  description = "AWS region"
+  value       = var.region
+}
+
 output "naming_convention" {
   description = "Naming convention used: {name_prefix}-{environment}-{resource}"
   value       = "${var.name_prefix}-${var.environment}-{resource}"
@@ -103,11 +113,6 @@ output "langsmith_irsa_role_arn" {
   value       = module.eks.langsmith_irsa_role_arn
 }
 
-output "eso_role_arn" {
-  description = "IAM role ARN for External Secrets Operator — used to read SSM Parameter Store"
-  value       = aws_iam_role.eso.arn
-}
-
 #------------------------------------------------------------------------------
 # ALB
 #------------------------------------------------------------------------------
@@ -124,6 +129,11 @@ output "alb_scheme" {
 output "alb_dns_name" {
   description = "ALB DNS hostname — use as config.hostname in Helm values"
   value       = module.alb.alb_dns_name
+}
+
+output "acm_certificate_arn" {
+  description = "ACM certificate ARN attached to the ALB (empty when tls_certificate_source != acm)"
+  value       = var.acm_certificate_arn
 }
 
 output "langsmith_url" {
@@ -206,14 +216,23 @@ output "next_steps" {
     1. Update kubeconfig:
        aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.region}
 
-    2. Run the Helm deployment:
-       cd ../helm
-       source ../infra/scripts/setup-env.sh --deploy
-       ./scripts/deploy.sh
+    2. Deploy LangSmith (pick one):
+
+       Option A — Helm scripts (recommended):
+         cd terraform/aws
+         make init-values
+         make deploy
+
+       Option B — Terraform app module:
+         cd terraform/aws
+         make init-app
+         cp app/terraform.tfvars.example app/terraform.tfvars
+         # Edit app/terraform.tfvars (set admin_email, sizing, features)
+         make plan-app
+         make apply-app
 
     3. Configure DNS:
        Point your domain to: ${module.alb.alb_dns_name}
-       (Wait ~2 min after first deploy for ALB to be provisioned)
 
     4. Access LangSmith:
        ${var.tls_certificate_source == "none" ? "http://${module.alb.alb_dns_name}" : "https://YOUR_DOMAIN"}

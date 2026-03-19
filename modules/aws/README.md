@@ -121,12 +121,16 @@ aws/
 │   │   ├── preflight-check.sh      ← Pre-deploy validation
 │   │   └── uninstall.sh            ← Helm uninstall + cleanup
 │   └── values/
-│       ├── langsmith-values.yaml.example              ← Base AWS values
-│       ├── langsmith-values-ha.yaml.example           ← HA sizing (production)
-│       ├── langsmith-values-dev.yaml.example          ← Reduced sizing (POC/test)
-│       ├── langsmith-values-agent-deploys.yaml.example ← Deployments feature
-│       ├── langsmith-values-agent-builder.yaml.example ← Agent Builder
-│       └── langsmith-values-insights.yaml.example     ← ClickHouse Insights
+│       ├── examples/                                    ← Reference templates (init-values.sh copies from here)
+│       │   ├── langsmith-values.yaml                    ← Base AWS values
+│       │   ├── langsmith-values-sizing-ha.yaml          ← HA sizing (production)
+│       │   ├── langsmith-values-sizing-light.yaml       ← Light sizing (POC/test)
+│       │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
+│       │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
+│       │   └── langsmith-values-insights.yaml           ← ClickHouse Insights
+│       ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
+│       ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
+│       └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
 └── app/                    ← Pass 2 option B: Terraform-managed Helm deploy
     ├── main.tf             ← Providers, ESO resources, helm_release
     ├── variables.tf        ← Infra inputs (auto-populated) + app config
@@ -240,24 +244,18 @@ kubectl get pods -n kube-system
 
 Two paths — pick one:
 
-### Option A: Script-driven Helm deploy
+### Option A: Script-driven Helm deploy (recommended)
 
-Best for: production deployments with ESO, layered values, addon composition.
+Best for: most deployments. Interactive prompts guide you through sizing and product choices.
 
 ```bash
 cd terraform/aws
 
-make init-values       # generate Helm values from Terraform outputs
+make init-values       # prompts: admin email, sizing (ha/light/none), product tier
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-Enable optional addons by copying `.example` files before deploying:
-
-```bash
-cp helm/values/langsmith-values-agent-deploys.yaml.example helm/values/langsmith-values-agent-deploys.yaml
-cp helm/values/langsmith-values-agent-builder.yaml.example helm/values/langsmith-values-agent-builder.yaml
-cp helm/values/langsmith-values-insights.yaml.example      helm/values/langsmith-values-insights.yaml
-```
+`init-values.sh` prompts for your sizing profile and which products to enable, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
 ### Option B: Terraform-managed Helm deploy
 
@@ -282,7 +280,7 @@ The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_
 
 ```hcl
 admin_email          = "admin@example.com"
-sizing               = "ha"           # ha | dev | none
+sizing               = "ha"           # ha | light | none
 enable_agent_deploys = true
 enable_agent_builder = true
 enable_insights      = true

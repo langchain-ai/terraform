@@ -64,6 +64,11 @@ resource "terraform_data" "validate_inputs" {
       condition     = var.create_vpc || (var.vpc_id != null && length(var.private_subnets) > 0 && var.vpc_cidr_block != null)
       error_message = "When create_vpc = false, vpc_id, private_subnets, and vpc_cidr_block must all be provided."
     }
+
+    precondition {
+      condition     = var.create_vpc || var.alb_scheme == "internal" || length(var.public_subnets) > 0
+      error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
+    }
   }
 }
 
@@ -137,8 +142,9 @@ module "postgres" {
   source = "./modules/postgres"
   count  = var.postgres_source == "external" ? 1 : 0
 
-  identifier     = local.postgres_name
-  vpc_id         = local.vpc_id
+  identifier      = local.postgres_name
+  engine_version  = var.postgres_engine_version
+  vpc_id          = local.vpc_id
   subnet_ids     = local.private_subnets
   ingress_cidrs  = [local.vpc_cidr_block]
   vpc_cidr_block = local.vpc_cidr_block
@@ -288,11 +294,7 @@ module "bastion" {
 module "k8s_bootstrap" {
   source = "./modules/k8s-bootstrap"
 
-  cluster_name           = local.cluster_name
-  cluster_endpoint       = module.eks.cluster_endpoint
-  cluster_ca_certificate = module.eks.cluster_certificate_authority_data
-  region                 = var.region
-  namespace              = var.langsmith_namespace
+  namespace = var.langsmith_namespace
 
   postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
   redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
@@ -301,4 +303,6 @@ module "k8s_bootstrap" {
   letsencrypt_email      = var.letsencrypt_email
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
+
+  depends_on = [module.eks]
 }

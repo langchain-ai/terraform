@@ -1,23 +1,3 @@
-variable "cluster_name" {
-  type        = string
-  description = "Name of the EKS cluster"
-}
-
-variable "cluster_endpoint" {
-  type        = string
-  description = "EKS cluster API server endpoint"
-}
-
-variable "cluster_ca_certificate" {
-  type        = string
-  description = "Base64-encoded certificate authority data for the EKS cluster"
-}
-
-variable "region" {
-  type        = string
-  description = "AWS region"
-}
-
 variable "namespace" {
   type        = string
   description = "Kubernetes namespace for LangSmith"

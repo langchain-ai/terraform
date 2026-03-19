@@ -1,49 +1,10 @@
 # k8s-bootstrap: Provisions supporting Kubernetes resources for LangSmith.
 # Creates the namespace, database/cache secrets, KEDA, and cert-manager.
 # The LangSmith Helm chart itself is deployed separately via aws/helm/scripts/deploy.sh.
-
-terraform {
-  required_providers {
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.0"
-    }
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-# ── Providers ─────────────────────────────────────────────────────────────────
-# Cluster credentials are passed in from the root module (module.eks outputs).
-# Using exec-based auth so this module never needs a raw token in state.
-
-provider "kubernetes" {
-  host                   = var.cluster_endpoint
-  cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
-  }
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = var.cluster_endpoint
-    cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
-    }
-  }
-}
+#
+# Providers (kubernetes, helm, aws) are inherited from the root module — do not
+# define provider blocks here. See:
+# https://developer.hashicorp.com/terraform/language/modules/develop/providers
 
 # ── Namespace ────────────────────────────────────────────────────────────────
 

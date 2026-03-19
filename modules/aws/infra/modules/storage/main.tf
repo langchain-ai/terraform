@@ -80,6 +80,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
 }
 
 resource "aws_s3_bucket_policy" "bucket_policy" {
+  count  = var.langsmith_irsa_role_arn != null ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
 
   policy = jsonencode({
@@ -92,7 +93,10 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
           AWS = var.langsmith_irsa_role_arn
         },
         Action = [
-          "s3:*",
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
         ],
         Resource = [
           aws_s3_bucket.bucket.arn,

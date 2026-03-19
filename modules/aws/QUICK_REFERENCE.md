@@ -55,31 +55,31 @@ make kubeconfig
 
 ## Enable Optional Addons
 
-Copy `.example` files before deploying:
+`init-values.sh` prompts for product tier on first run. To add addons later, copy from `examples/`:
 
 ```bash
 # Deployments feature (required for Agent Builder)
-cp helm/values/langsmith-values-agent-deploys.yaml.example \
+cp helm/values/examples/langsmith-values-agent-deploys.yaml \
    helm/values/langsmith-values-agent-deploys.yaml
 
 # Agent Builder (requires agent-deploys)
-cp helm/values/langsmith-values-agent-builder.yaml.example \
+cp helm/values/examples/langsmith-values-agent-builder.yaml \
    helm/values/langsmith-values-agent-builder.yaml
 
 # ClickHouse Insights
-cp helm/values/langsmith-values-insights.yaml.example \
+cp helm/values/examples/langsmith-values-insights.yaml \
    helm/values/langsmith-values-insights.yaml
 
 # Then redeploy
 make deploy
 ```
 
-**Sizing**: HA sizing is enabled by default. For dev/test/POC:
+**Sizing**: `init-values.sh` prompts for sizing on first run. To switch later:
 
 ```bash
-rm helm/values/langsmith-values-ha.yaml
-cp helm/values/langsmith-values-dev.yaml.example \
-   helm/values/langsmith-values-dev.yaml
+rm helm/values/langsmith-values-sizing-ha.yaml
+cp helm/values/examples/langsmith-values-sizing-light.yaml \
+   helm/values/langsmith-values-sizing-light.yaml
 ```
 
 ---

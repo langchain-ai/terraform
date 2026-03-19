@@ -1,14 +1,8 @@
-# Dev/test/POC resource overrides for LangSmith on AWS.
+# Light sizing — reduced resource requests for POCs, trials, and staging.
+# Single replicas, no autoscaling. For production, use langsmith-values-sizing-ha.yaml.
 #
-# Single replicas, reduced resource requests — suitable for POCs, trials, and
-# staging environments where cost matters more than resilience.
-# For production workloads, use langsmith-values-ha.yaml.example instead.
-#
-# Copy to langsmith-values-dev.yaml to activate:
-#   cp langsmith-values-dev.yaml.example langsmith-values-dev.yaml
-#
-# deploy.sh picks it up automatically if the file is present, applied after
-# langsmith-values-{env}.yaml so these settings win.
+# init-values.sh copies this to ../langsmith-values-sizing-light.yaml when you choose light sizing.
+# Manual: cp examples/langsmith-values-sizing-light.yaml ../langsmith-values-sizing-light.yaml
 
 platformBackend:
   resources:

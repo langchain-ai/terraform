@@ -23,13 +23,21 @@ RESET='\033[0m'
 
 _ask() {
   local prompt="$1" default="${2:-}"
-  if [[ -n "$default" ]]; then
-    printf "  %s ${DIM}[%s]${RESET}: " "$prompt" "$default"
-  else
-    printf "  %s: " "$prompt"
-  fi
-  read -r _REPLY
-  _REPLY="${_REPLY:-$default}"
+  while true; do
+    if [[ -n "$default" ]]; then
+      printf "  %s ${DIM}[%s]${RESET}: " "$prompt" "$default"
+    else
+      printf "  %s: " "$prompt"
+    fi
+    read -r _REPLY
+    _REPLY="${_REPLY:-$default}"
+    # Reject shell metacharacters that could cause injection in heredocs
+    if [[ "$_REPLY" =~ [\`\$\!\\] ]]; then
+      _red "  ERROR: value must not contain \`, \$, !, or \\ characters. Try again."
+      continue
+    fi
+    break
+  done
 }
 
 _ask_yn() {
@@ -59,6 +67,17 @@ _ask_choice() {
     _red "Invalid selection."; echo ""
     exit 1
   fi
+}
+
+_ask_int() {
+  local prompt="$1" default="${2:-}"
+  while true; do
+    _ask "$prompt" "$default"
+    if [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
+      break
+    fi
+    _red "  ERROR: must be a number. Try again."
+  done
 }
 
 _section() {
@@ -105,8 +124,14 @@ printf "  Profile: $(_green "$PROFILE")\n"
 
 _section "2. Naming & Region"
 
-_ask "Company/team prefix (max 11 chars, lowercase)" "myco"
-NAME_PREFIX="$_REPLY"
+while true; do
+  _ask "Company/team prefix (max 11 chars, lowercase)" "myco"
+  NAME_PREFIX="$_REPLY"
+  if [[ ${#NAME_PREFIX} -le 11 ]] && [[ "$NAME_PREFIX" =~ ^[a-z][a-z0-9-]*$ ]]; then
+    break
+  fi
+  _red "  ERROR: must be 1-11 lowercase alphanumeric chars (may include hyphens, must start with a letter)."
+done
 
 if [[ "$PROFILE" == "prod" ]]; then
   _ask "Environment" "prod"
@@ -205,9 +230,9 @@ fi
 echo ""
 _ask "Node group instance type" "$NODE_INSTANCE"
 NODE_INSTANCE="$_REPLY"
-_ask "Node group min size" "$NODE_MIN"
+_ask_int "Node group min size" "$NODE_MIN"
 NODE_MIN="$_REPLY"
-_ask "Node group max size" "$NODE_MAX"
+_ask_int "Node group max size" "$NODE_MAX"
 NODE_MAX="$_REPLY"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -257,9 +282,9 @@ if [[ "$PG_SOURCE" == "external" ]]; then
   echo ""
   _ask "RDS instance type" "$PG_INSTANCE"
   PG_INSTANCE="$_REPLY"
-  _ask "RDS initial storage (GB)" "$PG_STORAGE"
+  _ask_int "RDS initial storage (GB)" "$PG_STORAGE"
   PG_STORAGE="$_REPLY"
-  _ask "RDS max storage (GB, for autoscaling)" "$PG_MAX_STORAGE"
+  _ask_int "RDS max storage (GB, for autoscaling)" "$PG_MAX_STORAGE"
   PG_MAX_STORAGE="$_REPLY"
 
   if [[ "$PROFILE" != "prod" ]]; then
@@ -384,9 +409,9 @@ S3_SHORT=14
 S3_LONG=400
 
 if [[ "$PROFILE" == "prod" ]]; then
-  _ask "S3 short-lived trace TTL (days)" "14"
+  _ask_int "S3 short-lived trace TTL (days)" "14"
   S3_SHORT="$_REPLY"
-  _ask "S3 long-lived trace TTL (days)" "400"
+  _ask_int "S3 long-lived trace TTL (days)" "400"
   S3_LONG="$_REPLY"
 else
   printf "  $(_dim "Using defaults: short=14d, long=400d. Edit terraform.tfvars to change.")\n"

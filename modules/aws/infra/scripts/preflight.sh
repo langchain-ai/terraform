@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     -s|--skip_resource_tests) SKIP_RESOURCE_TESTS=true; shift ;;
     -y|--yes)                 NON_INTERACTIVE=true; shift ;;
     --create-test-resources)  CREATE_TEST_RESOURCES=true; shift ;;
-    --domain)                 ACM_DOMAIN="$2"; shift 2 ;;
+    --domain)                 [[ $# -lt 2 ]] && { printf "ERROR: --domain requires an argument\n" >&2; exit 1; }; ACM_DOMAIN="$2"; shift 2 ;;
     *)
       printf "Unknown option: %s\n" "$1"
       printf "Usage: %s [-s] [-y] [--create-test-resources] [--domain <domain>]\n" "$0"

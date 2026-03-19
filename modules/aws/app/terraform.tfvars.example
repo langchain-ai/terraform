@@ -15,9 +15,9 @@ admin_email = "admin@example.com"
 # release_name  = "langsmith"
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
-# "ha"   = production (default) — multi-replica, HPA autoscaling
-# "dev"  = reduced resources for POC/test
-# "none" = chart defaults
+# "ha"    = production (default) — multi-replica, HPA autoscaling
+# "light" = reduced resources for POC/test
+# "none"  = chart defaults
 
 # sizing = "ha"
 

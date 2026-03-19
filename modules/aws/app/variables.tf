@@ -66,6 +66,12 @@ variable "tls_certificate_source" {
   default     = null
 }
 
+variable "acm_certificate_arn" {
+  description = "ARN of the ACM certificate. Required when tls_certificate_source = acm."
+  type        = string
+  default     = null
+}
+
 variable "langsmith_namespace" {
   description = "Kubernetes namespace for LangSmith"
   type        = string
@@ -112,18 +118,56 @@ variable "helm_force_update" {
   default     = false
 }
 
+variable "eso_refresh_interval" {
+  description = "How often ESO syncs secrets from SSM into the langsmith-config K8s Secret (e.g. 1h, 15m, 5m). Lower values help during debugging or secret rotation."
+  type        = string
+  default     = "1h"
+}
+
+variable "helm_values_path" {
+  description = "Path to directory containing Helm values YAML files. Defaults to helm/values/ (populated by make init-values). Override for BYOI or custom values."
+  type        = string
+  default     = null
+}
+
 #------------------------------------------------------------------------------
 # Sizing
 #------------------------------------------------------------------------------
 
 variable "sizing" {
-  description = "Resource sizing profile: ha (production), dev (reduced), or none (chart defaults)"
+  description = "Resource sizing profile: ha (production), light (reduced for POC/test), or none (chart defaults)"
   type        = string
   default     = "ha"
 
   validation {
-    condition     = contains(["ha", "dev", "none"], var.sizing)
-    error_message = "sizing must be one of: ha, dev, none"
+    condition     = contains(["ha", "light", "none"], var.sizing)
+    error_message = "sizing must be one of: ha, light, none"
+  }
+}
+
+#------------------------------------------------------------------------------
+# External services
+#------------------------------------------------------------------------------
+
+variable "postgres_source" {
+  description = "PostgreSQL deployment type: 'external' (RDS, default) or 'in-cluster' (Helm)"
+  type        = string
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.postgres_source)
+    error_message = "postgres_source must be one of: external, in-cluster."
+  }
+}
+
+variable "redis_source" {
+  description = "Redis deployment type: 'external' (ElastiCache, default) or 'in-cluster' (Helm)"
+  type        = string
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.redis_source)
+    error_message = "redis_source must be one of: external, in-cluster."
   }
 }
 

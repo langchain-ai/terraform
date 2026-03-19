@@ -67,6 +67,26 @@ resource "kubernetes_manifest" "cluster_secret_store" {
   }
 }
 
+# ── SSM parameter existence checks ──────────────────────────────────────────
+# Validate that optional encryption keys exist in SSM when their feature toggle
+# is enabled. Without these, ESO fails to sync the entire langsmith-config secret
+# (all-or-nothing), causing a total application outage — not just a feature-specific failure.
+
+data "aws_ssm_parameter" "agent_builder_key" {
+  count = var.enable_agent_builder ? 1 : 0
+  name  = "${local.ssm_prefix}/agent-builder-encryption-key"
+}
+
+data "aws_ssm_parameter" "insights_key" {
+  count = var.enable_insights ? 1 : 0
+  name  = "${local.ssm_prefix}/insights-encryption-key"
+}
+
+data "aws_ssm_parameter" "deployments_key" {
+  count = var.enable_agent_deploys ? 1 : 0
+  name  = "${local.ssm_prefix}/deployments-encryption-key"
+}
+
 # ── ESO: ExternalSecret ──────────────────────────────────────────────────────
 # Syncs secrets from SSM → K8s Secret (langsmith-config).
 # deploy.sh does this with kubectl apply; here we manage it in Terraform.
@@ -82,7 +102,7 @@ resource "kubernetes_manifest" "external_secret" {
       namespace = local.namespace
     }
     spec = {
-      refreshInterval = "1h"
+      refreshInterval = var.eso_refresh_interval
       secretStoreRef = {
         name = "langsmith-ssm"
         kind = "ClusterSecretStore"
@@ -111,6 +131,13 @@ resource "kubernetes_manifest" "external_secret" {
             remoteRef = { key = "${local.ssm_prefix}/langsmith-admin-password" }
           },
         ],
+        # Deployments encryption key — only if addon enabled
+        var.enable_agent_deploys ? [
+          {
+            secretKey = "deployments_encryption_key"
+            remoteRef = { key = "${local.ssm_prefix}/deployments-encryption-key" }
+          },
+        ] : [],
         # Agent Builder encryption key — only if addon enabled
         var.enable_agent_builder ? [
           {
@@ -130,6 +157,28 @@ resource "kubernetes_manifest" "external_secret" {
   }
 }
 
+# ── ClickHouse Secret (only when Insights is enabled) ────────────────────────
+# Stores ClickHouse credentials in a K8s Secret so the password never appears
+# in Helm values or Helm release metadata.
+
+resource "kubernetes_secret" "clickhouse" {
+  count = var.enable_insights ? 1 : 0
+
+  metadata {
+    name      = "langsmith-clickhouse"
+    namespace = local.namespace
+  }
+  data = {
+    clickhouse_host     = var.clickhouse_host
+    clickhouse_port     = tostring(var.clickhouse_port)
+    clickhouse_user     = var.clickhouse_username
+    clickhouse_password = var.clickhouse_password
+    clickhouse_db       = var.clickhouse_database
+    clickhouse_tls      = tostring(var.clickhouse_tls)
+  }
+  type = "Opaque"
+}
+
 # ── Helm Release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "langsmith" {
@@ -146,85 +195,64 @@ resource "helm_release" "langsmith" {
 
   force_update = var.helm_force_update
 
-  # Base AWS values
+  # Values layering — YAML files are the single source of truth (shared with helm/scripts path).
+  # Only overrides_values is HCL — it contains dynamic, env-specific config (hostname, IRSA, S3).
   values = concat(
-    [yamlencode(local.base_values)],
+    # 1. Base AWS config (ingress, storage, auth, blob, external postgres/redis)
+    [file("${local.values_path}/langsmith-values.yaml")],
+    # 2. Dynamic overrides (hostname, IRSA annotations, S3 bucket, region)
     [yamlencode(local.overrides_values)],
-    var.sizing == "ha" ? [yamlencode(local.ha_values)] : [],
-    var.sizing == "dev" ? [yamlencode(local.dev_values)] : [],
-    var.enable_agent_deploys ? [yamlencode(local.agent_deploys_values)] : [],
-    var.enable_agent_builder ? [yamlencode(local.agent_builder_values)] : [],
-    var.enable_insights ? [yamlencode(local.insights_values)] : [],
+    # 3. Sizing
+    var.sizing == "ha"    ? [file("${local.values_path}/langsmith-values-sizing-ha.yaml")] : [],
+    var.sizing == "light" ? [file("${local.values_path}/langsmith-values-sizing-light.yaml")] : [],
+    # 4. Product addons
+    var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
+    var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
+    var.enable_insights      ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
   )
 }
 
-# ── langsmith-ksa IRSA annotation ─────────────────────────────────────────────
-# The operator creates this SA for agent deployment pods. It needs the IRSA
-# annotation for S3 access. Applied after Helm so the SA exists.
+# ── langsmith-ksa for agent deployment pods ──────────────────────────────────
+# Creates the SA up front with the IRSA annotation so the operator's spawned
+# agent pods have S3 access from the start. The SA must exist before the
+# operator tries to use it — kubernetes_annotations alone would fail on first
+# apply because the SA doesn't exist yet.
 
-resource "kubernetes_annotations" "langsmith_ksa" {
+resource "kubernetes_service_account_v1" "langsmith_ksa" {
   count = var.enable_agent_deploys ? 1 : 0
 
-  depends_on = [helm_release.langsmith]
-
-  api_version = "v1"
-  kind        = "ServiceAccount"
   metadata {
     name      = "langsmith-ksa"
     namespace = local.namespace
+    annotations = local.irsa_annotations
   }
-  annotations = local.irsa_annotations
-  force       = true
+
+  lifecycle {
+    ignore_changes = [metadata[0].labels]
+  }
 }
 
 #------------------------------------------------------------------------------
-# Helm Values — built from variables
+# Helm Values — dynamic overrides only
 #
-# These locals replicate the layered values files from helm/values/.
-# Each block maps 1:1 with an equivalent YAML file.
+# Static values (sizing, resource limits, addon config) come from the YAML files
+# in helm/values/ via file(). These are the same files the scripts path uses,
+# so both deployment paths share a single source of truth.
+# Requires: make init-values (copies examples/ → values/ and generates overrides).
+#
+# Only env-specific config that requires variable interpolation lives here as HCL.
 #------------------------------------------------------------------------------
 
 locals {
-  # langsmith-values.yaml equivalent — base AWS config
-  base_values = {
-    ingress = {
-      enabled           = true
-      ingressClassName  = "alb"
-      annotations       = local.ingress_annotations
-    }
-    storage = {
-      storageClassName = "gp3"
-    }
-    config = {
-      authType           = "mixed"
-      existingSecretName = "langsmith-config"
-      basicAuth = {
-        enabled = true
-      }
-      blobStorage = {
-        enabled = true
-        engine  = "S3"
-      }
-    }
-    postgres = {
-      external = {
-        enabled              = true
-        existingSecretName   = "langsmith-postgres"
-        connectionUrlSecretKey = "connection_url"
-      }
-    }
-    redis = {
-      external = {
-        enabled              = true
-        existingSecretName   = "langsmith-redis"
-        connectionUrlSecretKey = "connection_url"
-      }
-    }
-  }
-
-  # langsmith-values-overrides.yaml equivalent — env-specific config
+  # Overrides — env-specific config generated from Terraform variables.
+  # Equivalent to what init-values.sh writes into langsmith-values-overrides.yaml.
   overrides_values = merge(
     {
+      ingress = {
+        enabled          = true
+        ingressClassName = "alb"
+        annotations      = local.ingress_annotations
+      }
       config = {
         hostname             = local.hostname
         initialOrgAdminEmail = var.admin_email
@@ -242,196 +270,39 @@ locals {
         { name = "AWS_DEFAULT_REGION", value = local.region },
       ]
     },
+    # Postgres/Redis: disable external if using in-cluster
+    var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
+    var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
     # IRSA annotations for each component
     { for component in local.irsa_components : component => {
       serviceAccount = {
         annotations = local.irsa_annotations
       }
-    }},
+    } },
   )
 
-  # langsmith-values-ha.yaml equivalent
-  ha_values = {
-    platformBackend = {
-      resources = {
-        requests = { cpu = "500m", memory = "1Gi" }
-        limits   = { cpu = "1", memory = "2Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 2, maxReplicas = 10, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-    backend = {
-      resources = {
-        requests = { cpu = "1", memory = "2Gi" }
-        limits   = { cpu = "2", memory = "4Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 3, maxReplicas = 10, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-    ingestQueue = {
-      resources = {
-        requests = { cpu = "1", memory = "2Gi" }
-        limits   = { cpu = "2", memory = "4Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 3, maxReplicas = 10, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-    queue = {
-      resources = {
-        requests = { cpu = "1", memory = "2Gi" }
-        limits   = { cpu = "2", memory = "4Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 3, maxReplicas = 10, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-    frontend = {
-      resources = {
-        requests = { cpu = "500m", memory = "1Gi" }
-        limits   = { cpu = "1", memory = "2Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 2, maxReplicas = 10, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-    playground = {
-      resources = {
-        requests = { cpu = "500m", memory = "1Gi" }
-        limits   = { cpu = "1", memory = "8Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 1, maxReplicas = 5, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-    aceBackend = {
-      resources = {
-        requests = { cpu = "200m", memory = "1Gi" }
-        limits   = { cpu = "1", memory = "2Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 1, maxReplicas = 5, targetCPUUtilizationPercentage = 50, targetMemoryUtilizationPercentage = 80 } }
-    }
-  }
-
-  # langsmith-values-dev.yaml equivalent
-  dev_values = {
-    platformBackend = { resources = { requests = { cpu = "200m", memory = "512Mi" }, limits = { cpu = "500m", memory = "1Gi" } } }
-    backend         = { resources = { requests = { cpu = "250m", memory = "512Mi" }, limits = { cpu = "1", memory = "2Gi" } } }
-    ingestQueue     = { resources = { requests = { cpu = "250m", memory = "512Mi" }, limits = { cpu = "1", memory = "2Gi" } } }
-    queue           = { resources = { requests = { cpu = "250m", memory = "512Mi" }, limits = { cpu = "1", memory = "2Gi" } } }
-    frontend        = { resources = { requests = { cpu = "100m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } } }
-    playground      = { resources = { requests = { cpu = "100m", memory = "256Mi" }, limits = { cpu = "500m", memory = "1Gi" } } }
-    aceBackend      = { resources = { requests = { cpu = "100m", memory = "256Mi" }, limits = { cpu = "500m", memory = "512Mi" } } }
-  }
-
-  # langsmith-values-agent-deploys.yaml equivalent
-  agent_deploys_values = {
+  # Agent deploys override — only the dynamic tlsEnabled field.
+  # Resource sizing and operator template come from the YAML file.
+  agent_deploys_overrides = {
     config = {
       deployment = {
-        enabled    = true
         tlsEnabled = local.tls_enabled_for_deploys
       }
     }
-    hostBackend = {
-      enabled = true
-      resources = {
-        requests = { cpu = "500m", memory = "512Mi" }
-        limits   = { cpu = "2", memory = "2Gi" }
-      }
-      autoscaling = { hpa = { enabled = true, minReplicas = 1, maxReplicas = 5, targetCPUUtilizationPercentage = 70 } }
-    }
-    listener = {
-      enabled = true
-      resources = {
-        requests = { cpu = "1000m", memory = "2Gi" }
-        limits   = { cpu = "2", memory = "4Gi" }
-      }
-    }
-    operator = {
-      enabled = true
-      resources = {
-        requests = { cpu = "100m", memory = "128Mi" }
-        limits   = { cpu = "500m", memory = "512Mi" }
-      }
-      templates = {
-        deployment = <<-YAML
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: $${name}
-            namespace: $${namespace}
-          spec:
-            replicas: $${replicas}
-            revisionHistoryLimit: 10
-            selector:
-              matchLabels:
-                app: $${name}
-            template:
-              metadata:
-                labels:
-                  app: $${name}
-              spec:
-                enableServiceLinks: false
-                serviceAccountName: langsmith-ksa
-                containers:
-                - name: api-server
-                  image: $${image}
-                  ports:
-                  - name: api-server
-                    containerPort: 8000
-                    protocol: TCP
-                  livenessProbe:
-                    httpGet:
-                      path: /ok
-                      port: 8000
-                    periodSeconds: 15
-                    timeoutSeconds: 5
-                    failureThreshold: 6
-                  readinessProbe:
-                    httpGet:
-                      path: /ok
-                      port: 8000
-                    periodSeconds: 15
-                    timeoutSeconds: 5
-                    failureThreshold: 6
-                  resources:
-                    requests:
-                      cpu: 100m
-                      memory: 256Mi
-                    limits:
-                      cpu: 1000m
-                      memory: 1Gi
-        YAML
-      }
-    }
   }
 
-  # langsmith-values-agent-builder.yaml equivalent
-  agent_builder_values = {
-    config = {
-      agentBuilder = {
-        enabled = true
-      }
-    }
-    backend = {
-      agentBootstrap = {
-        enabled = true
-      }
-    }
-    agentBuilderToolServer = {
-      enabled = true
-    }
-    agentBuilderTriggerServer = {
-      enabled = true
-    }
-  }
-
-  # langsmith-values-insights.yaml equivalent
-  insights_values = {
-    config = {
-      insights = {
-        enabled = true
-      }
-    }
+  # Insights override — ClickHouse connection details from variables.
+  # The YAML file enables the feature; this layers on the actual connection config.
+  # Credentials are stored in the langsmith-clickhouse K8s Secret (created above).
+  insights_overrides = {
     clickhouse = {
       external = {
-        enabled  = true
-        host     = var.clickhouse_host
-        port     = var.clickhouse_port
-        database = var.clickhouse_database
-        username = var.clickhouse_username
-        password = var.clickhouse_password
-        tls      = var.clickhouse_tls
+        host               = var.clickhouse_host
+        port               = tostring(var.clickhouse_port)
+        database           = var.clickhouse_database
+        user               = var.clickhouse_username
+        tls                = var.clickhouse_tls
+        existingSecretName = "langsmith-clickhouse"
       }
     }
   }

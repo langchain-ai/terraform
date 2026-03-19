@@ -1,8 +1,8 @@
-# Agent Builder overrides — enable when deploying LangGraph Platform (self-hosted).
+# Agent Builder — visual agent building UI (requires Deployments).
 #
-# Copy to langsmith-values-agent-builder.yaml to activate.
-# deploy.sh picks it up automatically if the file is present.
-#   cp langsmith-values-agent-builder.yaml.example langsmith-values-agent-builder.yaml
+# init-values.sh copies this to ../langsmith-values-agent-builder.yaml when you choose
+# a product tier that includes Agent Builder (tier 3+).
+# Manual: cp examples/langsmith-values-agent-builder.yaml ../langsmith-values-agent-builder.yaml
 #
 # Prerequisites:
 #   - Agent Builder / LangGraph Platform entitlement in your LangSmith license

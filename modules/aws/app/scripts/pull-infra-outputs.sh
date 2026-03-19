@@ -37,31 +37,31 @@ langsmith_irsa_role_arn=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_ir
 bucket_name=$(terraform -chdir="$INFRA_DIR" output -raw bucket_name)
 alb_arn=$(terraform -chdir="$INFRA_DIR" output -raw alb_arn 2>/dev/null || echo "")
 alb_dns_name=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null || echo "")
-alb_scheme=$(terraform -chdir="$INFRA_DIR" output -raw alb_scheme 2>/dev/null || echo "internet-facing")
+alb_scheme=$(terraform -chdir="$INFRA_DIR" output -raw alb_scheme) || {
+  echo "ERROR: Could not read alb_scheme from infra outputs." >&2
+  echo "       This is required to set the correct ALB ingress annotation." >&2
+  echo "       Set alb_scheme manually in app/terraform.tfvars (internet-facing or internal)." >&2
+  exit 1
+}
 tls_certificate_source=$(terraform -chdir="$INFRA_DIR" output -raw tls_certificate_source)
+acm_certificate_arn=$(terraform -chdir="$INFRA_DIR" output -raw acm_certificate_arn 2>/dev/null || echo "")
+postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/dev/null || echo "external")
+redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
 langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace)
 
-# ── Read region and environment from terraform.tfvars ────────────────────────
-# These are input variables, not outputs — parse from tfvars.
+# ── Read region and environment from terraform output ────────────────────────
 
-_tfvars="$INFRA_DIR/terraform.tfvars"
-
-if [[ ! -f "$_tfvars" ]]; then
-  echo "ERROR: terraform.tfvars not found at $_tfvars" >&2
-  exit 1
-fi
-
-region=$(grep -E '^\s*region\s*=' "$_tfvars" \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || region=""
-environment=$(grep -E '^\s*environment\s*=' "$_tfvars" \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || environment=""
+region=$(terraform -chdir="$INFRA_DIR" output -raw region 2>/dev/null) || region=""
+environment=$(terraform -chdir="$INFRA_DIR" output -raw environment 2>/dev/null) || environment=""
 
 if [[ -z "$region" ]]; then
-  echo "ERROR: Could not parse region from $_tfvars" >&2
+  echo "ERROR: Could not read region from infra outputs." >&2
+  echo "       If using an older infra module, set region manually in app/terraform.tfvars." >&2
   exit 1
 fi
 if [[ -z "$environment" ]]; then
-  echo "ERROR: Could not parse environment from $_tfvars" >&2
+  echo "ERROR: Could not read environment from infra outputs." >&2
+  echo "       If using an older infra module, set environment manually in app/terraform.tfvars." >&2
   exit 1
 fi
 
@@ -79,6 +79,9 @@ cat > "$OUT_FILE" <<EOF
   "alb_dns_name": "$alb_dns_name",
   "alb_scheme": "$alb_scheme",
   "tls_certificate_source": "$tls_certificate_source",
+  "acm_certificate_arn": "$acm_certificate_arn",
+  "postgres_source": "$postgres_source",
+  "redis_source": "$redis_source",
   "langsmith_namespace": "$langsmith_namespace"
 }
 EOF

@@ -1,9 +1,9 @@
 # AWS base Helm values for LangSmith.
 #
-# Copy to langsmith-values.yaml to activate:
-#   cp langsmith-values.yaml.example langsmith-values.yaml
+# init-values.sh copies this to ../langsmith-values.yaml on first run.
+# Manual: cp examples/langsmith-values.yaml ../langsmith-values.yaml
 #
-# This file is applied on every deploy alongside langsmith-values-{env}.yaml.
+# Applied on every deploy alongside langsmith-values-overrides.yaml.
 # It configures AWS-native integrations: ALB ingress, gp3 storage, S3 blob storage,
 # and ESO-backed secret management.
 #

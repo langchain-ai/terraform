@@ -19,6 +19,21 @@
 
 set -euo pipefail
 
+# ── Cleanup Trap ──────────────────────────────────────────────────────────────
+
+_CLEANUP_FILES=()
+_CLEANUP_DIRS=()
+
+cleanup() {
+  for f in "${_CLEANUP_FILES[@]+"${_CLEANUP_FILES[@]}"}"; do
+    rm -f "$f" 2>/dev/null || true
+  done
+  for d in "${_CLEANUP_DIRS[@]+"${_CLEANUP_DIRS[@]}"}"; do
+    rm -rf "$d" 2>/dev/null || true
+  done
+}
+trap cleanup EXIT INT TERM
+
 # ── Constants & Defaults ─────────────────────────────────────────────────────
 
 NAMESPACE="langsmith"
@@ -38,7 +53,6 @@ SKIP_JOBS=false
 SKIP_SERVICES=false
 SKIP_INGRESS=false
 SKIP_CLOUD=false
-SKIP_BEACON=false
 TAIL_LINES=1000
 INCLUDE_LOGS=true
 COMMAND=""
@@ -81,6 +95,10 @@ ADDON_COMPONENTS=(
 )
 
 # ── Color / Output Helpers ───────────────────────────────────────────────────
+
+# Initialize to empty so set -u doesn't crash if warn()/error() are called
+# before setup_colors (e.g. during parse_args).
+RED="" GREEN="" YELLOW="" BOLD="" DIM="" RESET=""
 
 setup_colors() {
   if [[ "$NO_COLOR" == true ]] || [[ ! -t 1 ]]; then
@@ -143,7 +161,7 @@ section() {
 
 print_summary() {
   local elapsed="${1:-}"
-  local total=$((PASS_COUNT + FAIL_COUNT))
+  local total=$((PASS_COUNT + FAIL_COUNT + WARN_COUNT))
   echo
   if [[ -n "$elapsed" ]]; then
     printf "${BOLD}--- Summary (%s) ---${RESET}\n" "$elapsed"
@@ -171,8 +189,49 @@ detect_dependencies() {
   command -v openssl >/dev/null 2>&1 && HAS_OPENSSL=true
   command -v curl >/dev/null 2>&1 && HAS_CURL=true
 
+  _detect_base64
+  if [[ -z "$_BASE64_DECODE_CMD" ]]; then
+    warn "No working base64 decoder found — TLS certificate checks will be skipped."
+  fi
+
   if [[ "$HAS_JQ" == false ]]; then
     warn "jq not found — some checks will use degraded parsing. Install jq for best results."
+  fi
+}
+
+# Portable base64 decode
+#
+# Platform landscape:
+#   GNU coreutils (Linux, WSL):  base64 -d
+#   BusyBox (Alpine, minimal):   base64 -d
+#   BSD/macOS (older, <13):      base64 -D   (-d not recognized)
+#   BSD/macOS (Ventura+ >=13):   base64 -d   (both -d and -D work)
+#   openssl (everywhere):        openssl base64 -d
+#
+# Strategy: probe once with a known value at startup, cache the working
+# flag, and reuse it. This avoids the fragile `cmd1 || cmd2` pattern where
+# the first command's behavior with stdin on failure is platform-dependent.
+_BASE64_DECODE_CMD=""
+
+_detect_base64() {
+  local test_input="dGVzdA=="  # "test" in base64
+  # Prefer base64 (faster, no openssl dep for non-TLS paths)
+  if echo "$test_input" | base64 -d 2>/dev/null | grep -q "^test$"; then
+    _BASE64_DECODE_CMD="base64 -d"
+  elif echo "$test_input" | base64 -D 2>/dev/null | grep -q "^test$"; then
+    _BASE64_DECODE_CMD="base64 -D"
+  elif echo "$test_input" | openssl base64 -d 2>/dev/null | grep -q "^test$"; then
+    _BASE64_DECODE_CMD="openssl base64 -d"
+  fi
+}
+
+base64_decode() {
+  if [[ -n "$_BASE64_DECODE_CMD" ]]; then
+    $_BASE64_DECODE_CMD
+  else
+    # Should not happen — _detect_base64 covers all known platforms.
+    # Last-resort fallback preserving old behavior.
+    base64 -d 2>/dev/null || base64 -D 2>/dev/null
   fi
 }
 
@@ -198,6 +257,7 @@ kube() {
 kube_get_json() {
   local errfile
   errfile=$(mktemp)
+  _CLEANUP_FILES+=("$errfile")
   local result
   if result=$(kubectl ${KUBECTL_ARGS[@]+"${KUBECTL_ARGS[@]}"} "$@" -o json 2>"$errfile"); then
     rm -f "$errfile"
@@ -207,19 +267,13 @@ kube_get_json() {
     local err
     err=$(cat "$errfile")
     rm -f "$errfile"
-    if echo "$err" | grep -qi "forbidden\|Forbidden"; then
+    if echo "$err" | grep -qi "forbidden"; then
       echo "PERMISSION_DENIED"
       return 1
     fi
     echo "ERROR: $err"
     return 1
   fi
-}
-
-# Extract a field using jsonpath (no jq needed)
-kube_get_field() {
-  local resource="$1" jsonpath="$2"
-  kubectl ${KUBECTL_ARGS[@]+"${KUBECTL_ARGS[@]}"} get "$resource" -n "$NAMESPACE" -o jsonpath="$jsonpath" 2>/dev/null
 }
 
 # Resolve selectors: replace "langsmith-" with "${RELEASE_NAME}-" if non-default
@@ -232,24 +286,6 @@ resolve_selector() {
   fi
 }
 
-# ── jq Helpers ───────────────────────────────────────────────────────────────
-
-# Apply a jq filter, or pass through if jq unavailable
-jq_filter() {
-  local filter="$1"
-  if [[ "$HAS_JQ" == true ]]; then
-    jq -r "$filter"
-  else
-    cat
-  fi
-}
-
-# Check if a value is in a space-separated list
-contains_word() {
-  local word="$1" list="$2"
-  echo "$list" | tr ' ' '\n' | grep -qxF "$word"
-}
-
 # ── Status Overview ──────────────────────────────────────────────────────────
 
 run_status() {
@@ -258,14 +294,23 @@ run_status() {
   # Cluster connectivity
   if ! kube cluster-info >/dev/null 2>&1; then
     printf "  %-20s ${RED}%s${RESET}\n" "Cluster" "offline"
-    error "Could not connect to the Kubernetes API server. Verify your kubeconfig and that the cluster is reachable."
-    return 1
+    record_fail "cluster_connectivity" "Cluster API unreachable" \
+      "Ensure the Kubernetes cluster is running and accessible. Verify your kubeconfig and network connectivity." \
+      "$DOCS_BASE/diagnostics-self-hosted"
+    return 0
   fi
+  CLUSTER_ONLINE=true
   printf "  %-20s ${GREEN}%s${RESET}\n" "Cluster" "online"
 
   # K8s version
   local k8s_version
-  k8s_version=$(kube version -o json 2>/dev/null | jq_filter '.serverVersion.gitVersion // "unknown"') || k8s_version="unknown"
+  if [[ "$HAS_JQ" == true ]]; then
+    k8s_version=$(kube version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // "unknown"') || k8s_version="unknown"
+  else
+    # Without jq, extract gitVersion with grep/sed fallback
+    k8s_version=$(kube version -o json 2>/dev/null | grep -o '"gitVersion": *"[^"]*"' | head -1 | sed 's/.*"gitVersion": *"//;s/"//') || k8s_version="unknown"
+    [[ -z "$k8s_version" ]] && k8s_version="unknown"
+  fi
   printf "  %-20s %s\n" "K8s Version" "$k8s_version"
 
   # Cloud provider (best-effort from node labels)
@@ -335,12 +380,12 @@ run_status() {
         [[ "$failed" -gt 0 ]] && text="$text, $failed Failed/Error"
         printf "  %-20s ${RED}%s${RESET}\n" "$name" "$text"
         # Show anomalies
-        echo "$pod_json" | jq -r --arg bad "$BAD_POD_REASONS" '
+        echo "$pod_json" | jq -r --arg bad "$BAD_POD_REASONS" --arg red "$RED" --arg reset "$RESET" '
           .items[] |
           (.status.containerStatuses // []) + (.status.initContainerStatuses // []) |
           .[] | select(.state.waiting.reason != null) |
           select(($bad | split(" ")) as $reasons | .state.waiting.reason as $r | $reasons | any(. == $r)) |
-          "    \u001b[31m↳ " + .name + ": " + .state.waiting.reason + "\u001b[0m"
+          "    " + $red + "↳ " + .name + ": " + .state.waiting.reason + $reset
         ' 2>/dev/null || true
       elif [[ "$pending" -gt 0 ]]; then
         printf "  %-20s ${YELLOW}%d/%d Running, %d Pending${RESET}\n" "$name" "$running" "$total" "$pending"
@@ -348,9 +393,9 @@ run_status() {
         printf "  %-20s ${GREEN}%d/%d Running${RESET}\n" "$name" "$running" "$total"
       fi
     else
-      # Degraded mode without jq
+      # Degraded mode without jq — count "phase" keys as a proxy for pod count
       local count
-      count=$(echo "$pod_json" | grep -c '"name"' 2>/dev/null) || count=0
+      count=$(echo "$pod_json" | grep -c '"phase"' 2>/dev/null) || count=0
       printf "  %-20s %s pods\n" "$name" "$count"
     fi
   done
@@ -385,6 +430,38 @@ check_cluster_connectivity() {
       "$DOCS_BASE/diagnostics-self-hosted"
     return 1
   fi
+}
+
+check_namespace() {
+  local ns_exists
+  ns_exists=$(kube get namespace "$NAMESPACE" -o jsonpath='{.metadata.name}' 2>/dev/null) || true
+  if [[ -z "$ns_exists" ]]; then
+    record_fail "namespace" "Namespace \"$NAMESPACE\" not found" \
+      "Verify the namespace exists: kubectl get namespace $NAMESPACE. Use --namespace to specify a different namespace." \
+      "$DOCS_BASE/diagnostics-self-hosted"
+    return 1
+  fi
+
+  # Namespace exists — check if it has any LangSmith pods at all.
+  # Distinguish RBAC failures from genuinely empty namespaces.
+  local pod_output
+  pod_output=$(kube get pods -n "$NAMESPACE" --no-headers 2>&1) || true
+  if echo "$pod_output" | grep -qi "forbidden"; then
+    record_warn "namespace" "Namespace \"$NAMESPACE\" exists (pod listing requires additional RBAC)" \
+      "Apply deploy/rbac.yaml to grant pod list permissions, or use --skip to bypass checks that need it." \
+      "$DOCS_BASE/diagnostics-self-hosted"
+  else
+    local pod_count
+    pod_count=$(echo "$pod_output" | grep -Ecv '^$|^No resources found' 2>/dev/null) || pod_count=0
+    if [[ "$pod_count" -eq 0 ]]; then
+      record_warn "namespace" "Namespace \"$NAMESPACE\" exists but contains no pods" \
+        "Is this the right namespace? Use --namespace to target a different one." \
+        "$DOCS_BASE/diagnostics-self-hosted"
+    else
+      record_pass "namespace" "Namespace \"$NAMESPACE\" exists ($pod_count pods)"
+    fi
+  fi
+  return 0
 }
 
 check_cluster_version() {
@@ -435,7 +512,12 @@ check_deployments() {
   fi
 
   while IFS=$'\t' read -r name replicas available ready generation observed; do
-    if [[ "$available" -ge "$replicas" && "$replicas" -gt 0 ]]; then
+    [[ -z "$name" ]] && continue
+    if [[ "$replicas" -eq 0 ]]; then
+      record_warn "deployment:$NAMESPACE/$name" "Scaled to 0 replicas — deployment is inactive" \
+        "This deployment has 0 desired replicas. If this is unintentional, scale it back up: kubectl scale deployment $name -n $NAMESPACE --replicas=1" \
+        "$DOCS_BASE/diagnostics-self-hosted"
+    elif [[ "$available" -ge "$replicas" ]]; then
       if [[ "$VERBOSE" == true ]]; then
         record_pass "deployment:$NAMESPACE/$name" "${available}/${replicas} available, generation ${observed}/${generation}"
       fi
@@ -463,7 +545,12 @@ check_statefulsets() {
   if [[ "$HAS_JQ" == false ]]; then return; fi
 
   while IFS=$'\t' read -r name replicas ready updated; do
-    if [[ "$ready" -ge "$replicas" && "$replicas" -gt 0 ]]; then
+    [[ -z "$name" ]] && continue
+    if [[ "$replicas" -eq 0 ]]; then
+      record_warn "statefulset:$NAMESPACE/$name" "Scaled to 0 replicas — statefulset is inactive" \
+        "This statefulset has 0 desired replicas. If this is unintentional, scale it back up: kubectl scale statefulset $name -n $NAMESPACE --replicas=1" \
+        "$DOCS_BASE/diagnostics-self-hosted"
+    elif [[ "$ready" -ge "$replicas" ]]; then
       if [[ "$VERBOSE" == true ]]; then
         record_pass "statefulset:$NAMESPACE/$name" "${ready}/${replicas} ready, ${updated}/${replicas} updated"
       fi
@@ -484,7 +571,12 @@ check_daemonsets() {
   if [[ "$HAS_JQ" == false ]]; then return; fi
 
   while IFS=$'\t' read -r name desired ready; do
-    if [[ "$ready" -ge "$desired" && "$desired" -gt 0 ]]; then
+    [[ -z "$name" ]] && continue
+    if [[ "$desired" -eq 0 ]]; then
+      record_warn "daemonset:$NAMESPACE/$name" "Desired 0 pods — no matching nodes" \
+        "This daemonset has 0 desired pods. Verify nodeSelector/tolerations if this is unexpected." \
+        "$DOCS_BASE/diagnostics-self-hosted"
+    elif [[ "$ready" -ge "$desired" ]]; then
       [[ "$VERBOSE" == true ]] && record_pass "daemonset:$NAMESPACE/$name" "${ready}/${desired} ready"
     else
       record_fail "daemonset:$NAMESPACE/$name" "${ready}/${desired} ready" \
@@ -517,6 +609,7 @@ check_pods() {
 
   # Check each pod for bad states, readiness, and restart counts
   while IFS=$'\t' read -r pod phase bad_state ready; do
+    [[ -z "$pod" ]] && continue
     if [[ "$bad_state" != "none" ]]; then
       record_fail "pod:$NAMESPACE/$pod" "Bad state: $bad_state" \
         "Check pod events and container logs: kubectl describe pod $pod -n $NAMESPACE && kubectl logs $pod -n $NAMESPACE" \
@@ -577,32 +670,20 @@ check_pods() {
     ) | @tsv
   ' 2>/dev/null)
 
-  # Init container failures
-  while IFS=$'\t' read -r pod container reason message; do
+  # Init container failures (terminated with non-zero exit only;
+  # waiting-state failures are already caught by the pod-level check above)
+  while IFS=$'\t' read -r pod container reason _message; do
     [[ -z "$pod" ]] && continue
-    if [[ "$reason" == exited:* ]]; then
-      local code="${reason#exited:}"
-      record_fail "init_container:$NAMESPACE/$pod/$container" "Init container $container exited with code $code" \
-        "Check init container logs: kubectl logs $pod -c $container -n $NAMESPACE" \
-        "$DOCS_BASE/diagnostics-self-hosted"
-    else
-      record_fail "init_container:$NAMESPACE/$pod/$container" "Init container $container: $reason" \
-        "Check init container logs and image pull config: kubectl logs $pod -c $container -n $NAMESPACE" \
-        "$DOCS_BASE/diagnostics-self-hosted"
-    fi
+    local code="${reason#exited:}"
+    record_fail "init_container:$NAMESPACE/$pod/$container" "Init container $container exited with code $code" \
+      "Check init container logs: kubectl logs $pod -c $container -n $NAMESPACE" \
+      "$DOCS_BASE/diagnostics-self-hosted"
   done < <(echo "$pods_json" | jq -r '
     .items[] |
     select(.status.phase != "Succeeded") |
     .metadata.name as $pod |
     (.status.initContainerStatuses // [])[] |
-    if .state.waiting.reason != null and
-       (.state.waiting.reason == "CrashLoopBackOff" or
-        .state.waiting.reason == "ImagePullBackOff" or
-        .state.waiting.reason == "ErrImagePull" or
-        .state.waiting.reason == "CreateContainerConfigError")
-    then
-      [$pod, .name, .state.waiting.reason, (.state.waiting.message // "")] | @tsv
-    elif .state.terminated != null and .state.terminated.exitCode != 0
+    if .state.terminated != null and .state.terminated.exitCode != 0
     then
       [$pod, .name, ("exited:" + (.state.terminated.exitCode | tostring)), (.state.terminated.message // "")] | @tsv
     else
@@ -626,6 +707,7 @@ check_jobs() {
   if [[ "$HAS_JQ" == false ]]; then return; fi
 
   while IFS=$'\t' read -r name completions succeeded failed complete; do
+    [[ -z "$name" ]] && continue
     local msg="${succeeded}/${completions} succeeded"
     [[ "$failed" -gt 0 ]] && msg="$msg, $failed failed"
 
@@ -684,10 +766,15 @@ check_helm_release() {
     return
   fi
 
-  local count=0
-  if [[ "$HAS_JQ" == true ]]; then
-    count=$(echo "$helm_json" | jq '.items | length' 2>/dev/null) || count=0
+  if [[ "$HAS_JQ" == false ]]; then
+    # Without jq we know the secret list was returned (passed checks above)
+    # but can't parse the count — report a degraded pass
+    record_pass "helm_release:$RELEASE_NAME" "Helm release secret(s) found (install jq for details)"
+    return
   fi
+
+  local count=0
+  count=$(echo "$helm_json" | jq '.items | length' 2>/dev/null) || count=0
 
   if [[ "$count" -gt 0 ]]; then
     record_pass "helm_release:$RELEASE_NAME" "Helm release found"
@@ -783,24 +870,35 @@ check_services() {
 
   # Get endpoints to check service health
   local ep_json
-  ep_json=$(kube_get_json get endpoints -n "$NAMESPACE" 2>/dev/null) || ep_json="{}"
+  ep_json=$(kube_get_json get endpoints -n "$NAMESPACE" 2>/dev/null) || ep_json=""
+  local ep_usable=false
+  if [[ -n "$ep_json" && "$ep_json" != "PERMISSION_DENIED" && "$ep_json" != ERROR* ]]; then
+    ep_usable=true
+  fi
 
   while IFS=$'\t' read -r name svc_type _cluster_ip; do
+    [[ -z "$name" ]] && continue
     # Check if endpoints exist
     local has_endpoints=false
-    if [[ "$HAS_JQ" == true && -n "$ep_json" && "$ep_json" != ERROR* ]]; then
+    if [[ "$HAS_JQ" == true && "$ep_usable" == true ]]; then
       local ep_count
-      ep_count=$(echo "$ep_json" | jq -r --arg name "$name" '.items[] | select(.metadata.name == $name) | (.subsets // []) | [.[].addresses // [] | length] | add // 0' 2>/dev/null) || ep_count=0
-      [[ "$ep_count" -gt 0 ]] && has_endpoints=true
+      ep_count=$(echo "$ep_json" | jq -r --arg name "$name" '[.items[] | select(.metadata.name == $name) | (.subsets // [])[] | (.addresses // []) | length] | add // 0' 2>/dev/null) || ep_count=0
+      [[ -n "$ep_count" && "$ep_count" -gt 0 ]] && has_endpoints=true
     fi
 
     local ready=true
-    if [[ "$has_endpoints" == false && "$svc_type" != "ExternalName" ]]; then
+    if [[ "$has_endpoints" == false && "$ep_usable" == true && "$svc_type" != "ExternalName" ]]; then
       ready=false
     fi
 
     if [[ "$ready" == true ]]; then
-      [[ "$VERBOSE" == true ]] && record_pass "service:$NAMESPACE/$name" "type=$svc_type, endpoints=$has_endpoints"
+      if [[ "$svc_type" == "ExternalName" ]]; then
+        [[ "$VERBOSE" == true ]] && record_pass "service:$NAMESPACE/$name" "type=ExternalName (no endpoints expected)"
+      elif [[ "$ep_usable" == true ]]; then
+        [[ "$VERBOSE" == true ]] && record_pass "service:$NAMESPACE/$name" "type=$svc_type, endpoints=$has_endpoints"
+      else
+        [[ "$VERBOSE" == true ]] && record_pass "service:$NAMESPACE/$name" "type=$svc_type (endpoint check skipped)"
+      fi
     elif [[ "$svc_type" == "LoadBalancer" ]]; then
       # Check for pending LB address
       local has_address
@@ -842,6 +940,7 @@ check_ingresses() {
 
   # Check each ingress for address and annotations
   while IFS=$'\t' read -r name has_address ingress_class proxy_timeout proxy_body proxy_buffering; do
+    [[ -z "$name" ]] && continue
     # Address check
     if [[ "$has_address" == "true" ]]; then
       [[ "$VERBOSE" == true ]] && record_pass "ingress:$NAMESPACE/$name" "address=true"
@@ -855,12 +954,19 @@ check_ingresses() {
     local cls
     cls=$(echo "$ingress_class" | tr '[:upper:]' '[:lower:]')
     if [[ -n "$cls" && "$cls" != *nginx* ]]; then
-      continue  # not nginx, skip annotation checks
+      continue  # explicitly non-nginx, skip annotation checks
     fi
 
     local prefix="ingress_config:$name"
+    # Detect nginx: either the class says "nginx", or no class is set but
+    # nginx-specific annotations are present (common when relying on the
+    # cluster's default IngressClass).
     local is_nginx=false
-    [[ -n "$cls" ]] && is_nginx=true
+    if [[ -n "$cls" ]]; then
+      is_nginx=true
+    elif [[ -n "$proxy_timeout" || -n "$proxy_body" || -n "$proxy_buffering" ]]; then
+      is_nginx=true
+    fi
 
     # proxy-read-timeout (need >= 3600)
     if [[ -n "$proxy_timeout" ]]; then
@@ -910,6 +1016,10 @@ check_tls_certificates() {
     [[ "$VERBOSE" == true ]] && record_warn "tls_certificates" "TLS checks skipped (openssl not available)" ""
     return
   fi
+  if [[ -z "$_BASE64_DECODE_CMD" ]]; then
+    [[ "$VERBOSE" == true ]] && record_warn "tls_certificates" "TLS checks skipped (no base64 decoder available)" ""
+    return
+  fi
   if [[ "$HAS_JQ" == false ]]; then return; fi
 
   # Find TLS secrets referenced by ingresses
@@ -934,22 +1044,35 @@ check_tls_certificates() {
       continue
     fi
 
+    # Decode cert once to a temp file to avoid triple base64 decode
+    local cert_pem
+    cert_pem=$(mktemp)
+    _CLEANUP_FILES+=("$cert_pem")
+    if ! echo "$cert_data" | base64_decode > "$cert_pem" 2>/dev/null || [[ ! -s "$cert_pem" ]]; then
+      record_warn "tls:$secret_name" "Unable to decode TLS certificate in $secret_name" \
+        "Verify the certificate is valid and properly encoded." \
+        "$DOCS_BASE/self-host-ingress"
+      rm -f "$cert_pem"
+      continue
+    fi
+
     local expiry
-    expiry=$(echo "$cert_data" | base64 -d 2>/dev/null | openssl x509 -enddate -noout 2>/dev/null) || true
+    expiry=$(openssl x509 -enddate -noout -in "$cert_pem" 2>/dev/null) || true
 
     if [[ -z "$expiry" ]]; then
       record_warn "tls:$secret_name" "Unable to parse TLS certificate in $secret_name" \
         "Verify the certificate is valid and properly encoded." \
         "$DOCS_BASE/self-host-ingress"
+      rm -f "$cert_pem"
       continue
     fi
 
     # Check if cert expires within 30 days
     local expiry_date="${expiry#notAfter=}"
-    if echo "$cert_data" | base64 -d 2>/dev/null | openssl x509 -checkend 2592000 -noout 2>/dev/null; then
+    if openssl x509 -checkend 2592000 -noout -in "$cert_pem" 2>/dev/null; then
       [[ "$VERBOSE" == true ]] && record_pass "tls:$secret_name" "Certificate valid (expires: $expiry_date)"
     else
-      if echo "$cert_data" | base64 -d 2>/dev/null | openssl x509 -checkend 0 -noout 2>/dev/null; then
+      if openssl x509 -checkend 0 -noout -in "$cert_pem" 2>/dev/null; then
         record_warn "tls:$secret_name" "Certificate expires within 30 days ($expiry_date)" \
           "Renew the TLS certificate before it expires." \
           "$DOCS_BASE/self-host-ingress"
@@ -959,12 +1082,11 @@ check_tls_certificates() {
           "$DOCS_BASE/self-host-ingress"
       fi
     fi
+    rm -f "$cert_pem"
   done
 }
 
 check_beacon() {
-  if [[ "$SKIP_BEACON" == true ]]; then return; fi
-
   if [[ "$HAS_CURL" == false ]]; then
     record_warn "beacon_reachability" "Beacon check skipped (curl not available)" ""
     return
@@ -972,11 +1094,14 @@ check_beacon() {
 
   local beacon_url="https://beacon.langchain.com"
   if curl -sf --max-time 10 "$beacon_url" >/dev/null 2>&1; then
-    record_pass "beacon_reachability" "Beacon API reachable ($beacon_url)"
+    record_pass "beacon_reachability" "Beacon API reachable from this machine ($beacon_url)"
+    record_detail "Note: this tests connectivity from your workstation, not from inside the cluster."
+    record_detail "Cluster pods may still be unable to reach the beacon if egress is restricted."
   else
-    record_fail "beacon_reachability" "Beacon API unreachable" \
-      "Ensure egress to $beacon_url is allowed for billing. If air-gapped, use --skip-beacon." \
+    record_fail "beacon_reachability" "Beacon API unreachable from this machine" \
+      "Ensure egress to $beacon_url is allowed for billing." \
       "$DOCS_BASE/self-host-egress"
+    record_detail "Note: this tests connectivity from your workstation, not from inside the cluster."
   fi
 }
 
@@ -1127,6 +1252,10 @@ check_clickhouse_disk() {
     [[ -z "$disk_name" ]] && continue
     # Remove decimal for comparison
     local pct_int="${pct_used%.*}"
+    if ! [[ "$pct_int" =~ ^[0-9]+$ ]]; then
+      record_warn "clickhouse_disk:$disk_name" "Unable to parse disk usage for $disk_name (got: $pct_used)"
+      continue
+    fi
     if [[ "$pct_int" -ge 90 ]]; then
       record_fail "clickhouse_disk:$disk_name" "Disk $disk_name is ${pct_used}% full ($free free of $total)" \
         "ClickHouse disk is critically full. Expand storage or reduce retention." \
@@ -1167,10 +1296,20 @@ check_pg_connections() {
     return
   fi
 
+  # Detect PG user from configmap connection string, fall back to "postgres"
+  local pg_user="postgres"
+  if [[ "$HAS_JQ" == true ]]; then
+    local pg_conn
+    pg_conn=$(kube get configmap "${RELEASE_NAME}-config" -n "$NAMESPACE" -o json 2>/dev/null | jq -r '.data.PG_RR_CONNECTION_STRING // .data.PG_CONNECTION_STRING // ""' 2>/dev/null) || true
+    if [[ "$pg_conn" =~ ://([^:@]+)(:|@) ]]; then
+      pg_user="${BASH_REMATCH[1]}"
+    fi
+  fi
+
   local max_conn
-  max_conn=$(kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U postgres -tAc "SHOW max_connections" 2>/dev/null) || true
+  max_conn=$(kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U "$pg_user" -tAc "SHOW max_connections" 2>/dev/null) || true
   local active_conn
-  active_conn=$(kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U postgres -tAc "SELECT count(*) FROM pg_stat_activity" 2>/dev/null) || true
+  active_conn=$(kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U "$pg_user" -tAc "SELECT count(*) FROM pg_stat_activity" 2>/dev/null) || true
 
   if [[ -z "$max_conn" || -z "$active_conn" ]]; then
     record_warn "postgres_connections" "Unable to query Postgres connections (exec may require elevated RBAC)" \
@@ -1181,6 +1320,14 @@ check_pg_connections() {
 
   max_conn=$(echo "$max_conn" | tr -d '[:space:]')
   active_conn=$(echo "$active_conn" | tr -d '[:space:]')
+
+  # Validate numeric before arithmetic
+  if ! [[ "$max_conn" =~ ^[0-9]+$ && "$active_conn" =~ ^[0-9]+$ ]]; then
+    record_warn "postgres_connections" "Unable to parse Postgres connection stats (max=$max_conn, active=$active_conn)" \
+      "Verify Postgres is accessible and the user has sufficient privileges." \
+      "$DOCS_BASE/kubernetes"
+    return
+  fi
 
   if [[ "$max_conn" -gt 0 ]]; then
     local pct=$((active_conn * 100 / max_conn))
@@ -1199,10 +1346,10 @@ check_pg_connections() {
 
   # Idle in transaction
   local idle_count
-  idle_count=$(kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U postgres -tAc "SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction'" 2>/dev/null) || true
+  idle_count=$(kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U "$pg_user" -tAc "SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction'" 2>/dev/null) || true
   idle_count=$(echo "$idle_count" | tr -d '[:space:]')
 
-  if [[ -n "$idle_count" && "$idle_count" -ge 5 ]]; then
+  if [[ -n "$idle_count" && "$idle_count" =~ ^[0-9]+$ && "$idle_count" -ge 5 ]]; then
     record_warn "postgres_idle_in_transaction" "$idle_count connections idle in transaction" \
       "Investigate long-running transactions. These hold locks and consume connection slots."
   fi
@@ -1290,7 +1437,8 @@ run_app_diagnostics() {
       "SELECT type, count() as cnt, any(last_error_message) as example FROM system.query_log WHERE event_date >= today() - 7 AND exception != '' GROUP BY type ORDER BY cnt DESC LIMIT 10 FORMAT PrettyCompact" 2>/dev/null || echo "    (query failed or no exceptions)"
     echo
   else
-    warn "No running ClickHouse pod found — skipping ClickHouse diagnostics"
+    record_warn "clickhouse_diagnostics" "No running ClickHouse pod found" \
+      "Verify ClickHouse is running." "$DOCS_BASE/self-host-external-clickhouse"
   fi
 
   # Postgres queries
@@ -1298,23 +1446,34 @@ run_app_diagnostics() {
   local pg_pod
   pg_pod=$(find_pod_by_selector "$pg_selector")
 
+  # Detect PG user from configmap connection string, fall back to "postgres"
+  local pg_user="postgres"
+  if [[ "$HAS_JQ" == true ]]; then
+    local pg_conn
+    pg_conn=$(kube get configmap "${RELEASE_NAME}-config" -n "$NAMESPACE" -o json 2>/dev/null | jq -r '.data.PG_RR_CONNECTION_STRING // .data.PG_CONNECTION_STRING // ""' 2>/dev/null) || true
+    if [[ "$pg_conn" =~ ://([^:@]+)(:|@) ]]; then
+      pg_user="${BASH_REMATCH[1]}"
+    fi
+  fi
+
   if [[ -n "$pg_pod" ]]; then
     info "Postgres diagnostics (pod: $pg_pod)"
     echo
 
     # Connection stats
     printf "${BOLD}  Connection Stats:${RESET}\n"
-    kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U postgres -c \
+    kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U "$pg_user" -c \
       "SELECT state, count(*) FROM pg_stat_activity GROUP BY state ORDER BY count DESC" 2>/dev/null || echo "    (query failed)"
     echo
 
     # Database sizes
     printf "${BOLD}  Database Sizes:${RESET}\n"
-    kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U postgres -c \
+    kube exec "$pg_pod" -n "$NAMESPACE" -- psql -U "$pg_user" -c \
       "SELECT datname, pg_size_pretty(pg_database_size(datname)) as size FROM pg_database WHERE datname NOT IN ('template0','template1') ORDER BY pg_database_size(datname) DESC" 2>/dev/null || echo "    (query failed)"
     echo
   else
-    warn "No running Postgres pod found — skipping Postgres diagnostics"
+    record_warn "postgres_diagnostics" "No running Postgres pod found" \
+      "Verify Postgres is running." "$DOCS_BASE/kubernetes"
   fi
 }
 
@@ -1331,46 +1490,58 @@ redact_logs() {
       -e 's/gho_[a-zA-Z0-9]{20,}/[REDACTED]/g' \
       -e 's/AKIA[0-9A-Z]{16}/[REDACTED]/g' \
       -e 's/([Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+)[a-zA-Z0-9_.~+/=-]+/\1[REDACTED]/g' \
-      -e 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)[[:space:]]*[=:][[:space:]]*[^[:space:]]+/\1=[REDACTED]/g' \
-      -e 's#([Pp][Oo][Ss][Tt][Gg][Rr][Ee][Ss]|[Mm][Yy][Ss][Qq][Ll]|[Rr][Ee][Dd][Ii][Ss]|[Mm][Oo][Nn][Gg][Oo][Dd][Bb])://[^:]+:[^@]+@#\1://[REDACTED]:[REDACTED]@#g' \
+      -e 's/([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Aa][Cc][Cc][Ee][Ss][Ss][_-]?[Kk][Ee][Yy]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee][_-]?[Kk][Ee][Yy]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll][Ss]?)([[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1\2[REDACTED]/g' \
+      -e 's#([Pp][Oo][Ss][Tt][Gg][Rr][Ee][Ss]|[Mm][Yy][Ss][Qq][Ll]|[Rr][Ee][Dd][Ii][Ss]|[Mm][Oo][Nn][Gg][Oo][Dd][Bb]|[Cc][Ll][Ii][Cc][Kk][Hh][Oo][Uu][Ss][Ee]|[Cc][Hh]|[Aa][Mm][Qq][Pp][Ss]?|[Rr][Aa][Bb][Bb][Ii][Tt][Mm][Qq])://[^:]+:[^@]+@#\1://[REDACTED]:[REDACTED]@#g' \
       -e 's/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[REDACTED]/g'
   fi
 }
 
 collect_bundle() {
-  local timestamp
-  timestamp=$(date +%Y%m%d-%H%M%S)
-  local bundle_dir="/tmp/langsmith-doctor-${timestamp}"
+  local bundle_dir
+  bundle_dir=$(mktemp -d "${TMPDIR:-/tmp}/langsmith-doctor-XXXXXXXXXX")
+  _CLEANUP_DIRS+=("$bundle_dir")
   mkdir -p "$bundle_dir/logs"
 
   section "Support Bundle Collection"
   info "Collecting to $bundle_dir"
 
-  # Resource YAML dumps
-  for resource in pods deployments statefulsets daemonsets services configmaps jobs; do
+  # Resource YAML dumps (redact sensitive values from configmaps)
+  for resource in pods deployments statefulsets daemonsets services jobs; do
     info "Collecting ${resource}..."
-    kube get "$resource" -n "$NAMESPACE" -o yaml > "$bundle_dir/${resource}.yaml" 2>/dev/null || true
+    kube get "$resource" -n "$NAMESPACE" -o yaml 2>/dev/null | redact_logs > "$bundle_dir/${resource}.yaml" || true
   done
+  info "Collecting configmaps..."
+  kube get configmaps -n "$NAMESPACE" -o yaml 2>/dev/null | redact_logs > "$bundle_dir/configmaps.yaml" || true
 
   # PVCs
-  kube get pvc -n "$NAMESPACE" -o yaml > "$bundle_dir/pvcs.yaml" 2>/dev/null || true
+  kube get pvc -n "$NAMESPACE" -o yaml 2>/dev/null | redact_logs > "$bundle_dir/pvcs.yaml" || rm -f "$bundle_dir/pvcs.yaml"
 
   # StorageClasses (cluster-scoped)
-  kube get storageclasses -o yaml > "$bundle_dir/storageclasses.yaml" 2>/dev/null || true
+  kube get storageclasses -o yaml 2>/dev/null | redact_logs > "$bundle_dir/storageclasses.yaml" || rm -f "$bundle_dir/storageclasses.yaml"
 
   # Events (human-readable)
   info "Collecting events..."
-  kube get events -n "$NAMESPACE" --sort-by='.lastTimestamp' > "$bundle_dir/events.txt" 2>/dev/null || true
-  kube get events -n "$NAMESPACE" -o yaml > "$bundle_dir/events.yaml" 2>/dev/null || true
+  kube get events -n "$NAMESPACE" --sort-by='.metadata.creationTimestamp' 2>/dev/null | redact_logs > "$bundle_dir/events.txt" || true
+  kube get events -n "$NAMESPACE" -o yaml 2>/dev/null | redact_logs > "$bundle_dir/events.yaml" || true
 
   # Nodes (cluster-scoped, may fail)
   info "Collecting nodes..."
-  kube get nodes -o yaml > "$bundle_dir/nodes.yaml" 2>/dev/null || warn "Skipping nodes (permission denied or unavailable)"
+  if ! kube get nodes -o yaml > "$bundle_dir/nodes.yaml" 2>/dev/null; then
+    rm -f "$bundle_dir/nodes.yaml"
+    warn "Skipping nodes (permission denied or unavailable)"
+  fi
 
-  # Helm release metadata
+  # Helm release metadata (strip .data.release to avoid leaking rendered values/secrets)
   if [[ "$SKIP_HELM" == false ]]; then
     info "Collecting Helm info..."
-    kube get secrets -n "$NAMESPACE" -l "owner=helm,name=${RELEASE_NAME}" -o yaml > "$bundle_dir/helm-release.yaml" 2>/dev/null || true
+    if [[ "$HAS_JQ" == true ]]; then
+      kube get secrets -n "$NAMESPACE" -l "owner=helm,name=${RELEASE_NAME}" -o json 2>/dev/null | \
+        jq 'if .items then .items |= map(.data.release = "[REDACTED]") else .data.release = "[REDACTED]" end' | \
+        redact_logs > "$bundle_dir/helm-release.json" || true
+    else
+      # Without jq, collect only metadata (no -o yaml which would include secret data)
+      kube get secrets -n "$NAMESPACE" -l "owner=helm,name=${RELEASE_NAME}" -o custom-columns=NAME:.metadata.name,STATUS:.metadata.labels.status,VERSION:.metadata.labels.version > "$bundle_dir/helm-release.txt" 2>/dev/null || true
+    fi
   fi
 
   # Pod logs
@@ -1389,7 +1560,7 @@ collect_bundle() {
             redact_logs > "$bundle_dir/logs/${pod}_${container}_previous.log" 2>/dev/null || true
           # Remove empty previous logs
           [[ ! -s "$bundle_dir/logs/${pod}_${container}_previous.log" ]] && rm -f "$bundle_dir/logs/${pod}_${container}_previous.log"
-        done < <(echo "$pods_json" | jq -r '.items[] | .metadata.name as $pod | .spec.containers[].name as $c | [$pod, $c] | @tsv' 2>/dev/null)
+        done < <(echo "$pods_json" | jq -r '.items[] | .metadata.name as $pod | ((.spec.containers[].name), (.spec.initContainers[]?.name)) | . as $c | [$pod, $c] | @tsv' 2>/dev/null)
       fi
     else
       # Without jq, just get logs for all pods
@@ -1403,15 +1574,38 @@ collect_bundle() {
   fi
 
   # Create archive
+  local bundle_basename
+  bundle_basename=$(basename "$bundle_dir")
+  local bundle_parent
+  bundle_parent=$(dirname "$bundle_dir")
   local archive="${bundle_dir}.tar.gz"
-  tar czf "$archive" -C /tmp "langsmith-doctor-${timestamp}" 2>/dev/null
+  if tar czf "$archive" -C "$bundle_parent" "$bundle_basename" 2>/dev/null; then
+    # Archive succeeded — remove bundle_dir from cleanup (keep the .tar.gz)
+    local new_cleanup=()
+    for d in "${_CLEANUP_DIRS[@]+"${_CLEANUP_DIRS[@]}"}"; do
+      [[ "$d" == "$bundle_dir" ]] && continue
+      new_cleanup+=("$d")
+    done
+    _CLEANUP_DIRS=("${new_cleanup[@]+"${new_cleanup[@]}"}")
+    rm -rf "$bundle_dir"
 
-  echo
-  info "Bundle saved to: $archive"
-  local size
-  size=$(du -h "$archive" 2>/dev/null | cut -f1)
-  info "Size: $size"
-  echo "$archive"
+    echo
+    info "Bundle saved to: $archive"
+    local size
+    size=$(du -h "$archive" 2>/dev/null | cut -f1)
+    info "Size: $size"
+  else
+    echo
+    error "Failed to create archive at $archive"
+    info "Uncompressed bundle directory preserved at: $bundle_dir"
+    # Remove from cleanup so the directory actually survives for the user
+    local new_cleanup=()
+    for d in "${_CLEANUP_DIRS[@]+"${_CLEANUP_DIRS[@]}"}"; do
+      [[ "$d" == "$bundle_dir" ]] && continue
+      new_cleanup+=("$d")
+    done
+    _CLEANUP_DIRS=("${new_cleanup[@]+"${new_cleanup[@]}"}")
+  fi
 }
 
 # ── Arg Parsing ──────────────────────────────────────────────────────────────
@@ -1433,7 +1627,7 @@ Options:
   --release-name <name>  Helm release name (default: langsmith)
   --kubeconfig <path>    Path to kubeconfig
   --context <name>       Kubernetes context
-  --skip <categories>    Comma-separated skip list: helm,jobs,services,ingress,cloud,beacon
+  --skip <categories>    Comma-separated skip list: helm,jobs,services,ingress,cloud
   --verbose              Show passing checks too
   --no-redact            Disable log redaction in bundle
   --no-color             Disable color output
@@ -1450,14 +1644,22 @@ EOF
   exit 0
 }
 
+require_arg() {
+  if [[ $# -lt 2 || -z "$2" || "$2" == --* ]]; then
+    error "$1 requires a value"
+    exit 1
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --namespace)     NAMESPACE="$2"; shift 2 ;;
-      --release-name)  RELEASE_NAME="$2"; shift 2 ;;
-      --kubeconfig)    KUBECONFIG_FLAG="$2"; shift 2 ;;
-      --context)       CONTEXT_FLAG="$2"; shift 2 ;;
+      --namespace)     require_arg "$1" "${2:-}"; NAMESPACE="$2"; shift 2 ;;
+      --release-name)  require_arg "$1" "${2:-}"; RELEASE_NAME="$2"; shift 2 ;;
+      --kubeconfig)    require_arg "$1" "${2:-}"; KUBECONFIG_FLAG="$2"; shift 2 ;;
+      --context)       require_arg "$1" "${2:-}"; CONTEXT_FLAG="$2"; shift 2 ;;
       --skip)
+        require_arg "$1" "${2:-}"
         IFS=',' read -ra SKIP_LIST <<< "$2"
         for skip in "${SKIP_LIST[@]}"; do
           case "$skip" in
@@ -1466,20 +1668,31 @@ parse_args() {
             services) SKIP_SERVICES=true ;;
             ingress)  SKIP_INGRESS=true ;;
             cloud)    SKIP_CLOUD=true ;;
-            beacon)   SKIP_BEACON=true ;;
             *) warn "Unknown skip category: $skip" ;;
           esac
         done
         shift 2 ;;
-      --skip-beacon)   SKIP_BEACON=true; shift ;;
       --verbose|-v)    VERBOSE=true; shift ;;
       --no-redact)     NO_REDACT=true; shift ;;
       --no-color)      NO_COLOR=true; shift ;;
-      --tail-lines)    TAIL_LINES="$2"; shift 2 ;;
+      --tail-lines)
+        require_arg "$1" "${2:-}"
+        if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+          error "--tail-lines requires a numeric value, got: $2"
+          exit 1
+        fi
+        TAIL_LINES="$2"; shift 2 ;;
       --help|-h)       usage ;;
       --version)       echo "langsmith-doctor $VERSION"; exit 0 ;;
       diagnose)        COMMAND="diagnose"; shift ;;
-      app)             SUBCOMMAND="app"; shift ;;
+      app)
+        if [[ -n "$COMMAND" && "$COMMAND" != "diagnose" ]]; then
+          warn "'app' subcommand is only valid with 'diagnose' — ignoring"
+        else
+          COMMAND="diagnose"
+          SUBCOMMAND="app"
+        fi
+        shift ;;
       bundle)          COMMAND="bundle"; shift ;;
       help)            usage ;;
       *)               warn "Unknown argument: $1"; shift ;;
@@ -1502,14 +1715,26 @@ print_banner() {
   fi
 }
 
+CLUSTER_ONLINE=false
+
 run_diagnose() {
   section "Validation"
 
-  # Gate: cluster connectivity
-  if ! check_cluster_connectivity; then
-    return 1
+  # Gate: cluster connectivity (skip if run_status already verified)
+  if [[ "$CLUSTER_ONLINE" != true ]]; then
+    if ! check_cluster_connectivity; then
+      return 0
+    fi
+    CLUSTER_ONLINE=true
+  else
+    record_pass "cluster_connectivity" "Cluster API reachable"
   fi
   check_cluster_version
+
+  # Gate: namespace must exist to proceed with meaningful checks
+  if ! check_namespace; then
+    return 0
+  fi
 
   # Check groups (sequential in v1)
   run_workload_checks
@@ -1533,22 +1758,29 @@ main() {
 
   case "$COMMAND" in
     diagnose)
-      if [[ "$SUBCOMMAND" == "app" ]]; then
-        run_status
-        run_app_diagnostics
-      else
-        run_status
-        run_diagnose
-        local end_time elapsed
-        end_time=$(date +%s)
-        elapsed="$((end_time - start_time))s"
-        print_summary "$elapsed"
+      run_status
+      if [[ "$CLUSTER_ONLINE" == true ]]; then
+        if [[ "$SUBCOMMAND" == "app" ]]; then
+          # App diagnostics still need a valid namespace to exec into pods
+          section "Validation"
+          if check_namespace; then
+            run_app_diagnostics
+          fi
+        else
+          run_diagnose
+        fi
       fi
+      local end_time elapsed
+      end_time=$(date +%s)
+      elapsed="$((end_time - start_time))s"
+      print_summary "$elapsed"
       ;;
     bundle)
       run_status
-      run_diagnose
-      collect_bundle
+      if [[ "$CLUSTER_ONLINE" == true ]]; then
+        run_diagnose
+        collect_bundle
+      fi
       local end_time elapsed
       end_time=$(date +%s)
       elapsed="$((end_time - start_time))s"

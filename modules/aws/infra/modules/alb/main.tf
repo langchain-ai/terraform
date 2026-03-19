@@ -73,7 +73,7 @@ resource "aws_security_group" "alb" {
   }
 
   dynamic "ingress" {
-    for_each = var.tls_certificate_source == "acm" ? [1] : []
+    for_each = var.tls_certificate_source != "none" ? [1] : []
     content {
       description      = "HTTPS"
       from_port        = 443
@@ -84,6 +84,8 @@ resource "aws_security_group" "alb" {
     }
   }
 
+  # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
+  # If using VPC peering for targets outside this VPC, add those CIDRs here.
   egress {
     from_port   = 0
     to_port     = 0

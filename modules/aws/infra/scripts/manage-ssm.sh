@@ -82,12 +82,18 @@ _is_stable() {
 _ssm_path() { echo "${SSM_PREFIX}/${1}"; }
 
 _get_param() {
-  aws ssm get-parameter \
+  local _out
+  _out=$(aws ssm get-parameter \
     --region "$_region" \
     --name "$(_ssm_path "$1")" \
     --with-decryption \
     --query 'Parameter.Value' \
-    --output text 2>/dev/null
+    --output text 2>&1) && { echo "$_out"; return 0; }
+  if echo "$_out" | grep -q "ParameterNotFound"; then
+    return 1
+  fi
+  echo "ERROR: SSM query failed for $1: $_out" >&2
+  return 1
 }
 
 _param_exists() {
@@ -252,13 +258,13 @@ cmd_validate() {
       val=$(_get_param "$key")
       if [[ -z "$val" ]]; then
         printf "  %-42s  %s\n" "$key" "$(_yellow "EMPTY")"
-        ((warnings++))
+        warnings=$((warnings + 1))
       else
         # Extra validation for admin password
         if [[ "$key" == "langsmith-admin-password" ]]; then
           if ! printf '%s' "$val" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
             printf "  %-42s  %s\n" "$key" "$(_red "INVALID — missing required symbol")"
-            ((warnings++))
+            warnings=$((warnings + 1))
             continue
           fi
         fi
@@ -266,7 +272,7 @@ cmd_validate() {
       fi
     else
       printf "  %-42s  %s\n" "$key" "$(_red "MISSING")"
-      ((missing++))
+      missing=$((missing + 1))
     fi
   done
 
@@ -343,7 +349,7 @@ cmd_diff() {
       match_status=$(_green "✓")
     else
       match_status=$(_red "✗ MISMATCH")
-      ((mismatches++))
+      mismatches=$((mismatches + 1))
     fi
 
     printf "  %-35s  %-10s  %-10s  %s\n" "$ssm_key" "$ssm_status" "$k8s_status" "$match_status"

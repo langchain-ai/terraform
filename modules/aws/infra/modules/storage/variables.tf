@@ -16,6 +16,7 @@ variable "vpc_id" {
 variable "langsmith_irsa_role_arn" {
   type        = string
   description = "ARN of the LangSmith IRSA role. Used to scope the S3 bucket policy to a specific principal."
+  default     = null
 }
 
 variable "kms_key_arn" {

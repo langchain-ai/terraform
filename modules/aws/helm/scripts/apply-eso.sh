@@ -17,15 +17,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-$SCRIPT_DIR/../../infra}"
 source "$INFRA_DIR/scripts/_common.sh"
 
+# Check if an SSM parameter exists. Returns 0 if found, 1 if not found.
+# Surfaces non-ParameterNotFound errors (e.g. expired credentials) to stderr.
+_ssm_key_exists() {
+  local _err
+  _err=$(aws ssm get-parameter --name "$1" --query 'Parameter.Name' --output text 2>&1) && return 0
+  if echo "$_err" | grep -q "ParameterNotFound"; then
+    return 1
+  fi
+  echo "WARNING: SSM check for $1 failed: $_err" >&2
+  return 1
+}
+
 NAMESPACE="${NAMESPACE:-langsmith}"
 
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-dev}"
-_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-us-east-2}"
+_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
+_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: Could not read name_prefix from $INFRA_DIR/terraform.tfvars" >&2
+  exit 1
+fi
+if [[ -z "$_environment" ]]; then
+  echo "ERROR: Could not read environment from $INFRA_DIR/terraform.tfvars" >&2
+  exit 1
+fi
+if [[ -z "$_region" ]]; then
+  echo "ERROR: Could not read region from $INFRA_DIR/terraform.tfvars" >&2
   exit 1
 fi
 
@@ -73,22 +93,19 @@ spec:
     - secretKey: initial_org_admin_password
       remoteRef:
         key: ${_ssm_prefix}/langsmith-admin-password
-$(if aws ssm get-parameter --name "${_ssm_prefix}/agent-builder-encryption-key" \
-    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<ABEOF
+$(if _ssm_key_exists "${_ssm_prefix}/agent-builder-encryption-key"; then cat <<ABEOF
     - secretKey: agent_builder_encryption_key
       remoteRef:
         key: ${_ssm_prefix}/agent-builder-encryption-key
 ABEOF
 fi)
-$(if aws ssm get-parameter --name "${_ssm_prefix}/insights-encryption-key" \
-    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<IEOF
+$(if _ssm_key_exists "${_ssm_prefix}/insights-encryption-key"; then cat <<IEOF
     - secretKey: insights_encryption_key
       remoteRef:
         key: ${_ssm_prefix}/insights-encryption-key
 IEOF
 fi)
-$(if aws ssm get-parameter --name "${_ssm_prefix}/deployments-encryption-key" \
-    --query 'Parameter.Name' --output text 2>/dev/null | grep -q .; then cat <<DEOF
+$(if _ssm_key_exists "${_ssm_prefix}/deployments-encryption-key"; then cat <<DEOF
     - secretKey: deployments_encryption_key
       remoteRef:
         key: ${_ssm_prefix}/deployments-encryption-key

@@ -29,7 +29,11 @@ _tfvars_region=$(grep -E '^\s*region\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/
 export AWS_REGION="${_tfvars_region:-${AWS_REGION:-us-east-2}}"
 
 # ── Environment & tagging ─────────────────────────────────────────────────────
-export TF_VAR_environment="${LANGSMITH_ENV:-dev}"
+# Read environment from terraform.tfvars first — only fall back to env var / default
+# if not set there. This prevents silently overriding "prod" in tfvars with "dev".
+_tfvars_env=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
+  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _tfvars_env=""
+export TF_VAR_environment="${_tfvars_env:-${LANGSMITH_ENV:-dev}}"
 export TF_VAR_owner="${LANGSMITH_OWNER:-}"
 export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
 export TF_VAR_region="$AWS_REGION"
@@ -41,6 +45,10 @@ _name_prefix=$(grep -E '^\s*name_prefix\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/d
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
 _environment=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _environment="${LANGSMITH_ENV:-dev}"
+if [[ -z "$_name_prefix" ]]; then
+  echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
+  return 1
+fi
 export TF_VAR_name_prefix="${_name_prefix}"
 
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
@@ -58,6 +66,29 @@ for _precheck_var in LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
     echo ""
   fi
 done
+
+# ── Safe SSM write ────────────────────────────────────────────────────────────
+# Writes a value to SSM via a JSON file to avoid shell expansion issues with
+# special characters in passwords ($, !, backticks, etc.) that break --value.
+_ssm_put_safe() {
+  local _path="$1" _val="$2"
+  local _tmpval _tmpjson
+  _tmpval="$(mktemp)"  || return 1
+  _tmpjson="$(mktemp)" || { rm -f "$_tmpval"; return 1; }
+  printf '%s' "$_val" > "$_tmpval"
+  python3 -c "
+import json, sys
+v = open(sys.argv[1]).read()
+json.dump({'Name':sys.argv[2],'Value':v,'Type':'SecureString','Overwrite':True}, open(sys.argv[3],'w'))
+" "$_tmpval" "$_path" "$_tmpjson"
+  local _rc=0
+  aws ssm put-parameter \
+    --region "$AWS_REGION" \
+    --cli-input-json "file://${_tmpjson}" \
+    --output text >/dev/null 2>&1 || _rc=$?
+  rm -f "$_tmpval" "$_tmpjson"
+  return $_rc
+}
 
 # ── SSM-backed secret helper ──────────────────────────────────────────────────
 # _ssm_secret: reads a secret from SSM if available; falls back to a local
@@ -90,25 +121,10 @@ _ssm_secret() {
     if ! aws ssm get-parameter --region "$AWS_REGION" --name "$_path" \
         --query Parameter.Name --output text &>/dev/null; then
       echo "  $varname is set in env but missing from SSM — backfilling → $_path"
-      # Write value via JSON file to avoid shell expansion issues with special
-      # characters in passwords ($, !, backticks, etc.) that break --value "...".
-      local _tmpval _tmpjson
-      _tmpval="$(mktemp)"  || { echo "  WARNING: could not create temp file"; return; }
-      _tmpjson="$(mktemp)" || { rm -f "$_tmpval"; echo "  WARNING: could not create temp file"; return; }
-      printenv "$varname" > "$_tmpval"
-      python3 -c "
-import json, sys
-v = open(sys.argv[1]).read().rstrip('\n')
-json.dump({'Name':sys.argv[2],'Value':v,'Type':'SecureString','Overwrite':True}, open(sys.argv[3],'w'))
-" "$_tmpval" "$_path" "$_tmpjson"
-      if ! aws ssm put-parameter \
-          --region "$AWS_REGION" \
-          --cli-input-json "file://${_tmpjson}" \
-          --output text >/dev/null 2>&1; then
+      if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
         echo "  WARNING: SSM backfill failed for $_path"
         echo "           Try manually: ./infra/scripts/manage-ssm.sh set $(basename "$_path") '<value>'"
       fi
-      rm -f "$_tmpval" "$_tmpjson"
     fi
     return
   fi
@@ -125,13 +141,7 @@ json.dump({'Name':sys.argv[2],'Value':v,'Type':'SecureString','Overwrite':True},
   if [[ -z "$val" && -n "$file_name" && -f "$file_name" ]]; then
     val=$(cat "$file_name")
     echo "  Migrating $varname from $file_name → SSM"
-    if aws ssm put-parameter \
-        --region "$AWS_REGION" \
-        --name "$_path" \
-        --value "$val" \
-        --type SecureString \
-        --overwrite \
-        --output text >/dev/null 2>&1; then
+    if _ssm_put_safe "$_path" "$val"; then
       echo "  Migration complete. You may delete: $file_name"
     fi
   fi
@@ -150,13 +160,7 @@ json.dump({'Name':sys.argv[2],'Value':v,'Type':'SecureString','Overwrite':True},
     fi
 
     # Store in SSM; fall back to local file if SSM is not yet reachable
-    if aws ssm put-parameter \
-        --region "$AWS_REGION" \
-        --name "$_path" \
-        --value "$val" \
-        --type SecureString \
-        --overwrite \
-        --output text >/dev/null 2>&1; then
+    if _ssm_put_safe "$_path" "$val"; then
       echo "  Stored $varname → SSM: $_path"
     elif [[ -n "$file_name" ]]; then
       printf '%s' "$val" > "$file_name"
@@ -207,8 +211,25 @@ if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
     echo "       The Helm chart will reject this password. Unset LANGSMITH_ADMIN_PASSWORD," >&2
     echo "       delete the SSM parameter at ${_ssm_prefix}/langsmith-admin-password," >&2
     echo "       and re-source this script with a valid password." >&2
+    return 1
   fi
 fi
+
+# ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
+# Fernet keys for Deployments, Agent Builder, and Insights addons.
+# Auto-generated and stored in SSM on first run. Only created when the user
+# opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
+# Generate manually: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+_fernet_gen='python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+
+_ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
+  "$_fernet_gen" "" "true"
+
+_ssm_secret "agent-builder-encryption-key" "" "TF_VAR_langsmith_agent_builder_encryption_key" \
+  "$_fernet_gen" "" "true"
+
+_ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_key" \
+  "$_fernet_gen" "" "true"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
@@ -224,6 +245,9 @@ echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-sa
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
+echo "  deploy_key        = (hidden — SSM: ${_ssm_prefix}/deployments-encryption-key)"
+echo "  ab_key            = (hidden — SSM: ${_ssm_prefix}/agent-builder-encryption-key)"
+echo "  insights_key      = (hidden — SSM: ${_ssm_prefix}/insights-encryption-key)"
 echo "  ssm_prefix        = $_ssm_prefix"
 echo ""
 echo "Next:  terraform -chdir=infra apply"

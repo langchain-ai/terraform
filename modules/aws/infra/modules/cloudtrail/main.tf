@@ -20,7 +20,7 @@ data "aws_region" "current" {}
 
 resource "aws_s3_bucket" "cloudtrail" {
   bucket        = var.bucket_name
-  force_destroy = true
+  force_destroy = var.force_destroy
   tags          = var.tags
 }
 
