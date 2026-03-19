@@ -23,7 +23,7 @@ checklist below.
 - RDS: create/delete DB instance
 - ElastiCache: create/delete replication group
 - S3: create/delete bucket, bucket policies
-- SSM: GetParameter, PutParameter (for `source ./infra/setup-env.sh`)
+- SSM: GetParameter, PutParameter (for `source ./infra/scripts/setup-env.sh`)
 
 ---
 
@@ -62,7 +62,7 @@ All checks must be green before proceeding. Fix any permission errors first.
 
 ### Step 2 — Set secrets and open a terraform shell
 ```bash
-source ./infra/setup-env.sh
+source ./infra/scripts/setup-env.sh
 ```
 This script:
 - Reads `name_prefix` and `environment` from `terraform.tfvars` to build the SSM path prefix
@@ -76,7 +76,7 @@ This script:
 - `jwt_secret` is write-once: rotating it invalidates all active user sessions
 - `admin_password` must contain a symbol from `!#$%()+,-./:?@[\]^_{~}`
 
-> **Must use `source`** — running `./infra/setup-env.sh` directly does not export variables
+> **Must use `source`** — running `./infra/scripts/setup-env.sh` directly does not export variables
 > to the calling shell.
 >
 > **All subsequent terraform commands MUST run in the same shell session** — exported `TF_VAR_*`
@@ -270,7 +270,7 @@ aws wafv2 get-web-acl-for-resource --region "$REGION" \
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| Precondition failed: postgres_password / redis_auth_token is required | `terraform plan` fails with "Resource precondition failed" | Re-source setup-env.sh in the SAME shell before running terraform: `source ./infra/setup-env.sh` — TF_VAR_* do not persist across shell sessions |
+| Precondition failed: postgres_password / redis_auth_token is required | `terraform plan` fails with "Resource precondition failed" | Re-source setup-env.sh in the SAME shell before running terraform: `source ./infra/scripts/setup-env.sh` — TF_VAR_* do not persist across shell sessions |
 | Secrets Manager "secret scheduled for deletion" | `apply` fails with `InvalidRequestException: You can't create this secret because a secret with this name is already scheduled for deletion` | **No longer applicable** — `modules/secrets/` has been removed. Secrets are managed exclusively via SSM Parameter Store + ESO. If you still have a lingering Secrets Manager secret from a prior deploy, force-delete it: `aws secretsmanager delete-secret --region <region> --secret-id <name_prefix>-<environment>-langsmith --force-delete-without-recovery` |
 | `setup-env.sh` keeps showing "Migrating postgres-password → SSM" on every run | Migration message on each source | The IAM user may lack `ssm:PutParameter` — the value loads from the local `.pg_password` file as a fallback; safe for testing but fix permissions for production |
 | EBS CSI addon not ready when StorageClass is created | `Error: Failed to create StorageClass` | Re-run `terraform apply` — EKS addon becomes active asynchronously |

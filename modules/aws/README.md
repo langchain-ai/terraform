@@ -11,7 +11,7 @@ This directory contains the Terraform configuration to deploy LangSmith on AWS. 
 | Pass | What | How | Time |
 |------|------|-----|------|
 | **Pass 1** | VPC, EKS cluster, RDS, ElastiCache, S3, ALB, IRSA, ESO | `make apply` | ~20–25 min |
-| **Pass 2** | LangSmith Helm chart + ESO wiring | `make deploy` (scripts) or `make apply-app` (Terraform) | ~10 min |
+| **Pass 2** | LangSmith Helm chart + ESO wiring | `make init-values` → `make deploy` (scripts) or `make apply-app` (Terraform) | ~10 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
 
@@ -93,7 +93,15 @@ aws/
 │   ├── outputs.tf          ← Cluster, DB, Redis, S3, ALB, IAM outputs
 │   ├── backend.tf          ← Remote state backend (configure before init)
 │   ├── versions.tf         ← Required provider versions
-│   ├── setup-env.sh        ← Create/manage secrets in SSM Parameter Store
+│   ├── scripts/
+│   │   ├── _common.sh          ← Shared helpers (tfvar parsing, colors)
+│   │   ├── manage-ssm.sh       ← Interactive SSM parameter manager
+│   │   ├── migrate-ssm.sh      ← Migrate SSM params from legacy paths
+│   │   ├── preflight.sh        ← Pre-Terraform AWS permission checks
+│   │   ├── quickstart.sh       ← Interactive setup wizard
+│   │   ├── set-kubeconfig.sh   ← Update KUBECONFIG for EKS
+│   │   ├── setup-env.sh        ← Create/manage secrets in SSM Parameter Store
+│   │   └── status.sh           ← Deployment state checker
 │   └── modules/
 │       ├── vpc/            ← VPC, subnets, NAT gateway
 │       ├── eks/            ← EKS cluster, managed node groups, IRSA role, GP3 storage class
@@ -108,9 +116,9 @@ aws/
 ├── helm/                   ← Pass 2 option A: script-driven Helm deploy
 │   ├── scripts/
 │   │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
-│   │   ├── init-overrides.sh       ← Generate values-overrides.yaml from Terraform outputs
+│   │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
+│   │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
 │   │   ├── preflight-check.sh      ← Pre-deploy validation
-│   │   ├── generate-secrets.sh     ← Generate API key salt, JWT secret, Fernet keys
 │   │   └── uninstall.sh            ← Helm uninstall + cleanup
 │   └── values/
 │       ├── langsmith-values.yaml.example              ← Base AWS values
@@ -201,8 +209,12 @@ Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC
 ```bash
 cd terraform/aws
 
+# First time? Generate terraform.tfvars interactively:
+make quickstart
+
 # Create and populate secrets in SSM Parameter Store
-source infra/setup-env.sh
+# (must be sourced — Make can't do this; run `make setup-env` for the exact command)
+source infra/scripts/setup-env.sh
 
 # Deploy infrastructure
 make init
@@ -235,7 +247,7 @@ Best for: production deployments with ESO, layered values, addon composition.
 ```bash
 cd terraform/aws
 
-make init-overrides    # generate values-overrides.yaml from Terraform outputs
+make init-values       # generate Helm values from Terraform outputs
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
@@ -327,7 +339,7 @@ git clone <your-repo-url>                # get the deployment code
 cd ps-control-plane/terraform/aws
 
 # Copy your terraform.tfvars and secrets, then run normally:
-source infra/setup-env.sh
+source infra/scripts/setup-env.sh
 make plan
 make apply
 make deploy

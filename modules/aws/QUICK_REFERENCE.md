@@ -1,102 +1,85 @@
 # LangSmith on AWS — Quick Reference
 
+All commands run from `terraform/aws/`. Run `make help` to see all targets.
+
 ---
 
-## Pass 1 — Terraform Infrastructure
+## First-Time Setup
 
 ```bash
-# Configure AWS credentials
-aws configure
-aws sts get-caller-identity
+cd terraform/aws
 
-# Configure and deploy
-cd terraform/aws/infra
-# Edit terraform.tfvars with your values
+# 1. Generate terraform.tfvars (interactive wizard)
+make quickstart
 
-terraform init
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+# 2. Set up secrets in SSM Parameter Store
+source infra/scripts/setup-env.sh
 
-# Get cluster credentials
-aws eks update-kubeconfig \
-  --region us-west-2 \
-  --name $(terraform output -raw cluster_name)
+# 3. Deploy infrastructure (~20-25 min)
+make init
+make plan
+make apply
 
-# Verify
-kubectl get nodes
-kubectl get ns
-kubectl get pods -n kube-system
-kubectl get pods -n cert-manager
+# 4. Generate Helm values from Terraform outputs
+make init-values
+
+# 5. Deploy LangSmith (~10 min)
+make deploy
 ```
 
 ---
 
-## Pass 2 — LangSmith Helm Deploy
+## Day-2 Operations
 
 ```bash
-cd terraform/aws/infra
+# Check deployment state and get next-step guidance
+make status
 
-# Get required outputs
-terraform output -raw alb_dns_name
-terraform output -raw langsmith_irsa_role_arn
-terraform output -raw bucket_name
+# Re-deploy after changing Helm values or upgrading
+make deploy
 
-export API_KEY_SALT=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 32)
-export AGENT_BUILDER_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export INSIGHTS_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="<strong-password>"
+# Re-generate Helm values after Terraform changes
+make init-values
 
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
+# Re-sync ESO secrets without redeploying
+make apply-eso
 
-helm upgrade --install langsmith langchain/langsmith \
-  --namespace langsmith --create-namespace \
-  -f ../helm/values/langsmith-values.yaml.example \
-  --set config.langsmithLicenseKey="<your-license-key>" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="$(terraform output -raw alb_dns_name)" \
-  --set config.basicAuth.initialOrgAdminEmail="$ADMIN_EMAIL" \
-  --set config.basicAuth.initialOrgAdminPassword="$ADMIN_PASSWORD" \
-  --set config.agentBuilder.encryptionKey="$AGENT_BUILDER_ENCRYPTION_KEY" \
-  --set config.insights.encryptionKey="$INSIGHTS_ENCRYPTION_KEY" \
-  --set config.blobStorage.provider="s3" \
-  --set config.blobStorage.bucketName="$(terraform output -raw bucket_name)" \
-  --set config.blobStorage.region="us-west-2" \
-  --set "serviceAccount.annotations.eks\.amazonaws\.com/role-arn=$(terraform output -raw langsmith_irsa_role_arn)" \
-  --wait --timeout 15m
+# Manage SSM secrets interactively
+make ssm
 
-# Verify
-kubectl get pods -n langsmith
-kubectl get ingress -n langsmith
-
-# Configure DNS: create CNAME record pointing to ALB
-terraform output -raw alb_dns_name
+# Update kubeconfig for the EKS cluster
+make kubeconfig
 ```
 
 ---
 
-## Pass 3 — LangSmith Deployments (Optional)
+## Enable Optional Addons
+
+Copy `.example` files before deploying:
 
 ```bash
-helm repo add kedacore https://kedacore.github.io/charts
-helm repo update
-helm upgrade --install keda kedacore/keda \
-  --namespace keda --create-namespace --wait
+# Deployments feature (required for Agent Builder)
+cp helm/values/langsmith-values-agent-deploys.yaml.example \
+   helm/values/langsmith-values-agent-deploys.yaml
 
-helm upgrade langsmith langchain/langsmith \
-  --namespace langsmith \
-  -f ../helm/values/langsmith-values.yaml.example \
-  -f ../helm/values/langsmith-values-agent-deploys.yaml.example \
-  --set config.deployment.enabled=true \
-  --set config.deployment.url="https://<your-langsmith-domain>" \
-  --wait --timeout 10m
+# Agent Builder (requires agent-deploys)
+cp helm/values/langsmith-values-agent-builder.yaml.example \
+   helm/values/langsmith-values-agent-builder.yaml
 
-kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
+# ClickHouse Insights
+cp helm/values/langsmith-values-insights.yaml.example \
+   helm/values/langsmith-values-insights.yaml
+
+# Then redeploy
+make deploy
+```
+
+**Sizing**: HA sizing is enabled by default. For dev/test/POC:
+
+```bash
+rm helm/values/langsmith-values-ha.yaml
+cp helm/values/langsmith-values-dev.yaml.example \
+   helm/values/langsmith-values-dev.yaml
 ```
 
 ---
@@ -115,6 +98,9 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 kubectl get ingress -n langsmith
 kubectl describe ingress -n langsmith
 
+# ESO secret sync status
+kubectl get externalsecret langsmith-config -n langsmith
+
 # TLS
 kubectl get certificate -n langsmith
 kubectl get challenges -n langsmith
@@ -125,8 +111,8 @@ helm status langsmith -n langsmith
 helm history langsmith -n langsmith
 helm get values langsmith -n langsmith
 
-# IRSA
-kubectl get sa langsmith -n langsmith -o yaml | grep eks.amazonaws.com
+# IRSA — check per-component annotations
+kubectl get sa -n langsmith -o yaml | grep eks.amazonaws.com
 
 # LangSmith Deployments
 kubectl get lgp -n langsmith
@@ -174,17 +160,18 @@ aws iam get-role --role-name <irsa-role-name>
 ## Terraform Commands
 
 ```bash
+cd terraform/aws/infra
+
 terraform init
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars -target=module.eks
+terraform plan
+terraform apply
+terraform apply -target=module.eks
 terraform output
 terraform output -raw cluster_name
 terraform output -raw alb_dns_name
 terraform output -raw langsmith_irsa_role_arn
 terraform output -raw bucket_name
 terraform state list
-terraform refresh -var-file=terraform.tfvars
 ```
 
 ---
@@ -192,17 +179,18 @@ terraform refresh -var-file=terraform.tfvars
 ## Teardown
 
 ```bash
-# 1. Remove LangSmith Deployments (if Pass 3 was enabled)
-kubectl delete lgp --all -n langsmith 2>/dev/null || true
+cd terraform/aws
 
-# 2. Uninstall LangSmith
-helm uninstall langsmith -n langsmith --wait
+# Option A: script-driven deploy
+make uninstall
 
-# 3. Delete namespace
-kubectl delete namespace langsmith --timeout=60s
+# Option B: Terraform-managed deploy
+make destroy-app
 
-# 4. Set postgres_deletion_protection = false in terraform.tfvars, then:
-cd terraform/aws/infra
-terraform apply -var-file=terraform.tfvars
+# Then destroy infrastructure:
+# 1. Set postgres_deletion_protection = false in infra/terraform.tfvars
+# 2. Apply the change, then destroy
+cd infra
+terraform apply
 terraform destroy
 ```

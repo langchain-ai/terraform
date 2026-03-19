@@ -81,7 +81,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 
 ### SSM Parameter Store
 - **What**: Centralized secret store — holds all LangSmith secrets
-- **Secret flow**: `source setup-env.sh` writes → SSM → ESO ClusterSecretStore reads → `langsmith-config` K8s Secret → Helm `config.existingSecretName`
+- **Secret flow**: `source scripts/setup-env.sh` writes → SSM → ESO ClusterSecretStore reads → `langsmith-config` K8s Secret → Helm `config.existingSecretName`
 - **Prefix**: `/langsmith/{name_prefix}-{environment}/`
 
 ---
