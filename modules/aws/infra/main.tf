@@ -131,6 +131,7 @@ module "storage" {
   region                  = var.region
   vpc_id                  = local.vpc_id
   langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
+  create_bucket_policy    = true
   s3_ttl_enabled          = var.s3_ttl_enabled
   s3_ttl_short_days       = var.s3_ttl_short_days
   s3_ttl_long_days        = var.s3_ttl_long_days

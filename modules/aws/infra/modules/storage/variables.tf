@@ -19,6 +19,12 @@ variable "langsmith_irsa_role_arn" {
   default     = null
 }
 
+variable "create_bucket_policy" {
+  type        = bool
+  description = "Whether to create the S3 bucket policy. Use this instead of checking langsmith_irsa_role_arn for count, since the ARN is not known until apply."
+  default     = false
+}
+
 variable "kms_key_arn" {
   type        = string
   description = "ARN of a KMS CMK for S3 server-side encryption. When set, SSE-KMS is used instead of SSE-S3 (AES256)."
