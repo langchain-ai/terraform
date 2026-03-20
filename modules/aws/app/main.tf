@@ -210,10 +210,6 @@ resource "helm_release" "langsmith" {
   # failed if the job exceeds the timeout — even though all workloads are healthy.
   wait = false
 
-  # Use client-side apply to avoid SSA field ownership conflicts between Helm
-  # and the ALB ingress controller on .spec.rules.
-  disable_openapi_validation = true
-
   force_update = var.helm_force_update
 
   # Values layering — YAML files are the single source of truth (shared with helm/scripts path).
