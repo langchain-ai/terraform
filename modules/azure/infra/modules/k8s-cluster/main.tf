@@ -19,6 +19,19 @@
 #     IP that routes to all LangSmith services by path/host.
 # ══════════════════════════════════════════════════════════════════════════════
 
+locals {
+  service_accounts_for_workload_identity = [
+    "${var.langsmith_release_name}-backend",
+    "${var.langsmith_release_name}-platform-backend",
+    "${var.langsmith_release_name}-queue",
+    "${var.langsmith_release_name}-ingest-queue",
+    "${var.langsmith_release_name}-host-backend",
+    "${var.langsmith_release_name}-listener",
+    "${var.langsmith_release_name}-agent-builder-tool-server",
+    "${var.langsmith_release_name}-agent-builder-trigger-server",
+  ]
+}
+
 # Helm provider uses the AKS cluster credentials to deploy charts
 # (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
 # Credentials come from the AKS resource itself — no external kubeconfig needed.
@@ -70,6 +83,8 @@ resource "azurerm_kubernetes_cluster" "main" {
     # Temporary node pool name used during node pool upgrades/rotations.
     # Required when auto_scaling_enabled = true and the pool is being replaced.
     temporary_name_for_rotation = "defaulttmp"
+
+    zones = var.availability_zones
   }
 
   # System-assigned Managed Identity: AKS uses this to manage node VMs,
@@ -137,6 +152,31 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
 # cert-manager integrates with NGINX to automate TLS certificate provisioning.
 #
 # 2 replicas for basic availability (both on different nodes via pod anti-affinity).
+# ── Workload Identity ─────────────────────────────────────────────────────────
+# User-Assigned Managed Identity for LangSmith pods.
+# Centralised here because the AKS OIDC issuer URL (needed for federated
+# credentials) is produced by this module. Having identity creation and
+# federation in the same place avoids circular dependency.
+resource "azurerm_user_assigned_identity" "k8s_app" {
+  name                = "${var.cluster_name}-app-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = merge(var.tags, { module = "aks" })
+}
+
+# Federated Identity Credentials — bind each LangSmith K8s service account to
+# the Managed Identity via OIDC. One credential per service account.
+resource "azurerm_federated_identity_credential" "k8s_app" {
+  for_each = toset(local.service_accounts_for_workload_identity)
+
+  name      = "langsmith-federated-${each.value}"
+  parent_id = azurerm_user_assigned_identity.k8s_app.id
+
+  audience = ["api://AzureADTokenExchange"]
+  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  subject  = "system:serviceaccount:${var.langsmith_namespace}:${each.value}"
+}
+
 resource "helm_release" "nginx_ingress" {
   count      = var.nginx_ingress_enabled ? 1 : 0
   name       = "ingress-nginx"

@@ -339,3 +339,91 @@ variable "langsmith_polly_encryption_key" {
   sensitive   = true
   default     = ""
 }
+
+# ── WAF ───────────────────────────────────────────────────────────────────────
+
+variable "create_waf" {
+  type        = bool
+  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). Attach to Application Gateway or Front Door manually after creation."
+  default     = false
+}
+
+variable "waf_mode" {
+  type        = string
+  description = "WAF enforcement mode: Detection (log only) or Prevention (block)"
+  default     = "Prevention"
+}
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+
+variable "create_diagnostics" {
+  type        = bool
+  description = "Deploy Azure Monitor Log Analytics workspace and diagnostic settings for AKS, Key Vault, and PostgreSQL."
+  default     = false
+}
+
+variable "log_retention_days" {
+  type        = number
+  description = "Log Analytics workspace retention in days."
+  default     = 90
+}
+
+# ── Bastion ───────────────────────────────────────────────────────────────────
+
+variable "create_bastion" {
+  type        = bool
+  description = "Deploy a jump VM for private AKS cluster access via az ssh vm."
+  default     = false
+}
+
+variable "bastion_vm_size" {
+  type        = string
+  description = "VM SKU for the bastion host."
+  default     = "Standard_B2s"
+}
+
+variable "bastion_admin_ssh_public_key" {
+  type        = string
+  description = "SSH public key for emergency admin access to the bastion VM."
+  default     = ""
+}
+
+variable "bastion_allowed_ssh_cidrs" {
+  type        = list(string)
+  description = "CIDR ranges allowed inbound SSH to the bastion. Restrict to VPN/corporate ranges in production."
+  default     = ["0.0.0.0/0"]
+}
+
+# ── DNS ───────────────────────────────────────────────────────────────────────
+
+variable "create_dns_zone" {
+  type        = bool
+  description = "Create an Azure DNS zone and A record for the LangSmith domain."
+  default     = false
+}
+
+variable "ingress_ip" {
+  type        = string
+  description = "Public IP of the NGINX ingress Load Balancer. Used by the DNS module for the A record. Get from: kubectl get svc -n ingress-nginx."
+  default     = ""
+}
+
+# ── Multi-AZ ─────────────────────────────────────────────────────────────────
+
+variable "availability_zones" {
+  type        = list(string)
+  description = "Availability zones to deploy into. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone."
+  default     = ["1"]
+}
+
+variable "postgres_standby_availability_zone" {
+  type        = string
+  description = "Standby AZ for Postgres HA (ZoneRedundant mode). Leave empty to disable HA standby."
+  default     = ""
+}
+
+variable "postgres_geo_redundant_backup" {
+  type        = bool
+  description = "Enable geo-redundant backups for PostgreSQL."
+  default     = false
+}

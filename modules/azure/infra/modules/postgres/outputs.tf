@@ -1,3 +1,8 @@
+output "postgres_id" {
+  description = "Resource ID of the PostgreSQL Flexible Server — used by the diagnostics module for diagnostic settings"
+  value       = azurerm_postgresql_flexible_server.db.id
+}
+
 output "connection_url" {
   description = "The connection URL for the PostgreSQL Flexible Server"
   # replace() percent-encodes special characters that are invalid in URL userinfo.

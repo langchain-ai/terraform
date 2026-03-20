@@ -17,3 +17,8 @@ output "subnet_redis_id" {
   value       = try(azurerm_subnet.subnet_redis[0].id, null)
   description = "The ID of the Redis subnet, if created."
 }
+
+output "subnet_bastion_id" {
+  description = "ID of the bastion subnet (empty string when enable_bastion = false)"
+  value       = var.enable_bastion ? azurerm_subnet.subnet_bastion[0].id : ""
+}

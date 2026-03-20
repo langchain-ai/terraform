@@ -75,3 +75,21 @@ variable "tags" {
   description = "Common Azure resource tags to apply to all resources in this module"
   default     = {}
 }
+
+variable "langsmith_namespace" {
+  type        = string
+  description = "Kubernetes namespace where LangSmith is deployed. Used for Workload Identity federation."
+  default     = "langsmith"
+}
+
+variable "langsmith_release_name" {
+  type        = string
+  description = "Helm release name for LangSmith. Used to generate federated identity credential subjects."
+  default     = "langsmith"
+}
+
+variable "availability_zones" {
+  type        = list(string)
+  description = "Availability zones for the default node pool. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
+  default     = ["1"]
+}

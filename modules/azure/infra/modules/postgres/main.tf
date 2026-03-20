@@ -39,6 +39,17 @@ resource "azurerm_postgresql_flexible_server" "db" {
   delegated_subnet_id           = var.subnet_id
   private_dns_zone_id           = azurerm_private_dns_zone.db_dns_zone.id
 
+  zone                         = var.availability_zone
+  geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
+
+  dynamic "high_availability" {
+    for_each = var.standby_availability_zone != "" ? [1] : []
+    content {
+      mode                      = "ZoneRedundant"
+      standby_availability_zone = var.standby_availability_zone
+    }
+  }
+
   tags = merge(var.tags, { module = "postgres" })
 
   lifecycle {

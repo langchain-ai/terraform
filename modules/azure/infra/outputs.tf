@@ -84,3 +84,32 @@ output "keyvault_uri" {
   description = "URI of the Key Vault (https://<name>.vault.azure.net/)"
   value       = module.keyvault.vault_uri
 }
+
+# ── WAF ───────────────────────────────────────────────────────────────────────
+output "waf_policy_id" {
+  description = "WAF policy resource ID (attach to App Gateway or Front Door)"
+  value       = var.create_waf ? module.waf[0].waf_policy_id : ""
+}
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+output "log_analytics_workspace_id" {
+  description = "Log Analytics workspace resource ID"
+  value       = var.create_diagnostics ? module.diagnostics[0].workspace_id : ""
+}
+
+# ── Bastion ───────────────────────────────────────────────────────────────────
+output "bastion_public_ip" {
+  description = "Public IP of the bastion jump VM"
+  value       = var.create_bastion ? module.bastion[0].public_ip : ""
+}
+
+output "bastion_ssh_command" {
+  description = "az CLI command to SSH into the bastion VM"
+  value       = var.create_bastion ? module.bastion[0].ssh_command : ""
+}
+
+# ── DNS ───────────────────────────────────────────────────────────────────────
+output "dns_nameservers" {
+  description = "Azure nameservers for the DNS zone — configure at your registrar"
+  value       = var.create_dns_zone ? module.dns[0].nameservers : []
+}

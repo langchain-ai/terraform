@@ -54,3 +54,21 @@ variable "postgres_subnet_address_prefix" {
   description = "Prefix for the Postgres subnet. Can be disjoint IP ranges."
   default     = ["10.0.32.0/20"] # 4k IP addresses
 }
+
+variable "enable_bastion" {
+  type        = bool
+  description = "Create a dedicated subnet for the bastion/jump host"
+  default     = false
+}
+
+variable "bastion_subnet_address_prefix" {
+  type        = list(string)
+  description = "CIDR prefix for the bastion subnet"
+  default     = ["10.0.80.0/27"] # 32 IPs — sufficient for a single jump VM
+}
+
+variable "availability_zones" {
+  type        = list(string)
+  description = "Availability zones to spread resources across. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone (lower cost)."
+  default     = ["1"]
+}

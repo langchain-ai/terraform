@@ -83,6 +83,9 @@ module "vnet" {
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
+  enable_bastion     = var.create_bastion
+  availability_zones = var.availability_zones
+
   tags = local.common_tags
 }
 
@@ -108,6 +111,11 @@ module "aks" {
   # Deploys NGINX ingress controller via Helm — creates the Azure Load Balancer.
   nginx_ingress_enabled = var.nginx_ingress_enabled
 
+  langsmith_namespace    = var.langsmith_namespace
+  langsmith_release_name = var.langsmith_release_name
+
+  availability_zones = var.availability_zones
+
   tags = local.common_tags
 }
 
@@ -127,6 +135,10 @@ module "postgres" {
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
+
+  availability_zone            = var.availability_zones[0]
+  standby_availability_zone    = var.postgres_standby_availability_zone
+  geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
   tags = local.common_tags
 }
@@ -149,9 +161,9 @@ module "redis" {
 }
 
 # ── Blob Storage ──────────────────────────────────────────────────────────────
-# Azure Blob Storage for trace objects + Workload Identity wiring.
-# Depends on AKS (needs oidc_issuer_url) and the blob module creates
-# federated credentials that allow K8s pods to assume the Managed Identity.
+# Azure Blob Storage for trace objects.
+# The Workload Identity (Managed Identity + Federated Credentials) is created
+# in the k8s-cluster module and passed in here for the RBAC role assignment.
 
 module "blob" {
   source               = "./modules/storage"
@@ -164,17 +176,11 @@ module "blob" {
   ttl_short_days = var.blob_ttl_short_days
   ttl_long_days  = var.blob_ttl_long_days
 
-  # OIDC issuer from AKS — the trust anchor for federated identity credentials.
-  # AKS must be created first; Terraform resolves this implicitly.
-  aks_oidc_issuer_url    = module.aks.oidc_issuer_url
-  langsmith_namespace    = var.langsmith_namespace
-  langsmith_release_name = var.langsmith_release_name
+  # Workload Identity from k8s-cluster module — implicit dep on module.aks.
+  workload_identity_principal_id = module.aks.workload_identity_principal_id
+  workload_identity_client_id    = module.aks.workload_identity_client_id
 
   tags = local.common_tags
-
-  depends_on = [
-    module.aks
-  ]
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -261,4 +267,70 @@ module "k8s_bootstrap" {
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
+}
+
+# ── WAF (optional) ────────────────────────────────────────────────────────────
+# Deploy Azure WAF policy with OWASP 3.2 + bot protection.
+# Attach to Application Gateway or Azure Front Door after creation.
+# Enable with: create_waf = true in terraform.tfvars
+
+module "waf" {
+  count               = var.create_waf ? 1 : 0
+  source              = "./modules/waf"
+  name                = "langsmith-waf${local.identifier}"
+  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = var.location
+  waf_mode            = var.waf_mode
+  tags                = local.common_tags
+}
+
+# ── Diagnostics (optional) ────────────────────────────────────────────────────
+# Azure Monitor Log Analytics + diagnostic settings for AKS, Key Vault, Postgres.
+# Enable with: create_diagnostics = true in terraform.tfvars
+
+module "diagnostics" {
+  count               = var.create_diagnostics ? 1 : 0
+  source              = "./modules/diagnostics"
+  name                = "langsmith-logs${local.identifier}"
+  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = var.location
+  retention_days      = var.log_retention_days
+
+  aks_id      = module.aks.cluster_id
+  keyvault_id = module.keyvault.vault_id
+  postgres_id = var.postgres_source == "external" ? module.postgres[0].postgres_id : ""
+
+  tags = local.common_tags
+}
+
+# ── Bastion (optional) ────────────────────────────────────────────────────────
+# Jump VM for private AKS cluster access. Uses Azure AD SSH login.
+# Enable with: create_bastion = true in terraform.tfvars
+
+module "bastion" {
+  count               = var.create_bastion ? 1 : 0
+  source              = "./modules/bastion"
+  name                = "langsmith-bastion${local.identifier}"
+  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = var.location
+  subnet_id           = module.vnet.subnet_bastion_id
+  vm_size             = var.bastion_vm_size
+  admin_ssh_public_key = var.bastion_admin_ssh_public_key
+  allowed_ssh_cidrs   = var.bastion_allowed_ssh_cidrs
+  tags                = local.common_tags
+
+  depends_on = [module.vnet]
+}
+
+# ── DNS (optional) ────────────────────────────────────────────────────────────
+# Azure DNS zone + A record. Delegates DNS-01 to cert-manager for TLS.
+# Enable with: create_dns_zone = true and set langsmith_domain + ingress_ip.
+
+module "dns" {
+  count               = var.create_dns_zone ? 1 : 0
+  source              = "./modules/dns"
+  domain              = var.langsmith_domain
+  resource_group_name = azurerm_resource_group.resource_group.name
+  ingress_ip          = var.ingress_ip
+  tags                = local.common_tags
 }

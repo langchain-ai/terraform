@@ -42,3 +42,13 @@ output "cluster_ca_certificate" {
   value       = azurerm_kubernetes_cluster.main.kube_config[0].cluster_ca_certificate
   sensitive   = true
 }
+
+output "workload_identity_client_id" {
+  description = "Client ID of the User-Assigned Managed Identity for LangSmith pods (Workload Identity)"
+  value       = azurerm_user_assigned_identity.k8s_app.client_id
+}
+
+output "workload_identity_principal_id" {
+  description = "Principal (Object) ID of the Managed Identity — used by keyvault and storage modules for RBAC role assignments"
+  value       = azurerm_user_assigned_identity.k8s_app.principal_id
+}
