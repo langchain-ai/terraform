@@ -11,7 +11,40 @@ Self-hosted LangSmith deployment on Azure Kubernetes Service (AKS).
 
 ## Quick Start
 
-See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for copy-paste deployment commands.
+```bash
+cd terraform/azure
+
+# 1. Check prerequisites (az CLI, login, resource providers, RBAC)
+make preflight
+
+# 2. Copy and fill in your variables
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+vi infra/terraform.tfvars           # set subscription_id, identifier, location
+
+# 3. Bootstrap secrets (prompts on first run, reads from Key Vault on subsequent runs)
+cd infra && ./setup-env.sh && cd ..
+
+# 4. Deploy infrastructure (~15–20 min)
+make init
+make plan
+make apply
+
+# 5. Get cluster credentials
+make kubeconfig
+
+# 6. Apply TLS cluster issuers (Let's Encrypt)
+cd infra && sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' \
+  ../kubectl/letsencrypt-issuers.yaml | kubectl apply -f - && cd ..
+
+# 7. Deploy LangSmith (Helm)
+make deploy
+
+# 8. Check status
+make status
+```
+
+For the full copy-paste command set with outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
+For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
 ## Deployment Passes
 

@@ -26,6 +26,55 @@ make destroy     # terraform destroy
 
 ---
 
+## First-Time Setup
+
+All commands run from `terraform/azure/` unless noted.
+
+```bash
+# Step 1 — Preflight: validates az CLI, login, resource providers, RBAC, terraform.tfvars
+make preflight
+
+# Step 2 — Copy and fill in variables
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+vi infra/terraform.tfvars
+# Required fields: subscription_id, identifier, location
+# Optional: postgres_source, redis_source, tls_certificate_source, letsencrypt_email
+
+# Step 3 — Bootstrap secrets (prompts for passwords + license key on first run)
+cd infra && ./setup-env.sh && cd ..
+# On subsequent runs: reads from Key Vault → regenerates secrets.auto.tfvars (no prompts)
+
+# Step 4 — Deploy Azure infrastructure (~15–20 min)
+make init
+make plan
+make apply
+
+# Step 5 — Get cluster credentials
+make kubeconfig
+kubectl get nodes     # confirm nodes are Ready
+
+# Step 6 — Apply TLS cluster issuers (Let's Encrypt only — skip for custom cert)
+cd infra
+sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' \
+  ../kubectl/letsencrypt-issuers.yaml | kubectl apply -f -
+kubectl get clusterissuers   # both should be READY: True
+cd ..
+
+# Step 7 — Deploy LangSmith
+make deploy
+# This runs: helm upgrade --install langsmith langsmith/langsmith ...
+
+# Step 8 — Verify
+make status
+# Shows pods, services, ingress, certificates in the langsmith namespace
+```
+
+> **First run takes ~20 min total.** AKS provisioning: ~12 min. PostgreSQL: ~5 min. NGINX LoadBalancer IP assignment: ~2 min. Helm install: ~5 min.
+
+> For demo/POC (all in-cluster DBs — no external Postgres/Redis), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
+
+---
+
 ## Pass 1 — Infrastructure
 
 ```bash
