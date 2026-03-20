@@ -524,6 +524,12 @@ variable "enable_insights" {
   default     = false
 }
 
+variable "enable_polly" {
+  type        = bool
+  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # LangGraph Platform Encryption Keys
 # Fernet keys for optional feature modules. Generate once and never change.

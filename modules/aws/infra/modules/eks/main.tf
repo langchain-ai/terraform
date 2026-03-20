@@ -14,6 +14,11 @@ module "eks" {
 
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
 
+  # The community module ignores desired_size changes (lifecycle ignore_changes) so
+  # the cluster autoscaler can manage it. min_size and max_size DO propagate through
+  # terraform apply. If plan shows no changes after modifying min/max, run
+  # `terraform refresh` first — the ASG may have been changed out-of-band (e.g. via
+  # AWS CLI or console) and the state already reflects the new values.
   eks_managed_node_groups = {
     for k, v in var.eks_managed_node_groups : k => merge(v, {
       desired_size = coalesce(v.desired_size, v.min_size)

@@ -9,6 +9,7 @@
 #   4. langsmith-values-agent-deploys.yaml  — Deployments feature (if present)
 #   5. langsmith-values-agent-builder.yaml  — Agent Builder feature (if present)
 #   6. langsmith-values-insights.yaml       — ClickHouse/Insights (if present)
+#   7. langsmith-values-polly.yaml          — Polly AI eval/monitoring (if present)
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -69,13 +70,19 @@ echo ""
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
+_enable_polly=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
+_tfvar_is_true "enable_polly"         && _enable_polly=true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+  exit 1
+fi
+if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
 
@@ -115,6 +122,7 @@ _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "agent-builder:agent_builder:$_enable_agent_builder"
   "insights:insights:$_enable_insights"
+  "polly:polly:$_enable_polly"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -146,8 +154,10 @@ echo ""
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain
 
-# Guard: a pending-upgrade release (left by a Ctrl+C'd helm upgrade --wait) blocks
-# helm upgrade --install. Roll back to clear the lock before proceeding.
+# Guard: recover from broken release states before proceeding.
+#   - pending-upgrade: left by a Ctrl+C'd helm upgrade --wait. Roll back to clear.
+#   - failed: left by a timed-out post-install hook or resource readiness check.
+#             helm upgrade works fine on a failed release — just log and continue.
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
 if [[ "$_release_status" == "pending-upgrade" ]]; then
@@ -155,18 +165,68 @@ if [[ "$_release_status" == "pending-upgrade" ]]; then
   echo "         Rolling back to clear the lock..."
   helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
   echo ""
+elif [[ "$_release_status" == "failed" ]]; then
+  echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
+  echo "         This is usually caused by a post-install hook timeout — not a broken deployment."
+  echo "         Proceeding with upgrade (helm upgrade works on failed releases)."
+  echo ""
 fi
 
+# Deploy with --server-side=false to avoid SSA field ownership conflicts with the
+# ALB ingress controller. Helm 3.14+ defaults to server-side apply, which fights
+# with the controller over .spec.rules ownership. Client-side apply sidesteps this.
+#
+# We intentionally do NOT use --wait here. The chart's post-install bootstrap job
+# deploys operator-managed agents (clio, polly, agent-builder) which can take 10+
+# minutes on a cold cluster with autoscaling. Using --wait causes the release to go
+# 'failed' if the job exceeds the timeout — even though all workloads are healthy.
+# Instead, we do our own readiness check below.
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   "${VALUES_ARGS[@]}" \
-  --wait \
+  --server-side=false \
   --timeout 20m
 
 echo ""
-echo "LangSmith deployed."
+echo "LangSmith deployed. Waiting for core pods..."
+echo ""
+
+# ── Wait for core components to be ready ────────────────────────────────────
+# Instead of --wait (which blocks on hooks), check that the core deployments
+# are available. This decouples app readiness from the bootstrap job.
+_core_deployments=(
+  "${RELEASE_NAME}-frontend"
+  "${RELEASE_NAME}-backend"
+  "${RELEASE_NAME}-platform-backend"
+  "${RELEASE_NAME}-ingest-queue"
+  "${RELEASE_NAME}-queue"
+)
+# Add deployments-feature components if enabled
+if [[ "$_enable_deployments" == "true" ]]; then
+  _core_deployments+=(
+    "${RELEASE_NAME}-host-backend"
+    "${RELEASE_NAME}-listener"
+    "${RELEASE_NAME}-operator"
+  )
+fi
+
+_all_ready=true
+for dep in "${_core_deployments[@]}"; do
+  if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ $dep not ready within 5m (may still be starting)"
+    _all_ready=false
+  fi
+done
+
+if [[ "$_all_ready" == "true" ]]; then
+  echo "All core deployments ready."
+else
+  echo ""
+  echo "WARNING: Some deployments are still rolling out. This is normal on a cold cluster"
+  echo "         while nodes are provisioning. Check with: kubectl get pods -n $NAMESPACE"
+fi
 echo ""
 
 # Ensure langsmith-ksa service account exists and carries the IRSA annotation.
@@ -215,7 +275,7 @@ if [[ -n "$ALB_HOST" ]]; then
       --namespace "$NAMESPACE" \
       ${CHART_VERSION:+--version "$CHART_VERSION"} \
       "${VALUES_ARGS[@]}" \
-      --wait \
+      --server-side=false \
       --timeout 20m
     echo ""
     echo "LangSmith redeployed with hostname: $ALB_HOST"

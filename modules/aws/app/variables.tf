@@ -193,6 +193,12 @@ variable "enable_insights" {
   default     = false
 }
 
+variable "enable_polly" {
+  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_agent_deploys = true."
+  type        = bool
+  default     = false
+}
+
 variable "tls_enabled_for_deploys" {
   description = "Whether agent deployment endpoints use HTTPS. Auto-detected from tls_certificate_source if not set."
   type        = bool
