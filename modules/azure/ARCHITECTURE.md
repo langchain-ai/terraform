@@ -192,6 +192,21 @@ Based on `helm/charts/langsmith/examples/medium_size.yaml`. Use with `values-ove
 
 ---
 
+## Optional Modules
+
+Four optional modules can be enabled by setting variables in `terraform.tfvars`. Each is a count-controlled module — 0 = disabled, 1 = enabled.
+
+| Module | Variable to enable | Use case |
+|--------|-------------------|---------|
+| `waf` | `enable_waf = true` | Azure Application Gateway + WAF v2. Enterprise perimeter security, Web ACLs, bot protection. |
+| `diagnostics` | `enable_diagnostics = true` | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. Required for production observability and audit logging. |
+| `bastion` | `enable_bastion = true` | Azure Bastion (Standard tier). Secure browser-based SSH to node VMs without a public IP or jump box. |
+| `dns` | `enable_dns = true` | Azure DNS zone + A record. Use when you own a custom domain and want Azure to manage DNS. |
+
+These modules are independent — enable any combination. The core deployment (Passes 1–5) functions without any of them.
+
+---
+
 ## Workload Identity (Blob Storage)
 
 LangSmith pods access Azure Blob Storage without static keys. Azure AD token exchange happens via the AKS OIDC issuer:
@@ -204,10 +219,12 @@ AKS OIDC issuer
   → Azure AD issues a short-lived token — no storage keys in any secret or env var
 ```
 
+**Workload Identity is now centralized in `modules/k8s-cluster/`** (moved from `modules/storage/`). Federated credentials are registered alongside the managed identity and OIDC issuer in the same module, which avoids circular dependencies and makes it easier to add new service accounts.
+
 ### Which pods need Workload Identity
 
 Every pod that reads blob storage env vars (`langsmith.commonEnv` in the Helm chart) must have:
-1. A federated credential registered in Terraform (`modules/storage/main.tf`)
+1. A federated credential registered in Terraform (`modules/k8s-cluster/main.tf`)
 2. The `azure.workload.identity/use: "true"` label on the deployment
 3. The `azure.workload.identity/client-id` annotation on the service account
 
@@ -227,7 +244,7 @@ Every pod that reads blob storage env vars (`langsmith.commonEnv` in the Helm ch
 | `langsmith-clickhouse` | 2 | no |
 | `langsmith-operator` | 3 | no |
 
-All federated credentials are registered in `modules/storage/main.tf` under `service_accounts_for_workload_identity`. Adding a new pod that accesses blob storage requires adding its service account name to that list and running `terraform apply -target=module.blob`.
+All federated credentials are registered in `modules/k8s-cluster/main.tf` under `service_accounts_for_workload_identity`. Adding a new pod that accesses blob storage requires adding its service account name to that list and running `terraform apply -target=module.aks`.
 
 ### What breaks without it
 

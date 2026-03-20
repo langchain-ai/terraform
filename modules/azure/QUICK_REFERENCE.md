@@ -6,6 +6,26 @@ For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIG
 
 ---
 
+## Makefile Shortcuts
+
+A `Makefile` at `terraform/azure/` provides shortcuts for all common operations. Run from `terraform/azure/`:
+
+```bash
+make help        # list all available targets
+make preflight   # validate az CLI login, resource providers, RBAC roles, terraform.tfvars
+make init        # terraform init
+make plan        # terraform plan (sources setup-env.sh automatically)
+make apply       # terraform apply — Pass 1 infrastructure
+make kubeconfig  # az aks get-credentials (reads cluster/RG names from terraform output)
+make deploy      # helm deploy LangSmith — Pass 2
+make status      # kubectl get pods/svc/ingress/certificate/scaledobject in langsmith namespace
+make destroy     # terraform destroy
+```
+
+> Run `make preflight` before `make apply` on a new machine or subscription. It checks az CLI version, login status, required resource provider registrations (Microsoft.ContainerService, Microsoft.DBforPostgreSQL, etc.), RBAC role assignments (Contributor + User Access Administrator), and that `terraform.tfvars` exists with required fields filled in.
+
+---
+
 ## Pass 1 — Infrastructure
 
 ```bash
@@ -72,6 +92,18 @@ letsencrypt_email      = "you@example.com"
 # ── LangSmith ─────────────────────────────────────────────────────────────────
 langsmith_namespace    = "langsmith"
 langsmith_release_name = "langsmith"
+
+# ── Optional modules ──────────────────────────────────────────────────────────
+# Uncomment to enable. Each adds an independent module — safe to add post-deploy.
+# enable_waf         = true   # Azure Application Gateway + WAF v2
+# enable_diagnostics = true   # Log Analytics + diagnostic settings (recommended for prod)
+# enable_bastion     = true   # Azure Bastion for secure node SSH (no public IP)
+# enable_dns         = true   # Azure DNS zone + A record for custom domain
+
+# ── Multi-AZ (optional) ───────────────────────────────────────────────────────
+# Spread AKS node pools and PostgreSQL across availability zones.
+# availability_zones              = ["1", "2", "3"]
+# postgres_high_availability_mode = "ZoneRedundant"   # requires GeneralPurpose SKU
 ```
 
 > For demo/POC with all in-cluster DBs — see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
