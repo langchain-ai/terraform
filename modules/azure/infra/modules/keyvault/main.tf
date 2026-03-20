@@ -205,3 +205,18 @@ resource "azurerm_key_vault_secret" "insights_encryption_key" {
   tags       = merge(var.tags, { component = "insights", stability = "critical", module = "keyvault" })
   depends_on = [time_sleep.wait_for_rbac]
 }
+
+resource "azurerm_key_vault_secret" "polly_encryption_key" {
+  count        = var.langsmith_polly_encryption_key != "" ? 1 : 0
+  name         = "langsmith-polly-encryption-key"
+  value        = var.langsmith_polly_encryption_key
+  key_vault_id = azurerm_key_vault.langsmith.id
+  content_type = "text/plain"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+
+  tags       = merge(var.tags, { component = "polly", stability = "critical", module = "keyvault" })
+  depends_on = [time_sleep.wait_for_rbac]
+}

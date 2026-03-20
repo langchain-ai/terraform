@@ -26,6 +26,8 @@ config:
     engine: "Azure"
     azureStorageAccountName: "<tf output: storage_account_name>"
     azureStorageContainerName: "<tf output: storage_container_name>"
+  telemetry:
+    usageReporting: true
 
 postgres:
   external:

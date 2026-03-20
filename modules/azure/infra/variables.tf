@@ -332,3 +332,10 @@ variable "langsmith_insights_encryption_key" {
   sensitive   = true
   default     = ""
 }
+
+variable "langsmith_polly_encryption_key" {
+  type        = string
+  description = "Fernet key for Polly agent. Stored in Key Vault: langsmith-polly-encryption-key. Must stay stable — changing breaks existing Polly data."
+  sensitive   = true
+  default     = ""
+}

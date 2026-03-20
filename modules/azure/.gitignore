@@ -21,6 +21,7 @@ infra/.jwt_secret
 infra/.deployments_key
 infra/.agent_builder_key
 infra/.insights_key
+infra/.polly_key
 
 # Helm generated values — contain real credentials
 **/helm/values/langsmith-values*.yaml

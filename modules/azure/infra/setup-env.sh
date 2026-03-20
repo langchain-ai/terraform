@@ -98,6 +98,7 @@ jwt_secret=$(_kv_secret   "langsmith-jwt-secret"                 ".jwt_secret"  
 deployments_key=$(_kv_secret "langsmith-deployments-encryption-key" ".deployments_key" "$_fernet_generator")
 agent_builder_key=$(_kv_secret "langsmith-agent-builder-encryption-key" ".agent_builder_key" "$_fernet_generator")
 insights_key=$(_kv_secret "langsmith-insights-encryption-key"    ".insights_key"    "$_fernet_generator")
+polly_key=$(_kv_secret    "langsmith-polly-encryption-key"        ".polly_key"       "$_fernet_generator")
 
 # ── Write secrets.auto.tfvars ─────────────────────────────────────────────────
 cat > "$SECRETS_FILE" << EOF
@@ -112,6 +113,7 @@ langsmith_jwt_secret                   = "$jwt_secret"
 langsmith_deployments_encryption_key   = "$deployments_key"
 langsmith_agent_builder_encryption_key = "$agent_builder_key"
 langsmith_insights_encryption_key      = "$insights_key"
+langsmith_polly_encryption_key         = "$polly_key"
 EOF
 
 chmod 600 "$SECRETS_FILE"

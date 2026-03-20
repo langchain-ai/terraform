@@ -63,6 +63,12 @@ variable "admin_password" {
   type        = string
 }
 
+variable "database_name" {
+  description = "The name of the LangSmith database to create and connect to"
+  type        = string
+  default     = "langsmith"
+}
+
 variable "tags" {
   type        = map(string)
   description = "Common Azure resource tags to apply to all resources in this module"
