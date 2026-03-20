@@ -168,4 +168,4 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ---
 
-*Updated after full production deploy: Passes 2–5 verified on chart v0.13.23.*
+*Updated after full production deploy: Passes 2–5 verified on chart v0.13.27.*

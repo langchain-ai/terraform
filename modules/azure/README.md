@@ -21,7 +21,7 @@ See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for copy-paste deployment commands.
 | 1.5 | Cluster access | `az aks get-credentials` |
 | 1.6 | TLS cluster issuers | `kubectl apply -f kubectl/letsencrypt-issuers.yaml` |
 | 2 | LangSmith application | `kubectl create secret` + `helm upgrade --install` |
-| 3 | LangGraph Deployments (optional) | add `config.deployment` block + `helm upgrade --install` |
+| 3 | LangSmith Deployments (optional) | add `config.deployment` block + `helm upgrade --install` |
 | 4 | Agent Builder (optional) | add `config.agentBuilder` block + `helm upgrade --install` |
 | 5 | Insights + Polly (optional) | add `config.insights` + `config.polly` blocks + `helm upgrade --install` |
 
@@ -75,7 +75,7 @@ azure/
 │   └── values/
 │       ├── values-overrides.yaml                       # Live file — gitignored, never commit
 │       ├── values-overrides-pass-2.yaml.example        # Pass 2 (core LangSmith)
-│       ├── values-overrides-pass-3.yaml.example        # Pass 2 + LangGraph Deployments
+│       ├── values-overrides-pass-3.yaml.example        # Pass 2 + LangSmith Deployments
 │       ├── values-overrides-pass-4.yaml.example        # Pass 3 + Agent Builder
 │       ├── values-overrides-pass-5.yaml.example        # Pass 3 + Insights
 │       ├── values-overrides-demo.yaml.example          # In-cluster DBs (light deploy)

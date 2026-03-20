@@ -838,9 +838,10 @@ helm repo update
 helm search repo langsmith/langsmith --versions | head -10
 ```
 
-Example output (latest as of March 2026 is `0.13.23`):
+Example output (latest as of March 2026 is `0.13.27`):
 ```
 NAME                   CHART VERSION   APP VERSION
+langsmith/langsmith    0.13.27         0.13.28
 langsmith/langsmith    0.13.23         0.13.23
 langsmith/langsmith    0.13.21         0.13.21
 langsmith/langsmith    0.13.20         0.13.21

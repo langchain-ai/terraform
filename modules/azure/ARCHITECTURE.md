@@ -6,7 +6,7 @@
 
 ### Production Deploy (External Postgres + Redis)
 
-**[LangSmith Azure — Production Architecture (v0.13.23)](https://app.eraser.io/workspace/oto9FgBOY2s7877578R2)**
+**[LangSmith Azure — Production Architecture (v0.13.27)](https://app.eraser.io/workspace/oto9FgBOY2s7877578R2)**
 
 ![LangSmith Azure Production Architecture](diagrams/production-deploy-architecture.png)
 
@@ -18,7 +18,7 @@ No new diagram — Pass 5 adds `config.insights.enabled: true` only. Clio deploy
 
 ### Pass 4 — Agent Builder Containers (verified)
 
-**[LangSmith Azure — Pass 4 Platform Containers (v0.13.23)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
+**[LangSmith Azure — Pass 4 Platform Containers (v0.13.27)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
 
 Adds to Pass 3 — 3 static + 4 dynamic pods:
 - `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
@@ -28,7 +28,7 @@ Adds to Pass 3 — 3 static + 4 dynamic pods:
 
 ### Pass 3 — LangGraph Platform Containers (verified)
 
-**[LangSmith Azure — Pass 3 Platform Containers (v0.13.23)](https://app.eraser.io/workspace/6renzZO9DtNdvLuqO0Aa)**
+**[LangSmith Azure — Pass 3 Platform Containers (v0.13.27)](https://app.eraser.io/workspace/6renzZO9DtNdvLuqO0Aa)**
 
 Adds 3 pods to the Pass 2 topology:
 - `langsmith-host-backend` — LangGraph control plane API (WI)
@@ -38,7 +38,7 @@ Adds 3 pods to the Pass 2 topology:
 
 ### Pass 2 — Platform Containers (External Postgres + Redis, verified)
 
-**[LangSmith Azure — Pass 2 Platform Containers (v0.13.23)](https://app.eraser.io/workspace/CTA7dtpxBysehdXeYOHu)**
+**[LangSmith Azure — Pass 2 Platform Containers (v0.13.27)](https://app.eraser.io/workspace/CTA7dtpxBysehdXeYOHu)**
 
 Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 deploy:
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
@@ -49,7 +49,7 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 ### Light Deploy (All In-Cluster)
 
-**[LangSmith Azure — Light Deploy Architecture (v0.13.23)](https://app.eraser.io/workspace/sQxjXna8084czm2eRPFj)**
+**[LangSmith Azure — Light Deploy Architecture (v0.13.27)](https://app.eraser.io/workspace/sQxjXna8084czm2eRPFj)**
 
 ![LangSmith Azure Light Deploy Architecture](diagrams/light-deploy-architecture.png)
 
