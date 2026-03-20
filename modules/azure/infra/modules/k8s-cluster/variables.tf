@@ -88,6 +88,12 @@ variable "langsmith_release_name" {
   default     = "langsmith"
 }
 
+variable "workload_identity_name" {
+  type        = string
+  description = "Override the managed identity name. Set to the existing identity name when migrating from the storage module to avoid recreating it."
+  default     = ""
+}
+
 variable "availability_zones" {
   type        = list(string)
   description = "Availability zones for the default node pool. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."

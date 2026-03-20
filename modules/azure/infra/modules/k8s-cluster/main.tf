@@ -114,8 +114,12 @@ resource "azurerm_kubernetes_cluster" "main" {
   lifecycle {
     # upgrade_settings change during rolling node upgrades; ignore to prevent
     # drift between Terraform state and live cluster configuration.
+    # zones: AKS does not support changing zones on an existing node pool —
+    # it is only applied at creation time. Ignoring prevents forced recreation
+    # when availability_zones is set on an existing cluster.
     ignore_changes = [
-      default_node_pool[0].upgrade_settings
+      default_node_pool[0].upgrade_settings,
+      default_node_pool[0].zones,
     ]
   }
 }
@@ -158,7 +162,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
 # credentials) is produced by this module. Having identity creation and
 # federation in the same place avoids circular dependency.
 resource "azurerm_user_assigned_identity" "k8s_app" {
-  name                = "${var.cluster_name}-app-identity"
+  name                = var.workload_identity_name != "" ? var.workload_identity_name : "${var.cluster_name}-app-identity"
   resource_group_name = var.resource_group_name
   location            = var.location
   tags                = merge(var.tags, { module = "aks" })

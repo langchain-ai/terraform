@@ -114,6 +114,10 @@ module "aks" {
   langsmith_namespace    = var.langsmith_namespace
   langsmith_release_name = var.langsmith_release_name
 
+  # Preserve existing identity name when migrating from storage module.
+  # New deployments leave this unset and get "${cluster_name}-app-identity".
+  workload_identity_name = "k8s-app-identity"
+
   availability_zones = var.availability_zones
 
   tags = local.common_tags

@@ -40,7 +40,6 @@ resource "azurerm_monitor_diagnostic_setting" "aks" {
 
   enabled_metric {
     category = "AllMetrics"
-    enabled  = false
   }
 }
 
@@ -57,7 +56,6 @@ resource "azurerm_monitor_diagnostic_setting" "keyvault" {
 
   enabled_metric {
     category = "AllMetrics"
-    enabled  = false
   }
 }
 
@@ -72,6 +70,5 @@ resource "azurerm_monitor_diagnostic_setting" "postgres" {
 
   enabled_metric {
     category = "AllMetrics"
-    enabled  = false
   }
 }
