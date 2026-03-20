@@ -66,7 +66,7 @@ variable "admin_password" {
 variable "database_name" {
   description = "The name of the LangSmith database to create and connect to"
   type        = string
-  default     = "langsmithdz"
+  default     = "langsmith"
 }
 
 variable "tags" {
