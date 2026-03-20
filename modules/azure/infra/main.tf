@@ -208,6 +208,7 @@ module "keyvault" {
   langsmith_deployments_encryption_key   = var.langsmith_deployments_encryption_key
   langsmith_agent_builder_encryption_key = var.langsmith_agent_builder_encryption_key
   langsmith_insights_encryption_key      = var.langsmith_insights_encryption_key
+  langsmith_polly_encryption_key         = var.langsmith_polly_encryption_key
 
   purge_protection_enabled = var.keyvault_purge_protection
 

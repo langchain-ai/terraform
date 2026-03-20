@@ -33,12 +33,16 @@ config:
     engine: "Azure"
     azureStorageAccountName: "<tf output: storage_account_name>"
     azureStorageContainerName: "<tf output: storage_container_name>"
+  telemetry:
+    usageReporting: true
   deployment:
     enabled: true
     url: "https://<your-domain.com>"
-  # Pass 5 — encryption key read from langsmith-config-secret (insights_encryption_key)
+  # Pass 5 — encryption keys read from langsmith-config-secret
   # WARNING: never change after first deploy
   insights:
+    enabled: true
+  polly:
     enabled: true
 
 postgres:

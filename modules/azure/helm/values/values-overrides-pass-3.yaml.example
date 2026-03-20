@@ -30,6 +30,8 @@ config:
     engine: "Azure"
     azureStorageAccountName: "<tf output: storage_account_name>"
     azureStorageContainerName: "<tf output: storage_container_name>"
+  telemetry:
+    usageReporting: true
   # Pass 3 — required: both enabled AND url
   deployment:
     enabled: true

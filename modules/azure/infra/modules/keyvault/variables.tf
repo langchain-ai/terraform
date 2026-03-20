@@ -89,6 +89,13 @@ variable "langsmith_insights_encryption_key" {
   default     = ""
 }
 
+variable "langsmith_polly_encryption_key" {
+  type        = string
+  description = "Fernet encryption key for Polly agent. Empty = not stored."
+  sensitive   = true
+  default     = ""
+}
+
 # ── Tags ──────────────────────────────────────────────────────────────────────
 
 variable "tags" {
