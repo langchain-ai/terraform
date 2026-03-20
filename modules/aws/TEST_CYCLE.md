@@ -23,7 +23,7 @@ checklist below.
 - RDS: create/delete DB instance
 - ElastiCache: create/delete replication group
 - S3: create/delete bucket, bucket policies
-- SSM: GetParameter, PutParameter (for `source ./infra/setup-env.sh`)
+- SSM: GetParameter, PutParameter (for `source ./infra/scripts/setup-env.sh`)
 
 ---
 
@@ -62,7 +62,7 @@ All checks must be green before proceeding. Fix any permission errors first.
 
 ### Step 2 — Set secrets and open a terraform shell
 ```bash
-source ./infra/setup-env.sh
+source ./infra/scripts/setup-env.sh
 ```
 This script:
 - Reads `name_prefix` and `environment` from `terraform.tfvars` to build the SSM path prefix
@@ -76,7 +76,7 @@ This script:
 - `jwt_secret` is write-once: rotating it invalidates all active user sessions
 - `admin_password` must contain a symbol from `!#$%()+,-./:?@[\]^_{~}`
 
-> **Must use `source`** — running `./infra/setup-env.sh` directly does not export variables
+> **Must use `source`** — running `./infra/scripts/setup-env.sh` directly does not export variables
 > to the calling shell.
 >
 > **All subsequent terraform commands MUST run in the same shell session** — exported `TF_VAR_*`
@@ -169,10 +169,10 @@ Both role ARNs must be present — needed by Pass 2.
 
 ### ALB
 ```bash
-terraform -chdir=infra output alb_url
+terraform -chdir=infra output alb_dns_name
 ```
-Expected: `http://<cluster-name>.<region>.elb.amazonaws.com`
-(HTTP only when `tls_certificate_source = "none"`)
+Expected: `<name_prefix>-<environment>-alb-<id>.<region>.elb.amazonaws.com`
+(Use `terraform -chdir=infra output langsmith_url` for the full URL with protocol.)
 
 ---
 
@@ -270,8 +270,8 @@ aws wafv2 get-web-acl-for-resource --region "$REGION" \
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| Precondition failed: postgres_password / redis_auth_token is required | `terraform plan` fails with "Resource precondition failed" | Re-source setup-env.sh in the SAME shell before running terraform: `source ./infra/setup-env.sh` — TF_VAR_* do not persist across shell sessions |
-| Secrets Manager "secret scheduled for deletion" | `apply` fails with `InvalidRequestException: You can't create this secret because a secret with this name is already scheduled for deletion` | Force-delete the pending secret: `aws secretsmanager delete-secret --region <region> --secret-id <name_prefix>-<environment>-langsmith --force-delete-without-recovery` then re-apply. **Root cause fixed**: `modules/secrets/variables.tf` now defaults `recovery_window_in_days = 0` so future destroys skip the recovery window. |
+| Precondition failed: postgres_password / redis_auth_token is required | `terraform plan` fails with "Resource precondition failed" | Re-source setup-env.sh in the SAME shell before running terraform: `source ./infra/scripts/setup-env.sh` — TF_VAR_* do not persist across shell sessions |
+| Secrets Manager "secret scheduled for deletion" | `apply` fails with `InvalidRequestException: You can't create this secret because a secret with this name is already scheduled for deletion` | **No longer applicable** — `modules/secrets/` has been removed. Secrets are managed exclusively via SSM Parameter Store + ESO. If you still have a lingering Secrets Manager secret from a prior deploy, force-delete it: `aws secretsmanager delete-secret --region <region> --secret-id <name_prefix>-<environment>-langsmith --force-delete-without-recovery` |
 | `setup-env.sh` keeps showing "Migrating postgres-password → SSM" on every run | Migration message on each source | The IAM user may lack `ssm:PutParameter` — the value loads from the local `.pg_password` file as a fallback; safe for testing but fix permissions for production |
 | EBS CSI addon not ready when StorageClass is created | `Error: Failed to create StorageClass` | Re-run `terraform apply` — EKS addon becomes active asynchronously |
 | ESO or KEDA Helm release times out | `context deadline exceeded` on k8s_bootstrap module | Uninstall the stuck release, then re-apply: `helm uninstall external-secrets -n external-secrets` |
@@ -280,6 +280,10 @@ aws wafv2 get-web-acl-for-resource --region "$REGION" \
 | `moved` block warnings | `Warning: Moved block still exists` | Safe to ignore — blocks kept for state migration compatibility |
 | `gp2` StorageClass still default | `kubectl get sc` shows `gp2 (default)` | Patch it: `kubectl patch sc gp2 -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'` |
 | IRSA trust policy error | `AssumeRoleWithWebIdentity` denied | Verify `langsmith_namespace` in tfvars matches the K8s namespace; IRSA trust is scoped to `system:serviceaccount:<namespace>:*` |
+| ALB webhook not ready | `failed calling webhook "mservice.elbv2.k8s.aws": no endpoints available for service "aws-load-balancer-webhook-service"` during ESO/KEDA Helm install | The ALB controller mutating webhook intercepts Service creation but its pods aren't ready yet. **Fixed**: a `time_sleep` (30s) between the EKS module and k8s-bootstrap gives the webhook time to become available. If you still hit this on a slow cluster, re-run `terraform apply`. |
+| KMS alias already exists | `AlreadyExistsException: An alias with the name alias/eks/<name>-eks already exists` | Orphaned from a prior incomplete destroy. Import it: `terraform import 'module.eks.module.eks.module.kms.aws_kms_alias.this["cluster"]' 'alias/eks/<name>-eks'` then re-apply |
+| Node group `minSize > desiredSize` | `InvalidParameterException: minSize can't be greater than desiredSize` | **Fixed**: `desired_size` now defaults to `min_size` when omitted from `eks_managed_node_groups`. If using an older version, add `desired_size` to your tfvars node group config. |
+| `setup-env.sh` hangs in non-interactive shell | Script blocks on `read` when stdin is not a terminal (CI, piped, redirected) | **Fixed**: script now detects non-interactive shell via `[[ -t 0 ]]` and fails fast with instructions to pre-export env vars or populate SSM directly |
 
 ---
 

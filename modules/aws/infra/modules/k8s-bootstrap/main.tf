@@ -2,53 +2,9 @@
 # Creates the namespace, database/cache secrets, KEDA, and cert-manager.
 # The LangSmith Helm chart itself is deployed separately via aws/helm/scripts/deploy.sh.
 #
-# Key dependencies installed here:
-#   KEDA              — https://keda.sh/docs/
-#   cert-manager      — https://cert-manager.io/docs/
-#   External Secrets  — https://external-secrets.io/latest/
-
-terraform {
-  required_providers {
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.0"
-    }
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-# ── Providers ─────────────────────────────────────────────────────────────────
-# Cluster credentials are passed in from the root module (module.eks outputs).
-# Using exec-based auth so this module never needs a raw token in state.
-
-provider "kubernetes" {
-  host                   = var.cluster_endpoint
-  cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
-  }
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = var.cluster_endpoint
-    cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", var.cluster_name, "--region", var.region]
-    }
-  }
-}
+# Providers (kubernetes, helm, aws) are inherited from the root module — do not
+# define provider blocks here. See:
+# https://developer.hashicorp.com/terraform/language/modules/develop/providers
 
 # ── Namespace ────────────────────────────────────────────────────────────────
 
@@ -88,7 +44,6 @@ resource "kubernetes_secret" "redis" {
 
 # ── KEDA (Kubernetes Event-driven Autoscaling) ───────────────────────────────
 # Required for LangSmith Deployments feature.
-# https://keda.sh/docs/latest/concepts/
 
 resource "helm_release" "keda" {
   name             = "keda"
@@ -96,7 +51,7 @@ resource "helm_release" "keda" {
   chart            = "keda"
   namespace        = "keda"
   create_namespace = true
-  version          = "2.16.0"
+  version          = "2.19.0"
 
   set {
     name  = "resources.operator.requests.cpu"
@@ -118,7 +73,7 @@ resource "helm_release" "cert_manager" {
   chart            = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
-  version          = "v1.17.0"
+  version          = "v1.20.0"
 
   set {
     name  = "crds.enabled"
@@ -134,7 +89,7 @@ resource "helm_release" "external_secrets" {
   chart            = "external-secrets"
   namespace        = "external-secrets"
   create_namespace = true
-  version          = "0.10.7"
+  version          = "2.1.0"
 
   set {
     name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
@@ -143,31 +98,38 @@ resource "helm_release" "external_secrets" {
 }
 
 
-resource "kubernetes_manifest" "letsencrypt_cluster_issuer" {
+# ClusterIssuer for Let's Encrypt — applied via kubectl to avoid the
+# kubernetes_manifest plan-time CRD validation issue. On a fresh cluster,
+# cert-manager CRDs don't exist until apply, so kubernetes_manifest fails
+# at plan time. terraform_data + local-exec defers the apply to after
+# cert-manager is installed.
+resource "terraform_data" "letsencrypt_cluster_issuer" {
   count = var.tls_certificate_source == "letsencrypt" ? 1 : 0
 
-  manifest = {
-    apiVersion = "cert-manager.io/v1"
-    kind       = "ClusterIssuer"
-    metadata = {
-      name = "letsencrypt-prod"
-    }
-    spec = {
-      acme = {
-        server = "https://acme-v02.api.letsencrypt.org/directory"
-        email  = var.letsencrypt_email
-        privateKeySecretRef = {
-          name = "letsencrypt-prod"
-        }
-        solvers = [{
-          http01 = {
-            ingress = {
-              ingressClassName = "alb"
-            }
-          }
-        }]
-      }
-    }
+  triggers_replace = [
+    var.letsencrypt_email,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${var.letsencrypt_email}
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          ingressClassName: alb
+MANIFEST
+    EOT
   }
 
   depends_on = [helm_release.cert_manager]

@@ -10,6 +10,7 @@
 #   ./scripts/preflight.sh --create-test-resources # + create/destroy real AWS resources
 #   ./scripts/preflight.sh -y                      # non-interactive
 set -euo pipefail
+export AWS_PAGER=""
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -31,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     -s|--skip_resource_tests) SKIP_RESOURCE_TESTS=true; shift ;;
     -y|--yes)                 NON_INTERACTIVE=true; shift ;;
     --create-test-resources)  CREATE_TEST_RESOURCES=true; shift ;;
-    --domain)                 ACM_DOMAIN="$2"; shift 2 ;;
+    --domain)                 [[ $# -lt 2 ]] && { printf "ERROR: --domain requires an argument\n" >&2; exit 1; }; ACM_DOMAIN="$2"; shift 2 ;;
     *)
       printf "Unknown option: %s\n" "$1"
       printf "Usage: %s [-s] [-y] [--create-test-resources] [--domain <domain>]\n" "$0"
@@ -224,15 +225,6 @@ if check_denied "$SSM_OUT"; then
   exit 1
 fi
 success "SSM Parameter Store permissions OK"
-
-# Secrets Manager — langsmith secret (needed for secrets module)
-info "Secrets Manager — langsmith secret..."
-SM_OUT=$(aws secretsmanager list-secrets --region "$REGION" --max-results 1 2>&1 || true)
-if check_denied "$SM_OUT"; then
-  error "Secrets Manager permission denied. Required: secretsmanager:CreateSecret, secretsmanager:GetSecretValue"
-  exit 1
-fi
-success "Secrets Manager permissions OK"
 
 # ACM — TLS certificates (needed for acm TLS mode)
 info "ACM — TLS certificate management..."

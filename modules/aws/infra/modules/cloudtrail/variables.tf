@@ -20,6 +20,12 @@ variable "log_retention_days" {
   default     = 365
 }
 
+variable "force_destroy" {
+  type        = bool
+  description = "Allow terraform destroy to delete the CloudTrail S3 bucket even when it contains audit logs."
+  default     = false
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags to apply to all resources"

@@ -91,6 +91,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
 # that guarantees the bucket stays private — even if someone misconfigures
 # the block-public-access settings above, this policy still blocks external access.
 resource "aws_s3_bucket_policy" "bucket_policy" {
+  count  = var.create_bucket_policy ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
 
   policy = jsonencode({
@@ -103,7 +104,10 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
           AWS = var.langsmith_irsa_role_arn
         },
         Action = [
-          "s3:*",
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
         ],
         Resource = [
           aws_s3_bucket.bucket.arn,

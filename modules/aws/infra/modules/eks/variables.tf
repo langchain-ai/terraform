@@ -46,14 +46,18 @@ variable "eks_managed_node_group_defaults" {
 }
 
 variable "eks_managed_node_groups" {
-  type        = map(any)
-  description = "EKS managed node groups"
+  type = map(object({
+    name           = string
+    instance_types = list(string)
+    min_size       = optional(number, 1)
+    desired_size   = optional(number, null)
+    max_size       = optional(number, 10)
+  }))
+  description = "EKS managed node groups. desired_size defaults to min_size when omitted."
   default = {
     default = {
       name           = "node-group-default"
       instance_types = ["m5.4xlarge"]
-      min_size       = 1
-      max_size       = 10
     }
   }
 }

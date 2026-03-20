@@ -5,28 +5,31 @@
 # updates kubeconfig to target the right cluster, then removes the Helm release
 # and ESO resources.
 set -euo pipefail
+export AWS_PAGER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-TF_DIR="$HELM_DIR/../infra"
+INFRA_DIR="$HELM_DIR/../infra"
+source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 
 # ── Resolve config from terraform.tfvars ──────────────────────────────────────
-_tfvars="$TF_DIR/terraform.tfvars"
-
-if [[ ! -f "$_tfvars" ]]; then
-  echo "ERROR: terraform.tfvars not found at $_tfvars" >&2
+if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
   exit 1
 fi
 
-_environment=$(grep -E '^\s*environment\s*=' "$_tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _environment="dev"
-_name_prefix=$(grep -E '^\s*name_prefix\s*=' "$_tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
-_region=$(grep -E '^\s*region\s*=' "$_tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _region="${AWS_REGION:-us-east-2}"
+_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
+
+if [[ -z "$_environment" || -z "$_region" ]]; then
+  echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
+  echo "       Ensure terraform.tfvars has 'environment' and 'region' set." >&2
+  exit 1
+fi
 
 echo "Resolved from terraform.tfvars:"
 echo "  name_prefix  = ${_name_prefix:-(empty)}"
@@ -36,7 +39,7 @@ echo ""
 
 # ── Get cluster name from Terraform output ────────────────────────────────────
 echo "Reading cluster name from Terraform output..."
-_cluster_name=$(terraform -chdir="$TF_DIR" output -raw cluster_name 2>/dev/null) || {
+_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || {
   echo "ERROR: Could not read cluster_name. Is 'terraform apply' complete?" >&2
   exit 1
 }
@@ -80,10 +83,16 @@ echo ""
 
 # ── Clean up operator-managed resources ──────────────────────────────────────
 # platform-backend creates agent-builder and LangGraph resources at runtime with
-# no Helm owner reference. kubectl delete all removes them so K8s stops restarting
-# the pods. ConfigMaps and Secrets are left intact.
-echo "Removing operator-managed resources from namespace '$NAMESPACE'..."
-kubectl delete all --all -n "$NAMESPACE" --ignore-not-found
+# no Helm owner reference. Target only LangSmith resources by label so workloads
+# from other teams sharing this namespace are not affected.
+echo "Removing operator-managed LangSmith resources from namespace '$NAMESPACE'..."
+kubectl delete deployments,services,pods,jobs,statefulsets,replicasets \
+  -l "app.kubernetes.io/instance=${RELEASE_NAME}" \
+  -n "$NAMESPACE" --ignore-not-found
+# Operator-spawned agent deployment pods use a different label pattern
+kubectl delete deployments,pods \
+  -l "langsmith.dev/managed-by=operator" \
+  -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
 echo ""
 
 echo "Uninstall complete."

@@ -16,6 +16,7 @@ terraform {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_elb_service_account" "current" {}
 
 # ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
 # Created only when access_logs_enabled = true.
@@ -24,7 +25,7 @@ data "aws_caller_identity" "current" {}
 
 resource "aws_s3_bucket" "access_logs" {
   count         = var.access_logs_enabled ? 1 : 0
-  bucket        = "${var.name}-access-logs"
+  bucket        = var.bucket_suffix != "" ? "${var.name}-access-logs-${var.bucket_suffix}" : "${var.name}-access-logs"
   force_destroy = true
   tags          = var.tags
 }
@@ -46,6 +47,12 @@ resource "aws_s3_bucket_policy" "access_logs" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { AWS = data.aws_elb_service_account.current.arn }
+        Action    = "s3:PutObject"
+        Resource  = "${aws_s3_bucket.access_logs[0].arn}/${var.access_logs_prefix}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+      },
       {
         Effect    = "Allow"
         Principal = { Service = "logdelivery.elasticloadbalancing.amazonaws.com" }
@@ -75,7 +82,7 @@ resource "aws_security_group" "alb" {
   }
 
   dynamic "ingress" {
-    for_each = var.tls_certificate_source == "acm" ? [1] : []
+    for_each = var.tls_certificate_source != "none" ? [1] : []
     content {
       description = "HTTPS"
       from_port   = 443
@@ -85,6 +92,8 @@ resource "aws_security_group" "alb" {
     }
   }
 
+  # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
+  # If using VPC peering for targets outside this VPC, add those CIDRs here.
   egress {
     from_port   = 0
     to_port     = 0
@@ -113,6 +122,10 @@ resource "aws_lb" "this" {
       enabled = true
     }
   }
+
+  # AWS validates the bucket policy when enabling access logs — the policy must
+  # exist before the ALB attribute is modified, not just the bucket.
+  depends_on = [aws_s3_bucket_policy.access_logs]
 
   tags = var.tags
 }

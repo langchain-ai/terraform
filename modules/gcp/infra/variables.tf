@@ -420,7 +420,7 @@ variable "ingress_type" {
 # Reference: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
 #------------------------------------------------------------------------------
 variable "clickhouse_source" {
-  description = "ClickHouse deployment type: 'in-cluster' (default, deployed via Helm), 'langsmith-managed' (managed by LangChain), or 'external' (self-hosted)"
+  description = "ClickHouse deployment type: 'in-cluster' (dev/POC only), 'langsmith-managed' (recommended for production — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), or 'external' (self-hosted)"
   type        = string
   default     = "in-cluster"
 

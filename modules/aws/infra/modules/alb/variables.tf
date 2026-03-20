@@ -15,7 +15,7 @@ variable "subnets" {
 
 variable "internal" {
   type        = bool
-  description = "If true, the ALB is internal (private). If false, internet-facing (public)."
+  description = "If true, provisions an internal ALB on private subnets. If false, provisions an internet-facing ALB on public subnets."
   default     = false
 }
 
@@ -58,4 +58,10 @@ variable "access_logs_prefix" {
   type        = string
   description = "S3 key prefix for ALB access log objects"
   default     = "alb"
+}
+
+variable "bucket_suffix" {
+  type        = string
+  description = "Random suffix appended to S3 bucket names to ensure global uniqueness"
+  default     = ""
 }

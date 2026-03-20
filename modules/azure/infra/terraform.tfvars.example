@@ -70,8 +70,10 @@ redis_capacity = 2           # P2 = 13 GB RAM. See: https://azure.microsoft.com/
 # ClickHouse Configuration
 #------------------------------------------------------------------------------
 # ClickHouse deployment type:
-#   "in-cluster"  — (default) deployed as a pod in the cluster via Helm
-#   "external"    — self-hosted or LangChain-managed ClickHouse (contact sales@langchain.dev)
+#   "in-cluster"  — (default) deployed as a pod in the cluster via Helm.
+#                   ⚠️  Dev/POC only — single pod, no replication, no backups.
+#   "external"    — LangChain Managed ClickHouse (recommended for production).
+#                   See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
 clickhouse_source = "in-cluster"
 
 #------------------------------------------------------------------------------

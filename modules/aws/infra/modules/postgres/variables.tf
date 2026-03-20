@@ -55,7 +55,13 @@ variable "username" {
 
 variable "password" {
   type        = string
+  sensitive   = true
   description = "Password for the database"
+
+  validation {
+    condition     = can(regex("^[^/@\"' ]+$", var.password))
+    error_message = "RDS master password must not contain '/', '@', '\"', single quotes, or spaces. Only printable ASCII characters excluding these are allowed."
+  }
 }
 
 variable "iam_database_authentication_enabled" {

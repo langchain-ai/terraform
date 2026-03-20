@@ -15,7 +15,7 @@
 #   2. Fill in each section below — comments explain every field.
 #
 #   3. Set up secrets (passwords, tokens, keys) via SSM-backed script:
-#        source ./setup-env.sh
+#        source ./scripts/setup-env.sh
 #      This auto-generates secrets, stores them in SSM Parameter Store, and
 #      exports TF_VAR_* into your shell. Run it once before `terraform apply`.
 #
@@ -150,7 +150,7 @@ create_vpc = true
 
 # Kubernetes version. Check AWS docs for supported versions:
 # https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html
-eks_cluster_version = "1.31"
+eks_cluster_version = "1.33"
 
 # Public API endpoint — controls whether the EKS API server is reachable
 # from outside the VPC.
@@ -441,10 +441,10 @@ langsmith_namespace = "langsmith"
 
 # ── ALB Network Access ───────────────────────────────────────────────────────
 #
-# alb_internal = true/false
-#   true  → internal ALB on private subnets (reachable only from within the VPC
-#           or via VPN/peering/Transit Gateway).
-#   false → internet-facing ALB on public subnets (default).
+# alb_scheme = "internet-facing" or "internal"
+#   "internet-facing" → ALB on public subnets (default).
+#   "internal"        → ALB on private subnets (reachable only from within the
+#                       VPC or via VPN/peering/Transit Gateway).
 #
 # alb_allowed_cidr_blocks = ["10.0.0.0/8", "172.16.0.0/12"]
 #   Restricts which IPs can reach ports 80/443 on the ALB security group.
@@ -452,12 +452,12 @@ langsmith_namespace = "langsmith"
 #   internal or limited-access deployments.
 #
 # GOING PUBLIC LATER:
-#   1. Set alb_internal = false  (switches to public subnets, internet-facing)
+#   1. Set alb_scheme = "internet-facing"  (switches to public subnets)
 #   2. Set alb_allowed_cidr_blocks = ["0.0.0.0/0"]  (opens to all)
 #   3. Run: terraform apply
 #   The ALB DNS name will change — update any DNS records or bookmarks.
 
-# alb_internal            = false
+# alb_scheme              = "internet-facing"
 # alb_allowed_cidr_blocks = ["0.0.0.0/0"]
 
 # ALB Access Logs — captures every request that hits the ALB:
@@ -487,16 +487,33 @@ langsmith_namespace = "langsmith"
 # create_waf = false
 
 #------------------------------------------------------------------------------
+# LANGGRAPH PLATFORM FEATURES (product addons)
+#------------------------------------------------------------------------------
+# These flags control which LangSmith product features are enabled.
+# Each requires the corresponding entitlement in your LangSmith license key.
+# deploy.sh reads these to decide which Helm values overlay files to include.
+#
+# If you're doing a base LangSmith deployment, leave all three as false.
+#
+#   enable_deployments   — LangGraph Platform (listener, operator, host-backend)
+#   enable_agent_builder — Visual agent builder UI (requires enable_deployments)
+#   enable_insights      — ClickHouse-backed analytics dashboard
+#
+enable_deployments   = false
+enable_agent_builder = false
+enable_insights      = false
+
+#------------------------------------------------------------------------------
 # LANGGRAPH PLATFORM ENCRYPTION KEYS (optional — for addons only)
 #------------------------------------------------------------------------------
-# These Fernet encryption keys are ONLY needed when you enable specific
-# LangSmith feature overlays in Helm (Pass 2). If you're doing a base
-# LangSmith deployment without addons, skip this entire section.
+# These Fernet encryption keys are ONLY needed when the corresponding
+# feature flag above is set to true. If all three flags are false, skip
+# this entire section.
 #
-# Each key corresponds to a Helm values overlay file:
-#   Deployments  → langsmith-values-agent-deploys.yaml
-#   Agent Builder → langsmith-values-agent-builder.yaml
-#   Insights     → langsmith-values-insights.yaml
+# Each key corresponds to a feature flag:
+#   Deployments  → enable_deployments   = true
+#   Agent Builder → enable_agent_builder = true
+#   Insights     → enable_insights      = true
 #
 # Generate a Fernet key (https://cryptography.io/en/latest/fernet/):
 #   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'

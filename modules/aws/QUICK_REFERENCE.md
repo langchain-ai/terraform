@@ -1,131 +1,90 @@
 # LangSmith on AWS — Quick Reference
 
-## Prerequisites
+All commands run from `terraform/aws/`. Run `make help` to see all targets.
 
-Install these tools before starting:
+---
 
-| Tool | Version | Install |
-|------|---------|---------|
-| [Terraform](https://developer.hashicorp.com/terraform/install) | >= 1.5 | `brew install terraform` |
-| [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | v2 | `brew install awscli` |
-| [kubectl](https://kubernetes.io/docs/tasks/tools/) | >= 1.28 | `brew install kubectl` |
-| [Helm](https://helm.sh/docs/intro/install/) | >= 3.12 | `brew install helm` |
+## First-Time Setup
 
 ```bash
-# Verify AWS credentials
-aws configure
-aws sts get-caller-identity
+cd terraform/aws
+
+# 1. Generate terraform.tfvars (interactive wizard)
+make quickstart
+
+# 2. Set up secrets in SSM Parameter Store
+source infra/scripts/setup-env.sh
+
+# 3. Deploy infrastructure (~20-25 min)
+make init
+make plan
+make apply
+
+# 4. Generate Helm values from Terraform outputs
+make init-values
+
+# 5. Deploy LangSmith (~10 min)
+make deploy
 ```
 
 ---
 
-## Pass 1 — Infrastructure (Terraform)
+## Day-2 Operations
 
 ```bash
-cd aws/infra
+# Check deployment state and get next-step guidance
+make status
 
-# 1. Configure variables — pick a profile or start from the full example
-cp terraform.tfvars.dev terraform.tfvars      # dev: public EKS, small instances, no deletion protection
-# cp terraform.tfvars.prod terraform.tfvars   # prod: private EKS, recommended sizes, protection on
-# cp terraform.tfvars.example terraform.tfvars  # full annotated reference — every option explained
+# Re-deploy after changing Helm values or upgrading
+make deploy
 
-# 2. Run preflight checks (validates tools, AWS creds, IAM permissions)
-./scripts/preflight.sh
+# Re-generate Helm values after Terraform changes
+make init-values
 
-# 3. Set up secrets (stores in SSM Parameter Store, exports TF_VAR_*)
-#    IMPORTANT: use `source` — not `./setup-env.sh`
-source ./setup-env.sh
+# Re-sync ESO secrets without redeploying
+make apply-eso
 
-# 4. Deploy infrastructure
-terraform init
-terraform plan
-terraform apply
+# Manage SSM secrets interactively
+make ssm
 
-# 5. Update kubeconfig after cluster is created
-aws eks update-kubeconfig --region <region> --name <name_prefix>-<env>-eks
+# Update kubeconfig for the EKS cluster
+make kubeconfig
 ```
 
 ---
 
-## Pass 1b — Custom Domain (optional)
+## Enable Optional Addons
 
-If you set `langsmith_domain` in `terraform.tfvars`, Terraform auto-provisions a Route 53 zone and ACM certificate.
-
-```bash
-# After terraform apply, get the NS records to delegate at your registrar
-terraform output dns_name_servers
-
-# Once NS delegation propagates (~5-30 min), enable HTTPS:
-# In terraform.tfvars, change: tls_certificate_source = "acm"
-terraform apply
-```
-
-You can skip this step and access LangSmith via the ALB hostname directly.
-
----
-
-## Pass 2 — Deploy LangSmith (Helm)
+`init-values.sh` prompts for product tier on first run. To add addons later, copy from `examples/`:
 
 ```bash
-cd aws/helm
-
-# 1. Generate environment values file from Terraform outputs
-./scripts/init-overrides.sh
-
-# 2. Deploy (includes preflight checks, ESO setup, and Helm install)
-./scripts/deploy.sh
-```
-
-**First deploy**: The ALB hostname isn't known until the ingress is created.
-`deploy.sh` handles this automatically — it detects the ALB hostname after the
-first install and re-runs Helm with the hostname set.
-
-### Optional addons
-
-Enable addons by copying the example files, then re-run `./scripts/deploy.sh`:
-
-```bash
-# Agent Deployments (LangGraph Platform)
-cp values/langsmith-values-agent-deploys.yaml.example values/langsmith-values-agent-deploys.yaml
+# Deployments feature (required for Agent Builder)
+cp helm/values/examples/langsmith-values-agent-deploys.yaml \
+   helm/values/langsmith-values-agent-deploys.yaml
 
 # Agent Builder (requires agent-deploys)
-cp values/langsmith-values-agent-builder.yaml.example values/langsmith-values-agent-builder.yaml
+cp helm/values/examples/langsmith-values-agent-builder.yaml \
+   helm/values/langsmith-values-agent-builder.yaml
 
-# Insights
-cp values/langsmith-values-insights.yaml.example values/langsmith-values-insights.yaml
+# ClickHouse Insights
+cp helm/values/examples/langsmith-values-insights.yaml \
+   helm/values/langsmith-values-insights.yaml
+
+# Then redeploy
+make deploy
+```
+
+**Sizing**: `init-values.sh` prompts for sizing on first run. To switch later:
+
+```bash
+rm helm/values/langsmith-values-sizing-ha.yaml
+cp helm/values/examples/langsmith-values-sizing-light.yaml \
+   helm/values/langsmith-values-sizing-light.yaml
 ```
 
 ---
 
-## Verify
-
-```bash
-kubectl get pods -n langsmith
-kubectl get ingress -n langsmith
-```
-
----
-
-## Access LangSmith
-
-**Port-forward** (works immediately, no ALB/DNS needed):
-```bash
-kubectl port-forward svc/langsmith-frontend -n langsmith 8080:80
-# Open http://localhost:8080
-```
-
-**Via ALB** (once the ingress has an address):
-```bash
-# Get the ALB hostname
-kubectl get ingress -n langsmith -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}'
-# Open http://<alb-hostname> in your browser
-```
-
-Login with the admin email from `init-overrides.sh` and the admin password from `setup-env.sh`.
-
----
-
-## Common Operations
+## Common kubectl Commands
 
 ```bash
 # Pod health
@@ -139,6 +98,9 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 kubectl get ingress -n langsmith
 kubectl describe ingress -n langsmith
 
+# ESO secret sync status
+kubectl get externalsecret langsmith-config -n langsmith
+
 # TLS
 kubectl get certificate -n langsmith
 kubectl get challenges -n langsmith
@@ -149,8 +111,8 @@ helm status langsmith -n langsmith
 helm history langsmith -n langsmith
 helm get values langsmith -n langsmith
 
-# IRSA
-kubectl get sa langsmith -n langsmith -o yaml | grep eks.amazonaws.com
+# IRSA — check per-component annotations
+kubectl get sa -n langsmith -o yaml | grep eks.amazonaws.com
 
 # LangSmith Deployments
 kubectl get lgp -n langsmith
@@ -198,87 +160,37 @@ aws iam get-role --role-name <irsa-role-name>
 ## Terraform Commands
 
 ```bash
+cd terraform/aws/infra
+
 terraform init
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars -target=module.eks
+terraform plan
+terraform apply
+terraform apply -target=module.eks
 terraform output
 terraform output -raw cluster_name
 terraform output -raw alb_dns_name
 terraform output -raw langsmith_irsa_role_arn
 terraform output -raw bucket_name
 terraform state list
-terraform refresh -var-file=terraform.tfvars
-```
-
----
-
-## Troubleshooting
-
-### LangSmith UI unreachable after re-running init-overrides.sh
-
-**Symptom:** `kubectl get ingress -n langsmith` shows a hostname under `HOSTS` (not `*`), and the ALB returns 404 or no response.
-
-**Cause:** `config.hostname` was populated (e.g. from the pre-provisioned ALB DNS name), which locks the ALB listener rule to that specific `Host` header. Requests arriving with a different `Host` header are dropped.
-
-**Fix:** Clear the hostname and redeploy:
-```bash
-# In langsmith-values-{env}.yaml, set:
-#   config.hostname: ""
-./helm/scripts/deploy.sh
-```
-
----
-
-### Switching to the pre-provisioned ALB on an existing cluster (Option A cut-over)
-
-**Symptom:** After provisioning the `alb` module and re-running `init-overrides.sh`, the ingress `ADDRESS` still shows the old reactive ALB. The `load-balancer-arn` annotation is present but ignored.
-
-**Cause:** The AWS Load Balancer Controller cannot reassign an existing ingress to a different ALB. The annotation is only respected on initial ingress creation.
-
-**Fix:** Delete the ingress so the controller recreates it against the pre-provisioned ALB:
-```bash
-kubectl delete ingress langsmith-ingress -n langsmith
-./helm/scripts/deploy.sh
-```
-
----
-
-### platform-backend / ingest-queue crash on startup (S3 301 MovedPermanently)
-
-**Symptom:** Pods in `CrashLoopBackOff`; logs show `panic: blob-storage health-check failed: ... StatusCode: 301 ... api error MovedPermanently`.
-
-**Cause:** `config.blobStorage.apiURL` defaults to `https://s3.us-west-2.amazonaws.com` in the Helm chart. If your bucket is in a different region, the SDK gets a 301 redirect it cannot follow.
-
-**Fix:** Ensure `init-overrides.sh` has been run to generate `langsmith-values-{env}.yaml`, which sets `apiURL` to the correct regional endpoint. Verify:
-```bash
-grep apiURL aws/helm/values/langsmith-values-*.yaml
-# should show: apiURL: "https://s3.<your-region>.amazonaws.com"
-```
-
----
-
-### IRSA not applied — pods lack S3 access
-
-**Symptom:** S3 operations fail with permission errors despite an IRSA role existing.
-
-**Cause:** The LangSmith Helm chart does not support a top-level `serviceAccount` block. IRSA annotations must be set per component.
-
-**Fix:** Ensure `langsmith-values-{env}.yaml` (generated by `init-overrides.sh`) contains per-component annotations:
-```yaml
-platformBackend:
-  serviceAccount:
-    annotations:
-      eks.amazonaws.com/role-arn: "<role-arn>"
-backend:
-  serviceAccount:
-    annotations:
-      eks.amazonaws.com/role-arn: "<role-arn>"
-# ... ingestQueue, queue
 ```
 
 ---
 
 ## Teardown
 
-See [TEARDOWN.md](TEARDOWN.md) for the full step-by-step teardown guide.
+```bash
+cd terraform/aws
+
+# Option A: script-driven deploy
+make uninstall
+
+# Option B: Terraform-managed deploy
+make destroy-app
+
+# Then destroy infrastructure:
+# 1. Set postgres_deletion_protection = false in infra/terraform.tfvars
+# 2. Apply the change, then destroy
+cd infra
+terraform apply
+terraform destroy
+```
