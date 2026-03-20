@@ -38,7 +38,7 @@ resource "azurerm_monitor_diagnostic_setting" "aks" {
   enabled_log { category = "cluster-autoscaler" }
   enabled_log { category = "guard" }
 
-  metric {
+  enabled_metric {
     category = "AllMetrics"
     enabled  = false
   }
@@ -55,7 +55,7 @@ resource "azurerm_monitor_diagnostic_setting" "keyvault" {
   enabled_log { category = "AuditEvent" }
   enabled_log { category = "AzurePolicyEvaluationDetails" }
 
-  metric {
+  enabled_metric {
     category = "AllMetrics"
     enabled  = false
   }
@@ -70,7 +70,7 @@ resource "azurerm_monitor_diagnostic_setting" "postgres" {
 
   enabled_log { category = "PostgreSQLLogs" }
 
-  metric {
+  enabled_metric {
     category = "AllMetrics"
     enabled  = false
   }
