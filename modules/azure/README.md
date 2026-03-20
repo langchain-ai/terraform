@@ -23,7 +23,7 @@ See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for copy-paste deployment commands.
 | 2 | LangSmith application | `kubectl create secret` + `helm upgrade --install` |
 | 3 | LangGraph Deployments (optional) | add `config.deployment` block + `helm upgrade --install` |
 | 4 | Agent Builder (optional) | add `config.agentBuilder` block + `helm upgrade --install` |
-| 5 | Insights (optional) | add `config.insights` block + `helm upgrade --install` |
+| 5 | Insights + Polly (optional) | add `config.insights` + `config.polly` blocks + `helm upgrade --install` |
 
 See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for exact copy-paste commands, cluster sizing guidance, and helm chart version pinning.
 

@@ -102,6 +102,7 @@ langsmith_release_name = "langsmith"
 | `deployments_encryption_key` | Fernet key (Python `cryptography`) | Encrypts LangGraph deployment metadata |
 | `agent_builder_encryption_key` | Fernet key | Encrypts Agent Builder data |
 | `insights_encryption_key` | Fernet key | Encrypts Insights / Clio data |
+| `polly_encryption_key` | Fernet key | Encrypts Polly agent data |
 
 **Storage behaviour — two phases:**
 
@@ -124,6 +125,7 @@ langsmith_jwt_secret                   = "<openssl-rand-base64-32>"
 langsmith_deployments_encryption_key   = "<fernet-key>"
 langsmith_agent_builder_encryption_key = "<fernet-key>"
 langsmith_insights_encryption_key      = "<fernet-key>"
+langsmith_polly_encryption_key         = "<fernet-key>"
 ```
 
 **Why `secrets.auto.tfvars` and not environment variables:**
@@ -358,11 +360,12 @@ ADMIN_PASSWORD=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmit
 DEPLOY_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-deployments-encryption-key --query value -o tsv)
 AGENT_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-agent-builder-encryption-key --query value -o tsv)
 INSIGHTS_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-insights-encryption-key --query value -o tsv)
+POLLY_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-polly-encryption-key --query value -o tsv)
 ```
 
 ```bash
 # Step 2 — create the secret (single line — no multiline paste issues)
-kubectl create secret generic langsmith-config-secret --namespace langsmith --from-literal=api_key_salt="$API_KEY_SALT" --from-literal=jwt_secret="$JWT_SECRET" --from-literal=langsmith_license_key="$LICENSE_KEY" --from-literal=initial_org_admin_password="$ADMIN_PASSWORD" --from-literal=deployments_encryption_key="$DEPLOY_KEY" --from-literal=agent_builder_encryption_key="$AGENT_KEY" --from-literal=insights_encryption_key="$INSIGHTS_KEY" --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic langsmith-config-secret --namespace langsmith --from-literal=api_key_salt="$API_KEY_SALT" --from-literal=jwt_secret="$JWT_SECRET" --from-literal=langsmith_license_key="$LICENSE_KEY" --from-literal=initial_org_admin_password="$ADMIN_PASSWORD" --from-literal=deployments_encryption_key="$DEPLOY_KEY" --from-literal=agent_builder_encryption_key="$AGENT_KEY" --from-literal=insights_encryption_key="$INSIGHTS_KEY" --from-literal=polly_encryption_key="$POLLY_KEY" --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ```bash
@@ -370,7 +373,7 @@ kubectl create secret generic langsmith-config-secret --namespace langsmith --fr
 kubectl get secrets -n langsmith | grep langsmith
 ```
 ```
-langsmith-config-secret    Opaque   7      ...
+langsmith-config-secret    Opaque   8      ...
 langsmith-postgres-secret  Opaque   1      ...
 langsmith-redis-secret     Opaque   1      ...
 ```
@@ -657,7 +660,7 @@ langsmith-queue-xxxxxxxxx-xxxxx                                   1/1     Runnin
 Enables AI-powered trace analytics (Clio). Requires Pass 3.
 No additional static pods — Clio deploys as a dynamic LangGraph deployment via the operator (same pattern as the Agent Builder agent in Pass 4).
 
-**Warning:** `insights_encryption_key` must never change after first enable — it will permanently break access to existing insights data.
+**Warning:** `insights_encryption_key` and `polly_encryption_key` must never change after first enable — changing either will permanently break access to existing data.
 
 ### 5a — Enable in values-overrides.yaml
 
@@ -666,6 +669,8 @@ Add inside the existing `config:` block:
 config:
   # ...
   insights:
+    enabled: true
+  polly:
     enabled: true
 ```
 
@@ -810,7 +815,7 @@ langsmith/langsmith    0.13.20         0.13.21
 langsmith/langsmith    0.13.19         0.13.20
 ```
 
-> When upgrading — read the chart changelog first. `deployments_encryption_key`, `agent_builder_encryption_key`, and `insights_encryption_key` must never change between upgrades.
+> When upgrading — read the chart changelog first. `deployments_encryption_key`, `agent_builder_encryption_key`, `insights_encryption_key`, and `polly_encryption_key` must never change between upgrades.
 
 ---
 
