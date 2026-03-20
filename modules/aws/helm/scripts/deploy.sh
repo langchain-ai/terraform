@@ -6,6 +6,7 @@
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-sizing-ha.yaml    — HA sizing (if present)
 #      OR langsmith-values-sizing-light.yaml — light sizing for POC/test (if present)
+#      OR langsmith-values-sizing-ci.yaml    — minimal sizing for CI/ephemeral envs (if present)
 #   4. langsmith-values-agent-deploys.yaml  — Deployments feature (if present)
 #   5. langsmith-values-agent-builder.yaml  — Agent Builder feature (if present)
 #   6. langsmith-values-insights.yaml       — ClickHouse/Insights (if present)
@@ -89,12 +90,14 @@ fi
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
-# Sizing: ha and light are mutually exclusive — if both exist, error.
-_ha_file="$VALUES_DIR/langsmith-values-sizing-ha.yaml"
-_light_file="$VALUES_DIR/langsmith-values-sizing-light.yaml"
-if [[ -f "$_ha_file" && -f "$_light_file" ]]; then
-  echo "ERROR: Both langsmith-values-sizing-ha.yaml and langsmith-values-sizing-light.yaml exist." >&2
-  echo "       These are mutually exclusive — remove one before deploying." >&2
+# Sizing: ha, light, and ci are mutually exclusive — only one may exist.
+_sizing_files=()
+for _s in sizing-ha sizing-light sizing-ci; do
+  [[ -f "$VALUES_DIR/langsmith-values-${_s}.yaml" ]] && _sizing_files+=("$_s")
+done
+if (( ${#_sizing_files[@]} > 1 )); then
+  echo "ERROR: Multiple sizing files found: ${_sizing_files[*]}" >&2
+  echo "       These are mutually exclusive — keep only one before deploying." >&2
   exit 1
 fi
 
@@ -105,7 +108,7 @@ echo "  ✔ langsmith-values.yaml (base)"
 echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 
 # Sizing files: included if present on disk (not gated by tfvars flags).
-for sizing in sizing-ha sizing-light; do
+for sizing in sizing-ha sizing-light sizing-ci; do
   f="$VALUES_DIR/langsmith-values-${sizing}.yaml"
   if [[ -f "$f" ]]; then
     VALUES_ARGS+=(-f "$f")

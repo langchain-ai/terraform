@@ -135,20 +135,24 @@ echo ""
 # ── Sizing choice ────────────────────────────────────────────────────────────
 _sizing_ha="$VALUES_DIR/langsmith-values-sizing-ha.yaml"
 _sizing_light="$VALUES_DIR/langsmith-values-sizing-light.yaml"
+_sizing_ci="$VALUES_DIR/langsmith-values-sizing-ci.yaml"
 
-if [[ -f "$_sizing_ha" || -f "$_sizing_light" ]]; then
+if [[ -f "$_sizing_ha" || -f "$_sizing_light" || -f "$_sizing_ci" ]]; then
   # Sizing already chosen — respect existing choice on re-runs
   if [[ -f "$_sizing_ha" ]]; then
     echo "Sizing: HA (existing langsmith-values-sizing-ha.yaml)"
-  else
+  elif [[ -f "$_sizing_light" ]]; then
     echo "Sizing: light (existing langsmith-values-sizing-light.yaml)"
+  else
+    echo "Sizing: CI (existing langsmith-values-sizing-ci.yaml)"
   fi
 elif [[ "$_first_run" == "true" ]]; then
   echo "Sizing profile:"
   echo ""
   echo "  1) ha    — production (multi-replica, HPA autoscaling)"
   echo "  2) light — reduced resources for POC/test"
-  echo "  3) none  — chart defaults (no sizing file)"
+  echo "  3) ci    — minimal footprint for CI/ephemeral environments"
+  echo "  4) none  — chart defaults (no sizing file)"
   echo ""
   printf "Choice [1]: "
   read -r _sizing_choice
@@ -163,11 +167,15 @@ elif [[ "$_first_run" == "true" ]]; then
       cp "$EXAMPLES_DIR/langsmith-values-sizing-light.yaml" "$_sizing_light"
       echo "  Created: langsmith-values-sizing-light.yaml"
       ;;
-    3|none)
+    3|ci)
+      cp "$EXAMPLES_DIR/langsmith-values-sizing-ci.yaml" "$_sizing_ci"
+      echo "  Created: langsmith-values-sizing-ci.yaml"
+      ;;
+    4|none)
       echo "  No sizing file — using chart defaults."
       ;;
     *)
-      echo "ERROR: Invalid choice '$_sizing_choice'. Expected 1, 2, or 3." >&2
+      echo "ERROR: Invalid choice '$_sizing_choice'. Expected 1, 2, 3, or 4." >&2
       exit 1
       ;;
   esac

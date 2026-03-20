@@ -10,13 +10,14 @@
 #   kubectl top pods -n langsmith
 
 platformBackend:
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "1Gi"
-    limits:
-      cpu: "1"
-      memory: "2Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -26,13 +27,14 @@ platformBackend:
       targetMemoryUtilizationPercentage: 80
 
 backend:
-  resources:
-    requests:
-      cpu: "1"
-      memory: "2Gi"
-    limits:
-      cpu: "2"
-      memory: "4Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -42,13 +44,14 @@ backend:
       targetMemoryUtilizationPercentage: 80
 
 ingestQueue:
-  resources:
-    requests:
-      cpu: "1"
-      memory: "2Gi"
-    limits:
-      cpu: "2"
-      memory: "4Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -58,13 +61,14 @@ ingestQueue:
       targetMemoryUtilizationPercentage: 80
 
 queue:
-  resources:
-    requests:
-      cpu: "1"
-      memory: "2Gi"
-    limits:
-      cpu: "2"
-      memory: "4Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -74,13 +78,14 @@ queue:
       targetMemoryUtilizationPercentage: 80
 
 frontend:
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "1Gi"
-    limits:
-      cpu: "1"
-      memory: "2Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -90,13 +95,14 @@ frontend:
       targetMemoryUtilizationPercentage: 80
 
 playground:
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "1Gi"
-    limits:
-      cpu: "1"
-      memory: "8Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "8Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -106,13 +112,14 @@ playground:
       targetMemoryUtilizationPercentage: 80
 
 aceBackend:
-  resources:
-    requests:
-      cpu: "200m"
-      memory: "1Gi"
-    limits:
-      cpu: "1"
-      memory: "2Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
