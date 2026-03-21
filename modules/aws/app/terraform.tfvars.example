@@ -15,17 +15,20 @@ admin_email = "admin@example.com"
 # release_name  = "langsmith"
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
-# "ha"    = production (default) — multi-replica, HPA autoscaling
-# "light" = reduced resources for POC/test
-# "none"  = chart defaults
+# "production"       = multi-replica with HPA (~20 users, ~100 traces/sec)
+# "production-large" = high-volume (~50 users, ~1000 traces/sec)
+# "dev"              = single-replica, minimal resources (dev/CI/demos)
+# "none"             = chart defaults
 
-# sizing = "ha"
+# sizing = "production"
 
 # ── Feature toggles ──────────────────────────────────────────────────────────
 
-# enable_agent_deploys = true    # Deployments feature (LangGraph Platform)
-# enable_agent_builder = true    # Agent Builder (requires agent_deploys)
-# enable_insights      = true    # Insights (requires ClickHouse below)
+# enable_agent_deploys   = true    # Deployments feature (LangGraph Platform)
+# enable_agent_builder   = true    # Agent Builder (requires agent_deploys)
+# enable_insights        = true    # Insights (requires ClickHouse below)
+# enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
+# enable_usage_telemetry = true    # Extended usage telemetry reporting
 
 # ── ClickHouse (required when enable_insights = true) ────────────────────────
 

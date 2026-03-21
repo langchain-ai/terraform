@@ -506,6 +506,17 @@ variable "langsmith_jwt_secret" {
 # deploy.sh reads these to decide which values overlay files to include.
 # Addons require the corresponding entitlement in your LangSmith license key.
 #------------------------------------------------------------------------------
+variable "sizing_profile" {
+  type        = string
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), or 'default' (chart defaults, no sizing file)."
+  default     = "default"
+
+  validation {
+    condition     = contains(["production", "production-large", "dev", "minimum", "default"], var.sizing_profile)
+    error_message = "sizing_profile must be one of: production, production-large, dev, minimum, default."
+  }
+}
+
 variable "enable_deployments" {
   type        = bool
   description = "Enable LangGraph Platform Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
@@ -527,6 +538,12 @@ variable "enable_insights" {
 variable "enable_polly" {
   type        = bool
   description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  default     = false
+}
+
+variable "enable_usage_telemetry" {
+  type        = bool
+  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED). Parsed by init-values.sh and the app module."
   default     = false
 }
 

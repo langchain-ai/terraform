@@ -1,13 +1,14 @@
-# HA sizing — multi-replica deployments and autoscaling for production workloads.
-# For smaller POC/test deployments, use langsmith-values-sizing-light.yaml instead.
+# Production sizing — multi-replica deployments with HPA autoscaling.
 #
-# init-values.sh copies this to ../langsmith-values-sizing-ha.yaml when you choose HA sizing.
-# Manual: cp examples/langsmith-values-sizing-ha.yaml ../langsmith-values-sizing-ha.yaml
-
-# -- Resource sizing and autoscaling ------------------------------------------
-# Tune to your workload. These are reasonable starting points for a medium
-# production deployment. Monitor actual usage with:
+# This is the recommended profile for any environment serving real traffic.
+# Enables horizontal pod autoscaling on all stateless components with
+# reasonable resource requests as starting points. Tune to your workload:
 #   kubectl top pods -n langsmith
+#
+# Covers ALL chart components including infrastructure (ClickHouse, operator,
+# agent-builder servers) — not just the application pods.
+
+# -- Application components ----------------------------------------------------
 
 platformBackend:
   deployment:
@@ -127,3 +128,83 @@ aceBackend:
       maxReplicas: 5
       targetCPUUtilizationPercentage: 50
       targetMemoryUtilizationPercentage: 80
+
+# -- Deployments feature components --------------------------------------------
+
+hostBackend:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+listener:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+operator:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+# -- Agent Builder infrastructure ----------------------------------------------
+
+agentBuilderToolServer:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+agentBuilderTriggerServer:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+# -- In-cluster ClickHouse (dev/POC only — production should use external) -----
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "2"
+        memory: "8Gi"
+      limits:
+        cpu: "4"
+        memory: "16Gi"

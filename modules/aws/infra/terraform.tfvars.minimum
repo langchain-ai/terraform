@@ -1,0 +1,92 @@
+# =============================================================================
+# LangSmith on AWS — Minimum Profile
+# =============================================================================
+# ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD.
+#
+# Smallest possible footprint: single m5.xlarge node, reduced RDS/ElastiCache
+# instance types, minimum sizing profile for Helm. Exists to keep LangSmith
+# alive at the lowest possible cost for cost parking, CI smoke tests, or
+# single-user demos.
+#
+# Will break under any meaningful traffic. OOM kills, timeouts, and degraded
+# UX are expected and acceptable.
+#
+# Copy to terraform.tfvars and change name_prefix to get started:
+#
+#   cp terraform.tfvars.minimum terraform.tfvars
+#
+# For the full annotated reference with every option explained, see:
+#   terraform.tfvars.example
+# =============================================================================
+
+#------------------------------------------------------------------------------
+# REQUIRED — Change these
+#------------------------------------------------------------------------------
+name_prefix = "myco"       # 1-11 chars, lowercase. Your company/team name.
+environment = "dev"
+region      = "us-west-2"
+
+#------------------------------------------------------------------------------
+# Tagging
+#------------------------------------------------------------------------------
+owner       = "platform-team"
+cost_center = "engineering"
+
+#------------------------------------------------------------------------------
+# Networking — create a fresh VPC (simplest path)
+#------------------------------------------------------------------------------
+create_vpc = true
+
+#------------------------------------------------------------------------------
+# EKS — public API for easy kubectl access
+#------------------------------------------------------------------------------
+enable_public_eks_cluster = true
+eks_cluster_version       = "1.31"
+
+# Single node, autoscales to 2 during deploys when bootstrap inflates
+# operator-managed pods temporarily.
+eks_managed_node_groups = {
+  default = {
+    name           = "node-group-default"
+    instance_types = ["m5.xlarge"]   # 4 vCPU, 16 GB — floor for LangSmith
+    min_size       = 1
+    max_size       = 2
+  }
+}
+
+#------------------------------------------------------------------------------
+# External Postgres + Redis (smallest managed instances)
+#------------------------------------------------------------------------------
+postgres_source        = "external"
+postgres_username      = "langsmith"
+postgres_instance_type = "db.t3.small"    # 2 vCPU, 2 GB — bare minimum
+postgres_storage_gb    = 20
+postgres_max_storage_gb = 50
+
+# Deletion protection OFF so you can `terraform destroy` without extra steps.
+postgres_deletion_protection = false
+
+redis_source        = "external"
+redis_instance_type = "cache.t3.small"    # 2 vCPU, 1.5 GB — bare minimum
+
+#------------------------------------------------------------------------------
+# ClickHouse — in-cluster for minimum
+#------------------------------------------------------------------------------
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# TLS — start with HTTP
+#------------------------------------------------------------------------------
+tls_certificate_source = "none"
+
+#------------------------------------------------------------------------------
+# Storage
+#------------------------------------------------------------------------------
+s3_ttl_enabled    = true
+s3_ttl_short_days = 7
+s3_ttl_long_days  = 30     # short retention — this isn't production data
+
+#------------------------------------------------------------------------------
+# Sizing — minimum profile (rock-bottom resource requests)
+#------------------------------------------------------------------------------
+sizing_profile = "minimum"

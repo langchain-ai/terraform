@@ -4,7 +4,7 @@
 # Opinionated defaults for production deployments.
 # Copy to terraform.tfvars and change name_prefix, region, and domain:
 #
-#   cp terraform.tfvars.prod terraform.tfvars
+#   cp terraform.tfvars.production terraform.tfvars
 #
 # For the full annotated reference with every option explained, see:
 #   terraform.tfvars.example

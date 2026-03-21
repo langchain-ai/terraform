@@ -220,8 +220,9 @@ resource "helm_release" "langsmith" {
     # 2. Dynamic overrides (hostname, IRSA annotations, S3 bucket, region)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
-    var.sizing == "ha"    ? [file("${local.values_path}/langsmith-values-sizing-ha.yaml")] : [],
-    var.sizing == "light" ? [file("${local.values_path}/langsmith-values-sizing-light.yaml")] : [],
+    var.sizing == "production"       ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
+    var.sizing == "production-large" ? [file("${local.values_path}/langsmith-values-sizing-production-large.yaml")] : [],
+    var.sizing == "dev"              ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
     # 4. Product addons
     var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
@@ -283,10 +284,13 @@ locals {
           apiURL     = "https://s3.${local.region}.amazonaws.com"
         }
       }
-      commonEnv = [
-        { name = "AWS_REGION", value = local.region },
-        { name = "AWS_DEFAULT_REGION", value = local.region },
-      ]
+      commonEnv = concat(
+        [
+          { name = "AWS_REGION", value = local.region },
+          { name = "AWS_DEFAULT_REGION", value = local.region },
+        ],
+        var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
+      )
     },
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},

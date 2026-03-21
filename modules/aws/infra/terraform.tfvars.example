@@ -487,6 +487,29 @@ langsmith_namespace = "langsmith"
 # create_waf = false
 
 #------------------------------------------------------------------------------
+# HELM SIZING PROFILE
+#------------------------------------------------------------------------------
+# Controls resource requests/limits and replica counts for LangSmith pods.
+# deploy.sh uses this to select the correct sizing values file.
+#
+# Profiles are based on the LangSmith scale guide:
+#   https://docs.langchain.com/langsmith/self-host-scale
+#
+#   "production"       — Multi-replica with HPA autoscaling. Fits the
+#                        Medium/Medium pattern (~20 users, ~100 traces/sec).
+#                        Good starting point for most production deployments.
+#   "production-large" — Higher baselines and wider HPA ranges. Fits the
+#                        High/High pattern (~50 users, ~1000 traces/sec).
+#                        Use when you know the deployment handles heavy volume.
+#   "dev"              — Single-replica, minimal resources. For local dev, CI
+#                        pipelines, demos, and short-lived POCs. Chart defaults
+#                        request 1+ CPU per component and 3.5 CPU / 12Gi for
+#                        ClickHouse — without this profile, pods won't schedule
+#                        on small clusters.
+#   "default"          — Chart defaults (no sizing file applied).
+sizing_profile = "production"
+
+#------------------------------------------------------------------------------
 # LANGGRAPH PLATFORM FEATURES (product addons)
 #------------------------------------------------------------------------------
 # These flags control which LangSmith product features are enabled.
@@ -502,6 +525,10 @@ langsmith_namespace = "langsmith"
 enable_deployments   = false
 enable_agent_builder = false
 enable_insights      = false
+
+# Extended usage telemetry — sends anonymized usage metrics to LangChain.
+# Default is off. Enable if you want to share usage data.
+enable_usage_telemetry = false
 
 #------------------------------------------------------------------------------
 # LANGGRAPH PLATFORM ENCRYPTION KEYS (optional — for addons only)

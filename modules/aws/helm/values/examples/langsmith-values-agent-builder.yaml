@@ -17,6 +17,16 @@ config:
     # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/agent-builder-encryption-key" \
     #             --value "<key>" --type SecureString
     # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
+    #
+    # Agent worker pod resources (applied to operator-managed agent deployments).
+    # Chart defaults are 4096/8192 MiB — oversized for dev/POC.
+    # These control the server container in each LGP pod (agent-builder, clio, polly).
+    agent:
+      resources:
+        cpu: 1
+        cpuLimit: 2
+        memoryMb: 512
+        memoryLimitMb: 1024
 
 backend:
   agentBootstrap:
