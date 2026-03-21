@@ -10,8 +10,6 @@
 #
 # Prompts for (on first run):
 #   - Admin email
-#   - Sizing profile (ha / light / none)
-#   - Product tier (LangSmith only / +Deployments / +Agent Builder / +Insights)
 #
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
@@ -47,6 +45,7 @@ _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
 _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
 _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
+_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 
 if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -70,6 +69,7 @@ echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
+echo "  sizing_profile         = $_sizing_profile"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -132,56 +132,18 @@ else
 fi
 echo ""
 
-# ── Sizing choice ────────────────────────────────────────────────────────────
-_sizing_ha="$VALUES_DIR/langsmith-values-sizing-ha.yaml"
-_sizing_light="$VALUES_DIR/langsmith-values-sizing-light.yaml"
-_sizing_ci="$VALUES_DIR/langsmith-values-sizing-ci.yaml"
-
-if [[ -f "$_sizing_ha" || -f "$_sizing_light" || -f "$_sizing_ci" ]]; then
-  # Sizing already chosen — respect existing choice on re-runs
-  if [[ -f "$_sizing_ha" ]]; then
-    echo "Sizing: HA (existing langsmith-values-sizing-ha.yaml)"
-  elif [[ -f "$_sizing_light" ]]; then
-    echo "Sizing: light (existing langsmith-values-sizing-light.yaml)"
+# ── Sizing profile (from terraform.tfvars) ──────────────────────────────────
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ ! -f "$_sizing_file" ]]; then
+    cp "$_sizing_example" "$_sizing_file"
+    echo "Sizing: ${_sizing_profile} (created langsmith-values-sizing-${_sizing_profile}.yaml)"
   else
-    echo "Sizing: CI (existing langsmith-values-sizing-ci.yaml)"
+    echo "Sizing: ${_sizing_profile} (existing langsmith-values-sizing-${_sizing_profile}.yaml)"
   fi
-elif [[ "$_first_run" == "true" ]]; then
-  echo "Sizing profile:"
-  echo ""
-  echo "  1) ha    — production (multi-replica, HPA autoscaling)"
-  echo "  2) light — reduced resources for POC/test"
-  echo "  3) ci    — minimal footprint for CI/ephemeral environments"
-  echo "  4) none  — chart defaults (no sizing file)"
-  echo ""
-  printf "Choice [1]: "
-  read -r _sizing_choice
-  _sizing_choice="${_sizing_choice:-1}"
-
-  case "$_sizing_choice" in
-    1|ha)
-      cp "$EXAMPLES_DIR/langsmith-values-sizing-ha.yaml" "$_sizing_ha"
-      echo "  Created: langsmith-values-sizing-ha.yaml"
-      ;;
-    2|light)
-      cp "$EXAMPLES_DIR/langsmith-values-sizing-light.yaml" "$_sizing_light"
-      echo "  Created: langsmith-values-sizing-light.yaml"
-      ;;
-    3|ci)
-      cp "$EXAMPLES_DIR/langsmith-values-sizing-ci.yaml" "$_sizing_ci"
-      echo "  Created: langsmith-values-sizing-ci.yaml"
-      ;;
-    4|none)
-      echo "  No sizing file — using chart defaults."
-      ;;
-    *)
-      echo "ERROR: Invalid choice '$_sizing_choice'. Expected 1, 2, 3, or 4." >&2
-      exit 1
-      ;;
-  esac
 else
-  echo "No sizing file found. To add one:"
-  echo "  cp $EXAMPLES_DIR/langsmith-values-sizing-ha.yaml $VALUES_DIR/"
+  echo "Sizing: chart defaults (sizing_profile = default)"
 fi
 echo ""
 
@@ -195,10 +157,12 @@ _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
-_tfvar_is_true "enable_deployments"   && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
-_tfvar_is_true "enable_insights"      && _enable_insights=true
-_tfvar_is_true "enable_polly"         && _enable_polly=true
+_enable_usage_telemetry=false
+_tfvar_is_true "enable_deployments"    && _enable_deployments=true
+_tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
+_tfvar_is_true "enable_insights"       && _enable_insights=true
+_tfvar_is_true "enable_polly"          && _enable_polly=true
+_tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -437,6 +401,11 @@ commonEnv:
     value: "${_region}"
   - name: AWS_DEFAULT_REGION
     value: "${_region}"
+$( [[ "$_enable_usage_telemetry" == "true" ]] && cat <<'TELEMETRY'
+  - name: PHONE_HOME_USAGE_REPORTING_ENABLED
+    value: "true"
+TELEMETRY
+)
 
 # IRSA: annotate each component's service account individually.
 # The chart does not support a global serviceAccount block.
