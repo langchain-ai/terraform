@@ -104,6 +104,6 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 Issues identified during module review. Items here don't block the happy path but affect edge cases.
 
 - [ ] **Base `values.yaml` hardcodes `postgres.external.enabled: true`** — when `postgres_source = "in-cluster"`, `init-values.sh` writes an override to disable it, but manual copy of the base file skips that. Add a guard in `deploy.sh` that validates the override exists when `postgres_source = "in-cluster"`. (`helm/values/values.yaml:241-244`, `init-values.sh`)
-- [ ] **`values-overrides.yaml.example` uses stale secret names** — references `langsmith-postgres-credentials` and `langsmith-redis-credentials` but k8s-bootstrap creates `langsmith-postgres` and `langsmith-redis`. (`helm/values/values-overrides.yaml.example:25-33`)
+- [x] **`values-overrides.yaml.example` uses stale secret names** — fixed: updated `values.yaml`, `values-overrides.yaml.example`, and added `examples/langsmith-values.yaml`
 - [ ] **`null_resource.wait_for_cluster` uses `local-exec` with `gcloud`** — requires gcloud in PATH during `terraform apply`; fails in CI environments without gcloud. Consider replacing with a `time_sleep` + retry or a Terraform `http` data source health check.
 - [ ] **`terraform_data.validate_inputs` has no `depends_on`** — preconditions run during plan phase correctly, but explicit dependency on `google_project_service.apis` would make the error ordering more predictable on fresh projects.
