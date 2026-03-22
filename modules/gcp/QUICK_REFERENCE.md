@@ -10,7 +10,7 @@ gcloud auth login
 gcloud config set project <your-project-id>
 gcloud auth application-default login
 
-# AWS-style task runner flow (recommended)
+# Recommended workflow
 cd terraform/gcp
 make preflight
 make init
@@ -44,7 +44,7 @@ kubectl get secrets -n langsmith
 ## Pass 2 — LangSmith Helm Deploy
 
 ```bash
-# Use scripted deployment (AWS-style guardrails)
+# Recommended: use the scripted deployment
 cd terraform/gcp/helm/scripts
 ./deploy.sh
 

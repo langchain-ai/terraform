@@ -396,7 +396,7 @@ variable "langsmith_helm_chart_version" {
 }
 
 #------------------------------------------------------------------------------
-# Optional parity modules (AWS-aligned capability wiring)
+# Optional GCP modules
 #------------------------------------------------------------------------------
 variable "enable_gcp_iam_module" {
   description = "Enable GCP IAM module for Workload Identity and bucket IAM bindings."
