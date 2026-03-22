@@ -8,7 +8,8 @@
 
 .PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy \
         preflight kubeconfig \
-        init-values deploy uninstall deploy-all
+        init-values deploy uninstall deploy-all \
+        patch-lgp
 
 INFRA_DIR := infra
 HELM_DIR  := helm
@@ -74,6 +75,11 @@ deploy: ## Deploy LangSmith via Helm
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
+
+# ── Pass 3: LGP Resource Patching ─────────────────────────────────────────────
+
+patch-lgp: ## Patch LGP CRs for minimum/dev profiles (right-sizes redis sidecars + database)
+	$(HELM_DIR)/scripts/patch-lgp-resources.sh
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

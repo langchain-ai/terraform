@@ -651,3 +651,32 @@ variable "langsmith_insights_encryption_key" {
   sensitive   = true
   default     = ""
 }
+
+#------------------------------------------------------------------------------
+# Helm Sizing Profile
+#------------------------------------------------------------------------------
+variable "sizing_profile" {
+  type        = string
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
+  default     = "default"
+
+  validation {
+    condition     = contains(["production", "production-large", "dev", "minimum", "default"], var.sizing_profile)
+    error_message = "sizing_profile must be one of: production, production-large, dev, minimum, default."
+  }
+}
+
+#------------------------------------------------------------------------------
+# Optional Feature Addons
+#------------------------------------------------------------------------------
+variable "enable_polly" {
+  type        = bool
+  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  default     = false
+}
+
+variable "enable_usage_telemetry" {
+  type        = bool
+  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)."
+  default     = false
+}

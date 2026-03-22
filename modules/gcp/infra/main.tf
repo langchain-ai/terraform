@@ -127,6 +127,11 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_dns_module || var.dns_create_zone || var.dns_existing_zone_name != ""
       error_message = "dns_existing_zone_name is required when enable_dns_module = true and dns_create_zone = false."
     }
+
+    precondition {
+      condition     = !var.enable_polly || var.enable_deployments
+      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
+    }
   }
 }
 

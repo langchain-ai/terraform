@@ -2,13 +2,13 @@
 # Deploys or upgrades LangSmith via Helm on GCP.
 #
 # Values files loaded (in order, last wins):
-#   1. values.yaml                            — base GCP config (always)
-#   2. values-overrides.yaml                  — env-specific: hostname, WI annotations, GCS (required)
-#   3. langsmith-values-sizing-ha.yaml        — HA sizing (if present)
-#      OR langsmith-values-sizing-light.yaml  — light sizing for POC/test (if present)
-#   4. langsmith-values-agent-deploys.yaml    — Deployments feature (if present)
-#   5. langsmith-values-agent-builder.yaml    — Agent Builder feature (if present)
-#   6. langsmith-values-insights.yaml         — ClickHouse/Insights (if present)
+#   1. values.yaml                                  — base GCP config (always)
+#   2. values-overrides.yaml                        — env-specific: hostname, WI annotations, GCS (required)
+#   3. langsmith-values-sizing-{profile}.yaml       — sizing profile (from sizing_profile in terraform.tfvars)
+#   4. langsmith-values-agent-deploys.yaml          — Deployments feature (if enabled)
+#   5. langsmith-values-agent-builder.yaml          — Agent Builder feature (if enabled)
+#   6. langsmith-values-insights.yaml               — ClickHouse/Insights (if enabled)
+#   7. langsmith-values-polly.yaml                  — Polly AI eval/monitoring (if enabled)
 #
 # Generate values files: ./helm/scripts/init-values.sh
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -71,47 +71,77 @@ echo ""
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
 
+# ── Pre-deploy Gateway IP staleness check ────────────────────────────────────
+# If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
+# resource recreation), warn the operator and update values-overrides.yaml
+# to prevent the Deployments operator from hitting stale endpoints.
+_live_gateway_ip=$(kubectl get gateway -n "$NAMESPACE" \
+  -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
+if [[ -n "$_live_gateway_ip" ]]; then
+  _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
+    | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
+  if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_gateway_ip" ]]; then
+    _current_url=$(grep -E '^\s*url:' "$OVERRIDES_FILE" 2>/dev/null \
+      | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _current_url=""
+    _protocol="http"
+    [[ "$_current_url" == https://* ]] && _protocol="https"
+    echo "WARNING: config.hostname is stale."
+    echo "  Configured: $_configured_hostname"
+    echo "  Gateway IP: $_live_gateway_ip"
+    echo "  Updating $(basename "$OVERRIDES_FILE") before deploy..."
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_live_gateway_ip}\"|" "$OVERRIDES_FILE" && rm -f "$OVERRIDES_FILE.bak"
+    sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_live_gateway_ip}\"|" "$OVERRIDES_FILE" && rm -f "$OVERRIDES_FILE.bak"
+    echo "  Done."
+    echo ""
+  fi
+fi
+
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$BASE_VALUES_FILE" -f "$OVERRIDES_FILE")
-
-# Sizing: ha and light are mutually exclusive — if both exist, error.
-_ha_file="$VALUES_DIR/langsmith-values-sizing-ha.yaml"
-_light_file="$VALUES_DIR/langsmith-values-sizing-light.yaml"
-if [[ -f "$_ha_file" && -f "$_light_file" ]]; then
-  echo "ERROR: Both langsmith-values-sizing-ha.yaml and langsmith-values-sizing-light.yaml exist." >&2
-  echo "       These are mutually exclusive — remove one before deploying." >&2
-  exit 1
-fi
 
 echo "Values chain:"
 echo "  ✔ values.yaml (base)"
 echo "  ✔ values-overrides.yaml"
 
-for sizing in sizing-ha sizing-light; do
-  f="$VALUES_DIR/langsmith-values-${sizing}.yaml"
-  if [[ -f "$f" ]]; then
-    VALUES_ARGS+=(-f "$f")
-    echo "  ✔ langsmith-values-${sizing}.yaml"
+# Sizing: driven by sizing_profile in terraform.tfvars.
+_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ -f "$_sizing_file" ]]; then
+    VALUES_ARGS+=(-f "$_sizing_file")
+    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
+    if [[ "$_sizing_profile" == "minimum" ]]; then
+      echo ""
+      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production use."
+      echo "     Resources are at the absolute floor. Expect degraded performance"
+      echo "     under real workloads. Use sizing_profile = production for production."
+      echo ""
+    fi
   else
-    echo "  ✗ langsmith-values-${sizing}.yaml (not found — skipped)"
+    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile} but file not found — run: make init-values)"
   fi
-done
+else
+  echo "  ○ sizing: chart defaults (sizing_profile = default)"
+fi
 
 # Addon files: gated by enable_* flags in terraform.tfvars.
-# File must exist AND the corresponding flag must be true.
-# If no flags are set (default false), files are still included when present
-# for backwards compatibility with deployments predating the feature flags.
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
+_enable_polly=false
 _any_flag_set=false
 _tfvar_is_true "enable_deployments"   && { _enable_deployments=true;  _any_flag_set=true; }
 _tfvar_is_true "enable_agent_builder" && { _enable_agent_builder=true; _any_flag_set=true; }
 _tfvar_is_true "enable_insights"      && { _enable_insights=true;      _any_flag_set=true; }
+_tfvar_is_true "enable_polly"         && { _enable_polly=true;          _any_flag_set=true; }
 
-# Validate addon dependencies when flags are set
+# Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+  exit 1
+fi
+if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
 
@@ -119,6 +149,7 @@ _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "agent-builder:agent_builder:$_enable_agent_builder"
   "insights:insights:$_enable_insights"
+  "polly:polly:$_enable_polly"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -128,7 +159,6 @@ for entry in "${_addon_gate[@]}"; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
 
   if [[ "$_any_flag_set" == "true" ]]; then
-    # Flags are in use — strict gating
     if [[ "$enabled" == "true" ]]; then
       if [[ -f "$f" ]]; then
         VALUES_ARGS+=(-f "$f")
@@ -144,7 +174,6 @@ for entry in "${_addon_gate[@]}"; do
       fi
     fi
   else
-    # No flags set — include by file presence (backwards compat)
     if [[ -f "$f" ]]; then
       VALUES_ARGS+=(-f "$f")
       echo "  ✔ langsmith-values-${addon}.yaml"
@@ -169,7 +198,7 @@ if [[ "$_release_status" == "pending-upgrade" ]]; then
   echo ""
 fi
 
-echo "Deploying LangSmith..."
+echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 

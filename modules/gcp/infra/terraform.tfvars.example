@@ -274,6 +274,27 @@ enable_agent_builder = false
 # Requires: ClickHouse (in-cluster or external)
 enable_insights = false
 
+# Polly — AI-powered evaluation and monitoring
+# Requires: enable_deployments = true and Polly entitlement in your license
+enable_polly = false
+
+# Usage telemetry — extended usage reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)
+# Enables additional product analytics sent back to LangChain
+enable_usage_telemetry = false
+
+#------------------------------------------------------------------------------
+# Optional: Helm Sizing Profile
+# Controls which langsmith-values-sizing-{profile}.yaml overlay deploy.sh loads.
+# Run `make init-values` after changing this — it copies the sizing file from examples/.
+#
+#   "default"          — chart defaults (no overlay); suitable for quick tests
+#   "minimum"          — absolute floor; fits e2-standard-4; not for production
+#   "dev"              — single replica, minimal resources; dev/CI environments
+#   "production"       — multi-replica with HPA; recommended for production
+#   "production-large" — high-memory / high-CPU pattern; 50+ users, 1000+ traces/sec
+#------------------------------------------------------------------------------
+sizing_profile = "production"
+
 #------------------------------------------------------------------------------
 # Optional: LangGraph Platform Encryption Keys (sensitive)
 # Auto-generated and stored in Secret Manager on first run when using setup-env.sh.
