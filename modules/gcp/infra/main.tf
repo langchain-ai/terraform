@@ -123,6 +123,8 @@ locals {
 # These fire at plan time with a clear error message.
 #------------------------------------------------------------------------------
 resource "terraform_data" "validate_inputs" {
+  depends_on = [google_project_service.apis]
+
   lifecycle {
     precondition {
       condition     = var.postgres_source != "external" || var.postgres_password != ""
