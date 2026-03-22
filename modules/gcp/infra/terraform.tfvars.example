@@ -1,7 +1,41 @@
-# Example Terraform Variables
-# Copy this file to terraform.tfvars and customize for your environment
+# LangSmith on GCP — Terraform Variables
 #
-# cp terraform.tfvars.example terraform.tfvars
+# Copy this file to terraform.tfvars and customize for your environment:
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# ── Deployment Tier Guide ─────────────────────────────────────────────────────
+#
+# Tier 1 — All in-cluster (dev/POC only)
+#   postgres_source   = "in-cluster"
+#   redis_source      = "in-cluster"
+#   clickhouse_source = "in-cluster"
+#   No Cloud SQL, Memorystore, or external ClickHouse provisioned.
+#   ⚠ Not for production — no HA, no managed backups, no SLAs.
+#
+# Tier 2 — External Postgres + Redis, in-cluster ClickHouse (quick-start)
+#   postgres_source   = "external"   → Cloud SQL (private IP, VPC peering)
+#   redis_source      = "external"   → Memorystore (private IP)
+#   clickhouse_source = "in-cluster"
+#   ⚠ In-cluster ClickHouse is dev/POC only — single pod, no replication.
+#
+# Tier 3 — All external (production recommended)
+#   postgres_source   = "external"
+#   redis_source      = "external"
+#   clickhouse_source = "langsmith-managed"  (or "external" for self-hosted)
+#   See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
+#
+# ── Sensitive variables ───────────────────────────────────────────────────────
+# Do NOT put passwords or keys directly in terraform.tfvars.
+# Use environment variables or setup-env.sh (which can write/read Secret Manager):
+#
+#   export TF_VAR_postgres_password="..."
+#   export TF_VAR_langsmith_license_key="..."
+#   # Or:
+#   source infra/scripts/setup-env.sh
+#
+# ── First time? ───────────────────────────────────────────────────────────────
+#   make quickstart     — interactive wizard that generates this file for you
+#   make setup-env      — set up secrets (prints the source command to run)
 
 #------------------------------------------------------------------------------
 # Required Variables
@@ -49,16 +83,18 @@ gke_max_nodes       = 10           # Max nodes for autoscaling
 # Machine type - ClickHouse requires nodes with 4+ vCPU and 16GB+ RAM
 # Recommended: e2-standard-8 (8 vCPU, 32GB) for medium workloads
 # Minimum: e2-standard-4 (4 vCPU, 16GB) for small workloads
-gke_machine_type    = "e2-standard-4"
-gke_disk_size           = 100          # GB
-gke_release_channel     = "REGULAR"    # RAPID, REGULAR, or STABLE
-gke_deletion_protection = true         # Prevent accidental cluster deletion
+gke_machine_type            = "e2-standard-4"
+gke_disk_size               = 100          # GB
+gke_release_channel         = "REGULAR"    # RAPID, REGULAR, or STABLE
+gke_deletion_protection     = true         # Prevent accidental cluster deletion
 gke_network_policy_provider = "DATA_PLANE_V2"  # CALICO (legacy) or DATA_PLANE_V2 (recommended)
 
 #------------------------------------------------------------------------------
 # Optional: PostgreSQL Configuration
 #------------------------------------------------------------------------------
-postgres_source = "external"  # "external" (default, Cloud SQL with private IP) or "in-cluster" (via Helm)
+# "external" — Cloud SQL with private IP (recommended)
+# "in-cluster" — Postgres runs as a pod inside GKE (dev/POC only)
+postgres_source = "external"
 
 # Configuration for external PostgreSQL (Cloud SQL)
 postgres_version             = "POSTGRES_18"
@@ -67,34 +103,25 @@ postgres_disk_size           = 50                   # GB
 postgres_high_availability   = true                 # REGIONAL for HA
 postgres_deletion_protection = true                 # Prevent accidental deletion
 
-# PostgreSQL password (required for external, sensitive - prefer using environment variable)
+# PostgreSQL password (sensitive — use environment variable, not this file)
 # Set via: export TF_VAR_postgres_password="your-secure-password"
-# postgres_password = "your-secure-password"
+# Or run:  source infra/scripts/setup-env.sh
+# postgres_password = ""
 
-# PostgreSQL database flags (optional - uses defaults if not specified)
+# PostgreSQL database flags (optional)
 # postgres_database_flags = [
-#   {
-#     name  = "max_connections"
-#     value = "500"
-#   },
-#   {
-#     name  = "log_checkpoints"
-#     value = "on"
-#   },
-#   {
-#     name  = "log_connections"
-#     value = "on"
-#   },
-#   {
-#     name  = "log_disconnections"
-#     value = "on"
-#   }
+#   { name = "max_connections",    value = "500" },
+#   { name = "log_checkpoints",    value = "on"  },
+#   { name = "log_connections",    value = "on"  },
+#   { name = "log_disconnections", value = "on"  },
 # ]
 
 #------------------------------------------------------------------------------
 # Optional: Redis Configuration
 #------------------------------------------------------------------------------
-redis_source = "external"  # "external" (default, Memorystore) or "in-cluster" (via Helm)
+# "external" — Memorystore (recommended)
+# "in-cluster" — Redis runs as a pod inside GKE (dev/POC only)
+redis_source            = "external"
 redis_version           = "REDIS_7_2"
 redis_memory_size       = 5    # GB
 redis_high_availability = true # Standard HA tier
@@ -103,20 +130,20 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 #------------------------------------------------------------------------------
 # Optional: Storage Configuration
 #------------------------------------------------------------------------------
-storage_ttl_short_days = 14   # Short term TTL for ttl_s/ prefix (default: 14 days)
-storage_ttl_long_days  = 400  # Long term TTL for ttl_l/ prefix (default: 400 days)
-storage_force_destroy   = false # Prevent bucket deletion with objects
+storage_ttl_short_days = 14    # Short-lived trace TTL (ttl_s/ prefix, default: 14 days)
+storage_ttl_long_days  = 400   # Long-lived trace TTL (ttl_l/ prefix, default: 400 days)
+storage_force_destroy  = false # Prevent bucket deletion with objects
 
 #------------------------------------------------------------------------------
 # Optional: ClickHouse Configuration
 # Reference: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
 #------------------------------------------------------------------------------
 # ClickHouse deployment type:
-#   "in-cluster"        - (default) Deployed as a pod in the cluster via Helm.
-#                         ⚠️  Dev/POC only — single pod, no replication, no backups.
-#   "langsmith-managed" - Managed by LangChain team (recommended for production).
+#   "in-cluster"        — (default) Deployed as a pod in the cluster via Helm.
+#                         ⚠  Dev/POC only — single pod, no replication, no backups.
+#   "langsmith-managed" — Managed by LangChain team (recommended for production).
 #                         See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
-#   "external"          - Self-hosted external ClickHouse instance
+#   "external"          — Self-hosted external ClickHouse instance
 clickhouse_source = "in-cluster"
 
 # --- For langsmith-managed or external ClickHouse ---
@@ -124,7 +151,7 @@ clickhouse_source = "in-cluster"
 # clickhouse_port      = 9440     # Native port (9440 for TLS, 9000 for non-TLS)
 # clickhouse_http_port = 8443     # HTTP port (8443 for TLS, 8123 for non-TLS)
 # clickhouse_user      = "default"
-# clickhouse_password  = "your-password"  # Or use TF_VAR_clickhouse_password env var
+# clickhouse_password  = "your-password"  # Or: export TF_VAR_clickhouse_password
 # clickhouse_database  = "default"
 # clickhouse_tls       = true
 
@@ -137,55 +164,44 @@ clickhouse_source = "in-cluster"
 langsmith_namespace = "langsmith"
 langsmith_domain    = "langsmith.example.com"
 
-# License key (sensitive - prefer using environment variable)
+# License key (sensitive — use environment variable, not this file)
 # Set via: export TF_VAR_langsmith_license_key="your-license-key"
-# langsmith_license_key = "your-license-key"
+# langsmith_license_key = ""
 
 # Optional: Pin Helm chart version (recommended for reproducible deploys)
 # Empty = use latest available chart version
 langsmith_helm_chart_version = ""
 
 #------------------------------------------------------------------------------
-# Optional: AWS-parity module wiring
-#------------------------------------------------------------------------------
-# Enable Workload Identity + bucket IAM grants module.
-enable_gcp_iam_module = true
-
-# Enable Secret Manager secret creation for bootstrap credentials.
-enable_secret_manager_module = false
-
-# Enable Cloud DNS + managed cert module wiring.
-enable_dns_module       = false
-dns_create_zone         = true
-dns_existing_zone_name  = ""
-dns_create_certificate  = true
-
-#------------------------------------------------------------------------------
-# Optional: Ingress Configuration
-#------------------------------------------------------------------------------
-install_ingress = true
-ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved for future)
-# Note: Gateway uses HTTPS only (port 443). TLS must be configured (see TLS Configuration section above).
-
-#------------------------------------------------------------------------------
-# Optional: LangSmith Deployment (Deploy agents from UI)
-# Reference: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
-#------------------------------------------------------------------------------
-# Enables deploying agents/apps directly from LangSmith UI
-# This installs KEDA (Kubernetes Event-driven Autoscaling)
-enable_langsmith_deployment = true
-
-#------------------------------------------------------------------------------
 # Optional: TLS / HTTPS Configuration
 #------------------------------------------------------------------------------
+# ── Staged-deploy walkthrough ──────────────────────────────────────────────
+#
+# If you don't have a certificate yet, deploy in two passes:
+#
+# Pass 1 — HTTP only (get the Gateway IP):
+#   tls_certificate_source = "none"
+#   terraform apply
+#   # Note the gateway IP from terraform output or: kubectl get gateway -n langsmith
+#   # Point your DNS A record to the gateway IP, then wait for DNS to propagate.
+#
+# Pass 2 — Enable TLS:
+#   tls_certificate_source = "letsencrypt"
+#   letsencrypt_email       = "you@example.com"
+#   terraform apply
+#   # cert-manager will provision the certificate automatically.
+#
+# ⚠  Warning: Do not delete and recreate the Gateway resource after you have DNS
+#    pointing to it — GKE will issue a new external IP and your DNS record will
+#    break. Use terraform apply (update-in-place) to change TLS configuration.
+
 # Choose TLS certificate source:
-#   "none"        - No TLS (HTTP only) - not recommended for production
-#   "letsencrypt" - Automatic certificates via Let's Encrypt + cert-manager
-#   "existing"    - Provide your own TLS certificate and key
+#   "none"        — No TLS (HTTP only) — use for initial DNS setup (see above)
+#   "letsencrypt" — Automatic via Let's Encrypt + cert-manager (recommended)
+#   "existing"    — Provide your own TLS certificate and key
 tls_certificate_source = "letsencrypt"
 
 # --- Option 1: Let's Encrypt (automatic) ---
-# Set tls_certificate_source = "letsencrypt" and configure:
 letsencrypt_email = "your-email@example.com"
 
 # --- Option 2: Existing Certificates ---
@@ -210,6 +226,69 @@ letsencrypt_email = "your-email@example.com"
 tls_secret_name = "langsmith-tls"
 
 #------------------------------------------------------------------------------
+# Optional: Ingress Configuration
+#------------------------------------------------------------------------------
+install_ingress = true
+ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved)
+
+#------------------------------------------------------------------------------
+# Optional: AWS-parity module wiring
+#------------------------------------------------------------------------------
+# Enable Workload Identity + bucket IAM grants module (recommended).
+enable_gcp_iam_module = true
+
+# Enable Secret Manager secret creation for bootstrap credentials.
+# When true, postgres + redis passwords are stored in Secret Manager.
+# Use setup-env.sh to manage secrets — it reads/writes Secret Manager automatically.
+enable_secret_manager_module = false
+
+# Enable Cloud DNS + managed cert module wiring.
+enable_dns_module      = false
+dns_create_zone        = true
+dns_existing_zone_name = ""
+dns_create_certificate = true
+
+#------------------------------------------------------------------------------
+# Optional: LangSmith Deployment (Deploy agents from UI)
+# Reference: https://docs.langchain.com/langsmith/deploy-self-hosted-full-platform
+#------------------------------------------------------------------------------
+# Enables deploying agents/apps directly from LangSmith UI.
+# Installs KEDA (Kubernetes Event-driven Autoscaling).
+enable_langsmith_deployment = true
+
+#------------------------------------------------------------------------------
+# Optional: Product Feature Flags (LangGraph Platform)
+# Set to true to enable addons. Each requires the matching license entitlement.
+# deploy.sh reads these flags to decide which Helm values overlays to include.
+#------------------------------------------------------------------------------
+
+# Deployments — deploy agents/apps from the LangSmith UI
+# Requires: KEDA (enable_langsmith_deployment = true)
+enable_deployments = false
+
+# Agent Builder — build, test, and iterate on agents in the LangSmith UI
+# Requires: enable_deployments = true
+enable_agent_builder = false
+
+# Insights — advanced trace analytics powered by ClickHouse
+# Requires: ClickHouse (in-cluster or external)
+enable_insights = false
+
+#------------------------------------------------------------------------------
+# Optional: LangGraph Platform Encryption Keys (sensitive)
+# Auto-generated and stored in Secret Manager on first run when using setup-env.sh.
+# Fernet keys: 32 random bytes, URL-safe base64-encoded.
+# WARNING: Never change these after the first deployment — existing data will
+# become unreadable. Rotation requires a coordinated migration procedure.
+#------------------------------------------------------------------------------
+
+# Set via: export TF_VAR_langsmith_deployments_encryption_key="..."
+# Or run:  source infra/scripts/setup-env.sh  (auto-generates and stores)
+# langsmith_deployments_encryption_key   = ""
+# langsmith_agent_builder_encryption_key = ""
+# langsmith_insights_encryption_key      = ""
+
+#------------------------------------------------------------------------------
 # Optional: Labels/Tags (Applied to all resources)
 #------------------------------------------------------------------------------
 owner       = "platform-team"  # Team or individual responsible
@@ -217,7 +296,6 @@ cost_center = "engineering"    # For billing attribution
 
 # Additional custom labels
 labels = {
-  # Add any custom labels here
   # "department" = "engineering"
   # "project"    = "langsmith"
 }
