@@ -191,8 +191,7 @@ else
 fi
 echo ""
 
-# ── Product addons (interactive) ──────────────────────────────────────────────
-# GCP has no enable_* flags in terraform.tfvars — addons are Helm-only.
+# ── Product addons (from terraform.tfvars, with interactive fallback) ─────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
@@ -200,29 +199,61 @@ _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
+_tfvars_drive_addons=false
 
-if [[ -f "$_deploys_file" ]]; then
-  _enable_deployments=true
-  echo "Product addons: Deployments (existing langsmith-values-agent-deploys.yaml)"
-fi
-if [[ -f "$_builder_file" ]]; then
-  _enable_agent_builder=true
-  echo "Product addons: Agent Builder (existing langsmith-values-agent-builder.yaml)"
-fi
-if [[ -f "$_insights_file" ]]; then
-  _enable_insights=true
-  echo "Product addons: Insights (existing langsmith-values-insights.yaml)"
-fi
+# Read enable_* flags from terraform.tfvars if set
+_tfvar_is_true "enable_deployments"   && { _enable_deployments=true;   _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_agent_builder" && { _enable_agent_builder=true;  _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_insights"      && { _enable_insights=true;       _tfvars_drive_addons=true; }
 
-if [[ "$_first_run" == "true" && "$_enable_deployments" == "false" ]]; then
-  echo "Product tier:"
+echo "Product addons (from terraform.tfvars):"
+
+if [[ "$_tfvars_drive_addons" == "true" ]]; then
+  # Validate addon dependencies
+  if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
+    echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+    exit 1
+  fi
+
+  if [[ "$_enable_deployments" == "true" ]]; then
+    if [[ ! -f "$_deploys_file" ]]; then
+      cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
+      echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
+    else
+      echo "  ✔ Deployments (existing)"
+    fi
+  else
+    echo "  ✗ Deployments (enable_deployments = false)"
+  fi
+
+  if [[ "$_enable_agent_builder" == "true" ]]; then
+    if [[ ! -f "$_builder_file" ]]; then
+      cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
+      echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
+    else
+      echo "  ✔ Agent Builder (existing)"
+    fi
+  else
+    echo "  ✗ Agent Builder (enable_agent_builder = false)"
+  fi
+
+  if [[ "$_enable_insights" == "true" ]]; then
+    echo "  ✔ Insights (enable_insights = true)"
+    # File creation + ClickHouse prompt handled below
+  else
+    echo "  ✗ Insights (enable_insights = false)"
+  fi
+elif [[ "$_first_run" == "true" ]]; then
+  # No tfvars flags set — interactive fallback on first run
+  echo "  (no enable_* flags in terraform.tfvars — prompting interactively)"
   echo ""
+  echo "  Product tier:"
   echo "  1) LangSmith only"
   echo "  2) LangSmith + Deployments (LangGraph Platform)"
   echo "  3) LangSmith + Deployments + Agent Builder"
   echo "  4) LangSmith + Deployments + Agent Builder + Insights"
   echo ""
-  printf "Choice [1]: "
+  printf "  Choice [1]: "
   read -r _tier_choice
   _tier_choice="${_tier_choice:-1}"
 
@@ -246,6 +277,14 @@ if [[ "$_first_run" == "true" && "$_enable_deployments" == "false" ]]; then
       exit 1
       ;;
   esac
+  echo ""
+  echo "  Tip: set enable_deployments / enable_agent_builder / enable_insights"
+  echo "  in terraform.tfvars to skip this prompt on future runs."
+else
+  # Re-run with no tfvars flags — report what's already on disk
+  [[ -f "$_deploys_file" ]]  && { _enable_deployments=true;  echo "  ✔ Deployments (existing file)"; } || echo "  ✗ Deployments"
+  [[ -f "$_builder_file" ]]  && { _enable_agent_builder=true; echo "  ✔ Agent Builder (existing file)"; } || echo "  ✗ Agent Builder"
+  [[ -f "$_insights_file" ]] && { _enable_insights=true;      echo "  ✔ Insights (existing file)"; } || echo "  ✗ Insights"
 fi
 
 # Insights — prompt for ClickHouse connection on first creation

@@ -23,6 +23,14 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 CHART_VERSION="${CHART_VERSION:-}"
 
+# ── tfvars helpers ────────────────────────────────────────────────────────────
+_parse_tfvar() {
+  local key="$1"
+  awk -F= "/^[[:space:]]*${key}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" \
+    "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+}
+_tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
+
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
 
@@ -89,14 +97,60 @@ for sizing in sizing-ha sizing-light; do
   fi
 done
 
-# Addon files: included when present on disk (copied here by init-values.sh).
-for addon in agent-deploys agent-builder insights; do
+# Addon files: gated by enable_* flags in terraform.tfvars.
+# File must exist AND the corresponding flag must be true.
+# If no flags are set (default false), files are still included when present
+# for backwards compatibility with deployments predating the feature flags.
+_enable_deployments=false
+_enable_agent_builder=false
+_enable_insights=false
+_any_flag_set=false
+_tfvar_is_true "enable_deployments"   && { _enable_deployments=true;  _any_flag_set=true; }
+_tfvar_is_true "enable_agent_builder" && { _enable_agent_builder=true; _any_flag_set=true; }
+_tfvar_is_true "enable_insights"      && { _enable_insights=true;      _any_flag_set=true; }
+
+# Validate addon dependencies when flags are set
+if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+  exit 1
+fi
+
+_addon_gate=(
+  "agent-deploys:deployments:$_enable_deployments"
+  "agent-builder:agent_builder:$_enable_agent_builder"
+  "insights:insights:$_enable_insights"
+)
+for entry in "${_addon_gate[@]}"; do
+  addon="${entry%%:*}"
+  rest="${entry#*:}"
+  flag_name="${rest%%:*}"
+  enabled="${rest##*:}"
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
-  if [[ -f "$f" ]]; then
-    VALUES_ARGS+=(-f "$f")
-    echo "  ✔ langsmith-values-${addon}.yaml"
+
+  if [[ "$_any_flag_set" == "true" ]]; then
+    # Flags are in use — strict gating
+    if [[ "$enabled" == "true" ]]; then
+      if [[ -f "$f" ]]; then
+        VALUES_ARGS+=(-f "$f")
+        echo "  ✔ langsmith-values-${addon}.yaml"
+      else
+        echo "  ✗ langsmith-values-${addon}.yaml (enable_${flag_name}=true but file not found — run init-values.sh)"
+      fi
+    else
+      if [[ -f "$f" ]]; then
+        echo "  ○ langsmith-values-${addon}.yaml (file exists but enable_${flag_name}=false — skipped)"
+      else
+        echo "  ✗ langsmith-values-${addon}.yaml (not enabled)"
+      fi
+    fi
   else
-    echo "  ✗ langsmith-values-${addon}.yaml (not present — skipped)"
+    # No flags set — include by file presence (backwards compat)
+    if [[ -f "$f" ]]; then
+      VALUES_ARGS+=(-f "$f")
+      echo "  ✔ langsmith-values-${addon}.yaml"
+    else
+      echo "  ✗ langsmith-values-${addon}.yaml (not present — skipped)"
+    fi
   fi
 done
 echo ""
