@@ -200,7 +200,40 @@ kubectl rollout status deployment/envoy-gateway -n envoy-gateway-system
 
 ---
 
-### Issue #9 — terraform destroy fails: deletion protection enabled
+### Issue #9 — Envoy Gateway external IP changed after re-apply
+
+**Symptom:** DNS no longer resolves to the correct IP after Terraform re-apply, or existing firewall allowlists stop working.
+
+**Cause:** The Envoy Gateway external IP is tied to the `Gateway` Kubernetes resource managed by Terraform. If that resource is deleted and recreated (e.g. due to a `taint`, a module change that forces replacement, or a `terraform destroy` + re-apply), GCP issues a **new** IP address. There is no way to reserve the original IP.
+
+**Prevention:**
+- Never `terraform taint` or manually delete the `Gateway` resource.
+- Use `make destroy` + `make apply` only for full teardown/rebuild — not for iterating on Gateway config.
+- Before any operation that might recreate the Gateway, note the current IP:
+
+```bash
+kubectl get svc -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=<gateway-name> \
+  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'
+```
+
+**Recovery:** If the IP changed, update your DNS A record to the new IP:
+
+```bash
+# Get the new IP
+kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.addresses[0].value}'
+
+# Update your DNS record (Cloud DNS example)
+gcloud dns record-sets update <your-domain>. \
+  --type=A --ttl=300 \
+  --rrdatas=<new-ip> \
+  --zone=<zone-name> \
+  --project=<project-id>
+```
+
+---
+
+### Issue #10 — terraform destroy fails: deletion protection enabled
 
 **Symptom:**
 ```
@@ -224,7 +257,7 @@ terraform destroy
 
 ---
 
-### Issue #10 — Workload Identity not working (GCS permission denied)
+### Issue #11 — Workload Identity not working (GCS permission denied)
 
 **Symptom:**
 ```
@@ -265,7 +298,7 @@ make deploy
 
 ---
 
-### Issue #11 — `langsmith-ksa` missing Workload Identity annotation
+### Issue #12 — `langsmith-ksa` missing Workload Identity annotation
 
 **Symptom:** Operator-spawned agent deployment pods fail to start or are stuck in `Pending`. Logs show permission errors or the agent bootstrap job hangs.
 
@@ -292,7 +325,7 @@ kubectl annotate serviceaccount langsmith-ksa -n langsmith \
 
 ---
 
-### Issue #12 — Helm release stuck in `pending-upgrade`
+### Issue #13 — Helm release stuck in `pending-upgrade`
 
 **Symptom:**
 ```
@@ -310,7 +343,7 @@ make deploy
 
 ---
 
-### Issue #13 — Secret Manager access denied
+### Issue #14 — Secret Manager access denied
 
 **Symptom:**
 ```
@@ -345,7 +378,7 @@ gcloud projects add-iam-policy-binding <project-id> \
 
 ---
 
-### Issue #14 — `langsmith-postgres` or `langsmith-redis` secret missing
+### Issue #15 — `langsmith-postgres` or `langsmith-redis` secret missing
 
 **Symptom:** Pods crash with database connection errors immediately after deploy, or `kubectl get secrets -n langsmith` does not show `langsmith-postgres` / `langsmith-redis`.
 
