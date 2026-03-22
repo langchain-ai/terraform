@@ -1,6 +1,25 @@
+# GCS remote state backend.
+#
+# Prerequisites:
+#   1. Create the GCS bucket (versioning strongly recommended):
+#        gsutil mb -p YOUR_PROJECT_ID -l us-central1 gs://YOUR_BUCKET_NAME
+#        gsutil versioning set on gs://YOUR_BUCKET_NAME
+#
+#   2. Grant the operator (or SA running Terraform) Storage Object Admin on the bucket:
+#        gsutil iam ch \
+#          serviceAccount:YOUR_SA@PROJECT.iam.gserviceaccount.com:objectAdmin \
+#          gs://YOUR_BUCKET_NAME
+#
+# Usage:
+#   Copy this file to backend.tf, fill in bucket/prefix, then run:
+#     terraform init -reconfigure
+#
+# GCS provides built-in state locking via object generation conditions —
+# no separate lock resource is required (unlike S3 + DynamoDB).
+
 terraform {
   backend "gcs" {
-    bucket = "my-terraform-state-bucket"
-    prefix = "langsmith/gcp"
+    bucket = "your-terraform-state-bucket"
+    prefix = "langsmith/state"
   }
 }
