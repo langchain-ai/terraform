@@ -35,9 +35,8 @@ terraform apply -var-file=terraform.tfvars
 ```
 Error: Get "https://<cluster-endpoint>/api/v1/namespaces": dial tcp: connection refused
 ```
-or `null_resource.wait_for_cluster` local-exec times out with `ERROR: API server did not become accessible in time`.
 
-**Cause:** The GKE control plane takes 10–15 minutes to become fully operational. The `wait_for_cluster` resource polls for up to 10 minutes. On slow projects or new projects with cold-start API activation, this window can be exceeded.
+**Cause:** The GKE control plane takes 10–15 minutes to become fully operational. Terraform waits for the cluster to reach `RUNNING` state, then adds a 90-second buffer for the API server to become accessible. On slow projects or cold-start API activation, this window can be exceeded.
 
 **Fix:** Wait for the cluster to reach `RUNNING` status, then re-run apply:
 

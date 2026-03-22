@@ -53,45 +53,12 @@ data "google_project" "current" {
   project_id = var.project_id
 }
 
-# Wait for GKE cluster to be fully ready and API server accessible
-resource "null_resource" "wait_for_cluster" {
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Waiting for GKE cluster to be ready..."
-      
-      # Wait for cluster to be in RUNNING state
-      for i in {1..60}; do
-        STATUS=$(gcloud container clusters describe ${module.gke_cluster.cluster_name} \
-          --region ${var.region} \
-          --project ${var.project_id} \
-          --format="value(status)" 2>/dev/null || echo "UNKNOWN")
-        if [ "$STATUS" = "RUNNING" ]; then
-          echo "Cluster status: RUNNING"
-          break
-        fi
-        echo "Waiting for cluster status... ($i/60) - Current: $STATUS"
-        sleep 10
-      done
-      
-      # Wait for API server to be accessible
-      echo "Waiting for API server to be accessible..."
-      for i in {1..30}; do
-        if gcloud container clusters get-credentials ${module.gke_cluster.cluster_name} \
-          --region ${var.region} \
-          --project ${var.project_id} >/dev/null 2>&1; then
-          if kubectl cluster-info >/dev/null 2>&1; then
-            echo "API server is accessible!"
-            exit 0
-          fi
-        fi
-        echo "Waiting for API server... ($i/30)"
-        sleep 5
-      done
-      
-      echo "ERROR: API server did not become accessible in time"
-      exit 1
-    EOT
-  }
+# Wait for GKE API server to be fully ready after cluster creation.
+# The google_container_cluster resource waits until RUNNING state, but the
+# API server needs a short additional window before accepting requests.
+# time_sleep works in CI environments without gcloud/kubectl in PATH.
+resource "time_sleep" "wait_for_cluster" {
+  create_duration = "90s"
 
   depends_on = [module.gke_cluster]
 }
@@ -450,7 +417,7 @@ module "k8s_bootstrap" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [null_resource.wait_for_cluster, module.cloudsql, module.iam]
+  depends_on = [time_sleep.wait_for_cluster, module.cloudsql, module.iam]
 }
 
 #------------------------------------------------------------------------------
@@ -471,5 +438,5 @@ module "ingress" {
   tls_certificate_source = var.tls_certificate_source
   tls_secret_name        = var.tls_secret_name
 
-  depends_on = [null_resource.wait_for_cluster, module.k8s_bootstrap]
+  depends_on = [time_sleep.wait_for_cluster, module.k8s_bootstrap]
 }
