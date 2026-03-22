@@ -137,6 +137,39 @@ output "storage_bucket_url" {
 }
 
 #------------------------------------------------------------------------------
+# IAM / Secrets / DNS Outputs
+#------------------------------------------------------------------------------
+output "workload_identity_service_account_email" {
+  description = "GCP service account email used for Workload Identity (null when IAM module is disabled)"
+  value       = var.enable_gcp_iam_module ? module.iam[0].service_account_email : null
+}
+
+output "workload_identity_annotation" {
+  description = "Kubernetes annotation value for iam.gke.io/gcp-service-account (null when IAM module is disabled)"
+  value       = var.enable_gcp_iam_module ? module.iam[0].workload_identity_annotation : null
+}
+
+output "secret_manager_secret_id" {
+  description = "Secret Manager secret ID created by secrets module (null when disabled)"
+  value       = var.enable_secret_manager_module ? module.secrets[0].secret_id : null
+}
+
+output "dns_zone_name" {
+  description = "Cloud DNS managed zone name (null when DNS module is disabled)"
+  value       = var.enable_dns_module ? module.dns[0].zone_name : null
+}
+
+output "dns_name_servers" {
+  description = "Name servers for Cloud DNS zone (empty when DNS module is disabled)"
+  value       = var.enable_dns_module ? module.dns[0].name_servers : []
+}
+
+output "managed_certificate_name" {
+  description = "Google-managed certificate name (null when DNS module is disabled)"
+  value       = var.enable_dns_module ? module.dns[0].certificate_name : null
+}
+
+#------------------------------------------------------------------------------
 # Networking Outputs
 #------------------------------------------------------------------------------
 output "vpc_name" {

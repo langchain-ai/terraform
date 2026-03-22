@@ -166,6 +166,12 @@ resource "random_id" "suffix" {
   }
 }
 
+locals {
+  # Must match modules/iam account_id format.
+  workload_identity_gsa_account_id = "${var.name_prefix}-langsmith"
+  workload_identity_gsa_email      = "${local.workload_identity_gsa_account_id}@${var.project_id}.iam.gserviceaccount.com"
+}
+
 #------------------------------------------------------------------------------
 # Enable Required APIs
 #------------------------------------------------------------------------------
@@ -351,6 +357,54 @@ module "storage" {
 }
 
 #------------------------------------------------------------------------------
+# IAM Module (Optional)
+#------------------------------------------------------------------------------
+module "iam" {
+  source = "./modules/iam"
+  count  = var.enable_gcp_iam_module ? 1 : 0
+
+  gcp_project = var.project_id
+  project     = var.name_prefix
+  environment = var.environment
+
+  namespace            = var.langsmith_namespace
+  service_account_name = "langsmith-ksa"
+  gcs_bucket_name      = module.storage.bucket_name
+}
+
+#------------------------------------------------------------------------------
+# Secret Manager Module (Optional)
+#------------------------------------------------------------------------------
+module "secrets" {
+  source = "./modules/secrets"
+  count  = var.enable_secret_manager_module ? 1 : 0
+
+  gcp_project = var.project_id
+  project     = var.name_prefix
+  environment = var.environment
+
+  postgres_password = var.postgres_source == "external" ? module.cloudsql[0].password : var.postgres_password
+  redis_password    = ""
+}
+
+#------------------------------------------------------------------------------
+# DNS Module (Optional)
+#------------------------------------------------------------------------------
+module "dns" {
+  source = "./modules/dns"
+  count  = var.enable_dns_module ? 1 : 0
+
+  gcp_project = var.project_id
+  project     = var.name_prefix
+  environment = var.environment
+
+  domain_name        = var.langsmith_domain
+  create_zone        = var.dns_create_zone
+  existing_zone_name = var.dns_existing_zone_name
+  create_certificate = var.dns_create_certificate
+}
+
+#------------------------------------------------------------------------------
 # K8s Bootstrap Module
 #------------------------------------------------------------------------------
 module "k8s_bootstrap" {
@@ -360,7 +414,8 @@ module "k8s_bootstrap" {
   environment = var.environment
 
   # Namespace configuration
-  langsmith_namespace = var.langsmith_namespace
+  langsmith_namespace         = var.langsmith_namespace
+  workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
 
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
@@ -404,7 +459,7 @@ module "k8s_bootstrap" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [null_resource.wait_for_cluster, module.cloudsql]
+  depends_on = [null_resource.wait_for_cluster, module.cloudsql, module.iam]
 }
 
 #------------------------------------------------------------------------------

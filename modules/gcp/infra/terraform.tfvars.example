@@ -146,6 +146,21 @@ langsmith_domain    = "langsmith.example.com"
 langsmith_helm_chart_version = ""
 
 #------------------------------------------------------------------------------
+# Optional: AWS-parity module wiring
+#------------------------------------------------------------------------------
+# Enable Workload Identity + bucket IAM grants module.
+enable_gcp_iam_module = true
+
+# Enable Secret Manager secret creation for bootstrap credentials.
+enable_secret_manager_module = false
+
+# Enable Cloud DNS + managed cert module wiring.
+enable_dns_module       = false
+dns_create_zone         = true
+dns_existing_zone_name  = ""
+dns_create_certificate  = true
+
+#------------------------------------------------------------------------------
 # Optional: Ingress Configuration
 #------------------------------------------------------------------------------
 install_ingress = true

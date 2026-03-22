@@ -19,6 +19,12 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
+variable "workload_identity_gsa_email" {
+  description = "Optional GCP service account email to annotate on the LangSmith Kubernetes service account for Workload Identity."
+  type        = string
+  default     = ""
+}
+
 #------------------------------------------------------------------------------
 # Database Credentials
 #------------------------------------------------------------------------------

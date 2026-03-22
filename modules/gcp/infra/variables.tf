@@ -396,6 +396,45 @@ variable "langsmith_helm_chart_version" {
 }
 
 #------------------------------------------------------------------------------
+# Optional parity modules (AWS-aligned capability wiring)
+#------------------------------------------------------------------------------
+variable "enable_gcp_iam_module" {
+  description = "Enable GCP IAM module for Workload Identity and bucket IAM bindings."
+  type        = bool
+  default     = true
+}
+
+variable "enable_secret_manager_module" {
+  description = "Enable Secret Manager module to store generated/bootstrap credentials."
+  type        = bool
+  default     = false
+}
+
+variable "enable_dns_module" {
+  description = "Enable Cloud DNS + managed certificate module wiring."
+  type        = bool
+  default     = false
+}
+
+variable "dns_create_zone" {
+  description = "Create a new Cloud DNS managed zone when enable_dns_module is true."
+  type        = bool
+  default     = true
+}
+
+variable "dns_existing_zone_name" {
+  description = "Existing Cloud DNS zone name to use when dns_create_zone is false."
+  type        = string
+  default     = ""
+}
+
+variable "dns_create_certificate" {
+  description = "Create a Google-managed SSL certificate when enable_dns_module is true."
+  type        = bool
+  default     = true
+}
+
+#------------------------------------------------------------------------------
 # Ingress Configuration
 #------------------------------------------------------------------------------
 variable "install_ingress" {
