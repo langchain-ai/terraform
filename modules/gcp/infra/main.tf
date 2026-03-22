@@ -377,7 +377,7 @@ module "k8s_bootstrap" {
 
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
-  postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}" : ""
+  postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}?sslmode=require" : ""
 
   # Redis connection - only when using external Redis
   use_managed_redis    = var.redis_source == "external"

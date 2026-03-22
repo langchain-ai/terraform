@@ -15,7 +15,7 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 ### High
 
 - [ ] **No VPC Flow Logs** — add `log_config { aggregation_interval = "INTERVAL_5_SEC"; flow_sampling = 0.5 }` to the subnet in `modules/networking/main.tf`
-- [ ] **PostgreSQL TLS not enforced in connection string** — `k8s-bootstrap` writes the connection URL without `?sslmode=require`; Cloud SQL enforces TLS by default but the connection string should be explicit
+- [x] **PostgreSQL TLS not enforced in connection string** — fixed: added `?sslmode=require` to the connection URL in `main.tf`
 - [ ] **Redis: no AUTH configured** — Memorystore is access-controlled by VPC private IP only; add `auth_enabled = true` to the redis module for defense-in-depth
 - [ ] **GCS HMAC keys not rotated** — HMAC keys are created manually and have no rotation mechanism; document a rotation runbook or use Workload Identity + native GCS auth if the chart supports it
 
@@ -47,7 +47,7 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 ## Disaster Recovery
 
 - [ ] **No Cloud SQL automated backup export** — Cloud SQL has automated backups enabled but no export to GCS for long-term retention or cross-region DR
-- [ ] **No GCS versioning enabled by default** — LangSmith bucket has no object versioning; accidental deletions are permanent
+- [x] **No GCS versioning enabled by default** — fixed: `versioning { enabled = true }` in `modules/storage/main.tf`
 - [ ] **No GCS cross-region replication** — no documented procedure for DR failover to a secondary region
 - [ ] **No GKE PVC snapshot policy** — ClickHouse PVC (premium-rwo) has no VolumeSnapshot schedule
 - [ ] **No cluster recovery runbook** — no documented procedure for full rebuild from Cloud SQL + GCS backups
@@ -79,7 +79,7 @@ Items marked with **(opt-in)** have working implementations gated behind a varia
 - [ ] **No cost optimization guidance** — e2-standard-4 is a reasonable default but memory-optimized nodes (n2-highmem-4) may be more cost-effective for ClickHouse; document right-sizing recommendations
 - [ ] **GCS access via HMAC keys** — HMAC key creation is manual and outside Terraform; ideally the LangSmith chart would support native GCS auth via Workload Identity to eliminate static key management
 - [ ] **No tagging / label strategy** — `owner` and `cost_center` labels exist but no enforcement across all resources; needed for cost allocation and compliance
-- [ ] **Envoy Gateway external IP is ephemeral** — if the Gateway resource is deleted and recreated, a new IP is issued; existing DNS records and any IP allowlists break permanently. Document this risk in TROUBLESHOOTING.md
+- [x] **Envoy Gateway external IP is ephemeral** — documented in TROUBLESHOOTING.md Issue #9 with prevention steps and DNS recovery commands
 
 ---
 
