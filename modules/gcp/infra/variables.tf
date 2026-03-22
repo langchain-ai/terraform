@@ -396,6 +396,45 @@ variable "langsmith_helm_chart_version" {
 }
 
 #------------------------------------------------------------------------------
+# Optional GCP modules
+#------------------------------------------------------------------------------
+variable "enable_gcp_iam_module" {
+  description = "Enable GCP IAM module for Workload Identity and bucket IAM bindings."
+  type        = bool
+  default     = true
+}
+
+variable "enable_secret_manager_module" {
+  description = "Enable Secret Manager module to store generated/bootstrap credentials."
+  type        = bool
+  default     = false
+}
+
+variable "enable_dns_module" {
+  description = "Enable Cloud DNS + managed certificate module wiring."
+  type        = bool
+  default     = false
+}
+
+variable "dns_create_zone" {
+  description = "Create a new Cloud DNS managed zone when enable_dns_module is true."
+  type        = bool
+  default     = true
+}
+
+variable "dns_existing_zone_name" {
+  description = "Existing Cloud DNS zone name to use when dns_create_zone is false."
+  type        = string
+  default     = ""
+}
+
+variable "dns_create_certificate" {
+  description = "Create a Google-managed SSL certificate when enable_dns_module is true."
+  type        = bool
+  default     = true
+}
+
+#------------------------------------------------------------------------------
 # Ingress Configuration
 #------------------------------------------------------------------------------
 variable "install_ingress" {
@@ -562,3 +601,82 @@ variable "cost_center" {
   default     = ""
 }
 
+#------------------------------------------------------------------------------
+# LangGraph Platform Features
+# Boolean flags that control which product addons are active in Helm (Pass 2).
+# init-values.sh and deploy.sh read these to select the right values overlays.
+# Each addon requires the corresponding entitlement in your LangSmith license.
+#------------------------------------------------------------------------------
+variable "enable_deployments" {
+  type        = bool
+  description = "Enable LangGraph Platform Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
+  default     = false
+}
+
+variable "enable_agent_builder" {
+  type        = bool
+  description = "Enable Agent Builder (visual agent building UI). Requires enable_deployments = true and Agent Builder entitlement in license."
+  default     = false
+}
+
+variable "enable_insights" {
+  type        = bool
+  description = "Enable Insights (ClickHouse-backed analytics). Requires Insights entitlement in license."
+  default     = false
+}
+
+#------------------------------------------------------------------------------
+# LangGraph Platform Encryption Keys
+# Fernet keys for optional feature modules. Generate once and never change.
+# Set via TF_VAR_* environment variables — do not commit to terraform.tfvars.
+# Required only when enabling the corresponding feature overlay in Helm.
+#------------------------------------------------------------------------------
+variable "langsmith_deployments_encryption_key" {
+  type        = string
+  description = "Fernet key for LangSmith Deployments. Generate once: python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'."
+  sensitive   = true
+  default     = ""
+}
+
+variable "langsmith_agent_builder_encryption_key" {
+  type        = string
+  description = "Fernet key for Agent Builder. Generate once and keep stable — changing requires re-encrypting all Agent Builder configs."
+  sensitive   = true
+  default     = ""
+}
+
+variable "langsmith_insights_encryption_key" {
+  type        = string
+  description = "Fernet key for Insights. Generate once — changing breaks existing Insights data."
+  sensitive   = true
+  default     = ""
+}
+
+#------------------------------------------------------------------------------
+# Helm Sizing Profile
+#------------------------------------------------------------------------------
+variable "sizing_profile" {
+  type        = string
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
+  default     = "default"
+
+  validation {
+    condition     = contains(["production", "production-large", "dev", "minimum", "default"], var.sizing_profile)
+    error_message = "sizing_profile must be one of: production, production-large, dev, minimum, default."
+  }
+}
+
+#------------------------------------------------------------------------------
+# Optional Feature Addons
+#------------------------------------------------------------------------------
+variable "enable_polly" {
+  type        = bool
+  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  default     = false
+}
+
+variable "enable_usage_telemetry" {
+  type        = bool
+  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)."
+  default     = false
+}

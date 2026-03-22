@@ -14,9 +14,9 @@ resource "google_storage_bucket" "langsmith_traces" {
   # Uniform bucket-level access
   uniform_bucket_level_access = true
 
-  # Versioning (optional)
+  # Versioning — protects against accidental deletes
   versioning {
-    enabled = false
+    enabled = true
   }
 
   # Lifecycle rules for TTL prefixes (matching LangSmith TTL structure)

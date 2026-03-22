@@ -94,6 +94,7 @@ gcloud auth application-default login
 
 ```
 gcp/
+├── Makefile             ← Task runner (quickstart/status/preflight/init/plan/apply/deploy)
 ├── infra/
 │   ├── main.tf             ← Root module — enables APIs, wires sub-modules
 │   ├── variables.tf        ← All input variables with defaults
@@ -107,18 +108,28 @@ gcp/
 │       ├── storage/        ← GCS bucket with TTL lifecycle rules (ttl_s/ ttl_l/)
 │       ├── k8s-bootstrap/  ← Namespaces, K8s secrets, cert-manager, KEDA
 │       ├── ingress/        ← Envoy Gateway (Gateway API), GatewayClass, HTTPRoute
-│       ├── iam/            ← Workload Identity service accounts and bindings
-│       ├── dns/            ← Cloud DNS managed zone (optional)
-│       └── secrets/        ← Secret Manager secrets for credentials
+│       ├── iam/            ← Workload Identity service accounts and bindings (wired by default)
+│       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
+│       └── secrets/        ← Secret Manager secrets for credentials (optional via flags)
+│   └── scripts/
+│       ├── _common.sh          ← Shared helpers (tfvar parser, color/status helpers)
+│       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
+│       ├── quickstart.sh       ← Interactive setup wizard — generates terraform.tfvars
+│       ├── setup-env.sh        ← Exports TF_VAR_* secrets from Secret Manager (source it)
+│       ├── status.sh           ← Deployment health check — tells you what to run next
+│       ├── manage-secrets.sh   ← Secret Manager CRUD (list/get/set/validate/delete)
+│       └── tf-run.sh           ← Terraform wrapper that auto-sources setup-env.sh
 └── helm/
     ├── scripts/
-    │   ├── deploy.sh             ← Helm deploy automation
-    │   ├── generate-secrets.sh   ← Generate API key salt, JWT secret, Fernet keys
+    │   ├── deploy.sh             ← Helm deploy automation (values chain + WI annotation)
     │   ├── get-kubeconfig.sh     ← gcloud get-credentials wrapper
-    │   └── preflight-check.sh    ← Pre-deploy validation
+    │   ├── init-values.sh        ← Generates values-overrides.yaml from Terraform outputs
+    │   ├── preflight-check.sh    ← Pre-deploy validation (tools, cluster, values)
+    │   └── uninstall.sh          ← Helm uninstall + operator resource cleanup
     └── values/
-        ├── values.yaml                    ← Base Helm values
-        └── values-overrides.yaml.example  ← Overlay template
+        ├── values.yaml                    ← GCP base Helm values (Gateway, GCS HMAC)
+        ├── values-overrides.yaml.example  ← Env-specific overlay template
+        └── examples/                      ← Annotated reference files and addon overlays
 ```
 
 ---
@@ -166,7 +177,7 @@ enable_langsmith_deployment = true
 
 ### Terraform state backend (recommended for production)
 
-Uncomment the backend block in `gcp/infra/main.tf`:
+Copy `backend.tf.example` to `backend.tf` and fill in your bucket:
 
 ```hcl
 backend "gcs" {
@@ -182,6 +193,14 @@ backend "gcs" {
 Provisions: VPC, GKE cluster, Cloud SQL PostgreSQL, Memorystore Redis, GCS bucket, K8s bootstrap (namespaces, K8s secrets, cert-manager, KEDA).
 
 ```bash
+# Recommended workflow
+cd gcp
+make preflight
+make init
+make plan
+make apply
+
+# Equivalent direct Terraform flow
 cd gcp/infra
 
 terraform init
@@ -194,10 +213,8 @@ terraform apply -var-file=terraform.tfvars
 ### After apply — get cluster credentials
 
 ```bash
-gcloud container clusters get-credentials \
-  $(terraform output -raw cluster_name) \
-  --region us-west2 \
-  --project <your-project-id>
+cd ../helm/scripts
+./get-kubeconfig.sh
 
 kubectl get nodes
 kubectl get ns
@@ -215,11 +232,11 @@ kubectl get secrets -n langsmith
 
 ## Pass 2 — LangSmith Helm Deploy
 
-The Terraform `outputs.tf` generates a ready-to-copy Helm command:
+Use the scripted flow (includes preflight + kubeconfig refresh):
 
 ```bash
-cd gcp/infra
-terraform output -raw helm_install_command
+cd gcp/helm/scripts
+./deploy.sh
 ```
 
 Or run manually — generate secrets first:
@@ -363,6 +380,17 @@ helm upgrade langsmith langchain/langsmith \
 | `owner` | `platform-team` | no | Owner label applied to all resources |
 | `cost_center` | `""` | no | Cost center label for billing attribution |
 | `labels` | `{}` | no | Additional labels applied to all resources |
+
+### Optional GCP modules
+
+| Variable | Default | Description |
+|---|---|---|
+| `enable_gcp_iam_module` | `true` | Wires `modules/iam` for Workload Identity + bucket IAM binding |
+| `enable_secret_manager_module` | `false` | Wires `modules/secrets` for Secret Manager bootstrap secret |
+| `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS + managed cert |
+| `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
+| `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |
+| `dns_create_certificate` | `true` | Create a Google-managed cert when DNS module is enabled |
 
 ---
 
