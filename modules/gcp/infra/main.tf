@@ -71,21 +71,20 @@ provider "google-beta" {
   default_labels = local.common_labels
 }
 
-# Configure Kubernetes provider
-# Uses try() to fallback to module outputs if data source isn't available yet
-# This allows plan to work even when cluster doesn't exist
+# Configure Kubernetes provider.
+# Use module outputs directly so first plan works before cluster creation.
 provider "kubernetes" {
-  host                   = try("https://${data.google_container_cluster.gke.endpoint}", "https://${module.gke_cluster.endpoint}")
+  host                   = "https://${module.gke_cluster.endpoint}"
   token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = try(base64decode(data.google_container_cluster.gke.master_auth[0].cluster_ca_certificate), base64decode(module.gke_cluster.ca_certificate))
+  cluster_ca_certificate = base64decode(module.gke_cluster.ca_certificate)
 }
 
 # Configure Helm provider
 provider "helm" {
   kubernetes {
-    host                   = try("https://${data.google_container_cluster.gke.endpoint}", "https://${module.gke_cluster.endpoint}")
+    host                   = "https://${module.gke_cluster.endpoint}"
     token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = try(base64decode(data.google_container_cluster.gke.master_auth[0].cluster_ca_certificate), base64decode(module.gke_cluster.ca_certificate))
+    cluster_ca_certificate = base64decode(module.gke_cluster.ca_certificate)
   }
 }
 
@@ -142,15 +141,6 @@ resource "null_resource" "wait_for_cluster" {
   depends_on = [module.gke_cluster]
 }
 
-# Get GKE cluster information (after it's ready)
-data "google_container_cluster" "gke" {
-  name     = module.gke_cluster.cluster_name
-  location = var.region
-  project  = var.project_id
-
-  depends_on = [null_resource.wait_for_cluster]
-}
-
 #------------------------------------------------------------------------------
 # Random Resources
 #------------------------------------------------------------------------------
@@ -170,6 +160,50 @@ locals {
   # Must match modules/iam account_id format.
   workload_identity_gsa_account_id = "${var.name_prefix}-langsmith"
   workload_identity_gsa_email      = "${local.workload_identity_gsa_account_id}@${var.project_id}.iam.gserviceaccount.com"
+}
+
+#------------------------------------------------------------------------------
+# Input Validation
+# Cross-variable checks that can't be expressed in variable validation blocks.
+# These fire at plan time with a clear error message.
+#------------------------------------------------------------------------------
+resource "terraform_data" "validate_inputs" {
+  lifecycle {
+    precondition {
+      condition     = var.postgres_source != "external" || var.postgres_password != ""
+      error_message = "postgres_password is required when postgres_source = 'external'. Set TF_VAR_postgres_password in your environment."
+    }
+
+    precondition {
+      condition     = var.tls_certificate_source != "letsencrypt" || var.letsencrypt_email != ""
+      error_message = "letsencrypt_email is required when tls_certificate_source = 'letsencrypt'."
+    }
+
+    precondition {
+      condition     = var.tls_certificate_source != "existing" || (var.tls_certificate_crt != "" && var.tls_certificate_key != "")
+      error_message = "tls_certificate_crt and tls_certificate_key are required when tls_certificate_source = 'existing'."
+    }
+
+    precondition {
+      condition     = !var.enable_agent_builder || var.enable_deployments
+      error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
+    }
+
+    precondition {
+      condition     = var.clickhouse_source == "in-cluster" || var.clickhouse_host != ""
+      error_message = "clickhouse_host is required when clickhouse_source is 'langsmith-managed' or 'external'."
+    }
+
+    precondition {
+      condition     = var.clickhouse_source == "in-cluster" || var.clickhouse_password != ""
+      error_message = "clickhouse_password is required when clickhouse_source is 'langsmith-managed' or 'external'."
+    }
+
+    precondition {
+      condition     = !var.enable_dns_module || var.dns_create_zone || var.dns_existing_zone_name != ""
+      error_message = "dns_existing_zone_name is required when enable_dns_module = true and dns_create_zone = false."
+    }
+  }
 }
 
 #------------------------------------------------------------------------------
