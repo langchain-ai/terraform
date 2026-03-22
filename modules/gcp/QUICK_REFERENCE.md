@@ -55,32 +55,49 @@ make kubeconfig
 
 ## Enable Optional Addons
 
-`init-values.sh` prompts for product tier on first run. To add addons after initial install, copy from `examples/` and redeploy:
-
-```bash
-# Deployments feature (required for Agent Builder)
-cp helm/values/examples/langsmith-values-agent-deploys.yaml \
-   helm/values/langsmith-values-agent-deploys.yaml
-
-# Agent Builder (requires agent-deploys)
-cp helm/values/examples/langsmith-values-agent-builder.yaml \
-   helm/values/langsmith-values-agent-builder.yaml
-
-# ClickHouse Insights
-cp helm/values/examples/langsmith-values-insights.yaml \
-   helm/values/langsmith-values-insights.yaml
-
-# Then redeploy
-make deploy
-```
-
-Also set the corresponding flags in `terraform.tfvars`:
+Set the feature flags in `terraform.tfvars`, then `make init-values && make deploy`. `init-values.sh` copies the matching example file into `helm/values/` automatically.
 
 ```hcl
+# terraform.tfvars
 enable_deployments   = true
 enable_agent_builder = true   # requires enable_deployments = true
 enable_insights      = true
+enable_polly         = true   # requires enable_deployments = true + Polly license entitlement
+
+# Usage telemetry (optional)
+enable_usage_telemetry = true
 ```
+
+To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
+
+```bash
+cp helm/values/examples/langsmith-values-agent-deploys.yaml helm/values/
+cp helm/values/examples/langsmith-values-agent-builder.yaml helm/values/
+cp helm/values/examples/langsmith-values-insights.yaml      helm/values/
+cp helm/values/examples/langsmith-values-polly.yaml         helm/values/
+
+make deploy
+```
+
+## Sizing Profiles
+
+Set `sizing_profile` in `terraform.tfvars` before running `make init-values`:
+
+```hcl
+sizing_profile = "production"   # default | minimum | dev | production | production-large
+```
+
+| Profile | When to use |
+|---|---|
+| `default` | Chart defaults — quick tests, no overlay applied |
+| `minimum` | Absolute floor — fits e2-standard-4; use for cost parking or CI smoke tests |
+| `dev` | Single replica, minimal resources — dev/CI environments |
+| `production` | Multi-replica with HPA — recommended for real workloads |
+| `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
+
+After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+
+> **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
 
 ---
 
