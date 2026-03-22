@@ -10,6 +10,13 @@ gcloud auth login
 gcloud config set project <your-project-id>
 gcloud auth application-default login
 
+# AWS-style task runner flow (recommended)
+cd terraform/gcp
+make preflight
+make init
+make plan
+make apply
+
 # Configure
 cd terraform/gcp/infra
 cp terraform.tfvars.example terraform.tfvars
@@ -20,11 +27,9 @@ terraform init
 terraform plan -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 
-# Get cluster credentials
-gcloud container clusters get-credentials \
-  $(terraform output -raw cluster_name) \
-  --region us-west2 \
-  --project <your-project-id>
+# Get cluster credentials from Terraform outputs
+cd ../helm/scripts
+./get-kubeconfig.sh
 
 # Verify
 kubectl get nodes
@@ -39,9 +44,9 @@ kubectl get secrets -n langsmith
 ## Pass 2 — LangSmith Helm Deploy
 
 ```bash
-# Use the generated command (recommended)
-cd terraform/gcp/infra
-terraform output -raw helm_install_command
+# Use scripted deployment (AWS-style guardrails)
+cd terraform/gcp/helm/scripts
+./deploy.sh
 
 # Or run manually:
 export API_KEY_SALT=$(openssl rand -base64 32)
@@ -55,9 +60,6 @@ export ADMIN_PASSWORD="<strong-password>"
 # Create HMAC key in GCP Console: Storage > Settings > Interoperability
 export GCS_ACCESS_KEY="<hmac-access-key>"
 export GCS_ACCESS_SECRET="<hmac-secret>"
-
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
 
 helm upgrade --install langsmith langchain/langsmith \
   --namespace langsmith --create-namespace \

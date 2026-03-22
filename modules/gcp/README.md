@@ -94,6 +94,7 @@ gcloud auth application-default login
 
 ```
 gcp/
+├── Makefile             ← AWS-style workflow aliases (preflight/init/plan/apply/deploy)
 ├── infra/
 │   ├── main.tf             ← Root module — enables APIs, wires sub-modules
 │   ├── variables.tf        ← All input variables with defaults
@@ -107,9 +108,11 @@ gcp/
 │       ├── storage/        ← GCS bucket with TTL lifecycle rules (ttl_s/ ttl_l/)
 │       ├── k8s-bootstrap/  ← Namespaces, K8s secrets, cert-manager, KEDA
 │       ├── ingress/        ← Envoy Gateway (Gateway API), GatewayClass, HTTPRoute
-│       ├── iam/            ← Workload Identity service accounts and bindings
-│       ├── dns/            ← Cloud DNS managed zone (optional)
-│       └── secrets/        ← Secret Manager secrets for credentials
+│       ├── iam/            ← Workload Identity service accounts and bindings (wired by default)
+│       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
+│       └── secrets/        ← Secret Manager secrets for credentials (optional via flags)
+│   └── scripts/
+│       └── preflight.sh    ← Pre-Terraform tooling/auth/API checks
 └── helm/
     ├── scripts/
     │   ├── deploy.sh             ← Helm deploy automation
@@ -182,6 +185,14 @@ backend "gcs" {
 Provisions: VPC, GKE cluster, Cloud SQL PostgreSQL, Memorystore Redis, GCS bucket, K8s bootstrap (namespaces, K8s secrets, cert-manager, KEDA).
 
 ```bash
+# Recommended AWS-style flow
+cd gcp
+make preflight
+make init
+make plan
+make apply
+
+# Equivalent direct Terraform flow
 cd gcp/infra
 
 terraform init
@@ -194,10 +205,8 @@ terraform apply -var-file=terraform.tfvars
 ### After apply — get cluster credentials
 
 ```bash
-gcloud container clusters get-credentials \
-  $(terraform output -raw cluster_name) \
-  --region us-west2 \
-  --project <your-project-id>
+cd ../helm/scripts
+./get-kubeconfig.sh
 
 kubectl get nodes
 kubectl get ns
@@ -215,11 +224,11 @@ kubectl get secrets -n langsmith
 
 ## Pass 2 — LangSmith Helm Deploy
 
-The Terraform `outputs.tf` generates a ready-to-copy Helm command:
+Use the scripted flow (includes preflight + kubeconfig refresh):
 
 ```bash
-cd gcp/infra
-terraform output -raw helm_install_command
+cd gcp/helm/scripts
+./deploy.sh
 ```
 
 Or run manually — generate secrets first:
@@ -363,6 +372,17 @@ helm upgrade langsmith langchain/langsmith \
 | `owner` | `platform-team` | no | Owner label applied to all resources |
 | `cost_center` | `""` | no | Cost center label for billing attribution |
 | `labels` | `{}` | no | Additional labels applied to all resources |
+
+### Optional parity module toggles
+
+| Variable | Default | Description |
+|---|---|---|
+| `enable_gcp_iam_module` | `true` | Wires `modules/iam` for Workload Identity + bucket IAM binding |
+| `enable_secret_manager_module` | `false` | Wires `modules/secrets` for Secret Manager bootstrap secret |
+| `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS + managed cert |
+| `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
+| `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |
+| `dns_create_certificate` | `true` | Create a Google-managed cert when DNS module is enabled |
 
 ---
 
