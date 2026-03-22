@@ -1,18 +1,21 @@
 # LangSmith GCP Deployment — Task Runner
 #
-# First time?      make quickstart
-# Pass 1 (infra):  make setup-env → make init → make plan → make apply
-# Pass 2 (helm):   make init-values → make deploy
-# Full deploy:     make deploy-all
-# Where am I?      make status
+# First time?           make quickstart
+# Pass 1 (infra):       make setup-env → make init → make plan → make apply
+# Pass 2a (helm):       make init-values → make deploy
+# Pass 2b (terraform):  make init-values → make init-app → make apply-app
+# Full deploy:          make deploy-all
+# Where am I?           make status
 
 .PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy \
         preflight kubeconfig \
         init-values deploy uninstall deploy-all \
-        patch-lgp
+        patch-lgp \
+        init-app plan-app apply-app destroy-app
 
 INFRA_DIR := infra
 HELM_DIR  := helm
+APP_DIR   := app
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -80,6 +83,21 @@ uninstall: ## Uninstall LangSmith Helm release
 
 patch-lgp: ## Patch LGP CRs for minimum/dev profiles (right-sizes redis sidecars + database)
 	$(HELM_DIR)/scripts/patch-lgp-resources.sh
+
+# ── Pass 2b: Terraform-native Helm deployment (alternative to scripts) ────────
+
+init-app: ## Pull infra outputs into app/infra.auto.tfvars.json, then terraform init
+	$(APP_DIR)/scripts/pull-infra-outputs.sh
+	terraform -chdir=$(APP_DIR) init
+
+plan-app: ## terraform plan (app — Helm deployment)
+	terraform -chdir=$(APP_DIR) plan
+
+apply-app: ## terraform apply (app — deploys LangSmith via Helm)
+	terraform -chdir=$(APP_DIR) apply
+
+destroy-app: ## terraform destroy (app — removes Helm release)
+	terraform -chdir=$(APP_DIR) destroy
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

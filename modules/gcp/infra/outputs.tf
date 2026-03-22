@@ -3,6 +3,26 @@
 #------------------------------------------------------------------------------
 # Naming Information
 #------------------------------------------------------------------------------
+output "project_id" {
+  description = "GCP project ID"
+  value       = var.project_id
+}
+
+output "region" {
+  description = "GCP region"
+  value       = var.region
+}
+
+output "environment" {
+  description = "Environment name"
+  value       = var.environment
+}
+
+output "langsmith_namespace" {
+  description = "Kubernetes namespace for LangSmith"
+  value       = var.langsmith_namespace
+}
+
 output "name_prefix" {
   description = "Name prefix used for all resources"
   value       = var.name_prefix
