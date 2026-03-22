@@ -41,59 +41,39 @@ kubectl delete crd lgps.apps.langchain.ai
 ## Step 2 — Uninstall LangSmith Helm Release
 
 ```bash
-# Uninstall the Helm release
+cd terraform/gcp
+make uninstall
+```
+
+Or manually:
+
+```bash
 helm uninstall langsmith -n langsmith
-
-# Verify all pods are removed
-kubectl get pods -n langsmith
-
-# Delete the namespace (removes remaining ConfigMaps, Secrets, PVCs)
-kubectl delete namespace langsmith
+kubectl get pods -n langsmith   # verify all pods removed
 ```
 
 ---
 
-## Step 3 — Remove Kubernetes Bootstrap Resources
+## Step 3 — Destroy GCP Infrastructure
 
-```bash
-# Uninstall KEDA
-helm uninstall keda -n keda
-kubectl delete namespace keda
+First, disable deletion protection in `terraform.tfvars`:
 
-# Uninstall cert-manager
-helm uninstall cert-manager -n cert-manager
-kubectl delete namespace cert-manager
-
-# Uninstall Envoy Gateway
-helm uninstall envoy-gateway -n envoy-gateway-system
-kubectl delete namespace envoy-gateway-system
+```hcl
+gke_deletion_protection      = false
+postgres_deletion_protection = false
 ```
 
----
-
-## Step 4 — Destroy GCP Infrastructure
-
-Run from the `gcp/infra/langsmith` directory:
+Then:
 
 ```bash
-cd gcp/infra/langsmith
-
-# Preview what will be destroyed
-terraform plan -destroy
-
-# Destroy all resources
-terraform destroy
+cd terraform/gcp
+make apply    # apply the deletion-protection change
+make destroy  # destroy all infrastructure
 ```
 
-Terraform will destroy in dependency order:
-- LangSmith Helm resources
-- GKE cluster
-- Cloud SQL instance
-- Memorystore Redis
-- GCS bucket
-- VPC and networking
+Terraform destroys in dependency order: Helm resources → GKE → Cloud SQL → Memorystore → GCS bucket → VPC.
 
-> **Data warning:** `terraform destroy` permanently deletes the Cloud SQL database and GCS bucket contents. Export any data you need to retain before proceeding.
+> **Data warning:** `terraform destroy` permanently deletes the Cloud SQL database and GCS bucket contents (unless `force_destroy = false` is set on the bucket). Export any data you need to retain before proceeding.
 
 ---
 
