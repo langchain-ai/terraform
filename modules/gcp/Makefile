@@ -6,7 +6,7 @@
 # Full deploy:     make deploy-all
 # Where am I?      make status
 
-.PHONY: help quickstart status status-quick setup-env init plan apply destroy \
+.PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy \
         preflight kubeconfig \
         init-values deploy uninstall deploy-all
 
@@ -42,6 +42,9 @@ setup-env: ## Set up secrets in Secret Manager (prints the source command to run
 		echo "    \033[36msource $(INFRA_DIR)/scripts/setup-env.sh\033[0m"; \
 	fi
 	@echo ""
+
+secrets: ## Interactive Secret Manager tool (list/get/set/validate/delete)
+	$(INFRA_DIR)/scripts/manage-secrets.sh
 
 init: ## terraform init (infra)
 	terraform -chdir=$(INFRA_DIR) init
