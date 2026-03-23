@@ -21,6 +21,10 @@ resource "kubernetes_service_account" "langsmith" {
     name      = "langsmith-ksa"
     namespace = kubernetes_namespace.langsmith.metadata[0].name
 
+    annotations = var.workload_identity_gsa_email != "" ? {
+      "iam.gke.io/gcp-service-account" = var.workload_identity_gsa_email
+    } : {}
+
     labels = merge(var.labels, {
       "component" = "service-account"
     })

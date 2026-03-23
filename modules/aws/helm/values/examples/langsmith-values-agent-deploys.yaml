@@ -17,7 +17,7 @@ config:
     tlsEnabled: false
 
 # Resource sizing for shared components (backend, frontend, playground, aceBackend)
-# is handled by the sizing files (langsmith-values-sizing-ha.yaml or langsmith-values-sizing-light.yaml).
+# is handled by the sizing files (langsmith-values-sizing-{production,production-large,dev}.yaml).
 # Do not set replicaCount or resources for those components here — it silently
 # overrides HPA/autoscaling settings from the sizing file because this file
 # is loaded after them in Helm's values merge order.

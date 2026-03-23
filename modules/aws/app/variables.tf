@@ -135,13 +135,13 @@ variable "helm_values_path" {
 #------------------------------------------------------------------------------
 
 variable "sizing" {
-  description = "Resource sizing profile: ha (production), light (reduced for POC/test), or none (chart defaults)"
+  description = "Resource sizing profile: production (~20 users, ~100 traces/sec), production-large (~50 users, ~1000 traces/sec), dev (single-replica, minimal resources), or none (chart defaults). See https://docs.langchain.com/langsmith/self-host-scale"
   type        = string
-  default     = "ha"
+  default     = "production"
 
   validation {
-    condition     = contains(["ha", "light", "none"], var.sizing)
-    error_message = "sizing must be one of: ha, light, none"
+    condition     = contains(["production", "production-large", "dev", "none"], var.sizing)
+    error_message = "sizing must be one of: production, production-large, dev, none"
   }
 }
 
@@ -189,6 +189,18 @@ variable "enable_agent_builder" {
 
 variable "enable_insights" {
   description = "Enable Insights (requires external ClickHouse)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_polly" {
+  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_agent_deploys = true."
+  type        = bool
+  default     = false
+}
+
+variable "enable_usage_telemetry" {
+  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)"
   type        = bool
   default     = false
 }

@@ -47,6 +47,9 @@ locals {
     } : {},
     local.alb_arn != null && local.alb_arn != "" ? {
       "alb.ingress.kubernetes.io/load-balancer-arn" = local.alb_arn
+      # group.name binds the ingress to the pre-provisioned ALB. Without this,
+      # the controller may create a new ALB on each ingress reconciliation.
+      "alb.ingress.kubernetes.io/group.name" = "${local.name_prefix}-${local.environment}"
     } : {},
   )
 
@@ -113,6 +116,10 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_agent_builder || var.enable_agent_deploys
       error_message = "enable_agent_builder requires enable_agent_deploys = true"
+    }
+    precondition {
+      condition     = !var.enable_polly || var.enable_agent_deploys
+      error_message = "enable_polly requires enable_agent_deploys = true"
     }
     precondition {
       condition     = !var.enable_insights || var.clickhouse_host != ""

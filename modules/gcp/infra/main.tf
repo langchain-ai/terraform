@@ -9,51 +9,6 @@
 #   terraform plan -var="project_id=your-project-id" -var="name_prefix=mycompany"
 #   terraform apply -var="project_id=your-project-id" -var="name_prefix=mycompany"
 
-terraform {
-  required_version = ">= 1.5.0"
-
-  required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 5.0"
-    }
-    google-beta = {
-      source  = "hashicorp/google-beta"
-      version = "~> 5.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.25"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.12"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
-    time = {
-      source  = "hashicorp/time"
-      version = "~> 0.10"
-    }
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.2"
-    }
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.4"
-    }
-  }
-
-  # Uncomment to use remote state (RECOMMENDED for production and teams)
-  # backend "gcs" {
-  #   bucket = "your-terraform-state-bucket"
-  #   prefix = "langsmith/state"
-  # }
-}
-
 #------------------------------------------------------------------------------
 # Providers
 #------------------------------------------------------------------------------
@@ -71,21 +26,20 @@ provider "google-beta" {
   default_labels = local.common_labels
 }
 
-# Configure Kubernetes provider
-# Uses try() to fallback to module outputs if data source isn't available yet
-# This allows plan to work even when cluster doesn't exist
+# Configure Kubernetes provider.
+# Use module outputs directly so first plan works before cluster creation.
 provider "kubernetes" {
-  host                   = try("https://${data.google_container_cluster.gke.endpoint}", "https://${module.gke_cluster.endpoint}")
+  host                   = "https://${module.gke_cluster.endpoint}"
   token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = try(base64decode(data.google_container_cluster.gke.master_auth[0].cluster_ca_certificate), base64decode(module.gke_cluster.ca_certificate))
+  cluster_ca_certificate = base64decode(module.gke_cluster.ca_certificate)
 }
 
 # Configure Helm provider
 provider "helm" {
   kubernetes {
-    host                   = try("https://${data.google_container_cluster.gke.endpoint}", "https://${module.gke_cluster.endpoint}")
+    host                   = "https://${module.gke_cluster.endpoint}"
     token                  = data.google_client_config.default.access_token
-    cluster_ca_certificate = try(base64decode(data.google_container_cluster.gke.master_auth[0].cluster_ca_certificate), base64decode(module.gke_cluster.ca_certificate))
+    cluster_ca_certificate = base64decode(module.gke_cluster.ca_certificate)
   }
 }
 
@@ -99,56 +53,14 @@ data "google_project" "current" {
   project_id = var.project_id
 }
 
-# Wait for GKE cluster to be fully ready and API server accessible
-resource "null_resource" "wait_for_cluster" {
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Waiting for GKE cluster to be ready..."
-      
-      # Wait for cluster to be in RUNNING state
-      for i in {1..60}; do
-        STATUS=$(gcloud container clusters describe ${module.gke_cluster.cluster_name} \
-          --region ${var.region} \
-          --project ${var.project_id} \
-          --format="value(status)" 2>/dev/null || echo "UNKNOWN")
-        if [ "$STATUS" = "RUNNING" ]; then
-          echo "Cluster status: RUNNING"
-          break
-        fi
-        echo "Waiting for cluster status... ($i/60) - Current: $STATUS"
-        sleep 10
-      done
-      
-      # Wait for API server to be accessible
-      echo "Waiting for API server to be accessible..."
-      for i in {1..30}; do
-        if gcloud container clusters get-credentials ${module.gke_cluster.cluster_name} \
-          --region ${var.region} \
-          --project ${var.project_id} >/dev/null 2>&1; then
-          if kubectl cluster-info >/dev/null 2>&1; then
-            echo "API server is accessible!"
-            exit 0
-          fi
-        fi
-        echo "Waiting for API server... ($i/30)"
-        sleep 5
-      done
-      
-      echo "ERROR: API server did not become accessible in time"
-      exit 1
-    EOT
-  }
+# Wait for GKE API server to be fully ready after cluster creation.
+# The google_container_cluster resource waits until RUNNING state, but the
+# API server needs a short additional window before accepting requests.
+# time_sleep works in CI environments without gcloud/kubectl in PATH.
+resource "time_sleep" "wait_for_cluster" {
+  create_duration = "90s"
 
   depends_on = [module.gke_cluster]
-}
-
-# Get GKE cluster information (after it's ready)
-data "google_container_cluster" "gke" {
-  name     = module.gke_cluster.cluster_name
-  location = var.region
-  project  = var.project_id
-
-  depends_on = [null_resource.wait_for_cluster]
 }
 
 #------------------------------------------------------------------------------
@@ -163,6 +75,63 @@ resource "random_id" "suffix" {
     project_id  = var.project_id
     name_prefix = var.name_prefix
     environment = var.environment
+  }
+}
+
+locals {
+  # Must match modules/iam account_id format.
+  workload_identity_gsa_account_id = "${var.name_prefix}-langsmith"
+  workload_identity_gsa_email      = "${local.workload_identity_gsa_account_id}@${var.project_id}.iam.gserviceaccount.com"
+}
+
+#------------------------------------------------------------------------------
+# Input Validation
+# Cross-variable checks that can't be expressed in variable validation blocks.
+# These fire at plan time with a clear error message.
+#------------------------------------------------------------------------------
+resource "terraform_data" "validate_inputs" {
+  depends_on = [google_project_service.apis]
+
+  lifecycle {
+    precondition {
+      condition     = var.postgres_source != "external" || var.postgres_password != ""
+      error_message = "postgres_password is required when postgres_source = 'external'. Set TF_VAR_postgres_password in your environment."
+    }
+
+    precondition {
+      condition     = var.tls_certificate_source != "letsencrypt" || var.letsencrypt_email != ""
+      error_message = "letsencrypt_email is required when tls_certificate_source = 'letsencrypt'."
+    }
+
+    precondition {
+      condition     = var.tls_certificate_source != "existing" || (var.tls_certificate_crt != "" && var.tls_certificate_key != "")
+      error_message = "tls_certificate_crt and tls_certificate_key are required when tls_certificate_source = 'existing'."
+    }
+
+    precondition {
+      condition     = !var.enable_agent_builder || var.enable_deployments
+      error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
+    }
+
+    precondition {
+      condition     = var.clickhouse_source == "in-cluster" || var.clickhouse_host != ""
+      error_message = "clickhouse_host is required when clickhouse_source is 'langsmith-managed' or 'external'."
+    }
+
+    precondition {
+      condition     = var.clickhouse_source == "in-cluster" || var.clickhouse_password != ""
+      error_message = "clickhouse_password is required when clickhouse_source is 'langsmith-managed' or 'external'."
+    }
+
+    precondition {
+      condition     = !var.enable_dns_module || var.dns_create_zone || var.dns_existing_zone_name != ""
+      error_message = "dns_existing_zone_name is required when enable_dns_module = true and dns_create_zone = false."
+    }
+
+    precondition {
+      condition     = !var.enable_polly || var.enable_deployments
+      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
+    }
   }
 }
 
@@ -351,6 +320,54 @@ module "storage" {
 }
 
 #------------------------------------------------------------------------------
+# IAM Module (Optional)
+#------------------------------------------------------------------------------
+module "iam" {
+  source = "./modules/iam"
+  count  = var.enable_gcp_iam_module ? 1 : 0
+
+  gcp_project = var.project_id
+  project     = var.name_prefix
+  environment = var.environment
+
+  namespace            = var.langsmith_namespace
+  service_account_name = "langsmith-ksa"
+  gcs_bucket_name      = module.storage.bucket_name
+}
+
+#------------------------------------------------------------------------------
+# Secret Manager Module (Optional)
+#------------------------------------------------------------------------------
+module "secrets" {
+  source = "./modules/secrets"
+  count  = var.enable_secret_manager_module ? 1 : 0
+
+  gcp_project = var.project_id
+  project     = var.name_prefix
+  environment = var.environment
+
+  postgres_password = var.postgres_source == "external" ? module.cloudsql[0].password : var.postgres_password
+  redis_password    = ""
+}
+
+#------------------------------------------------------------------------------
+# DNS Module (Optional)
+#------------------------------------------------------------------------------
+module "dns" {
+  source = "./modules/dns"
+  count  = var.enable_dns_module ? 1 : 0
+
+  gcp_project = var.project_id
+  project     = var.name_prefix
+  environment = var.environment
+
+  domain_name        = var.langsmith_domain
+  create_zone        = var.dns_create_zone
+  existing_zone_name = var.dns_existing_zone_name
+  create_certificate = var.dns_create_certificate
+}
+
+#------------------------------------------------------------------------------
 # K8s Bootstrap Module
 #------------------------------------------------------------------------------
 module "k8s_bootstrap" {
@@ -360,11 +377,12 @@ module "k8s_bootstrap" {
   environment = var.environment
 
   # Namespace configuration
-  langsmith_namespace = var.langsmith_namespace
+  langsmith_namespace         = var.langsmith_namespace
+  workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
 
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
-  postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}" : ""
+  postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}?sslmode=require" : ""
 
   # Redis connection - only when using external Redis
   use_managed_redis    = var.redis_source == "external"
@@ -404,7 +422,7 @@ module "k8s_bootstrap" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [null_resource.wait_for_cluster, module.cloudsql]
+  depends_on = [time_sleep.wait_for_cluster, module.cloudsql, module.iam]
 }
 
 #------------------------------------------------------------------------------
@@ -425,5 +443,5 @@ module "ingress" {
   tls_certificate_source = var.tls_certificate_source
   tls_secret_name        = var.tls_secret_name
 
-  depends_on = [null_resource.wait_for_cluster, module.k8s_bootstrap]
+  depends_on = [time_sleep.wait_for_cluster, module.k8s_bootstrap]
 }

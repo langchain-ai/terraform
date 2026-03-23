@@ -21,7 +21,7 @@ source "$INFRA_DIR/scripts/_common.sh"
 # Surfaces non-ParameterNotFound errors (e.g. expired credentials) to stderr.
 _ssm_key_exists() {
   local _err
-  _err=$(aws ssm get-parameter --name "$1" --query 'Parameter.Name' --output text 2>&1) && return 0
+  _err=$(aws ssm get-parameter --name "$1" --region "$_region" --query 'Parameter.Name' --output text 2>&1) && return 0
   if echo "$_err" | grep -q "ParameterNotFound"; then
     return 1
   fi
@@ -111,6 +111,12 @@ $(if _ssm_key_exists "${_ssm_prefix}/deployments-encryption-key"; then cat <<DEO
       remoteRef:
         key: ${_ssm_prefix}/deployments-encryption-key
 DEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/polly-encryption-key"; then cat <<PEOF
+    - secretKey: polly_encryption_key
+      remoteRef:
+        key: ${_ssm_prefix}/polly-encryption-key
+PEOF
 fi)
 EOF
 

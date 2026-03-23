@@ -1,0 +1,14 @@
+# Polly — AI-powered evaluation and monitoring.
+# Requires config.deployment.enabled = true (LangGraph Platform).
+# Encryption key is stored in the langsmith-config K8s Secret (via ESO from SSM).
+config:
+  polly:
+    enabled: true
+    agent:
+      resources:
+        cpu: 2
+        cpuLimit: 4
+        memoryMb: 4096
+        memoryLimitMb: 8192
+        minScale: 1
+        maxScale: 5

@@ -1,0 +1,11 @@
+# Remote backend configuration for the app module.
+#
+# Copy this to backend.tf and fill in your values.
+# Use the same GCS bucket as your infra/ backend (different prefix).
+#
+# terraform {
+#   backend "gcs" {
+#     bucket = "your-tf-state-bucket"
+#     prefix = "langsmith/app"
+#   }
+# }

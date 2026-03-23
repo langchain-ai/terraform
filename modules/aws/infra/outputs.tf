@@ -203,6 +203,11 @@ output "enable_insights" {
   value       = var.enable_insights
 }
 
+output "enable_polly" {
+  description = "Whether Polly addon is enabled"
+  value       = var.enable_polly
+}
+
 #------------------------------------------------------------------------------
 # Resource Summary
 #------------------------------------------------------------------------------
@@ -222,6 +227,7 @@ output "resource_summary" {
     deployments        = var.enable_deployments
     agent_builder      = var.enable_agent_builder
     insights           = var.enable_insights
+    polly              = var.enable_polly
   }
 }
 

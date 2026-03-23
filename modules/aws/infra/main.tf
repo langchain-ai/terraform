@@ -74,6 +74,11 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_agent_builder || var.enable_deployments
       error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
     }
+
+    precondition {
+      condition     = !var.enable_polly || var.enable_deployments
+      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
+    }
   }
 }
 

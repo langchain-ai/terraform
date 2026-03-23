@@ -2,6 +2,105 @@
 
 ---
 
+## First-Time Setup
+
+```bash
+cd terraform/gcp
+
+# Interactive wizard — generates terraform.tfvars from guided prompts
+make quickstart
+
+# Set up secrets in Secret Manager (auto-generates passwords + Fernet keys)
+# Must be sourced so it can export TF_VAR_* into your shell
+source infra/scripts/setup-env.sh
+
+# Verify secrets are stored correctly
+make secrets        # → infra/scripts/manage-secrets.sh validate
+
+# Deploy infrastructure
+make init
+make plan
+make apply
+
+# Generate Helm values from Terraform outputs
+make init-values    # → helm/scripts/init-values.sh
+
+# Deploy LangSmith
+make deploy         # → helm/scripts/deploy.sh
+```
+
+---
+
+## Day-2 Operations
+
+```bash
+# Check deployment state and get next-step guidance
+make status              # full check
+make status-quick        # skip Secret Manager and K8s queries
+
+# Re-deploy after changing Helm values or upgrading chart version
+make deploy
+
+# Re-generate Helm values after Terraform changes
+make init-values
+
+# Manage Secret Manager secrets interactively
+make secrets             # list/get/set/validate/delete
+
+# Update kubeconfig for the GKE cluster
+make kubeconfig
+```
+
+---
+
+## Enable Optional Addons
+
+Set the feature flags in `terraform.tfvars`, then `make init-values && make deploy`. `init-values.sh` copies the matching example file into `helm/values/` automatically.
+
+```hcl
+# terraform.tfvars
+enable_deployments   = true
+enable_agent_builder = true   # requires enable_deployments = true
+enable_insights      = true
+enable_polly         = true   # requires enable_deployments = true + Polly license entitlement
+
+# Usage telemetry (optional)
+enable_usage_telemetry = true
+```
+
+To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
+
+```bash
+cp helm/values/examples/langsmith-values-agent-deploys.yaml helm/values/
+cp helm/values/examples/langsmith-values-agent-builder.yaml helm/values/
+cp helm/values/examples/langsmith-values-insights.yaml      helm/values/
+cp helm/values/examples/langsmith-values-polly.yaml         helm/values/
+
+make deploy
+```
+
+## Sizing Profiles
+
+Set `sizing_profile` in `terraform.tfvars` before running `make init-values`:
+
+```hcl
+sizing_profile = "production"   # default | minimum | dev | production | production-large
+```
+
+| Profile | When to use |
+|---|---|
+| `default` | Chart defaults — quick tests, no overlay applied |
+| `minimum` | Absolute floor — fits e2-standard-4; use for cost parking or CI smoke tests |
+| `dev` | Single replica, minimal resources — dev/CI environments |
+| `production` | Multi-replica with HPA — recommended for real workloads |
+| `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
+
+After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+
+> **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
+
+---
+
 ## Pass 1 — Terraform Infrastructure
 
 ```bash
@@ -10,21 +109,25 @@ gcloud auth login
 gcloud config set project <your-project-id>
 gcloud auth application-default login
 
+# Recommended workflow
+cd terraform/gcp
+make preflight
+make init
+make plan
+make apply
+
 # Configure
 cd terraform/gcp/infra
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your values
 
-# Deploy
+# Direct Terraform (equivalent)
 terraform init
 terraform plan -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 
 # Get cluster credentials
-gcloud container clusters get-credentials \
-  $(terraform output -raw cluster_name) \
-  --region us-west2 \
-  --project <your-project-id>
+make kubeconfig
 
 # Verify
 kubectl get nodes
@@ -39,55 +142,18 @@ kubectl get secrets -n langsmith
 ## Pass 2 — LangSmith Helm Deploy
 
 ```bash
-# Use the generated command (recommended)
-cd terraform/gcp/infra
-terraform output -raw helm_install_command
+# Recommended: use the scripted deployment
+cd terraform/gcp
+make init-values   # generates values-overrides.yaml from Terraform outputs
+make deploy        # runs helm upgrade --install with the full values chain
 
-# Or run manually:
-export API_KEY_SALT=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 32)
-export AGENT_BUILDER_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export INSIGHTS_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export ADMIN_EMAIL="admin@example.com"
-export ADMIN_PASSWORD="<strong-password>"
-# Create HMAC key in GCP Console: Storage > Settings > Interoperability
-export GCS_ACCESS_KEY="<hmac-access-key>"
-export GCS_ACCESS_SECRET="<hmac-secret>"
-
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
-
-helm upgrade --install langsmith langchain/langsmith \
-  --namespace langsmith --create-namespace \
-  -f ../helm/values/values.yaml \
-  -f ../helm/values/values-overrides.yaml \
-  --set config.langsmithLicenseKey="<your-license-key>" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="<your-langsmith-domain>" \
-  --set config.basicAuth.initialOrgAdminEmail="$ADMIN_EMAIL" \
-  --set config.basicAuth.initialOrgAdminPassword="$ADMIN_PASSWORD" \
-  --set config.agentBuilder.encryptionKey="$AGENT_BUILDER_ENCRYPTION_KEY" \
-  --set config.insights.encryptionKey="$INSIGHTS_ENCRYPTION_KEY" \
-  --set config.blobStorage.bucketName="$(terraform output -raw storage_bucket_name)" \
-  --set config.blobStorage.accessKey="$GCS_ACCESS_KEY" \
-  --set config.blobStorage.accessKeySecret="$GCS_ACCESS_SECRET" \
-  --set gateway.enabled=true \
-  --set ingress.enabled=false \
-  --wait --timeout 15m
-
-# Get Gateway IP for DNS
-kubectl get svc -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
-  -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}'
-
-# Verify pods
+# Check what was deployed
+helm status langsmith -n langsmith
 kubectl get pods -n langsmith
 
-# Check TLS certificate
-kubectl get certificate -n langsmith
+# Get Gateway IP for DNS
+kubectl get gateway -n langsmith \
+  -o jsonpath='{.items[0].status.addresses[0].value}'
 ```
 
 ---
@@ -95,23 +161,17 @@ kubectl get certificate -n langsmith
 ## Pass 3 — LangSmith Deployments (Optional)
 
 ```bash
-# Add to terraform.tfvars:
-#   enable_langsmith_deployment = true
+# Set in terraform.tfvars, then re-apply
+enable_deployments   = true
+enable_agent_builder = true   # if you have the Agent Builder entitlement
 
-cd terraform/gcp/infra
-terraform apply -var-file=terraform.tfvars
+make apply
+make deploy   # re-deploys with addon overlay files
 
+# Verify KEDA and operator
 kubectl get pods -n keda
-
-helm upgrade langsmith langchain/langsmith \
-  --namespace langsmith \
-  -f ../helm/values/values.yaml \
-  -f ../helm/values/values-overrides.yaml \
-  --set config.deployment.enabled=true \
-  --set config.deployment.url="https://<your-langsmith-domain>" \
-  --wait --timeout 10m
-
 kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
+kubectl get lgp -n langsmith
 ```
 
 ---
@@ -137,7 +197,7 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 # Stream backend logs
 kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
 
-# Gateway / ingress
+# Gateway / HTTPRoute
 kubectl get gateway -n langsmith
 kubectl get httproute -n langsmith
 kubectl get svc -n envoy-gateway-system
@@ -147,6 +207,9 @@ kubectl get certificate -n langsmith
 kubectl get challenges -n langsmith
 kubectl describe certificate <cert-name> -n langsmith
 kubectl get clusterissuer
+
+# Workload Identity
+kubectl get serviceaccount langsmith-ksa -n langsmith -o yaml | grep annotation -A5
 
 # Helm status
 helm status langsmith -n langsmith
@@ -184,11 +247,18 @@ gcloud redis instances describe <instance-name> --region <region> --format="valu
 gsutil ls gs://<bucket-name>
 gsutil iam get gs://<bucket-name>
 
+# Check Workload Identity binding
+gcloud iam service-accounts get-iam-policy <gsa-email> --project <project-id>
+
 # Check enabled APIs
 gcloud services list --enabled --project <project-id>
 
 # Check VPC peering
 gcloud services vpc-peerings list --network <vpc-name> --project <project-id>
+
+# Check Secret Manager secrets
+gcloud secrets list --project <project-id> --filter="name:langsmith"
+gcloud secrets versions access latest --secret=<secret-id> --project <project-id>
 ```
 
 ---
@@ -199,7 +269,7 @@ gcloud services vpc-peerings list --network <vpc-name> --project <project-id>
 # Initialize
 terraform init
 
-# Plan with var file
+# Plan
 terraform plan -var-file=terraform.tfvars
 
 # Apply
@@ -214,7 +284,6 @@ terraform output
 # Show a specific output
 terraform output -raw cluster_name
 terraform output -raw storage_bucket_name
-terraform output -raw helm_install_command
 
 # Show resource state
 terraform state list
@@ -233,12 +302,10 @@ terraform refresh -var-file=terraform.tfvars
 kubectl delete lgp --all -n langsmith 2>/dev/null || true
 
 # 2. Uninstall LangSmith
-helm uninstall langsmith -n langsmith --wait
+make uninstall    # or: helm/scripts/uninstall.sh
 
-# 3. Delete namespace
-kubectl delete namespace langsmith --timeout=60s
-
-# 4. Set deletion protection = false in terraform.tfvars, then:
-cd terraform/gcp/infra
-terraform destroy
+# 3. Set deletion protection = false in terraform.tfvars, then:
+make destroy
 ```
+
+> Set `gke_deletion_protection = false` and `postgres_deletion_protection = false` before running `make destroy` in production.

@@ -19,7 +19,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
-| **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
+| **Dev** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
 | **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
@@ -123,11 +123,13 @@ aws/
 │   └── values/
 │       ├── examples/                                    ← Reference templates (init-values.sh copies from here)
 │       │   ├── langsmith-values.yaml                    ← Base AWS values
-│       │   ├── langsmith-values-sizing-ha.yaml          ← HA sizing (production)
-│       │   ├── langsmith-values-sizing-light.yaml       ← Light sizing (POC/test)
+│       │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
+│       │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
+│       │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
 │       │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
 │       │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
-│       │   └── langsmith-values-insights.yaml           ← ClickHouse Insights
+│       │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
+│       │   └── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
 │       ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
 │       ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
 │       └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
@@ -251,11 +253,11 @@ Best for: most deployments. Interactive prompts guide you through sizing and pro
 ```bash
 cd terraform/aws
 
-make init-values       # prompts: admin email, sizing (ha/light/none), product tier
+make init-values       # prompts: admin email; reads sizing + addons from terraform.tfvars
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-`init-values.sh` prompts for your sizing profile and which products to enable, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+`init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
 ### Option B: Terraform-managed Helm deploy
 
@@ -285,10 +287,11 @@ The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_
 
 ```hcl
 admin_email          = "admin@example.com"
-sizing               = "ha"           # ha | light | none
+sizing               = "production"   # production | production-large | dev | none
 enable_agent_deploys = true
 enable_agent_builder = true
 enable_insights      = true
+enable_polly         = true
 clickhouse_host      = "clickhouse.example.com"
 ```
 
@@ -422,6 +425,12 @@ kubectl get ingress -n langsmith
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
 | `cloudtrail_log_retention_days` | `365` | no | Days to retain CloudTrail logs |
 | `create_waf` | `false` | no | Attach WAFv2 Web ACL to ALB |
+| `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
+| `enable_deployments` | `false` | no | Enable LangGraph Platform (listener, operator, host-backend) |
+| `enable_agent_builder` | `false` | no | Enable Agent Builder (requires `enable_deployments`) |
+| `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
+| `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
+| `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

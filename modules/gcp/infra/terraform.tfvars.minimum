@@ -1,0 +1,70 @@
+# =============================================================================
+# LangSmith on GCP — Minimum Profile
+# =============================================================================
+# ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD.
+#
+# Smallest possible footprint: single e2-standard-4 node, reduced Cloud SQL
+# and Memorystore instance types, minimum sizing profile for Helm. Exists to
+# keep LangSmith alive at the lowest possible cost for cost parking, CI smoke
+# tests, or single-user demos.
+#
+# Will break under any meaningful traffic. OOM kills, timeouts, and degraded
+# UX are expected and acceptable.
+#
+# Copy to terraform.tfvars and change name_prefix/project_id to get started:
+#
+#   cp terraform.tfvars.minimum terraform.tfvars
+#
+# For the full annotated reference with every option explained, see:
+#   terraform.tfvars.example
+# =============================================================================
+
+#------------------------------------------------------------------------------
+# REQUIRED — Change these
+#------------------------------------------------------------------------------
+project_id  = "your-gcp-project-id"
+name_prefix = "myco"          # 1-11 chars, lowercase. Your company/team name.
+environment = "dev"
+region      = "us-west2"
+zone        = "us-west2-a"
+
+#------------------------------------------------------------------------------
+# GKE — single node, autoscales to 2 during deploys
+#------------------------------------------------------------------------------
+gke_machine_type    = "e2-standard-4"   # 4 vCPU, 16 GB — floor for LangSmith
+gke_node_count      = 1
+gke_min_nodes       = 1
+gke_max_nodes       = 2
+gke_deletion_protection = false         # required for clean terraform destroy
+
+#------------------------------------------------------------------------------
+# External Postgres + Redis (smallest managed instances)
+#------------------------------------------------------------------------------
+postgres_source              = "external"
+postgres_tier                = "db-custom-1-3840"   # 1 vCPU, 3.75 GB — bare minimum
+postgres_disk_size           = 20
+postgres_deletion_protection = false                 # required for clean terraform destroy
+
+redis_source        = "external"
+redis_memory_size   = 1
+
+#------------------------------------------------------------------------------
+# ClickHouse — in-cluster for minimum
+#------------------------------------------------------------------------------
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# TLS — start with HTTP
+#------------------------------------------------------------------------------
+tls_certificate_source = "none"
+
+#------------------------------------------------------------------------------
+# Storage — short retention, this isn't production data
+#------------------------------------------------------------------------------
+storage_ttl_short_days = 7
+storage_ttl_long_days  = 30
+
+#------------------------------------------------------------------------------
+# Sizing — minimum profile (rock-bottom resource requests)
+#------------------------------------------------------------------------------
+sizing_profile = "minimum"

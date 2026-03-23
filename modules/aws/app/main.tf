@@ -87,6 +87,11 @@ data "aws_ssm_parameter" "deployments_key" {
   name  = "${local.ssm_prefix}/deployments-encryption-key"
 }
 
+data "aws_ssm_parameter" "polly_key" {
+  count = var.enable_polly ? 1 : 0
+  name  = "${local.ssm_prefix}/polly-encryption-key"
+}
+
 # ── ESO: ExternalSecret ──────────────────────────────────────────────────────
 # Syncs secrets from SSM → K8s Secret (langsmith-config).
 # deploy.sh does this with kubectl apply; here we manage it in Terraform.
@@ -152,6 +157,13 @@ resource "kubernetes_manifest" "external_secret" {
             remoteRef = { key = "${local.ssm_prefix}/insights-encryption-key" }
           },
         ] : [],
+        # Polly encryption key — only if addon enabled
+        var.enable_polly ? [
+          {
+            secretKey = "polly_encryption_key"
+            remoteRef = { key = "${local.ssm_prefix}/polly-encryption-key" }
+          },
+        ] : [],
       )
     }
   }
@@ -191,7 +203,12 @@ resource "helm_release" "langsmith" {
   chart            = "langsmith"
   version          = var.chart_version != "" ? var.chart_version : null
   timeout          = var.helm_timeout
-  wait             = true
+
+  # Do NOT use wait = true. The chart's post-install bootstrap job deploys
+  # operator-managed agents (clio, polly, agent-builder) which can take 10+
+  # minutes on a cold cluster with autoscaling. Terraform marks the release as
+  # failed if the job exceeds the timeout — even though all workloads are healthy.
+  wait = false
 
   force_update = var.helm_force_update
 
@@ -203,12 +220,14 @@ resource "helm_release" "langsmith" {
     # 2. Dynamic overrides (hostname, IRSA annotations, S3 bucket, region)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
-    var.sizing == "ha"    ? [file("${local.values_path}/langsmith-values-sizing-ha.yaml")] : [],
-    var.sizing == "light" ? [file("${local.values_path}/langsmith-values-sizing-light.yaml")] : [],
+    var.sizing == "production"       ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
+    var.sizing == "production-large" ? [file("${local.values_path}/langsmith-values-sizing-production-large.yaml")] : [],
+    var.sizing == "dev"              ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
     # 4. Product addons
     var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
     var.enable_insights      ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
+    var.enable_polly         ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
   )
 }
 
@@ -265,10 +284,13 @@ locals {
           apiURL     = "https://s3.${local.region}.amazonaws.com"
         }
       }
-      commonEnv = [
-        { name = "AWS_REGION", value = local.region },
-        { name = "AWS_DEFAULT_REGION", value = local.region },
-      ]
+      commonEnv = concat(
+        [
+          { name = "AWS_REGION", value = local.region },
+          { name = "AWS_DEFAULT_REGION", value = local.region },
+        ],
+        var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
+      )
     },
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},

@@ -346,6 +346,66 @@ terraform apply -var-file=terraform.tfvars
 # Then redeploy Helm to pick up the new ALB
 ```
 
+### Issue #15 — ALB hostname changed after ingress recreation
+
+**Symptom:** LangSmith URL stops working. Agent deployments stuck in DEPLOYING state.
+DNS records or bookmarks point to an old ALB hostname that no longer resolves.
+
+**Cause:** Deleting the Kubernetes ingress (via `helm uninstall`, `kubectl delete ingress`,
+or namespace deletion) deprovisions the ALB. When the ingress is recreated, a new ALB with
+a different hostname is issued. The `config.deployment.url` in the Helm values still points
+to the old hostname, so the operator's health checks fail and deployments stay stuck.
+
+This also happens if the ALB controller creates a new ALB instead of reusing the
+Terraform pre-provisioned one. The `group.name` annotation is required alongside
+`load-balancer-arn` to prevent this — without it, the controller's behavior is
+inconsistent across ingress reconciliations.
+
+**Prevention:**
+- Ensure `group.name` and `load-balancer-arn` annotations are both set
+  (`init-values.sh` does this automatically when a pre-provisioned ALB exists)
+- Never delete the ingress unless you plan to update all hostname-dependent config
+- Avoid `helm rollback` without `--server-side=false` — the ingress SSA conflict
+  can trigger a delete/recreate cycle
+
+**Fix:**
+```bash
+# 1. Check what hostname the ingress currently has
+kubectl get ingress langsmith-ingress -n langsmith \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+
+# 2. Check what Terraform expects
+terraform output alb_dns_name
+
+# 3. If they differ, re-run init-values.sh to refresh the hostname and redeploy
+make init-values
+make deploy
+```
+
+### Issue #16 — Node group scaling changes not applied by terraform
+
+**Symptom:** Changing `min_size` or `max_size` in `terraform.tfvars` shows
+"No changes" on `terraform plan`.
+
+**Cause:** The ASG was changed out-of-band (e.g. via AWS CLI, console, or
+cluster autoscaler) and the Terraform state already reflects the new values.
+The community EKS module ignores `desired_size` changes (so the autoscaler can
+manage it), but `min_size` and `max_size` should propagate normally.
+
+**Fix:**
+```bash
+# Refresh state to pull real ASG values, then plan
+terraform refresh
+terraform plan
+
+# If you need an immediate change, use the AWS CLI directly
+aws eks update-nodegroup-config \
+  --cluster-name <cluster> \
+  --nodegroup-name <nodegroup> \
+  --scaling-config minSize=3,maxSize=8,desiredSize=5 \
+  --region <region>
+```
+
 ---
 
 ## Diagnostic Commands

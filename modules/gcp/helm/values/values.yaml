@@ -1,40 +1,35 @@
-# LangSmith Helm Chart Values
-# Gateway is managed by Terraform, HTTPRoute is managed by Helm
+# GCP base Helm values for LangSmith.
+#
+# Applied on every deploy alongside values-overrides.yaml.
+# Configures GCP-native integrations: Envoy Gateway (HTTPRoute),
+# and GCS blob storage via the S3-compatible HMAC API.
+#
+# Do NOT put secrets or env-specific values here.
+#   Hostname, admin email, bucket name, WI annotation → values-overrides.yaml (init-values.sh)
+#   Feature addon config (agentBuilder, insights)     → addon overlay files
+#   Resource sizing                                   → langsmith-values-sizing-*.yaml
+#
+# For an annotated reference, see examples/langsmith-values.yaml.
 
 ingress:
-  enabled: false
+  enabled: false  # GCP uses Envoy Gateway (Gateway API), not a K8s Ingress
 
 gateway:
   enabled: true
-  name: ""
+  name: ""        # Filled by init-values.sh from terraform output
   namespace: "envoy-gateway-system"
 
 config:
-  hostname: "langsmith.example.com"
   basePath: ""
   authType: "mixed"
   basicAuth:
     enabled: true
-    initialOrgAdminEmail: "YOUR_ADMIN_EMAIL"
-    initialOrgAdminPassword: "YOUR_ADMIN_PASSWORD"
-  deployment:
-    enabled: true
   blobStorage:
     enabled: true
-    engine: "S3"
-    bucketName: ""
+    engine: "S3"        # GCS exposes an S3-compatible API via HMAC keys
     apiURL: "https://storage.googleapis.com"
-    accessKey: ""
-    accessKeySecret: ""
     s3UsePathStyle: false
-
-  agentBuilder:
-    enabled: true
-    encryptionKey: "YOUR_AGENT_BUILDER_FERNET_KEY"
-
-  insights:
-    enabled: true
-    encryptionKey: "YOUR_INSIGHTS_FERNET_KEY"
+    # bucketName, accessKey, accessKeySecret → values-overrides.yaml
 
 aceBackend:
   deployment:
@@ -241,7 +236,8 @@ playground:
 postgres:
   external:
     enabled: true
-    existingSecretName: "langsmith-postgres-credentials"
+    existingSecretName: "langsmith-postgres"  # created by k8s-bootstrap
+    connectionUrlSecretKey: "connection_url"
 
 queue:
   deployment:
@@ -263,10 +259,5 @@ queue:
 redis:
   external:
     enabled: true
-    existingSecretName: "langsmith-redis-credentials"
-
-agentBuilderToolServer:
-  enabled: true
-
-agentBuilderTriggerServer:
-  enabled: true
+    existingSecretName: "langsmith-redis"  # created by k8s-bootstrap
+    connectionUrlSecretKey: "connection_url"

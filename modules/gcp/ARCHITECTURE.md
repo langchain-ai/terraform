@@ -25,9 +25,9 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | storage | `modules/storage/` | GCS bucket with lifecycle rules for `ttl_s/` (14 days) and `ttl_l/` (400 days) prefixes |
 | k8s-bootstrap | `modules/k8s-bootstrap/` | `langsmith` namespace, K8s secrets for Postgres and Redis URLs, cert-manager Helm release, KEDA Helm release |
 | ingress | `modules/ingress/` | Envoy Gateway Helm release, GatewayClass, HTTPRoute, optional HTTPS Gateway listener |
-| iam | `modules/iam/` | GCP service accounts and Workload Identity IAM bindings for GCS access |
-| dns | `modules/dns/` | Cloud DNS managed zone (optional) |
-| secrets | `modules/secrets/` | Secret Manager secrets for Postgres password and Redis auth |
+| iam | `modules/iam/` | GCP service accounts and Workload Identity IAM bindings for GCS access (wired by default) |
+| dns | `modules/dns/` | Cloud DNS managed zone and managed cert (optional via `enable_dns_module`) |
+| secrets | `modules/secrets/` | Secret Manager secret bundle (optional via `enable_secret_manager_module`) |
 
 ---
 
@@ -137,11 +137,14 @@ google_project_service (APIs enabled)
   └── module.networking
         ├── module.gke_cluster
         │     └── null_resource.wait_for_cluster
-        │           ├── module.cloudsql    (count = postgres_source == "external")
-        │           ├── module.redis       (count = redis_source    == "external")
+        │           ├── module.cloudsql      (count = postgres_source == "external")
+        │           ├── module.redis         (count = redis_source    == "external")
         │           ├── module.storage
+        │           ├── module.iam           (count = enable_gcp_iam_module)
+        │           ├── module.secrets       (count = enable_secret_manager_module)
+        │           ├── module.dns           (count = enable_dns_module)
         │           ├── module.k8s_bootstrap
-        │           └── module.ingress     (count = install_ingress)
+        │           └── module.ingress       (count = install_ingress)
         └── (private_service_connection when external services)
 ```
 

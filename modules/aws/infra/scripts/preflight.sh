@@ -91,9 +91,10 @@ TFVARS="$SCRIPT_DIR/../terraform.tfvars"
 if [[ ! -f "$TFVARS" ]]; then
   error "terraform.tfvars not found at $TFVARS"
   info "Quick start:"
-  info "  cp terraform.tfvars.dev terraform.tfvars      # dev profile"
-  info "  cp terraform.tfvars.prod terraform.tfvars     # prod profile"
-  info "  cp terraform.tfvars.example terraform.tfvars  # full reference"
+  info "  cp terraform.tfvars.minimum terraform.tfvars     # minimum profile (cost parking, CI)"
+  info "  cp terraform.tfvars.dev terraform.tfvars         # dev profile"
+  info "  cp terraform.tfvars.production terraform.tfvars  # production profile"
+  info "  cp terraform.tfvars.example terraform.tfvars     # full reference"
   exit 1
 fi
 success "terraform.tfvars found"

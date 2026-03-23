@@ -10,8 +10,6 @@
 #
 # Prompts for (on first run):
 #   - Admin email
-#   - Sizing profile (ha / light / none)
-#   - Product tier (LangSmith only / +Deployments / +Agent Builder / +Insights)
 #
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
@@ -46,6 +44,8 @@ _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
 _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
 _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
+_clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
+_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 
 if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -69,6 +69,7 @@ echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
+echo "  sizing_profile         = $_sizing_profile"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -131,48 +132,18 @@ else
 fi
 echo ""
 
-# ── Sizing choice ────────────────────────────────────────────────────────────
-_sizing_ha="$VALUES_DIR/langsmith-values-sizing-ha.yaml"
-_sizing_light="$VALUES_DIR/langsmith-values-sizing-light.yaml"
-
-if [[ -f "$_sizing_ha" || -f "$_sizing_light" ]]; then
-  # Sizing already chosen — respect existing choice on re-runs
-  if [[ -f "$_sizing_ha" ]]; then
-    echo "Sizing: HA (existing langsmith-values-sizing-ha.yaml)"
+# ── Sizing profile (from terraform.tfvars) ──────────────────────────────────
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ ! -f "$_sizing_file" ]]; then
+    cp "$_sizing_example" "$_sizing_file"
+    echo "Sizing: ${_sizing_profile} (created langsmith-values-sizing-${_sizing_profile}.yaml)"
   else
-    echo "Sizing: light (existing langsmith-values-sizing-light.yaml)"
+    echo "Sizing: ${_sizing_profile} (existing langsmith-values-sizing-${_sizing_profile}.yaml)"
   fi
-elif [[ "$_first_run" == "true" ]]; then
-  echo "Sizing profile:"
-  echo ""
-  echo "  1) ha    — production (multi-replica, HPA autoscaling)"
-  echo "  2) light — reduced resources for POC/test"
-  echo "  3) none  — chart defaults (no sizing file)"
-  echo ""
-  printf "Choice [1]: "
-  read -r _sizing_choice
-  _sizing_choice="${_sizing_choice:-1}"
-
-  case "$_sizing_choice" in
-    1|ha)
-      cp "$EXAMPLES_DIR/langsmith-values-sizing-ha.yaml" "$_sizing_ha"
-      echo "  Created: langsmith-values-sizing-ha.yaml"
-      ;;
-    2|light)
-      cp "$EXAMPLES_DIR/langsmith-values-sizing-light.yaml" "$_sizing_light"
-      echo "  Created: langsmith-values-sizing-light.yaml"
-      ;;
-    3|none)
-      echo "  No sizing file — using chart defaults."
-      ;;
-    *)
-      echo "ERROR: Invalid choice '$_sizing_choice'. Expected 1, 2, or 3." >&2
-      exit 1
-      ;;
-  esac
 else
-  echo "No sizing file found. To add one:"
-  echo "  cp $EXAMPLES_DIR/langsmith-values-sizing-ha.yaml $VALUES_DIR/"
+  echo "Sizing: chart defaults (sizing_profile = default)"
 fi
 echo ""
 
@@ -180,13 +151,18 @@ echo ""
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
+_polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
 
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
-_tfvar_is_true "enable_deployments"   && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
-_tfvar_is_true "enable_insights"      && _enable_insights=true
+_enable_polly=false
+_enable_usage_telemetry=false
+_tfvar_is_true "enable_deployments"    && _enable_deployments=true
+_tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
+_tfvar_is_true "enable_insights"       && _enable_insights=true
+_tfvar_is_true "enable_polly"          && _enable_polly=true
+_tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -221,42 +197,56 @@ fi
 # Insights
 if [[ "$_enable_insights" == "true" ]]; then
   if [[ ! -f "$_insights_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
-    echo "  ✔ Insights (created langsmith-values-insights.yaml)"
-    echo ""
-    # Prompt for ClickHouse connection details on first creation
-    echo "  Insights requires an external ClickHouse instance."
-    printf "  ClickHouse host: "
-    read -r _ch_host
-    if [[ -z "$_ch_host" ]]; then
-      echo "ERROR: ClickHouse host is required." >&2
-      exit 1
-    fi
-    printf "  ClickHouse port [8123]: "
-    read -r _ch_port
-    _ch_port="${_ch_port:-8123}"
-    if ! [[ "$_ch_port" =~ ^[0-9]+$ ]]; then
-      echo "ERROR: ClickHouse port must be numeric." >&2
-      exit 1
-    fi
-    printf "  ClickHouse database [default]: "
-    read -r _ch_db
-    _ch_db="${_ch_db:-default}"
-    printf "  ClickHouse username [default]: "
-    read -r _ch_user
-    _ch_user="${_ch_user:-default}"
-    printf "  ClickHouse password: "
-    read -rs _ch_pass
-    echo ""
-    printf "  Enable TLS? [Y/n]: "
-    read -r _ch_tls
-    _ch_tls="${_ch_tls:-Y}"
-    [[ "$_ch_tls" =~ ^[Yy] ]] && _ch_tls_val="true" || _ch_tls_val="false"
+    if [[ "$_clickhouse_source" == "in-cluster" ]]; then
+      # In-cluster ClickHouse: the chart deploys it as a StatefulSet.
+      # No external connection config needed — just enable insights.
+      cat > "$_insights_file" <<CHEOF
+# Auto-generated by init-values.sh — in-cluster ClickHouse.
+# ClickHouse runs as a StatefulSet pod in the cluster (dev/POC only).
+# For production, set clickhouse_source = "external" in terraform.tfvars
+# and re-run init-values.sh to configure an external ClickHouse connection.
+config:
+  insights:
+    enabled: true
+CHEOF
+      echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
+    else
+      # External ClickHouse: prompt for connection details on first creation.
+      cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
+      echo "  ✔ Insights (created langsmith-values-insights.yaml)"
+      echo ""
+      echo "  Insights requires an external ClickHouse instance."
+      printf "  ClickHouse host: "
+      read -r _ch_host
+      if [[ -z "$_ch_host" ]]; then
+        echo "ERROR: ClickHouse host is required." >&2
+        exit 1
+      fi
+      printf "  ClickHouse port [8123]: "
+      read -r _ch_port
+      _ch_port="${_ch_port:-8123}"
+      if ! [[ "$_ch_port" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: ClickHouse port must be numeric." >&2
+        exit 1
+      fi
+      printf "  ClickHouse database [default]: "
+      read -r _ch_db
+      _ch_db="${_ch_db:-default}"
+      printf "  ClickHouse username [default]: "
+      read -r _ch_user
+      _ch_user="${_ch_user:-default}"
+      printf "  ClickHouse password: "
+      read -rs _ch_pass
+      echo ""
+      printf "  Enable TLS? [Y/n]: "
+      read -r _ch_tls
+      _ch_tls="${_ch_tls:-Y}"
+      [[ "$_ch_tls" =~ ^[Yy] ]] && _ch_tls_val="true" || _ch_tls_val="false"
 
-    # Write ClickHouse values using existingSecretName pattern.
-    # The password is stored in a K8s Secret, not in the values file.
-    cat > "$_insights_file" <<CHEOF
-# Auto-generated by init-values.sh — ClickHouse connection details.
+      # Write ClickHouse values using existingSecretName pattern.
+      # The password is stored in a K8s Secret, not in the values file.
+      cat > "$_insights_file" <<CHEOF
+# Auto-generated by init-values.sh — external ClickHouse connection.
 # Re-run init-values.sh or edit this file to update.
 # Password is stored in the langsmith-clickhouse K8s Secret (not this file).
 config:
@@ -273,28 +263,45 @@ clickhouse:
     tls: ${_ch_tls_val}
     existingSecretName: "langsmith-clickhouse"
 CHEOF
-    echo "  Updated: langsmith-values-insights.yaml"
-    echo ""
-    echo "  Creating langsmith-clickhouse K8s Secret..."
-    echo "  (deploy.sh will re-apply this if the namespace is recreated)"
-    if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
-      --from-literal=clickhouse_host="${_ch_host}" \
-      --from-literal=clickhouse_port="${_ch_port}" \
-      --from-literal=clickhouse_user="${_ch_user}" \
-      --from-literal=clickhouse_password="${_ch_pass}" \
-      --from-literal=clickhouse_db="${_ch_db}" \
-      --from-literal=clickhouse_tls="${_ch_tls_val}" \
-      --dry-run=client -o yaml | kubectl apply -f -; then
-      echo "  WARNING: Could not create langsmith-clickhouse K8s secret." >&2
-      echo "           Ensure kubectl is configured and re-run, or create the secret manually." >&2
-    else
-      echo "  Secret langsmith-clickhouse created/updated."
+      echo "  Updated: langsmith-values-insights.yaml"
+      echo ""
+      echo "  Creating langsmith-clickhouse K8s Secret..."
+      echo "  (deploy.sh will re-apply this if the namespace is recreated)"
+      if ! kubectl create secret generic langsmith-clickhouse -n "${NAMESPACE:-langsmith}" \
+        --from-literal=clickhouse_host="${_ch_host}" \
+        --from-literal=clickhouse_port="${_ch_port}" \
+        --from-literal=clickhouse_user="${_ch_user}" \
+        --from-literal=clickhouse_password="${_ch_pass}" \
+        --from-literal=clickhouse_db="${_ch_db}" \
+        --from-literal=clickhouse_tls="${_ch_tls_val}" \
+        --dry-run=client -o yaml | kubectl apply -f -; then
+        echo "  WARNING: Could not create langsmith-clickhouse K8s secret." >&2
+        echo "           Ensure kubectl is configured and re-run, or create the secret manually." >&2
+      else
+        echo "  Secret langsmith-clickhouse created/updated."
+      fi
     fi
   else
     echo "  ✔ Insights (existing)"
   fi
 else
   echo "  ✗ Insights (enable_insights = false)"
+fi
+
+# Polly
+if [[ "$_enable_polly" == "true" ]]; then
+  if [[ "$_enable_deployments" != "true" ]]; then
+    echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
+    exit 1
+  fi
+  if [[ ! -f "$_polly_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
+    echo "  ✔ Polly (created langsmith-values-polly.yaml)"
+  else
+    echo "  ✔ Polly (existing)"
+  fi
+else
+  echo "  ✗ Polly (enable_polly = false)"
 fi
 
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
@@ -310,12 +317,15 @@ echo ""
 _ingress_block=""
 _ingress_annotations=()
 
-if [[ "$ALB_SCHEME" == "internal" ]]; then
-  _ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"internal\"")
-fi
+# Always set scheme — the base values file no longer hardcodes it.
+_ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"${ALB_SCHEME}\"")
 
 if [[ -n "$ALB_ARN" ]]; then
   _ingress_annotations+=("    alb.ingress.kubernetes.io/load-balancer-arn: \"${ALB_ARN}\"")
+  # group.name tells the ALB controller to bind to the existing pre-provisioned ALB
+  # instead of creating a new one on each ingress reconciliation. Without this,
+  # ingress recreation provisions a new ALB with a different hostname.
+  _ingress_annotations+=("    alb.ingress.kubernetes.io/group.name: \"${_name_prefix}-${_environment}\"")
 fi
 
 if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
@@ -391,6 +401,11 @@ commonEnv:
     value: "${_region}"
   - name: AWS_DEFAULT_REGION
     value: "${_region}"
+$( [[ "$_enable_usage_telemetry" == "true" ]] && cat <<'TELEMETRY'
+  - name: PHONE_HOME_USAGE_REPORTING_ENABLED
+    value: "true"
+TELEMETRY
+)
 
 # IRSA: annotate each component's service account individually.
 # The chart does not support a global serviceAccount block.

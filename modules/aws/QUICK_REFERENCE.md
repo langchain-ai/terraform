@@ -55,32 +55,32 @@ make kubeconfig
 
 ## Enable Optional Addons
 
-`init-values.sh` prompts for product tier on first run. To add addons later, copy from `examples/`:
+Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the flags, then re-run `init-values` to copy the corresponding values files:
+
+```hcl
+# infra/terraform.tfvars
+enable_deployments   = true    # LangGraph Platform (required for Agent Builder and Polly)
+enable_agent_builder = true    # Agent Builder UI
+enable_insights      = true    # ClickHouse-backed analytics
+enable_polly         = true    # Polly AI eval/monitoring
+enable_usage_telemetry = false # Extended usage telemetry
+```
 
 ```bash
-# Deployments feature (required for Agent Builder)
-cp helm/values/examples/langsmith-values-agent-deploys.yaml \
-   helm/values/langsmith-values-agent-deploys.yaml
-
-# Agent Builder (requires agent-deploys)
-cp helm/values/examples/langsmith-values-agent-builder.yaml \
-   helm/values/langsmith-values-agent-builder.yaml
-
-# ClickHouse Insights
-cp helm/values/examples/langsmith-values-insights.yaml \
-   helm/values/langsmith-values-insights.yaml
-
-# Then redeploy
+make init-values   # copies addon values files based on enable_* flags
 make deploy
 ```
 
-**Sizing**: `init-values.sh` prompts for sizing on first run. To switch later:
+**Sizing**: Set `sizing_profile` in `terraform.tfvars`:
 
-```bash
-rm helm/values/langsmith-values-sizing-ha.yaml
-cp helm/values/examples/langsmith-values-sizing-light.yaml \
-   helm/values/langsmith-values-sizing-light.yaml
+```hcl
+sizing_profile = "production"         # multi-replica with HPA (recommended)
+sizing_profile = "production-large"   # high-volume (~50 users, ~1000 traces/sec)
+sizing_profile = "dev"                # single-replica, minimal resources (dev/CI/demos)
+sizing_profile = "default"            # chart defaults (no sizing file)
 ```
+
+Then re-run `make init-values && make deploy`.
 
 ---
 

@@ -1,0 +1,77 @@
+# GCP base Helm values for LangSmith.
+#
+# This is the annotated reference for helm/values/values.yaml.
+# init-values.sh uses values.yaml directly — this file documents the
+# GCP-specific choices made in that base file.
+#
+# Manual copy: cp examples/langsmith-values.yaml ../values.yaml
+#
+# Applied on every deploy alongside values-overrides.yaml.
+# Configures GCP-native integrations: Envoy Gateway (HTTPRoute) and
+# GCS blob storage via the S3-compatible HMAC API.
+#
+# Do NOT put secrets or env-specific values here.
+#   Hostname, admin email, bucket name, WI annotation → values-overrides.yaml
+#   Feature addon config (agentBuilder, insights)     → addon overlay files
+#   Resource sizing                                   → langsmith-values-sizing-*.yaml
+
+# ── Ingress / Gateway ─────────────────────────────────────────────────────────
+# GCP uses Envoy Gateway (Gateway API) instead of a K8s Ingress.
+# The Gateway resource is managed by Terraform; the HTTPRoute is created by Helm.
+# gateway.name is filled by init-values.sh from `terraform output gateway_name`.
+ingress:
+  enabled: false
+
+gateway:
+  enabled: true
+  name: ""        # set by init-values.sh
+  namespace: "envoy-gateway-system"
+
+# ── Config ────────────────────────────────────────────────────────────────────
+config:
+  basePath: ""
+  authType: "mixed"  # "mixed" = API keys + basic auth; "api_key" = API keys only
+
+  basicAuth:
+    enabled: true
+    # initialOrgAdminEmail and initialOrgAdminPassword go in values-overrides.yaml
+
+  # GCS blob storage via S3-compatible HMAC API.
+  # engine: "S3" is correct — GCS exposes an S3-compatible endpoint at storage.googleapis.com.
+  # bucketName, accessKey, accessKeySecret are set in values-overrides.yaml by init-values.sh.
+  blobStorage:
+    enabled: true
+    engine: "S3"
+    apiURL: "https://storage.googleapis.com"
+    s3UsePathStyle: false
+
+# ── Postgres ──────────────────────────────────────────────────────────────────
+# Secret "langsmith-postgres" is created by the k8s-bootstrap Terraform module.
+# It contains a "connection_url" key with the full PostgreSQL connection string.
+# When postgres_source = "in-cluster" this block is overridden by the chart defaults.
+postgres:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-postgres"
+    connectionUrlSecretKey: "connection_url"
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+# Secret "langsmith-redis" is created by the k8s-bootstrap Terraform module.
+redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis"
+    connectionUrlSecretKey: "connection_url"
+
+# ── ClickHouse ────────────────────────────────────────────────────────────────
+# Defaults to in-cluster. When clickhouse_source = "langsmith-managed" or "external",
+# k8s-bootstrap creates the "langsmith-clickhouse" secret and the insights overlay
+# (langsmith-values-insights.yaml) sets external.enabled = true + existingSecretName.
+clickhouse:
+  external:
+    enabled: false
+  statefulSet:
+    persistence:
+      enabled: true
+      size: 500Gi
+      storageClassName: "premium-rwo"  # GKE high-performance persistent disk
