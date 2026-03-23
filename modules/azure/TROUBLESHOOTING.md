@@ -6,6 +6,94 @@ Issues, gotchas, and fixes. Updated as deployments are validated.
 
 ## Pass 1 — Infrastructure
 
+### vCPU quota exceeded — autoscaler backoff or node pool rotation fails
+
+**Symptom — autoscaler backoff (pods pending):**
+```
+Warning  FailedScheduling  pod/langsmith-backend-xxx  0/1 nodes are available: 1 Too many pods.
+Normal   NotTriggerScaleUp pod/langsmith-backend-xxx  pod didn't trigger scale-up: 2 in backoff after failed scale-up
+```
+
+**Symptom — node pool rotation fails (e.g. changing max_pods):**
+```
+Error: creating temporary Agent Pool ... Agent Pool Name: "defaulttmp"
+"code": "ErrCode_InsufficientVCPUQuota",
+"message": "Insufficient vcpu quota requested 8, remaining 2 for family standardDSv3Family for region eastus."
+```
+
+**Cause:** Azure subscriptions have per-region vCPU quotas per VM family. The default for `standardDSv3Family` in eastus is often 10 cores. One `Standard_D8s_v3` node uses 8 cores — only 2 remain. Autoscaler needs 8 more for a second node; node pool rotation creates a temporary surge node of the same size.
+
+**Why `max_pods = 30` triggers this:** AKS default is 30 pods per node. Pass 2 alone deploys ~37 pods (17 LangSmith + 20 system). The autoscaler tries to add a second node, hits quota, and enters backoff. The fix is `default_node_pool_max_pods = 60` in `terraform.tfvars` — all pods fit on one node and no scale-out is needed.
+
+**Recommended quota for multi-dataplane (3 dataplanes):**
+- Pass 2 + 3 dataplanes: ~46 pods — fits on 1× D8s_v3 with `max_pods = 60`
+- Set quota to **32 cores** to allow autoscaler headroom for rolling upgrades and burst
+
+**Fix — request quota increase:**
+```bash
+# Option 1 — Azure portal (usually auto-approves within minutes)
+# Portal → Subscriptions → <sub-id> → Usage + Quotas → search "DSv3" → eastus → Request increase → 32
+
+# Option 2 — CLI
+az quota update \
+  --resource-name "standardDSv3Family" \
+  --scope /subscriptions/<sub-id>/providers/Microsoft.Compute/locations/eastus \
+  --limit-object value=32 limit-type=Independent \
+  --resource-type dedicated
+
+# Verify current usage
+az vm list-usage --location eastus --query "[?contains(name.value,'DSv3')]" -o table
+```
+
+**Fix — ensure max_pods is set correctly in terraform.tfvars:**
+```hcl
+default_node_pool_max_pods = 60   # must be set before first apply — immutable field
+```
+
+> **Note:** `max_pods` is immutable on an existing node pool. Changing it after initial apply requires a node pool rotation (temporary node = more quota). Always set it before the first `terraform apply`.
+
+---
+
+### Istio addon revision not supported
+
+**Symptom:**
+```
+Error: creating Kubernetes Cluster ...: unexpected status 400 (400 Bad Request)
+"message": "Requested change in revisions is not allowed. Reason: Revision asm-1-XX is not supported by the service mesh add-on."
+```
+
+**Cause:** Azure retires old ASM revisions regularly. `asm-1-22` and `asm-1-24` are retired as of early 2026. The supported set changes every few months and does not match what you might find in older docs or blog posts.
+
+**ASM = Azure Service Mesh.** The version format `asm-1-27` maps to Istio 1.27.x — Azure manages the control plane.
+
+**Fix:** Check what revisions are currently available in your region, then update `istio_addon_revision` in `terraform.tfvars`:
+```bash
+# List currently supported revisions and their K8s compatibility
+az aks mesh get-revisions --location eastus -o table
+
+# Current output example (March 2026):
+# Revision    Upgrades          CompatibleWith      CompatibleVersions
+# asm-1-26    asm-1-27,asm-1-28 KubernetesOfficial  1.29, 1.30, 1.31, 1.32, 1.33, 1.34
+# asm-1-27    asm-1-28          KubernetesOfficial  1.29, 1.30, 1.31, 1.32, 1.33, 1.34, 1.35
+# asm-1-28    None available    KubernetesOfficial  1.30, 1.31, 1.32, 1.33, 1.34, 1.35
+```
+
+Update `terraform.tfvars`:
+```hcl
+istio_addon_revision = "asm-1-27"   # use output from az aks mesh get-revisions
+```
+
+Then re-run `terraform apply`. The default in this module is kept current but may lag Azure's retirement schedule — always verify before deploying.
+
+**After cluster exists**, check available upgrades:
+```bash
+az aks mesh get-upgrades -g <resource-group> -n <cluster-name>
+```
+
+---
+
+
+
 ### Key Vault secrets already exist but are not in Terraform state
 
 **Symptom:**
@@ -40,6 +128,62 @@ terraform apply
 ---
 
 ## Pass 2 — Application
+
+### Front Door returns 404 — UI not loading (Istio + Front Door)
+
+**Symptom:**
+```
+curl https://<fd-endpoint>.z02.azurefd.net/   →  HTTP 404 (Azure FD error page)
+curl -H "Host: <fd-endpoint>.z02.azurefd.net" http://<istio-lb-ip>/  →  HTTP 200 ✓
+```
+
+The LangSmith frontend loads when hitting the Istio LB directly with the correct Host header, but Front Door returns its own 404 error page.
+
+**Cause:** Front Door's `originHostHeader` defaults to the origin hostname (the Istio LB IP address). FD forwards requests to the cluster with `Host: <IP>` instead of `Host: <fd-endpoint>.z02.azurefd.net`. The Istio VirtualService only matches the FD endpoint hostname — an IP-based Host header matches nothing, so Istio returns 404.
+
+The Terraform `frontdoor` module fixes this automatically: `origin_host_header` is set to the FD endpoint hostname when no custom domain is configured. If you see this issue with an older version of the module, check the origin config:
+
+```bash
+az afd origin show \
+  --profile-name <fd-profile> \
+  --resource-group <rg> \
+  --origin-group-name <origin-group> \
+  --origin-name <origin> \
+  --query originHostHeader -o tsv
+# Should be: <fd-endpoint>.z02.azurefd.net (not the IP)
+```
+
+**Fix — update via Terraform:**
+The `modules/frontdoor/main.tf` origin block should have:
+```hcl
+origin_host_header = var.custom_domain != "" ? var.custom_domain : azurerm_cdn_frontdoor_endpoint.endpoint.host_name
+```
+Then run `terraform apply` — FD propagates the change within ~2 minutes.
+
+**Why this matters for Istio specifically:** NGINX Ingress uses `ingressClassName` and routes based on path — it ignores the Host header mismatch. Istio VirtualService routing is Host-header-exact — if the Host doesn't match, the request falls through to a 404. This issue only manifests with `ingress_controller = "istio-addon"`.
+
+---
+
+### `database "langsmith" does not exist` — backend pods crashlooping
+
+**Symptom:**
+```
+FATAL: database "langsmith" does not exist (SQLSTATE 3D000)
+panic: failed to connect to ... server error: FATAL: database "langsmith" does not exist
+```
+Backend pods start, connect to Postgres, and immediately crash.
+
+**Cause:** Azure DB for PostgreSQL Flexible Server does not auto-create application databases. Only the `postgres` system database exists by default. The `langsmith` database must be created explicitly.
+
+The Terraform `postgres` module now creates the database automatically via `azurerm_postgresql_flexible_server_database`. If you see this error it means you are on an older version of the module that was missing this resource.
+
+**Fix:**
+```bash
+terraform apply   # adds azurerm_postgresql_flexible_server_database.langsmith
+kubectl rollout restart deployment -n langsmith   # kick pods immediately
+```
+
+---
 
 ### `langsmith-backend-auth-bootstrap` stuck in `CreateContainerConfigError`
 
@@ -156,9 +300,9 @@ WorkloadIdentityCredential authentication failed.
 
 **Cause:** The pod's Kubernetes ServiceAccount does not have a registered federated identity credential on the Azure Managed Identity. Every pod that accesses Blob Storage needs one.
 
-**Fix:** Add the missing service account to `modules/storage/main.tf` and re-apply:
+**Fix:** Add the missing service account to `modules/k8s-cluster/main.tf` locals and re-apply:
 ```hcl
-# azure/infra/modules/storage/main.tf
+# azure/infra/modules/k8s-cluster/main.tf
 service_accounts_for_workload_identity = [
   "${var.langsmith_release_name}-backend",
   "${var.langsmith_release_name}-platform-backend",
@@ -171,7 +315,7 @@ service_accounts_for_workload_identity = [
 ]
 ```
 ```bash
-terraform apply -target=module.blob
+terraform apply -target=module.aks
 kubectl rollout restart deployment/langsmith-<service> -n langsmith
 ```
 

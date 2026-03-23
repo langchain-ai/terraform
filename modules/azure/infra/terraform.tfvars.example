@@ -1,141 +1,137 @@
-# Example Terraform Variables — LangSmith on Azure
-# Copy this file to terraform.tfvars and customize for your environment.
-#
+# LangSmith on Azure — Terraform Variables Example
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy to terraform.tfvars and fill in your values:
 #   cp terraform.tfvars.example terraform.tfvars
 #
-# Sensitive values (passwords, license key, secrets) are NOT set here.
-# Run: source ./setup-env.sh  — that script sets TF_VAR_* from Azure Key Vault
-# or prompts for them on first run.
+# Sensitive values (passwords, license key, Fernet keys) are NOT set here.
+# Run ./setup-env.sh — prompts on first run, reads from Key Vault on subsequent runs.
+# ─────────────────────────────────────────────────────────────────────────────
 
-#------------------------------------------------------------------------------
-# Required Variables
-#------------------------------------------------------------------------------
-subscription_id = "your-azure-subscription-id"
+# ── Required ──────────────────────────────────────────────────────────────────
+subscription_id = "your-azure-subscription-id"   # az account show --query id -o tsv
 
-#------------------------------------------------------------------------------
-# Naming & Tagging
-#------------------------------------------------------------------------------
-# Short suffix appended to every resource name to distinguish environments.
-# Must start with a hyphen or be empty. Examples: "-prod", "-staging", ""
-# Format: langsmith-aks{identifier}, langsmith-rg{identifier}, etc.
-identifier  = ""         # suffix appended to all resource names, e.g. -prod or -staging
-environment = "dev"      # dev | staging | prod
+# ── Naming ────────────────────────────────────────────────────────────────────
+# Suffix appended to every resource name to distinguish deployments.
+# Must start with a hyphen or be empty. Examples: "-prod", "-staging", "-dz"
+identifier  = "-prod"
+environment = "dev"    # dev | staging | prod
+location    = "eastus"
 
-owner       = "platform-team"   # Team or individual responsible
-cost_center = "engineering"     # For billing attribution
+# Optional tags for cost allocation and compliance
+# owner       = "platform-team"
+# cost_center = "engineering"
 
-#------------------------------------------------------------------------------
-# Regional Configuration
-#------------------------------------------------------------------------------
-location = "eastus"   # Azure region (e.g. eastus, westus2, westeurope)
+# ── Sources — external managed services ───────────────────────────────────────
+postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
+redis_source      = "external"    # "external" = Azure Cache for Redis Premium
+clickhouse_source = "in-cluster"  # ClickHouse always in-cluster (dev/POC)
+                                  # Production: use LangChain Managed ClickHouse
 
-#------------------------------------------------------------------------------
-# AKS Configuration
-#------------------------------------------------------------------------------
-# VM size for the default node pool. Must have 4+ vCPU and 14+ GB RAM.
-# DSv2 family has broad quota availability in most regions.
-default_node_pool_vm_size   = "Standard_DS3_v2"  # 4 vCPU, 14GB RAM
-default_node_pool_max_count = 4
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+postgres_admin_username      = "langsmith"
+postgres_database_name       = "langsmith"    # database name on the server
+postgres_deletion_protection = false          # set true for production
 
-# Prevent accidental AKS cluster deletion. Set false for dev/test.
-aks_deletion_protection = false  # Set true for production
+# ── Redis ─────────────────────────────────────────────────────────────────────
+redis_capacity = 1   # P1 = 6 GB RAM (sufficient for most deployments)
+                     # P2 = 13 GB RAM (required for high write load ≥26 GiB)
 
-# Additional node pools (e.g. for ClickHouse or memory-heavy workloads)
-# additional_node_pools = {
-#   large = {
-#     vm_size   = "Standard_DS4_v2"  # 8 vCPU, 28GB RAM
-#     min_count = 0
-#     max_count = 2
-#   }
-# }
+# ── AKS ───────────────────────────────────────────────────────────────────────
+# Sizing: Medium load (Med/Med), 1 Control Plane + 3 Dataplanes
+# Ref: ~74 vCPU / 148 GiB total — 10× Standard_D8s_v3 per sizing calculator
+default_node_pool_vm_size   = "Standard_D8s_v3"  # 8 vCPU, 32 GiB
+default_node_pool_max_count = 12                  # 10 target + 2 headroom
+default_node_pool_max_pods  = 60                  # AKS default 30 is too low; Pass 2 needs ~32 pods (17 LS + 15 system)
+aks_deletion_protection     = false               # set true for production
 
-#------------------------------------------------------------------------------
-# PostgreSQL Configuration
-#------------------------------------------------------------------------------
-postgres_source = "external"  # "external" (Azure DB for PostgreSQL) or "in-cluster" (via Helm)
+# Large pool: ClickHouse (16 vCPU / 24 GiB required) + dataplane agent pods
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v3"  # 16 vCPU, 64 GiB
+    min_count = 0
+    max_count = 2
+  }
+}
 
-# PostgreSQL admin username (password set via setup-env.sh)
-postgres_admin_username = "langsmith"
+# ── Ingress controller ────────────────────────────────────────────────────────
+# "nginx"       — NGINX ingress via Helm (standard, start here)
+# "istio-addon" — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
+# "istio"       — Istio via Helm (self-managed)
+# "none"        — skip (bring your own)
+ingress_controller = "nginx"
 
-# Prevent accidental PostgreSQL deletion. Set false for dev/test.
-postgres_deletion_protection = false  # Set true for production
+# Istio addon revision — only used when ingress_controller = "istio-addon"
+# Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
+# istio_addon_revision = "asm-1-22"
 
-#------------------------------------------------------------------------------
-# Redis Configuration
-#------------------------------------------------------------------------------
-redis_source   = "external"  # "external" (Azure Cache for Redis) or "in-cluster" (via Helm)
-redis_capacity = 2           # P2 = 13 GB RAM. See: https://azure.microsoft.com/pricing/details/cache/
+# ── DNS + TLS ─────────────────────────────────────────────────────────────────
+# Recommended: delegate a subdomain to Azure DNS and use DNS-01 cert issuance.
+# DNS-01 works with any ingress controller — cert-manager uses Azure Workload
+# Identity to create TXT records automatically. No HTTP routing required.
+#
+# Flow:
+#   1. terraform apply  → creates DNS zone, outputs nameservers
+#   2. Add NS records at your registrar for the subdomain (one-time)
+#   3. Get ingress IP: kubectl get svc ingress-nginx-controller -n ingress-nginx
+#   4. Set ingress_ip below → terraform apply  → creates A record
+#
+tls_certificate_source = "dns01"                    # "dns01" | "letsencrypt" (HTTP-01) | "none"
+letsencrypt_email      = "you@example.com"          # Let's Encrypt notifications
+langsmith_domain       = "langsmith.example.com"    # subdomain you control
+create_dns_zone        = true                       # Terraform creates the Azure DNS zone
+# ingress_ip           = ""                         # fill after first apply
 
-#------------------------------------------------------------------------------
-# ClickHouse Configuration
-#------------------------------------------------------------------------------
-# ClickHouse deployment type:
-#   "in-cluster"  — (default) deployed as a pod in the cluster via Helm.
-#                   ⚠️  Dev/POC only — single pod, no replication, no backups.
-#   "external"    — LangChain Managed ClickHouse (recommended for production).
-#                   See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse
-clickhouse_source = "in-cluster"
+# ── Key Vault ─────────────────────────────────────────────────────────────────
+keyvault_purge_protection = false   # set true for production
 
-#------------------------------------------------------------------------------
-# Blob Storage (Azure Blob) — always required
-#------------------------------------------------------------------------------
-# Payloads must not go into ClickHouse — blob storage is always enabled.
-# TTL settings control automatic object expiration.
-blob_ttl_enabled    = true
-blob_ttl_short_days = 14    # Short-lived objects (e.g. inline trace payloads)
-blob_ttl_long_days  = 400   # Long-lived objects (e.g. run attachments)
-
-#------------------------------------------------------------------------------
-# Key Vault
-#------------------------------------------------------------------------------
-# Key Vault name must be globally unique, 3–24 chars.
-# Defaults to "langsmith-kv{identifier}" — set explicitly to avoid collisions.
+# Optional: override the generated Key Vault name (must be globally unique, 3–24 chars)
 # keyvault_name = "my-langsmith-kv"
 
-# Set false for dev environments where you need to destroy and recreate.
-keyvault_purge_protection = false  # Set true for production
+# ── Blob storage ──────────────────────────────────────────────────────────────
+blob_ttl_enabled    = true
+blob_ttl_short_days = 14    # short-lived trace payloads
+blob_ttl_long_days  = 400   # run attachments (~13 months)
 
-#------------------------------------------------------------------------------
-# LangSmith Application
-#------------------------------------------------------------------------------
-langsmith_namespace = "langsmith"
-langsmith_domain    = "langsmith.example.com"  # Your hostname (required for TLS)
-
-# Helm release name (used for Workload Identity federated credential subjects)
+# ── LangSmith ─────────────────────────────────────────────────────────────────
+langsmith_namespace    = "langsmith"
 langsmith_release_name = "langsmith"
 
-# Pin a specific LangSmith Helm chart version for reproducible deploys.
-# Empty = use latest available chart version.
-langsmith_helm_chart_version = ""
+# ── Azure Front Door (optional — recommended for production) ──────────────────
+# Front Door Standard is the ACM equivalent for Azure — managed TLS + CDN edge.
+# Works with any ingress_controller value (nginx, istio, istio-addon, none).
+#
+# When to use Front Door vs DNS-01 + cert-manager:
+#   Front Door:  simpler, no cert-manager needed, no Azure DNS zone needed.
+#               Customer just adds CNAME + TXT at their registrar. ~$35/mo.
+#   DNS-01:      no per-request CDN cost, cert lives on the cluster.
+#               Better for high-traffic or private deployments.
+#
+# Flow (after first terraform apply):
+#   1. terraform output frontdoor_endpoint_hostname    → FQDN for CNAME
+#   2. terraform output frontdoor_validation_token     → value for TXT record
+#   3. At registrar: CNAME langsmith.example.com → <endpoint_hostname>
+#                    TXT  _dnsauth.langsmith.example.com → <validation_token>
+#   4. Azure issues managed cert automatically (no re-apply needed)
+#   5. Set frontdoor_origin_hostname → terraform apply (connects FD to AKS LB)
+#
+# create_frontdoor          = true
+# frontdoor_origin_hostname = ""         # fill after ingress LB is provisioned
+# frontdoor_sku             = "Standard_AzureFrontDoor"   # or Premium for WAF
 
-# License key (sensitive — prefer using environment variable)
-# Set via: export TF_VAR_langsmith_license_key="your-license-key"
-# langsmith_license_key = "your-license-key"
+# ── Optional modules ──────────────────────────────────────────────────────────
+# Each is independently toggleable — safe to add after initial deploy.
+# create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)
+# create_diagnostics = true   # Log Analytics + diagnostic settings (recommended for prod)
+# create_bastion     = true   # Jump VM for private AKS node access
 
-#------------------------------------------------------------------------------
-# TLS / HTTPS Configuration
-#------------------------------------------------------------------------------
-# Choose TLS certificate source:
-#   "none"        — HTTP only (demo/dev — no cert-manager required)
-#   "letsencrypt" — Automatic certificates via Let's Encrypt + cert-manager
-#   "existing"    — Provide your own TLS certificate
-tls_certificate_source = "letsencrypt"
+# ── Multi-AZ (optional) ───────────────────────────────────────────────────────
+# availability_zones                   = ["1", "2", "3"]  # zone-redundant HA
+# postgres_standby_availability_zone   = "2"              # Postgres HA standby
+# postgres_geo_redundant_backup        = true             # geo-redundant backups
 
-# --- Let's Encrypt (automatic) ---
-# Required when tls_certificate_source = "letsencrypt"
-letsencrypt_email = "your-email@example.com"
-
-#------------------------------------------------------------------------------
-# Networking (optional — override only if needed)
-#------------------------------------------------------------------------------
-# Set create_vnet = false to reuse an existing VNet.
-# Provide vnet_id, aks_subnet_id, postgres_subnet_id, redis_subnet_id.
-# create_vnet = true
-
-# Subnet address prefixes (must not overlap with existing ranges)
-# postgres_subnet_address_prefix = ["10.0.32.0/20"]
-# redis_subnet_address_prefix    = ["10.0.48.0/20"]
-
-# AKS internal service CIDR (must not overlap with VNet)
-# aks_service_cidr   = "10.0.64.0/20"
-# aks_dns_service_ip = "10.0.64.10"
+# ── Networking (optional — override only if reusing existing VNet) ─────────────
+# create_vnet          = false
+# vnet_id              = "/subscriptions/.../virtualNetworks/my-vnet"
+# aks_subnet_id        = "/subscriptions/.../subnets/aks"
+# postgres_subnet_id   = "/subscriptions/.../subnets/postgres"
+# redis_subnet_id      = "/subscriptions/.../subnets/redis"

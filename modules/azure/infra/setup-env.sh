@@ -87,9 +87,10 @@ echo "  identifier : ${_identifier:-(empty)}"
 echo "  key_vault  : $_kv_name"
 echo ""
 
-pg_password=$(_prompt "LANGSMITH_PG_PASSWORD"     "PostgreSQL admin password")
-license_key=$(_prompt "LANGSMITH_LICENSE_KEY"      "LangSmith license key    ")
-admin_password=$(_prompt "LANGSMITH_ADMIN_PASSWORD" "LangSmith admin password ")
+pg_password=$(_prompt "LANGSMITH_PG_PASSWORD"     "PostgreSQL admin password  ")
+license_key=$(_prompt "LANGSMITH_LICENSE_KEY"      "LangSmith license key      ")
+admin_password=$(_prompt "LANGSMITH_ADMIN_PASSWORD" "LangSmith admin password   ")
+admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL"      "Initial org admin email    ")
 
 echo ""
 echo "  Resolving stable secrets..."
@@ -108,6 +109,7 @@ cat > "$SECRETS_FILE" << EOF
 postgres_admin_password                = "$pg_password"
 langsmith_license_key                  = "$license_key"
 langsmith_admin_password               = "$admin_password"
+langsmith_admin_email                  = "$admin_email"
 langsmith_api_key_salt                 = "$api_key_salt"
 langsmith_jwt_secret                   = "$jwt_secret"
 langsmith_deployments_encryption_key   = "$deployments_key"
@@ -131,9 +133,14 @@ echo "After apply:"
 echo "  az aks get-credentials --resource-group langsmith-rg\${_identifier} --name langsmith-aks\${_identifier} --overwrite-existing"
 echo "  kubectl get nodes  # verify cluster access"
 echo ""
-echo "Pass 2 — secrets + Helm deploy:"
-echo "  # Pull secrets from Key Vault and create k8s secrets (see QUICK_REFERENCE.md Pass 2a)"
+echo "Pass 1.5 — DNS onboarding (if create_dns_zone = true):"
+echo "  terraform output   # note nameservers"
+echo "  # Add NS records at your registrar for your subdomain, then:"
+echo "  kubectl get svc ingress-nginx-controller -n ingress-nginx  # get EXTERNAL-IP"
+echo "  # Set ingress_ip in terraform.tfvars → terraform apply"
+echo ""
+echo "Pass 2 — Helm deploy (see QUICK_REFERENCE.md):"
 echo "  helm upgrade --install langsmith langsmith/langsmith \\"
 echo "    --version <VERSION> --namespace langsmith \\"
-echo "    -f ../helm/values/values-overrides.yaml \\"
+echo "    -f ../helm/values/values-overrides-pass-5.yaml.example \\"
 echo "    --wait --timeout 15m"

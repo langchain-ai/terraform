@@ -82,8 +82,8 @@ platformBackend:
     labels:
       azure.workload.identity/use: "true"
     resources:
-      requests: { cpu: 500m, memory: 1Gi }
-      limits:   { cpu: 1000m, memory: 2Gi }
+      requests: { cpu: 1000m, memory: 2Gi }
+      limits:   { cpu: 2000m, memory: 4Gi }
   serviceAccount:
     annotations:
       azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
@@ -183,15 +183,34 @@ clickhouse:
     persistence:
       size: "500Gi"
 
+# ── Ingress / Gateway ─────────────────────────────────────────────────────────
+# Choose based on ingress_controller in terraform.tfvars:
+#
+# Option A — istio-addon (required for multi-dataplane)
+#   istioGateway creates VirtualService resources — routes traffic across
+#   namespaces to agent deployments. Standard Ingress is namespace-scoped
+#   and cannot do this.
 ingress:
+  enabled: false
+
+istioGateway:
   enabled: true
-  ingressClassName: "nginx"
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-  tls:
-    - secretName: langsmith-tls
-      hosts:
-        - "<your-domain.com>"
+  name: "langsmith-gateway"    # must match the Gateway resource on the cluster
+  namespace: "aks-istio-ingress"   # ASM addon: ingress gateway lives in aks-istio-ingress (not istio-system)
+# Option B — NGINX (simpler, single-namespace deployments only)
+# ingress:
+#   enabled: true
+#   ingressClassName: "nginx"
+#   # Front Door: no annotations needed (TLS terminated at FD edge)
+#   # cert-manager DNS-01: uncomment below
+#   # annotations:
+#   #   cert-manager.io/cluster-issuer: "letsencrypt-prod"
+#   # tls:
+#   #   - secretName: langsmith-tls
+#   #     hosts:
+#   #       - "<your-domain.com>"
+# istioGateway:
+#   enabled: false
 
 # ── Pass 3 additions ──────────────────────────────────────────────────────────
 hostBackend:
@@ -200,7 +219,8 @@ hostBackend:
     labels:
       azure.workload.identity/use: "true"
     resources:
-      requests: { cpu: 100m, memory: 500Mi }
+      requests: { cpu: 200m, memory: 1Gi }
+      limits:   { cpu: 1000m, memory: 2Gi }
   serviceAccount:
     annotations:
       azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
@@ -211,7 +231,8 @@ listener:
     labels:
       azure.workload.identity/use: "true"
     resources:
-      requests: { cpu: 100m, memory: 500Mi }
+      requests: { cpu: 1000m, memory: 2Gi }
+      limits:   { cpu: 2000m, memory: 4Gi }
   serviceAccount:
     annotations:
       azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
@@ -275,7 +296,8 @@ agentBuilderToolServer:
     labels:
       azure.workload.identity/use: "true"
     resources:
-      requests: { cpu: 100m, memory: 500Mi }
+      requests: { cpu: 1000m, memory: 2Gi }
+      limits:   { cpu: 2000m, memory: 4Gi }
   serviceAccount:
     annotations:
       azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"
@@ -286,7 +308,8 @@ agentBuilderTriggerServer:
     labels:
       azure.workload.identity/use: "true"
     resources:
-      requests: { cpu: 100m, memory: 500Mi }
+      requests: { cpu: 1000m, memory: 2Gi }
+      limits:   { cpu: 2000m, memory: 4Gi }
   serviceAccount:
     annotations:
       azure.workload.identity/client-id: "<tf output: workload_identity_client_id>"

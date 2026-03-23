@@ -94,6 +94,12 @@ variable "redis_subnet_id" {
   default     = ""
 }
 
+variable "postgres_database_name" {
+  type        = string
+  description = "Name of the PostgreSQL database LangSmith connects to. Must match the database that exists on the server."
+  default     = "langsmith"
+}
+
 variable "postgres_source" {
   type        = string
   description = "PostgreSQL deployment type. 'external' provisions Azure Database for PostgreSQL Flexible Server (private VNet). 'in-cluster' uses the chart-managed in-cluster Postgres pod (dev/demo only)."
@@ -163,16 +169,38 @@ variable "blob_ttl_long_days" {
   default     = 400
 }
 
+# ── AKS node pool sizing guidance ─────────────────────────────────────────────
+# Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
+#   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)
+#   + ingestQueue×3 (3 vCPU/6Gi) + frontend + playground + aceBackend + system pods
+#   → Standard_D8s_v3 × 3 nodes (24 vCPU / 96 GiB) comfortably fits Pass 2.
+#
+# Pass 3–5 (LangGraph Platform, Agent Builder, Insights): add ~3 vCPU / 5 GiB.
+#   Total with autoscale headroom: max_count = 12 (Standard_D8s_v3).
+#
+# ClickHouse: 3.5 vCPU / 15 GiB request — always scheduled to the large pool
+#   (Standard_D16s_v3, 16 vCPU / 64 GiB) via node affinity set in the chart.
+#   Production recommendation from upstream: 8 vCPU / 32 GiB for heavy tracing load.
+#
+# Official LangSmith minimum: 16 vCPU / 64 GiB cluster-wide.
+# See: https://docs.langchain.com/langsmith/kubernetes
+
 variable "default_node_pool_vm_size" {
   type        = string
-  description = "VM size of the default node pool"
-  default     = "Standard_DS3_v2" # 4 vCPU, 14GB RAM — DSv2 family (60 free vCPUs in eastus)
+  description = "VM size for the default AKS node pool. Standard_D8s_v3 (8 vCPU / 32 GiB) is the recommended baseline for Pass 2+ (external Postgres + Redis). Use Standard_D4s_v3 (4 vCPU / 16 GiB) only for light/demo deployments (in-cluster DBs). See sizing comment above."
+  default     = "Standard_D8s_v3" # 8 vCPU, 32 GiB
 }
 
 variable "default_node_pool_max_count" {
   type        = number
-  description = "Max count of the default node pool. Set to at least 4 when using Agent Builder — the LGP postgres pod needs ~1 vCPU request."
-  default     = 4
+  description = "Max node count for the default pool. Pass 2: 4–6 nodes. Pass 3 (LangGraph Platform): 6. Pass 4 (Agent Builder): 8. Pass 5 (Insights): 10–12. Autoscaler scales within this limit — increasing max_count takes effect immediately with no node restarts."
+  default     = 12
+}
+
+variable "default_node_pool_max_pods" {
+  type        = number
+  description = "Max pods per node in the default pool. AKS Azure CNI default is 30 — too low for LangSmith. Pass 2 alone needs ~32 pods (17 LangSmith + 15 system). Set to 60 to fit full multi-pass deployments on a single node. Immutable — changing requires node pool recreation."
+  default     = 60
 }
 
 variable "aks_service_cidr" {
@@ -193,10 +221,10 @@ variable "additional_node_pools" {
     min_count = number
     max_count = number
   }))
-  description = "Additional node pools to be created"
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
   default = {
     large = {
-      vm_size   = "Standard_DS4_v2" # 8 vCPU, 28GB RAM — DSv2 family (widely available quota)
+      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
       min_count = 0
       max_count = 2
     }
@@ -221,10 +249,27 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
-variable "nginx_ingress_enabled" {
-  type        = bool
-  description = "Install the nginx ingress helm chart on the AKS cluster."
-  default     = true
+variable "ingress_controller" {
+  type        = string
+  description = "Ingress controller to install. 'nginx' = NGINX via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'none' = skip."
+  default     = "nginx"
+
+  validation {
+    condition     = contains(["nginx", "istio", "istio-addon", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', or 'none'."
+  }
+}
+
+variable "istio_version" {
+  type        = string
+  description = "Istio helm chart version. Only used when ingress_controller = 'istio'."
+  default     = "1.29.1"
+}
+
+variable "istio_addon_revision" {
+  type        = string
+  description = "Azure Service Mesh revision. Format: 'asm-1-<minor>'. To list available revisions after cluster exists: az aks mesh get-upgrades -g <rg> -n <cluster>"
+  default     = "asm-1-27"
 }
 
 variable "letsencrypt_email" {
@@ -291,6 +336,12 @@ variable "langsmith_admin_password" {
   type        = string
   description = "Initial LangSmith organization admin password. Stored in Key Vault: langsmith-admin-password."
   sensitive   = true
+  default     = ""
+}
+
+variable "langsmith_admin_email" {
+  type        = string
+  description = "Initial LangSmith organization admin email. Set via setup-env.sh — used as initialOrgAdminEmail in Helm values."
   default     = ""
 }
 
@@ -392,6 +443,26 @@ variable "bastion_allowed_ssh_cidrs" {
   type        = list(string)
   description = "CIDR ranges allowed inbound SSH to the bastion. Restrict to VPN/corporate ranges in production."
   default     = ["0.0.0.0/0"]
+}
+
+# ── Front Door ────────────────────────────────────────────────────────────────
+
+variable "create_frontdoor" {
+  type        = bool
+  description = "Deploy Azure Front Door Standard as the edge layer (managed TLS + CDN). Works with any ingress_controller value (nginx, istio, istio-addon)."
+  default     = false
+}
+
+variable "frontdoor_sku" {
+  type        = string
+  description = "Front Door SKU. 'Standard_AzureFrontDoor' (~$35/mo) for CDN+TLS. 'Premium_AzureFrontDoor' (~$330/mo) required for WAF attachment."
+  default     = "Standard_AzureFrontDoor"
+}
+
+variable "frontdoor_origin_hostname" {
+  type        = string
+  description = "Hostname or IP of the AKS ingress LB. For NGINX: kubectl get svc ingress-nginx-controller -n ingress-nginx. For Istio: kubectl get svc istio-ingressgateway -n istio-system."
+  default     = ""
 }
 
 # ── DNS ───────────────────────────────────────────────────────────────────────

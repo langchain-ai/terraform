@@ -1,0 +1,108 @@
+# host-backend cross-namespace RBAC
+#
+# Grants langsmith/langsmith-host-backend read access to pods and logs
+# in each agents-build-* namespace so agent logs surface in the LangSmith UI.
+#
+# The LangSmith Helm chart manages RBAC within the langsmith namespace only.
+# These cross-namespace bindings must be applied separately.
+#
+# Apply:
+#   kubectl apply -f host-backend-rbac.yaml
+#
+# Verify:
+#   kubectl auth can-i get pods/log -n agents-build-one \
+#     --as=system:serviceaccount:langsmith:langsmith-host-backend
+#   # → yes
+#
+# When adding a new workspace (e.g. agents-build-four):
+#   Copy the Role + RoleBinding blocks below, change the namespace,
+#   and apply. No changes to existing namespaces needed.
+
+# ── agents-build-one ─────────────────────────────────────────────────────────
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: host-backend-pod-reader
+  namespace: agents-build-one
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: host-backend-pod-reader
+  namespace: agents-build-one
+subjects:
+- kind: ServiceAccount
+  name: langsmith-host-backend
+  namespace: langsmith
+roleRef:
+  kind: Role
+  name: host-backend-pod-reader
+  apiGroup: rbac.authorization.k8s.io
+
+# ── agents-build-two ─────────────────────────────────────────────────────────
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: host-backend-pod-reader
+  namespace: agents-build-two
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: host-backend-pod-reader
+  namespace: agents-build-two
+subjects:
+- kind: ServiceAccount
+  name: langsmith-host-backend
+  namespace: langsmith
+roleRef:
+  kind: Role
+  name: host-backend-pod-reader
+  apiGroup: rbac.authorization.k8s.io
+
+# ── agents-build-three ───────────────────────────────────────────────────────
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: host-backend-pod-reader
+  namespace: agents-build-three
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: host-backend-pod-reader
+  namespace: agents-build-three
+subjects:
+- kind: ServiceAccount
+  name: langsmith-host-backend
+  namespace: langsmith
+roleRef:
+  kind: Role
+  name: host-backend-pod-reader
+  apiGroup: rbac.authorization.k8s.io

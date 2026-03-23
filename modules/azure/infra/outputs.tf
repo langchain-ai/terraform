@@ -20,7 +20,7 @@ output "storage_container_name" {
   value       = module.blob.container_name
 }
 
-# See: https://docs.smith.langchain.com/self_hosting/configuration/blob_storage#azure-blob-storage
+# See: https://docs.langchain.com/langsmith/self-host-blob-storage
 output "storage_account_k8s_managed_identity_client_id" {
   description = "Client ID of the managed identity used by the LangSmith backend pod to access Blob Storage via Workload Identity"
   value       = module.blob.k8s_managed_identity_client_id
@@ -59,8 +59,17 @@ output "kubeconfig" {
 # ── LangSmith ─────────────────────────────────────────────────────────────────
 
 output "langsmith_url" {
-  description = "URL where LangSmith is accessible (requires DNS to be configured)"
-  value       = var.langsmith_domain != "" ? "https://${var.langsmith_domain}" : "Domain not set — configure var.langsmith_domain in terraform.tfvars"
+  description = "URL where LangSmith is accessible. Uses custom domain if set, otherwise falls back to Front Door endpoint hostname."
+  value = (
+    var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
+    var.create_frontdoor   ? "https://${module.frontdoor[0].endpoint_hostname}" :
+    "No domain configured — set var.langsmith_domain or var.create_frontdoor = true"
+  )
+}
+
+output "langsmith_admin_email" {
+  description = "Initial LangSmith org admin email — set via setup-env.sh, used as initialOrgAdminEmail in Helm values."
+  value       = var.langsmith_admin_email
 }
 
 output "langsmith_namespace" {
@@ -83,6 +92,17 @@ output "keyvault_name" {
 output "keyvault_uri" {
   description = "URI of the Key Vault (https://<name>.vault.azure.net/)"
   value       = module.keyvault.vault_uri
+}
+
+# ── Front Door ────────────────────────────────────────────────────────────────
+output "frontdoor_endpoint_hostname" {
+  description = "Front Door endpoint hostname — add CNAME at registrar: custom_domain → this value"
+  value       = var.create_frontdoor ? module.frontdoor[0].endpoint_hostname : ""
+}
+
+output "frontdoor_validation_token" {
+  description = "TXT record value for custom domain TLS validation — add at registrar: _dnsauth.<custom_domain> TXT <this value>"
+  value       = var.create_frontdoor ? module.frontdoor[0].custom_domain_validation_token : ""
 }
 
 # ── WAF ───────────────────────────────────────────────────────────────────────

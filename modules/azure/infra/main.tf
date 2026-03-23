@@ -104,12 +104,15 @@ module "aks" {
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_max_count = var.default_node_pool_max_count
+  default_node_pool_max_pods  = var.default_node_pool_max_pods
 
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads)
   additional_node_pools = var.additional_node_pools
 
-  # Deploys NGINX ingress controller via Helm — creates the Azure Load Balancer.
-  nginx_ingress_enabled = var.nginx_ingress_enabled
+  # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'none'
+  ingress_controller   = var.ingress_controller
+  istio_version        = var.istio_version
+  istio_addon_revision = var.istio_addon_revision
 
   langsmith_namespace    = var.langsmith_namespace
   langsmith_release_name = var.langsmith_release_name
@@ -139,6 +142,7 @@ module "postgres" {
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
+  database_name  = var.postgres_database_name
 
   availability_zone            = var.availability_zones[0]
   standby_availability_zone    = var.postgres_standby_availability_zone
@@ -271,6 +275,47 @@ module "k8s_bootstrap" {
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
+
+  # TLS / cert-manager
+  tls_certificate_source          = var.tls_certificate_source
+  letsencrypt_email               = var.letsencrypt_email
+  cert_manager_identity_client_id = module.aks.cert_manager_identity_client_id
+  subscription_id                 = var.subscription_id
+  dns_zone_name                   = var.create_dns_zone ? var.langsmith_domain : ""
+  dns_resource_group_name         = azurerm_resource_group.resource_group.name
+}
+
+# ── Front Door (optional) ─────────────────────────────────────────────────────
+# Azure Front Door Standard/Premium as the edge layer for LangSmith.
+# Provides managed TLS certificates (no cert-manager needed), HTTPS redirect,
+# and global CDN acceleration. Works with any ingress controller (nginx, istio).
+#
+# TLS flow with Front Door:
+#   1. Apply → note frontdoor_endpoint_hostname output
+#   2. Registrar: CNAME langsmith.<domain> → frontdoor_endpoint_hostname
+#   3. Registrar: TXT _dnsauth.langsmith.<domain> → frontdoor_validation_token
+#   4. Azure issues managed cert automatically (no re-apply needed)
+#
+# vs DNS-01 + cert-manager: Front Door is simpler — no cert-manager, no Azure DNS zone needed.
+# Enable with: create_frontdoor = true
+
+module "frontdoor" {
+  count               = var.create_frontdoor ? 1 : 0
+  source              = "./modules/frontdoor"
+  name                = "langsmith-fd${local.identifier}"
+  resource_group_name = azurerm_resource_group.resource_group.name
+  sku_name            = var.frontdoor_sku
+
+  # Set after first apply — get from kubectl get svc
+  origin_hostname = var.frontdoor_origin_hostname
+
+  # Customer domain — Front Door issues managed TLS for this
+  custom_domain = var.langsmith_domain
+
+  # Optional WAF — requires Premium SKU and create_waf = true
+  waf_policy_id = var.create_waf && var.frontdoor_sku == "Premium_AzureFrontDoor" ? module.waf[0].waf_policy_id : ""
+
+  tags = local.common_tags
 }
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
@@ -303,6 +348,11 @@ module "diagnostics" {
   aks_id      = module.aks.cluster_id
   keyvault_id = module.keyvault.vault_id
   postgres_id = var.postgres_source == "external" ? module.postgres[0].postgres_id : ""
+
+  # Boolean flags known at plan time — count cannot depend on computed resource IDs.
+  enable_aks_diag      = true
+  enable_keyvault_diag = true
+  enable_postgres_diag = var.postgres_source == "external"
 
   tags = local.common_tags
 }
@@ -337,4 +387,8 @@ module "dns" {
   resource_group_name = azurerm_resource_group.resource_group.name
   ingress_ip          = var.ingress_ip
   tags                = local.common_tags
+
+  # Grant cert-manager DNS Zone Contributor so it can create TXT records
+  # for DNS-01 ACME challenges. Only needed when tls_certificate_source = "dns01".
+  cert_manager_principal_id = var.tls_certificate_source == "dns01" ? module.aks.cert_manager_identity_principal_id : ""
 }

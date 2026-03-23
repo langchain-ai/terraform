@@ -1,0 +1,51 @@
+# istio-gateway.yaml — Istio Gateway for LangSmith (Azure Service Mesh / ASM addon)
+#
+# Apply ONCE before the first helm deploy (Pass 2d).
+# Safe to re-apply (kubectl apply is idempotent).
+#
+# ASM addon namespaces differ from standalone Istio:
+#   aks-istio-ingress  — external ingress gateway (LoadBalancer service)
+#   aks-istio-system   — istiod control plane
+#
+# Usage:
+#   kubectl apply -f helm/values/istio-gateway.yaml
+#
+# NOTE on hosts: "*"
+#   The Gateway is a port-level listener only — hosts: "*" is correct here.
+#   Hostname-based routing (your actual domain) is handled by the VirtualService
+#   that the LangSmith chart creates from config.hostname in values-overrides.yaml.
+#   You do NOT need to put your domain here.
+#
+# NOTE on TLS:
+#   Port 443 is only needed if TLS terminates AT the Istio gateway (e.g. cert-manager).
+#   With Azure Front Door, TLS terminates at the FD edge — traffic arrives at the
+#   Istio gateway over HTTP (port 80). The 443 server block is commented out below
+#   for FD deployments. Uncomment it if using cert-manager + Istio TLS termination.
+#
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: aks-istio-ingress
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+    # HTTP — used with Azure Front Door (FD terminates TLS at the edge)
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - "*"   # wildcard is correct — VirtualService handles hostname routing
+
+    # HTTPS — uncomment if using cert-manager + Istio TLS termination (no Front Door)
+    # - port:
+    #     number: 443
+    #     name: https
+    #     protocol: HTTPS
+    #   tls:
+    #     mode: SIMPLE
+    #     credentialName: langsmith-tls   # cert-manager Certificate secretName
+    #   hosts:
+    #     - "*"

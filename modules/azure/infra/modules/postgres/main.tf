@@ -59,6 +59,18 @@ resource "azurerm_postgresql_flexible_server" "db" {
   }
 }
 
+# LangSmith application database.
+# Azure Flexible Server does not auto-create application databases — only
+# the 'postgres' system database exists by default. LangSmith requires
+# a database named after var.database_name to exist before the backend
+# can connect.
+resource "azurerm_postgresql_flexible_server_database" "langsmith" {
+  name      = var.database_name
+  server_id = azurerm_postgresql_flexible_server.db.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+}
+
 # Private DNS zone for PostgreSQL name resolution within the VNet.
 # Resolves: <server-name>.postgres.database.azure.com → private IP.
 # Without this zone, AKS pods cannot resolve the database hostname.
