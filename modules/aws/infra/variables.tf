@@ -574,3 +574,10 @@ variable "langsmith_insights_encryption_key" {
   default     = ""
 }
 
+variable "langsmith_polly_encryption_key" {
+  type        = string
+  description = "Fernet key for Polly. Generate once — changing breaks existing Polly encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
+  sensitive   = true
+  default     = ""
+}
+

@@ -245,7 +245,7 @@ if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
 fi
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
-# Fernet keys for Deployments, Agent Builder, and Insights addons.
+# Fernet keys for Deployments, Agent Builder, Insights, and Polly addons.
 # Auto-generated and stored in SSM on first run. Only created when the user
 # opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
@@ -258,6 +258,9 @@ _ssm_secret "agent-builder-encryption-key" "" "TF_VAR_langsmith_agent_builder_en
   "$_fernet_gen" "" "true"
 
 _ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_key" \
+  "$_fernet_gen" "" "true"
+
+_ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
 
 # ── Summary ───────────────────────────────────────────────────────────────────

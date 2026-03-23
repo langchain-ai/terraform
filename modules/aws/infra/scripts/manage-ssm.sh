@@ -42,6 +42,7 @@ OPTIONAL_PARAMS=(
   "agent-builder-encryption-key"
   "insights-encryption-key"
   "deployments-encryption-key"
+  "polly-encryption-key"
 )
 
 # Stable secrets that should never be changed after first deploy
@@ -59,6 +60,7 @@ DIFF_SSM_KEYS=(
   "agent-builder-encryption-key"
   "insights-encryption-key"
   "deployments-encryption-key"
+  "polly-encryption-key"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -68,6 +70,7 @@ DIFF_K8S_KEYS=(
   "agent_builder_encryption_key"
   "insights_encryption_key"
   "deployments_encryption_key"
+  "polly_encryption_key"
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
