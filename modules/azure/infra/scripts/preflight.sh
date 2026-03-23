@@ -103,17 +103,26 @@ else
     warn "Contributor role not found at subscription scope — may have it at resource group scope (acceptable)"
   fi
 
-  # Check User Access Administrator (required for role assignments in modules)
+  # Check User Access Administrator or Owner (required for role assignments in modules).
+  # Owner implicitly includes all User Access Administrator permissions.
   UAA=$(az role assignment list \
     --assignee "$CURRENT_USER_ID" \
     --role "User Access Administrator" \
     --scope "/subscriptions/${SUB_ID_CHECK}" \
     --query "length(@)" -o tsv 2>/dev/null || echo "0")
 
+  OWNER=$(az role assignment list \
+    --assignee "$CURRENT_USER_ID" \
+    --role "Owner" \
+    --scope "/subscriptions/${SUB_ID_CHECK}" \
+    --query "length(@)" -o tsv 2>/dev/null || echo "0")
+
   if [ "$UAA" -gt "0" ]; then
     pass "User Access Administrator role on subscription"
+  elif [ "$OWNER" -gt "0" ]; then
+    pass "Owner role on subscription (includes User Access Administrator permissions)"
   else
-    fail "User Access Administrator role not found. Required for RBAC role assignments in keyvault, storage, and WAF modules."
+    fail "Neither Owner nor User Access Administrator role found. Required for RBAC role assignments in keyvault, storage, and WAF modules."
   fi
 fi
 
@@ -126,9 +135,9 @@ if [ ! -f "$TFVARS" ]; then
 else
   pass "terraform.tfvars exists"
 
-  # Check required fields are not placeholder values
-  REQUIRED_FIELDS=("location" "langsmith_license_key")
-  for FIELD in "${REQUIRED_FIELDS[@]}"; do
+  # Check required fields in terraform.tfvars
+  REQUIRED_TFVARS_FIELDS=("location" "subscription_id")
+  for FIELD in "${REQUIRED_TFVARS_FIELDS[@]}"; do
     VALUE=$(grep "^${FIELD}" "$TFVARS" 2>/dev/null | head -1 | cut -d'"' -f2 || echo "")
     if [ -z "$VALUE" ] || [[ "$VALUE" == *"<"* ]]; then
       fail "terraform.tfvars: ${FIELD} is empty or still a placeholder"
@@ -136,6 +145,21 @@ else
       pass "terraform.tfvars: ${FIELD} is set"
     fi
   done
+
+  # Check secrets.auto.tfvars exists and has license key
+  # Secrets live in secrets.auto.tfvars (written by setup-env.sh), not terraform.tfvars.
+  SECRETS_FILE="${INFRA_DIR}/secrets.auto.tfvars"
+  if [ ! -f "$SECRETS_FILE" ]; then
+    fail "secrets.auto.tfvars not found. Run: ./setup-env.sh"
+  else
+    pass "secrets.auto.tfvars exists"
+    LICENSE=$(grep "^langsmith_license_key" "$SECRETS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || echo "")
+    if [ -z "$LICENSE" ] || [[ "$LICENSE" == *"<"* ]]; then
+      fail "secrets.auto.tfvars: langsmith_license_key is empty — re-run ./setup-env.sh"
+    else
+      pass "secrets.auto.tfvars: langsmith_license_key is set"
+    fi
+  fi
 fi
 
 # ── 6. Other tooling ──────────────────────────────────────────────────────────

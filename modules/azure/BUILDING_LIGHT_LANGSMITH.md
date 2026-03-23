@@ -194,7 +194,7 @@ helm repo update
 helm search repo langsmith/langsmith --versions | head -5
 
 helm upgrade --install langsmith langsmith/langsmith \
-  --version 0.13.27 \
+  --version 0.13.28 \
   --namespace langsmith --create-namespace \
   -f ../helm/values/values-overrides.yaml \
   --wait --timeout 15m

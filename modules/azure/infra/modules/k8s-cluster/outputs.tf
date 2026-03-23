@@ -52,3 +52,13 @@ output "workload_identity_principal_id" {
   description = "Principal (Object) ID of the Managed Identity — used by keyvault and storage modules for RBAC role assignments"
   value       = azurerm_user_assigned_identity.k8s_app.principal_id
 }
+
+output "cert_manager_identity_client_id" {
+  description = "Client ID of the cert-manager Managed Identity — annotated on the cert-manager service account for DNS-01 Workload Identity auth"
+  value       = azurerm_user_assigned_identity.cert_manager.client_id
+}
+
+output "cert_manager_identity_principal_id" {
+  description = "Principal ID of the cert-manager Managed Identity — granted DNS Zone Contributor by the dns module"
+  value       = azurerm_user_assigned_identity.cert_manager.principal_id
+}

@@ -66,11 +66,15 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### Azure DB for PostgreSQL Flexible Server
 - **What**: Relational DB — orgs, users, projects, API keys, settings
+- **Version**: PostgreSQL ≥ 14 required (Azure Flexible Server defaults to 16)
+- **Extensions**: `btree_gin`, `btree_gist`, `pgcrypto`, `citext`, `ltree`, `pg_trgm` — enabled automatically by the postgres module
 - **Access**: Private VNet only (subnet-postgres) · SSL port 5432
 - **Secret**: `langsmith-postgres-secret` — created by Terraform k8s-bootstrap module
 
 ### Azure Cache for Redis Premium
 - **What**: Queue + cache — trace ingestion queue, pub/sub, short-lived cache
+- **Version**: Redis ≥ 5 required (Azure Cache for Redis Premium defaults to Redis 6)
+- **Dedicated instance**: Each LangSmith installation must use its own dedicated Redis — shared instances cause deployment tasks to route incorrectly
 - **Access**: Private VNet only (subnet-redis) · TLS port 6380
 - **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module
 
@@ -168,4 +172,4 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ---
 
-*Updated after full production deploy: Passes 2–5 verified on chart v0.13.27.*
+*Updated after full production deploy: Passes 2–5 verified on chart v0.13.28 (appVersion 0.13.31).*

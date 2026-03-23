@@ -14,6 +14,6 @@ output "nameservers" {
 }
 
 output "a_record_fqdn" {
-  description = "Fully qualified domain name of the A record"
-  value       = azurerm_dns_a_record.langsmith.fqdn
+  description = "Fully qualified domain name of the A record (empty until ingress_ip is set)"
+  value       = length(azurerm_dns_a_record.langsmith) > 0 ? azurerm_dns_a_record.langsmith[0].fqdn : ""
 }

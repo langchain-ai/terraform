@@ -50,13 +50,40 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 
 | Pass | What | How |
 |------|------|-----|
-| 1 | Azure infrastructure (AKS, Blob, Key Vault, cert-manager, KEDA) | `terraform apply` |
-| 1.5 | Cluster access | `az aks get-credentials` |
-| 1.6 | TLS cluster issuers | `kubectl apply -f kubectl/letsencrypt-issuers.yaml` |
+| 1 | Azure infrastructure (AKS, Blob, Key Vault, DNS zone, cert-manager, KEDA) | `terraform apply` |
+| 1.5 | Cluster access + get ingress IP | `az aks get-credentials` + `kubectl get svc` |
+| 1.5b | DNS onboarding | Add NS records at registrar → set `ingress_ip` → `terraform apply` |
+| 1.6 | TLS ClusterIssuer | Auto (DNS-01) or `kubectl apply` (HTTP-01 only) |
 | 2 | LangSmith application | `kubectl create secret` + `helm upgrade --install` |
 | 3 | LangSmith Deployments (optional) | add `config.deployment` block + `helm upgrade --install` |
 | 4 | Agent Builder (optional) | add `config.agentBuilder` block + `helm upgrade --install` |
 | 5 | Insights + Polly (optional) | add `config.insights` + `config.polly` blocks + `helm upgrade --install` |
+
+## Ingress Controller Options
+
+| `ingress_controller` | Description | When to use |
+|---|---|---|
+| `nginx` | NGINX ingress via Helm | Standard — works everywhere |
+| `istio-addon` | Azure managed Istio (AKS service mesh add-on) | Production — no control plane resource cost |
+| `istio` | Istio via Helm (self-managed) | When you need full Istio control |
+| `none` | No ingress installed | Bring your own |
+
+Start with `nginx`. Switch to `istio-addon` when you need multi-namespace routing (multi-dataplane) or Istio service mesh features.
+
+## TLS / Edge Options
+
+| Option | Variable | How TLS works | Azure DNS zone needed |
+|---|---|---|---|
+| **Front Door** (recommended) | `create_frontdoor = true` | Azure manages certs — CNAME + TXT at registrar | No |
+| **DNS-01 + cert-manager** | `tls_certificate_source = "dns01"` | cert-manager creates certs via Azure DNS TXT records | Yes (`create_dns_zone = true`) |
+| **HTTP-01 + cert-manager** | `tls_certificate_source = "letsencrypt"` | cert-manager creates certs via HTTP challenge | No (ingress must be public) |
+| **None** | `tls_certificate_source = "none"` | Bring your own | No |
+
+**Front Door works with all ingress controllers.** It sits in front of AKS at the edge and routes to the ingress LB (NGINX IP or Istio Gateway IP) over HTTP. TLS is terminated at Front Door — the ingress controller does not need TLS configuration.
+
+```
+Customer → Front Door (TLS, WAF, CDN) → AKS NGINX or Istio Gateway (HTTP) → LangSmith pods
+```
 
 See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for exact copy-paste commands, cluster sizing guidance, and helm chart version pinning.
 

@@ -22,8 +22,11 @@ resource "azurerm_dns_zone" "main" {
   tags                = merge(var.tags, { module = "dns" })
 }
 
-# A record pointing the root domain (and www) at the NGINX ingress LB IP.
+# A record pointing the root domain at the ingress LB IP.
+# Only created once ingress_ip is set — leave it empty on first apply,
+# then set ingress_ip after kubectl get svc and re-apply.
 resource "azurerm_dns_a_record" "langsmith" {
+  count               = var.ingress_ip != "" ? 1 : 0
   name                = "@"
   zone_name           = azurerm_dns_zone.main.name
   resource_group_name = var.resource_group_name

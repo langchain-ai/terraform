@@ -26,7 +26,7 @@ resource "azurerm_log_analytics_workspace" "main" {
 # kube-audit-admin: admin-level operations only (lower volume)
 # cluster-autoscaler: scale-up/scale-down decisions
 resource "azurerm_monitor_diagnostic_setting" "aks" {
-  count                      = var.aks_id != "" ? 1 : 0
+  count                      = var.enable_aks_diag ? 1 : 0
   name                       = "${var.name}-aks-diag"
   target_resource_id         = var.aks_id
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
@@ -46,7 +46,7 @@ resource "azurerm_monitor_diagnostic_setting" "aks" {
 # Key Vault diagnostic settings — captures every secret read/write.
 # AuditEvent: who accessed which secret, from which IP, and the result.
 resource "azurerm_monitor_diagnostic_setting" "keyvault" {
-  count                      = var.keyvault_id != "" ? 1 : 0
+  count                      = var.enable_keyvault_diag ? 1 : 0
   name                       = "${var.name}-kv-diag"
   target_resource_id         = var.keyvault_id
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
@@ -61,7 +61,7 @@ resource "azurerm_monitor_diagnostic_setting" "keyvault" {
 
 # PostgreSQL diagnostic settings — captures slow queries and auth failures.
 resource "azurerm_monitor_diagnostic_setting" "postgres" {
-  count                      = var.postgres_id != "" ? 1 : 0
+  count                      = var.enable_postgres_diag ? 1 : 0
   name                       = "${var.name}-postgres-diag"
   target_resource_id         = var.postgres_id
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
