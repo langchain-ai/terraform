@@ -32,3 +32,9 @@ variable "eso_irsa_role_arn" {
   type        = string
   description = "ARN of the IRSA role for the External Secrets Operator controller"
 }
+
+variable "enable_envoy_gateway" {
+  type        = bool
+  description = "Install Envoy Gateway for Kubernetes Gateway API routing"
+  default     = false
+}

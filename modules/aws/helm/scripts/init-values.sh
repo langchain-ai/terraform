@@ -46,6 +46,9 @@ _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external
 _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
+_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+_enable_envoy_gateway=false
+_tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 
 if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -99,12 +102,15 @@ echo "  acm_certificate_arn    = ${ACM_CERT_ARN:-(not set)}"
 echo ""
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
+# Hostname priority: custom domain > existing value > ALB DNS name
 EXISTING_HOSTNAME=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_HOSTNAME=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_HOSTNAME=""
 fi
-if [[ -n "$EXISTING_HOSTNAME" ]]; then
+if [[ -n "$_langsmith_domain" ]]; then
+  HOSTNAME="$_langsmith_domain"
+elif [[ -n "$EXISTING_HOSTNAME" ]]; then
   HOSTNAME="$EXISTING_HOSTNAME"
 elif [[ -n "$ALB_DNS_NAME" ]]; then
   HOSTNAME="$ALB_DNS_NAME"
@@ -313,36 +319,51 @@ if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
 fi
 echo ""
 
-# ── Build optional ingress annotations ────────────────────────────────────────
-_ingress_block=""
-_ingress_annotations=()
+# ── Build ingress or gateway block ─────────────────────────────────────────────
+_routing_block=""
 
-# Always set scheme — the base values file no longer hardcodes it.
-_ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"${ALB_SCHEME}\"")
+if [[ "$_enable_envoy_gateway" == "true" ]]; then
+  # Gateway API mode: disable chart Ingress, enable HTTPRoute creation.
+  # The bridge Ingress (ALB → Envoy proxy) is created by deploy.sh.
+  _routing_block="
+ingress:
+  enabled: false
 
-if [[ -n "$ALB_ARN" ]]; then
-  _ingress_annotations+=("    alb.ingress.kubernetes.io/load-balancer-arn: \"${ALB_ARN}\"")
-  # group.name tells the ALB controller to bind to the existing pre-provisioned ALB
-  # instead of creating a new one on each ingress reconciliation. Without this,
-  # ingress recreation provisions a new ALB with a different hostname.
-  _ingress_annotations+=("    alb.ingress.kubernetes.io/group.name: \"${_name_prefix}-${_environment}\"")
-fi
+gateway:
+  enabled: true
+  name: \"langsmith-gateway\"
+  namespace: \"${NAMESPACE:-langsmith}\""
+else
+  # Classic ALB Ingress mode
+  _ingress_annotations=()
 
-if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
-  _ingress_annotations+=("    alb.ingress.kubernetes.io/listen-ports: '[{\"HTTP\": 80}, {\"HTTPS\": 443}]'")
-  _ingress_annotations+=("    alb.ingress.kubernetes.io/ssl-redirect: \"443\"")
-  if [[ "$_tls_source" == "acm" && -n "$ACM_CERT_ARN" ]]; then
-    _ingress_annotations+=("    alb.ingress.kubernetes.io/certificate-arn: \"${ACM_CERT_ARN}\"")
+  # Always set scheme — the base values file no longer hardcodes it.
+  _ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"${ALB_SCHEME}\"")
+
+  if [[ -n "$ALB_ARN" ]]; then
+    _ingress_annotations+=("    alb.ingress.kubernetes.io/load-balancer-arn: \"${ALB_ARN}\"")
+    # group.name tells the ALB controller to bind to the existing pre-provisioned ALB
+    # instead of creating a new one on each ingress reconciliation. Without this,
+    # ingress recreation provisions a new ALB with a different hostname.
+    _ingress_annotations+=("    alb.ingress.kubernetes.io/group.name: \"${_name_prefix}-${_environment}\"")
   fi
-fi
 
-if [[ ${#_ingress_annotations[@]} -gt 0 ]]; then
-  _ingress_block="
+  if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
+    _ingress_annotations+=("    alb.ingress.kubernetes.io/listen-ports: '[{\"HTTP\": 80}, {\"HTTPS\": 443}]'")
+    _ingress_annotations+=("    alb.ingress.kubernetes.io/ssl-redirect: \"443\"")
+    if [[ "$_tls_source" == "acm" && -n "$ACM_CERT_ARN" ]]; then
+      _ingress_annotations+=("    alb.ingress.kubernetes.io/certificate-arn: \"${ACM_CERT_ARN}\"")
+    fi
+  fi
+
+  if [[ ${#_ingress_annotations[@]} -gt 0 ]]; then
+    _routing_block="
 ingress:
   annotations:"
-  for _ann in "${_ingress_annotations[@]}"; do
-    _ingress_block+=$'\n'"${_ann}"
-  done
+    for _ann in "${_ingress_annotations[@]}"; do
+      _routing_block+=$'\n'"${_ann}"
+    done
+  fi
 fi
 
 # ── Copy base values if missing ───────────────────────────────────────────────
@@ -448,7 +469,7 @@ operator:
 # carry the IRSA annotation. Apply it after Helm creates the service account:
 #   kubectl annotate serviceaccount langsmith-ksa -n langsmith \
 #     eks.amazonaws.com/role-arn=<irsa_role_arn> --overwrite
-${_ingress_block}
+${_routing_block}
 ${_external_services_block}
 YAML
 

@@ -208,6 +208,11 @@ output "enable_polly" {
   value       = var.enable_polly
 }
 
+output "enable_envoy_gateway" {
+  description = "Whether Envoy Gateway is installed for Kubernetes Gateway API routing"
+  value       = var.enable_envoy_gateway
+}
+
 #------------------------------------------------------------------------------
 # Resource Summary
 #------------------------------------------------------------------------------

@@ -37,7 +37,7 @@ postgres_deletion_protection = false    # Required for clean terraform destroy a
 ```
 
 All other defaults are fine for testing. The current dev config uses:
-- `name_prefix = "mfrederick"`, `environment = "dev"`, `region = "us-east-2"`
+- `name_prefix = "myco"`, `environment = "dev"`, `region = "us-east-2"`
 - EKS: v1.31, `m5.4xlarge`, min 1 / max 10 nodes
 - RDS: `db.t3.large`, 20 GB
 - Redis: `cache.m6g.xlarge`
@@ -306,13 +306,13 @@ terraform -chdir=infra destroy
 
 **If destroy hangs on security groups**: the ALB controller may have created extra security
 group rules. Check the AWS Console → EC2 → Security Groups, find any with names containing
-`mfrederick-dev`, and delete the extra rules or groups manually, then re-run destroy.
+`myco-dev`, and delete the extra rules or groups manually, then re-run destroy.
 
 ---
 
 ## SSM Parameter Reference
 
-Secrets stored at `/langsmith/mfrederick-dev/`:
+Secrets stored at `/langsmith/myco-dev/`:
 
 | Parameter | Auto-generated | Rotatable |
 |-----------|---------------|-----------|
@@ -323,4 +323,4 @@ Secrets stored at `/langsmith/mfrederick-dev/`:
 | `langsmith-license-key` | No (prompted) | N/A |
 | `langsmith-admin-password` | No (prompted) | Yes |
 
-To inspect: `aws ssm get-parameters-by-path --path /langsmith/mfrederick-dev/ --with-decryption`
+To inspect: `aws ssm get-parameters-by-path --path /langsmith/myco-dev/ --with-decryption`
