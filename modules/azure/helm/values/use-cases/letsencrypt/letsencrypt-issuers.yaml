@@ -4,7 +4,7 @@
 #   ACME_EMAIL=you@example.com bash helm/scripts/apply-cluster-issuers.sh
 #
 # Or apply directly (replace ACME_EMAIL first):
-#   sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' kubectl/letsencrypt-issuers.yaml | kubectl apply -f -
+#   sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' helm/values/use-cases/letsencrypt/letsencrypt-issuers.yaml | kubectl apply -f -
 #
 # Both staging and prod issuers are created:
 #   - letsencrypt-staging: test without rate limits (cert NOT trusted by browsers)
