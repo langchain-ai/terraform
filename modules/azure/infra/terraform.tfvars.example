@@ -37,18 +37,38 @@ redis_capacity = 1   # P1 = 6 GB RAM (sufficient for most deployments)
                      # P2 = 13 GB RAM (required for high write load ≥26 GiB)
 
 # ── AKS ───────────────────────────────────────────────────────────────────────
-# Sizing: Medium load (Med/Med), 1 Control Plane + 3 Dataplanes
-# Ref: ~74 vCPU / 148 GiB total — 10× Standard_D8s_v3 per sizing calculator
+# Node sizing: Standard_D8s_v3 (8 vCPU, 32 GiB) — AKS reserves ~1.7 vCPU/node,
+# leaving ~6.3 allocatable per node.
+#
+# CPU requests at minimum replicas (production sizing):
+#   backend ×3 (3.0) + platformBackend ×2 (1.0) + ingestQueue ×3 (3.0)
+#   + queue ×3 (3.0) + frontend ×2 (1.0) + playground (0.5) + aceBackend (0.2)
+#   + clickhouse (2.0) + system pods (0.7) = ~14.4 vCPU total requests
+#
+# min_count guidance (autoscaler scales up from this floor immediately):
+#   3  — Pass 2 (core LangSmith, no addons). ~76% CPU utilization. Min for prod.
+#   5  — Pass 3+ (+ Deployments, Agent Builder). Headroom for HPA burst.
+#   6  — Pass 4+ (+ Agent Builder + dynamic operator pods). Recommended if enabling all.
+#  10  — max_count ceiling; autoscaler handles load spikes.
+#
+# Cost estimate (eastus, on-demand):
+#   3× Standard_D8s_v3 ≈ $0.38/hr each ≈ $830/mo
+#   5× Standard_D8s_v3 ≈ $1.38/mo
+#
 default_node_pool_vm_size   = "Standard_D8s_v3"  # 8 vCPU, 32 GiB
-default_node_pool_max_count = 12                  # 10 target + 2 headroom
-default_node_pool_max_pods  = 60                  # AKS default 30 is too low; Pass 2 needs ~32 pods (17 LS + 15 system)
+default_node_pool_min_count = 3                   # minimum 3 for Pass 2 production
+default_node_pool_max_count = 10                  # autoscaler ceiling
+default_node_pool_max_pods  = 60                  # AKS default 30 is too low; Pass 2 needs ~32 pods
 aks_deletion_protection     = false               # set true for production
 
-# Large pool: ClickHouse (16 vCPU / 24 GiB required) + dataplane agent pods
+# Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
+# ClickHouse production sizing requests 2 vCPU / 8 GiB — fits on the default pool.
+# Use the large pool to dedicate a node to ClickHouse for predictable I/O, or
+# to host operator-spawned agent deployment pods which have unpredictable resource usage.
 additional_node_pools = {
   large = {
     vm_size   = "Standard_D16s_v3"  # 16 vCPU, 64 GiB
-    min_count = 0
+    min_count = 0                   # scales from zero — not needed for Pass 2 alone
     max_count = 2
   }
 }
@@ -65,21 +85,30 @@ ingress_controller = "nginx"
 # istio_addon_revision = "asm-1-22"
 
 # ── DNS + TLS ─────────────────────────────────────────────────────────────────
-# Recommended: delegate a subdomain to Azure DNS and use DNS-01 cert issuance.
-# DNS-01 works with any ingress controller — cert-manager uses Azure Workload
-# Identity to create TXT records automatically. No HTTP routing required.
+# Option A: Azure Public IP DNS label + Let's Encrypt HTTP-01 (recommended)
+#   Free Azure subdomain — no custom domain or DNS zone needed.
+#   cert-manager issues and renews the cert automatically via HTTP-01 challenge.
+#   → https://<nginx_dns_label>.<location>.cloudapp.azure.com
 #
-# Flow:
-#   1. terraform apply  → creates DNS zone, outputs nameservers
-#   2. Add NS records at your registrar for the subdomain (one-time)
-#   3. Get ingress IP: kubectl get svc ingress-nginx-controller -n ingress-nginx
-#   4. Set ingress_ip below → terraform apply  → creates A record
-#
-tls_certificate_source = "dns01"                    # "dns01" | "letsencrypt" (HTTP-01) | "none"
-letsencrypt_email      = "you@example.com"          # Let's Encrypt notifications
-langsmith_domain       = "langsmith.example.com"    # subdomain you control
-create_dns_zone        = true                       # Terraform creates the Azure DNS zone
-# ingress_ip           = ""                         # fill after first apply
+nginx_dns_label        = "langsmith-prod"       # → langsmith-prod.eastus.cloudapp.azure.com
+tls_certificate_source = "letsencrypt"
+letsencrypt_email      = "you@example.com"
+
+# Option B: Custom domain + DNS-01 cert-manager (cert issued on cluster)
+#   Requires: Azure DNS zone + NS delegation at registrar (one-time).
+# tls_certificate_source = "dns01"
+# create_dns_zone        = true
+# langsmith_domain       = "langsmith.example.com"
+# letsencrypt_email      = "you@example.com"
+
+# Option C: Azure Front Door (WAF + global CDN — enterprise only)
+#   1. terraform apply  → creates Front Door + endpoint
+#   2. Get NGINX LB IP after Pass 1.5 → set frontdoor_origin_hostname → apply
+#   3. terraform output frontdoor_endpoint_hostname → add CNAME at registrar
+#   4. terraform output frontdoor_validation_token  → add TXT _dnsauth record
+# create_frontdoor          = true
+# langsmith_domain          = "langsmith.example.com"
+# frontdoor_origin_hostname = ""
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 keyvault_purge_protection = false   # set true for production
@@ -96,27 +125,30 @@ blob_ttl_long_days  = 400   # run attachments (~13 months)
 langsmith_namespace    = "langsmith"
 langsmith_release_name = "langsmith"
 
-# ── Azure Front Door (optional — recommended for production) ──────────────────
-# Front Door Standard is the ACM equivalent for Azure — managed TLS + CDN edge.
-# Works with any ingress_controller value (nginx, istio, istio-addon, none).
+# ── Helm sizing + addon feature flags ─────────────────────────────────────────
+# Read by helm/scripts/init-values.sh and helm/scripts/deploy.sh.
+# Set flags and re-run `make init-values && make deploy` to enable each pass.
 #
-# When to use Front Door vs DNS-01 + cert-manager:
-#   Front Door:  simpler, no cert-manager needed, no Azure DNS zone needed.
-#               Customer just adds CNAME + TXT at their registrar. ~$35/mo.
-#   DNS-01:      no per-request CDN cost, cert lives on the cluster.
-#               Better for high-traffic or private deployments.
+# Sizing profiles (controls which examples/langsmith-values-sizing-*.yaml is applied):
+#   minimum          — absolute minimum (demos, very constrained clusters)
+#   dev              — single-replica, minimal resources (dev / CI / demos)
+#   production       — multi-replica with HPA (recommended for all real workloads)
+#   production-large — high-volume (~50 concurrent users, ~1000 traces/sec)
 #
-# Flow (after first terraform apply):
-#   1. terraform output frontdoor_endpoint_hostname    → FQDN for CNAME
-#   2. terraform output frontdoor_validation_token     → value for TXT record
-#   3. At registrar: CNAME langsmith.example.com → <endpoint_hostname>
-#                    TXT  _dnsauth.langsmith.example.com → <validation_token>
-#   4. Azure issues managed cert automatically (no re-apply needed)
-#   5. Set frontdoor_origin_hostname → terraform apply (connects FD to AKS LB)
-#
-# create_frontdoor          = true
-# frontdoor_origin_hostname = ""         # fill after ingress LB is provisioned
-# frontdoor_sku             = "Standard_AzureFrontDoor"   # or Premium for WAF
+sizing_profile = "production"
+
+# Pass 3 — LangGraph Platform (hostBackend, listener, operator)
+# Required before enabling agent_builder, insights, or polly.
+# enable_deployments = true
+
+# Pass 4 — Agent Builder UI (agentBuilderToolServer, agentBuilderTriggerServer, agentBootstrap Job)
+# enable_agent_builder = true
+
+# Pass 5 — Insights / Clio (ClickHouse-backed trace analytics — deploys via operator)
+# enable_insights = true
+
+# Pass 5 — Polly (AI eval / monitoring agent)
+# enable_polly = true
 
 # ── Optional modules ──────────────────────────────────────────────────────────
 # Each is independently toggleable — safe to add after initial deploy.
