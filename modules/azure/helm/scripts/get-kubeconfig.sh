@@ -40,6 +40,8 @@ pass "kubeconfig updated"
 echo ""
 info "Active context: $(kubectl config current-context)"
 echo ""
+kubectl get nodes
+echo ""
 echo "Next:"
 echo "  make k8s-secrets   # pull Key Vault → langsmith-config-secret"
 echo "  make init-values   # generate Helm values from terraform outputs"

@@ -161,6 +161,111 @@ terraform apply
 
 ## Pass 2 — Application
 
+### `nginx_dns_label` subdomain not resolving — TLS cert stuck pending
+
+**Symptom:** After `make deploy`, `nslookup langsmith-demo.eastus.cloudapp.azure.com` returns NXDOMAIN. The cert-manager ACME challenge can't complete and the TLS certificate stays `READY: False`.
+
+**Cause:** The `service.beta.kubernetes.io/azure-dns-label-name` annotation must be present on the NGINX LoadBalancer service for Azure to assign the DNS label to the public IP. If the annotation is missing, the IP is provisioned but has no DNS name.
+
+`make deploy` sets this annotation automatically via `deploy.sh`. If you deployed without `make deploy` (e.g. ran `helm upgrade` directly), the annotation was never set.
+
+**Fix — set the annotation manually:**
+```bash
+kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
+  service.beta.kubernetes.io/azure-dns-label-name=<nginx_dns_label> \
+  --overwrite
+# e.g. --overwrite with value: langsmith-demo
+
+# Wait 1-2 minutes, then verify DNS resolves:
+nslookup langsmith-demo.eastus.cloudapp.azure.com
+# Expected: returns the public IP
+
+# Once DNS resolves, delete the stuck cert to trigger a re-issue:
+kubectl delete certificate langsmith-tls -n langsmith
+# cert-manager re-creates it and the ACME challenge completes within 2-3 minutes
+```
+
+**Verify the annotation was set:**
+```bash
+kubectl get svc ingress-nginx-controller -n ingress-nginx \
+  -o jsonpath='{.metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}'
+# Expected: langsmith-demo (or your nginx_dns_label value)
+```
+
+---
+
+### `letsencrypt-prod` ClusterIssuer missing — cert-manager cannot issue TLS cert
+
+**Symptom:**
+```
+kubectl get certificate langsmith-tls -n langsmith
+# NAME            READY   SECRET   AGE
+# langsmith-tls   False            3m
+
+kubectl describe certificate langsmith-tls -n langsmith
+# Events: ... clusterissuers.cert-manager.io "letsencrypt-prod" not found
+```
+
+**Cause:** When `tls_certificate_source = "letsencrypt"` is set, the `k8s-bootstrap` module creates a `letsencrypt-prod` ClusterIssuer via `kubernetes_manifest`. If you deployed from an older version of the module (before `cluster_issuer_http01` was added), the ClusterIssuer was never created.
+
+**Fix — apply it manually:**
+```bash
+kubectl apply -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: you@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+EOF
+
+# Verify it becomes Ready (takes ~20 seconds)
+kubectl get clusterissuer letsencrypt-prod
+# NAME               READY   AGE
+# letsencrypt-prod   True    30s
+
+# Delete the stuck cert to trigger re-issue
+kubectl delete certificate langsmith-tls -n langsmith
+```
+
+**Long-term fix:** Update `k8s-bootstrap/main.tf` to include the `kubernetes_manifest.cluster_issuer_http01` resource and re-run `make apply`. This is already included in the current version of the module.
+
+---
+
+### Scripts missing after fresh clone or clean environment
+
+**Symptom:** Running `make kubeconfig`, `make deploy`, `make status`, or `make uninstall` fails with:
+```
+helm/scripts/get-kubeconfig.sh: No such file or directory
+helm/scripts/preflight-check.sh: No such file or directory
+infra/scripts/_common.sh: No such file or directory
+```
+
+**Cause:** These scripts are tracked in git but were untracked (`??`) files — meaning they existed locally but had never been committed. After a fresh clone or `git clean -f`, they are absent.
+
+**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, they can be recreated from the source in `BUILDING_LIGHT_LANGSMITH.md` or by cherry-picking the commit that adds them.
+
+**Scripts that were added (now committed):**
+| Script | Purpose |
+|---|---|
+| `infra/scripts/_common.sh` | Shared bash helpers (`_parse_tfvar`, `pass/fail/warn/info/header`) |
+| `helm/scripts/get-kubeconfig.sh` | Reads cluster name from `terraform output`, runs `az aks get-credentials` |
+| `helm/scripts/preflight-check.sh` | Checks required tools, cluster connectivity, helm repo |
+| `helm/scripts/preflight-check.sh` | TLS check, NGINX DNS label annotation |
+| `helm/scripts/uninstall.sh` | Uninstalls Helm release, prompts for namespace deletion |
+| `infra/scripts/status.sh` | 9-section health check for the full deployment |
+| `infra/scripts/tf-run.sh` | Wrapper for `terraform init/plan/apply/destroy` |
+
+---
+
 ### Front Door returns 404 — UI not loading (Istio + Front Door)
 
 **Symptom:**
@@ -435,7 +540,41 @@ See [ARCHITECTURE.md — Workload Identity](ARCHITECTURE.md#workload-identity-bl
 
 ---
 
-## Teardown
+## Teardown / Clean
+
+### `make clean` before `make destroy` — tfstate deleted, infrastructure orphaned
+
+**Symptom:** `make clean` was run before `make destroy`. Terraform's `terraform.tfstate` is deleted. Running `make destroy` now fails immediately:
+```
+No state file was found!
+```
+All Azure resources (AKS, VNet, Key Vault, Storage, etc.) are still running but Terraform has lost all tracking.
+
+**Cause:** `make clean` removes local secrets and generated files including `terraform.tfvars` and `secrets.auto.tfvars`. Without `terraform.tfvars`, Terraform cannot initialize the backend or identify any resources.
+
+**Correct teardown order:**
+```
+1. make uninstall   ← Helm + namespace
+2. make destroy     ← Azure infra (needs tfstate + tfvars)
+3. make clean       ← local secrets and generated files (LAST)
+```
+
+**Recovery when tfstate is gone:**
+```bash
+# Delete the entire resource group directly — removes everything in one shot
+az group delete --name langsmith-rg<identifier> --yes --no-wait
+
+# Watch until deletion completes
+az group show --name langsmith-rg<identifier> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
+# Once you see "ResourceGroupNotFound", all resources are deleted
+```
+
+> **Key Vault soft-delete after forced deletion:** If you reuse the same `identifier`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
+> ```bash
+> az keyvault purge --name langsmith-kv<identifier> --location <region>
+> ```
+
+---
 
 ### `terraform destroy` stalls on VNet/subnet deletion
 

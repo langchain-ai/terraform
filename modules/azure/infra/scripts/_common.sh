@@ -17,8 +17,10 @@ INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 
 # ── terraform.tfvars parser ──────────────────────────────────────────────────
 _parse_tfvar() {
+  local key="$1"
+  local tfvars_file="${INFRA_DIR}/terraform.tfvars"
   local line val
-  line=$(grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null | head -1) || return 1
+  line=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
   # Strip everything up to and including =
   val=$(echo "$line" | sed 's/^[^=]*=//')
   # Quoted string: extract between double quotes
@@ -28,16 +30,14 @@ _parse_tfvar() {
     # Unquoted (bool, number): strip inline comment then whitespace
     val=$(echo "$val" | sed 's/#.*//' | tr -d '[:space:]')
   fi
+  [[ -n "$val" ]] || return 1
   echo "$val"
 }
 
 # Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
 _tfvar_is_true() {
   local val
-  val=$(grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*//' \
-    | sed 's/#.*//' \
-    | tr -d '[:space:]') || return 1
+  val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
 }
 

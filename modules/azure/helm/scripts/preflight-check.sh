@@ -14,7 +14,7 @@ echo ""
 
 # ── Required tools ─────────────────────────────────────────────────────────
 MISSING=()
-for tool in az kubectl helm; do
+for tool in az kubectl helm terraform; do
   if ! command -v "$tool" &>/dev/null; then
     MISSING+=("$tool")
   fi
@@ -25,14 +25,15 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo ""
   for tool in "${MISSING[@]}"; do
     case "$tool" in
-      az)      action "Install az CLI: https://docs.microsoft.com/cli/azure/install-azure-cli" ;;
-      kubectl) action "Install kubectl: https://kubernetes.io/docs/tasks/tools/" ;;
-      helm)    action "Install helm: https://helm.sh/docs/intro/install/" ;;
+      az)        action "Install az CLI: https://docs.microsoft.com/cli/azure/install-azure-cli" ;;
+      kubectl)   action "Install kubectl: https://kubernetes.io/docs/tasks/tools/" ;;
+      helm)      action "Install helm: https://helm.sh/docs/intro/install/" ;;
+      terraform) action "Install terraform: https://developer.hashicorp.com/terraform/downloads" ;;
     esac
   done
   exit 1
 fi
-pass "Required tools: az kubectl helm"
+pass "Required tools: az kubectl helm terraform"
 
 # ── Azure login ─────────────────────────────────────────────────────────────
 if ! az account show &>/dev/null; then
@@ -54,13 +55,8 @@ else
 fi
 
 # ── Helm langchain repo ──────────────────────────────────────────────────────
-if helm repo list 2>/dev/null | grep -q "langchain"; then
-  pass "Helm langchain repo configured"
-else
-  warn "langchain Helm repo not found — adding..."
-  helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
-  pass "langchain Helm repo added"
-fi
+helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
+helm repo update langchain &>/dev/null && pass "Helm repo langchain updated" || warn "Helm repo update failed — proceeding anyway"
 
 echo ""
 pass "All preflight checks passed"

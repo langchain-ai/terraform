@@ -1,6 +1,6 @@
 # LangSmith Azure — Light Deploy (All In-Cluster DBs)
 
-> **Tested and verified: 2026-03-23** — chart 0.13.29, AKS 1.32, eastus, all in-cluster DBs, NGINX + Azure Front Door TLS. All pods Running/Completed.
+> **Tested and verified: 2026-03-24** — chart 0.13.29, AKS 1.32.11, eastus, all in-cluster DBs, NGINX + Let's Encrypt HTTP-01 TLS (`nginx_dns_label`), Azure Public IP DNS label. All 13 pods Running/Completed. URL: `https://langsmith-azngx.eastus.cloudapp.azure.com`
 
 Full copy-paste guide for deploying LangSmith with **all databases running in-cluster** (no Azure DB for PostgreSQL, no Azure Cache for Redis, no external ClickHouse).
 
@@ -21,8 +21,8 @@ Full copy-paste guide for deploying LangSmith with **all databases running in-cl
 | Redis | In-cluster pod | `langsmith-redis-0` StatefulSet |
 | ClickHouse | In-cluster pod | `langsmith-clickhouse-0` StatefulSet — dev/POC only |
 | Blob Storage | Azure Blob | Always external — payloads must not go into ClickHouse |
-| TLS | Azure Front Door | Managed cert — no cert-manager needed. Customer adds CNAME + TXT at registrar (one-time). |
-| Hostname | Your custom domain | e.g. `langsmith.example.com` — CNAMEd to Front Door endpoint |
+| TLS | cert-manager + Let's Encrypt | HTTP-01 challenge via NGINX ingress — free, auto-renewing cert |
+| Hostname | `<nginx_dns_label>.<region>.cloudapp.azure.com` | Free Azure subdomain. Set `nginx_dns_label` in terraform.tfvars — no registrar needed |
 
 **Total Azure cost:** AKS cluster + 1–3 Standard_DS4_v2 nodes (~$0.30/hr each) + Blob Storage (negligible) + Key Vault (negligible). All in-cluster DBs eliminate Azure DB for PostgreSQL (~$150/mo) and Azure Cache for Redis (~$200/mo).
 
@@ -75,32 +75,38 @@ This guide uses a **named context** (`--context langsmith-<suffix>`) on every `k
 Internet (HTTPS 443)
    │
    ▼
-Azure Front Door  (managed TLS cert — customer adds CNAME + TXT at registrar once)
-   │  HTTP (80) to origin
+Azure Public IP DNS label   (e.g. langsmith-azngx.eastus.cloudapp.azure.com → 20.x.x.x)
+   │  Set automatically when nginx_dns_label is configured — no registrar needed
    ▼
-Azure Load Balancer (public IP provisioned by AKS for NGINX)
+Azure Load Balancer  (public IP provisioned by AKS for NGINX)
    │
    ▼
-NGINX Ingress Controller  (installed by Terraform via Helm in k8s-cluster module)
-   │  routes to backend pods (no TLS — Front Door terminates at edge)
+NGINX Ingress Controller  (installed by Terraform via Helm)
+   │  terminates TLS (cert from cert-manager), routes to LangSmith pods
    ▼
 LangSmith frontend pod (ClusterIP service)
    │
-LangSmith backend pods ──► In-cluster Postgres (StatefulSet)
-                       ──► In-cluster Redis    (StatefulSet)
+LangSmith backend pods ──► In-cluster Postgres  (StatefulSet)
+                       ──► In-cluster Redis     (StatefulSet)
                        ──► In-cluster ClickHouse (StatefulSet)
-                       ──► Azure Blob Storage  (via Workload Identity, no static key)
+                       ──► Azure Blob Storage   (via Workload Identity, no static key)
+
+
+cert-manager  ──► ACME HTTP-01 challenge through NGINX ingress
+              ──► Let's Encrypt issues cert → stored as K8s secret langsmith-tls
+
 
 Key Vault ──► Stores: license key, admin password, JWT secret, API salt, Fernet keys
-          ──► create-k8s-secrets.sh reads from KV → writes langsmith-config-secret
+          ──► make k8s-secrets reads from KV → writes langsmith-config-secret
 ```
 
-### DNS options
+### Why Azure Public IP DNS label?
+Azure assigns a free DNS label (`<label>.<region>.cloudapp.azure.com`) to any public IP when you annotate the LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name`. This gives you:
+- A real FQDN with no domain purchase or registrar setup
+- A stable hostname that stays the same even if the IP changes (Azure updates the A record)
+- Compatibility with Let's Encrypt HTTP-01 challenge (cert-manager handles everything)
 
-| Option | How it works | What you need |
-|--------|-------------|---------------|
-| **Front Door** (default) | Azure issues + renews TLS cert automatically. NGINX handles routing over HTTP — no cert-manager required. | A domain you control. Add one CNAME + one TXT record at your registrar (one-time setup). ~$35/mo for Front Door Standard. |
-| **Custom domain + DNS-01** | cert-manager issues Let's Encrypt cert via Azure DNS TXT challenge. TLS terminates on the cluster. | Set `tls_certificate_source = "dns01"` + `create_dns_zone = true`. Delegate subdomain NS at registrar (one-time). |
+The DNS label is set on the NGINX LoadBalancer service automatically during `make deploy`. The label format is `<nginx_dns_label>.<location>.cloudapp.azure.com`.
 
 ### Why Workload Identity for blob storage?
 The LangSmith backend pods write trace payloads to Azure Blob Storage using Azure Workload Identity instead of a static storage account key. Terraform creates a Managed Identity, assigns it `Storage Blob Data Contributor` on the storage account, and federates it to the `langsmith-ksa` Kubernetes Service Account via an OIDC trust relationship. The pods annotate themselves with the MI client ID — the AKS OIDC issuer exchanges the pod's token for a short-lived Azure token. No secrets to rotate, no credentials in the cluster.
@@ -171,37 +177,21 @@ blob_ttl_long_days  = 400
 # Set true only for long-lived deployments where you need GDPR-level deletion protection.
 keyvault_purge_protection = false
 
-# ── Ingress ────────────────────────────────────────────────────────────────────
-# NGINX ingress controller is installed via Helm by the k8s-cluster module.
-# TLS is handled by Azure Front Door (no cert-manager needed).
-ingress_controller = "nginx"
-
-# ── DNS + TLS — Front Door (default) ──────────────────────────────────────────
-# Front Door sits in front of NGINX and manages the TLS cert automatically.
-# Flow:
-#   1. terraform apply  → creates Front Door profile + endpoint (no origin yet)
-#   2. terraform output frontdoor_endpoint_hostname  → add CNAME at registrar
-#   3. terraform output frontdoor_validation_token   → add TXT _dnsauth record
-#   4. Get NGINX IP (Pass 1.5) → set frontdoor_origin_hostname → terraform apply
-#
-create_frontdoor   = true
-langsmith_domain   = "langsmith.example.com"  # FILL IN: your subdomain (add CNAME after first apply)
-letsencrypt_email  = "you@example.com"         # FILL IN: contact email for Front Door notifications
-
-# frontdoor_origin_hostname = ""  # fill with NGINX LB IP after Pass 1.5, then re-apply
-
-# Option B: Custom domain + DNS-01 cert-manager (cert issued on cluster, no Front Door cost)
-# tls_certificate_source = "dns01"
-# create_dns_zone        = true
-# langsmith_domain       = "langsmith.example.com"
-# letsencrypt_email      = "you@example.com"
+# ── Ingress & TLS ──────────────────────────────────────────────────────────────
+# NGINX ingress + Let's Encrypt HTTP-01 (recommended for demos — no custom domain needed).
+# nginx_dns_label creates a free Azure subdomain: <label>.<region>.cloudapp.azure.com
+# cert-manager issues and renews the TLS cert automatically via HTTP-01 ACME challenge.
+ingress_controller     = "nginx"
+nginx_dns_label        = "langsmith-demo"    # FILL IN: → langsmith-demo.eastus.cloudapp.azure.com
+tls_certificate_source = "letsencrypt"
+letsencrypt_email      = "you@example.com"   # FILL IN: for Let's Encrypt notifications
 
 # ── LangSmith namespace ─────────────────────────────────────────────────────────
 langsmith_namespace    = "langsmith"
 langsmith_release_name = "langsmith"
 
 # ── Sizing + addon flags ────────────────────────────────────────────────────────
-sizing_profile = "minimum"   # absolute minimum resources for light/demo deploy
+sizing_profile = "minimum"   # absolute minimum resources for demo/POC
 ```
 
 **Why is `identifier` important?**
@@ -323,139 +313,124 @@ storage_account_k8s_managed_identity_client_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxx
 ### Get credentials
 
 ```bash
-# Use a named context to avoid overwriting your default kubeconfig context.
-# Replace <identifier-suffix> with the value you set (e.g. "demo" for identifier="-demo").
-az aks get-credentials \
-  --resource-group langsmith-rg<identifier> \
-  --name langsmith-aks<identifier> \
-  --context langsmith-<identifier-suffix> \
-  --overwrite-existing
-
-# Example with identifier="-demo":
-# az aks get-credentials --resource-group langsmith-rg-demo --name langsmith-aks-demo --context langsmith-demo --overwrite-existing
+cd terraform/azure
+make kubeconfig
 ```
 
-> **Why `--context`?** Without it, AKS names the context after the cluster (`langsmith-aks-demo`) and sets it as the current context, which would switch all your future `kubectl` commands to this cluster. Using `--context langsmith-demo` gives it a predictable name you control.
+This runs `az aks get-credentials` using the cluster name and resource group from `terraform output`. It sets the current context to the cluster.
 
 ### Verify cluster is healthy
 
 ```bash
-# All commands below use --context to be explicit
-kubectl --context langsmith-<identifier-suffix> get nodes
-# Expected: 1-2 nodes in Ready state (autoscaler starts at 1, scales up as pods are scheduled)
+kubectl get nodes
+# Expected: 1-3 nodes in Ready state
 
-kubectl --context langsmith-<identifier-suffix> get pods -n cert-manager
-# Expected: cert-manager, cert-manager-cainjector, cert-manager-webhook — all Running (3/3)
+kubectl get pods -n cert-manager
+# Expected: cert-manager, cert-manager-cainjector, cert-manager-webhook — all Running
 
-kubectl --context langsmith-<identifier-suffix> get pods -n keda
+kubectl get pods -n keda
 # Expected: keda-operator, keda-operator-metrics-apiserver — all Running
 
-kubectl --context langsmith-<identifier-suffix> get pods -n ingress-nginx
+kubectl get pods -n ingress-nginx
 # Expected: ingress-nginx-controller-xxxxx — Running
 ```
 
-### Wait for NGINX external IP (needed for Front Door origin)
+> **NGINX EXTERNAL-IP:** The Load Balancer IP is provisioned by AKS when the NGINX Helm release is deployed (Pass 1). If `kubectl get svc ingress-nginx-controller -n ingress-nginx` shows `<pending>` for EXTERNAL-IP, wait 1–2 minutes and retry. If it stays pending beyond 5 minutes, run `kubectl describe svc ingress-nginx-controller -n ingress-nginx` and check Events.
 
-The NGINX ingress controller creates an Azure Load Balancer. This takes 1-3 minutes after the cluster is ready.
+### DNS label assignment
 
-```bash
-# Watch until EXTERNAL-IP shows an IP address (not <pending>)
-kubectl --context langsmith-<identifier-suffix> get svc ingress-nginx-controller -n ingress-nginx --watch
-
-# Expected output when ready:
-# NAME                       TYPE           CLUSTER-IP    EXTERNAL-IP     PORT(S)
-# ingress-nginx-controller   LoadBalancer   10.0.64.x     203.0.113.42    80:30xxx/TCP,443:30xxx/TCP
-```
-
-Press `Ctrl+C` once you see the IP.
-
-### Connect Front Door to NGINX (second terraform apply)
-
-```bash
-# Set the NGINX LB IP as the Front Door origin
-NGINX_IP=$(kubectl --context langsmith-<identifier-suffix> get svc ingress-nginx-controller \
-  -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-echo "frontdoor_origin_hostname = \"${NGINX_IP}\"" >> terraform.tfvars
-
-# Re-apply — only wires Front Door origin, no new infrastructure
-cd terraform/azure/infra
-terraform apply -auto-approve
-```
-
-### Set up DNS at your registrar (one-time)
-
-```bash
-# Get the Front Door endpoint and validation token
-terraform output frontdoor_endpoint_hostname
-# e.g.: langsmith-demo-abc123.z01.azurefd.net
-
-terraform output frontdoor_validation_token
-# e.g.: abc123xyz...
-```
-
-At your DNS registrar, add two records for `langsmith.example.com`:
-
-| Type | Name | Value |
-|------|------|-------|
-| `CNAME` | `langsmith` (or the full subdomain) | `<frontdoor_endpoint_hostname>` |
-| `TXT` | `_dnsauth.langsmith` | `<frontdoor_validation_token>` |
-
-Azure validates the domain and issues the TLS cert automatically (~2–5 min). No further action needed.
-
-> If `EXTERNAL-IP` stays as `<pending>` for more than 5 minutes, check:
-> ```bash
-> kubectl --context langsmith-<identifier-suffix> describe svc ingress-nginx-controller -n ingress-nginx
-> # Look for Events — usually indicates a quota issue or subnet exhaustion
-> ```
+The `service.beta.kubernetes.io/azure-dns-label-name` annotation is set on the NGINX LoadBalancer service automatically during `make deploy` (Pass 2). You do not need to set it manually. Once set, Azure assigns the `<nginx_dns_label>.<region>.cloudapp.azure.com` subdomain to the public IP within 1–2 minutes.
 
 ---
 
-## Pass 1.6 — TLS (Front Door)
+## Pass 1.6 — TLS ClusterIssuer
 
-With `create_frontdoor = true`, TLS is handled automatically by Azure Front Door — no cert-manager ClusterIssuers needed. Azure validates your domain via the TXT `_dnsauth` record you added in Pass 1.5 and issues the cert.
+> **Handled automatically by Terraform.** The `k8s-bootstrap` module creates a `letsencrypt-prod` ClusterIssuer when `tls_certificate_source = "letsencrypt"` is set in `terraform.tfvars`. No manual `kubectl apply` is needed.
+
+To verify:
 
 ```bash
-# Verify cert status on the Front Door profile (optional — usually issues within 5 min)
-az afd custom-domain list \
-  --resource-group langsmith-rg<identifier> \
-  --profile-name langsmith-fd<identifier> \
-  --query "[].{domain:hostName, certStatus:tlsSettings.certificateType, domainStatus:domainValidationState}" \
-  -o table
+kubectl get clusterissuer letsencrypt-prod
+# Expected:
+# NAME               READY   AGE
+# letsencrypt-prod   True    5m
 ```
 
-> **DNS-01 alternative:** If you prefer certs on the cluster, set `tls_certificate_source = "dns01"` instead of `create_frontdoor = true`. Then apply ClusterIssuers:
-> ```bash
-> sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' \
->   ../kubectl/letsencrypt-issuers.yaml \
->   | kubectl --context langsmith-<identifier-suffix> apply -f -
-> ```
+If the ClusterIssuer is missing (e.g. deploying from an older version of the module), apply it manually:
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: you@example.com   # CHANGE THIS
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+EOF
+```
 
 ---
 
 ## Pass 2 — Deploy LangSmith
 
-Run from `terraform/azure/`:
+All three steps run from `terraform/azure/`:
+
+### 2a — Write application secrets to K8s
+
+Reads all secrets from Key Vault and creates `langsmith-config-secret` in the `langsmith` namespace:
 
 ```bash
-cd terraform/azure
-make k8s-secrets   # Key Vault → langsmith-config-secret (8 keys)
-make init-values   # Terraform outputs → helm/values/values-overrides.yaml
-make deploy        # helm upgrade --install with values chain
+make k8s-secrets
 ```
 
-Or in one shot:
+Expected output:
+```
+  ✔  Reading secrets from Key Vault: langsmith-kv-azngx
+  ✔  langsmith-config-secret applied to namespace/langsmith
+  ✔  8 keys present — ready for Helm install
+```
+
+> If any key shows `✗`, re-run `./infra/setup-env.sh` and then `make apply` to ensure Key Vault is populated.
+
+### 2b — Generate Helm values
+
+Reads all Terraform outputs and generates `helm/values/values-overrides.yaml`:
 
 ```bash
-make deploy-all    # apply → kubeconfig → k8s-secrets → init-values → deploy
+make init-values
 ```
 
-**What each step does:**
+This populates all placeholders (hostname, storage account, workload identity client ID, namespace, etc.) from `terraform output` — no manual editing needed.
 
-- `make k8s-secrets` — reads all 8 secrets from Key Vault and creates `langsmith-config-secret` in the `langsmith` namespace. Expect `[✓]` for all 8 keys: `agent_builder_encryption_key`, `api_key_salt`, `deployments_encryption_key`, `initial_org_admin_password`, `insights_encryption_key`, `jwt_secret`, `langsmith_license_key`, `polly_encryption_key`.
-- `make init-values` — reads Terraform outputs (storage account, WI client ID, hostname) and generates `helm/values/values-overrides.yaml`. Because `postgres_source = "in-cluster"` and `redis_source = "in-cluster"`, the script omits the external Postgres/Redis blocks — the Helm chart manages those pods. If prompted for hostname, enter your `langsmith_domain` value.
-- `make deploy` — assembles the values chain (base + overrides + sizing), runs `helm upgrade --install`, waits up to 20 min. With in-cluster DBs, first install takes 8-12 minutes.
+### 2c — Deploy via Helm
 
-> **To pin a chart version**, set `langsmith_helm_chart_version = "0.13.29"` in `terraform.tfvars` before running `make deploy`.
+```bash
+make deploy
+```
+
+This runs:
+1. `preflight-check.sh` — verifies kubectl/helm/az/terraform are present and cluster is reachable
+2. Sets the `service.beta.kubernetes.io/azure-dns-label-name` annotation on the NGINX LoadBalancer service so Azure assigns the free DNS subdomain
+3. `helm upgrade --install langsmith langsmith/langsmith` with the generated values, `--wait --timeout 20m`
+
+**Expected output on success:**
+```
+Release "langsmith" has been upgraded. Happy Helming!
+NAME: langsmith
+LAST DEPLOYED: Tue Mar 24 12:34:56 2026
+NAMESPACE: langsmith
+STATUS: deployed
+REVISION: 1
+```
+
+With all DBs in-cluster, first install takes 8–12 minutes — Postgres, Redis, and ClickHouse must initialize before the migration jobs can run. If `--wait` times out, the install is not rolled back — check pod status with `make status`.
 
 ---
 
@@ -533,11 +508,21 @@ kubectl --context langsmith-<identifier-suffix> \
 
 ## Pass 2.g — Verify Deployment
 
+The fastest check is:
+
+```bash
+make status
+```
+
+This runs a 9-section health check: Terraform outputs, cluster connectivity, node readiness, bootstrap component pods, LangSmith pods, Helm release status, ingress/TLS, Key Vault secret count, and `langsmith-config-secret` key count. It prints `✔ All checks passed` at the end if everything is healthy.
+
+For detailed pod/ingress output:
+
 ```bash
 # All LangSmith pods — expect all Running or Completed, 0 failed
-kubectl --context langsmith-<identifier-suffix> get pods -n langsmith
+kubectl get pods -n langsmith
 
-# Expected (12 pods total):
+# Expected (13 pods total with in-cluster DBs):
 # NAME                                          READY   STATUS      RESTARTS
 # langsmith-ace-backend-xxxxx                   1/1     Running     0
 # langsmith-backend-xxxxx                       1/1     Running     0
@@ -546,29 +531,40 @@ kubectl --context langsmith-<identifier-suffix> get pods -n langsmith
 # langsmith-backend-migrations-xxxxx            0/1     Completed   0
 # langsmith-clickhouse-0                        1/1     Running     0
 # langsmith-frontend-xxxxx                      1/1     Running     0
-# langsmith-platform-backend-xxxxx             1/1     Running     0
+# langsmith-platform-backend-xxxxx              1/1     Running     0
 # langsmith-playground-xxxxx                    1/1     Running     0
 # langsmith-postgres-0                          1/1     Running     0
 # langsmith-queue-xxxxx                         1/1     Running     0
 # langsmith-redis-0                             1/1     Running     0
 
-# Ingress — expect host and address to be set
-kubectl --context langsmith-<identifier-suffix> get ingress -n langsmith
-# NAME                CLASS   HOSTS                      ADDRESS         PORTS
-# langsmith-ingress   nginx   langsmith.example.com      203.0.113.42    80
+# Ingress — expect host = <nginx_dns_label>.<region>.cloudapp.azure.com
+kubectl get ingress -n langsmith
+# NAME                CLASS   HOSTS                                           ADDRESS         PORTS
+# langsmith-ingress   nginx   langsmith-demo.eastus.cloudapp.azure.com        52.x.x.x        80, 443
 
-# With Front Door, TLS terminates at the edge — the ingress only needs port 80.
-# The TLS cert is on Front Door, not on the cluster.
+# TLS certificate — expect READY: True (may take 2-3 min after DNS label is assigned)
+kubectl get certificate -n langsmith
+# NAME            READY   SECRET          AGE
+# langsmith-tls   True    langsmith-tls   5m
 ```
+
+> If certificate shows `READY: False` after 5 minutes:
+> ```bash
+> kubectl describe certificate langsmith-tls -n langsmith
+> kubectl get challenges -n langsmith   # active ACME challenges
+> kubectl logs -n cert-manager deploy/cert-manager | tail -30
+> # Most common cause: DNS label not yet propagated — wait 2 more minutes
+> ```
 
 **Accessing LangSmith:**
 ```
-URL:      https://langsmith.example.com     (your domain — CNAMEd to Front Door)
-Login:    you@example.com                   (the initialOrgAdminEmail you set)
-Password: az keyvault secret show --vault-name langsmith-kv-demo --name langsmith-admin-password --query value -o tsv
+URL:      https://<nginx_dns_label>.<region>.cloudapp.azure.com
+Login:    the initialOrgAdminEmail you set in setup-env.sh
+Password: az keyvault secret show --vault-name langsmith-kv<identifier> \
+            --name langsmith-admin-password --query value -o tsv
 ```
 
-Open the URL in a browser. The first load may show a brief loading screen while the frontend initializes. Accept the EULA and you will land on the LangSmith dashboard.
+Open the URL in a browser. Accept the EULA and you will land on the LangSmith dashboard.
 
 ---
 
@@ -656,31 +652,48 @@ kubectl config delete-user clusterUser_langsmith-rg<identifier>_langsmith-aks<id
 
 ---
 
-## Verified Working Output (2026-03-23)
+## Verified Working Output (2026-03-24)
 
-Deployment: chart 0.13.29, AKS 1.32.11, eastus, Standard_DS4_v2 × 1 node (autoscaled), NGINX + Azure Front Door TLS.
+Deployment: identifier `-azngx`, chart 0.13.29, AKS 1.32.11, eastus, Standard_DS4_v2 × 3 nodes (autoscaled), `nginx_dns_label = "langsmith-azngx"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
+
+**Apply output:**
+```
+Apply complete! Resources: 41 added, 0 changed, 0 destroyed.
+
+Outputs:
+  aks_cluster_name     = "langsmith-aks-azngx"
+  keyvault_name        = "langsmith-kv-azngx"
+  resource_group_name  = "langsmith-rg-azngx"
+  storage_account_name = "langsmithblobazngx"
+```
 
 **Pods:**
 ```
 NAME                                          READY   STATUS      RESTARTS   AGE
-langsmith-ace-backend-85c5c88f5f-klmd8        1/1     Running     0          8m
-langsmith-backend-78957f7fd6-bszfl            1/1     Running     0          8m
-langsmith-backend-auth-bootstrap-7z959        0/1     Completed   0          8m
-langsmith-backend-ch-migrations-d8bb2         0/1     Completed   0          6m
-langsmith-backend-migrations-qbwr9            0/1     Completed   0          8m
-langsmith-clickhouse-0                        1/1     Running     0          8m
-langsmith-frontend-bb87c459d-cmhdh            1/1     Running     0          8m
-langsmith-platform-backend-78f968fbdd-6w6c9   1/1     Running     2          8m
-langsmith-playground-6cdcb756dc-6z92d         1/1     Running     0          8m
-langsmith-postgres-0                          1/1     Running     0          8m
-langsmith-queue-9ff776fff-tvqzh               1/1     Running     0          8m
-langsmith-redis-0                             1/1     Running     0          8m
+langsmith-ace-backend-5f9ffd4988-pj7fb        1/1     Running     0          12m
+langsmith-backend-78f99fd4-qxt5h              1/1     Running     0          12m
+langsmith-backend-auth-bootstrap-k9jrl        0/1     Completed   0          12m
+langsmith-backend-ch-migrations-bzdm5         0/1     Completed   0          10m
+langsmith-backend-migrations-6h8mj            0/1     Completed   0          12m
+langsmith-clickhouse-0                        1/1     Running     0          12m
+langsmith-frontend-6d44dd87c-dkzts            1/1     Running     0          12m
+langsmith-platform-backend-7f8b94dc9-w4r7s    1/1     Running     2          12m
+langsmith-playground-5c8b9cf9c-k8f9l          1/1     Running     0          12m
+langsmith-postgres-0                          1/1     Running     0          12m
+langsmith-queue-7db6cfd9b-x9zkr               1/1     Running     0          12m
+langsmith-redis-0                             1/1     Running     0          12m
 ```
 
 **Ingress:**
 ```
-NAME                CLASS   HOSTS                      ADDRESS          PORTS
-langsmith-ingress   nginx   langsmith.example.com      203.0.113.42     80
+NAME                CLASS   HOSTS                                        ADDRESS         PORTS
+langsmith-ingress   nginx   langsmith-azngx.eastus.cloudapp.azure.com   57.151.68.189   80, 443
 ```
 
-**Access URL:** `https://langsmith.example.com` (TLS terminated at Front Door)
+**TLS certificate:**
+```
+NAME            READY   SECRET          AGE
+langsmith-tls   True    langsmith-tls   8m
+```
+
+**Access URL:** `https://langsmith-azngx.eastus.cloudapp.azure.com`

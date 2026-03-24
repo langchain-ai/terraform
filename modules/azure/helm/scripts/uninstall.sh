@@ -53,9 +53,10 @@ if [[ "$_lgp_count" -gt 0 ]]; then
 fi
 
 # ── Uninstall Helm release ──────────────────────────────────────────────────
-if helm status "$RELEASE_NAME" -n "$NAMESPACE" &>/dev/null; then
+if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --short 2>/dev/null | grep -q "^${RELEASE_NAME}$"; then
   info "Uninstalling Helm release: ${RELEASE_NAME}..."
-  helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
+  helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m 2>/dev/null || \
+    helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" 2>/dev/null || true
   pass "Helm release '${RELEASE_NAME}' uninstalled"
 else
   skip "Helm release '${RELEASE_NAME}' not found in namespace '${NAMESPACE}'"
@@ -80,4 +81,5 @@ echo ""
 echo "To destroy infrastructure:"
 echo "  helm uninstall ingress-nginx -n ingress-nginx --wait  # remove Azure LB"
 echo "  make destroy"
+warn "Then: make clean    (removes local secrets and generated files)"
 echo ""

@@ -175,9 +175,9 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"aks_cluster_name"'; 
   _storage_account=$(echo "$_tf_output" | jq -r '.storage_account_name.value // empty' 2>/dev/null) || _storage_account=""
   _langsmith_url=$(echo "$_tf_output" | jq -r '.langsmith_url.value       // empty' 2>/dev/null) || _langsmith_url=""
 
-  [[ -n "$_cluster_name" ]]   && info "AKS cluster: ${_cluster_name}"      || warn "No aks_cluster_name output"
-  [[ -n "$_rg_name" ]]        && info "Resource group: ${_rg_name}"
-  [[ -n "$_kv_tf_name" ]]     && info "Key Vault: ${_kv_tf_name}"
+  [[ -n "$_cluster_name" ]]    && info "AKS cluster: ${_cluster_name}"      || warn "No aks_cluster_name output"
+  [[ -n "$_rg_name" ]]         && info "Resource group: ${_rg_name}"
+  [[ -n "$_kv_tf_name" ]]      && info "Key Vault: ${_kv_tf_name}"
   [[ -n "$_storage_account" ]] && info "Storage account: ${_storage_account}" || warn "No storage_account_name output"
   [[ -n "$_langsmith_url" ]]   && info "LangSmith URL: ${_langsmith_url}"
 else
@@ -209,6 +209,28 @@ else
 
   if kubectl cluster-info --request-timeout=5s &>/dev/null; then
     pass "kubectl can reach the cluster"
+
+    # Node readiness
+    if NODES=$(kubectl get nodes --no-headers 2>/dev/null); then
+      READY=$(echo "$NODES" | grep -c " Ready " || true)
+      TOTAL=$(echo "$NODES" | wc -l | tr -d ' ')
+      if [[ "$READY" == "$TOTAL" ]]; then
+        pass "$READY/$TOTAL nodes Ready"
+      else
+        warn "$READY/$TOTAL nodes Ready"
+        echo "$NODES"
+      fi
+    fi
+
+    # Bootstrap components
+    for ns in cert-manager keda ingress-nginx; do
+      if kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -v "Running\|Completed" | grep -q .; then
+        warn "$ns: some pods not Running"
+      else
+        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || echo 0)
+        pass "$ns: ${_running_count} pod(s) Running"
+      fi
+    done
   else
     fail "kubectl cannot reach the cluster"
     action "make kubeconfig"
@@ -368,6 +390,33 @@ else
     fi
   else
     skip "NGINX ingress IP not yet assigned"
+  fi
+
+  # Ingress and TLS certificate
+  kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  CERT_STATUS=$(kubectl get certificate -n "$_NAMESPACE" --no-headers 2>/dev/null) || CERT_STATUS=""
+  if [[ -n "$CERT_STATUS" ]]; then
+    echo "$CERT_STATUS" | while read -r line; do
+      if echo "$line" | grep -q "True"; then
+        pass "cert: $line"
+      else
+        warn "cert: $line"
+      fi
+    done
+  else
+    info "No certificate resources (Front Door TLS or no TLS configured)"
+  fi
+
+  # langsmith-config-secret key count
+  if [[ "$QUICK" == "false" ]]; then
+    ACTUAL_KEYS=$(kubectl get secret langsmith-config-secret -n "$_NAMESPACE" \
+      -o json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['data']))" 2>/dev/null) || ACTUAL_KEYS=0
+    if [[ "$ACTUAL_KEYS" -ge 8 ]]; then
+      pass "langsmith-config-secret: $ACTUAL_KEYS keys present"
+    else
+      warn "langsmith-config-secret: $ACTUAL_KEYS key(s) — expected 8. Run: make k8s-secrets"
+      set_next "make k8s-secrets"
+    fi
   fi
 fi
 
