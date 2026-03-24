@@ -77,7 +77,7 @@ resource "aws_route53_record" "cert_validation" {
 }
 
 resource "aws_acm_certificate_validation" "langsmith" {
-  count                   = var.create_certificate ? 1 : 0
+  count                   = var.create_certificate && var.wait_for_validation ? 1 : 0
   certificate_arn         = aws_acm_certificate.langsmith[0].arn
   validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
 }

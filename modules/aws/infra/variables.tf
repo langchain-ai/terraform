@@ -547,6 +547,12 @@ variable "enable_usage_telemetry" {
   default     = false
 }
 
+variable "enable_envoy_gateway" {
+  type        = bool
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # LangGraph Platform Encryption Keys
 # Fernet keys for optional feature modules. Generate once and never change.

@@ -371,5 +371,7 @@ module "k8s_bootstrap" {
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
 
+  enable_envoy_gateway = var.enable_envoy_gateway
+
   depends_on = [time_sleep.wait_for_alb_webhook]
 }

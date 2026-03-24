@@ -135,3 +135,73 @@ MANIFEST
   depends_on = [helm_release.cert_manager]
 }
 
+# ── Envoy Gateway (Kubernetes Gateway API controller) ──────────────────────
+# Installs the Envoy Gateway controller and Gateway API CRDs. When enabled,
+# the LangSmith Helm chart creates HTTPRoute resources instead of Ingress.
+# The Gateway resource is created in the langsmith namespace so HTTPRoutes
+# can reference it without cross-namespace ReferenceGrants.
+
+resource "helm_release" "envoy_gateway" {
+  count = var.enable_envoy_gateway ? 1 : 0
+
+  name             = "envoy-gateway"
+  repository       = "oci://docker.io/envoyproxy"
+  chart            = "gateway-helm"
+  namespace        = "envoy-gateway-system"
+  create_namespace = true
+  version          = "v1.3.0"
+
+  set {
+    name  = "deployment.envoyGateway.resources.requests.cpu"
+    value = "100m"
+  }
+  set {
+    name  = "deployment.envoyGateway.resources.requests.memory"
+    value = "256Mi"
+  }
+}
+
+# GatewayClass + Gateway resource — applied via kubectl to avoid CRD plan-time
+# validation issues (same pattern as the letsencrypt ClusterIssuer above). The
+# Gateway API CRDs are installed by the Envoy Gateway Helm chart.
+#
+# The GatewayClass is created explicitly because the Envoy Gateway certgen job
+# (which normally creates it) runs with a short TTL and may not re-run on
+# subsequent applies. Without a GatewayClass, the Gateway stays in "Waiting
+# for controller" state indefinitely.
+resource "terraform_data" "envoy_gateway_resource" {
+  count = var.enable_envoy_gateway ? 1 : 0
+
+  triggers_replace = [
+    var.namespace,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${var.namespace}
+spec:
+  gatewayClassName: eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 8080
+MANIFEST
+    EOT
+  }
+
+  depends_on = [helm_release.envoy_gateway]
+}
+
