@@ -94,6 +94,38 @@ az aks mesh get-upgrades -g <resource-group> -n <cluster-name>
 
 
 
+### Key Vault purge protection cannot be disabled after enabling
+
+**Symptom:**
+```
+Error: updating Key Vault "langsmith-kv-dz": once Purge Protection has been Enabled it's not possible to disable it
+```
+
+**Cause:** Azure Key Vault soft-delete is enabled by default. When a Key Vault is deleted (via `terraform destroy` or manually), Azure retains it in a soft-deleted recoverable state for 90 days. On the next `terraform apply` with the same name, **Azure silently recovers the old Key Vault** — including its original `purge_protection_enabled = true` setting. Since purge protection is a one-way door (enabled → cannot be disabled), any subsequent apply with `keyvault_purge_protection = false` fails.
+
+**Fix — if you can live with purge protection enabled** (test environments):
+```hcl
+# terraform.tfvars
+keyvault_purge_protection = true
+```
+Re-run `make apply` — no more diff.
+
+**Fix — if you need purge_protection = false** (clean re-deployable test env):
+```bash
+# 1. Remove KV from Terraform state (does not delete it from Azure)
+terraform -chdir=infra state rm module.keyvault.azurerm_key_vault.langsmith
+
+# 2. Permanently purge the soft-deleted KV (irreversible!)
+az keyvault purge --name langsmith-kv<identifier> --location eastus
+
+# 3. Re-apply — Terraform creates a fresh KV with purge_protection = false
+make apply
+```
+
+**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `identifier` suffix for a fresh clean deploy.
+
+---
+
 ### Key Vault secrets already exist but are not in Terraform state
 
 **Symptom:**
@@ -195,11 +227,11 @@ Helm eventually times out at 15 minutes with no clear error message.
 
 **Cause:** The Job reads the admin password using the key `initial_org_admin_password`. If the secret was created with a different key name (e.g. `admin_password`), the container can't start.
 
-**Fix:** Delete and recreate `langsmith-config-secret` with the correct key name, then re-run helm:
+**Fix:** Delete and recreate `langsmith-config-secret` with the correct key name, then re-deploy:
 ```bash
 kubectl delete secret langsmith-config-secret -n langsmith
-# Re-run the kubectl create secret command from QUICK_REFERENCE.md Pass 2c
-# Ensure --from-literal=initial_org_admin_password="$ADMIN_PASSWORD"
+make k8s-secrets   # recreates from Key Vault with correct key names
+make deploy
 ```
 
 ---
@@ -215,13 +247,13 @@ Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmi
 
 **Cause:** LangSmith DB migrations are one-way (Alembic forward-only). A newer chart version applies schema migrations that older chart versions don't know about. Downgrading the chart leaves the DB at a revision the older app image can't locate.
 
-**Fix:** Roll forward to the version you were on (or newer):
+**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy:
+```hcl
+# terraform.tfvars
+langsmith_helm_chart_version = "0.13.30"   # pin to working version
+```
 ```bash
-helm upgrade --install langsmith langsmith/langsmith \
-  --version <PREVIOUS_VERSION> \
-  --namespace langsmith \
-  -f ../helm/values/values-overrides.yaml \
-  --wait --timeout 15m
+make init-values && make deploy
 ```
 
 **Prevention:** Always test a new chart version in a separate environment before upgrading production. Never downgrade an existing deployment.
@@ -237,12 +269,9 @@ Error: UPGRADE FAILED: timed out waiting for the condition
 
 **Cause:** The `langsmith-backend-auth-bootstrap` Job runs DB migrations and auth bootstrap on every `helm upgrade`. On first install this can take up to 5 minutes. Without `--timeout 15m`, helm may report failure even though the install eventually succeeds.
 
-**Fix:** Always include `--timeout 15m` in the helm command:
+**Fix:** `make deploy` already includes `--timeout 20m`. If you are running helm manually, always include `--timeout 20m`:
 ```bash
-helm upgrade --install langsmith langsmith/langsmith \
-  --version <VERSION> --namespace langsmith \
-  -f ../helm/values/values-overrides.yaml \
-  --wait --timeout 15m
+make deploy   # recommended — handles timeout, values chain, and release guard automatically
 ```
 
 ---
@@ -334,12 +363,70 @@ See [ARCHITECTURE.md — Workload Identity](ARCHITECTURE.md#workload-identity-bl
 **Fix — correct teardown order:**
 ```bash
 # 1. Uninstall LangSmith — removes pods, services, and the Azure Load Balancer
-helm uninstall langsmith -n langsmith --wait
+make uninstall
 
 # 2. Delete the namespace (clears any lingering finalizers)
 kubectl delete namespace langsmith --timeout=60s
 
 # 3. Now safe to destroy
 #    cert-manager and KEDA are managed by Terraform (k8s-bootstrap module) — destroy handles them
-terraform destroy
+make destroy
+```
+
+---
+
+### `langsmith-agent-bootstrap` hook times out on first Pass 3–5 deploy
+
+**Symptom:**
+```
+Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmith-agent-bootstrap
+not ready. status: InProgress, message: Job in progress
+context deadline exceeded
+```
+The job log shows agents progressing through `QUEUED → AWAITING_DEPLOY → DEPLOYING` but never reaching `HEALTHY` within the 20-minute helm timeout.
+
+**Cause:** On a cold cluster (all agent images pulling for the first time), the three LGP agents (`agent-builder`, `clio`, `smith-polly`) can take longer than 20 minutes to reach HEALTHY status. The Helm post-upgrade hook waits synchronously.
+
+**This is not a failure** — the resources ARE applied. The release is marked `failed` but the agents continue deploying. Re-run once agents are healthy:
+
+```bash
+# Wait for agents to finish (watch pod count stabilise)
+kubectl get pods -n langsmith -w | grep -E "agent-builder|clio|smith-polly"
+
+# Re-deploy — bootstrap hook completes immediately since agents are already HEALTHY
+make deploy
+```
+
+---
+
+### `listener` pods OOMKilled — CrashLoopBackOff with dev sizing
+
+**Symptom:** `langsmith-listener` pods repeatedly crash. `kubectl describe pod` shows `Reason: OOMKilled` / `Exit Code: 137`. Cluster memory looks fine overall.
+
+**Cause:** The `langsmith-values-sizing-dev.yaml` sets `listener.deployment.resources.limits.memory: 512Mi`. When Deployments (Pass 3) are enabled, the listener is heavier and exceeds this limit.
+
+**Fix:** The `langsmith-values-agent-deploys.yaml` overlay (loaded after the sizing file) correctly sets `listener.deployment.resources.limits.memory: 4Gi`. Verify both files are in your values chain:
+
+```
+make deploy   # values chain: values.yaml → overrides → sizing-dev → agent-deploys
+```
+
+If you see only the sizing file without agent-deploys, re-run `make init-values` to regenerate the overlay files.
+
+**Key gotcha — `resources` vs `deployment.resources`:** The LangSmith chart uses `listener.deployment.resources` (not `listener.resources`) for container resource limits. Setting `listener.resources` in an overlay file is silently ignored. Always use the `deployment.resources` path.
+
+---
+
+### Stale HPA scales `listener` or `host-backend` to max replicas unexpectedly
+
+**Symptom:** After enabling Passes 3–5, `langsmith-listener` scales to 8–10 pods even though `sizing_profile = "dev"` sets `replicas: 1`. Memory usage stays high, pods keep OOMKilling.
+
+**Cause:** A prior Helm revision created an HPA for `listener` (or `host-backend`) when `autoscaling.hpa.enabled: true` was set. When the release fails (hook timeout), Helm does not clean up the HPA. On re-deploy with `enabled: false`, the stale HPA remains and overrides the `replicas` spec.
+
+**Fix:**
+```bash
+kubectl delete hpa langsmith-listener langsmith-host-backend -n langsmith 2>/dev/null || true
+kubectl scale deployment langsmith-listener -n langsmith --replicas=1
+kubectl scale deployment langsmith-host-backend -n langsmith --replicas=1
+make deploy   # locks in correct replica count from values files
 ```
