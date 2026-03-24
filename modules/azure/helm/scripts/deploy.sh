@@ -75,6 +75,35 @@ if [[ -n "$_nginx_dns_label" ]]; then
   fi
 fi
 
+# ── Apply letsencrypt-prod ClusterIssuer ──────────────────────────────────
+# kubernetes_manifest in Terraform can't create this on fresh deploy (no cluster
+# exists during plan). Applied here instead — idempotent, safe to re-run.
+_tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
+if [[ "$_tls_source" == "letsencrypt" ]]; then
+  _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
+  if kubectl get clusterissuer letsencrypt-prod &>/dev/null; then
+    pass "ClusterIssuer letsencrypt-prod already exists"
+  else
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${_le_email}
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+EOF
+    pass "ClusterIssuer letsencrypt-prod created"
+  fi
+fi
+
 # ── Preflight checks ──────────────────────────────────────────────────────
 "$SCRIPT_DIR/preflight-check.sh"
 

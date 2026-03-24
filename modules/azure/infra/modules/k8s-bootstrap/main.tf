@@ -242,39 +242,10 @@ resource "helm_release" "cert_manager" {
   }
 }
 
-# HTTP-01 ClusterIssuer — created by Terraform when tls_certificate_source = "letsencrypt".
-# cert-manager uses the NGINX ingress to serve the ACME HTTP-01 challenge token at
-# /.well-known/acme-challenge/<token>. No DNS API access needed — works with any public IP.
-# Best fit for: Public IP DNS label (*.cloudapp.azure.com) or any A-record hostname.
-resource "kubernetes_manifest" "cluster_issuer_http01" {
-  count = var.tls_certificate_source == "letsencrypt" ? 1 : 0
-
-  manifest = {
-    apiVersion = "cert-manager.io/v1"
-    kind       = "ClusterIssuer"
-    metadata = {
-      name = "letsencrypt-prod"
-    }
-    spec = {
-      acme = {
-        server = "https://acme-v02.api.letsencrypt.org/directory"
-        email  = var.letsencrypt_email
-        privateKeySecretRef = {
-          name = "letsencrypt-prod-account-key"
-        }
-        solvers = [{
-          http01 = {
-            ingress = {
-              ingressClassName = "nginx"
-            }
-          }
-        }]
-      }
-    }
-  }
-
-  depends_on = [helm_release.cert_manager]
-}
+# HTTP-01 ClusterIssuer is NOT created here.
+# kubernetes_manifest requires a live API connection during plan, which fails on fresh
+# deploy (no cluster exists yet). It is applied by helm/scripts/deploy.sh instead,
+# after the cluster is up, via kubectl apply.
 
 # DNS-01 ClusterIssuer — created by Terraform when tls_certificate_source = "dns01".
 # Uses Azure DNS + Workload Identity: no static service principal needed.
