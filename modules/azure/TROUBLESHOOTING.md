@@ -278,6 +278,37 @@ make deploy   # recommended — handles timeout, values chain, and release guard
 
 ## Pass 3+ — Feature Passes
 
+### Polly shows "Unable to connect to LangGraph server" / connects to `localhost:8123`
+
+**Symptom:** The Polly chat widget in the UI shows:
+```
+ConnectionError: Unable to connect to LangGraph server.
+Please ensure the server is running and accessible.
+```
+Browser console shows `POST http://localhost:8123/threads net::ERR_FAILED` and a CORS error for `localhost:8123`.
+
+**Cause:** Two separate issues can produce this:
+
+**A — Frontend pod started before `langsmith-polly-config` was created.**
+The bootstrap job creates a ConfigMap `langsmith-polly-config` with `VITE_POLLY_DEPLOYMENT_URL` after Polly is registered. The frontend mounts this via `envFrom` — but env vars from ConfigMap are loaded at pod start, not watched dynamically. If the frontend pod was running before the bootstrap job completed, it has `VITE_SELF_HOSTED_POLLY_ENABLED=true` but no URL, so Polly defaults to `localhost:8123`.
+
+**Fix:** Roll the frontend after any `agentBootstrap` run that registers Polly for the first time:
+```bash
+kubectl rollout restart deployment langsmith-frontend -n langsmith
+```
+Verify the new pod has the URL:
+```bash
+kubectl exec -n langsmith deploy/langsmith-frontend -- env | grep POLLY
+# expect: VITE_POLLY_DEPLOYMENT_URL=https://<hostname>/lgp/smith-polly-<hash>
+```
+
+**B — `LANGCHAIN_ENDPOINT` set in `polly.agent.extraEnv`.**
+`LANGCHAIN_ENDPOINT` is a reserved variable. Setting it in `polly.agent.extraEnv` causes the bootstrap job to fail registering Polly with `400 Bad Request: 'LANGCHAIN_ENDPOINT' is reserved`. Polly is never created, so no URL ends up in the ConfigMap.
+
+**Fix:** Remove the `polly.agent.extraEnv` block entirely. The operator injects `LANGCHAIN_ENDPOINT` automatically pointing to `langsmith-frontend:80/api/v1`, which correctly routes to the legacy backend. Do not attempt to override it.
+
+---
+
 ### `listener` and `operator` pods never appear after Pass 3 helm upgrade
 
 **Symptom:** `helm upgrade` succeeds. `langsmith-host-backend` is Running but `langsmith-listener` and `langsmith-operator` are absent from `kubectl get pods`.
@@ -311,6 +342,58 @@ Changing `deployments_encryption_key`, `agent_builder_encryption_key`, or `insig
 
 - Do not rotate these keys.
 - Do not set `config.agentBuilder.encryptionKey` or `config.insights.encryptionKey` inline in `values-overrides.yaml` — the chart reads them from `langsmith-config-secret` via `existingSecretName`. Setting inline overrides the secret reference.
+
+---
+
+### `agent-builder-tool-server` or `polly` in CrashLoopBackOff — child processes die silently
+
+**Symptom:**
+```
+INFO:     Started parent process [1]
+INFO:     Waiting for child process [18]
+INFO:     Child process [18] died
+INFO:     Waiting for child process [19]
+INFO:     Child process [19] died
+...
+Startup probe failed: Get "http://10.0.0.x:1989/health": dial tcp ...: connect: connection refused
+```
+Pod restarts indefinitely. No traceback is printed to the container log.
+
+**Cause:** The `lc_config.settings.SharedSettings` class is instantiated at **module import time** inside the uvicorn worker process. A pydantic `ValidationError` raised there exits the worker with code 0 — uvicorn's parent prints "Child process died" but swallows the traceback. The most common triggers:
+
+- `BASIC_AUTH_ENABLED = true` but `BASIC_AUTH_JWT_SECRET` is empty (key missing from `langsmith-config-secret`)
+- A required feature-flag key is absent from the `langsmith-config` ConfigMap (populated by Helm)
+
+**How to diagnose — run the server in a debug pod:**
+```bash
+# Get the image version
+IMAGE=$(kubectl get deployment langsmith-agent-builder-tool-server -n langsmith \
+  -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+# Create a debug pod (sleep so you can exec in)
+kubectl run ts-debug --image="$IMAGE" --restart=Never -n langsmith \
+  --overrides='{"spec":{"containers":[{"name":"ts-debug","image":"'"$IMAGE"'","command":["sleep","300"],"envFrom":[{"configMapRef":{"name":"langsmith-config"}}],"resources":{"requests":{"cpu":"100m","memory":"256Mi"},"limits":{"cpu":"500m","memory":"512Mi"}}}]}}'
+
+kubectl wait --for=condition=Ready pod/ts-debug -n langsmith --timeout=60s
+
+# Now run the server — the traceback will be visible
+kubectl exec -n langsmith ts-debug -- \
+  /bin/sh -c 'cd /code/agent-builder-tool-server && PYTHONUNBUFFERED=1 python server.py 2>&1 | head -40'
+
+kubectl delete pod ts-debug -n langsmith
+```
+
+**Fix:** Add the missing key to `langsmith-config-secret`:
+```bash
+# Find which key is missing from the pydantic error, then add it to Key Vault:
+az keyvault secret set --vault-name <kv-name> --name <missing-key> --value "<value>"
+
+# Re-create the secret:
+make k8s-secrets
+
+# Restart the failing pod:
+kubectl rollout restart deployment/langsmith-agent-builder-tool-server -n langsmith
+```
 
 ---
 

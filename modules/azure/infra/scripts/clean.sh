@@ -35,6 +35,25 @@ echo ""
 warn "This removes all local secrets and generated values files."
 warn "Run AFTER: make uninstall && make destroy"
 echo ""
+
+# Guard: if tfstate exists and terraform destroy hasn't run yet, abort.
+# Deleting tfstate before destroy means Terraform loses track of all Azure
+# resources — you'll have to delete them manually via az group delete.
+if [[ -f "$INFRA_DIR/terraform.tfstate" ]]; then
+  _state_resources=$(grep -c '"type":' "$INFRA_DIR/terraform.tfstate" 2>/dev/null || echo 0)
+  if [[ "$_state_resources" -gt 0 ]]; then
+    echo ""
+    fail "terraform.tfstate exists with ${_state_resources} tracked resource(s)."
+    warn "Run 'make destroy' BEFORE 'make clean' — otherwise Terraform loses track"
+    warn "of your Azure resources and you'll have to delete them manually."
+    warn "  make uninstall   # remove Helm release first"
+    warn "  make destroy     # terraform destroy"
+    warn "  make clean       # then clean local files"
+    echo ""
+    printf "  Force clean anyway? [y/N] "
+  fi
+fi
+
 printf "  Continue? [y/N] "
 read -r _confirm
 [[ "$_confirm" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 0; }

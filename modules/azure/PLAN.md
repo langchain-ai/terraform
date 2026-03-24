@@ -1,4 +1,85 @@
-# LangSmith Azure Deployment Standardization Plan
+# LangSmith Azure — GCP/AWS Parity Plan
+# Updated 2026-03-23
+# Status: [ ] todo  [~] in progress  [x] done
+
+## Goal
+Make Azure deployment workflow identical to GCP/AWS:
+- `make` from `terraform/azure/` drives the full 5-pass workflow
+- `init-values.sh` generates `helm/values/values-overrides.yaml` from terraform outputs
+- `deploy.sh` uses a values chain: base + overrides + sizing + addon overlays
+- `status.sh` provides 9-section health check
+- All scripts live in their correct homes (`infra/scripts/` vs `helm/scripts/`)
+
+## Target Workflow
+
+```
+make quickstart      # (future) interactive wizard → terraform.tfvars
+make setup-env       # prompts for secrets → secrets.auto.tfvars
+make preflight       # Azure credential + provider checks
+make init            # terraform init
+make plan            # terraform plan
+make apply           # terraform apply (Pass 1)
+make kubeconfig      # az aks get-credentials
+make k8s-secrets     # pull Key Vault → langsmith-config-secret
+make init-values     # TF outputs → helm/values/values-overrides.yaml
+make deploy          # helm upgrade --install (values chain, Pass 2–5 via tfvars flags)
+make status          # 9-section health check
+make status-quick    # skip slow K8s/Key Vault checks
+make deploy-all      # apply → kubeconfig → k8s-secrets → init-values → deploy
+```
+
+## 5-Pass Deployment
+
+| Pass | What | How |
+|------|------|-----|
+| 1 | AKS + Postgres + Redis + Blob + KV + cert-manager + KEDA + namespace + SA | `make apply` |
+| 1.5 | Cluster access + langsmith-config-secret | `make kubeconfig && make k8s-secrets` |
+| 2 | Core LangSmith (17 pods) | `make init-values && make deploy` |
+| 3 | + LangGraph Deployments | set `enable_deployments = true` → `make deploy` |
+| 4 | + Agent Builder | set `enable_agent_builder = true` → `make deploy` |
+| 5 | + Insights/Clio | set `enable_insights = true` → `make deploy` |
+
+---
+
+## Files to Create / Update
+
+### [ ] Batch 1: Infra Scripts + Makefile
+
+- [ ] `infra/scripts/_common.sh` — shared helpers: `_parse_tfvar`, `_tfvar_is_true`, color/status helpers
+- [ ] `infra/scripts/status.sh` — 9-section health check (azure-adapted from GCP)
+- [ ] `infra/scripts/tf-run.sh` — CI-friendly terraform runner
+- [ ] Update `Makefile` — add `init-values`, `status-quick`, `deploy-all`, `setup-env` targets; fix `deploy` → `helm/scripts/deploy.sh`
+
+### [ ] Batch 2: Helm Scripts
+
+- [ ] `helm/scripts/deploy.sh` — values chain + pending-upgrade guard + WI annotation check
+- [ ] `helm/scripts/init-values.sh` — reads TF outputs, generates values-overrides.yaml; prompts for sizing + tier
+- [ ] `helm/scripts/preflight-check.sh` — tools check + cluster connectivity
+- [ ] `helm/scripts/get-kubeconfig.sh` — `az aks get-credentials` wrapper
+- [ ] `helm/scripts/uninstall.sh` — clean Helm uninstall
+
+### [ ] Batch 3: Helm Values
+
+- [ ] `helm/values/values.yaml` — Azure base: NGINX ingress, Azure Blob WI, external PG/Redis secrets, in-cluster CH, production sizing
+- [ ] `helm/values/values-overrides.yaml.example` — template filled by `init-values.sh`
+- [ ] `helm/values/examples/langsmith-values.yaml` — annotated reference
+- [ ] `helm/values/examples/langsmith-values-sizing-minimum.yaml`
+- [ ] `helm/values/examples/langsmith-values-sizing-dev.yaml`
+- [ ] `helm/values/examples/langsmith-values-sizing-production.yaml`
+- [ ] `helm/values/examples/langsmith-values-agent-deploys.yaml` — Pass 3
+- [ ] `helm/values/examples/langsmith-values-agent-builder.yaml` — Pass 4
+- [ ] `helm/values/examples/langsmith-values-insights.yaml` — Pass 5
+- [ ] `helm/values/examples/langsmith-values-polly.yaml`
+
+### [x] Batch 4: Documentation + tfvars
+
+- [x] `infra/terraform.tfvars.example` — add `sizing_profile`, `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly`
+- [x] Update `QUICK_REFERENCE.md` — 5-pass make-based guide (single namespace)
+- [x] Update `README.md` — structure section + Makefile reference
+
+---
+
+
 
 ## Problem Statement
 
@@ -129,6 +210,38 @@ terraform state rm module.k8s_bootstrap.null_resource.insights_bootstrap[0]
 terraform state rm module.k8s_bootstrap.kubernetes_role_v1.backend_bootstrap[0]
 terraform state rm module.k8s_bootstrap.kubernetes_role_binding_v1.backend_bootstrap[0]
 ```
+
+## Teardown Gotchas (learned in field)
+
+### `make clean` must run AFTER `make destroy` — not before
+
+Running `make clean` before `make destroy` wipes `terraform.tfstate`. Terraform then has no record of what it created and cannot destroy anything. You're left with live Azure resources you have to delete manually:
+
+```bash
+az group delete --name langsmith-rg-<identifier> --yes --no-wait
+```
+
+**Correct teardown order:**
+```bash
+make uninstall   # 1. remove Helm release (removes Azure Load Balancer)
+make destroy     # 2. terraform destroy (~10-15 min)
+make clean       # 3. remove local secrets and generated files
+```
+
+`clean.sh` now detects a non-empty tfstate and warns before proceeding.
+
+### Key Vault soft-delete — reusing the same identifier
+
+After `terraform destroy` (or `az group delete`), the Key Vault enters Azure's soft-delete state for **7 days**. If you re-deploy with the same `identifier`, Terraform will silently recover the old Key Vault — including any `purge_protection_enabled = true` setting it had. If `keyvault_purge_protection = false` is set in the new tfvars, the apply fails.
+
+**Fix — purge the soft-deleted KV immediately after destroy:**
+```bash
+az keyvault purge --name langsmith-kv-<identifier> --location <region>
+```
+
+Or use a different `identifier` for the fresh deploy.
+
+---
 
 ## Implementation Phases
 

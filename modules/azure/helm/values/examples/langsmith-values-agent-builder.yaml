@@ -11,12 +11,8 @@
 config:
   agentBuilder:
     enabled: true
-    # encryptionKey is pulled from SSM via ESO — do not set it here.
-    # Required SSM parameter: /langsmith/{prefix}-{env}/agent-builder-encryption-key
-    # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/agent-builder-encryption-key" \
-    #             --value "<key>" --type SecureString
-    # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
+    # encryptionKey is read from langsmith-config-secret (agent_builder_encryption_key).
+    # Do NOT set encryptionKey inline — it's already in the secret via existingSecretName.
     #
     # Agent worker pod resources (applied to operator-managed agent deployments).
     # Chart defaults are 4096/8192 MiB — oversized for dev/POC.
@@ -30,9 +26,9 @@ config:
 
 backend:
   agentBootstrap:
-    # Required: runs the post-install/post-upgrade job that creates the langsmith-agent-builder-config
-    # ConfigMap and registers Agent Builder as an LGP deployment. Without this the Agent Builder
-    # nav item will not appear in the UI.
+    # Runs a post-upgrade Job that creates the langsmith-agent-builder-config ConfigMap
+    # and registers Agent Builder as an LGP deployment. Required for the Agent Builder
+    # nav item to appear in the UI. The job is idempotent — safe to run on every upgrade.
     enabled: true
 
 agentBuilderToolServer:

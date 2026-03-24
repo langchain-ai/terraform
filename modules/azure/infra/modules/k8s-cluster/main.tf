@@ -72,9 +72,9 @@ resource "azurerm_kubernetes_cluster" "main" {
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size
 
-    # Cluster autoscaler scales between 1 and max_count based on pending pods.
+    # Cluster autoscaler scales between min_count and max_count based on pending pods.
     auto_scaling_enabled = true
-    min_count            = 1
+    min_count            = var.default_node_pool_min_count
     max_count            = var.default_node_pool_max_count
 
     # Azure CNI default is 30 pods/node — too low for a full LangSmith deployment.
@@ -257,11 +257,17 @@ resource "helm_release" "nginx_ingress" {
 
         service = {
           type = "LoadBalancer"
-          annotations = {
-            # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
-            # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
-            "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
-          }
+          annotations = merge(
+            {
+              # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
+              # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
+              "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
+            },
+            var.nginx_dns_label != "" ? {
+              # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
+              "service.beta.kubernetes.io/azure-dns-label-name" = var.nginx_dns_label
+            } : {}
+          )
         }
       }
     })

@@ -41,8 +41,30 @@ plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.au
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	terraform -chdir=$(INFRA_DIR) plan
 
-apply: ## terraform apply (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
+apply: ## terraform apply (infra) — two-stage: Azure infra first, then k8s bootstrap + ClusterIssuer
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
+	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
+	terraform -chdir=$(INFRA_DIR) apply -auto-approve \
+		-target=azurerm_resource_group.resource_group \
+		-target=module.vnet \
+		-target=module.aks \
+		-target=module.postgres \
+		-target=module.redis \
+		-target=module.blob \
+		-target=module.keyvault
+	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
+	terraform -chdir=$(INFRA_DIR) apply -auto-approve \
+		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
+		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
+		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
+		-target=module.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_default_deny \
+		-target=module.k8s_bootstrap.kubernetes_network_policy_v1.langsmith_allow_internal \
+		-target=module.k8s_bootstrap.kubernetes_secret_v1.postgres \
+		-target=module.k8s_bootstrap.kubernetes_secret_v1.redis \
+		-target=module.k8s_bootstrap.kubernetes_secret_v1.license \
+		-target=module.k8s_bootstrap.helm_release.cert_manager \
+		-target=module.k8s_bootstrap.helm_release.keda
+	@echo "→ Stage 3: ClusterIssuer + remaining resources (cert-manager CRDs now ready)..."
 	terraform -chdir=$(INFRA_DIR) apply -auto-approve
 
 destroy: ## terraform destroy (infra)

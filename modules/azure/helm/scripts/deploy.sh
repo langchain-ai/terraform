@@ -212,6 +212,7 @@ helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   "${VALUES_ARGS[@]}" \
+  ${EXTRA_HELM_ARGS:+$EXTRA_HELM_ARGS} \
   --server-side=false \
   --timeout 20m
 

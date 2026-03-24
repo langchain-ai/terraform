@@ -47,6 +47,13 @@ variable "postgres_connection_url" {
   default     = ""
 }
 
+variable "postgres_admin_password" {
+  type        = string
+  description = "PostgreSQL admin password. Added as POSTGRES_PASSWORD to the postgres secret for listener-managed agent deployments."
+  sensitive   = true
+  default     = ""
+}
+
 variable "use_external_redis" {
   type        = bool
   description = "Create a Kubernetes secret for the external Redis connection URL"

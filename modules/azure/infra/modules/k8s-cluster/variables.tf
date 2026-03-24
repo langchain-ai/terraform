@@ -30,6 +30,12 @@ variable "default_node_pool_vm_size" {
   default     = "Standard_DS3_v2" # 4 vCPU, 14GB RAM — DSv2 family (60 free vCPUs in eastus)
 }
 
+variable "default_node_pool_min_count" {
+  type        = number
+  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable."
+  default     = 1
+}
+
 variable "default_node_pool_max_count" {
   type        = number
   description = "Max count of the default node pool"
@@ -133,4 +139,10 @@ variable "availability_zones" {
   type        = list(string)
   description = "Availability zones for the default node pool. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
   default     = ["1"]
+}
+
+variable "nginx_dns_label" {
+  type        = string
+  description = "Azure Public IP DNS label for the NGINX LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Leave empty to skip."
+  default     = ""
 }

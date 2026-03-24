@@ -59,11 +59,12 @@ output "kubeconfig" {
 # ── LangSmith ─────────────────────────────────────────────────────────────────
 
 output "langsmith_url" {
-  description = "URL where LangSmith is accessible. Uses custom domain if set, otherwise falls back to Front Door endpoint hostname."
+  description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.create_frontdoor   ? "https://${module.frontdoor[0].endpoint_hostname}" :
-    "No domain configured — set var.langsmith_domain or var.create_frontdoor = true"
+    var.create_frontdoor       ? "https://${module.frontdoor[0].endpoint_hostname}" :
+    var.nginx_dns_label != ""  ? "https://${var.nginx_dns_label}.${var.location}.cloudapp.azure.com" :
+    "No domain configured — set nginx_dns_label, langsmith_domain, or create_frontdoor = true"
   )
 }
 

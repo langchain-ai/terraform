@@ -103,6 +103,7 @@ module "aks" {
   dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
+  default_node_pool_min_count = var.default_node_pool_min_count
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
@@ -111,6 +112,7 @@ module "aks" {
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'none'
   ingress_controller   = var.ingress_controller
+  nginx_dns_label      = var.nginx_dns_label
   istio_version        = var.istio_version
   istio_addon_revision = var.istio_addon_revision
 
@@ -264,6 +266,7 @@ module "k8s_bootstrap" {
   # generate-secrets.sh also writes these secrets with the full URL from KV.
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
+  postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
   use_external_redis      = var.redis_source == "external"
   redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
 

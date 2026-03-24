@@ -1,22 +1,22 @@
 # Insights — ClickHouse-backed analytics (requires external ClickHouse).
 #
-# init-values.sh copies this to ../langsmith-values-insights.yaml when you choose
-# a product tier that includes Insights (tier 4). You'll be prompted for ClickHouse connection details.
-# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+# init-values.sh generates langsmith-values-insights.yaml based on clickhouse_source:
+#   - clickhouse_source = "in-cluster"  → simple config.insights.enabled: true (no external block)
+#   - clickhouse_source = "external"    → copies this file (fill in host/port below)
 #
-# Prerequisites:
-#   - ClickHouse instance (AWS Marketplace, LangChain managed, or self-hosted)
-#   - ClickHouse must be reachable from the EKS cluster
+# For in-cluster ClickHouse (dev/POC), you do not need this file — init-values.sh
+# generates the correct minimal config automatically.
+#
+# Prerequisites (external ClickHouse):
+#   - ClickHouse instance reachable from the AKS cluster
+#   - langsmith-clickhouse K8s secret with connection details (see below)
+#   - insights_encryption_key in Key Vault (set by setup-env.sh and Terraform)
 
 config:
   insights:
     enabled: true
-    # encryptionKey is pulled from SSM via ESO — do not set it here.
-    # Required SSM parameter: /langsmith/{prefix}-{env}/insights-encryption-key
-    # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/insights-encryption-key" \
-    #             --value "<key>" --type SecureString
-    # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
+    # encryptionKey is read from langsmith-config-secret (insights_encryption_key).
+    # Do NOT set encryptionKey inline — it is already in the secret via existingSecretName.
 
 clickhouse:
   external:
@@ -27,8 +27,9 @@ clickhouse:
     user: "default"
     # tls: true       # Uncomment if using HTTPS/TLS
     #
-    # Option A (recommended): Store credentials in a K8s Secret and reference it.
-    # The chart reads each field by its *SecretKey name (clickhouse_password, etc.).
+    # Store connection credentials in a K8s Secret and reference it.
+    # The chart reads each field by its *SecretKey name.
+    #
     #   kubectl create secret generic langsmith-clickhouse -n langsmith \
     #     --from-literal=clickhouse_host=<host> \
     #     --from-literal=clickhouse_port=8123 \

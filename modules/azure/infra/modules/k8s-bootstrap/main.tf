@@ -141,7 +141,12 @@ resource "kubernetes_secret_v1" "postgres" {
   }
 
   data = {
-    connection_url = var.postgres_connection_url
+    connection_url    = var.postgres_connection_url
+    # POSTGRES_URI and POSTGRES_PASSWORD are required by the listener's deploy_image
+    # task (host.platforms.k8s_operator.database_k8s.add_postgres_uri_secret) to
+    # provision per-deployment databases for LangSmith Deployments (Pass 3+).
+    POSTGRES_URI      = var.postgres_connection_url
+    POSTGRES_PASSWORD = var.postgres_admin_password
   }
 
   type = "Opaque"
@@ -237,13 +242,44 @@ resource "helm_release" "cert_manager" {
   }
 }
 
+# HTTP-01 ClusterIssuer — created by Terraform when tls_certificate_source = "letsencrypt".
+# cert-manager uses the NGINX ingress to serve the ACME HTTP-01 challenge token at
+# /.well-known/acme-challenge/<token>. No DNS API access needed — works with any public IP.
+# Best fit for: Public IP DNS label (*.cloudapp.azure.com) or any A-record hostname.
+resource "kubernetes_manifest" "cluster_issuer_http01" {
+  count = var.tls_certificate_source == "letsencrypt" ? 1 : 0
+
+  manifest = {
+    apiVersion = "cert-manager.io/v1"
+    kind       = "ClusterIssuer"
+    metadata = {
+      name = "letsencrypt-prod"
+    }
+    spec = {
+      acme = {
+        server = "https://acme-v02.api.letsencrypt.org/directory"
+        email  = var.letsencrypt_email
+        privateKeySecretRef = {
+          name = "letsencrypt-prod-account-key"
+        }
+        solvers = [{
+          http01 = {
+            ingress = {
+              ingressClassName = "nginx"
+            }
+          }
+        }]
+      }
+    }
+  }
+
+  depends_on = [helm_release.cert_manager]
+}
+
 # DNS-01 ClusterIssuer — created by Terraform when tls_certificate_source = "dns01".
 # Uses Azure DNS + Workload Identity: no static service principal needed.
 # cert-manager controller calls the Azure DNS API to create/delete TXT records
 # for ACME challenge verification.
-#
-# When tls_certificate_source = "letsencrypt" (HTTP-01), the ClusterIssuer is
-# created separately via: bash helm/scripts/apply-cluster-issuers.sh
 resource "kubernetes_manifest" "cluster_issuer_dns01" {
   count = var.tls_certificate_source == "dns01" ? 1 : 0
 

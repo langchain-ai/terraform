@@ -22,8 +22,9 @@ make setup-env
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
+# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
+# Skip plan and run apply directly — it handles the ordering in three stages.
 make init
-make plan
 make apply
 
 # 5. Get cluster credentials
@@ -42,7 +43,7 @@ make deploy
 make status
 ```
 
-Or run everything after `terraform apply` in one shot:
+Or run the full deployment in one shot:
 
 ```bash
 make deploy-all   # apply → kubeconfig → k8s-secrets → init-values → deploy
@@ -80,7 +81,7 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 
 ```hcl
 # infra/terraform.tfvars
-enable_deployments   = true    # Pass 3 — LangGraph Platform (required for Agent Builder + Insights)
+enable_deployments   = true    # Pass 3 — LangSmith Deployments (required for Agent Builder + Insights)
 enable_agent_builder = true    # Pass 4 — Agent Builder UI
 enable_insights      = true    # Pass 5 — ClickHouse-backed analytics
 enable_polly         = true    # Pass 5 — Polly AI eval/monitoring
@@ -111,7 +112,7 @@ Then re-run `make init-values && make deploy`.
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA | `make apply` |
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
 | **2** | LangSmith Helm (17 pods) | `make init-values && make deploy` |
-| **3** | + LangGraph Platform (`enable_deployments = true`) | `make init-values && make deploy` |
+| **3** | + LangSmith Deployments (`enable_deployments = true`) | `make init-values && make deploy` |
 | **4** | + Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
 | **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
 
@@ -225,9 +226,13 @@ langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running     0          5m
 
 > **`langsmith-config-secret` key name:** The job expects `initial_org_admin_password` (not `admin_password`). Wrong key → `CreateContainerConfigError` on auth-bootstrap.
 
+> **`config.deployment.url` must include `https://`.** Example: `url: "https://langsmith-prod.eastus.cloudapp.azure.com"`. Missing the protocol causes operator-deployed agents to stay stuck in `DEPLOYING` state indefinitely ("ConnectionError: Unable to connect to LangGraph server").
+
 > **`config.deployment.enabled: true` is required for Pass 3.** Setting only `config.deployment.url` without `enabled: true` causes the chart to silently skip `listener` and `operator`.
 
 > **`insights_encryption_key` and `polly_encryption_key` must never change** after first enable — changing either breaks existing encrypted data permanently.
+
+> **Roll frontend after first Polly enable.** The `agentBootstrap` job creates `langsmith-polly-config` ConfigMap with `VITE_POLLY_DEPLOYMENT_URL` after Polly registers. If the frontend pod was running before bootstrap completed, Polly shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
 
 > **Uninstall Helm BEFORE `terraform destroy`.** The Azure Load Balancer created by NGINX blocks VNet deletion. Run `helm uninstall langsmith -n langsmith --wait` first.
 
@@ -243,6 +248,9 @@ make uninstall
 
 # 2. Destroy infrastructure
 make destroy
+
+# 3. Remove local secrets and generated files
+make clean
 ```
 
 ---

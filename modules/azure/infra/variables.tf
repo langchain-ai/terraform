@@ -191,10 +191,16 @@ variable "default_node_pool_vm_size" {
   default     = "Standard_D8s_v3" # 8 vCPU, 32 GiB
 }
 
+variable "default_node_pool_min_count" {
+  type        = number
+  description = "Min node count for the default pool. Autoscaler never scales below this floor. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable (76% CPU). Set to 1 for minimum/dev deployments."
+  default     = 1
+}
+
 variable "default_node_pool_max_count" {
   type        = number
   description = "Max node count for the default pool. Pass 2: 4–6 nodes. Pass 3 (LangGraph Platform): 6. Pass 4 (Agent Builder): 8. Pass 5 (Insights): 10–12. Autoscaler scales within this limit — increasing max_count takes effect immediately with no node restarts."
-  default     = 12
+  default     = 10
 }
 
 variable "default_node_pool_max_pods" {
@@ -497,4 +503,45 @@ variable "postgres_geo_redundant_backup" {
   type        = bool
   description = "Enable geo-redundant backups for PostgreSQL."
   default     = false
+}
+
+# ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
+# These variables are declared here only to prevent Terraform from warning
+# about undeclared variables in terraform.tfvars. They are read by
+# helm/scripts/init-values.sh and helm/scripts/deploy.sh.
+
+variable "sizing_profile" {
+  type        = string
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
+  default     = "production"
+}
+
+variable "enable_deployments" {
+  type        = bool
+  description = "Pass 3 — enable LangGraph Platform (hostBackend, listener, operator). Read by deploy.sh — Terraform ignores this value."
+  default     = false
+}
+
+variable "enable_agent_builder" {
+  type        = bool
+  description = "Pass 4 — enable Agent Builder UI. Read by deploy.sh — Terraform ignores this value."
+  default     = false
+}
+
+variable "enable_insights" {
+  type        = bool
+  description = "Pass 5 — enable Insights / Clio. Read by deploy.sh — Terraform ignores this value."
+  default     = false
+}
+
+variable "enable_polly" {
+  type        = bool
+  description = "Pass 5 — enable Polly AI eval agent. Read by deploy.sh — Terraform ignores this value."
+  default     = false
+}
+
+variable "nginx_dns_label" {
+  type        = string
+  description = "Azure Public IP DNS label for the NGINX LoadBalancer. Results in <label>.<region>.cloudapp.azure.com. Leave empty to skip."
+  default     = ""
 }
