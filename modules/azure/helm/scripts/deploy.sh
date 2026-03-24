@@ -58,6 +58,23 @@ az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
 info "Active context: $(kubectl config current-context)"
 echo ""
 
+# ── Set NGINX DNS label annotation ───────────────────────────────────────
+# Azure assigns <nginx_dns_label>.<region>.cloudapp.azure.com to the public IP
+# only when this annotation is present on the LoadBalancer service.
+# cert-manager's HTTP-01 challenge depends on DNS resolving — must be set before deploy.
+_nginx_dns_label=$(_parse_tfvar "nginx_dns_label") || _nginx_dns_label=""
+_location=$(_parse_tfvar "location") || _location="eastus"
+if [[ -n "$_nginx_dns_label" ]]; then
+  if kubectl get svc ingress-nginx-controller -n ingress-nginx &>/dev/null; then
+    kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
+      "service.beta.kubernetes.io/azure-dns-label-name=${_nginx_dns_label}" \
+      --overwrite &>/dev/null
+    pass "NGINX DNS label set: ${_nginx_dns_label}.${_location}.cloudapp.azure.com"
+  else
+    warn "ingress-nginx-controller service not found — DNS label not set (run make apply first)"
+  fi
+fi
+
 # ── Preflight checks ──────────────────────────────────────────────────────
 "$SCRIPT_DIR/preflight-check.sh"
 
