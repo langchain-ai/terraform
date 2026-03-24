@@ -116,5 +116,10 @@ else
   echo -e "  ${RED}${ERRORS} key(s) missing. Re-run this script or check Key Vault secrets.${NC}"
   exit 1
 fi
+# Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
+# (clickhouse_source = "in-cluster"). The chart manages the connection internally.
+# For external ClickHouse, create the secret manually and set
+# clickhouse.external.existingSecretName in langsmith-values-insights.yaml.
+
 echo ""
 echo "Next: fill values-overrides.yaml and run helm upgrade --install"

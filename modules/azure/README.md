@@ -1,148 +1,234 @@
-# LangSmith on Azure
+# LangSmith on Azure — Deployment Guide
 
-Self-hosted LangSmith deployment on Azure Kubernetes Service (AKS).
+Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
+
+---
+
+## Overview
+
+This directory contains the Terraform configuration to deploy LangSmith on Azure. Deployment is split into two passes:
+
+| Pass | What | How | Time |
+|------|------|-----|------|
+| **Pass 1** | AKS cluster, Postgres, Redis, Blob, Key Vault, cert-manager, KEDA, Front Door | `make apply` | ~15–20 min |
+| **Pass 2** | LangSmith Helm chart | `make init-values` → `make deploy` | ~10 min |
+
+A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
+
+### Two deployment tiers
+
+| Tier | Postgres | Redis | ClickHouse | Use case |
+|------|---------|-------|-----------|---------|
+| **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
+| **Production** | Azure DB for PostgreSQL (private) | Azure Cache for Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+
+> **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
+>
+> **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
+
+---
 
 ## Prerequisites
 
-- Azure CLI (`az`) — authenticated with `az login`
-- Terraform >= 1.5
-- `kubectl`, `helm` >= 3.x
-- Azure subscription with sufficient quota (see [Cluster Sizing](QUICK_REFERENCE.md#cluster-sizing-reference))
+### Required tools
+
+```bash
+# Azure CLI (>= 2.50)
+brew install azure-cli
+az --version
+
+# Terraform (>= 1.5)
+brew tap hashicorp/tap && brew install hashicorp/tap/terraform
+terraform version
+
+# kubectl
+brew install kubectl
+kubectl version --client
+
+# Helm (>= 3.12)
+brew install helm
+helm version
+```
+
+### Required Azure RBAC
+
+The identity running Terraform needs the following roles on the subscription:
+
+| Role | Purpose |
+|------|---------|
+| `Contributor` | Create and manage all Azure resources |
+| `User Access Administrator` | Create role assignments for Key Vault, Blob, cert-manager managed identities |
+
+Owner includes both. Contributor alone is insufficient (role assignments require UAA).
+
+### Authenticate
+
+```bash
+az login
+az account set --subscription <your-subscription-id>
+az account show   # verify correct subscription
+```
+
+---
 
 ## Quick Start
 
 ```bash
 cd terraform/azure
 
-# 1. Check prerequisites (az CLI, login, resource providers, RBAC)
-make preflight
-
-# 2. Copy and fill in your variables
+# 1. Copy and fill in your variables
 cp infra/terraform.tfvars.example infra/terraform.tfvars
-vi infra/terraform.tfvars           # set subscription_id, identifier, location
+vi infra/terraform.tfvars   # set subscription_id, identifier, location, langsmith_domain
 
-# 3. Bootstrap secrets (prompts on first run, reads from Key Vault on subsequent runs)
-cd infra && ./setup-env.sh && cd ..
+# 2. Bootstrap secrets (prompts on first run, reads from Key Vault on repeat)
+make setup-env
+
+# 3. Check prerequisites
+make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
 make init
 make plan
 make apply
 
-# 5. Get cluster credentials
+# 5. Get cluster credentials + K8s secrets
 make kubeconfig
+make k8s-secrets
 
-# 6. Apply TLS cluster issuers (Let's Encrypt)
-cd infra && sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' \
-  ../kubectl/letsencrypt-issuers.yaml | kubectl apply -f - && cd ..
+# 6. Generate Helm values from Terraform outputs
+make init-values
 
-# 7. Deploy LangSmith (Helm)
+# 7. Deploy LangSmith (~10 min)
 make deploy
 
 # 8. Check status
 make status
 ```
 
-For the full copy-paste command set with outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
+Or run everything after `make apply` in one shot:
+
+```bash
+make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
+```
+
+For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
 For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
+
+---
 
 ## Deployment Passes
 
-| Pass | What | How |
-|------|------|-----|
-| 1 | Azure infrastructure (AKS, Blob, Key Vault, DNS zone, cert-manager, KEDA) | `terraform apply` |
-| 1.5 | Cluster access + get ingress IP | `az aks get-credentials` + `kubectl get svc` |
-| 1.5b | DNS onboarding | Add NS records at registrar → set `ingress_ip` → `terraform apply` |
-| 1.6 | TLS ClusterIssuer | Auto (DNS-01) or `kubectl apply` (HTTP-01 only) |
-| 2 | LangSmith application | `kubectl create secret` + `helm upgrade --install` |
-| 3 | LangSmith Deployments (optional) | add `config.deployment` block + `helm upgrade --install` |
-| 4 | Agent Builder (optional) | add `config.agentBuilder` block + `helm upgrade --install` |
-| 5 | Insights + Polly (optional) | add `config.insights` + `config.polly` blocks + `helm upgrade --install` |
+| Pass | What | Make target |
+|------|------|-------------|
+| **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA + ClusterIssuer | `make apply` |
+| **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
+| **2** | LangSmith Helm (17 pods) | `make init-values && make deploy` |
+| **3** | + LangGraph Platform (`enable_deployments = true`) | `make init-values && make deploy` |
+| **4** | + Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
+| **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
 
-## Ingress Controller Options
-
-| `ingress_controller` | Description | When to use |
-|---|---|---|
-| `nginx` | NGINX ingress via Helm | Standard — works everywhere |
-| `istio-addon` | Azure managed Istio (AKS service mesh add-on) | Production — no control plane resource cost |
-| `istio` | Istio via Helm (self-managed) | When you need full Istio control |
-| `none` | No ingress installed | Bring your own |
-
-Start with `nginx`. Switch to `istio-addon` when you need multi-namespace routing (multi-dataplane) or Istio service mesh features.
+---
 
 ## TLS / Edge Options
 
-| Option | Variable | How TLS works | Azure DNS zone needed |
-|---|---|---|---|
-| **Front Door** (recommended) | `create_frontdoor = true` | Azure manages certs — CNAME + TXT at registrar | No |
-| **DNS-01 + cert-manager** | `tls_certificate_source = "dns01"` | cert-manager creates certs via Azure DNS TXT records | Yes (`create_dns_zone = true`) |
-| **HTTP-01 + cert-manager** | `tls_certificate_source = "letsencrypt"` | cert-manager creates certs via HTTP challenge | No (ingress must be public) |
-| **None** | `tls_certificate_source = "none"` | Bring your own | No |
+| Option | Variables | When to use |
+|--------|-----------|-------------|
+| **Public IP DNS label** ⭐ | `nginx_dns_label` + `tls_certificate_source = "letsencrypt"` | Fastest. Free Azure subdomain (`<label>.<region>.cloudapp.azure.com`). cert-manager HTTP-01. No DNS zone needed. Best for dev/demo/POC. |
+| **DNS-01 + cert-manager** | `tls_certificate_source = "dns01"` + `langsmith_domain` + `create_dns_zone = true` | Custom domain + Let's Encrypt DNS-01 challenge via Azure DNS. |
+| **Front Door** | `create_frontdoor = true` + `langsmith_domain` | Azure-managed cert at the edge, WAF, CDN. Custom domain required. |
+| **None** | `tls_certificate_source = "none"` | Bring your own TLS. |
 
-**Front Door works with all ingress controllers.** It sits in front of AKS at the edge and routes to the ingress LB (NGINX IP or Istio Gateway IP) over HTTP. TLS is terminated at Front Door — the ingress controller does not need TLS configuration.
+**Recommended for quick deployments** — Azure Public IP DNS label with Let's Encrypt HTTP-01. No custom domain, no DNS zone, instant certificate. Terraform creates the cert-manager `ClusterIssuer` automatically in Pass 1.
 
+After `make apply`, set up DNS at your registrar:
+
+```bash
+terraform -chdir=infra output frontdoor_endpoint_hostname  # → add CNAME at registrar
+terraform -chdir=infra output frontdoor_validation_token   # → add TXT _dnsauth record
 ```
-Customer → Front Door (TLS, WAF, CDN) → AKS NGINX or Istio Gateway (HTTP) → LangSmith pods
-```
 
-See [QUICK_REFERENCE.md](QUICK_REFERENCE.md) for exact copy-paste commands, cluster sizing guidance, and helm chart version pinning.
+---
 
 ## Makefile
 
-A `Makefile` at `terraform/azure/` wraps the common Terraform and Helm operations. Run from the `terraform/azure/` directory:
+Run from `terraform/azure/`:
 
 ```bash
-make help        # list all targets
-make preflight   # validate az CLI, auth, resource provider registrations, RBAC
-make init        # terraform init
-make plan        # terraform plan (sources setup-env.sh automatically)
-make apply       # terraform apply — Pass 1 infrastructure
-make kubeconfig  # az aks get-credentials (reads cluster name from terraform output)
-make deploy      # helm deploy LangSmith — Pass 2
-make status      # kubectl get pods/svc/ingress/certificate in langsmith namespace
-make destroy     # terraform destroy
+make help          # list all targets
+make setup-env     # bootstrap secrets → secrets.auto.tfvars
+make preflight     # validate az CLI, auth, resource providers, RBAC
+make init          # terraform init
+make plan          # terraform plan
+make apply         # terraform apply — infrastructure
+make kubeconfig    # az aks get-credentials
+make k8s-secrets   # Key Vault → langsmith-config-secret
+make init-values   # TF outputs → helm/values/values-overrides.yaml
+make deploy        # helm upgrade --install (values chain: base + overrides + sizing + addons)
+make status        # 9-section health check
+make status-quick  # quick status (skip Key Vault + K8s queries)
+make deploy-all    # kubeconfig → k8s-secrets → init-values → deploy
+make uninstall     # helm uninstall langsmith (run before terraform destroy)
+make destroy       # terraform destroy
 ```
 
-Run `make preflight` before the first `make apply` to catch missing az login, unregistered resource providers, or missing RBAC roles early.
+### Addon feature flags
+
+Addon passes (3–5) are controlled by flags in `infra/terraform.tfvars`. Set the flags, then re-run `make init-values && make deploy`:
+
+```hcl
+sizing_profile       = "production"   # minimum | dev | production | production-large
+enable_deployments   = true           # Pass 3 — LangGraph Platform
+enable_agent_builder = true           # Pass 4 — Agent Builder UI
+enable_insights      = true           # Pass 5 — Insights / Clio
+enable_polly         = true           # Pass 5 — Polly
+```
+
+---
 
 ## Repository Layout
 
 ```
 azure/
-├── Makefile                # Wrapper for Terraform + Helm operations
-├── infra/                  # Terraform — Azure infrastructure
-│   ├── main.tf             # Module wiring
-│   ├── variables.tf        # All input variables
-│   ├── outputs.tf          # Terraform outputs (storage, identity, connection URLs)
-│   ├── setup-env.sh        # Bootstrap secrets → writes secrets.auto.tfvars
+├── Makefile                    # Task runner — start here
+├── infra/                      # Terraform — Azure infrastructure
+│   ├── main.tf                 # Module wiring
+│   ├── variables.tf            # All input variables
+│   ├── outputs.tf              # Terraform outputs (storage, identity, connection URLs)
+│   ├── setup-env.sh            # Bootstrap secrets → writes secrets.auto.tfvars
 │   ├── terraform.tfvars.example
-│   ├── secrets.auto.tfvars     # Generated by setup-env.sh — gitignored, never commit
-│   ├── scripts/
-│   │   └── preflight.sh    # Pre-flight validation (az CLI, auth, providers, RBAC)
-│   └── modules/
-│       ├── k8s-cluster/    # AKS + Workload Identity (OIDC, managed identity, federated creds)
-│       ├── k8s-bootstrap/  # Namespace, SA, cert-manager, KEDA
-│       ├── networking/     # VNet + subnets (multi-AZ zone support)
-│       ├── postgres/       # Azure DB for PostgreSQL (optional, multi-AZ)
-│       ├── redis/          # Azure Cache for Redis (optional)
-│       ├── storage/        # Blob storage
-│       ├── keyvault/       # Azure Key Vault
-│       ├── waf/            # Azure Application Gateway + WAF (optional)
-│       ├── diagnostics/    # Log Analytics workspace + diagnostic settings (optional)
-│       ├── bastion/        # Azure Bastion for secure cluster access (optional)
-│       └── dns/            # Azure DNS zone + A records (optional)
+│   ├── secrets.auto.tfvars         # Generated by setup-env.sh — gitignored, never commit
+│   └── scripts/
+│       ├── _common.sh          # Shared helpers: _parse_tfvar, color/status output
+│       ├── preflight.sh        # Pre-flight checks (az CLI, auth, providers, RBAC)
+│       ├── status.sh           # 9-section health check (supports --quick)
+│       ├── create-k8s-secrets.sh  # Key Vault → langsmith-config-secret
+│       └── tf-run.sh           # CI-friendly terraform runner (auto-sources setup-env.sh)
 ├── helm/
+│   ├── scripts/
+│   │   ├── deploy.sh           # Helm values chain deploy (base + overrides + sizing + addons)
+│   │   ├── init-values.sh      # TF outputs → values-overrides.yaml; copies sizing + addon files
+│   │   ├── get-kubeconfig.sh   # az aks get-credentials wrapper
+│   │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
+│   │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
 │   └── values/
-│       ├── values-overrides.yaml                       # Live file — gitignored, never commit
-│       ├── values-overrides-pass-2.yaml.example        # Pass 2 (core LangSmith)
-│       ├── values-overrides-pass-3.yaml.example        # Pass 2 + LangSmith Deployments
-│       ├── values-overrides-pass-4.yaml.example        # Pass 3 + Agent Builder
-│       ├── values-overrides-pass-5.yaml.example        # Pass 3 + Insights
-│       ├── values-overrides-demo.yaml.example          # In-cluster DBs (light deploy)
-│       └── values-overrides-external-dbs.yaml.example  # External Postgres + Redis (all passes)
+│       ├── values.yaml                              # Azure base (NGINX, Blob WI, external secrets)
+│       ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
+│       ├── values-overrides.yaml.example            # Template — copy and fill manually if needed
+│       └── examples/
+│           ├── langsmith-values.yaml                     # Annotated reference
+│           ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
+│           ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
+│           ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
+│           ├── langsmith-values-sizing-production-large.yaml  # High-volume (~1000 traces/sec)
+│           ├── langsmith-values-agent-deploys.yaml       # Pass 3 — LangGraph Platform
+│           ├── langsmith-values-agent-builder.yaml       # Pass 4 — Agent Builder
+│           ├── langsmith-values-insights.yaml            # Pass 5 — Insights / Clio
+│           └── langsmith-values-polly.yaml               # Pass 5 — Polly
 └── kubectl/
-    └── letsencrypt-issuers.yaml    # cert-manager ClusterIssuers (staging + prod) — applied in Pass 1.6
+    └── letsencrypt-issuers.yaml    # cert-manager ClusterIssuers (DNS-01 option only)
 ```
+
+---
 
 ## Terraform Modules
 
@@ -151,30 +237,33 @@ azure/
 | `networking` | yes | VNet, subnets (main, postgres, redis), private DNS zones. Multi-AZ zone pinning supported. |
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, NGINX ingress, postgres/redis K8s secrets. |
-| `storage` | yes | Azure Blob storage account + container. Workload Identity federated credential registration moved to `k8s-cluster`. |
+| `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete) + all application secrets. |
 | `postgres` | optional | Azure DB for PostgreSQL Flexible Server. Enabled when `postgres_source = "external"`. Multi-AZ standby supported. |
 | `redis` | optional | Azure Cache for Redis Premium. Enabled when `redis_source = "external"`. |
-| `waf` | optional | Azure Application Gateway + WAF v2. Use for enterprise perimeter security or when NGINX ingress is not sufficient. |
-| `diagnostics` | optional | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. Use for production observability. |
-| `bastion` | optional | Azure Bastion (Standard tier) for private, browser-based SSH/RDP to cluster nodes without a public IP. |
-| `dns` | optional | Azure DNS zone + A record pointing to the NGINX LoadBalancer IP. Use when you own a custom domain. |
+| `dns` | optional | Azure DNS zone + A record. Required for DNS-01 cert issuance (`tls_certificate_source = "dns01"`). |
+| `frontdoor` | optional | Azure Front Door Standard — managed TLS, CDN edge, WAF-ready. Enabled with `create_frontdoor = true`. |
+| `waf` | optional | Azure Application Gateway + WAF v2. Alternative to Front Door for enterprise perimeter security. |
+| `diagnostics` | optional | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. |
+| `bastion` | optional | Azure Bastion (Standard tier) for private SSH/RDP to cluster nodes. |
 
-> **Workload Identity** is now centralized in the `k8s-cluster` module. Federated credentials for blob-accessing pods (backend, platform-backend, queue, ingest-queue, host-backend, listener, agent-builder-tool-server, agent-builder-trigger-server) are registered there. Adding a new pod that accesses blob storage requires updating `service_accounts_for_workload_identity` in `k8s-cluster` variables and running `terraform apply -target=module.aks`.
+> **Workload Identity** is centralized in `k8s-cluster`. Federated credentials for blob-accessing pods (backend, platform-backend, queue, ingest-queue, host-backend, listener, agent-builder-tool-server, agent-builder-trigger-server) are registered there. Adding a new pod that needs Blob access requires updating `service_accounts_for_workload_identity` in `k8s-cluster` and running `terraform apply -target=module.aks`.
+
+---
 
 ## Multi-AZ Support
-
-The `networking`, `k8s-cluster`, and `postgres` modules support multi-AZ deployments. To pin AKS node pools and PostgreSQL to specific availability zones, set the `availability_zones` variable in `terraform.tfvars`:
 
 ```hcl
 # Spread AKS nodes across zones 1, 2, 3
 availability_zones = ["1", "2", "3"]
 
-# PostgreSQL standby in a different zone (high availability)
+# PostgreSQL HA standby in a different zone
 postgres_high_availability_mode = "ZoneRedundant"
 ```
 
-Zone-redundant PostgreSQL requires a `GeneralPurpose` or `MemoryOptimized` SKU. Leave `availability_zones` empty (default) for single-zone deployments.
+Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+---
 
 ## Architecture
 
@@ -186,7 +275,7 @@ See [SERVICES.md](SERVICES.md) — what each pod does, what it depends on, and w
 
 ## Light Deploy (Demo / POC)
 
-See [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — full guide for all-in-cluster deployment (no external Postgres/Redis).
+See [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — full guide for all-in-cluster deployment (no external Postgres/Redis), using Front Door for TLS.
 
 ## Troubleshooting
 
