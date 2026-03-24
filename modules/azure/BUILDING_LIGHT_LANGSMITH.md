@@ -345,36 +345,18 @@ The `service.beta.kubernetes.io/azure-dns-label-name` annotation is set on the N
 
 ## Pass 1.6 — TLS ClusterIssuer
 
-> **Handled automatically by Terraform.** The `k8s-bootstrap` module creates a `letsencrypt-prod` ClusterIssuer when `tls_certificate_source = "letsencrypt"` is set in `terraform.tfvars`. No manual `kubectl apply` is needed.
+> **Handled automatically by `make deploy`.** The `letsencrypt-prod` ClusterIssuer is created by `helm/scripts/deploy.sh` using `kubectl apply`, after the cluster is up. No manual step needed.
 
-To verify:
+`make deploy` creates it idempotently — if it already exists, it is skipped. To verify after `make deploy` runs:
 
 ```bash
 kubectl get clusterissuer letsencrypt-prod
 # Expected:
 # NAME               READY   AGE
-# letsencrypt-prod   True    5m
+# letsencrypt-prod   True    1m
 ```
 
-If the ClusterIssuer is missing (e.g. deploying from an older version of the module), apply it manually:
-```bash
-kubectl apply -f - <<'EOF'
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: you@example.com   # CHANGE THIS
-    privateKeySecretRef:
-      name: letsencrypt-prod-account-key
-    solvers:
-    - http01:
-        ingress:
-          class: nginx
-EOF
-```
+> **Why not Terraform?** `kubernetes_manifest` requires a live Kubernetes API connection during `terraform plan`. On a fresh deploy the cluster doesn't exist yet, so the resource blocks the entire apply. `deploy.sh` runs after the cluster is up, so `kubectl apply` works reliably.
 
 ---
 

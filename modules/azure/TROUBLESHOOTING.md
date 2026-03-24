@@ -236,7 +236,7 @@ kubectl get clusterissuer letsencrypt-prod
 kubectl delete certificate langsmith-tls -n langsmith
 ```
 
-**Long-term fix:** Update `k8s-bootstrap/main.tf` to include the `kubernetes_manifest.cluster_issuer_http01` resource and re-run `make apply`. This is already included in the current version of the module.
+**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`. This is already the case in the current version of the scripts.
 
 ---
 
