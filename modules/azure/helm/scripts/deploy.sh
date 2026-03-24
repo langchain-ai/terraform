@@ -11,7 +11,7 @@
 #   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
-# Templates live in terraform/helm/values/examples/ (shared across clouds) — init-values.sh copies them based on your choices.
+# Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
 #
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh

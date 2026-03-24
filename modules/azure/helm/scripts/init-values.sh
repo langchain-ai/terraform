@@ -28,9 +28,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
-TERRAFORM_DIR="$HELM_DIR/../.."
 VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$TERRAFORM_DIR/helm/values/examples"
+EXAMPLES_DIR="$VALUES_DIR/examples"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
