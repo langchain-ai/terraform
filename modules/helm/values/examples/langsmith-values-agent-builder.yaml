@@ -11,13 +11,16 @@
 config:
   agentBuilder:
     enabled: true
-    # encryptionKey is pulled from Key Vault → langsmith-config-secret K8s Secret.
-    # Key name in the secret: agent_builder_encryption_key
-    # This is set during: make k8s-secrets (reads from Key Vault)
-    # Do not set it here — it is already in existingSecretName.
+    # encryptionKey is pulled from SSM via ESO — do not set it here.
+    # Required SSM parameter: /langsmith/{prefix}-{env}/agent-builder-encryption-key
+    # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/agent-builder-encryption-key" \
+    #             --value "<key>" --type SecureString
+    # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
     #
     # Agent worker pod resources (applied to operator-managed agent deployments).
     # Chart defaults are 4096/8192 MiB — oversized for dev/POC.
+    # These control the server container in each LGP pod (agent-builder, clio, polly).
     agent:
       resources:
         cpu: 1
@@ -34,26 +37,6 @@ backend:
 
 agentBuilderToolServer:
   enabled: true
-  deployment:
-    labels:
-      azure.workload.identity/use: "true"
-    resources:
-      requests:
-        cpu: "200m"
-        memory: "512Mi"
-      limits:
-        cpu: "1"
-        memory: "1Gi"
 
 agentBuilderTriggerServer:
   enabled: true
-  deployment:
-    labels:
-      azure.workload.identity/use: "true"
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"

@@ -7,63 +7,60 @@
 config:
   deployment:
     # Enables the Deployments nav item in the UI. Also requires config.hostname to be
-    # set in langsmith-values-overrides.yaml — find the NGINX IP with:
-    #   kubectl get svc ingress-nginx-controller -n ingress-nginx \
-    #     -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+    # set in langsmith-values-{env}.yaml — find the ALB hostname with:
+    #   kubectl get ingress -n langsmith langsmith-ingress \
+    #     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
     enabled: true
-    # Set to true if TLS is enabled (tls_certificate_source = "letsencrypt" or "dns01").
-    # false = HTTP-only. The operator uses this to build agent deployment endpoint URLs —
-    # wrong value keeps deployments in DEPLOYING.
-    tlsEnabled: true
+    # Set to true if TLS is enabled (tls_certificate_source = "acm" or "letsencrypt").
+    # false = HTTP-only ALB (tls_certificate_source = "none"). The operator uses this to
+    # build agent deployment endpoint URLs — wrong value keeps deployments in DEPLOYING.
+    tlsEnabled: false
 
 # Resource sizing for shared components (backend, frontend, playground, aceBackend)
-# is handled by the sizing files (langsmith-values-sizing-{production,dev,minimum}.yaml).
+# is handled by the sizing files (langsmith-values-sizing-{production,production-large,dev}.yaml).
 # Do not set replicaCount or resources for those components here — it silently
 # overrides HPA/autoscaling settings from the sizing file because this file
 # is loaded after them in Helm's values merge order.
 
 hostBackend:
   enabled: true
-  deployment:
-    labels:
-      azure.workload.identity/use: "true"
-    resources:
-      requests:
-        cpu: "500m"
-        memory: "512Mi"
-      limits:
-        cpu: "2"
-        memory: "2Gi"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
   autoscaling:
     hpa:
-      enabled: false
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 70
 
 listener:
   enabled: true
-  deployment:
-    labels:
-      azure.workload.identity/use: "true"
-    resources:
-      requests:
-        cpu: "1000m"
-        memory: "2Gi"
-      limits:
-        cpu: "2"
-        memory: "4Gi"
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
 
 operator:
   enabled: true
-  deployment:
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "128Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
   # Deployment template for operator-spawned agent pods.
-  # Azure WI: agent pods run as langsmith-ksa. That ServiceAccount must have the
-  # azure.workload.identity/client-id annotation — deploy.sh ensures this after deploy.
+  # IRSA: agent pods run as langsmith-ksa. That ServiceAccount must have the
+  # IRSA role annotation — init-values.sh writes it alongside the other
+  # component service accounts.
   templates:
     deployment: |
       apiVersion: apps/v1
@@ -81,7 +78,6 @@ operator:
           metadata:
             labels:
               app: ${name}
-              azure.workload.identity/use: "true"
           spec:
             enableServiceLinks: false
             serviceAccountName: langsmith-ksa
