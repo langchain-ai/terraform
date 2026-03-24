@@ -10,7 +10,8 @@
 .PHONY: help setup-env preflight status status-quick \
         init plan apply destroy \
         kubeconfig k8s-secrets \
-        init-values deploy uninstall deploy-all
+        init-values deploy uninstall deploy-all \
+        clean
 
 INFRA_DIR := infra
 HELM_DIR  := helm
@@ -46,6 +47,9 @@ apply: ## terraform apply (infra) — runs setup-env.sh first to ensure secrets.
 
 destroy: ## terraform destroy (infra)
 	terraform -chdir=$(INFRA_DIR) destroy
+
+clean: ## Remove all local secrets and generated files (run after destroy)
+	$(INFRA_DIR)/scripts/clean.sh
 
 # ── Pass 1.5: Cluster Access + K8s Secrets ────────────────────────────────────
 
