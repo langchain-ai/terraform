@@ -1,0 +1,100 @@
+# cert-manager ClusterIssuer — Let's Encrypt DNS-01 via Azure DNS
+#
+# Use this when tls_certificate_source = "dns01" in terraform.tfvars.
+# DNS-01 validates domain ownership by creating a TXT record in Azure DNS
+# instead of serving an HTTP challenge. Required for wildcard certs or when
+# the cluster is not publicly reachable on port 80.
+#
+# Prerequisites:
+#   - Azure DNS zone created (create_dns_zone = true in terraform.tfvars)
+#   - cert-manager installed (done by make apply)
+#   - Azure credentials configured (see auth options below)
+#
+# Apply:
+#   kubectl apply -f kubectl/letsencrypt-issuer-dns01.yaml
+#
+# Verify:
+#   kubectl get clusterissuer letsencrypt-prod-dns01
+#   kubectl describe clusterissuer letsencrypt-prod-dns01
+
+---
+# ── Option A: Managed Identity (recommended for AKS) ─────────────────────────
+#
+# cert-manager uses the AKS-managed identity assigned to the cert-manager
+# service account via Workload Identity. No secrets needed.
+#
+# Setup:
+#   1. Create a managed identity for cert-manager in Azure
+#   2. Grant it "DNS Zone Contributor" on the Azure DNS zone resource group
+#   3. Create a federated credential binding it to the cert-manager service account:
+#        az identity federated-credential create \
+#          --identity-name <cert-manager-identity> \
+#          --resource-group <rg> \
+#          --name cert-manager-federated \
+#          --issuer <aks-oidc-issuer-url> \
+#          --subject system:serviceaccount:cert-manager:cert-manager \
+#          --audiences api://AzureADTokenExchange
+#   4. Annotate the cert-manager service account:
+#        kubectl annotate serviceaccount cert-manager -n cert-manager \
+#          azure.workload.identity/client-id=<managed-identity-client-id>
+#   5. Set clientID below and apply this file
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod-dns01
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: <letsencrypt_email>              # same as letsencrypt_email in terraform.tfvars
+    privateKeySecretRef:
+      name: letsencrypt-prod-dns01-account-key
+    solvers:
+    - dns01:
+        azureDNS:
+          subscriptionID: <subscription_id>         # from terraform.tfvars
+          resourceGroupName: <dns_resource_group>   # RG containing the Azure DNS zone
+          hostedZoneName: <domain>                  # e.g. langsmith.example.com
+          environment: AzurePublicCloud
+          managedIdentity:
+            clientID: <cert_manager_managed_identity_client_id>
+
+---
+# ── Option B: Service Principal ───────────────────────────────────────────────
+#
+# Use when Workload Identity is not available or you prefer static credentials.
+# Requires creating an Azure AD app registration and a K8s Secret.
+#
+# Setup:
+#   1. Create a service principal:
+#        az ad sp create-for-rbac --name cert-manager-dns \
+#          --role "DNS Zone Contributor" \
+#          --scopes /subscriptions/<sub>/resourceGroups/<dns-rg>
+#   2. Create the K8s secret with the SP client secret:
+#        kubectl create secret generic azuredns-config \
+#          --from-literal=client-secret=<sp-client-secret> \
+#          -n cert-manager
+#   3. Fill in clientID, tenantID, subscriptionID, resourceGroupName, hostedZoneName below
+
+# apiVersion: cert-manager.io/v1
+# kind: ClusterIssuer
+# metadata:
+#   name: letsencrypt-prod-dns01
+# spec:
+#   acme:
+#     server: https://acme-v02.api.letsencrypt.org/directory
+#     email: <letsencrypt_email>
+#     privateKeySecretRef:
+#       name: letsencrypt-prod-dns01-account-key
+#     solvers:
+#     - dns01:
+#         azureDNS:
+#           subscriptionID: <subscription_id>
+#           resourceGroupName: <dns_resource_group>
+#           hostedZoneName: <domain>
+#           environment: AzurePublicCloud
+#           clientID: <service_principal_client_id>
+#           tenantID: <tenant_id>
+#           clientSecretSecretRef:
+#             name: azuredns-config
+#             key: client-secret
