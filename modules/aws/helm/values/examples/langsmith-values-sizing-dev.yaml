@@ -1,14 +1,13 @@
 # ============================================================================
 # WARNING: NOT FOR PRODUCTION USE
 #
-# Minimal resource footprint for non-production environments: local dev, CI
-# pipelines, integration tests (k3d/kind/EKS dev), demos, and short-lived
-# POCs. Single replica per component, no autoscaling, tight limits.
+# Resource profile for non-production environments: local dev, CI pipelines,
+# integration tests (k3d/kind/EKS dev), demos, and short-lived POCs.
+# Single replica per component, no autoscaling, but enough headroom for a
+# developer to actually use the system — run traces, test agents, use the
+# playground without hitting OOM kills every five minutes.
 #
-# This WILL cause instability under real workloads — OOM kills, slow queries,
-# and degraded UX are expected. That's fine; the goal is to fit LangSmith on
-# a small cluster, not to serve traffic.
-#
+# For cost parking / idle standby: use langsmith-values-sizing-minimum.yaml
 # For production: use langsmith-values-sizing-production.yaml
 #   (sizing_profile = "production" in terraform.tfvars)
 # ============================================================================
@@ -21,7 +20,7 @@
 #   stay Pending indefinitely.
 #
 # Covers ALL chart components including infrastructure (ClickHouse, operator,
-# agent-builder servers) — not just the application pods.
+# agent-builder servers, operator-managed agents) — not just the app pods.
 #
 # NOTE: Uses deployment.resources / deployment.replicas nesting to match the
 # current LangSmith chart schema (aligned with GCP and Azure values).
@@ -35,11 +34,11 @@ backend:
     replicas: 1
     resources:
       requests:
-        cpu: "200m"
-        memory: "512Mi"
+        cpu: "500m"
+        memory: "1Gi"
       limits:
         cpu: "1"
-        memory: "1Gi"
+        memory: "2Gi"
 
 frontend:
   deployment:
@@ -47,7 +46,7 @@ frontend:
     resources:
       requests:
         cpu: "100m"
-        memory: "128Mi"
+        memory: "256Mi"
       limits:
         cpu: "500m"
         memory: "512Mi"
@@ -57,24 +56,46 @@ platformBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
+        cpu: "250m"
         memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
 
 playground:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
+        cpu: "250m"
+        memory: "512Mi"
       limits:
-        cpu: "500m"
-        memory: "384Mi"
+        cpu: "1"
+        memory: "1Gi"
 
 queue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+ingestQueue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+aceBackend:
   deployment:
     replicas: 1
     resources:
@@ -85,28 +106,6 @@ queue:
         cpu: "500m"
         memory: "1Gi"
 
-ingestQueue:
-  deployment:
-    replicas: 1
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
-
-aceBackend:
-  deployment:
-    replicas: 1
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
-        memory: "512Mi"
-
 # -- Deployments feature components --------------------------------------------
 
 hostBackend:
@@ -114,58 +113,91 @@ hostBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "500m"
+        cpu: "250m"
         memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
 
 listener:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
 
 operator:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
+        cpu: "250m"
+        memory: "512Mi"
       limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
 
 # -- Agent Builder infrastructure ----------------------------------------------
-# These run alongside the operator-managed agent pods (which we can't size here).
 
 agentBuilderToolServer:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
 
 agentBuilderTriggerServer:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
+        cpu: "250m"
+        memory: "512Mi"
       limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
+
+# -- Operator-managed agent resources ------------------------------------------
+# Chart defaults are 2 CPU / 4Gi per agent — way too heavy for dev.
+# These control the server and queue pod sizing written into LGP CRs by the
+# bootstrap job.
+
+config:
+  polly:
+    agent:
+      resources:
+        cpu: 0.25
+        cpuLimit: 0.5
+        memoryMb: 512
+        memoryLimitMb: 1024
+        minScale: 1
+        maxScale: 1
+  insights:
+    agent:
+      resources:
+        cpu: 0.25
+        cpuLimit: 0.5
+        memoryMb: 512
+        memoryLimitMb: 1024
+        minScale: 1
+        maxScale: 1
+  agentBuilder:
+    agent:
+      resources:
+        cpu: 0.25
+        cpuLimit: 0.5
+        memoryMb: 512
+        memoryLimitMb: 1024
+        minScale: 1
+        maxScale: 1
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # These apply when using in-cluster postgres, redis, and clickhouse.
@@ -178,28 +210,28 @@ postgres:
   statefulSet:
     resources:
       requests:
-        cpu: "100m"
-        memory: "128Mi"
+        cpu: "500m"
+        memory: "1Gi"
       limits:
         cpu: "1"
-        memory: "512Mi"
+        memory: "2Gi"
 
 redis:
   statefulSet:
     resources:
       requests:
-        cpu: "100m"
-        memory: "128Mi"
+        cpu: "200m"
+        memory: "256Mi"
       limits:
         cpu: "500m"
-        memory: "256Mi"
+        memory: "512Mi"
 
 clickhouse:
   statefulSet:
     resources:
       requests:
-        cpu: "200m"
-        memory: "512Mi"
+        cpu: "2"
+        memory: "8Gi"
       limits:
-        cpu: "1"
-        memory: "1.5Gi"
+        cpu: "4"
+        memory: "16Gi"

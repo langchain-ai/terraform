@@ -4,11 +4,11 @@
 # Values files loaded (in order, last wins):
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
-#   3. langsmith-values-sizing-{profile}.yaml — sizing (production or dev, from tfvars)
-#   4. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   5. langsmith-values-agent-builder.yaml  — Agent Builder feature (if enabled)
-#   6. langsmith-values-insights.yaml       — ClickHouse/Insights (if enabled)
-#   7. langsmith-values-polly.yaml          — Polly AI eval/monitoring (if enabled)
+#   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
+#   4. langsmith-values-agent-builder.yaml  — Agent Builder feature (if enabled)
+#   5. langsmith-values-insights.yaml       — ClickHouse/Insights (if enabled)
+#   6. langsmith-values-polly.yaml          — Polly AI eval/monitoring (if enabled)
+#   7. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -97,26 +97,6 @@ echo "Values chain:"
 echo "  ✔ langsmith-values.yaml (base)"
 echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 
-# Sizing: driven by sizing_profile in terraform.tfvars.
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = ${_sizing_profile} — NOT for production use."
-      echo "     Resources are reduced for dev/test/POC only. Expect degraded"
-      echo "     performance under real workloads. Use sizing_profile = production for production."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile} but file not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: chart defaults (sizing_profile = default)"
-fi
-
 # Addon files: gated by enable_* flags in terraform.tfvars.
 # The file must exist AND the corresponding flag must be true.
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
@@ -147,6 +127,26 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ -f "$_sizing_file" ]]; then
+    VALUES_ARGS+=(-f "$_sizing_file")
+    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
+    if [[ "$_sizing_profile" == "minimum" ]]; then
+      echo ""
+      echo "  ⚠️  WARNING: sizing_profile = ${_sizing_profile} — NOT for production use."
+      echo "     Resources are reduced for dev/test/POC only. Expect degraded"
+      echo "     performance under real workloads. Use sizing_profile = production for production."
+      echo ""
+    fi
+  else
+    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile} but file not found — run: make init-values)"
+  fi
+else
+  echo "  ○ sizing: chart defaults (sizing_profile = default)"
+fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
 # If the ingress already exists (i.e. this is not a first deploy), verify that
@@ -200,21 +200,6 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo "         This is usually caused by a post-install hook timeout — not a broken deployment."
   echo "         Proceeding with upgrade (helm upgrade works on failed releases)."
   echo ""
-fi
-
-# ── Pre-deploy LGP right-sizing (minimum only) ───────────────────────────────
-# When sizing_profile is minimum, patch existing LGP CRs *before* helm upgrade
-# so the operator reconciles pods down to minimum resources first. This frees
-# node capacity that would otherwise be needed to schedule the fat production-
-# default pods alongside the new ones during rollout.
-# The post-deploy patch (below) catches whatever the bootstrap hook resets.
-if [[ "$_sizing_profile" == "minimum" && "$_enable_deployments" == "true" ]]; then
-  _lgp_count=$(kubectl get lgp -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')
-  if [[ "$_lgp_count" -gt 0 ]]; then
-    echo "Pre-deploy: checking ${_lgp_count} LGP resource(s) against minimum profile..."
-    NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/patch-lgp-resources.sh" --profile "$_sizing_profile"
-    echo ""
-  fi
 fi
 
 # Deploy with --server-side=false to avoid SSA field ownership conflicts with the
@@ -273,23 +258,6 @@ else
   echo "         while nodes are provisioning. Check with: kubectl get pods -n $NAMESPACE"
 fi
 echo ""
-
-# ── Right-size operator-managed LGP resources ────────────────────────────────
-# When sizing_profile is minimum, patch LGP CRs to reduce redis, database,
-# and worker/queue resources from production defaults. Must wait for the
-# agent-bootstrap job to finish first — it resets LGPs to production defaults.
-if [[ "$_sizing_profile" == "minimum" ]]; then
-  if [[ "$_enable_deployments" == "true" ]]; then
-    echo ""
-    echo "Waiting for agent-bootstrap job to complete before patching LGP resources..."
-    kubectl wait --for=condition=complete job/langsmith-agent-bootstrap \
-      -n "$NAMESPACE" --timeout=15m 2>/dev/null || \
-      echo "  ⚠️  agent-bootstrap did not complete within 15m — patching anyway"
-    echo ""
-    NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/patch-lgp-resources.sh" --profile "$_sizing_profile"
-    echo ""
-  fi
-fi
 
 # Ensure langsmith-ksa service account exists and carries the IRSA annotation.
 # This SA is used by operator-spawned agent deployment pods. It is created by

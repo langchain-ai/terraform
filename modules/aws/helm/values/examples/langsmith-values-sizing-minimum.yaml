@@ -104,33 +104,38 @@ hostBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "50m"
-        memory: "512Mi"
+        cpu: "100m"
+        memory: "384Mi"
       limits:
         cpu: "500m"
         memory: "768Mi"
+  autoscaling:
+    hpa:
+      minReplicas: 1
+      maxReplicas: 1
 
 listener:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "512Mi"
+        cpu: "250m"
+        memory: "768Mi"
       limits:
         cpu: "1"
-        memory: "1Gi"
+        memory: "1536Mi"
 
 operator:
+  kedaEnabled: false
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "25m"
-        memory: "64Mi"
+        cpu: "100m"
+        memory: "256Mi"
       limits:
         cpu: "250m"
-        memory: "256Mi"
+        memory: "512Mi"
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
@@ -139,22 +144,56 @@ agentBuilderToolServer:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "1Gi"
+        cpu: "500m"
+        memory: "768Mi"
       limits:
         cpu: "1"
-        memory: "2Gi"
+        memory: "1536Mi"
 
 agentBuilderTriggerServer:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "25m"
-        memory: "192Mi"
+        cpu: "100m"
+        memory: "256Mi"
       limits:
         cpu: "250m"
         memory: "384Mi"
+
+# -- Operator-managed agent resources ------------------------------------------
+# Sets initial server/queue pod sizing for the bootstrap job. The UI-managed
+# deployments are the real source of truth — these just control the defaults
+# written into LGP CRs at first deploy.
+
+config:
+  polly:
+    agent:
+      resources:
+        cpu: 0.1
+        cpuLimit: 0.5
+        memoryMb: 256
+        memoryLimitMb: 512
+        minScale: 1
+        maxScale: 1
+  insights:
+    agent:
+      resources:
+        cpu: 0.1
+        cpuLimit: 0.5
+        memoryMb: 256
+        memoryLimitMb: 512
+        minScale: 1
+        maxScale: 1
+  agentBuilder:
+    agent:
+      resources:
+        cpu: 0.1
+        cpuLimit: 0.5
+        memoryMb: 256
+        memoryLimitMb: 512
+        minScale: 1
+        maxScale: 1
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # ClickHouse is the one component that actually uses its resources.
@@ -164,17 +203,17 @@ postgres:
   statefulSet:
     resources:
       requests:
-        cpu: "50m"
-        memory: "128Mi"
+        cpu: "200m"
+        memory: "512Mi"
       limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
 
 redis:
   statefulSet:
     resources:
       requests:
-        cpu: "25m"
+        cpu: "100m"
         memory: "64Mi"
       limits:
         cpu: "200m"
@@ -184,8 +223,8 @@ clickhouse:
   statefulSet:
     resources:
       requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
         cpu: "1"
         memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
