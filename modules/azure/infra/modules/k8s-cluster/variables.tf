@@ -30,10 +30,22 @@ variable "default_node_pool_vm_size" {
   default     = "Standard_DS3_v2" # 4 vCPU, 14GB RAM — DSv2 family (60 free vCPUs in eastus)
 }
 
+variable "default_node_pool_min_count" {
+  type        = number
+  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable."
+  default     = 1
+}
+
 variable "default_node_pool_max_count" {
   type        = number
   description = "Max count of the default node pool"
   default     = 10
+}
+
+variable "default_node_pool_max_pods" {
+  type        = number
+  description = "Max pods per node in the default node pool. AKS default is 30 (Azure CNI). LangSmith Pass 2 deploys ~17 pods; Pass 3 adds ~20 more. Set to 60 to fit a full multi-pass deployment on a single node without triggering autoscaler quota limits."
+  default     = 60
 }
 
 variable "service_cidr" {
@@ -64,14 +76,73 @@ variable "additional_node_pools" {
   }
 }
 
-variable "nginx_ingress_enabled" {
+variable "ingress_controller" {
+  type        = string
+  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'none' = skip."
+  default     = "nginx"
+
+  validation {
+    condition     = contains(["nginx", "istio", "istio-addon", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', or 'none'."
+  }
+}
+
+variable "istio_version" {
+  type        = string
+  description = "Istio helm chart version. Only used when ingress_controller = 'istio' (self-managed Helm install)."
+  default     = "1.29.1"
+}
+
+variable "istio_external_gateway_enabled" {
   type        = bool
-  description = "Install the nginx ingress helm chart on the AKS cluster."
+  description = "Provision an external (public) Istio ingress gateway. Used by both 'istio' and 'istio-addon' modes."
   default     = true
+}
+
+variable "istio_internal_gateway_enabled" {
+  type        = bool
+  description = "Provision an internal (private VNet) Istio ingress gateway. Used only with 'istio-addon' mode."
+  default     = false
+}
+
+variable "istio_addon_revision" {
+  type        = string
+  description = "Azure Service Mesh revision to pin. Format: 'asm-1-<minor>'. Run: az aks mesh get-upgrades -g <rg> -n <cluster> to list available revisions."
+  default     = "asm-1-27"
 }
 
 variable "tags" {
   type        = map(string)
   description = "Common Azure resource tags to apply to all resources in this module"
   default     = {}
+}
+
+variable "langsmith_namespace" {
+  type        = string
+  description = "Kubernetes namespace where LangSmith is deployed. Used for Workload Identity federation."
+  default     = "langsmith"
+}
+
+variable "langsmith_release_name" {
+  type        = string
+  description = "Helm release name for LangSmith. Used to generate federated identity credential subjects."
+  default     = "langsmith"
+}
+
+variable "workload_identity_name" {
+  type        = string
+  description = "Override the managed identity name. Set to the existing identity name when migrating from the storage module to avoid recreating it."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = list(string)
+  description = "Availability zones for the default node pool. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
+  default     = ["1"]
+}
+
+variable "nginx_dns_label" {
+  type        = string
+  description = "Azure Public IP DNS label for the NGINX LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Leave empty to skip."
+  default     = ""
 }

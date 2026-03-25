@@ -74,3 +74,21 @@ variable "tags" {
   description = "Common Azure resource tags to apply to all resources in this module"
   default     = {}
 }
+
+variable "availability_zone" {
+  type        = string
+  description = "Primary availability zone for the Postgres server (\"1\", \"2\", or \"3\")"
+  default     = "1"
+}
+
+variable "standby_availability_zone" {
+  type        = string
+  description = "Standby availability zone for HA. Leave empty to disable zone-redundant HA."
+  default     = ""
+}
+
+variable "geo_redundant_backup_enabled" {
+  type        = bool
+  description = "Enable geo-redundant backups. Requires paired Azure region support."
+  default     = false
+}

@@ -39,6 +39,17 @@ resource "azurerm_postgresql_flexible_server" "db" {
   delegated_subnet_id           = var.subnet_id
   private_dns_zone_id           = azurerm_private_dns_zone.db_dns_zone.id
 
+  zone                         = var.availability_zone
+  geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
+
+  dynamic "high_availability" {
+    for_each = var.standby_availability_zone != "" ? [1] : []
+    content {
+      mode                      = "ZoneRedundant"
+      standby_availability_zone = var.standby_availability_zone
+    }
+  }
+
   tags = merge(var.tags, { module = "postgres" })
 
   lifecycle {
@@ -46,6 +57,18 @@ resource "azurerm_postgresql_flexible_server" "db" {
     # maintenance. Ignore zone drift to prevent unnecessary plan noise.
     ignore_changes = [zone]
   }
+}
+
+# LangSmith application database.
+# Azure Flexible Server does not auto-create application databases — only
+# the 'postgres' system database exists by default. LangSmith requires
+# a database named after var.database_name to exist before the backend
+# can connect.
+resource "azurerm_postgresql_flexible_server_database" "langsmith" {
+  name      = var.database_name
+  server_id = azurerm_postgresql_flexible_server.db.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
 }
 
 # Private DNS zone for PostgreSQL name resolution within the VNet.

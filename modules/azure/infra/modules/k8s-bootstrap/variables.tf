@@ -47,6 +47,13 @@ variable "postgres_connection_url" {
   default     = ""
 }
 
+variable "postgres_admin_password" {
+  type        = string
+  description = "PostgreSQL admin password. Added as POSTGRES_PASSWORD to the postgres secret for listener-managed agent deployments."
+  sensitive   = true
+  default     = ""
+}
+
 variable "use_external_redis" {
   type        = bool
   description = "Create a Kubernetes secret for the external Redis connection URL"
@@ -85,6 +92,47 @@ variable "cert_manager_version" {
   type        = string
   description = "cert-manager Helm chart version"
   default     = "v1.14.4"
+}
+
+variable "tls_certificate_source" {
+  type        = string
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager (ClusterIssuer created by apply-cluster-issuers.sh). 'dns01' = DNS-01 via Azure DNS + Workload Identity (ClusterIssuer created by Terraform). 'none' = skip."
+  default     = "letsencrypt"
+
+  validation {
+    condition     = contains(["letsencrypt", "dns01", "none"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', or 'none'."
+  }
+}
+
+variable "letsencrypt_email" {
+  type        = string
+  description = "Email for Let's Encrypt certificate notifications. Required when tls_certificate_source = 'dns01'."
+  default     = ""
+}
+
+variable "cert_manager_identity_client_id" {
+  type        = string
+  description = "Client ID of the cert-manager Managed Identity. Required when tls_certificate_source = 'dns01'."
+  default     = ""
+}
+
+variable "dns_zone_name" {
+  type        = string
+  description = "Azure DNS zone name (e.g. langsmith.mycompany.com). Required when tls_certificate_source = 'dns01'."
+  default     = ""
+}
+
+variable "dns_resource_group_name" {
+  type        = string
+  description = "Resource group containing the Azure DNS zone. Required when tls_certificate_source = 'dns01'."
+  default     = ""
+}
+
+variable "subscription_id" {
+  type        = string
+  description = "Azure subscription ID. Required when tls_certificate_source = 'dns01' for the ClusterIssuer azureDNS config."
+  default     = ""
 }
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────

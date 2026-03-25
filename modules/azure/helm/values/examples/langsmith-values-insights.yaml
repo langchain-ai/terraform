@@ -1,0 +1,46 @@
+# Insights — ClickHouse-backed analytics (requires external ClickHouse).
+#
+# init-values.sh copies this to ../langsmith-values-insights.yaml when:
+#   - enable_insights = true AND clickhouse_source != "in-cluster"
+#
+# For in-cluster ClickHouse (dev/POC), init-values.sh generates a minimal file automatically:
+#   config:
+#     insights:
+#       enabled: true
+# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+#
+# Prerequisites:
+#   - External ClickHouse instance (LangChain Managed, Azure Marketplace, or self-hosted)
+#   - ClickHouse must be reachable from the AKS cluster
+
+config:
+  insights:
+    enabled: true
+    # encryptionKey is stored in Azure Key Vault and delivered via langsmith-config-secret.
+    # Terraform creates the key automatically in Key Vault during `make apply`.
+    # deploy.sh / make k8s-secrets pulls it and adds it to the langsmith-config-secret.
+    # Do not set encryptionKey inline here — it is already in existingSecretName.
+
+clickhouse:
+  external:
+    enabled: true
+    host: ""          # ClickHouse hostname or endpoint
+    port: "8123"      # HTTP port (default 8123); use 8443 for HTTPS
+    database: "default"
+    user: "default"
+    # tls: true       # Uncomment if using HTTPS/TLS
+    #
+    # Store connection credentials in a K8s Secret and reference it.
+    # The chart reads each field by its *SecretKey name.
+    #
+    #   kubectl create secret generic langsmith-clickhouse -n langsmith \
+    #     --from-literal=clickhouse_host=<host> \
+    #     --from-literal=clickhouse_port=8123 \
+    #     --from-literal=clickhouse_user=default \
+    #     --from-literal=clickhouse_password=<password> \
+    #     --from-literal=clickhouse_db=default \
+    #     --from-literal=clickhouse_tls=false
+    existingSecretName: "langsmith-clickhouse"
+    #
+    # Option B: Inline password (not recommended — visible in Helm release metadata):
+    # password: ""

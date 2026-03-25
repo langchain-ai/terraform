@@ -1,4 +1,6 @@
 # ── Providers ─────────────────────────────────────────────────────────────────
+# Credentials are passed in from the root module via variables (not from a local
+# kubeconfig) so this module works in CI/CD pipelines without file system access.
 
 provider "kubernetes" {
   host                   = var.host
@@ -17,6 +19,9 @@ provider "helm" {
 }
 
 # ── Namespace ─────────────────────────────────────────────────────────────────
+# Dedicated namespace isolates LangSmith workloads from other cluster tenants.
+# The workload.identity label is required by the Azure Workload Identity webhook
+# to inject OIDC tokens into pods so they can authenticate to Azure Blob Storage.
 
 resource "kubernetes_namespace_v1" "langsmith" {
   metadata {
@@ -44,6 +49,9 @@ resource "kubernetes_service_account_v1" "langsmith" {
 }
 
 # ── Resource Quota ────────────────────────────────────────────────────────────
+# Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
+# deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
+# Defaults: 40 CPU req / 80 CPU lim, 80 GiB req / 160 GiB lim, 200 pods.
 
 resource "kubernetes_resource_quota_v1" "langsmith" {
   metadata {
@@ -63,6 +71,9 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
 }
 
 # ── Network Policy ────────────────────────────────────────────────────────────
+# Default-deny blocks all ingress to LangSmith pods unless explicitly allowed.
+# This is defense-in-depth: even if a pod is compromised, it cannot receive
+# lateral traffic from other namespaces. Egress is unrestricted (external DBs).
 
 resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   metadata {
@@ -76,6 +87,10 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   }
 }
 
+# Allows ingress from the ingress-nginx namespace (external traffic via LB)
+# and from within the langsmith namespace itself (inter-service calls).
+# Both rules are required: without the intra-namespace rule, backend pods
+# cannot call each other (e.g. queue workers calling the internal API).
 resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
   metadata {
     name      = "allow-from-ingress-nginx"
@@ -114,6 +129,9 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
 # Application-level secrets (api_key_salt, jwt_secret, admin_password) are
 # written by helm/scripts/generate-secrets.sh from Azure Key Vault.
 
+# PostgreSQL connection URL injected into the namespace so the Helm chart can
+# reference it via existingSecretName. Created here (not by Helm) because the
+# URL is a Terraform output — it's only known after the postgres module runs.
 resource "kubernetes_secret_v1" "postgres" {
   count = var.use_external_postgres ? 1 : 0
 
@@ -123,12 +141,19 @@ resource "kubernetes_secret_v1" "postgres" {
   }
 
   data = {
-    connection_url = var.postgres_connection_url
+    connection_url    = var.postgres_connection_url
+    # POSTGRES_URI and POSTGRES_PASSWORD are required by the listener's deploy_image
+    # task (host.platforms.k8s_operator.database_k8s.add_postgres_uri_secret) to
+    # provision per-deployment databases for LangSmith Deployments (Pass 3+).
+    POSTGRES_URI      = var.postgres_connection_url
+    POSTGRES_PASSWORD = var.postgres_admin_password
   }
 
   type = "Opaque"
 }
 
+# Redis connection URL (rediss://...) injected the same way as the Postgres secret.
+# KEDA ScaledObjects also reference this secret to authenticate queue-depth queries.
 resource "kubernetes_secret_v1" "redis" {
   count = var.use_external_redis ? 1 : 0
 
@@ -144,6 +169,8 @@ resource "kubernetes_secret_v1" "redis" {
   type = "Opaque"
 }
 
+# LangSmith license key secret — required for the application to start.
+# The Helm chart references this via config.licenseKeySecretName.
 resource "kubernetes_secret_v1" "license" {
   count = var.langsmith_license_key != "" ? 1 : 0
 
@@ -194,6 +221,70 @@ resource "helm_release" "cert_manager" {
     name  = "controller.resources.limits.memory"
     value = "256Mi"
   }
+
+  # DNS-01 via Azure Workload Identity: annotate the cert-manager service account
+  # with the Managed Identity client ID so it can call the Azure DNS API.
+  # The federated credential (created in k8s-cluster module) allows the OIDC
+  # token exchange that binds the pod to the identity.
+  dynamic "set" {
+    for_each = var.tls_certificate_source == "dns01" ? [1] : []
+    content {
+      name  = "podLabels.azure\\.workload\\.identity/use"
+      value = "true"
+    }
+  }
+  dynamic "set" {
+    for_each = var.tls_certificate_source == "dns01" ? [1] : []
+    content {
+      name  = "serviceAccount.annotations.azure\\.workload\\.identity/client-id"
+      value = var.cert_manager_identity_client_id
+    }
+  }
+}
+
+# HTTP-01 ClusterIssuer is NOT created here.
+# kubernetes_manifest requires a live API connection during plan, which fails on fresh
+# deploy (no cluster exists yet). It is applied by helm/scripts/deploy.sh instead,
+# after the cluster is up, via kubectl apply.
+
+# DNS-01 ClusterIssuer — created by Terraform when tls_certificate_source = "dns01".
+# Uses Azure DNS + Workload Identity: no static service principal needed.
+# cert-manager controller calls the Azure DNS API to create/delete TXT records
+# for ACME challenge verification.
+resource "kubernetes_manifest" "cluster_issuer_dns01" {
+  count = var.tls_certificate_source == "dns01" ? 1 : 0
+
+  manifest = {
+    apiVersion = "cert-manager.io/v1"
+    kind       = "ClusterIssuer"
+    metadata = {
+      name = "letsencrypt-prod"
+    }
+    spec = {
+      acme = {
+        server = "https://acme-v02.api.letsencrypt.org/directory"
+        email  = var.letsencrypt_email
+        privateKeySecretRef = {
+          name = "letsencrypt-prod-account-key"
+        }
+        solvers = [{
+          dns01 = {
+            azureDNS = {
+              subscriptionID    = var.subscription_id
+              resourceGroupName = var.dns_resource_group_name
+              hostedZoneName    = var.dns_zone_name
+              environment       = "AzurePublicCloud"
+              managedIdentity = {
+                clientID = var.cert_manager_identity_client_id
+              }
+            }
+          }
+        }]
+      }
+    }
+  }
+
+  depends_on = [helm_release.cert_manager]
 }
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────

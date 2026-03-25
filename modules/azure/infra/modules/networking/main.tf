@@ -70,3 +70,13 @@ resource "azurerm_subnet" "subnet_redis" {
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = var.redis_subnet_address_prefix
 }
+
+# Bastion subnet — dedicated /27 for the jump VM (Azure Bastion also uses this name convention).
+# Created only when enable_bastion = true.
+resource "azurerm_subnet" "subnet_bastion" {
+  count                = var.enable_bastion ? 1 : 0
+  name                 = "${var.network_name}-subnet-bastion"
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = var.bastion_subnet_address_prefix
+}

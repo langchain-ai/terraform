@@ -16,16 +16,28 @@ _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 
 # ── terraform.tfvars parser ──────────────────────────────────────────────────
+# Handles both quoted strings (key = "value") and unquoted values (key = true / key = 42).
+# Returns non-zero if the key is not found.
 _parse_tfvar() {
-  grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
+  local key="$1"
+  local tfvars_file="${INFRA_DIR}/terraform.tfvars"
+  local raw val
+  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
+  [[ -n "$raw" ]] || return 1
+  # Quoted string: key = "value"
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  if [[ -z "$val" ]]; then
+    # Unquoted value: key = true / key = 42 / key = {}
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
+  fi
+  [[ -n "$val" ]] || return 1
+  echo "$val"
 }
 
-# Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
+# Returns 0 if KEY = true or "true" in terraform.tfvars.
 _tfvar_is_true() {
   local val
-  val=$(grep -E "^\s*${1}\s*=" "$INFRA_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]') || return 1
+  val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
 }
 

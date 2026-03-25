@@ -36,21 +36,14 @@ variable "ttl_long_days" {
   default     = 400
 }
 
-variable "aks_oidc_issuer_url" {
+variable "workload_identity_principal_id" {
   type        = string
-  description = "OIDC issuer URL of the AKS cluster. Used to set up workload identity for blob storage."
+  description = "Principal ID of the User-Assigned Managed Identity created by the k8s-cluster module. Granted Storage Blob Data Contributor on this account."
 }
 
-variable "langsmith_namespace" {
+variable "workload_identity_client_id" {
   type        = string
-  description = "Namespace of the LangSmith deployment"
-  default     = "default"
-}
-
-variable "langsmith_release_name" {
-  type        = string
-  description = "Release name of the LangSmith Helm deployment. Used to set up workload identity for blob storage."
-  default     = "langsmith"
+  description = "Client ID of the User-Assigned Managed Identity. Passed through as an output for k8s-bootstrap annotation."
 }
 
 variable "tags" {

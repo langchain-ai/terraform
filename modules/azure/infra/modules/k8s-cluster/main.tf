@@ -19,6 +19,19 @@
 #     IP that routes to all LangSmith services by path/host.
 # ══════════════════════════════════════════════════════════════════════════════
 
+locals {
+  service_accounts_for_workload_identity = [
+    "${var.langsmith_release_name}-backend",
+    "${var.langsmith_release_name}-platform-backend",
+    "${var.langsmith_release_name}-queue",
+    "${var.langsmith_release_name}-ingest-queue",
+    "${var.langsmith_release_name}-host-backend",
+    "${var.langsmith_release_name}-listener",
+    "${var.langsmith_release_name}-agent-builder-tool-server",
+    "${var.langsmith_release_name}-agent-builder-trigger-server",
+  ]
+}
+
 # Helm provider uses the AKS cluster credentials to deploy charts
 # (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
 # Credentials come from the AKS resource itself — no external kubeconfig needed.
@@ -59,10 +72,15 @@ resource "azurerm_kubernetes_cluster" "main" {
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size
 
-    # Cluster autoscaler scales between 1 and max_count based on pending pods.
+    # Cluster autoscaler scales between min_count and max_count based on pending pods.
     auto_scaling_enabled = true
-    min_count            = 1
+    min_count            = var.default_node_pool_min_count
     max_count            = var.default_node_pool_max_count
+
+    # Azure CNI default is 30 pods/node — too low for a full LangSmith deployment.
+    # Pass 2 alone deploys 17 pods; system pods (kube-system, cert-manager, KEDA) add ~15 more.
+    # Setting to 60 fits all passes on 1 node, avoiding autoscaler scale-out and vCPU quota pressure.
+    max_pods = var.default_node_pool_max_pods
 
     # Nodes live in the main subnet; Azure CNI assigns pod IPs from this range.
     vnet_subnet_id = var.subnet_id
@@ -70,6 +88,12 @@ resource "azurerm_kubernetes_cluster" "main" {
     # Temporary node pool name used during node pool upgrades/rotations.
     # Required when auto_scaling_enabled = true and the pool is being replaced.
     temporary_name_for_rotation = "defaulttmp"
+
+    # max_surge = "0" prevents AKS from creating a temporary surge node during
+    # node pool updates (e.g. max_pods change). Instead it drains the existing
+    # node in-place. Required when vCPU quota is tight (surge needs quota for
+    # a full extra node of the same VM size).
+    zones = var.availability_zones
   }
 
   # System-assigned Managed Identity: AKS uses this to manage node VMs,
@@ -96,11 +120,29 @@ resource "azurerm_kubernetes_cluster" "main" {
     secret_rotation_interval = "2m"
   }
 
+  # Azure managed Istio add-on (Azure Service Mesh).
+  # Enabled when ingress_controller = "istio-addon". Azure manages the Istio
+  # control plane — no separate Helm install needed. Supports external and
+  # internal ingress gateways backed by Azure Load Balancers.
+  dynamic "service_mesh_profile" {
+    for_each = var.ingress_controller == "istio-addon" ? [1] : []
+    content {
+      mode                             = "Istio"
+      revisions                        = [var.istio_addon_revision]
+      external_ingress_gateway_enabled = var.istio_external_gateway_enabled
+      internal_ingress_gateway_enabled = var.istio_internal_gateway_enabled
+    }
+  }
+
   lifecycle {
     # upgrade_settings change during rolling node upgrades; ignore to prevent
     # drift between Terraform state and live cluster configuration.
+    # zones: AKS does not support changing zones on an existing node pool —
+    # it is only applied at creation time. Ignoring prevents forced recreation
+    # when availability_zones is set on an existing cluster.
     ignore_changes = [
-      default_node_pool[0].upgrade_settings
+      default_node_pool[0].upgrade_settings,
+      default_node_pool[0].zones,
     ]
   }
 }
@@ -131,14 +173,60 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   }
 }
 
+# ── Workload Identity ─────────────────────────────────────────────────────────
+# User-Assigned Managed Identity for LangSmith pods.
+# Centralised here because the AKS OIDC issuer URL (needed for federated
+# credentials) is produced by this module. Having identity creation and
+# federation in the same place avoids circular dependency.
+resource "azurerm_user_assigned_identity" "k8s_app" {
+  name                = var.workload_identity_name != "" ? var.workload_identity_name : "${var.cluster_name}-app-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = merge(var.tags, { module = "aks" })
+}
+
+# cert-manager Managed Identity — used exclusively for DNS-01 ACME challenges.
+# Separate from the LangSmith app identity so cert-manager only gets DNS Zone
+# Contributor (not Storage Blob Contributor) and vice versa.
+# The dns module grants DNS Zone Contributor to this identity's principal_id.
+resource "azurerm_user_assigned_identity" "cert_manager" {
+  name                = "${var.cluster_name}-cert-manager-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = merge(var.tags, { module = "aks" })
+}
+
+# Federated credential for cert-manager controller service account.
+# Allows cert-manager pod to exchange its K8s OIDC token for an Azure AD token
+# so it can call the Azure DNS API without a static service principal secret.
+resource "azurerm_federated_identity_credential" "cert_manager" {
+  name      = "${var.cluster_name}-cert-manager-federated"
+  parent_id = azurerm_user_assigned_identity.cert_manager.id
+
+  audience = ["api://AzureADTokenExchange"]
+  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  subject  = "system:serviceaccount:cert-manager:cert-manager"
+}
+
+# Federated Identity Credentials — bind each LangSmith K8s service account to
+# the Managed Identity via OIDC. One credential per service account.
+resource "azurerm_federated_identity_credential" "k8s_app" {
+  for_each = toset(local.service_accounts_for_workload_identity)
+
+  name      = "langsmith-federated-${each.value}"
+  parent_id = azurerm_user_assigned_identity.k8s_app.id
+
+  audience = ["api://AzureADTokenExchange"]
+  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  subject  = "system:serviceaccount:${var.langsmith_namespace}:${each.value}"
+}
+
 # NGINX Ingress Controller — the single entry point for all HTTP(S) traffic.
 # Creates an Azure Standard Load Balancer with a public IP.
-# Routes traffic to LangSmith frontend/backend services via Ingress rules.
+# Routes traffic to LangSmith services by host/path via Ingress rules.
 # cert-manager integrates with NGINX to automate TLS certificate provisioning.
-#
-# 2 replicas for basic availability (both on different nodes via pod anti-affinity).
 resource "helm_release" "nginx_ingress" {
-  count      = var.nginx_ingress_enabled ? 1 : 0
+  count      = var.ingress_controller == "nginx" ? 1 : 0
   name       = "ingress-nginx"
   namespace  = "ingress-nginx"
   repository = "https://kubernetes.github.io/ingress-nginx"
@@ -169,13 +257,65 @@ resource "helm_release" "nginx_ingress" {
 
         service = {
           type = "LoadBalancer"
-          annotations = {
-            # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
-            # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
-            "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
-          }
+          annotations = merge(
+            {
+              # Keep HTTP probes (default) but point them at /nginx-health which always 200s.
+              # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
+              "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
+            },
+            var.nginx_dns_label != "" ? {
+              # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
+              "service.beta.kubernetes.io/azure-dns-label-name" = var.nginx_dns_label
+            } : {}
+          )
         }
       }
     })
   ]
+}
+
+# ── Istio (self-managed Helm) ──────────────────────────────────────────────────
+# Used when ingress_controller = "istio". Installs istio-base (CRDs), istiod
+# (control plane), and istio-ingressgateway (external LB) into istio-system.
+# For Azure-managed Istio, use ingress_controller = "istio-addon" instead —
+# it enables the AKS service mesh add-on via service_mesh_profile on the cluster.
+
+# istio-base: installs the Istio CRDs (VirtualService, Gateway, DestinationRule, etc.)
+# into the cluster. Must be applied first — istiod and the gateway depend on these CRDs.
+resource "helm_release" "istio_base" {
+  count      = var.ingress_controller == "istio" ? 1 : 0
+  name       = "istio-base"
+  namespace  = "istio-system"
+  repository = "https://istio-release.storage.googleapis.com/charts"
+  chart      = "base"
+  version    = var.istio_version
+
+  create_namespace = true
+}
+
+# istiod: the Istio control plane — manages service mesh policy, certificate
+# rotation, and injects Envoy sidecars into pods in mesh-enabled namespaces.
+resource "helm_release" "istiod" {
+  count      = var.ingress_controller == "istio" ? 1 : 0
+  name       = "istiod"
+  namespace  = "istio-system"
+  repository = "https://istio-release.storage.googleapis.com/charts"
+  chart      = "istiod"
+  version    = var.istio_version
+
+  depends_on = [helm_release.istio_base]
+}
+
+# Istio ingress gateway: the external-facing Load Balancer for all LangSmith traffic.
+# Replaces NGINX when Istio is in use. Gateway + VirtualService resources
+# (in use-cases/istio/) route traffic to LangSmith services.
+resource "helm_release" "istio_gateway" {
+  count      = var.ingress_controller == "istio" && var.istio_external_gateway_enabled ? 1 : 0
+  name       = "istio-ingressgateway"
+  namespace  = "istio-system"
+  repository = "https://istio-release.storage.googleapis.com/charts"
+  chart      = "gateway"
+  version    = var.istio_version
+
+  depends_on = [helm_release.istiod]
 }

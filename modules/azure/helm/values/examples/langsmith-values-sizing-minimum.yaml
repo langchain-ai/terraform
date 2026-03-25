@@ -1,0 +1,191 @@
+# ============================================================================
+# ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD
+#
+# This profile exists to keep LangSmith alive at the lowest possible cost.
+# Single replica, rock-bottom resource requests sized from actual kubectl-top
+# measurements on an idle cluster. The goal is to fit everything
+# on a single small node (e.g. m5.xlarge — 4 vCPU, 16 Gi).
+#
+# WILL break under any meaningful traffic. OOM kills, timeouts, and degraded
+# UX are expected and acceptable. Do not file bugs against this profile.
+#
+# Use cases: cost parking, weekend standby, CI smoke tests, demos with a
+# single user clicking around.
+#
+# For actual dev work: use langsmith-values-sizing-dev.yaml
+# For production:      use langsmith-values-sizing-production.yaml
+# ============================================================================
+
+# -- Application components ----------------------------------------------------
+
+backend:
+  e2eTest:
+    enabled: false
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "576Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+frontend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "10m"
+        memory: "32Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+
+platformBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+
+playground:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "384Mi"
+      limits:
+        cpu: "250m"
+        memory: "512Mi"
+
+queue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "768Mi"
+      limits:
+        cpu: "1"
+        memory: "1536Mi"
+
+ingestQueue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+
+aceBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+
+# -- Deployments feature components --------------------------------------------
+
+hostBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "768Mi"
+
+listener:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+operator:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "250m"
+        memory: "256Mi"
+
+# -- Agent Builder infrastructure ----------------------------------------------
+
+agentBuilderToolServer:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+agentBuilderTriggerServer:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "192Mi"
+      limits:
+        cpu: "250m"
+        memory: "384Mi"
+
+# -- In-cluster data services (Tier 1 only) -----------------------------------
+# ClickHouse is the one component that actually uses its resources.
+# Don't go below this or queries will time out.
+
+postgres:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+redis:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "200m"
+        memory: "128Mi"
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"

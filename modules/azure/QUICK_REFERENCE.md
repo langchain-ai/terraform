@@ -1,430 +1,213 @@
 # LangSmith Azure — Quick Reference
 
-Copy-paste commands for each deployment pass. **All commands run from `terraform/azure/infra/`** — no directory switching needed.
+All commands run from `terraform/azure/`. Run `make help` to see all targets.
 
 For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
 ---
 
-## Pass 1 — Infrastructure
+## First-Time Setup
 
 ```bash
-cd terraform/azure/infra
+cd terraform/azure
 
-# 1. Get your subscription ID
-az account show --query id -o tsv
+# 1. Copy and fill in your variables
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+vi infra/terraform.tfvars    # set subscription_id, identifier, location
 
-# 2. Edit terraform.tfvars
-#    Set: subscription_id, identifier, postgres_source, redis_source
-vi terraform.tfvars
+# 2. Bootstrap secrets (prompts on first run, reads from Key Vault on repeat)
+make setup-env
+
+# 3. Check prerequisites (az CLI, login, resource providers, RBAC)
+make preflight
+
+# 4. Deploy infrastructure (~15–20 min)
+# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
+# Skip plan and run apply directly — it handles the ordering in three stages.
+make init
+make apply
+
+# 5. Get cluster credentials
+make kubeconfig
+
+# 6. Create K8s secrets from Key Vault
+make k8s-secrets
+
+# 7. Generate Helm values from Terraform outputs
+make init-values
+
+# 8. Deploy LangSmith (~10 min)
+make deploy
+
+# 9. Check status
+make status
 ```
 
-**Complete `terraform.tfvars` for external DBs (copy from `.example`, fill the values below):**
+Or run the full deployment in one shot:
+
+```bash
+make deploy-all   # apply → kubeconfig → k8s-secrets → init-values → deploy
+```
+
+---
+
+## Day-2 Operations
+
+```bash
+# Check deployment state and get next-step guidance
+make status
+
+# Quick status (skip Key Vault + K8s queries)
+make status-quick
+
+# Re-deploy after changing Helm values or upgrading chart version
+make deploy
+
+# Re-generate Helm values after Terraform changes
+make init-values
+
+# Update kubeconfig for the AKS cluster
+make kubeconfig
+
+# Re-create langsmith-config-secret from Key Vault
+make k8s-secrets
+```
+
+---
+
+## Enable Optional Addons (Passes 3–5)
+
+Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the flags, then re-run `init-values` to copy the corresponding values files:
+
+```hcl
+# infra/terraform.tfvars
+enable_deployments   = true    # Pass 3 — LangSmith Deployments (required for Agent Builder + Insights)
+enable_agent_builder = true    # Pass 4 — Agent Builder UI
+enable_insights      = true    # Pass 5 — ClickHouse-backed analytics
+enable_polly         = true    # Pass 5 — Polly AI eval/monitoring
+```
+
+```bash
+make init-values   # copies addon values files based on enable_* flags
+make deploy
+```
+
+**Sizing**: Set `sizing_profile` in `terraform.tfvars`:
+
+```hcl
+sizing_profile = "production"         # multi-replica with HPA (recommended)
+sizing_profile = "production-large"   # high-volume (~50 users, ~1000 traces/sec)
+sizing_profile = "dev"                # single-replica, minimal resources (dev/CI/demos)
+sizing_profile = "minimum"            # absolute minimum (demos, very low resource budget)
+```
+
+Then re-run `make init-values && make deploy`.
+
+---
+
+## 5-Pass Deployment Summary
+
+| Pass | What | Make target |
+|------|------|-------------|
+| **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA | `make apply` |
+| **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
+| **2** | LangSmith Helm (17 pods) | `make init-values && make deploy` |
+| **3** | + LangSmith Deployments (`enable_deployments = true`) | `make init-values && make deploy` |
+| **4** | + Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
+| **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
+
+---
+
+## terraform.tfvars — Minimal Required
+
 ```hcl
 # ── Required ──────────────────────────────────────────────────────────────────
 subscription_id = ""              # az account show --query id -o tsv
 identifier      = "-prod"         # suffix appended to every resource name
 location        = "eastus"        # Azure region
 
-# ── Naming & tagging ──────────────────────────────────────────────────────────
-environment = "prod"
-owner       = "platform-team"
-cost_center = "engineering"
-
 # ── Data sources ──────────────────────────────────────────────────────────────
 postgres_source   = "external"    # Azure DB for PostgreSQL Flexible Server
 redis_source      = "external"    # Azure Cache for Redis Premium
-clickhouse_source = "in-cluster"  # ClickHouse always runs in-cluster
+clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 
 # ── AKS ───────────────────────────────────────────────────────────────────────
-default_node_pool_vm_size   = "Standard_DS3_v2"  # 4 vCPU, 14 GB RAM
-default_node_pool_max_count = 4
-aks_deletion_protection     = false               # set true for production
+default_node_pool_vm_size   = "Standard_D8s_v3"
+default_node_pool_max_count = 12
+default_node_pool_max_pods  = 60
 
-# ClickHouse requires 15 GB RAM — large pool handles it
-additional_node_pools = {
-  large = {
-    vm_size   = "Standard_DS4_v2"  # 8 vCPU, 28 GB RAM
-    min_count = 0
-    max_count = 2
-  }
-}
-
-# ── PostgreSQL ────────────────────────────────────────────────────────────────
-postgres_admin_username      = "langsmith"
-postgres_deletion_protection = false  # set true for production
-
-# ── Redis ─────────────────────────────────────────────────────────────────────
-redis_capacity = 2  # P2 = 13 GB RAM
-
-# ── Blob storage ──────────────────────────────────────────────────────────────
-blob_ttl_enabled    = true
-blob_ttl_short_days = 14   # short-lived trace payloads
-blob_ttl_long_days  = 400  # run attachments
-
-# ── Key Vault ─────────────────────────────────────────────────────────────────
-keyvault_purge_protection = false  # set true for production
-
-# ── TLS ───────────────────────────────────────────────────────────────────────
+# ── TLS (pick one approach) ───────────────────────────────────────────────────
+# Option A — Azure Public IP DNS label (fastest, free, no custom domain needed)
+#   → langsmith-prod.eastus.cloudapp.azure.com
+nginx_dns_label        = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
 
-# ── LangSmith ─────────────────────────────────────────────────────────────────
-langsmith_namespace    = "langsmith"
-langsmith_release_name = "langsmith"
-```
+# Option B — Custom domain + DNS-01 challenge (production recommended)
+# tls_certificate_source = "dns01"
+# langsmith_domain       = "langsmith.example.com"
+# letsencrypt_email      = "you@example.com"
 
-> For demo/POC with all in-cluster DBs — see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
-
-### 1b — Bootstrap secrets with setup-env.sh
-
-`setup-env.sh` is the only place sensitive values enter the system. It keeps credentials out of `terraform.tfvars` and out of shell history.
-
-**Run it:**
-```bash
-./setup-env.sh
-```
-
-**What it prompts for (first run only):**
-
-| Prompt | What to enter |
-|--------|---------------|
-| `PostgreSQL admin password` | Password for the Azure DB for PostgreSQL admin user — you choose it |
-| `LangSmith license key` | Your LangSmith enterprise license key from LangChain |
-| `LangSmith admin password` | Password for the first org admin account created on first boot |
-
-**What it generates automatically (stable — never rotated):**
-
-| Secret | How generated | Purpose |
-|--------|---------------|---------|
-| `api_key_salt` | `openssl rand -base64 32` | Salts all LangSmith API keys |
-| `jwt_secret` | `openssl rand -base64 32` | Signs JWT session tokens |
-| `deployments_encryption_key` | Fernet key (Python `cryptography`) | Encrypts LangGraph deployment metadata |
-| `agent_builder_encryption_key` | Fernet key | Encrypts Agent Builder data |
-| `insights_encryption_key` | Fernet key | Encrypts Insights / Clio data |
-| `polly_encryption_key` | Fernet key | Encrypts Polly agent data |
-
-**Storage behaviour — two phases:**
-
-| Phase | KV exists? | What setup-env.sh does | What terraform apply does |
-|-------|-----------|----------------------|--------------------------|
-| First run | No | Generates secrets → local dot-files + `secrets.auto.tfvars` | Creates KV + stores all secrets in KV |
-| Subsequent runs | Yes | Reads secrets from KV → `secrets.auto.tfvars` only | Secrets already in KV state — no-op |
-
-`setup-env.sh` is read-only against Key Vault — it never writes to KV directly. Terraform is the sole KV writer. This means `setup-env.sh → terraform apply` is always safe to run in sequence, on any machine, any number of times.
-
-**What `secrets.auto.tfvars` contains** (gitignored, `chmod 600`):
-```hcl
-# Auto-generated by setup-env.sh — DO NOT COMMIT
-
-postgres_admin_password                = "<your-postgres-password>"
-langsmith_license_key                  = "<your-license-key>"
-langsmith_admin_password               = "<your-admin-password>"
-langsmith_api_key_salt                 = "<openssl-rand-base64-32>"
-langsmith_jwt_secret                   = "<openssl-rand-base64-32>"
-langsmith_deployments_encryption_key   = "<fernet-key>"
-langsmith_agent_builder_encryption_key = "<fernet-key>"
-langsmith_insights_encryption_key      = "<fernet-key>"
-langsmith_polly_encryption_key         = "<fernet-key>"
-```
-
-**Why `secrets.auto.tfvars` and not environment variables:**
-Terraform automatically picks up any `*.auto.tfvars` file in the working directory — no `export TF_VAR_*` needed, no shell session coupling. The file is gitignored and `chmod 600`. On a new machine or CI, run `./setup-env.sh` to regenerate it from Key Vault.
-
-> **Never commit `secrets.auto.tfvars`.** It contains plaintext credentials. The `.gitignore` in `terraform/azure/infra/` blocks it, but double-check with `git status` before any commit.
-
-```bash
-# 3. Run setup-env.sh
-./setup-env.sh
-
-# 4. Init (first run only)
-terraform init
-
-# 5. Plan and apply — secrets.auto.tfvars picked up automatically
-terraform plan
-terraform apply
-```
-
-**What gets created (44 resources):**
-- Resource group: `langsmith-rg<identifier>`
-- VNet + 3 subnets: `subnet-main` (AKS), `subnet-postgres`, `subnet-redis`
-- AKS cluster: `langsmith-aks<identifier>` (default pool + large pool for ClickHouse)
-- NGINX Ingress: `helm_release.nginx_ingress` — Azure LoadBalancer provisioned
-- Azure DB for PostgreSQL Flexible Server + private DNS zone + VNet link
-- Azure Cache for Redis Premium
-- Blob storage account: `langsmithblob<identifier-no-hyphens>` + Managed Identity + federated credentials (backend, platform-backend, queue)
-- Key Vault: `langsmith-kv<identifier>` — all secrets stored (api_key_salt, jwt_secret, passwords, Fernet keys)
-- K8s: `langsmith` namespace, `langsmith-ksa` ServiceAccount, ResourceQuota, NetworkPolicies, cert-manager, KEDA
-- K8s secrets: `langsmith-postgres-secret`, `langsmith-redis-secret` — **created by Terraform from connection URLs**
-
-**After apply — verify outputs:**
-```bash
-terraform output
+# ── Sizing + addon flags ───────────────────────────────────────────────────────
+sizing_profile = "production"
+# enable_deployments   = true
+# enable_agent_builder = true
+# enable_insights      = true
+# enable_polly         = true
 ```
 
 ---
 
-## Pass 1.5 — Cluster Access
+## secrets.auto.tfvars
 
-```bash
-az aks get-credentials \
-  --resource-group langsmith-rg<identifier> \
-  --name langsmith-aks<identifier> \
-  --overwrite-existing
-```
-```
-Merged "langsmith-aks<identifier>" as current context in /Users/<you>/.kube/config
-```
+`setup-env.sh` generates this file — never commit it. Contains:
 
-```bash
-kubectl get nodes
-```
-```
-NAME                              STATUS   ROLES    AGE     VERSION
-aks-default-xxxxxxxxx-vmss000000  Ready    <none>   8m19s   v1.32.11
+```hcl
+postgres_admin_password                = "..."
+langsmith_license_key                  = "..."
+langsmith_admin_password               = "..."
+langsmith_api_key_salt                 = "..."
+langsmith_jwt_secret                   = "..."
+langsmith_deployments_encryption_key   = "..."
+langsmith_agent_builder_encryption_key = "..."
+langsmith_insights_encryption_key      = "..."
+langsmith_polly_encryption_key         = "..."
 ```
 
-```bash
-kubectl get sa langsmith-ksa -n langsmith \
-  -o jsonpath='{.metadata.annotations}'
-```
-```
-{"azure.workload.identity/client-id":"<managed-identity-client-id>"}
-```
+On subsequent runs `setup-env.sh` reads from Key Vault — no re-entry needed.
+
+---
+
+## Common kubectl Commands
 
 ```bash
-kubectl get pods -n cert-manager
-```
-```
-NAME                                       READY   STATUS    RESTARTS   AGE
-cert-manager-xxxxxxxxxx-xxxxx              1/1     Running   0          7m52s
-cert-manager-cainjector-xxxxxxxxxx-xxxxx   1/1     Running   0          7m52s
-cert-manager-webhook-xxxxxxxxxx-xxxxx      1/1     Running   0          7m52s
-```
+# Pod health
+kubectl get pods -n langsmith
+kubectl get pods -n langsmith -w
+kubectl describe pod <pod-name> -n langsmith
+kubectl logs <pod-name> -n langsmith --tail=100 -f
+kubectl logs <pod-name> -n langsmith --previous --tail=50
 
-```bash
-kubectl get pods -n keda
-```
-```
-NAME                                              READY   STATUS    RESTARTS   AGE
-keda-admission-webhooks-xxxxxxxxxx-xxxxx          1/1     Running   0          7m58s
-keda-operator-xxxxxxxxxx-xxxxx                    1/1     Running   0          7m58s
-keda-operator-metrics-apiserver-xxxxxxxxxx-xxxxx  1/1     Running   0          7m58s
-```
-
-```bash
+# Ingress / TLS
 kubectl get svc ingress-nginx-controller -n ingress-nginx
-```
-```
-NAME                       TYPE           CLUSTER-IP    EXTERNAL-IP    PORT(S)                      AGE
-ingress-nginx-controller   LoadBalancer   10.0.xx.xx    <public-ip>    80:xxxxx/TCP,443:xxxxx/TCP   7m51s
-```
+kubectl get ingress -n langsmith
+kubectl get certificate -n langsmith
 
-> Save the `EXTERNAL-IP` — used to build the `sslip.io` hostname in Pass 2.
+# Secrets (check keys without decoding)
+kubectl get secret langsmith-config-secret -n langsmith -o json | \
+  python3 -c "import sys,json; [print(k) for k in json.load(sys.stdin)['data']]"
+
+# Force pod restart
+kubectl rollout restart deployment/langsmith-backend -n langsmith
+```
 
 ---
 
-## Pass 1.6 — TLS Cluster Issuers (Let's Encrypt)
+## Pass 2 Expected Pods (~17)
 
-```bash
-# Verify cert-manager CRDs are ready
-kubectl get crd clusterissuers.cert-manager.io
-```
-```
-NAME                                  CREATED AT
-clusterissuers.cert-manager.io        2026-xx-xxTxx:xx:xxZ
-```
-
-```bash
-# Apply staging + prod ClusterIssuers (replace email) — path is relative to terraform/azure/infra/
-sed 's/ACME_EMAIL_PLACEHOLDER/you@example.com/g' ../kubectl/letsencrypt-issuers.yaml \
-  | kubectl apply -f -
-```
-```
-clusterissuer.cert-manager.io/letsencrypt-staging created
-clusterissuer.cert-manager.io/letsencrypt-prod created
-```
-
-```bash
-# Verify — both should show READY: True within ~10s
-kubectl get clusterissuers
-```
-```
-NAME                  READY   AGE
-letsencrypt-prod      True    105s
-letsencrypt-staging   True    105s
-```
-
-> Use `letsencrypt-staging` first when testing — it has no rate limits. Switch to `letsencrypt-prod` for production. Rate limit: 5 certificates per domain per week.
-
----
-
-## Pass 2 — LangSmith (External Postgres + Redis)
-
-> Pass 1 (Infrastructure) provisions AKS, Blob Storage, Key Vault, cert-manager, KEDA, and — when `postgres_source = "external"` and `redis_source = "external"` — Azure DB for PostgreSQL and Azure Cache for Redis.
-> Light deploy (all in-cluster DBs) reference: [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md)
-
-### Pass 1 terraform.tfvars settings (required before this pass)
-
-```hcl
-postgres_source = "external"
-redis_source    = "external"
-```
-
-### 2a — Collect terraform outputs
-
-```bash
-# Public IP assigned to the NGINX LoadBalancer by Azure (single line — avoids zsh paste issues)
-NGINX_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-
-# sslip.io gives us a free wildcard DNS without registering a domain
-HOSTNAME="${NGINX_IP//./-}.sslip.io"
-
-# If NGINX_IP is empty or wrong, set manually:
-# NGINX_IP="x.x.x.x"   # your LoadBalancer EXTERNAL-IP from Pass 1.5
-# HOSTNAME="${NGINX_IP//./-}.sslip.io"
-
-# Key Vault name — all secrets read from here
-KV_NAME=$(terraform output -raw keyvault_name)
-
-# Blob storage — trace payload store (always required)
-STORAGE_ACCOUNT=$(terraform output -raw storage_account_name)
-STORAGE_CONTAINER=$(terraform output -raw storage_container_name)
-
-# Workload Identity client ID — annotated on langsmith-ksa ServiceAccount
-WI_CLIENT_ID=$(terraform output -raw storage_account_k8s_managed_identity_client_id)
-
-# External DB connection URLs (private VNet — only accessible from within cluster)
-POSTGRES_URL=$(terraform output -raw postgres_connection_url)
-REDIS_URL=$(terraform output -raw redis_connection_url)
-
-echo "HOSTNAME:          $HOSTNAME"
-echo "KV_NAME:           $KV_NAME"
-echo "STORAGE_ACCOUNT:   $STORAGE_ACCOUNT"
-echo "STORAGE_CONTAINER: $STORAGE_CONTAINER"
-echo "WI_CLIENT_ID:      $WI_CLIENT_ID"
-echo "POSTGRES_URL:      $POSTGRES_URL"
-echo "REDIS_URL:         $REDIS_URL"
-```
-```
-HOSTNAME:          xx-xxx-xxx-x.sslip.io
-KV_NAME:           langsmith-kv<identifier>
-STORAGE_ACCOUNT:   langsmithblob<identifier-no-hyphens>
-STORAGE_CONTAINER: langsmith-blob<identifier>-container
-WI_CLIENT_ID:      <managed-identity-client-id>
-POSTGRES_URL:      postgresql://langsmith:<password>@langsmith-postgres<identifier>.postgres.database.azure.com:5432/postgres
-REDIS_URL:         rediss://:<primary-key>@langsmith-redis<identifier>.redis.cache.windows.net:6380
-```
-
-### 2b — Prepare values-overrides.yaml
-
-Each pass has its own example file. Copy the one matching your target pass:
-
-| Pass | Example file | Pods added |
-|------|-------------|------------|
-| 2 | `values-overrides-pass-2.yaml.example` | Core LangSmith (17 pods) |
-| 3 | `values-overrides-pass-3.yaml.example` | + host-backend, listener, operator (20 pods) |
-| 4 | `values-overrides-pass-4.yaml.example` | + agent-builder-tool-server, agent-builder-trigger-server (22 pods) |
-| 5 | `values-overrides-pass-5.yaml.example` | + Insights/Clio via operator (dynamic) |
-
-```bash
-cp ../helm/values/values-overrides-pass-2.yaml.example ../helm/values/values-overrides.yaml
-
-# Fill placeholders — one per line to avoid zsh multiline paste issues
-# On Linux remove the '' from sed -i ''
-sed -i '' "s|<your-domain.com>|${HOSTNAME}|g" ../helm/values/values-overrides.yaml
-sed -i '' "s|<tf output: storage_account_name>|${STORAGE_ACCOUNT}|g" ../helm/values/values-overrides.yaml
-sed -i '' "s|<tf output: storage_container_name>|${STORAGE_CONTAINER}|g" ../helm/values/values-overrides.yaml
-sed -i '' "s|<tf output: workload_identity_client_id>|${WI_CLIENT_ID}|g" ../helm/values/values-overrides.yaml
-```
-
-Set your admin email:
-```bash
-vi ../helm/values/values-overrides.yaml   # set initialOrgAdminEmail
-```
-
-### 2c — Create K8s config secret from Key Vault
-
-> `langsmith-postgres-secret` and `langsmith-redis-secret` are **already created by Terraform** (k8s-bootstrap module).
-> Only `langsmith-config-secret` needs to be created manually — it holds the application keys pulled from Key Vault.
-
-Run from `terraform/azure/infra/` (KV_NAME must be set from step 2a):
-
-```bash
-# Step 1 — fetch each secret into a variable (run one line at a time)
-KV_NAME=$(terraform output -raw keyvault_name)
-API_KEY_SALT=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-api-key-salt --query value -o tsv)
-JWT_SECRET=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-jwt-secret --query value -o tsv)
-LICENSE_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-license-key --query value -o tsv)
-ADMIN_PASSWORD=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-admin-password --query value -o tsv)
-DEPLOY_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-deployments-encryption-key --query value -o tsv)
-AGENT_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-agent-builder-encryption-key --query value -o tsv)
-INSIGHTS_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-insights-encryption-key --query value -o tsv)
-POLLY_KEY=$(az keyvault secret show --vault-name "$KV_NAME" --name langsmith-polly-encryption-key --query value -o tsv)
-```
-
-```bash
-# Step 2 — create the secret (single line — no multiline paste issues)
-kubectl create secret generic langsmith-config-secret --namespace langsmith --from-literal=api_key_salt="$API_KEY_SALT" --from-literal=jwt_secret="$JWT_SECRET" --from-literal=langsmith_license_key="$LICENSE_KEY" --from-literal=initial_org_admin_password="$ADMIN_PASSWORD" --from-literal=deployments_encryption_key="$DEPLOY_KEY" --from-literal=agent_builder_encryption_key="$AGENT_KEY" --from-literal=insights_encryption_key="$INSIGHTS_KEY" --from-literal=polly_encryption_key="$POLLY_KEY" --dry-run=client -o yaml | kubectl apply -f -
-```
-
-```bash
-# Verify all 3 secrets exist
-kubectl get secrets -n langsmith | grep langsmith
-```
-```
-langsmith-config-secret    Opaque   8      ...
-langsmith-postgres-secret  Opaque   1      ...
-langsmith-redis-secret     Opaque   1      ...
-```
-
-### 2d — Deploy LangSmith
-
-```bash
-helm repo add langsmith https://langchain-ai.github.io/helm
-helm repo update
-helm search repo langsmith/langsmith --versions | head -5   # confirm latest version
-
-helm upgrade --install langsmith langsmith/langsmith \
-  --version <VERSION> \
-  --namespace langsmith --create-namespace \
-  -f ../helm/values/values-overrides.yaml \
-  --wait --timeout 15m
-```
-
-> **Note:** `--timeout 15m` — the `langsmith-backend-auth-bootstrap` post-upgrade Job runs DB migrations and auth init; it needs up to ~5 min on first install.
-
-> Open a second terminal and watch pod status while helm runs:
-> ```bash
-> # macOS: install watch first
-> brew install watch
-> watch kubectl get pods -n langsmith
->
-> # or without installing anything
-> while true; do clear; kubectl get pods -n langsmith; sleep 3; done
-> ```
-
-Expected success output:
-```
-Thank you for installing LangSmith!
-...
-Release "langsmith" has been upgraded. Happy Helming!
-```
-
-### 2e — Verify
-
-```bash
-kubectl get pods -n langsmith        # all Running or Completed
-kubectl get ingress -n langsmith     # host + TLS assigned
-kubectl get certificate -n langsmith # READY: True
-```
-
-Example pod output (all Running):
 ```
 NAME                                          READY   STATUS      RESTARTS   AGE
 langsmith-ace-backend-xxxxxxxxx-xxxxx         1/1     Running     0          5m
-langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running     0          5m
-langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running     0          5m
 langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running     0          5m
 langsmith-backend-auth-bootstrap-xxxxx        0/1     Completed   0          5m
 langsmith-backend-ch-migrations-xxxxx         0/1     Completed   0          5m
@@ -432,391 +215,49 @@ langsmith-backend-migrations-xxxxx            0/1     Completed   0          5m
 langsmith-clickhouse-0                        1/1     Running     0          5m
 langsmith-frontend-xxxxxxxxx-xxxxx            1/1     Running     0          5m
 langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running     0          5m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running     0          5m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running     0          5m
 langsmith-platform-backend-xxxxxxxxx-xxxxx    1/1     Running     0          5m
 langsmith-playground-xxxxxxxxx-xxxxx          1/1     Running     0          5m
 langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running     0          5m
-langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running     0          5m
-langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running     0          5m
 ```
-
-Example ingress output:
-```
-NAME                CLASS   HOSTS                   ADDRESS        PORTS     AGE
-langsmith-ingress   nginx   <your-hostname>         <NGINX-IP>     80, 443   5m
-```
-
-Example certificate output:
-```
-NAME            READY   SECRET          AGE
-langsmith-tls   True    langsmith-tls   5m
-```
-
-Open `https://<HOSTNAME>` — login with `initialOrgAdminEmail` + admin password from Key Vault.
-
-> **WATCHOUT — `langsmith-config-secret` key name:** The Job expects `initial_org_admin_password` (not `admin_password`). Using the wrong key causes `CreateContainerConfigError` on the auth-bootstrap Job and the helm install will time out.
-
-#### Pass 2 — Pod resource configuration
-
-| Pod | Replicas | CPU req/limit | Mem req/limit | HPA min/max | WI |
-|-----|----------|--------------|---------------|-------------|----|
-| `langsmith-backend` | 1 (HPA) | 1000m / 2000m | 2000Mi / 4Gi | 3 / 10 | ✓ |
-| `langsmith-platform-backend` | 1 (HPA) | 500m / 1000m | 1Gi / 2Gi | 1 / 10 | ✓ |
-| `langsmith-frontend` | 1 (HPA) | 500m / 1000m | 1Gi / 2Gi | 1 / 10 | — |
-| `langsmith-playground` | 1 (HPA) | 500m / 1000m | 1Gi / 2Gi | 1 / 10 | — |
-| `langsmith-queue` | 1 (HPA+KEDA) | 1000m / 2000m | 2Gi / 4Gi | 3 / 10 | ✓ |
-| `langsmith-ingest-queue` | 1 (HPA+KEDA) | 1000m / 2000m | 2Gi / 4Gi | 3 / 10 | ✓ |
-| `langsmith-ace-backend` | 1 (HPA) | 500m / 1000m | 1Gi / 2Gi | 1 / 5 | — |
-| `langsmith-clickhouse` | StatefulSet | 3500m / 8000m | 15Gi / 32Gi | — | — |
-| Azure DB for PostgreSQL | managed | — | — | — | — |
-| Azure Cache for Redis | managed | — | — | — | — |
-
-> HPA scales on CPU ≥ 50% or Memory ≥ 80%. KEDA additionally scales `queue` and `ingest-queue` on Redis queue depth.
 
 ---
 
-## Pass 3 — LangSmith Deployments (optional)
+## Key Watchouts
 
-Enables LangGraph agent deployments: `hostBackend`, `listener`, `operator` pods.
-Requires Pass 2 to be running.
+> **`langsmith-config-secret` key name:** The job expects `initial_org_admin_password` (not `admin_password`). Wrong key → `CreateContainerConfigError` on auth-bootstrap.
 
-**What gets added:**
-- `langsmith-host-backend` — LangGraph control plane API
-- `langsmith-listener` — watches for deployment changes, creates K8s CRDs
-- `langsmith-operator` — manages per-deployment K8s Deployments
+> **`config.deployment.url` must include `https://`.** Example: `url: "https://langsmith-prod.eastus.cloudapp.azure.com"`. Missing the protocol causes operator-deployed agents to stay stuck in `DEPLOYING` state indefinitely ("ConnectionError: Unable to connect to LangGraph server").
 
-**Both `host-backend` and `listener` need Workload Identity** (blob access) — federated credentials already provisioned in `module.blob` during Pass 1.
+> **`config.deployment.enabled: true` is required for Pass 3.** Setting only `config.deployment.url` without `enabled: true` causes the chart to silently skip `listener` and `operator`.
 
-### 3a — Enable Pass 3 block in values-overrides.yaml
+> **`insights_encryption_key` and `polly_encryption_key` must never change** after first enable — changing either breaks existing encrypted data permanently.
 
-In `../helm/values/values-overrides.yaml`:
+> **Roll frontend after first Polly enable.** The `agentBootstrap` job creates `langsmith-polly-config` ConfigMap with `VITE_POLLY_DEPLOYMENT_URL` after Polly registers. If the frontend pod was running before bootstrap completed, Polly shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
 
-1. Add both `deployment.enabled` and `deployment.url` inside the existing `config:` block (not as a new top-level key):
-```yaml
-config:
-  # ... existing values ...
-  deployment:
-    enabled: true                        # REQUIRED — without this, listener and operator are skipped silently
-    url: "https://<your-hostname>"       # must match config.hostname
-```
+> **Uninstall Helm BEFORE `terraform destroy`.** The Azure Load Balancer created by NGINX blocks VNet deletion. Run `helm uninstall langsmith -n langsmith --wait` first.
 
-2. Uncomment the `# ── Pass 3` section at the bottom of the file (`hostBackend`, `listener`, `operator`).
-
-Get the WI client ID if needed:
-```bash
-terraform output -raw storage_account_k8s_managed_identity_client_id
-```
-
-### 3b — Deploy
-
-Single `-f` flag — no overlays folder:
-
-```bash
-helm upgrade --install langsmith langsmith/langsmith \
-  --version <VERSION> \
-  --namespace langsmith \
-  -f ../helm/values/values-overrides.yaml \
-  --wait --timeout 15m
-```
-
-### 3c — Verify
-
-```bash
-kubectl get pods -n langsmith
-```
-
-Expected — **17 pods total** (all Running, no Completed jobs shown after stabilisation):
-```
-NAME                                          READY   STATUS    RESTARTS   AGE
-langsmith-ace-backend-xxxxxxxxx-xxxxx         1/1     Running   0          15h
-langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running   0          15h
-langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running   0          15h
-langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running   0          15h
-langsmith-clickhouse-0                        1/1     Running   0          18h
-langsmith-frontend-xxxxxxxxx-xxxxx            1/1     Running   0          15h
-langsmith-host-backend-xxxxxxxxx-xxxxx        1/1     Running   0          15h  ★ Pass 3
-langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running   0          15h
-langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running   0          15h
-langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running   0          15h
-langsmith-listener-xxxxxxxxx-xxxxx            1/1     Running   0          15h  ★ Pass 3
-langsmith-operator-xxxxxxxxx-xxxxx            1/1     Running   0          15h  ★ Pass 3
-langsmith-platform-backend-xxxxxxxxx-xxxxx    1/1     Running   0          15h
-langsmith-playground-xxxxxxxxx-xxxxx          1/1     Running   0          15h
-langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running   0          15h
-langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running   0          15h
-langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running   0          15h
-```
-
-> **WATCHOUT — `config.deployment.enabled: true` is required.** Setting only `config.deployment.url` without `enabled: true` causes the chart to skip creating `listener` and `operator` deployments entirely — no error, they just won't appear.
-
-#### Pass 3 — New pod resource configuration
-
-| Pod | CPU req | Mem req | Replicas | WI |
-|-----|---------|---------|----------|----|
-| `langsmith-host-backend` | 100m | 500Mi | 1 | ✓ |
-| `langsmith-listener` | 100m | 500Mi | 1 | ✓ |
-| `langsmith-operator` | chart default | chart default | 1 | — |
-
----
-
-## Pass 4 — Agent Builder (optional)
-
-Enables `agentBuilderToolServer`, `agentBuilderTriggerServer`, and the `agentBootstrap` Job.
-Requires Pass 3. Encryption key is read from `langsmith-config-secret` (set in Pass 2c).
-
-**What gets added:**
-- `langsmith-backend-agent-bootstrap` — one-time Job that registers the bundled Agent Builder agent via the operator
-- `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
-- `langsmith-agent-builder-trigger-server` — webhooks and scheduled triggers (WI)
-
-### 4a — Switch to Pass 4 values file
-
-```bash
-cp ../helm/values/values-overrides-pass-4.yaml.example ../helm/values/values-overrides.yaml
-
-sed -i '' "s|<your-domain.com>|${HOSTNAME}|g" ../helm/values/values-overrides.yaml
-sed -i '' "s|<tf output: storage_account_name>|${STORAGE_ACCOUNT}|g" ../helm/values/values-overrides.yaml
-sed -i '' "s|<tf output: storage_container_name>|${STORAGE_CONTAINER}|g" ../helm/values/values-overrides.yaml
-sed -i '' "s|<tf output: workload_identity_client_id>|${WI_CLIENT_ID}|g" ../helm/values/values-overrides.yaml
-```
-
-Or keep your existing `values-overrides.yaml` and uncomment the `# ── Pass 4` block plus `config.agentBuilder` and `backend.agentBootstrap`.
-
-### 4b — Deploy
-
-```bash
-helm upgrade --install langsmith langsmith/langsmith \
-  --version <VERSION> \
-  --namespace langsmith \
-  -f ../helm/values/values-overrides.yaml \
-  --wait --timeout 15m
-```
-
-### 4c — Verify
-
-```bash
-kubectl get pods -n langsmith
-```
-
-Expected — **26 pods total** (static + dynamic agent deployment created by operator):
-
-```
-NAME                                                              READY   STATUS      RESTARTS   AGE
-agent-builder-<hash>-xxxxxxxxx-xxxxx                              1/1     Running     0          7m   ★ dynamic
-agent-builder-<hash>-queue-xxxxx                                  1/1     Running     0          7m   ★ dynamic
-agent-builder-<hash>-redis-xxxxx                                  1/1     Running     0          7m   ★ dynamic
-lg-<hash>-0                                                       1/1     Running     0          7m   ★ dynamic
-langsmith-ace-backend-xxxxxxxxx-xxxxx                             1/1     Running     0          9m
-langsmith-agent-bootstrap-xxxxx                                   0/1     Completed   0          8m   ★ Pass 4
-langsmith-agent-builder-tool-server-xxxxxxxxx-xxxxx               1/1     Running     0          9m   ★ Pass 4
-langsmith-agent-builder-trigger-server-xxxxxxxxx-xxxxx            1/1     Running     0          5m   ★ Pass 4
-langsmith-backend-xxxxxxxxx-xxxxx                                 1/1     Running     0          9m
-langsmith-backend-xxxxxxxxx-xxxxx                                 1/1     Running     0          9m
-langsmith-backend-auth-bootstrap-xxxxx                            0/1     Completed   0          8m
-langsmith-backend-ch-migrations-xxxxx                             0/1     Completed   0          8m
-langsmith-backend-migrations-xxxxx                                0/1     Completed   0          8m
-langsmith-clickhouse-0                                            1/1     Running     0          19h
-langsmith-frontend-xxxxxxxxx-xxxxx                                1/1     Running     0          5m
-langsmith-host-backend-xxxxxxxxx-xxxxx                            1/1     Running     0          9m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx                            1/1     Running     0          9m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx                            1/1     Running     0          9m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx                            1/1     Running     0          9m
-langsmith-listener-xxxxxxxxx-xxxxx                                1/1     Running     0          9m
-langsmith-operator-xxxxxxxxx-xxxxx                                1/1     Running     0          16h
-langsmith-platform-backend-xxxxxxxxx-xxxxx                        1/1     Running     0          9m
-langsmith-playground-xxxxxxxxx-xxxxx                              1/1     Running     0          9m
-langsmith-queue-xxxxxxxxx-xxxxx                                   1/1     Running     0          9m
-langsmith-queue-xxxxxxxxx-xxxxx                                   1/1     Running     0          9m
-langsmith-queue-xxxxxxxxx-xxxxx                                   1/1     Running     0          9m
-```
-
-**Pass 4 adds 3 static pods + 4 dynamic pods:**
-- `langsmith-agent-bootstrap` — one-time Job (Completed), registers the bundled Agent Builder agent via operator
-- `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
-- `langsmith-agent-builder-trigger-server` — webhooks + scheduled triggers (WI)
-- `agent-builder-<hash>` + `queue` + `redis` + `lg-<hash>-0` — operator-managed Agent Builder agent deployment (dynamic, hash = agent deployment ID)
-
-> **Note:** `encryptionKey` is NOT set inline in values — it's read from `langsmith-config-secret` via `existingSecretName`. Setting it inline would override the secret and create a mismatch.
-
-#### Pass 4 — New pod resource configuration
-
-| Pod | CPU req | Mem req | Replicas | WI | Type |
-|-----|---------|---------|----------|----|------|
-| `langsmith-agent-builder-tool-server` | 100m | 500Mi | 1 | ✓ | static |
-| `langsmith-agent-builder-trigger-server` | 100m | 500Mi | 1 | ✓ | static |
-| `langsmith-agent-bootstrap` | — | — | — | — | Job (Completed) |
-| `agent-builder-<hash>` | chart default | chart default | 1 | ✓ | dynamic |
-| `agent-builder-<hash>-queue` | chart default | chart default | 1 | — | dynamic |
-| `agent-builder-<hash>-redis` | chart default | chart default | 1 | — | dynamic |
-| `lg-<hash>-0` | chart default | chart default | 1 | — | dynamic StatefulSet |
-
-> Dynamic pods are created by the operator when `agentBootstrap` Job runs. The `<hash>` is the agent deployment ID assigned by the operator.
-
----
-
-## Pass 5 — Insights (optional)
-
-Enables AI-powered trace analytics (Clio). Requires Pass 3.
-No additional static pods — Clio deploys as a dynamic LangGraph deployment via the operator (same pattern as the Agent Builder agent in Pass 4).
-
-**Warning:** `insights_encryption_key` and `polly_encryption_key` must never change after first enable — changing either will permanently break access to existing data.
-
-### 5a — Enable in values-overrides.yaml
-
-Add inside the existing `config:` block:
-```yaml
-config:
-  # ...
-  insights:
-    enabled: true
-  polly:
-    enabled: true
-```
-
-Or copy the Pass 5 example:
-```bash
-cp ../helm/values/values-overrides-pass-5.yaml.example ../helm/values/values-overrides.yaml
-# fill placeholders same as Pass 2b
-```
-
-### 5b — Deploy
-
-```bash
-helm upgrade --install langsmith langsmith/langsmith \
-  --version <VERSION> \
-  --namespace langsmith \
-  -f ../helm/values/values-overrides.yaml \
-  --wait --timeout 15m
-```
-
-### 5c — Verify
-
-```bash
-kubectl get pods -n langsmith
-```
-
-#### Pass 5 — Pod resource configuration
-
-No new pods at deploy time. `config.insights.enabled: true` enables the feature flag only. Clio deploys lazily as a dynamic LangGraph deployment via the operator when first invoked from the UI — same `<hash>`-based pattern as `agent-builder-<hash>` in Pass 4.
-
-Pod count after Pass 5 helm upgrade is identical to Pass 4 (22 running pods):
-```
-agent-builder-<hash>-xxxxxxxxx-xxxxx              1/1     Running   0   25m
-agent-builder-<hash>-queue-xxxxx                  1/1     Running   0   25m
-agent-builder-<hash>-redis-xxxxx                  1/1     Running   0   25m
-lg-<hash>-0                                       1/1     Running   0   25m
-langsmith-ace-backend-xxxxxxxxx-xxxxx             1/1     Running   0   28m
-langsmith-agent-builder-tool-server-xxxxxxxxx     1/1     Running   0   8m
-langsmith-agent-builder-trigger-server-xxxxxxxxx  1/1     Running   0   8m
-langsmith-backend-xxxxxxxxx-xxxxx                 1/1     Running   0   8m
-langsmith-backend-xxxxxxxxx-xxxxx                 1/1     Running   0   8m
-langsmith-clickhouse-0                            1/1     Running   0   19h
-langsmith-frontend-xxxxxxxxx-xxxxx                1/1     Running   0   8m
-langsmith-host-backend-xxxxxxxxx-xxxxx            1/1     Running   0   8m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx            1/1     Running   0   8m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx            1/1     Running   0   8m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx            1/1     Running   0   8m
-langsmith-listener-xxxxxxxxx-xxxxx                1/1     Running   0   8m
-langsmith-operator-xxxxxxxxx-xxxxx                1/1     Running   0   16h
-langsmith-platform-backend-xxxxxxxxx-xxxxx        1/1     Running   0   8m
-langsmith-playground-xxxxxxxxx-xxxxx              1/1     Running   0   28m
-langsmith-queue-xxxxxxxxx-xxxxx                   1/1     Running   0   8m
-langsmith-queue-xxxxxxxxx-xxxxx                   1/1     Running   0   7m
-langsmith-queue-xxxxxxxxx-xxxxx                   1/1     Running   0   7m
-```
+> **Pin `--version` in Helm.** Without it, `helm upgrade` pulls latest which may silently apply DB migrations or toggle feature flags.
 
 ---
 
 ## Teardown
 
-Uninstall Helm releases first — otherwise the Azure Load Balancer created by NGINX blocks VNet deletion and `terraform destroy` stalls.
-
 ```bash
-# 1. Uninstall LangSmith (removes pods, services, Load Balancer)
-helm uninstall langsmith -n langsmith --wait
+# 1. Uninstall LangSmith (removes Azure Load Balancer)
+make uninstall
 
-# 2. Delete namespace (clears finalizers)
-kubectl delete namespace langsmith --timeout=60s
+# 2. Destroy infrastructure
+make destroy
 
-# 3. Destroy infrastructure (from terraform/azure/infra/)
-terraform destroy
+# 3. Remove local secrets and generated files
+make clean
 ```
 
 ---
 
-## Common Commands
+## Reference
 
-```bash
-# Check pod status
-kubectl get pods -n langsmith
-
-# Check ingress / get IP
-kubectl get svc ingress-nginx-controller -n ingress-nginx
-
-# Check TLS certificate
-kubectl get certificate -n langsmith
-
-# Tail logs
-kubectl logs -n langsmith -l app=langsmith-backend --tail=100 -f
-
-# Re-create config secret (e.g. after license key change)
-# Set KV_NAME first: KV_NAME=$(terraform output -raw keyvault_name)
-# Then re-run the kubectl create secret command from Pass 2c above
-```
-
----
-
-## Reference — Cluster Sizing
-
-Node pool defaults (set in `terraform.tfvars`):
-
-| Pool | VM Size | vCPU | RAM | Min | Max | Purpose |
-|------|---------|------|-----|-----|-----|---------|
-| default | Standard_DS3_v2 | 4 | 14 GB | 1 | 4 | Core LangSmith services, system pods |
-| large | Standard_DS4_v2 | 8 | 28 GB | 0 | 2 | ClickHouse, memory-heavy workloads |
-
-Recommended `default_node_pool_max_count` by pass:
-
-| Pass | What's added | Recommended max_count |
-|------|--------------|-----------------------|
-| Pass 2 | Core LangSmith (Azure Postgres + Redis) | 4 |
-| Pass 3 | hostBackend, listener, operator | 4 |
-| Pass 4 | Agent Builder tool + trigger server | 5–6 |
-| Pass 5 | Clio (Insights) analytics pods | 6+ |
-
-To increase capacity — update `terraform.tfvars` and re-apply:
-```bash
-default_node_pool_max_count = 6   # increase as needed
-```
-```bash
-terraform apply   # AKS autoscaler picks up new max immediately — no node restart
-```
-
-> The `large` node pool (DS4_v2, 0→2) handles ClickHouse automatically. If ClickHouse is evicted under memory pressure, increase `max_count` on the `large` pool in `additional_node_pools`.
-
----
-
-## Reference — Helm Chart Versions
-
-**Always pin `--version`.** Without it, `helm upgrade` pulls the latest chart which may silently apply DB migrations or toggle feature flags that break existing deployments.
-
-```bash
-helm repo update
-helm search repo langsmith/langsmith --versions | head -10
-```
-
-Example output (latest as of March 2026 is `0.13.23`):
-```
-NAME                   CHART VERSION   APP VERSION
-langsmith/langsmith    0.13.23         0.13.23
-langsmith/langsmith    0.13.21         0.13.21
-langsmith/langsmith    0.13.20         0.13.21
-langsmith/langsmith    0.13.19         0.13.20
-```
-
-> When upgrading — read the chart changelog first. `deployments_encryption_key`, `agent_builder_encryption_key`, `insights_encryption_key`, and `polly_encryption_key` must never change between upgrades.
-
----
-
-*Commands verified during production deployment — updated as we go.*
+- [ARCHITECTURE.md](ARCHITECTURE.md) — component diagram and pass structure
+- [SERVICES.md](SERVICES.md) — what each pod does, dependencies, which pass enables it
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — issues, gotchas, and fixes
+- [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — all-in-cluster demo/POC guide
