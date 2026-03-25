@@ -465,7 +465,8 @@ azure/
 │           ├── langsmith-values-agent-deploys.yaml       # Pass 3 — LangGraph Platform
 │           ├── langsmith-values-agent-builder.yaml       # Pass 4 — Agent Builder
 │           ├── langsmith-values-insights.yaml            # Pass 5 — Insights / Clio
-│           └── langsmith-values-polly.yaml               # Pass 5 — Polly
+│           ├── langsmith-values-polly.yaml               # Pass 5 — Polly
+│           └── letsencrypt-issuer-dns01.yaml             # cert-manager ClusterIssuer for DNS-01 TLS
 
 
 ```
