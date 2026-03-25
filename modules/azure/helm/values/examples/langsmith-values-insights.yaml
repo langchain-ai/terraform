@@ -1,22 +1,25 @@
 # Insights — ClickHouse-backed analytics (requires external ClickHouse).
 #
-# init-values.sh generates langsmith-values-insights.yaml based on clickhouse_source:
-#   - clickhouse_source = "in-cluster"  → simple config.insights.enabled: true (no external block)
-#   - clickhouse_source = "external"    → copies this file (fill in host/port below)
+# init-values.sh copies this to ../langsmith-values-insights.yaml when:
+#   - enable_insights = true AND clickhouse_source != "in-cluster"
 #
-# For in-cluster ClickHouse (dev/POC), you do not need this file — init-values.sh
-# generates the correct minimal config automatically.
+# For in-cluster ClickHouse (dev/POC), init-values.sh generates a minimal file automatically:
+#   config:
+#     insights:
+#       enabled: true
+# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
 #
-# Prerequisites (external ClickHouse):
-#   - ClickHouse instance reachable from the AKS cluster
-#   - langsmith-clickhouse K8s secret with connection details (see below)
-#   - insights_encryption_key in Key Vault (set by setup-env.sh and Terraform)
+# Prerequisites:
+#   - External ClickHouse instance (LangChain Managed, Azure Marketplace, or self-hosted)
+#   - ClickHouse must be reachable from the AKS cluster
 
 config:
   insights:
     enabled: true
-    # encryptionKey is read from langsmith-config-secret (insights_encryption_key).
-    # Do NOT set encryptionKey inline — it is already in the secret via existingSecretName.
+    # encryptionKey is stored in Azure Key Vault and delivered via langsmith-config-secret.
+    # Terraform creates the key automatically in Key Vault during `make apply`.
+    # deploy.sh / make k8s-secrets pulls it and adds it to the langsmith-config-secret.
+    # Do not set encryptionKey inline here — it is already in existingSecretName.
 
 clickhouse:
   external:
