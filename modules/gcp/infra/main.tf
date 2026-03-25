@@ -332,7 +332,22 @@ module "iam" {
 
   namespace            = var.langsmith_namespace
   service_account_name = "langsmith-ksa"
-  gcs_bucket_name      = module.storage.bucket_name
+  workload_identity_service_accounts = [
+    "langsmith-ksa",
+    "langsmith-backend",
+    "langsmith-platform-backend",
+    "langsmith-host-backend",
+    "langsmith-queue",
+    "langsmith-ingest-queue",
+    "langsmith-listener",
+    "langsmith-agent-builder-tool-server",
+    "langsmith-agent-builder-trigger-server",
+    "langsmith-ace-backend",
+    "langsmith-frontend",
+    "langsmith-playground",
+    "langsmith-operator",
+  ]
+  gcs_bucket_name = module.storage.bucket_name
 }
 
 #------------------------------------------------------------------------------

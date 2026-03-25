@@ -104,7 +104,8 @@ echo "  ✔ values.yaml (base)"
 echo "  ✔ values-overrides.yaml"
 
 # Sizing: driven by sizing_profile in terraform.tfvars.
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
+_sizing_profile=$(_parse_tfvar "sizing_profile")
+_sizing_profile="${_sizing_profile:-default}"
 if [[ "$_sizing_profile" != "default" ]]; then
   _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
   if [[ -f "$_sizing_file" ]]; then
@@ -187,31 +188,104 @@ echo ""
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain
 
-# Guard: a pending-upgrade release (left by a Ctrl+C'd helm upgrade --wait) blocks
-# helm upgrade --install. Roll back to clear the lock before proceeding.
+# Guard: pending Helm states (often from interrupted --wait) block upgrades.
+# Recover automatically before proceeding.
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
-if [[ "$_release_status" == "pending-upgrade" ]]; then
-  echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'pending-upgrade' state (interrupted upgrade)."
-  echo "         Rolling back to clear the lock..."
-  helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
-  echo ""
-fi
+case "$_release_status" in
+  pending-upgrade)
+    echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in '${_release_status}' state."
+    echo "         Rolling back to clear the lock..."
+    helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
+    echo ""
+    ;;
+  pending-install|pending-rollback|pending-uninstall)
+    echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in '${_release_status}' state."
+    echo "         Uninstalling stale release to clear lock before reinstall..."
+    helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait
+    echo ""
+    ;;
+  failed)
+    echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
+    echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
+    echo "         Proceeding with upgrade..."
+    echo ""
+    ;;
+esac
 
 echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
-helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+set +e
+_helm_output=$(helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   "${VALUES_ARGS[@]}" \
-  --wait \
-  --timeout 20m
+  --timeout 20m 2>&1)
+_helm_exit=$?
+set -e
+echo "$_helm_output"
+
+if [[ $_helm_exit -ne 0 ]]; then
+  if echo "$_helm_output" | rg -q "post-(install|upgrade) hooks failed: resource not ready, name: ${RELEASE_NAME}-agent-bootstrap, kind: Job"; then
+    echo ""
+    echo "WARNING: Helm reported agent-bootstrap hook timeout."
+    echo "         Continuing with non-blocking readiness checks."
+  else
+    echo "ERROR: Helm upgrade failed." >&2
+    exit $_helm_exit
+  fi
+fi
 
 echo ""
-echo "LangSmith deployed."
+echo "LangSmith deployed. Waiting for core pods..."
+echo ""
+
+# Wait for core components without blocking on long-running hooks.
+_core_deployments=(
+  "${RELEASE_NAME}-frontend"
+  "${RELEASE_NAME}-backend"
+  "${RELEASE_NAME}-platform-backend"
+  "${RELEASE_NAME}-ingest-queue"
+  "${RELEASE_NAME}-queue"
+)
+if [[ "$_enable_deployments" == "true" ]]; then
+  _core_deployments+=(
+    "${RELEASE_NAME}-host-backend"
+    "${RELEASE_NAME}-listener"
+    "${RELEASE_NAME}-operator"
+  )
+fi
+
+_all_ready=true
+for dep in "${_core_deployments[@]}"; do
+  if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ $dep not ready within 5m (may still be starting)"
+    _all_ready=false
+  fi
+done
+
+if [[ "$_all_ready" == "true" ]]; then
+  echo "All core deployments ready."
+else
+  echo ""
+  echo "WARNING: Some deployments are still rolling out."
+  echo "         Check with: kubectl get pods -n $NAMESPACE"
+fi
+
+# Informational only: agent bootstrap can take longer and should not block deploy.
+if kubectl get job -n "$NAMESPACE" "${RELEASE_NAME}-agent-bootstrap" >/dev/null 2>&1; then
+  _bootstrap_status=$(kubectl get job -n "$NAMESPACE" "${RELEASE_NAME}-agent-bootstrap" \
+    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
+  if [[ "$_bootstrap_status" != "True" ]]; then
+    echo ""
+    echo "Agent bootstrap is still running (non-blocking):"
+    echo "  kubectl logs -n $NAMESPACE job/${RELEASE_NAME}-agent-bootstrap --tail=120"
+  fi
+fi
+
 echo ""
 
 # ── Ensure langsmith-ksa carries the Workload Identity annotation ─────────────

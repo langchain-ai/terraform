@@ -67,6 +67,7 @@ _clickhouse_source=$(_parse_tfvar "clickhouse_source")
 _clickhouse_source="${_clickhouse_source:-in-cluster}"
 _sizing_profile=$(_parse_tfvar "sizing_profile")
 _sizing_profile="${_sizing_profile:-default}"
+_gateway_name="${_name_prefix}-${_environment}-gateway"
 
 if [[ -z "$_project_id" || -z "$_name_prefix" || -z "$_environment" ]]; then
   echo "ERROR: Could not read project_id, name_prefix, and/or environment from $INFRA_DIR/terraform.tfvars." >&2
@@ -152,6 +153,56 @@ else
   fi
 fi
 echo ""
+
+# ── Stable runtime secrets (apiKeySalt / jwtSecret / admin password) ─────────
+# Prefer TF_VAR_* from setup-env.sh, then existing file values.
+_extract_yaml_value() {
+  local key="$1"
+  awk -F': ' -v k="$key" '$1 ~ "^[[:space:]]*"k"$" { gsub(/"/, "", $2); gsub(/[[:space:]]+$/, "", $2); print $2; exit }' "$OUT_FILE" 2>/dev/null || true
+}
+
+EXISTING_API_KEY_SALT=""
+EXISTING_JWT_SECRET=""
+EXISTING_ADMIN_PASSWORD=""
+EXISTING_LICENSE_KEY=""
+if [[ -f "$OUT_FILE" ]]; then
+  EXISTING_API_KEY_SALT=$(_extract_yaml_value "apiKeySalt")
+  EXISTING_JWT_SECRET=$(_extract_yaml_value "jwtSecret")
+  EXISTING_ADMIN_PASSWORD=$(_extract_yaml_value "initialOrgAdminPassword")
+  EXISTING_LICENSE_KEY=$(_extract_yaml_value "langsmithLicenseKey")
+fi
+
+API_KEY_SALT="${TF_VAR_langsmith_api_key_salt:-$EXISTING_API_KEY_SALT}"
+if [[ -z "$API_KEY_SALT" ]]; then
+  API_KEY_SALT="$(openssl rand -base64 32 | tr -d '\n')"
+  echo "WARNING: TF_VAR_langsmith_api_key_salt not set; generated a new apiKeySalt."
+  echo "         To avoid API key invalidation across redeploys, run: source infra/scripts/setup-env.sh"
+fi
+
+JWT_SECRET="${TF_VAR_langsmith_jwt_secret:-$EXISTING_JWT_SECRET}"
+if [[ -z "$JWT_SECRET" ]]; then
+  JWT_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
+  echo "WARNING: TF_VAR_langsmith_jwt_secret not set; generated a new jwtSecret."
+  echo "         To avoid session invalidation across redeploys, run: source infra/scripts/setup-env.sh"
+fi
+
+ADMIN_PASSWORD="${TF_VAR_langsmith_admin_password:-$EXISTING_ADMIN_PASSWORD}"
+if [[ -z "$ADMIN_PASSWORD" ]]; then
+  printf "Initial admin password: "
+  read -rs ADMIN_PASSWORD
+  echo
+  if [[ -z "$ADMIN_PASSWORD" ]]; then
+    echo "ERROR: initial admin password is required." >&2
+    exit 1
+  fi
+fi
+
+LANGSMITH_LICENSE_KEY="${TF_VAR_langsmith_license_key:-$EXISTING_LICENSE_KEY}"
+if [[ -z "$LANGSMITH_LICENSE_KEY" ]]; then
+  echo "ERROR: LangSmith license key is required." >&2
+  echo "       Set TF_VAR_langsmith_license_key (or run: source infra/scripts/setup-env.sh)." >&2
+  exit 1
+fi
 
 # ── Sizing profile (from terraform.tfvars) ────────────────────────────────────
 if [[ "$_sizing_profile" != "default" ]]; then
@@ -259,19 +310,22 @@ elif [[ "$_first_run" == "true" ]]; then
   _tier_choice="${_tier_choice:-1}"
 
   case "$_tier_choice" in
-    1) ;;
+    1)
+      ;;
     2|3|4)
       cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
       echo "  Created: langsmith-values-agent-deploys.yaml"
       _enable_deployments=true
-      ;;&
-    3|4)
-      cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-      echo "  Created: langsmith-values-agent-builder.yaml"
-      _enable_agent_builder=true
-      ;;&
-    4)
-      _enable_insights=true
+
+      if [[ "$_tier_choice" == "3" || "$_tier_choice" == "4" ]]; then
+        cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
+        echo "  Created: langsmith-values-agent-builder.yaml"
+        _enable_agent_builder=true
+      fi
+
+      if [[ "$_tier_choice" == "4" ]]; then
+        _enable_insights=true
+      fi
       ;;
     *)
       echo "ERROR: Invalid choice '$_tier_choice'. Expected 1–4." >&2
@@ -392,6 +446,31 @@ redis:
     enabled: false"
 fi
 
+# ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
+_addon_keys_block=""
+if [[ "$_enable_agent_builder" == "true" || "$_enable_insights" == "true" ]]; then
+  _agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
+  _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
+
+  if [[ "$_enable_agent_builder" == "true" && -z "$_agent_builder_key" ]]; then
+    echo "ERROR: enable_agent_builder=true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+
+  if [[ "$_enable_insights" == "true" && -z "$_insights_key" ]]; then
+    echo "ERROR: enable_insights=true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+
+  _addon_keys_block="
+  agentBuilder:
+    encryptionKey: \"${_agent_builder_key}\"
+  insights:
+    encryptionKey: \"${_insights_key}\""
+fi
+
 # ── Workload Identity annotation block ────────────────────────────────────────
 _wi_block=""
 if [[ -n "$WI_ANNOTATION" ]]; then
@@ -453,7 +532,13 @@ config:
   # Envoy Gateway IP — required for OAuth and Deployments features.
   # Find it with: kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.addresses[0].value}'
   hostname: "${HOSTNAME}"
+  langsmithLicenseKey: "${LANGSMITH_LICENSE_KEY}"
+  apiKeySalt: "${API_KEY_SALT}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
+  basicAuth:
+    jwtSecret: "${JWT_SECRET}"
+    initialOrgAdminPassword: "${ADMIN_PASSWORD}"
+${_addon_keys_block}
   deployment:
     # URL used by the operator to build agent deployment endpoints.
     # Must match config.hostname with correct protocol — wrong value keeps
@@ -465,8 +550,13 @@ config:
     # Leave empty only if you are using Workload Identity + the chart's native GCS support.
     accessKey: ""
     accessKeySecret: ""
+    region: "${_region}"
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
+
+gateway:
+  name: "${_gateway_name}"
+  namespace: "envoy-gateway-system"
 ${_wi_block}
 ${_external_services_block}
 YAML

@@ -197,6 +197,16 @@ _sm_secret "postgres-password" "TF_VAR_postgres_password" \
 _sm_secret "langsmith-license-key" "TF_VAR_langsmith_license_key" \
   "" "LangSmith license key" "true"
 
+# ── Core LangSmith secrets (must stay stable after first deploy) ─────────────
+_sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
+  "openssl rand -base64 32 | tr -d '\n'" "" "true"
+
+_sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
+  "openssl rand -base64 32 | tr -d '\n'" "" "true"
+
+_sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
+  "" "Initial LangSmith admin password" "true"
+
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
 # Auto-generated and stored in Secret Manager on first run.
 # Only used when the corresponding feature flag is set to true in terraform.tfvars.
@@ -221,6 +231,9 @@ echo "  environment       = $_environment"
 echo "  region            = $_region"
 echo "  postgres_password = (hidden — SM: ${_sm_prefix}-postgres-password)"
 echo "  license_key       = (hidden — SM: ${_sm_prefix}-langsmith-license-key)"
+echo "  api_key_salt      = (hidden — SM: ${_sm_prefix}-api-key-salt)"
+echo "  jwt_secret        = (hidden — SM: ${_sm_prefix}-jwt-secret)"
+echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"
 echo "  insights_key      = (hidden — SM: ${_sm_prefix}-insights-encryption-key)"

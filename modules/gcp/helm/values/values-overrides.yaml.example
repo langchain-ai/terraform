@@ -9,9 +9,12 @@
 config:
   # Required: set your domain
   hostname: "langsmith.example.com"
+  # Required: keep stable after first deploy (setup-env.sh can manage this)
+  apiKeySalt: "CHANGE_ME_STABLE"
 
   # Required: first-login admin credentials
   basicAuth:
+    jwtSecret: "CHANGE_ME_STABLE"
     initialOrgAdminEmail: "admin@example.com"
     initialOrgAdminPassword: "CHANGE_ME"
 

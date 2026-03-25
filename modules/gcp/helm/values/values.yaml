@@ -26,7 +26,7 @@ config:
     enabled: true
   blobStorage:
     enabled: true
-    engine: "S3"        # GCS exposes an S3-compatible API via HMAC keys
+    engine: "GCS"       # Prefer native GCS mode (supports Workload Identity without HMAC keys)
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
     # bucketName, accessKey, accessKeySecret → values-overrides.yaml
@@ -236,7 +236,7 @@ playground:
 postgres:
   external:
     enabled: true
-    existingSecretName: "langsmith-postgres"  # created by k8s-bootstrap
+    existingSecretName: "langsmith-postgres-credentials"  # created by k8s-bootstrap
     connectionUrlSecretKey: "connection_url"
 
 queue:
@@ -259,5 +259,5 @@ queue:
 redis:
   external:
     enabled: true
-    existingSecretName: "langsmith-redis"  # created by k8s-bootstrap
+    existingSecretName: "langsmith-redis-credentials"  # created by k8s-bootstrap
     connectionUrlSecretKey: "connection_url"

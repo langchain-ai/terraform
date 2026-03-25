@@ -25,6 +25,26 @@ variable "service_account_name" {
   default     = "langsmith"
 }
 
+variable "workload_identity_service_accounts" {
+  description = "Kubernetes service account names allowed to impersonate the LangSmith GCP service account via Workload Identity."
+  type        = list(string)
+  default = [
+    "langsmith-ksa",
+    "langsmith-backend",
+    "langsmith-platform-backend",
+    "langsmith-host-backend",
+    "langsmith-queue",
+    "langsmith-ingest-queue",
+    "langsmith-listener",
+    "langsmith-agent-builder-tool-server",
+    "langsmith-agent-builder-trigger-server",
+    "langsmith-ace-backend",
+    "langsmith-frontend",
+    "langsmith-playground",
+    "langsmith-operator",
+  ]
+}
+
 variable "gcs_bucket_name" {
   description = "Name of the GCS bucket for LangSmith blob storage"
   type        = string
