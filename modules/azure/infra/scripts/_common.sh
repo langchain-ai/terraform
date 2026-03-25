@@ -18,17 +18,15 @@ INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 # ── terraform.tfvars parser ──────────────────────────────────────────────────
 _parse_tfvar() {
   local key="$1"
-  local tfvars_file="${INFRA_DIR}/terraform.tfvars"
-  local line val
-  line=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
-  # Strip everything up to and including =
-  val=$(echo "$line" | sed 's/^[^=]*=//')
-  # Quoted string: extract between double quotes
-  if echo "$val" | grep -q '"'; then
-    val=$(echo "$val" | sed 's/[[:space:]]*"\([^"]*\)".*/\1/')
-  else
-    # Unquoted (bool, number): strip inline comment then whitespace
-    val=$(echo "$val" | sed 's/#.*//' | tr -d '[:space:]')
+  local tfvars_file="${INFRA_DIR:-$(pwd)}/terraform.tfvars"
+  local raw val
+  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
+  [[ -n "$raw" ]] || return 1
+  # Quoted string: key = "value"
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  if [[ -z "$val" ]]; then
+    # Unquoted value: key = true / key = 42 / key = {}
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
   fi
   [[ -n "$val" ]] || return 1
   echo "$val"

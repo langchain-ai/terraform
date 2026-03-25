@@ -6,16 +6,15 @@
 
 config:
   deployment:
-    # Enables the Deployments nav item in the UI. Also requires config.hostname to be
-    # set in values-overrides.yaml — find the ingress hostname with:
-    #   kubectl get ingress -n langsmith
-    #   kubectl get svc ingress-nginx-controller -n ingress-nginx
+    # Enables the Deployments nav item in the UI and starts listener + operator pods.
+    # url must match the publicly reachable LangSmith hostname (with https:// protocol).
+    # init-values.sh populates url and tlsEnabled automatically from terraform.tfvars.
     enabled: true
-    # Set to true if TLS is enabled (tls_certificate_source = "letsencrypt").
-    # false = HTTP-only (tls_certificate_source = "none"). The operator uses this to
-    # build agent deployment endpoint URLs — wrong value keeps deployments in DEPLOYING.
-    # init-values.sh patches this to true automatically when letsencrypt is configured.
-    tlsEnabled: false
+    url: ""        # populated by init-values.sh → https://<nginx_dns_label>.<region>.cloudapp.azure.com
+    # Set to true when tls_certificate_source = "letsencrypt" or "dns01".
+    # The operator uses this to build agent deployment endpoint URLs.
+    # Wrong value (false when TLS is enabled) keeps deployments stuck in DEPLOYING state.
+    tlsEnabled: false  # populated by init-values.sh
 
 # Resource sizing for shared components (backend, frontend, playground, aceBackend)
 # is handled by the sizing files (langsmith-values-sizing-{production,production-large,dev}.yaml).
@@ -59,9 +58,8 @@ operator:
       cpu: "500m"
       memory: "512Mi"
   # Deployment template for operator-spawned agent pods.
-  # Workload Identity: agent pods run as langsmith-ksa. That ServiceAccount
-  # must have the azure.workload.identity/client-id annotation — deploy.sh
-  # ensures this after every helm upgrade.
+  # Agent pods run as langsmith-ksa (created by deploy.sh with WI annotation).
+  # Workload Identity is used for blob storage access — no static credentials needed.
   templates:
     deployment: |
       apiVersion: apps/v1
