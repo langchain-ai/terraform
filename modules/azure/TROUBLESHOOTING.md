@@ -381,6 +381,72 @@ make deploy   # recommended — handles timeout, values chain, and release guard
 
 ---
 
+## Pass 2 — init-values
+
+### `enable_deployments = true` (unquoted boolean) not picked up by init-values.sh
+
+**Symptom:** After setting `enable_deployments = true` in `terraform.tfvars` and running `make init-values`, the `langsmith-values-agent-deploys.yaml` file is not generated:
+```
+✗ langsmith-values-agent-deploys.yaml (not enabled)
+```
+Even though `enable_deployments = true` is clearly set in tfvars.
+
+**Cause:** `_parse_tfvar` in `_common.sh` used a sed command without `-n`/`p` flags. For unquoted values (`true`, `false`, numbers), sed returned the full line unchanged, which is non-empty, so the function returned `enable_deployments=true` (the full key=value) instead of just `true`. The `== "true"` check then failed.
+
+**Fix:** Already corrected in `_common.sh` — sed now uses `-n 's/pattern/\1/p'` so it only outputs the captured group when the pattern matches. Unquoted values fall through to a second pass that strips the key prefix.
+
+---
+
+### Pass 3 — `config.deployment` pods stay in DEPLOYING / never reach HEALTHY
+
+**Symptom:** After Pass 3 deploy, `listener` and `operator` are Running, but agent deployments stay in `DEPLOYING` state in the UI and never transition to `HEALTHY`.
+
+**Cause:** `config.deployment.url` was empty or `config.deployment.tlsEnabled` was `false` when TLS is enabled. The operator builds agent endpoint URLs using these values — an empty URL or wrong protocol causes the health check to fail.
+
+**Fix:** `init-values.sh` now automatically injects `url` and `tlsEnabled` into `langsmith-values-agent-deploys.yaml` after copying from examples. If deploying manually, set both explicitly:
+```yaml
+config:
+  deployment:
+    enabled: true
+    url: "https://langsmith-azonf.eastus.cloudapp.azure.com"   # must include https://
+    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt or dns01
+```
+
+---
+
+### Pass 5 — `backend-ch-migrations` stuck in `CreateContainerConfigError` after enabling Insights
+
+**Symptom:**
+```
+langsmith-backend-ch-migrations-xxxxx   CreateContainerConfigError
+Warning  Failed  kubelet  Error: secret "langsmith-clickhouse" not found
+```
+Multiple pods fail with `CreateContainerConfigError` immediately after enabling `enable_insights = true`.
+
+**Cause:** `langsmith-values-insights.yaml` (copied from the AWS-oriented example) sets `clickhouse.external.enabled: true` with `existingSecretName: langsmith-clickhouse`. This overrides the in-cluster ClickHouse configuration and expects an external secret that doesn't exist.
+
+**Fix:** `init-values.sh` now generates a minimal insights file when `clickhouse_source = "in-cluster"`:
+```yaml
+config:
+  insights:
+    enabled: true
+# No clickhouse.external block — chart uses in-cluster ClickHouse
+```
+
+If you have this issue on an existing deployment, overwrite the file and redeploy:
+```bash
+cat > helm/values/langsmith-values-insights.yaml << 'EOF'
+config:
+  insights:
+    enabled: true
+EOF
+make deploy
+```
+
+For **external ClickHouse** (production with LangChain managed ClickHouse), the full configuration is in `helm/values/examples/langsmith-values-insights.yaml`.
+
+---
+
 ## Pass 3+ — Feature Passes
 
 ### Polly shows "Unable to connect to LangGraph server" / connects to `localhost:8123`
