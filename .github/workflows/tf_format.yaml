@@ -6,6 +6,9 @@ on:
       - "modules/**"
       - ".github/workflows/tf_format.yaml"
 
+permissions:
+  contents: read
+
 jobs:
   terraform_check:
     runs-on: ubuntu-latest
