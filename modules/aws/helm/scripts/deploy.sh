@@ -29,6 +29,7 @@ CHART_VERSION="${CHART_VERSION:-}"
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
+_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 
 if [[ -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -155,7 +156,7 @@ fi
 # stuck at DEPLOYING and times out the release.
 _live_alb=$(kubectl get ingress -n "$NAMESPACE" langsmith-ingress \
   -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
-if [[ -n "$_live_alb" ]]; then
+if [[ -n "$_live_alb" && -z "$_langsmith_domain" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _configured_hostname=""
   if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_alb" ]]; then
@@ -287,9 +288,10 @@ if [[ -n "$ALB_HOST" ]]; then
   echo ""
   # Auto-update hostname in env values file if blank or stale (e.g. pre-provisioned ALB
   # DNS differs from the ingress-controller-managed ALB the chart actually receives).
+  # Skip when langsmith_domain is set — custom domain takes precedence over ALB hostname.
   _current_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_hostname=""
-  if [[ "$_current_hostname" != "$ALB_HOST" ]]; then
+  if [[ "$_current_hostname" != "$ALB_HOST" && -z "$_langsmith_domain" ]]; then
     # Derive protocol from the existing deployment.url value so we don't need tfvars here.
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
       | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""

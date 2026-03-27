@@ -368,6 +368,342 @@ kubectl get ingress -n langsmith
 
 ---
 
+## Command Glossary
+
+All commands are run from `terraform/aws/`. Run `make help` for a quick summary.
+
+---
+
+### `make quickstart`
+
+**When to use:** First time setting up a new deployment.
+
+Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, addons) and writes a ready-to-use `infra/terraform.tfvars` file. Saves you from editing the example file by hand.
+
+```bash
+make quickstart
+```
+
+---
+
+### `make setup-env`
+
+**When to use:** Before `make plan` or `make apply` on a fresh shell.
+
+Prints the `source` command you need to run. It cannot export environment variables itself because `make` runs each target in a subshell — variables set there die when the shell exits. You must source the script directly:
+
+```bash
+source infra/scripts/setup-env.sh
+```
+
+**What `setup-env.sh` actually does:**
+
+Builds the SSM path prefix from `terraform.tfvars`: `/langsmith/{name_prefix}-{environment}/`
+
+For each secret it follows this priority order:
+1. Already exported in the shell (`TF_VAR_*` or `LANGSMITH_*`) — use it, backfill SSM if missing
+2. Exists in SSM Parameter Store — read it (no prompt)
+3. Has an auto-generator — generate it (`openssl rand`), store in SSM
+4. Interactive terminal — prompt you, store in SSM
+5. No terminal (CI) — error with instructions to pre-export
+
+**SSM parameters it manages (`/langsmith/{name_prefix}-{environment}/`):**
+
+| SSM key | How it's set | Notes |
+|---|---|---|
+| `postgres-password` | You enter it | Terraform sets RDS with this password |
+| `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
+| `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
+| `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
+| `langsmith-license-key` | You enter it | From your LangChain account |
+| `langsmith-admin-password` | You enter it | Must contain `!#$%()+,-./:?@[\]^_{~}` |
+| `deployments-encryption-key` | Auto-generated (Fernet key) | For Deployments/LangGraph Platform feature |
+| `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Agent Builder feature |
+| `insights-encryption-key` | Auto-generated (Fernet key) | For Insights feature |
+| `polly-encryption-key` | Auto-generated (Fernet key) | For Polly AI eval feature |
+
+Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
+
+After running, you'll see a summary of all values (masked) and the SSM prefix. Terraform then reads the secrets as `TF_VAR_*` variables during `plan` / `apply`.
+
+> **Why SSM?** Secrets are never in git or `.tfvars`. ESO reads them from SSM at runtime and syncs them into the `langsmith-config` Kubernetes Secret that the Helm chart mounts.
+
+---
+
+### `make init`
+
+**When to use:** First time, or after adding/upgrading a Terraform provider or module.
+
+Runs `terraform -chdir=infra init`. Downloads all required providers (`hashicorp/aws`, `hashicorp/kubernetes`, `hashicorp/helm`, etc.) and modules (the EKS Blueprints module, VPC module, etc.) into `infra/.terraform/`. Configures the state backend defined in `backend.tf`.
+
+Safe to re-run at any time — it's idempotent.
+
+---
+
+### `make plan`
+
+**When to use:** Before every `make apply` to review what will change.
+
+Runs `terraform -chdir=infra plan`. Compares your `.tf` files + `terraform.tfvars` + `TF_VAR_*` env vars against the current Terraform state file. Shows a diff: what will be created, changed, or destroyed.
+
+**Nothing is created or modified.** The plan output is the single most important thing to review before applying — especially `destroy` actions.
+
+> Requires `TF_VAR_postgres_password`, `TF_VAR_redis_auth_token`, and other secrets to be set in the environment (via `source infra/scripts/setup-env.sh`).
+
+---
+
+### `make apply`
+
+**When to use:** To provision or update infrastructure.
+
+Runs `terraform -chdir=infra apply`. Executes the plan — prompts for confirmation (`yes`) before making changes. Provisions resources in dependency order:
+
+```
+VPC + Subnets
+  → Security Groups
+  → EKS Cluster (~12 min)
+    → Node Groups
+    → k8s-bootstrap (KEDA, cert-manager, ESO, namespace, IRSA service accounts)
+  → RDS PostgreSQL (~8 min, parallel with EKS)
+  → ElastiCache Redis (parallel with EKS)
+  → S3 Bucket + VPC Endpoint
+  → ALB + Listeners
+  → SSM Parameters
+```
+
+Resources with no dependencies are created in parallel. Total time: **~20–25 minutes**.
+
+After apply, all outputs (cluster name, ALB DNS, S3 bucket, IRSA role ARN) are printed and stored in Terraform state. `init-values.sh` reads these outputs automatically.
+
+---
+
+### `make kubeconfig`
+
+**When to use:** After `make apply` to configure `kubectl`, or when switching between deployments.
+
+Runs `infra/scripts/set-kubeconfig.sh` which calls `aws eks update-kubeconfig` with the cluster name from Terraform outputs. Merges the cluster credentials into `~/.kube/config`.
+
+```bash
+make kubeconfig
+kubectl get nodes   # verify
+```
+
+---
+
+### `make ssm`
+
+**When to use:** To view, update, or rotate secrets after the initial deployment.
+
+Runs `infra/scripts/manage-ssm.sh` — a full-featured SSM secret manager for the deployment. Run it without arguments for an interactive menu, or pass a subcommand directly.
+
+```bash
+make ssm                                                # interactive menu
+./infra/scripts/manage-ssm.sh list                     # show all params + last-modified date
+./infra/scripts/manage-ssm.sh get langsmith-license-key
+./infra/scripts/manage-ssm.sh set langsmith-admin-password 'NewP@ss!'
+./infra/scripts/manage-ssm.sh validate                 # check all required params exist
+./infra/scripts/manage-ssm.sh diff                     # compare SSM vs K8s secret (detects drift)
+./infra/scripts/manage-ssm.sh delete <key>
+```
+
+**Subcommands:**
+
+| Subcommand | What it does |
+|---|---|
+| `list` | Shows all parameters under the prefix with last-modified timestamps |
+| `get <key>` | Decrypts and prints a single parameter value |
+| `set <key> <value>` | Updates a parameter — validates format (e.g. admin password must contain a symbol); warns on stable secrets (`api-key-salt`, `jwt-secret`) |
+| `validate` | Checks all required params exist and are non-empty; reports optional params |
+| `diff` | Compares SSM values vs what's in the live `langsmith-config` K8s Secret — shows mismatches and how to force an ESO resync |
+| `delete <key>` | Removes a parameter — requires double confirmation for stable secrets |
+
+> After updating a secret with `set`, ESO syncs it to Kubernetes within 1 hour. To force an immediate sync:
+> ```bash
+> kubectl annotate externalsecret langsmith-config -n langsmith force-sync=$(date +%s) --overwrite
+> ```
+
+---
+
+### `make init-values`
+
+**When to use:** After `make apply`, or any time you change `terraform.tfvars` settings (addons, sizing, domain).
+
+Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and Pass 2:
+
+1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `sizing_profile`, `enable_*` flags, `langsmith_domain`)
+2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`)
+3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
+4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
+   - `enable_deployments = true` → copies `langsmith-values-agent-deploys.yaml`
+   - `enable_agent_builder = true` → copies `langsmith-values-agent-builder.yaml`
+   - `enable_insights = true` → copies `langsmith-values-insights.yaml`
+   - `enable_polly = true` → copies `langsmith-values-polly.yaml`
+5. Copies the appropriate sizing file if `sizing_profile` is set
+
+Re-running is safe — it refreshes Terraform outputs and preserves your admin email and existing choices.
+
+---
+
+### `make deploy`
+
+**When to use:** To deploy or upgrade LangSmith after `make init-values`.
+
+Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here is the exact sequence:
+
+**Step 1 — Kubeconfig.** Reads `cluster_name` from `terraform output` and runs `aws eks update-kubeconfig`.
+
+**Step 2 — Preflight checks** (`preflight-check.sh`). Confirms `aws`, `kubectl`, `helm`, `terraform` are installed; validates AWS credentials with `aws sts get-caller-identity`; verifies `kubectl` can reach the cluster; adds the `langchain` Helm repo if missing.
+
+**Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
+
+**Step 4 — Read feature flags.** Reads `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly` from `terraform.tfvars`. Validates addon dependencies (agent_builder and polly require deployments).
+
+**Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
+```
+-f langsmith-values.yaml                      (base — always)
+-f langsmith-values-overrides.yaml            (your env — always)
+-f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
+-f langsmith-values-agent-builder.yaml        (enable_agent_builder = true)
+-f langsmith-values-insights.yaml             (enable_insights = true)
+-f langsmith-values-polly.yaml                (enable_polly = true)
+-f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default, loaded LAST)
+```
+The sizing file is always loaded last so it can override replicas/resources set by addon files.
+
+**Step 6 — Pre-deploy hostname check.** If the ingress already exists and `langsmith_domain` is not set, compares `config.hostname` in the overrides file against the live ALB hostname. Auto-updates it if stale (prevents agent deployments getting stuck in `DEPLOYING` state with the wrong endpoint URL).
+
+**Step 7 — Broken release recovery.** Checks the current Helm release status. If `pending-upgrade` (left by a Ctrl+C'd upgrade), rolls back automatically. If `failed` (common after a first deploy timeout), logs a warning and proceeds — Helm upgrade works fine on a failed release.
+
+**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the post-install bootstrap job can take 10+ minutes while agent pods spin up on new nodes.
+
+**Step 9 — Core readiness.** Polls each core deployment with `kubectl rollout status --timeout=5m`:
+- `langsmith-frontend`, `langsmith-backend`, `langsmith-platform-backend`, `langsmith-ingest-queue`, `langsmith-queue`
+- Plus `langsmith-host-backend`, `langsmith-listener`, `langsmith-operator` if Deployments is enabled
+
+**Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and the bootstrap job hangs.
+
+**Step 11 — Frontend restart.** Restarts the frontend deployment to pick up the latest ConfigMap. Then prints the ALB hostname and port-forward instructions.
+
+---
+
+### `make apply-eso`
+
+**When to use:** When SSM secrets change but you don't need to redeploy Helm.
+
+Runs `helm/scripts/apply-eso.sh`. Re-applies just the ESO `ClusterSecretStore` and `ExternalSecret` resources and waits for the sync to complete (60s timeout). Useful for rotating credentials (license key, admin password) without triggering a full Helm upgrade.
+
+**What it creates/updates in Kubernetes:**
+
+1. `ClusterSecretStore langsmith-ssm` — a cluster-wide ESO provider pointing at AWS SSM Parameter Store in your region. Uses the IRSA role on the ESO pod for authentication.
+
+2. `ExternalSecret langsmith-config` (in the langsmith namespace) — maps SSM paths to K8s secret keys:
+
+   | SSM path | K8s secret key |
+   |---|---|
+   | `.../langsmith-license-key` | `langsmith_license_key` |
+   | `.../langsmith-api-key-salt` | `api_key_salt` |
+   | `.../langsmith-jwt-secret` | `jwt_secret` |
+   | `.../langsmith-admin-password` | `initial_org_admin_password` |
+   | `.../agent-builder-encryption-key` | `agent_builder_encryption_key` *(only if key exists in SSM)* |
+   | `.../insights-encryption-key` | `insights_encryption_key` *(only if key exists in SSM)* |
+   | `.../deployments-encryption-key` | `deployments_encryption_key` *(only if key exists in SSM)* |
+   | `.../polly-encryption-key` | `polly_encryption_key` *(only if key exists in SSM)* |
+
+The optional keys are dynamically included — `apply-eso.sh` probes SSM for each one and only adds it to the ExternalSecret if it exists. This prevents ESO from failing to sync because a disabled addon's key isn't in SSM yet.
+
+---
+
+### `make status`
+
+**When to use:** At any point to check where you are in the deployment process.
+
+Runs `infra/scripts/status.sh`. Works through 10 checks in sequence and tells you exactly what to run next. The first failing check sets the "Next Step" recommendation at the end.
+
+```bash
+make status          # full check
+make status-quick    # skip SSM + K8s queries (faster, for quick credential checks)
+```
+
+**The 10 sections it checks:**
+
+| # | Check | What it looks at |
+|---|---|---|
+| 1 | **terraform.tfvars** | File exists; `name_prefix`, `environment`, `region` are filled in |
+| 2 | **Environment Variables** | All `TF_VAR_*` and `LANGSMITH_*` secrets are exported in your shell |
+| 3 | **AWS Credentials** | `aws sts get-caller-identity` succeeds — prints account ID and ARN |
+| 4 | **SSM Parameters** | All 6 required params exist; shows which optional addon keys are present |
+| 5 | **Terraform Infra** | `terraform output` returns outputs — confirms `apply` has run; prints cluster name, ALB, bucket, IRSA role |
+| 6 | **Kubeconfig** | `kubectl` context matches the cluster name; can reach the API server |
+| 7 | **Helm Values** | `langsmith-values-overrides.yaml` exists; hostname is populated; addon files present |
+| 8 | **Kubernetes Resources** | Namespace exists; ESO `ClusterSecretStore` and `ExternalSecret` are deployed and synced; `langsmith-config` secret exists |
+| 9 | **Helm Release** | Release status (`deployed`, `failed`, `pending-upgrade`); pod count |
+| 10 | **Terraform Helm App** | `app/` Terraform module state (alternative Pass 2 path only) |
+
+---
+
+### `make uninstall`
+
+**When to use:** To remove the LangSmith Helm release (keeps infrastructure intact).
+
+Runs `helm/scripts/uninstall.sh`. Uninstalls the `langsmith` Helm release and cleans up associated Kubernetes resources (ESO objects, service accounts). Does **not** destroy Terraform infrastructure (VPC, EKS, RDS, Redis, S3).
+
+---
+
+### `make init-app` / `make plan-app` / `make apply-app` / `make destroy-app`
+
+**When to use:** Pass 2 Option B — managing the Helm deploy via Terraform instead of scripts.
+
+These targets use the `app/` Terraform module which manages the ESO resources and `helm_release` resource inside Terraform state.
+
+- `make init-app` — pulls live Terraform outputs from `infra/` into `app/infra.auto.tfvars.json`
+- `make plan-app` — runs `init-app` then `terraform plan` in `app/`
+- `make apply-app` — applies the Helm release via Terraform
+- `make destroy-app` — destroys just the Helm release (keeps infra)
+
+> Requires `make init-values` first — the app module reads YAML values files from `helm/values/`.
+
+---
+
+### `make deploy-all`
+
+**When to use:** Single-command full deploy (infra already initialized).
+
+Runs: `make apply` → `make init-values` → `make deploy` in sequence. Convenient for `terraform apply` + immediate Helm upgrade in one shot.
+
+---
+
+## Supporting Scripts
+
+These scripts are not exposed as `make` targets but are used internally by the scripts above.
+
+### `infra/scripts/_common.sh`
+
+Shared library sourced by every script. Provides:
+- `_parse_tfvar <key>` — extracts a value from `terraform.tfvars` using sed
+- `_tfvar_is_true <key>` — returns 0 if a variable is set to `true` in tfvars
+- `INFRA_DIR` — absolute path to `infra/`, resolved from the sourcing script's location
+- Terminal color helpers: `_green`, `_red`, `_yellow`, `_bold`
+- Status output helpers: `pass`, `fail`, `warn`, `skip`, `info`, `action`, `header` (used by `status.sh`)
+
+### `helm/scripts/preflight-check.sh`
+
+Called at the start of every `deploy.sh` run. Checks:
+1. Required binaries exist: `aws`, `kubectl`, `helm`, `terraform`
+2. AWS credentials work: `aws sts get-caller-identity`
+3. Cluster is reachable: `kubectl cluster-info --request-timeout=5s`
+4. `langchain` Helm repo is registered (adds it if missing, then updates)
+
+Exits non-zero on any failure so `deploy.sh` aborts before touching the cluster.
+
+### `infra/scripts/set-kubeconfig.sh`
+
+Called by `make kubeconfig`. Reads `cluster_name` from `terraform output` and runs:
+```bash
+aws eks update-kubeconfig --name <cluster_name> --region <region>
+```
+
+---
+
 ## Variable Reference
 
 | Variable | Default | Required | Description |
