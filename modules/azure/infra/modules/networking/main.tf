@@ -80,3 +80,14 @@ resource "azurerm_subnet" "subnet_bastion" {
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = var.bastion_subnet_address_prefix
 }
+
+# Application Gateway subnet — required when ingress_controller = "agic".
+# Azure Application Gateway v2 requires an exclusive subnet of at least /24.
+# No other resources (pods, VMs) may be placed in this subnet.
+resource "azurerm_subnet" "subnet_agic" {
+  count                = var.enable_agic ? 1 : 0
+  name                 = "${var.network_name}-subnet-agic"
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = var.agic_subnet_address_prefix
+}

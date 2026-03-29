@@ -49,11 +49,11 @@ _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-_create_frontdoor=$(_parse_tfvar "create_frontdoor") || _create_frontdoor="false"
-_nginx_dns_label=$(_parse_tfvar "nginx_dns_label") || _nginx_dns_label=""
+_dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
+_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
 
 # Derive protocol from TLS source
-if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" || "$_create_frontdoor" == "true" ]]; then
+if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]]; then
   _protocol="https"
 else
   _protocol="http"
@@ -72,8 +72,8 @@ info "tls_certificate_source = $_tls_source (protocol: $_protocol)"
 info "postgres_source        = $_postgres_source"
 info "redis_source           = $_redis_source"
 info "sizing_profile         = ${_sizing_profile}"
+info "ingress_controller     = $_ingress_controller"
 [[ -n "$_langsmith_domain" ]] && info "langsmith_domain       = $_langsmith_domain"
-[[ "$_create_frontdoor" == "true" ]] && info "create_frontdoor       = true"
 echo ""
 
 # ── Read terraform outputs ─────────────────────────────────────────────────
@@ -107,11 +107,12 @@ echo ""
 
 # ── Determine hostname ─────────────────────────────────────────────────────
 # Priority order:
-#   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME target)
-#   2. nginx_dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
-#   3. frontdoor_endpoint_hostname terraform output (*.azurefd.net — Front Door default FQDN)
-#   4. Existing value in values-overrides.yaml (keep on re-run)
-#   5. Interactive prompt
+#   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
+#   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
+#      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
+#      Azure assigns the DNS label to whichever LB service has the annotation set.
+#   3. Existing value in values-overrides.yaml (keep on re-run)
+#   4. Interactive prompt
 HOSTNAME=""
 
 if [[ -n "$_langsmith_domain" ]]; then
@@ -120,20 +121,19 @@ if [[ -n "$_langsmith_domain" ]]; then
   echo ""
 fi
 
-# Azure Public IP DNS label — free, no extra resource
-if [[ -z "$HOSTNAME" && -n "$_nginx_dns_label" ]]; then
-  HOSTNAME="${_nginx_dns_label}.${_location}.cloudapp.azure.com"
-  info "Hostname from nginx_dns_label: $HOSTNAME"
+# Azure Public IP DNS label — free, no extra resource, works for all ingress controllers
+if [[ -z "$HOSTNAME" && -n "$_dns_label" ]]; then
+  HOSTNAME="${_dns_label}.${_location}.cloudapp.azure.com"
+  info "Hostname from dns_label (${_ingress_controller}): $HOSTNAME"
   echo ""
 fi
 
-# If Front Door is enabled and no custom domain, try the *.azurefd.net endpoint
-if [[ -z "$HOSTNAME" && "$_create_frontdoor" == "true" ]]; then
-  _fd_hostname=$(terraform -chdir="$INFRA_DIR" output -raw frontdoor_endpoint_hostname 2>/dev/null) || _fd_hostname=""
-  if [[ -n "$_fd_hostname" ]]; then
-    HOSTNAME="$_fd_hostname"
-    info "Front Door endpoint hostname: $HOSTNAME"
-    info "(Add a CNAME from your custom domain to this FQDN — see terraform output)"
+# AGIC: derive hostname from Application Gateway public IP FQDN (terraform output)
+if [[ -z "$HOSTNAME" && "$_ingress_controller" == "agic" ]]; then
+  _agw_fqdn=$(terraform -chdir="$INFRA_DIR" output -raw agw_public_ip_fqdn 2>/dev/null) || _agw_fqdn=""
+  if [[ -n "$_agw_fqdn" ]]; then
+    HOSTNAME="$_agw_fqdn"
+    info "Hostname from AGW public IP FQDN: $HOSTNAME"
     echo ""
   fi
 fi
@@ -150,7 +150,7 @@ if [[ -z "$HOSTNAME" && -f "$OUT_FILE" ]]; then
 fi
 
 if [[ -z "$HOSTNAME" ]]; then
-  warn "No hostname found — set nginx_dns_label, langsmith_domain, or create_frontdoor in terraform.tfvars"
+  warn "No hostname found — set dns_label or langsmith_domain in terraform.tfvars"
   echo ""
   printf "  Enter hostname (e.g. langsmith.example.com): "
   read -r HOSTNAME
@@ -218,28 +218,24 @@ echo ""
 info "Generating values-overrides.yaml..."
 
 # Build ingress/TLS block
-# Front Door terminates TLS at the edge — no cert-manager annotation needed on the ingress.
-# DNS-01 and HTTP-01 (letsencrypt) use cert-manager to issue certs on the cluster.
-if [[ "$_create_frontdoor" == "true" ]]; then
+# The ingressClassName varies by ingress controller:
+#   nginx         → "nginx"
+#   istio         → "istio"  (self-managed via Helm)
+#   istio-addon   → "istio"  (AKS managed add-on)
+#   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
+#   envoy-gateway → ""     (uses Gateway API, not Ingress — configure manually)
+#   none          → ""       (bring your own)
+case "$_ingress_controller" in
+  istio|istio-addon) _ingress_class="istio" ;;
+  nginx)             _ingress_class="nginx" ;;
+  agic)              _ingress_class="azure-application-gateway" ;;
+  *)                 _ingress_class="" ;;
+esac
+
+if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
   _ingress_block='ingress:
-  enabled: true
-  ingressClassName: "nginx"
-  # Front Door terminates TLS — no cert-manager annotation needed.
-  # Front Door → NGINX LB (HTTP) → LangSmith pods.'
-elif [[ "$_tls_source" == "dns01" ]]; then
-  _ingress_block='ingress:
-  enabled: true
-  ingressClassName: "nginx"
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-  tls:
-    - secretName: langsmith-tls
-      hosts:
-        - "'"${HOSTNAME}"'"'
-elif [[ "$_tls_source" == "letsencrypt" ]]; then
-  _ingress_block='ingress:
-  enabled: true
-  ingressClassName: "nginx"
+  enabled: true'"${_ingress_class:+
+  ingressClassName: \"${_ingress_class}\"}"'
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
   tls:
@@ -248,8 +244,8 @@ elif [[ "$_tls_source" == "letsencrypt" ]]; then
         - "'"${HOSTNAME}"'"'
 else
   _ingress_block='ingress:
-  enabled: true
-  ingressClassName: "nginx"'
+  enabled: true'"${_ingress_class:+
+  ingressClassName: \"${_ingress_class}\"}"
 fi
 
 # Build postgres block
@@ -373,9 +369,21 @@ agentBuilderTriggerServer:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 
 # ── Ingress / TLS ─────────────────────────────────────────────────────────────
-${_ingress_block}
-istioGateway:
-  enabled: false
+# istio-addon: Kubernetes Ingress with ingressClassName: istio targets label
+# istio: ingressgateway, but the AKS external gateway label is
+# istio: aks-istio-ingressgateway-external — no match, no listeners.
+# deploy.sh creates an explicit Istio Gateway + VirtualService instead.
+# Disable chart-managed Ingress and istioGateway — routing is handled externally.
+$(if [[ "$_ingress_controller" == "istio-addon" || "$_ingress_controller" == "envoy-gateway" ]]; then
+  echo "ingress:"
+  echo "  enabled: false"
+  echo "istioGateway:"
+  echo "  enabled: false"
+else
+  echo "${_ingress_block}"
+  echo "istioGateway:"
+  echo "  enabled: false"
+fi)
 EOF
 
 pass "Generated: ${OUT_FILE}"
@@ -407,7 +415,7 @@ _copy_addon() {
       python3 -c "
 import sys
 content = open('${_dst}').read()
-content = content.replace('url: \"\"        # populated by init-values.sh → https://<nginx_dns_label>.<region>.cloudapp.azure.com',
+content = content.replace('url: \"\"        # populated by init-values.sh → https://<dns_label>.<region>.cloudapp.azure.com',
                           'url: \"${_protocol}://${HOSTNAME}\"')
 content = content.replace('tlsEnabled: false  # populated by init-values.sh',
                           'tlsEnabled: ${_tls_enabled}')

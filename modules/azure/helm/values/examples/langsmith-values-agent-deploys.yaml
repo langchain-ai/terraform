@@ -10,7 +10,7 @@ config:
     # url must match the publicly reachable LangSmith hostname (with https:// protocol).
     # init-values.sh populates url and tlsEnabled automatically from terraform.tfvars.
     enabled: true
-    url: ""        # populated by init-values.sh → https://<nginx_dns_label>.<region>.cloudapp.azure.com
+    url: ""        # populated by init-values.sh → https://<dns_label>.<region>.cloudapp.azure.com
     # Set to true when tls_certificate_source = "letsencrypt" or "dns01".
     # The operator uses this to build agent deployment endpoint URLs.
     # Wrong value (false when TLS is enabled) keeps deployments stuck in DEPLOYING state.

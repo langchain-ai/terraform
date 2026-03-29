@@ -257,12 +257,12 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'none' = skip."
+  description = "Ingress controller to install. 'nginx' = NGINX via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'agic' = Application Gateway Ingress Controller. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
   default     = "nginx"
 
   validation {
-    condition     = contains(["nginx", "istio", "istio-addon", "none"], var.ingress_controller)
-    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', or 'none'."
+    condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
   }
 }
 
@@ -451,26 +451,6 @@ variable "bastion_allowed_ssh_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
-# ── Front Door ────────────────────────────────────────────────────────────────
-
-variable "create_frontdoor" {
-  type        = bool
-  description = "Deploy Azure Front Door Standard as the edge layer (managed TLS + CDN). Works with any ingress_controller value (nginx, istio, istio-addon)."
-  default     = false
-}
-
-variable "frontdoor_sku" {
-  type        = string
-  description = "Front Door SKU. 'Standard_AzureFrontDoor' (~$35/mo) for CDN+TLS. 'Premium_AzureFrontDoor' (~$330/mo) required for WAF attachment."
-  default     = "Standard_AzureFrontDoor"
-}
-
-variable "frontdoor_origin_hostname" {
-  type        = string
-  description = "Hostname or IP of the AKS ingress LB. For NGINX: kubectl get svc ingress-nginx-controller -n ingress-nginx. For Istio: kubectl get svc istio-ingressgateway -n istio-system."
-  default     = ""
-}
-
 # ── DNS ───────────────────────────────────────────────────────────────────────
 
 variable "create_dns_zone" {
@@ -540,8 +520,35 @@ variable "enable_polly" {
   default     = false
 }
 
-variable "nginx_dns_label" {
+variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the NGINX LoadBalancer. Results in <label>.<region>.cloudapp.azure.com. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
   default     = ""
+}
+
+# ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
+
+variable "agic_subnet_address_prefix" {
+  type        = list(string)
+  description = "CIDR prefix for the Application Gateway dedicated subnet. Must be /24 or larger. Only used when ingress_controller = 'agic'."
+  default     = ["10.0.96.0/24"]
+}
+
+variable "agw_sku_tier" {
+  type        = string
+  description = "Application Gateway SKU tier. 'Standard_v2' or 'WAF_v2' (enables WAF). Only used when ingress_controller = 'agic'."
+  default     = "Standard_v2"
+
+  validation {
+    condition     = contains(["Standard_v2", "WAF_v2"], var.agw_sku_tier)
+    error_message = "agw_sku_tier must be 'Standard_v2' or 'WAF_v2'."
+  }
+}
+
+# ── Envoy Gateway ─────────────────────────────────────────────────────────────
+
+variable "envoy_gateway_version" {
+  type        = string
+  description = "Envoy Gateway Helm chart version. Only used when ingress_controller = 'envoy-gateway'."
+  default     = "v1.2.0"
 }

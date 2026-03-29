@@ -4,7 +4,7 @@
 # This profile exists to keep LangSmith alive at the lowest possible cost.
 # Single replica, rock-bottom resource requests sized from actual kubectl-top
 # measurements on an idle cluster. The goal is to fit everything
-# on a single small node (e.g. m5.xlarge — 4 vCPU, 16 Gi).
+# on a single small node (e.g. Standard_D4s_v3 — 4 vCPU, 16 GiB).
 #
 # WILL break under any meaningful traffic. OOM kills, timeouts, and degraded
 # UX are expected and acceptable. Do not file bugs against this profile.
@@ -14,6 +14,9 @@
 #
 # For actual dev work: use langsmith-values-sizing-dev.yaml
 # For production:      use langsmith-values-sizing-production.yaml
+#
+# Resource numbers sourced from SIZING.md — Minimum profile.
+# Total reserved: 2.9 vCPU / 7.6Gi  |  Limits: 9.7 vCPU / 15.3Gi
 # ============================================================================
 
 # -- Application components ----------------------------------------------------
@@ -104,8 +107,8 @@ hostBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "50m"
-        memory: "512Mi"
+        cpu: "100m"
+        memory: "384Mi"
       limits:
         cpu: "500m"
         memory: "768Mi"
@@ -115,22 +118,22 @@ listener:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "512Mi"
+        cpu: "250m"
+        memory: "768Mi"
       limits:
         cpu: "1"
-        memory: "1Gi"
+        memory: "1536Mi"
 
 operator:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "25m"
-        memory: "64Mi"
+        cpu: "100m"
+        memory: "256Mi"
       limits:
         cpu: "250m"
-        memory: "256Mi"
+        memory: "512Mi"
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
@@ -139,19 +142,19 @@ agentBuilderToolServer:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "1Gi"
+        cpu: "500m"
+        memory: "768Mi"
       limits:
         cpu: "1"
-        memory: "2Gi"
+        memory: "1536Mi"
 
 agentBuilderTriggerServer:
   deployment:
     replicas: 1
     resources:
       requests:
-        cpu: "25m"
-        memory: "192Mi"
+        cpu: "100m"
+        memory: "256Mi"
       limits:
         cpu: "250m"
         memory: "384Mi"
@@ -164,17 +167,17 @@ postgres:
   statefulSet:
     resources:
       requests:
-        cpu: "50m"
-        memory: "128Mi"
+        cpu: "200m"
+        memory: "512Mi"
       limits:
         cpu: "500m"
-        memory: "512Mi"
+        memory: "1Gi"
 
 redis:
   statefulSet:
     resources:
       requests:
-        cpu: "25m"
+        cpu: "100m"
         memory: "64Mi"
       limits:
         cpu: "200m"
@@ -184,8 +187,8 @@ clickhouse:
   statefulSet:
     resources:
       requests:
-        cpu: "500m"
-        memory: "1Gi"
-      limits:
         cpu: "1"
         memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"

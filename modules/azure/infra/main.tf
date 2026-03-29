@@ -41,6 +41,7 @@ locals {
   aks_subnet_id      = var.create_vnet ? module.vnet.subnet_main_id : var.aks_subnet_id
   postgres_subnet_id = var.create_vnet ? module.vnet.subnet_postgres_id : var.postgres_subnet_id
   redis_subnet_id    = var.create_vnet ? module.vnet.subnet_redis_id : var.redis_subnet_id
+  agic_subnet_id     = var.create_vnet ? module.vnet.subnet_agic_id : ""
 
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
@@ -86,6 +87,10 @@ module "vnet" {
   enable_bastion     = var.create_bastion
   availability_zones = var.availability_zones
 
+  # AGIC subnet: provisioned only when ingress_controller = "agic"
+  enable_agic                = var.ingress_controller == "agic"
+  agic_subnet_address_prefix = var.agic_subnet_address_prefix
+
   tags = local.common_tags
 }
 
@@ -110,11 +115,19 @@ module "aks" {
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads)
   additional_node_pools = var.additional_node_pools
 
-  # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'none'
+  # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller
-  nginx_dns_label      = var.nginx_dns_label
+  dns_label            = var.dns_label
   istio_version        = var.istio_version
   istio_addon_revision = var.istio_addon_revision
+
+  # AGIC — wired from vnet module output
+  subscription_id = var.subscription_id
+  agic_subnet_id  = local.agic_subnet_id
+  agw_sku_tier    = var.agw_sku_tier
+
+  # Envoy Gateway
+  envoy_gateway_version = var.envoy_gateway_version
 
   langsmith_namespace    = var.langsmith_namespace
   langsmith_release_name = var.langsmith_release_name
@@ -286,39 +299,6 @@ module "k8s_bootstrap" {
   subscription_id                 = var.subscription_id
   dns_zone_name                   = var.create_dns_zone ? var.langsmith_domain : ""
   dns_resource_group_name         = azurerm_resource_group.resource_group.name
-}
-
-# ── Front Door (optional) ─────────────────────────────────────────────────────
-# Azure Front Door Standard/Premium as the edge layer for LangSmith.
-# Provides managed TLS certificates (no cert-manager needed), HTTPS redirect,
-# and global CDN acceleration. Works with any ingress controller (nginx, istio).
-#
-# TLS flow with Front Door:
-#   1. Apply → note frontdoor_endpoint_hostname output
-#   2. Registrar: CNAME langsmith.<domain> → frontdoor_endpoint_hostname
-#   3. Registrar: TXT _dnsauth.langsmith.<domain> → frontdoor_validation_token
-#   4. Azure issues managed cert automatically (no re-apply needed)
-#
-# vs DNS-01 + cert-manager: Front Door is simpler — no cert-manager, no Azure DNS zone needed.
-# Enable with: create_frontdoor = true
-
-module "frontdoor" {
-  count               = var.create_frontdoor ? 1 : 0
-  source              = "./modules/frontdoor"
-  name                = "langsmith-fd${local.identifier}"
-  resource_group_name = azurerm_resource_group.resource_group.name
-  sku_name            = var.frontdoor_sku
-
-  # Set after first apply — get from kubectl get svc
-  origin_hostname = var.frontdoor_origin_hostname
-
-  # Customer domain — Front Door issues managed TLS for this
-  custom_domain = var.langsmith_domain
-
-  # Optional WAF — requires Premium SKU and create_waf = true
-  waf_policy_id = var.create_waf && var.frontdoor_sku == "Premium_AzureFrontDoor" ? module.waf[0].waf_policy_id : ""
-
-  tags = local.common_tags
 }
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────

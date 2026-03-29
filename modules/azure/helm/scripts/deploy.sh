@@ -58,32 +58,95 @@ az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
 info "Active context: $(kubectl config current-context)"
 echo ""
 
-# ── Set NGINX DNS label annotation ───────────────────────────────────────
-# Azure assigns <nginx_dns_label>.<region>.cloudapp.azure.com to the public IP
-# only when this annotation is present on the LoadBalancer service.
-# cert-manager's HTTP-01 challenge depends on DNS resolving — must be set before deploy.
-_nginx_dns_label=$(_parse_tfvar "nginx_dns_label") || _nginx_dns_label=""
+# ── Set DNS label annotation on the ingress LoadBalancer service ──────────
+# Azure assigns <dns_label>.<region>.cloudapp.azure.com to the public IP only when
+# the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
+# Works for ALL ingress controllers — nginx, istio, istio-addon, envoy-gateway.
+# cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
+_dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
-if [[ -n "$_nginx_dns_label" ]]; then
-  if kubectl get svc ingress-nginx-controller -n ingress-nginx &>/dev/null; then
-    kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
-      "service.beta.kubernetes.io/azure-dns-label-name=${_nginx_dns_label}" \
+_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+if [[ -n "$_dns_label" ]]; then
+  case "$_ingress_controller" in
+    nginx)
+      _lb_svc="ingress-nginx-controller"
+      _lb_ns="ingress-nginx"
+      ;;
+    istio-addon)
+      _lb_svc="aks-istio-ingressgateway-external"
+      _lb_ns="aks-istio-ingress"
+      ;;
+    istio)
+      _lb_svc="istio-ingressgateway"
+      _lb_ns="istio-system"
+      ;;
+    envoy-gateway)
+      # Envoy Gateway service name follows pattern: envoy-<namespace>-<gateway-name>
+      # Default gateway name in our setup is "langsmith"
+      _lb_svc="envoy-langsmith-langsmith-gateway"
+      _lb_ns="langsmith"
+      ;;
+    *)
+      _lb_svc=""
+      _lb_ns=""
+      ;;
+  esac
+  if [[ -n "$_lb_svc" ]] && kubectl get svc "$_lb_svc" -n "$_lb_ns" &>/dev/null; then
+    kubectl annotate svc "$_lb_svc" -n "$_lb_ns" \
+      "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" \
       --overwrite &>/dev/null
-    pass "NGINX DNS label set: ${_nginx_dns_label}.${_location}.cloudapp.azure.com"
-  else
-    warn "ingress-nginx-controller service not found — DNS label not set (run make apply first)"
+    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.cloudapp.azure.com"
+  elif [[ -n "$_lb_svc" ]]; then
+    warn "${_lb_svc} not found in ${_lb_ns} — DNS label not set (run make apply first)"
   fi
 fi
 
 # ── Apply letsencrypt-prod ClusterIssuer ──────────────────────────────────
 # kubernetes_manifest in Terraform can't create this on fresh deploy (no cluster
 # exists during plan). Applied here instead — idempotent, safe to re-run.
+# The ingress class used by the HTTP-01 solver must match the active ingress controller.
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
-  if kubectl get clusterissuer letsencrypt-prod &>/dev/null; then
-    pass "ClusterIssuer letsencrypt-prod already exists"
+  _le_namespace=$(_parse_tfvar "langsmith_namespace") || _le_namespace="langsmith"
+  _le_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
+  [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
+
+  if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+    # Envoy Gateway uses Gateway API — cert-manager gatewayHTTPRoute solver
+    # requires ExperimentalGatewayAPISupport feature gate on cert-manager controller.
+    # deploy.sh enables this gate automatically (kubectl patch).
+    kubectl patch deployment cert-manager -n cert-manager --type='json' \
+      -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]' &>/dev/null || true
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${_le_email}
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+          - name: langsmith-gateway
+            namespace: ${_le_namespace}
+            kind: Gateway
+EOF
+    pass "ClusterIssuer letsencrypt-prod configured (solver: gatewayHTTPRoute)"
   else
+    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers
+    case "$_ingress_controller" in
+      istio|istio-addon) _acme_ingress_class="istio" ;;
+      nginx)             _acme_ingress_class="nginx" ;;
+      agic)              _acme_ingress_class="azure-application-gateway" ;;
+      *)                 _acme_ingress_class="nginx" ;;
+    esac
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -98,10 +161,64 @@ spec:
     solvers:
     - http01:
         ingress:
-          class: nginx
+          ingressClassName: ${_acme_ingress_class}
 EOF
-    pass "ClusterIssuer letsencrypt-prod created"
+    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class})"
   fi
+fi
+
+# ── Self-managed Istio: create IngressClass resource ──────────────────────
+# istiod needs an IngressClass named "istio" to exist so it generates listeners
+# for the istio-ingressgateway. Without it, LDS push has 0 resources.
+if [[ "$_ingress_controller" == "istio" ]]; then
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: istio
+spec:
+  controller: istio.io/ingress-controller
+EOF
+  pass "IngressClass 'istio' created"
+fi
+
+# ── Create Istio Gateway resource (istio-addon only) ──────────────────────
+# With AKS managed Istio, ingressClassName: istio targets label istio: ingressgateway
+# but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
+# We create explicit Gateway + VirtualService to route port 80/443 correctly.
+if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+  _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+  [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
+  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${_namespace}
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "${_istio_hostname}"
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: langsmith-tls
+    hosts:
+    - "${_istio_hostname}"
+EOF
+  pass "Istio Gateway created: ${_istio_hostname} (ports 80 + 443)"
 fi
 
 # ── Preflight checks ──────────────────────────────────────────────────────
@@ -296,6 +413,211 @@ else
   warn "Some deployments are still rolling out — check with: kubectl get pods -n $NAMESPACE"
 fi
 echo ""
+
+# ── Post-deploy Envoy Gateway routing ─────────────────────────────────────
+# Envoy Gateway uses Gateway API (GatewayClass → Gateway → HTTPRoute).
+# The LangSmith Helm chart ingress is disabled (ingress.enabled: false).
+# We create the Gateway API resources here so make deploy is fully automated.
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
+  [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
+  _eg_release=$(_parse_tfvar "langsmith_release_name") || _eg_release="langsmith"
+
+  # GatewayClass — points to the Envoy Gateway controller
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: langsmith-eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+EOF
+
+  # Gateway — creates the Envoy proxy LB with TLS termination
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${_eg_namespace}
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  gatewayClassName: langsmith-eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "${_eg_hostname}"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: langsmith-tls
+    allowedRoutes:
+      namespaces:
+        from: Same
+EOF
+  pass "Envoy Gateway GatewayClass + Gateway created"
+
+  # HTTPRoute — routes all traffic to LangSmith frontend
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: langsmith
+  namespace: ${_eg_namespace}
+spec:
+  parentRefs:
+  - name: langsmith-gateway
+    namespace: ${_eg_namespace}
+  hostnames:
+  - "${_eg_hostname}"
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: ${_eg_release}-frontend
+      port: 80
+EOF
+  pass "Envoy Gateway HTTPRoute created: ${_eg_hostname}"
+
+  # Wait for Gateway LB service and annotate with DNS label.
+  # Envoy Gateway creates the LB in envoy-gateway-system namespace with label:
+  #   gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway
+  info "Waiting for Envoy Gateway LoadBalancer IP..."
+  _eg_svc_name=""
+  for i in $(seq 1 30); do
+    _eg_svc_name=$(kubectl get svc -n "envoy-gateway-system" \
+      -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    [[ -n "$_eg_svc_name" ]] && break
+    sleep 5
+  done
+
+  if [[ -n "$_eg_svc_name" && -n "$_dns_label" ]]; then
+    kubectl annotate svc "$_eg_svc_name" -n "envoy-gateway-system" \
+      "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" --overwrite &>/dev/null
+    pass "DNS label '${_dns_label}' set on envoy-gateway-system/${_eg_svc_name}"
+  else
+    warn "Could not find Envoy Gateway LB service — DNS label not set. Run: make deploy again after pods are ready"
+  fi
+fi
+
+# ── Post-deploy self-managed Istio TLS sync ───────────────────────────────
+# istiod reads the TLS secret via SDS using kubernetes:// scheme.
+# For self-managed Istio, the secret must exist in istio-system namespace
+# (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
+# Without this sync, the gateway returns "no peer certificate available".
+if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
+  _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
+  info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
+  _cert_ready=false
+  for i in $(seq 1 18); do
+    if kubectl get secret langsmith-tls -n "$_istio_ns" &>/dev/null 2>&1; then
+      _cert_ready=true; break
+    fi
+    sleep 10
+  done
+  if [[ "$_cert_ready" == "true" ]]; then
+    kubectl get secret langsmith-tls -n "$_istio_ns" -o json 2>/dev/null | \
+      python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata']['namespace'] = 'istio-system'
+for k in ['resourceVersion','uid','creationTimestamp']:
+    s['metadata'].pop(k, None)
+s['metadata']['annotations'] = {}
+print(json.dumps(s))
+" | kubectl apply -f - &>/dev/null
+    pass "TLS secret synced to istio-system namespace"
+  else
+    warn "TLS certificate not ready within 3 min — sync skipped. Re-run: make deploy"
+  fi
+fi
+
+# ── Post-deploy Istio routing (istio-addon only) ──────────────────────────
+# After cert-manager issues the TLS cert, copy the secret to aks-istio-ingress
+# so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
+# Also create the LangSmith VirtualService to route traffic through the Gateway.
+if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+  _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
+
+  # Wait for TLS cert to be ready (max 3 min) then sync to gateway namespace
+  info "Waiting for TLS certificate langsmith-tls..."
+  _cert_ready=false
+  for i in $(seq 1 18); do
+    if kubectl get secret langsmith-tls -n "$_namespace" &>/dev/null 2>&1; then
+      _cert_ready=true
+      break
+    fi
+    sleep 10
+  done
+
+  if [[ "$_cert_ready" == "true" ]]; then
+    # Sync TLS secret to aks-istio-ingress namespace (required for Gateway credentialName)
+    kubectl get secret langsmith-tls -n "$_namespace" -o json 2>/dev/null | \
+      python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata']['namespace'] = 'aks-istio-ingress'
+for k in ['resourceVersion','uid','creationTimestamp']:
+    s['metadata'].pop(k, None)
+s['metadata']['annotations'] = {}
+print(json.dumps(s))
+" | kubectl apply -f - &>/dev/null
+    pass "TLS secret synced to aks-istio-ingress namespace"
+  else
+    warn "TLS certificate not ready within 3 min — sync skipped. Re-run: make deploy"
+  fi
+
+  # Create VirtualService for LangSmith routing through the Istio Gateway
+  _release=$(_parse_tfvar "langsmith_release_name") || _release="langsmith"
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: langsmith
+  namespace: ${_namespace}
+spec:
+  hosts:
+  - "${_istio_hostname}"
+  gateways:
+  - langsmith-gateway
+  http:
+  - match:
+    - uri:
+        prefix: "/.well-known/acme-challenge/"
+    route:
+    - destination:
+        host: $(kubectl get svc -n "$_namespace" -l acme.cert-manager.io/http01-solver=true \
+          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "cm-acme-http-solver").${_namespace}.svc.cluster.local
+        port:
+          number: $(kubectl get svc -n "$_namespace" -l acme.cert-manager.io/http01-solver=true \
+            -o jsonpath='{.items[0].spec.ports[0].port}' 2>/dev/null || echo "8089")
+  - match:
+    - uri:
+        prefix: "/"
+    route:
+    - destination:
+        host: ${_release}-frontend.${_namespace}.svc.cluster.local
+        port:
+          number: 80
+EOF
+  pass "VirtualService configured for ${_istio_hostname}"
+fi
 
 # ── Ensure langsmith-ksa carries the WI annotation ───────────────────────
 # langsmith-ksa is used by operator-spawned agent deployment pods.

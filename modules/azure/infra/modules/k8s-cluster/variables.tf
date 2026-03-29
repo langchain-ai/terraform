@@ -78,12 +78,12 @@ variable "additional_node_pools" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'none' = skip."
+  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
   default     = "nginx"
 
   validation {
-    condition     = contains(["nginx", "istio", "istio-addon", "none"], var.ingress_controller)
-    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', or 'none'."
+    condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
+    error_message = "ingress_controller must be 'nginx', 'istio', 'istio-addon', 'agic', 'envoy-gateway', or 'none'."
   }
 }
 
@@ -141,8 +141,41 @@ variable "availability_zones" {
   default     = ["1"]
 }
 
-variable "nginx_dns_label" {
+variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the NGINX LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
   default     = ""
+}
+
+# ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
+
+variable "subscription_id" {
+  type        = string
+  description = "Azure subscription ID. Required for AGIC Workload Identity ARM auth and AGW resource references."
+  default     = ""
+}
+
+variable "agic_subnet_id" {
+  type        = string
+  description = "Subnet ID for the Application Gateway. Required when ingress_controller = 'agic'. Must be a /24 or larger dedicated subnet (no other resources)."
+  default     = ""
+}
+
+variable "agw_sku_tier" {
+  type        = string
+  description = "Application Gateway SKU tier. 'Standard_v2' for standard deployments, 'WAF_v2' to enable WAF on the gateway."
+  default     = "Standard_v2"
+
+  validation {
+    condition     = contains(["Standard_v2", "WAF_v2"], var.agw_sku_tier)
+    error_message = "agw_sku_tier must be 'Standard_v2' or 'WAF_v2'."
+  }
+}
+
+# ── Envoy Gateway ─────────────────────────────────────────────────────────────
+
+variable "envoy_gateway_version" {
+  type        = string
+  description = "Envoy Gateway Helm chart version (e.g. 'v1.2.0'). See: https://gateway.envoyproxy.io/releases"
+  default     = "v1.2.0"
 }

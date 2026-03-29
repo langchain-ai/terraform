@@ -58,13 +58,23 @@ output "kubeconfig" {
 
 # ── LangSmith ─────────────────────────────────────────────────────────────────
 
+output "agw_public_ip_fqdn" {
+  description = "FQDN of the Application Gateway public IP. Empty when ingress_controller != 'agic' or DNS label not set."
+  value       = module.aks.agw_public_ip_fqdn
+}
+
+output "agw_name" {
+  description = "Name of the Application Gateway resource. Empty when ingress_controller != 'agic'."
+  value       = module.aks.agw_name
+}
+
 output "langsmith_url" {
   description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.create_frontdoor       ? "https://${module.frontdoor[0].endpoint_hostname}" :
-    var.nginx_dns_label != ""  ? "https://${var.nginx_dns_label}.${var.location}.cloudapp.azure.com" :
-    "No domain configured — set nginx_dns_label, langsmith_domain, or create_frontdoor = true"
+    var.dns_label != ""  ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
+    var.ingress_controller == "agic" && module.aks.agw_public_ip_fqdn != null && module.aks.agw_public_ip_fqdn != "" ? "https://${module.aks.agw_public_ip_fqdn}" :
+    "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
   )
 }
 
@@ -95,17 +105,6 @@ output "keyvault_uri" {
   value       = module.keyvault.vault_uri
 }
 
-# ── Front Door ────────────────────────────────────────────────────────────────
-output "frontdoor_endpoint_hostname" {
-  description = "Front Door endpoint hostname — add CNAME at registrar: custom_domain → this value"
-  value       = var.create_frontdoor ? module.frontdoor[0].endpoint_hostname : ""
-}
-
-output "frontdoor_validation_token" {
-  description = "TXT record value for custom domain TLS validation — add at registrar: _dnsauth.<custom_domain> TXT <this value>"
-  value       = var.create_frontdoor ? module.frontdoor[0].custom_domain_validation_token : ""
-}
-
 # ── WAF ───────────────────────────────────────────────────────────────────────
 output "waf_policy_id" {
   description = "WAF policy resource ID (attach to App Gateway or Front Door)"
@@ -127,6 +126,22 @@ output "bastion_public_ip" {
 output "bastion_ssh_command" {
   description = "az CLI command to SSH into the bastion VM"
   value       = var.create_bastion ? module.bastion[0].ssh_command : ""
+}
+
+# ── Ingress passthrough (read by pull-infra-outputs.sh) ──────────────────────
+output "dns_label" {
+  description = "Azure Public IP DNS label passed through from var.dns_label"
+  value       = var.dns_label
+}
+
+output "ingress_controller" {
+  description = "Ingress controller type passed through from var.ingress_controller"
+  value       = var.ingress_controller
+}
+
+output "tls_certificate_source" {
+  description = "TLS certificate source passed through from var.tls_certificate_source"
+  value       = var.tls_certificate_source
 }
 
 # ── DNS ───────────────────────────────────────────────────────────────────────

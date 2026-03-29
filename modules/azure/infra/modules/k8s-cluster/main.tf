@@ -30,6 +30,22 @@ locals {
     "${var.langsmith_release_name}-agent-builder-tool-server",
     "${var.langsmith_release_name}-agent-builder-trigger-server",
   ]
+
+  # AGIC add-on identity — extracted from the cluster resource after apply.
+  # Azure creates this identity automatically in the MC_ node resource group.
+  # The identity needs 3 role assignments (see below).
+  agic_addon_principal_id = (
+    var.ingress_controller == "agic" &&
+    length(azurerm_kubernetes_cluster.main.ingress_application_gateway) > 0 &&
+    length(azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity) > 0
+  ) ? azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id : null
+
+  # Derive VNet resource ID from the AGIC subnet ID by stripping the /subnets/... suffix.
+  # e.g. /subscriptions/.../virtualNetworks/langsmith-vnet-dz/subnets/langsmith-vnet-dz-subnet-agic
+  #   →  /subscriptions/.../virtualNetworks/langsmith-vnet-dz
+  agic_vnet_id = var.ingress_controller == "agic" && var.agic_subnet_id != "" ? (
+    join("/subnets/", slice(split("/subnets/", var.agic_subnet_id), 0, 1))
+  ) : ""
 }
 
 # Helm provider uses the AKS cluster credentials to deploy charts
@@ -134,6 +150,17 @@ resource "azurerm_kubernetes_cluster" "main" {
     }
   }
 
+  # AGIC add-on — Azure Application Gateway Ingress Controller (AKS managed).
+  # Microsoft deprecated the AGIC Helm chart repo (appgwingress.blob.core.windows.net).
+  # The AKS ingress_application_gateway add-on is the supported path going forward.
+  # Azure manages the AGIC pod lifecycle; no separate Helm install required.
+  dynamic "ingress_application_gateway" {
+    for_each = var.ingress_controller == "agic" ? [1] : []
+    content {
+      gateway_id = azurerm_application_gateway.agw[0].id
+    }
+  }
+
   lifecycle {
     # upgrade_settings change during rolling node upgrades; ignore to prevent
     # drift between Terraform state and live cluster configuration.
@@ -201,7 +228,7 @@ resource "azurerm_user_assigned_identity" "cert_manager" {
 # so it can call the Azure DNS API without a static service principal secret.
 resource "azurerm_federated_identity_credential" "cert_manager" {
   name      = "${var.cluster_name}-cert-manager-federated"
-  parent_id = azurerm_user_assigned_identity.cert_manager.id
+  user_assigned_identity_id = azurerm_user_assigned_identity.cert_manager.id
 
   audience = ["api://AzureADTokenExchange"]
   issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
@@ -214,7 +241,7 @@ resource "azurerm_federated_identity_credential" "k8s_app" {
   for_each = toset(local.service_accounts_for_workload_identity)
 
   name      = "langsmith-federated-${each.value}"
-  parent_id = azurerm_user_assigned_identity.k8s_app.id
+  user_assigned_identity_id = azurerm_user_assigned_identity.k8s_app.id
 
   audience = ["api://AzureADTokenExchange"]
   issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
@@ -263,9 +290,9 @@ resource "helm_release" "nginx_ingress" {
               # This survives every CCM reconcile: protocol stays Http, path stays /nginx-health.
               "service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path" = "/nginx-health"
             },
-            var.nginx_dns_label != "" ? {
+            var.dns_label != "" ? {
               # Public IP DNS label → <label>.<region>.cloudapp.azure.com (free, no extra resource)
-              "service.beta.kubernetes.io/azure-dns-label-name" = var.nginx_dns_label
+              "service.beta.kubernetes.io/azure-dns-label-name" = var.dns_label
             } : {}
           )
         }
@@ -303,6 +330,19 @@ resource "helm_release" "istiod" {
   chart      = "istiod"
   version    = var.istio_version
 
+  # Enable Kubernetes Ingress support in istiod.
+  # Without meshConfig.ingressControllerMode, istiod ignores Ingress resources
+  # and the istio-ingressgateway has no routes — site returns connection refused.
+  # ingressClass must match the ingressClassName used in LangSmith Helm values.
+  set {
+    name  = "meshConfig.ingressControllerMode"
+    value = "STRICT"
+  }
+  set {
+    name  = "meshConfig.ingressClass"
+    value = "istio"
+  }
+
   depends_on = [helm_release.istio_base]
 }
 
@@ -318,4 +358,180 @@ resource "helm_release" "istio_gateway" {
   version    = var.istio_version
 
   depends_on = [helm_release.istiod]
+}
+
+# ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
+# Provisions an Azure Application Gateway v2 and installs the AGIC Helm chart.
+# AGIC watches Kubernetes Ingress resources with ingressClassName: azure/application-gateway
+# and programs AGW routing rules dynamically. Auth uses Workload Identity (ARM auth).
+#
+# Prerequisites: agic_subnet_id must point to a dedicated /24+ subnet in the same VNet.
+# The AGW itself has a placeholder backend/listener/rule — AGIC overwrites these.
+# ignore_changes lifecycle prevents Terraform from reverting AGIC-managed state.
+
+# Public IP for the Application Gateway frontend.
+# dns_label sets a DNS name: <dns_label>.<region>.cloudapp.azure.com on the AGW public IP.
+# For AGIC, the DNS label is set directly on the Azure public IP resource (not via K8s annotation).
+resource "azurerm_public_ip" "agw" {
+  count               = var.ingress_controller == "agic" ? 1 : 0
+  name                = "${var.cluster_name}-agw-pip"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  domain_name_label   = var.dns_label != "" ? var.dns_label : null
+  tags                = merge(var.tags, { module = "aks", component = "agic" })
+}
+
+# Application Gateway v2 — AGIC manages all routing rules after initial creation.
+# The placeholder backend/listener/rule below satisfies the required AGW schema;
+# AGIC replaces them with actual LangSmith routing on first reconcile.
+resource "azurerm_application_gateway" "agw" {
+  count               = var.ingress_controller == "agic" ? 1 : 0
+  name                = "${var.cluster_name}-agw"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = merge(var.tags, { module = "aks", component = "agic" })
+
+  sku {
+    name     = var.agw_sku_tier
+    tier     = var.agw_sku_tier
+    capacity = 2
+  }
+
+  gateway_ip_configuration {
+    name      = "agw-ip-config"
+    subnet_id = var.agic_subnet_id
+  }
+
+  frontend_port {
+    name = "http"
+    port = 80
+  }
+
+  frontend_port {
+    name = "https"
+    port = 443
+  }
+
+  frontend_ip_configuration {
+    name                 = "agw-frontend-ip"
+    public_ip_address_id = azurerm_public_ip.agw[0].id
+  }
+
+  # Placeholder backend pool — AGIC replaces this with actual pod endpoints.
+  backend_address_pool {
+    name = "placeholder-backend"
+  }
+
+  backend_http_settings {
+    name                  = "placeholder-http-settings"
+    cookie_based_affinity = "Disabled"
+    port                  = 80
+    protocol              = "Http"
+    request_timeout       = 60
+  }
+
+  http_listener {
+    name                           = "placeholder-listener"
+    frontend_ip_configuration_name = "agw-frontend-ip"
+    frontend_port_name             = "http"
+    protocol                       = "Http"
+  }
+
+  request_routing_rule {
+    name                       = "placeholder-rule"
+    rule_type                  = "Basic"
+    http_listener_name         = "placeholder-listener"
+    backend_address_pool_name  = "placeholder-backend"
+    backend_http_settings_name = "placeholder-http-settings"
+    priority                   = 1
+  }
+
+  lifecycle {
+    # AGIC manages these resources after initial creation.
+    # Ignoring prevents Terraform from overwriting AGIC-programmed routing rules
+    # on every subsequent apply.
+    ignore_changes = [
+      backend_address_pool,
+      backend_http_settings,
+      frontend_port,
+      http_listener,
+      probe,
+      request_routing_rule,
+      redirect_configuration,
+      ssl_certificate,
+      url_path_map,
+      tags,
+    ]
+  }
+
+  depends_on = [azurerm_public_ip.agw]
+}
+
+# ── AGIC add-on identity role assignments ─────────────────────────────────────
+# The AKS ingress_application_gateway add-on creates its own managed identity
+# (ingressapplicationgateway-<cluster> in the MC_ resource group).
+# Azure does NOT automatically grant the required permissions — they must be
+# assigned explicitly. Three permissions are required:
+#   1. Reader on the resource group (discover AGW and related resources)
+#   2. Contributor on the Application Gateway (update routing rules)
+#   3. Network Contributor on the VNet (subnet join action for AGW subnet)
+#
+# The add-on identity object_id is exposed via:
+#   azurerm_kubernetes_cluster.main.ingress_application_gateway[0]
+#     .ingress_application_gateway_identity[0].object_id
+# Both agic_addon_principal_id and agic_vnet_id are defined in the locals block at the top of this file.
+
+resource "azurerm_role_assignment" "agic_rg_reader" {
+  count                = var.ingress_controller == "agic" && local.agic_addon_principal_id != null ? 1 : 0
+  scope                = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
+  role_definition_name = "Reader"
+  principal_id         = local.agic_addon_principal_id
+}
+
+resource "azurerm_role_assignment" "agic_agw_contributor" {
+  count                = var.ingress_controller == "agic" && local.agic_addon_principal_id != null ? 1 : 0
+  scope                = azurerm_application_gateway.agw[0].id
+  role_definition_name = "Contributor"
+  principal_id         = local.agic_addon_principal_id
+  depends_on           = [azurerm_application_gateway.agw]
+}
+
+resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
+  count                = var.ingress_controller == "agic" && local.agic_addon_principal_id != null && local.agic_vnet_id != "" ? 1 : 0
+  scope                = local.agic_vnet_id
+  role_definition_name = "Network Contributor"
+  principal_id         = local.agic_addon_principal_id
+}
+
+# ── Envoy Gateway ─────────────────────────────────────────────────────────────
+# CNCF Gateway API implementation. Uses Gateway/HTTPRoute resources (not classic Ingress).
+# Published via OCI registry — no separate Helm repository needed.
+# After install: create a GatewayClass + Gateway + HTTPRoute to expose LangSmith.
+# See: helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml
+
+resource "helm_release" "envoy_gateway" {
+  count     = var.ingress_controller == "envoy-gateway" ? 1 : 0
+  name      = "envoy-gateway"
+  namespace = "envoy-gateway-system"
+  chart     = "oci://docker.io/envoyproxy/gateway-helm"
+  version   = var.envoy_gateway_version
+
+  create_namespace = true
+
+  values = [
+    yamlencode({
+      deployment = {
+        envoyGateway = {
+          resources = {
+            requests = {
+              cpu    = "100m"
+              memory = "256Mi"
+            }
+          }
+        }
+      }
+    })
+  ]
 }

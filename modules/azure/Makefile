@@ -1,24 +1,35 @@
 # LangSmith Azure — Task Runner
 #
-# First time?           make setup-env → make preflight → make init → make apply
-# Pass 1 (infra):       make setup-env → make init → make plan → make apply
-# Pass 1.5 (access):    make kubeconfig → make k8s-secrets
-# Pass 2 (helm):        make init-values → make deploy
-# Full deploy:          make deploy-all
-# Where am I?           make status
+# First time?              make quickstart → make setup-env → make preflight → make init → make apply
+# Pass 1 (infra):          make setup-env → make init → make plan → make apply
+# Pass 1.5 (access):       make kubeconfig → make k8s-secrets
+# Pass 2 (helm):           make init-values → make deploy
+# Pass 2 (terraform helm): make init-app → make apply-app
+# Full deploy (helm):      make deploy-all
+# Full deploy (terraform): make deploy-all-tf
+# Manage secrets:          make keyvault
+# Where am I?              make status
 
-.PHONY: help setup-env preflight status status-quick \
+.PHONY: help quickstart setup-env preflight keyvault status status-quick \
         init plan apply destroy \
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
+        init-app plan-app apply-app destroy-app deploy-all-tf \
         clean
 
 INFRA_DIR := infra
 HELM_DIR  := helm
+APP_DIR   := app
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+
+quickstart: ## Interactive setup wizard — generates terraform.tfvars
+	$(INFRA_DIR)/scripts/quickstart.sh
+
+keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
+	$(INFRA_DIR)/scripts/manage-keyvault.sh
 
 status: ## Check deployment state and show what to run next
 	$(INFRA_DIR)/scripts/status.sh
@@ -92,6 +103,23 @@ deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
 
+# ── Pass 2: App (Terraform Helm) ──────────────────────────────────────────────
+
+init-app: ## Pull infra outputs → app/infra.auto.tfvars.json, then terraform init (app)
+	$(APP_DIR)/scripts/pull-infra-outputs.sh
+	terraform -chdir=$(APP_DIR) init -input=false
+
+plan-app: init-app ## terraform plan (app) — auto-pulls infra outputs first
+	terraform -chdir=$(APP_DIR) plan
+
+apply-app: ## terraform apply (app)
+	terraform -chdir=$(APP_DIR) apply
+
+destroy-app: ## terraform destroy (app)
+	terraform -chdir=$(APP_DIR) destroy
+
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
 deploy-all: apply kubeconfig k8s-secrets init-values deploy ## Full deploy: infra → kubeconfig → secrets → helm
+
+deploy-all-tf: apply init-values init-app apply-app ## Full Terraform deploy: infra apply → init-values → app init+apply

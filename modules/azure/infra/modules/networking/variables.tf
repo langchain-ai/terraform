@@ -72,3 +72,15 @@ variable "availability_zones" {
   description = "Availability zones to spread resources across. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone (lower cost)."
   default     = ["1"]
 }
+
+variable "enable_agic" {
+  type        = bool
+  description = "Create a dedicated subnet for AGIC (Application Gateway Ingress Controller). Required when ingress_controller = 'agic'."
+  default     = false
+}
+
+variable "agic_subnet_address_prefix" {
+  type        = list(string)
+  description = "CIDR prefix for the Application Gateway subnet. Must be /24 or larger (Azure AGW requirement). Must not overlap with other subnets."
+  default     = ["10.0.96.0/24"] # 256 IPs — min size for App Gateway v2
+}

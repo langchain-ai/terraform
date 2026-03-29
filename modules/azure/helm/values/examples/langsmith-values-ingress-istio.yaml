@@ -1,0 +1,54 @@
+# LangSmith Azure — Istio Ingress Values
+# ──────────────────────────────────────────────────────────────────────────────
+# Use this overlay when ingress_controller = "istio" or "istio-addon" in terraform.tfvars.
+#
+# Prerequisites:
+#   • terraform apply with ingress_controller = "istio" or "istio-addon"
+#   • make k8s-secrets
+#   • make init-values  (generates values-overrides.yaml with ingressClassName: istio)
+#   • make deploy       (creates IngressClass, syncs TLS secret, and for istio-addon:
+#                        creates Gateway + VirtualService)
+#
+# ── Mode: istio (self-managed Helm) ──────────────────────────────────────────
+#   Terraform installs: istio-base (CRDs) + istiod (control plane) + istio-ingressgateway
+#   Namespace: istio-system
+#   Service:   istio-ingressgateway (exposes Azure LB)
+#   LB label:  istio: ingressgateway
+#
+#   istiod meshConfig (set in Terraform):
+#     meshConfig.ingressControllerMode: STRICT
+#     meshConfig.ingressClass: istio
+#   Without STRICT mode istiod ignores Ingress resources (LDS push = 0 listeners).
+#
+#   make deploy also:
+#   1. Creates the "istio" IngressClass resource (required for istiod to generate listeners)
+#   2. Syncs langsmith-tls secret to istio-system namespace after cert issuance
+#      (istiod delivers TLS to the gateway via SDS — secret must be in gateway pod namespace)
+#
+# ── Mode: istio-addon (AKS managed Service Mesh) ─────────────────────────────
+#   AKS enables the managed Istio add-on (no Helm install)
+#   Namespace: aks-istio-ingress
+#   Service:   aks-istio-ingressgateway-external
+#   LB label:  istio: aks-istio-ingressgateway-external  ← different from self-managed!
+#
+#   ingressClassName: istio targets label istio: ingressgateway — wrong for the AKS gateway.
+#   make deploy creates explicit Gateway + VirtualService + syncs TLS to aks-istio-ingress.
+#   Helm ingress block is disabled (ingress.enabled: false set by make init-values).
+#
+# ── Hostname ──────────────────────────────────────────────────────────────────
+#   istio:       kubectl get svc istio-ingressgateway -n istio-system
+#   istio-addon: kubectl get svc aks-istio-ingressgateway-external -n aks-istio-ingress
+#   Use dns_label in terraform.tfvars — assigned automatically via service annotation.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# For istio (self-managed): standard Kubernetes Ingress with ingressClassName: istio
+# For istio-addon: make init-values sets ingress.enabled: false instead
+ingress:
+  enabled: true
+  ingressClassName: "istio"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  tls:
+    - secretName: langsmith-tls
+      hosts:
+        - "<HOSTNAME>"  # e.g. langsmith-prod.eastus.cloudapp.azure.com

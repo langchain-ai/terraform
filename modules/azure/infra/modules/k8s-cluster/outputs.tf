@@ -62,3 +62,18 @@ output "cert_manager_identity_principal_id" {
   description = "Principal ID of the cert-manager Managed Identity — granted DNS Zone Contributor by the dns module"
   value       = azurerm_user_assigned_identity.cert_manager.principal_id
 }
+
+output "agw_public_ip_address" {
+  description = "Public IP address of the Application Gateway (empty when ingress_controller != 'agic')"
+  value       = var.ingress_controller == "agic" ? azurerm_public_ip.agw[0].ip_address : ""
+}
+
+output "agw_public_ip_fqdn" {
+  description = "FQDN of the Application Gateway public IP (<dns-label>.<region>.cloudapp.azure.com). Empty when ingress_controller != 'agic' or no DNS label is set."
+  value       = var.ingress_controller == "agic" ? azurerm_public_ip.agw[0].fqdn : ""
+}
+
+output "agw_name" {
+  description = "Name of the Application Gateway resource (empty when ingress_controller != 'agic')"
+  value       = var.ingress_controller == "agic" ? azurerm_application_gateway.agw[0].name : ""
+}

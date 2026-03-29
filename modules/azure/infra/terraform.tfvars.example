@@ -74,23 +74,37 @@ additional_node_pools = {
 }
 
 # ── Ingress controller ────────────────────────────────────────────────────────
-# "nginx"       — NGINX ingress via Helm (standard, start here)
-# "istio-addon" — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
-# "istio"       — Istio via Helm (self-managed)
-# "none"        — skip (bring your own)
+# "nginx"         — NGINX ingress via Helm (standard, start here)
+# "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
+# "istio"         — Istio via Helm (self-managed)
+# "agic"          — Application Gateway Ingress Controller (enterprise Azure, native WAF)
+#                   Provisions App Gateway v2 + dedicated /24 subnet + AGIC Helm chart
+#                   Use agw_sku_tier = "WAF_v2" to enable WAF on the gateway
+# "envoy-gateway" — Envoy Gateway via Helm (Gateway API native, uses Gateway/HTTPRoute)
+# "none"          — skip (bring your own)
 ingress_controller = "nginx"
 
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
 # istio_addon_revision = "asm-1-22"
 
+# AGIC options — only used when ingress_controller = "agic"
+# agw_sku_tier            = "Standard_v2"   # or "WAF_v2" to enable WAF on the App Gateway
+# agic_subnet_address_prefix = ["10.0.96.0/24"]  # must not overlap other subnets
+
 # ── DNS + TLS ─────────────────────────────────────────────────────────────────
-# Option A: Azure Public IP DNS label + Let's Encrypt HTTP-01 (recommended)
-#   Free Azure subdomain — no custom domain or DNS zone needed.
-#   cert-manager issues and renews the cert automatically via HTTP-01 challenge.
-#   → https://<nginx_dns_label>.<location>.cloudapp.azure.com
+# Azure Public IP DNS label — works with nginx, istio, istio-addon, envoy-gateway.
+# Azure assigns <dns_label>.<location>.cloudapp.azure.com to the ingress LB
+# public IP via the service.beta.kubernetes.io/azure-dns-label-name annotation.
+# Free, no DNS zone needed, no custom domain required.
+# deploy.sh applies the annotation to the right LB service based on ingress_controller.
+# Note: not applicable to AGIC — use langsmith_domain with an A record, or use the
+# auto-assigned FQDN from: terraform output agw_public_ip_fqdn
 #
-nginx_dns_label        = "langsmith-prod"       # → langsmith-prod.eastus.cloudapp.azure.com
+# Option A: Azure Public IP DNS label + Let's Encrypt HTTP-01 (recommended for nginx/istio)
+#   → https://<dns_label>.<location>.cloudapp.azure.com
+#
+dns_label        = "langsmith-prod"       # → langsmith-prod.eastus.cloudapp.azure.com
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
 
@@ -100,15 +114,6 @@ letsencrypt_email      = "you@example.com"
 # create_dns_zone        = true
 # langsmith_domain       = "langsmith.example.com"
 # letsencrypt_email      = "you@example.com"
-
-# Option C: Azure Front Door (WAF + global CDN — enterprise only)
-#   1. terraform apply  → creates Front Door + endpoint
-#   2. Get NGINX LB IP after Pass 1.5 → set frontdoor_origin_hostname → apply
-#   3. terraform output frontdoor_endpoint_hostname → add CNAME at registrar
-#   4. terraform output frontdoor_validation_token  → add TXT _dnsauth record
-# create_frontdoor          = true
-# langsmith_domain          = "langsmith.example.com"
-# frontdoor_origin_hostname = ""
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 keyvault_purge_protection = false   # set true for production

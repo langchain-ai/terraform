@@ -1,0 +1,134 @@
+# LangSmith Azure — Envoy Gateway Values
+# ──────────────────────────────────────────────────────────────────────────────
+# Use this overlay when ingress_controller = "envoy-gateway" in terraform.tfvars.
+#
+# Prerequisites:
+#   • terraform apply with ingress_controller = "envoy-gateway"
+#     (installs Envoy Gateway Helm chart in envoy-gateway-system namespace)
+#   • Gateway API CRDs installed automatically by the Helm chart
+#   • make k8s-secrets
+#   • make init-values  (sets ingress.enabled: false)
+#   • make deploy       (creates GatewayClass + Gateway + HTTPRoute automatically)
+#
+# How it works:
+#   Envoy Gateway implements the Kubernetes Gateway API (GatewayClass → Gateway →
+#   HTTPRoute) — NOT classic Kubernetes Ingress. The LangSmith Helm chart ingress
+#   block is disabled. Traffic flows:
+#     Azure LB (envoy-gateway-system) → Envoy proxy → HTTPRoute → langsmith-frontend
+#
+#   make deploy creates all Gateway API resources automatically and sets the
+#   dns_label annotation on the Envoy Gateway LB service.
+#
+# GatewayClass:   langsmith-eg  (controller: gateway.envoyproxy.io/gatewayclass-controller)
+# Gateway:        langsmith/langsmith-gateway
+# HTTPRoute:      langsmith/langsmith
+# LB service:     envoy-gateway-system/envoy-langsmith-langsmith-gateway-<hash>
+#
+# TLS:
+#   cert-manager issues a Let's Encrypt cert via the gatewayHTTPRoute solver.
+#   This requires cert-manager v1.14+ with ExperimentalGatewayAPISupport=true.
+#   deploy.sh enables this feature gate automatically.
+#
+#   ClusterIssuer solver config (applied by deploy.sh):
+#     solvers:
+#     - http01:
+#         gatewayHTTPRoute:
+#           parentRefs:
+#           - name: langsmith-gateway
+#             namespace: langsmith
+#             kind: Gateway
+#
+# Hostname:
+#   Set dns_label = "langsmith-prod" in terraform.tfvars
+#   → langsmith-prod.<region>.cloudapp.azure.com
+#   The annotation is applied to the Envoy Gateway LB service (not the langsmith-frontend LB).
+#
+# Equivalent manual steps (what make deploy does automatically):
+#
+#   # 1. Enable cert-manager Gateway API support
+#   kubectl patch deployment cert-manager -n cert-manager --type='json' \
+#     -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-",
+#           "value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]'
+#
+#   # 2. Create GatewayClass
+#   kubectl apply -f - <<EOF
+#   apiVersion: gateway.networking.k8s.io/v1
+#   kind: GatewayClass
+#   metadata:
+#     name: langsmith-eg
+#   spec:
+#     controllerName: gateway.envoyproxy.io/gatewayclass-controller
+#   EOF
+#
+#   # 3. Create Gateway (cert-manager annotation triggers cert issuance)
+#   kubectl apply -f - <<EOF
+#   apiVersion: gateway.networking.k8s.io/v1
+#   kind: Gateway
+#   metadata:
+#     name: langsmith-gateway
+#     namespace: langsmith
+#     annotations:
+#       cert-manager.io/cluster-issuer: "letsencrypt-prod"
+#   spec:
+#     gatewayClassName: langsmith-eg
+#     listeners:
+#     - name: http
+#       protocol: HTTP
+#       port: 80
+#       allowedRoutes:
+#         namespaces:
+#           from: Same
+#     - name: https
+#       protocol: HTTPS
+#       port: 443
+#       hostname: "<HOSTNAME>"
+#       tls:
+#         mode: Terminate
+#         certificateRefs:
+#         - name: langsmith-tls
+#       allowedRoutes:
+#         namespaces:
+#           from: Same
+#   EOF
+#
+#   # 4. Create HTTPRoute
+#   kubectl apply -f - <<EOF
+#   apiVersion: gateway.networking.k8s.io/v1
+#   kind: HTTPRoute
+#   metadata:
+#     name: langsmith
+#     namespace: langsmith
+#   spec:
+#     parentRefs:
+#     - name: langsmith-gateway
+#       namespace: langsmith
+#     hostnames:
+#     - "<HOSTNAME>"
+#     rules:
+#     - matches:
+#       - path:
+#           type: PathPrefix
+#           value: /
+#       backendRefs:
+#       - name: langsmith-frontend
+#         port: 80
+#   EOF
+#
+#   # 5. Set DNS label on Envoy Gateway LB service
+#   EG_SVC=$(kubectl get svc -n envoy-gateway-system \
+#     -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
+#     -o jsonpath='{.items[0].metadata.name}')
+#   kubectl annotate svc "$EG_SVC" -n envoy-gateway-system \
+#     service.beta.kubernetes.io/azure-dns-label-name=<DNS_LABEL> --overwrite
+#
+#   # 6. Get LB IP
+#   kubectl get gateway langsmith-gateway -n langsmith \
+#     -o jsonpath='{.status.addresses[0].value}'
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Disable the chart-managed Ingress — Gateway API is used instead.
+# make deploy creates GatewayClass + Gateway + HTTPRoute automatically.
+ingress:
+  enabled: false
+istioGateway:
+  enabled: false

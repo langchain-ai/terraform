@@ -17,6 +17,7 @@ source "$SCRIPT_DIR/_common.sh"
 AZURE_DIR="$INFRA_DIR/.."
 HELM_DIR="$AZURE_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
+APP_DIR="$AZURE_DIR/app"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -380,16 +381,32 @@ else
     fi
   fi
 
-  # NGINX ingress IP
-  _ingress_ip=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || _ingress_ip=""
-  if [[ -n "$_ingress_ip" ]]; then
-    pass "NGINX ingress IP: ${_ingress_ip}"
-    if [[ -n "${_hostname:-}" && "$_hostname" != "$_ingress_ip" ]]; then
-      info "(Point your DNS A record for ${_hostname} to ${_ingress_ip})"
+  # Ingress LoadBalancer IP — check the right service per ingress_controller
+  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="nginx"
+  case "${_ingress_controller:-nginx}" in
+    nginx)
+      _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
+    istio-addon)
+      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress" ;;
+    istio)
+      _lb_svc="istio-ingressgateway"; _lb_ns="istio-system" ;;
+    envoy-gateway)
+      _lb_svc="envoy-langsmith-langsmith-gateway"; _lb_ns="langsmith" ;;
+    *)
+      _lb_svc=""; _lb_ns="" ;;
+  esac
+
+  if [[ -n "$_lb_svc" ]]; then
+    _ingress_ip=$(kubectl get svc "$_lb_svc" -n "$_lb_ns" \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || _ingress_ip=""
+    if [[ -n "$_ingress_ip" ]]; then
+      pass "Ingress IP (${_ingress_controller}): ${_ingress_ip}"
+      if [[ -n "${_hostname:-}" && "$_hostname" != "$_ingress_ip" ]]; then
+        info "(Point your DNS A record for ${_hostname} to ${_ingress_ip})"
+      fi
+    else
+      skip "Ingress IP (${_ingress_controller}) not yet assigned"
     fi
-  else
-    skip "NGINX ingress IP not yet assigned"
   fi
 
   # Ingress and TLS certificate
@@ -404,7 +421,7 @@ else
       fi
     done
   else
-    info "No certificate resources (Front Door TLS or no TLS configured)"
+    info "No certificate resources (TLS not configured or using existing secret)"
   fi
 
   # langsmith-config-secret key count
@@ -418,6 +435,37 @@ else
       set_next "make k8s-secrets"
     fi
   fi
+fi
+
+# ── 10. Terraform Helm App (alternative Pass 2 path) ─────────────────────────
+header "10. Terraform Helm App (alternative path)"
+
+if [[ -d "$APP_DIR" ]]; then
+  if [[ -f "$APP_DIR/infra.auto.tfvars.json" ]]; then
+    pass "infra.auto.tfvars.json exists (make init-app was run)"
+  else
+    skip "infra.auto.tfvars.json — not generated"
+    action "make init-app  (if using Terraform Helm path instead of scripts)"
+  fi
+
+  _app_output=""
+  if [[ -d "$APP_DIR/.terraform" ]]; then
+    _app_output=$(terraform -chdir="$APP_DIR" output -json 2>/dev/null) || _app_output=""
+  fi
+
+  if [[ -n "$_app_output" ]] && echo "$_app_output" | grep -q '"value"'; then
+    pass "app/ terraform — applied"
+    _app_chart=$(echo "$_app_output" | grep -A2 '"helm_chart_version"' \
+      | grep '"value"' | sed 's/.*"value":[[:space:]]*"\(.*\)".*/\1/') || _app_chart=""
+    [[ -n "$_app_chart" ]] && info "Chart version: ${_app_chart}"
+  elif [[ -d "$APP_DIR/.terraform" ]]; then
+    skip "app/ terraform — initialized but not applied"
+    action "make apply-app"
+  else
+    skip "app/ terraform — not initialized (using shell deploy path, or not started)"
+  fi
+else
+  skip "app/ directory not present"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

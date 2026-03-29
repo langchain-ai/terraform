@@ -78,11 +78,11 @@ ingress_controller = "nginx"
 
 #------------------------------------------------------------------------------
 # DNS + TLS — Public IP DNS label + Let's Encrypt HTTP-01
-#   → https://<nginx_dns_label>.<location>.cloudapp.azure.com
+#   Works with all ingress controllers (nginx, istio, istio-addon, envoy-gateway).
+#   → https://<dns_label>.<location>.cloudapp.azure.com
 #   For custom domain: swap to tls_certificate_source = "dns01" + langsmith_domain
-#   For WAF/CDN edge:  use create_frontdoor = true (see terraform.tfvars.example)
 #------------------------------------------------------------------------------
-nginx_dns_label        = "langsmith-prod"       # → langsmith-prod.eastus.cloudapp.azure.com
+dns_label        = "langsmith-prod"       # → langsmith-prod.eastus.cloudapp.azure.com
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
 
