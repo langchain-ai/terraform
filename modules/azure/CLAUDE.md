@@ -105,16 +105,15 @@ _tfvar_is_true "key"      # returns 0 if key = true or "true"
 ### `helm/scripts/init-values.sh`
 Reads `terraform.tfvars` and `terraform output`, writes `values-overrides.yaml` and copies/generates addon files. Hostname resolution priority:
 1. `langsmith_domain` (custom domain)
-2. `nginx_dns_label` → `<label>.<region>.cloudapp.azure.com`
-3. `frontdoor_endpoint_hostname` from terraform output
-4. Existing value in `values-overrides.yaml` (preserved on re-run)
-5. Interactive prompt
+2. `dns_label` → `<label>.<region>.cloudapp.azure.com` (works for all ingress controllers)
+3. Existing value in `values-overrides.yaml` (preserved on re-run)
+4. Interactive prompt
 
 For insights with `clickhouse_source = "in-cluster"`, generates a minimal file (`config.insights.enabled: true` only) instead of copying the external ClickHouse example. This is intentional — the external example sets `clickhouse.external.enabled: true` and `existingSecretName: langsmith-clickhouse`, which causes `CreateContainerConfigError` when the secret doesn't exist.
 
 ### `helm/scripts/deploy.sh`
 Does more than `helm upgrade`. Key non-obvious steps:
-- Annotates the NGINX LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` — without this, Azure never assigns the DNS label to the public IP and cert-manager's HTTP-01 challenge fails
+- Annotates the ingress LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` — targets the correct service based on `ingress_controller` (nginx/istio/istio-addon/envoy-gateway). Without this annotation, Azure never assigns the DNS label to the public IP and cert-manager's HTTP-01 challenge fails
 - Creates `letsencrypt-prod` ClusterIssuer if `tls_certificate_source = "letsencrypt"` — cannot be done in Terraform because `kubernetes_manifest` requires a live API server during `terraform plan`, which doesn't exist on a fresh deploy
 - Auto-rolls back a `pending-upgrade` Helm release state before proceeding
 - Annotates `langsmith-ksa` service account with Workload Identity client-id — this SA is used by operator-spawned agent deployment pods
@@ -131,7 +130,7 @@ postgres_source   = "in-cluster"    # "in-cluster" | "external"
 redis_source      = "in-cluster"    # "in-cluster" | "external"
 clickhouse_source = "in-cluster"    # "in-cluster" | "external" (in-cluster = dev/POC only)
 
-nginx_dns_label        = "langsmith-azonf"    # → langsmith-azonf.eastus.cloudapp.azure.com
+dns_label        = "langsmith-azonf"    # → langsmith-azonf.eastus.cloudapp.azure.com
 tls_certificate_source = "letsencrypt"        # "letsencrypt" | "dns01" | "none"
 letsencrypt_email      = "you@example.com"    # used in ClusterIssuer ACME config
 

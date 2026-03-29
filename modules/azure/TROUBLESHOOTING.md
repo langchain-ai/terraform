@@ -161,7 +161,7 @@ terraform apply
 
 ## Pass 2 — Application
 
-### `nginx_dns_label` subdomain not resolving — TLS cert stuck pending
+### `dns_label` subdomain not resolving — TLS cert stuck pending
 
 **Symptom:** After `make deploy`, `nslookup langsmith-demo.eastus.cloudapp.azure.com` returns NXDOMAIN. The cert-manager ACME challenge can't complete and the TLS certificate stays `READY: False`.
 
@@ -172,7 +172,7 @@ terraform apply
 **Fix — set the annotation manually:**
 ```bash
 kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
-  service.beta.kubernetes.io/azure-dns-label-name=<nginx_dns_label> \
+  service.beta.kubernetes.io/azure-dns-label-name=<dns_label> \
   --overwrite
 # e.g. --overwrite with value: langsmith-demo
 
@@ -189,7 +189,132 @@ kubectl delete certificate langsmith-tls -n langsmith
 ```bash
 kubectl get svc ingress-nginx-controller -n ingress-nginx \
   -o jsonpath='{.metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}'
-# Expected: langsmith-demo (or your nginx_dns_label value)
+# Expected: langsmith-demo (or your dns_label value)
+```
+
+---
+
+### `istio-addon` — port 80/443 timeout, TLS handshake reset, site unreachable
+
+**Symptom:** After `make deploy` with `ingress_controller = "istio-addon"`, the site is unreachable. Port 80 times out, port 443 resets the TLS handshake. Cert-manager ACME challenge stays `pending`.
+
+```bash
+curl https://langsmith-dz.eastus.cloudapp.azure.com/
+# curl: (35) Recv failure: Connection reset by peer
+
+kubectl get challenge -n langsmith
+# NAME                    STATE     DOMAIN                              AGE
+# langsmith-tls-1-xxx     pending   langsmith-dz.eastus.cloudapp.azure.com   10m
+```
+
+**Root cause — three compounding issues:**
+
+1. **Wrong gateway label.** Kubernetes Ingress with `ingressClassName: istio` targets pods with label `istio: ingressgateway`. The AKS managed external gateway uses label `istio: aks-istio-ingressgateway-external`. Istio never creates Envoy listeners → gateway pod has no routes → all traffic is dropped.
+
+2. **ClusterIssuer created with `class: nginx`.** The ACME HTTP-01 solver ingress gets class `nginx`, not `istio` → cert-manager solver is never routed through the istio gateway.
+
+3. **TLS secret in wrong namespace.** Istio SDS reads the `credentialName` secret from the **gateway pod namespace** (`aks-istio-ingress`), not the app namespace (`langsmith`). TLS handshake fails even after the cert is issued.
+
+**Fix — `make deploy` handles all three automatically** (current version):
+- Creates a `Gateway` resource targeting `istio: aks-istio-ingressgateway-external` on ports 80 and 443
+- Applies `ClusterIssuer` with `ingressClassName: istio`
+- Waits for cert-manager to issue the cert, then syncs `langsmith-tls` to `aks-istio-ingress`
+- Creates a `VirtualService` routing traffic to the LangSmith frontend
+
+**If you deployed manually before this fix, apply the resources directly:**
+
+```bash
+# 1. Create the Istio Gateway
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: langsmith
+spec:
+  selector:
+    istio: aks-istio-ingressgateway-external
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "langsmith-dz.eastus.cloudapp.azure.com"   # replace with your dns_label.region.cloudapp.azure.com
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: langsmith-tls
+    hosts:
+    - "langsmith-dz.eastus.cloudapp.azure.com"
+EOF
+
+# 2. Fix the ClusterIssuer (patch solver class from nginx → istio)
+kubectl patch clusterissuer letsencrypt-prod --type=json \
+  -p='[{"op":"replace","path":"/spec/acme/solvers/0/http01/ingress/ingressClassName","value":"istio"}]'
+# Then delete the stuck challenge to force retry:
+kubectl delete challenge -n langsmith --all
+
+# 3. Once the cert is issued, sync the secret to the gateway namespace
+kubectl get secret langsmith-tls -n langsmith -o json | \
+  python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata']['namespace'] = 'aks-istio-ingress'
+for k in ['resourceVersion','uid','creationTimestamp']:
+    s['metadata'].pop(k, None)
+s['metadata']['annotations'] = {}
+print(json.dumps(s))
+" | kubectl apply -f -
+
+# 4. Create the VirtualService
+kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: langsmith
+  namespace: langsmith
+spec:
+  hosts:
+  - "langsmith-dz.eastus.cloudapp.azure.com"
+  gateways:
+  - langsmith-gateway
+  http:
+  - match:
+    - uri:
+        prefix: "/"
+    route:
+    - destination:
+        host: langsmith-frontend.langsmith.svc.cluster.local
+        port:
+          number: 80
+EOF
+```
+
+**Verify gateway has listeners:**
+```bash
+# Gateway pod should show READY 1/1 and have Envoy listeners configured
+kubectl get pods -n aks-istio-ingress
+# aks-istio-ingressgateway-external-asm-1-27-xxx   1/1   Running
+
+# Confirm port 80 responds (should return 404 or redirect before VS is created)
+curl -o /dev/null -w "%{http_code}" http://langsmith-dz.eastus.cloudapp.azure.com/
+# 404 = gateway is working, routing not yet configured
+# 000 = gateway still has no listeners — check Gateway resource was applied
+
+# Confirm TLS secret exists in gateway namespace
+kubectl get secret langsmith-tls -n aks-istio-ingress
+```
+
+**Check gateway selector label:**
+```bash
+kubectl get svc aks-istio-ingressgateway-external -n aks-istio-ingress \
+  -o jsonpath='{.spec.selector}'
+# {"app":"aks-istio-ingressgateway-external","istio":"aks-istio-ingressgateway-external"}
+# The Gateway resource must use selector: istio: aks-istio-ingressgateway-external
 ```
 
 ---
@@ -224,7 +349,7 @@ spec:
     solvers:
     - http01:
         ingress:
-          class: nginx
+          ingressClassName: nginx   # replace with "istio" when ingress_controller = "istio-addon" or "istio"
 EOF
 
 # Verify it becomes Ready (takes ~20 seconds)
@@ -236,7 +361,7 @@ kubectl get clusterissuer letsencrypt-prod
 kubectl delete certificate langsmith-tls -n langsmith
 ```
 
-**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`. This is already the case in the current version of the scripts.
+**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`, with the correct `ingressClassName` for the active ingress controller. This is already the case in the current version of the scripts.
 
 ---
 
@@ -265,39 +390,6 @@ infra/scripts/_common.sh: No such file or directory
 | `infra/scripts/tf-run.sh` | Wrapper for `terraform init/plan/apply/destroy` |
 
 ---
-
-### Front Door returns 404 — UI not loading (Istio + Front Door)
-
-**Symptom:**
-```
-curl https://<fd-endpoint>.z02.azurefd.net/   →  HTTP 404 (Azure FD error page)
-curl -H "Host: <fd-endpoint>.z02.azurefd.net" http://<istio-lb-ip>/  →  HTTP 200 ✓
-```
-
-The LangSmith frontend loads when hitting the Istio LB directly with the correct Host header, but Front Door returns its own 404 error page.
-
-**Cause:** Front Door's `originHostHeader` defaults to the origin hostname (the Istio LB IP address). FD forwards requests to the cluster with `Host: <IP>` instead of `Host: <fd-endpoint>.z02.azurefd.net`. The Istio VirtualService only matches the FD endpoint hostname — an IP-based Host header matches nothing, so Istio returns 404.
-
-The Terraform `frontdoor` module fixes this automatically: `origin_host_header` is set to the FD endpoint hostname when no custom domain is configured. If you see this issue with an older version of the module, check the origin config:
-
-```bash
-az afd origin show \
-  --profile-name <fd-profile> \
-  --resource-group <rg> \
-  --origin-group-name <origin-group> \
-  --origin-name <origin> \
-  --query originHostHeader -o tsv
-# Should be: <fd-endpoint>.z02.azurefd.net (not the IP)
-```
-
-**Fix — update via Terraform:**
-The `modules/frontdoor/main.tf` origin block should have:
-```hcl
-origin_host_header = var.custom_domain != "" ? var.custom_domain : azurerm_cdn_frontdoor_endpoint.endpoint.host_name
-```
-Then run `terraform apply` — FD propagates the change within ~2 minutes.
-
-**Why this matters for Istio specifically:** NGINX Ingress uses `ingressClassName` and routes based on path — it ignores the Host header mismatch. Istio VirtualService routing is Host-header-exact — if the Host doesn't match, the request falls through to a 404. This issue only manifests with `ingress_controller = "istio-addon"`.
 
 ---
 
@@ -717,4 +809,181 @@ kubectl delete hpa langsmith-listener langsmith-host-backend -n langsmith 2>/dev
 kubectl scale deployment langsmith-listener -n langsmith --replicas=1
 kubectl scale deployment langsmith-host-backend -n langsmith --replicas=1
 make deploy   # locks in correct replica count from values files
+```
+
+---
+
+## AGIC (Application Gateway Ingress Controller)
+
+### AGIC pod CrashLoopBackOff — 403 on AGW GET
+
+**Symptom:** `ingress-appgw-deployment` in `kube-system` is CrashLoopBackOff. Logs show:
+
+```
+ErrorApplicationGatewayForbidden: does not have authorization to perform action
+Microsoft.Network/applicationGateways/read
+```
+
+**Cause:** AKS creates its own managed identity for the `ingress_application_gateway` add-on (named `ingressapplicationgateway-<cluster>` in the MC_ resource group). Azure does NOT automatically grant the required permissions.
+
+**Fix (Terraform — automated from v1+):**
+The `k8s-cluster` module now creates all three role assignments automatically using the add-on identity extracted from `azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id`.
+
+**Fix (manual — for existing clusters or debugging):**
+```bash
+# Get the add-on identity object_id
+AGIC_OID=$(az aks show -g <RG> -n <CLUSTER> \
+  --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
+
+# Get resource IDs
+RG_ID="/subscriptions/<sub>/resourceGroups/<RG>"
+AGW_ID=$(az network application-gateway show -g <RG> -n <AGW> --query id -o tsv)
+VNET_ID=$(az network vnet show -g <RG> -n <VNET> --query id -o tsv)
+
+# Assign all three roles
+az role assignment create --role Reader --scope "$RG_ID" --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
+az role assignment create --role Contributor --scope "$AGW_ID" --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
+az role assignment create --role "Network Contributor" --scope "$VNET_ID" --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
+
+# Restart AGIC pod to pick up new token
+kubectl rollout restart deployment/ingress-appgw-deployment -n kube-system
+```
+
+---
+
+### AGIC — `ApplicationGatewayInsufficientPermissionOnSubnet`
+
+**Symptom:** AGIC pod running but logs show:
+
+```
+Code="ApplicationGatewayInsufficientPermissionOnSubnet"
+Message="Client ... does not have permission on the Virtual Network resource
+.../subnets/...-subnet-agic to perform action
+Microsoft.Network/virtualNetworks/subnets/join/action"
+```
+
+**Cause:** The AGIC add-on identity is missing **Network Contributor on the VNet**. This is separate from the Contributor role on the AGW. Azure RBAC propagation can also take 5–10 minutes.
+
+**Fix:**
+```bash
+AGIC_OID=$(az aks show -g <RG> -n <CLUSTER> \
+  --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
+VNET_ID=$(az network vnet show -g <RG> -n <VNET> --query id -o tsv)
+
+az role assignment create --role "Network Contributor" --scope "$VNET_ID" \
+  --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
+
+# Wait ~5 min for propagation, then restart AGIC
+kubectl rollout restart deployment/ingress-appgw-deployment -n kube-system
+```
+
+---
+
+### AGIC — `SecretNotFound` for TLS secret, site returns connection timeout
+
+**Symptom:** `kubectl describe ingress langsmith-ingress -n langsmith` shows:
+
+```
+Warning  SecretNotFound  azure/application-gateway  Unable to find the secret
+associated to secretId: [langsmith/langsmith-tls]
+```
+
+Site returns connection timeout (no HTTP response).
+
+**Cause:** AGIC saw the Ingress resource before cert-manager had issued the TLS certificate. AGIC programmed the AGW backend but without the TLS cert.
+
+**Fix:** Touch the ingress annotation to trigger re-sync after the cert is ready:
+```bash
+# Verify cert is ready first
+kubectl get certificate langsmith-tls -n langsmith
+
+# Force AGIC re-sync
+kubectl annotate ingress langsmith-ingress -n langsmith touch="$(date +%s)" --overwrite
+```
+
+---
+
+### AGIC — `ingressClassName: azure/application-gateway` rejected by Kubernetes
+
+**Symptom:** `helm upgrade` fails with:
+
+```
+Ingress.networking.k8s.io "langsmith-ingress" is invalid:
+spec.ingressClassName: Invalid value: "azure/application-gateway":
+a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.'
+```
+
+**Cause:** The legacy annotation `kubernetes.io/ingress.class: azure/application-gateway` (with slash) is not a valid `ingressClassName`. The AKS add-on creates an `IngressClass` resource named `azure-application-gateway` (with hyphen).
+
+**Fix:** Use `ingressClassName: azure-application-gateway` (hyphen, not slash). `make init-values` sets this automatically.
+
+---
+
+## Istio (self-managed Helm)
+
+### Istio site returns connection refused / no routes (LDS resources:0)
+
+**Symptom:** Site returns connection refused or timeout. `pilot-agent request GET config_dump` shows `LDS: PUSH resources:0`. HTTP also fails.
+
+**Root causes (all three must be fixed):**
+
+1. `meshConfig.ingressControllerMode` not set — istiod defaults to `DEFAULT` which ignores `ingressClassName`. Must be `STRICT`.
+2. `istio` IngressClass resource missing — istiod won't generate listeners without it.
+3. `meshConfig.ingressClass` not set to `istio` — istiod won't match the Ingress resource.
+
+**Fix:** All three are automated — `meshConfig` is set in the istiod Helm release (Terraform), `deploy.sh` creates the IngressClass.
+
+**Manual fix:**
+```bash
+# Create IngressClass
+kubectl apply -f - <<'YAML'
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: istio
+spec:
+  controller: istio.io/ingress-controller
+YAML
+
+# Restart istiod to pick up mesh config
+kubectl rollout restart deployment/istiod -n istio-system
+```
+
+---
+
+### Istio HTTPS returns "no peer certificate available"
+
+**Symptom:** HTTP works (200), HTTPS fails. `openssl s_client` shows `no peer certificate available`.
+
+**Cause:** istiod reads the TLS secret via SDS (`kubernetes://langsmith-tls`). The secret must exist in `istio-system` (the gateway pod namespace). cert-manager issues it to the `langsmith` namespace — it is not copied automatically.
+
+**Fix:** `deploy.sh` syncs the secret post-deploy. Manual fix:
+```bash
+kubectl get secret langsmith-tls -n langsmith -o json | python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata']['namespace'] = 'istio-system'
+for k in ['resourceVersion','uid','creationTimestamp']:
+    s['metadata'].pop(k, None)
+s['metadata']['annotations'] = {}
+print(json.dumps(s))
+" | kubectl apply -f -
+```
+
+---
+
+### Istio — leftover CRDs from istio-addon block self-managed Helm install
+
+**Symptom:** `terraform apply` fails with:
+```
+CustomResourceDefinition "wasmplugins.extensions.istio.io" exists and cannot be imported
+into the current release: invalid ownership metadata
+```
+
+**Cause:** Switching from `istio-addon` to `istio` leaves AKS-managed Istio CRDs without Helm ownership annotations.
+
+**Fix:**
+```bash
+kubectl get crd | grep "istio.io" | awk '{print $1}' | xargs kubectl delete crd
+terraform apply
 ```

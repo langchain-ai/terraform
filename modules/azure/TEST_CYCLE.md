@@ -39,8 +39,8 @@ location                     = "eastus"
 aks_deletion_protection      = false   # required for clean terraform destroy after test
 postgres_deletion_protection = false   # required for clean terraform destroy after test
 keyvault_purge_protection    = false   # required for clean terraform destroy after test
-create_frontdoor             = true
-langsmith_domain             = "langsmith.example.com"
+dns_label              = "langsmith-test"
+tls_certificate_source       = "letsencrypt"
 letsencrypt_email            = "you@example.com"
 default_node_pool_min_count  = 3       # critical — autoscaler starts here; 1 causes pod pending
 default_node_pool_max_pods   = 60      # immutable — must be set before first apply
@@ -111,7 +111,6 @@ Review the plan. Expected resource categories:
 - Azure Key Vault + all application secrets
 - Azure DB for PostgreSQL Flexible Server + private endpoint
 - Azure Cache for Redis Premium + private endpoint
-- Azure Front Door Standard profile + endpoint + origin group
 - cert-manager, KEDA, NGINX ingress Helm releases
 - Kubernetes namespace `langsmith`, K8s ServiceAccount
 
@@ -202,7 +201,7 @@ Expected key outputs:
 ```
 aks_cluster_name       = "langsmith-aks-<identifier>"
 keyvault_name          = "langsmith-kv-<identifier>"
-langsmith_url          = "https://<nginx_dns_label>.eastus.cloudapp.azure.com"
+langsmith_url          = "https://<dns_label>.eastus.cloudapp.azure.com"
 resource_group_name    = "langsmith-rg-<identifier>"
 storage_account_name   = "langsmithblob<identifier>"
 ```
@@ -296,7 +295,6 @@ postgres_geo_redundant_backup        = true
 | Key Vault soft-delete conflict | `VaultAlreadyExists: A vault with the same name already exists in deleted state` | Purge the old vault: `az keyvault purge --name <name> --location eastus`. Or use `keyvault_name` in tfvars to pick a new name. |
 | cert-manager or KEDA Helm timeout | `context deadline exceeded` on k8s-bootstrap module | Uninstall the stuck release and re-apply: `helm uninstall cert-manager -n cert-manager` |
 | PostgreSQL provisioning takes >20 min | `apply` appears hung on postgres module | Normal for Azure DB for PostgreSQL — it can take 10–15 min. Wait for it to complete. |
-| Front Door origin not wired | `frontdoor_origin_hostname` is empty — Front Door routes to nothing | After Pass 1, get the NGINX LB IP: `kubectl get svc -n ingress-nginx`. Set `frontdoor_origin_hostname = "<IP>"` in tfvars, then `make apply` again. |
 | `secrets.auto.tfvars` not found | `terraform plan` fails: variables have no value | Run `make setup-env` first. The file is gitignored and must be generated locally. |
 | NGINX LB IP pending | `kubectl get svc -n ingress-nginx` shows `<pending>` for EXTERNAL-IP | Wait 1–3 min for Azure LB provisioning. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
 

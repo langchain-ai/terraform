@@ -55,6 +55,31 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 ---
 
+## Deployment Paths
+
+### Pass 2 — Two ways to deploy the Helm chart
+
+| Path | How | When to use |
+|------|-----|-------------|
+| **Helm path** | `make init-values && make deploy` | Default. Shell script, interactive, reads TF outputs dynamically. Best for first deploys and day-2 re-deploys. |
+| **Terraform path** | `make init-app && make apply-app` | Declarative. K8s secrets + langsmith-ksa SA + Helm release in Terraform state. Best for GitOps/CI pipelines. |
+
+The Terraform path uses the `app/` module. `make init-app` calls `app/scripts/pull-infra-outputs.sh` to read all infra outputs and write them into `app/infra.auto.tfvars.json`.
+
+### Ingress Options
+
+| Controller | Variable | DNS label support | Notes |
+|-----------|---------|------------------|-------|
+| `nginx` | `ingress_controller = "nginx"` | yes | Default. NGINX via Helm, standard Kubernetes Ingress. |
+| `istio-addon` | `ingress_controller = "istio-addon"` | yes | AKS managed Istio service mesh. Use `istio_addon_revision` to pin revision. |
+| `istio` | `ingress_controller = "istio"` | yes | Self-managed Istio via Helm. Full control over revision and config. |
+| `envoy-gateway` | `ingress_controller = "envoy-gateway"` | yes | Gateway API native. Uses `envoyproxy/gateway-helm`. |
+| `none` | `ingress_controller = "none"` | — | Bring your own ingress. |
+
+Azure Public IP DNS labels (`dns_label`) work with all controllers. `deploy.sh` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to the correct LoadBalancer service based on the chosen controller.
+
+---
+
 ## Deployment Topology
 
 ### Phase 1 — Light (all in-cluster)
@@ -157,53 +182,38 @@ Pass 2 — Application
 
 ---
 
-## Resource Sizing — Medium (External Postgres + Redis)
+## Resource Sizing
 
-Based on `helm/charts/langsmith/examples/medium_size.yaml`. Use with `values-overrides-external-dbs.yaml`.
+Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for the full resource tables — CPU requests/limits, memory requests/limits, replica counts, and HPA ranges for every component across all four profiles.
 
-### Application Pods
+| Profile | Use case | Set via |
+|---------|---------|---------|
+| `minimum` | Cost parking, CI smoke tests, single-user demos | `sizing_profile = "minimum"` in `terraform.tfvars` |
+| `dev` | Developer use, integration tests, POCs | `sizing_profile = "dev"` |
+| `production` | Any real traffic — multi-replica + HPA | `sizing_profile = "production"` _(recommended)_ |
+| `production-large` | ~50 users, ~1,000 traces/sec | `sizing_profile = "production-large"` |
 
-| Pod | CPU Request | CPU Limit | Memory Request | Memory Limit | HPA Min | HPA Max |
-|-----|-------------|-----------|----------------|--------------|---------|---------|
-| `langsmith-backend` | 1000m | 2000m | 2000Mi | 4Gi | 3 | 10 |
-| `langsmith-platform-backend` | 500m | 1000m | 1Gi | 2Gi | 1 | 10 |
-| `langsmith-frontend` | 500m | 1000m | 1Gi | 2Gi | 1 | 10 |
-| `langsmith-playground` | 500m | 1000m | 1Gi | 2Gi | 1 | 10 |
-| `langsmith-queue` | 1000m | 2000m | 2Gi | 4Gi | 3 | 10 |
-| `langsmith-ingest-queue` | 1000m | 2000m | 2Gi | 4Gi | — | — |
-| `langsmith-ace-backend` | 500m | 1000m | 1Gi | 2Gi | — | — |
+### AKS Node Pools
 
-### Data Services
+| Pool | VM Size | vCPU | RAM | Min | Max | Purpose |
+|------|---------|------|-----|-----|-----|---------|
+| default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
+| large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
 
-| Service | CPU Request | CPU Limit | Memory Request | Memory Limit | Storage |
-|---------|-------------|-----------|----------------|--------------|---------|
-| `langsmith-clickhouse` (in-cluster) | 3500m | 8000m | 15Gi | 32Gi | 500Gi PVC |
-| Azure DB for PostgreSQL | — | — | — | — | managed |
-| Azure Cache for Redis Premium | — | — | — | — | managed |
-
-### Minimum AKS Node Pool Sizing for Medium Config
-
-| Pool | VM Size | vCPU | RAM | Min | Max |
-|------|---------|------|-----|-----|-----|
-| default | Standard_DS4_v2 | 8 | 28Gi | 3 | 6 |
-| large | Standard_DS5_v2 | 16 | 56Gi | 1 | 3 |
-
-> ClickHouse alone requests 15Gi RAM — the `large` node pool (DS5_v2, 16 vCPU / 56Gi) is required to schedule it. The default pool handles all application pods.
+> ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 
 ---
 
 ## Optional Modules
 
-Four optional modules can be enabled by setting variables in `terraform.tfvars`. Each is a count-controlled module — 0 = disabled, 1 = enabled.
+Optional modules are count-controlled — 0 = disabled, 1 = enabled. Enable any combination; the core deployment (Passes 1–5) works without them.
 
-| Module | Variable to enable | Use case |
-|--------|-------------------|---------|
-| `waf` | `enable_waf = true` | Azure Application Gateway + WAF v2. Enterprise perimeter security, Web ACLs, bot protection. |
-| `diagnostics` | `enable_diagnostics = true` | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. Required for production observability and audit logging. |
-| `bastion` | `enable_bastion = true` | Azure Bastion (Standard tier). Secure browser-based SSH to node VMs without a public IP or jump box. |
-| `dns` | `enable_dns = true` | Azure DNS zone + A record. Use when you own a custom domain and want Azure to manage DNS. |
-
-These modules are independent — enable any combination. The core deployment (Passes 1–5) functions without any of them.
+| Module | Variable | Use case |
+|--------|---------|---------|
+| `waf` | `create_waf = true` | Azure WAF policy (OWASP 3.2 + bot protection). Attach to Application Gateway. |
+| `diagnostics` | `create_diagnostics = true` | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. Required for production observability. |
+| `bastion` | `create_bastion = true` | Azure Bastion (Standard tier). Secure browser-based SSH to node VMs without a public IP. |
+| `dns` | `create_dns_zone = true` | Azure DNS zone + A record. Required for DNS-01 cert issuance with a custom domain. |
 
 ---
 

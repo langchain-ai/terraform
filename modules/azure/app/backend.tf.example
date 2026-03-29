@@ -1,0 +1,8 @@
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "my-tf-state-rg"
+    storage_account_name = "mytfstatestorage"
+    container_name       = "tfstate"
+    key                  = "langsmith/azure/app/terraform.tfstate"
+  }
+}

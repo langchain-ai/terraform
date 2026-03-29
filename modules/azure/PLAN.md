@@ -1,268 +1,384 @@
-# LangSmith Azure — GCP/AWS Parity Plan
-# Updated 2026-03-23
+# LangSmith Azure — Parity + Ingress Expansion Plan
+# Updated 2026-03-28
 # Status: [ ] todo  [~] in progress  [x] done
 
 ## Goal
-Make Azure deployment workflow identical to GCP/AWS:
-- `make` from `terraform/azure/` drives the full 5-pass workflow
-- `init-values.sh` generates `helm/values/values-overrides.yaml` from terraform outputs
-- `deploy.sh` uses a values chain: base + overrides + sizing + addon overlays
-- `status.sh` provides 9-section health check
-- All scripts live in their correct homes (`infra/scripts/` vs `helm/scripts/`)
 
-## Target Workflow
-
-```
-make quickstart      # (future) interactive wizard → terraform.tfvars
-make setup-env       # prompts for secrets → secrets.auto.tfvars
-make preflight       # Azure credential + provider checks
-make init            # terraform init
-make plan            # terraform plan
-make apply           # terraform apply (Pass 1)
-make kubeconfig      # az aks get-credentials
-make k8s-secrets     # pull Key Vault → langsmith-config-secret
-make init-values     # TF outputs → helm/values/values-overrides.yaml
-make deploy          # helm upgrade --install (values chain, Pass 2–5 via tfvars flags)
-make status          # 9-section health check
-make status-quick    # skip slow K8s/Key Vault checks
-make deploy-all      # apply → kubeconfig → k8s-secrets → init-values → deploy
-```
-
-## 5-Pass Deployment
-
-| Pass | What | How |
-|------|------|-----|
-| 1 | AKS + Postgres + Redis + Blob + KV + cert-manager + KEDA + namespace + SA | `make apply` |
-| 1.5 | Cluster access + langsmith-config-secret | `make kubeconfig && make k8s-secrets` |
-| 2 | Core LangSmith (17 pods) | `make init-values && make deploy` |
-| 3 | + LangGraph Deployments | set `enable_deployments = true` → `make deploy` |
-| 4 | + Agent Builder | set `enable_agent_builder = true` → `make deploy` |
-| 5 | + Insights/Clio | set `enable_insights = true` → `make deploy` |
+1. **AWS parity** — bring Azure to the same operator experience as AWS: `quickstart` wizard, `manage-keyvault` secret manager, ESO-backed secret syncing, and the same make-command flow.
+2. **Ingress expansion** — support 5 ingress options: `nginx`, `istio`, `istio-addon`, `agic`, `envoy-gateway`, each with a clear DNS story.
+3. **DNS clarity** — document and implement each DNS path so an SA can pick the right one in 30 seconds.
 
 ---
 
-## Files to Create / Update
+## Current State vs Target State
 
-### [ ] Batch 1: Infra Scripts + Makefile
-
-- [ ] `infra/scripts/_common.sh` — shared helpers: `_parse_tfvar`, `_tfvar_is_true`, color/status helpers
-- [ ] `infra/scripts/status.sh` — 9-section health check (azure-adapted from GCP)
-- [ ] `infra/scripts/tf-run.sh` — CI-friendly terraform runner
-- [ ] Update `Makefile` — add `init-values`, `status-quick`, `deploy-all`, `setup-env` targets; fix `deploy` → `helm/scripts/deploy.sh`
-
-### [ ] Batch 2: Helm Scripts
-
-- [ ] `helm/scripts/deploy.sh` — values chain + pending-upgrade guard + WI annotation check
-- [ ] `helm/scripts/init-values.sh` — reads TF outputs, generates values-overrides.yaml; prompts for sizing + tier
-- [ ] `helm/scripts/preflight-check.sh` — tools check + cluster connectivity
-- [ ] `helm/scripts/get-kubeconfig.sh` — `az aks get-credentials` wrapper
-- [ ] `helm/scripts/uninstall.sh` — clean Helm uninstall
-
-### [ ] Batch 3: Helm Values
-
-- [ ] `helm/values/values.yaml` — Azure base: NGINX ingress, Azure Blob WI, external PG/Redis secrets, in-cluster CH, production sizing
-- [ ] `helm/values/values-overrides.yaml.example` — template filled by `init-values.sh`
-- [ ] `helm/values/examples/langsmith-values.yaml` — annotated reference
-- [ ] `helm/values/examples/langsmith-values-sizing-minimum.yaml`
-- [ ] `helm/values/examples/langsmith-values-sizing-dev.yaml`
-- [ ] `helm/values/examples/langsmith-values-sizing-production.yaml`
-- [ ] `helm/values/examples/langsmith-values-agent-deploys.yaml` — Pass 3
-- [ ] `helm/values/examples/langsmith-values-agent-builder.yaml` — Pass 4
-- [ ] `helm/values/examples/langsmith-values-insights.yaml` — Pass 5
-- [ ] `helm/values/examples/langsmith-values-polly.yaml`
-
-### [x] Batch 4: Documentation + tfvars
-
-- [x] `infra/terraform.tfvars.example` — add `sizing_profile`, `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly`
-- [x] Update `QUICK_REFERENCE.md` — 5-pass make-based guide (single namespace)
-- [x] Update `README.md` — structure section + Makefile reference
+| Feature | AWS | Azure (current) | Azure (target) |
+|---|---|---|---|
+| Interactive wizard | `make quickstart` | ✗ | `make quickstart` |
+| Secret manager UI | `make ssm` (6 subcommands) | ✗ | `make keyvault` (6 subcommands) |
+| Secret sync | ESO (hourly auto-sync) | `create-k8s-secrets.sh` (one-shot) | Keep script + ESO option |
+| Terraform Helm path | `make apply-app` ✅ | ✗ | `make apply-app` ✅ **done** |
+| Ingress options | ALB only | nginx, istio, istio-addon | + agic, envoy-gateway ✅ **done** |
+| Auto-DNS | ALB hostname | dns_label (Azure public IP DNS) | per-ingress auto-DNS ✅ **done** |
+| Custom domain TLS | ACM | Let's Encrypt / Front Door | unchanged + AGIC cert |
+| `make status` | 10-section | 9-section | 10-section (parity) |
+| Sizing profiles | 4 profiles + SIZING.md ✅ | 4 profiles + SIZING.md ✅ **done** | unchanged |
+| Addon flags | tfvars + init-values | tfvars + init-values | unchanged |
 
 ---
 
+## Ingress Options
 
+### Option 1: NGINX (default, recommended for most deployments)
 
-## Problem Statement
+**How it works:** `ingress-nginx` Helm chart creates a LoadBalancer service with a public Azure IP.
 
-The current 5-pass deployment model routes **every** pass through `terraform apply`, coupling
-application lifecycle to infrastructure lifecycle. Helm values are embedded in Terraform HCL as
-`yamlencode()` locals, `null_resource` bootstrap scripts are opaque and non-idempotent, and
-`setup-env.sh` is a 338-line monolith mixing secret management, deployment flags, and hostname
-detection. The `helm/scripts/` directory exists with well-designed scripts that are currently unused.
+**DNS:**
+- `dns_label = "myco-langsmith"` → auto-assigns `myco-langsmith.eastus.cloudapp.azure.com` (no DNS zone needed)
+- OR `langsmith_domain = "langsmith.example.com"` with your own CNAME to the IP
 
-## Target Architecture
+**TLS:**
+- `letsencrypt-http` — cert-manager HTTP-01 against the dns_label hostname
+- `letsencrypt-dns` — cert-manager DNS-01 (requires `create_dns_zone = true`)
+- `frontdoor` — Azure Front Door terminates TLS, forwards HTTP to nginx
+- `existing` — bring your own K8s TLS secret
+
+**Best for:** Standard deployments, no service mesh needed, simplest setup.
+
+---
+
+### Option 2: Istio (self-managed via Helm)
+
+**How it works:** Installs `istio/base`, `istio/istiod`, and `istio/gateway` via Helm. Creates an Istio IngressGateway LoadBalancer service. Requires Gateway API CRDs.
+
+**DNS:**
+- Public IP of the `istio-ingressgateway` service — no auto DNS label (unlike nginx)
+- Must set `langsmith_domain` and point it at the IP via A record
+- OR use Front Door in front
+
+**TLS:**
+- cert-manager with `Gateway` + `HTTPRoute` resources (Gateway API)
+- `frontdoor` — Front Door terminates TLS, forwards to Istio gateway
+
+**Best for:** Deployments that need mTLS between services, or existing Istio mesh.
+
+**Terraform:** `ingress_controller = "istio"`, `istio_version = "1.29.1"` (pinned)
+
+---
+
+### Option 3: Azure Managed Istio (AKS Istio Add-on)
+
+**How it works:** AKS `azureServiceMesh` add-on. Azure manages the Istio control plane (upgrades, HA). Installs an Istio IngressGateway external to the Helm chart. Requires Gateway API CRDs.
+
+**DNS:** Same as self-managed Istio — no auto DNS label.
+
+**TLS:** Same as self-managed Istio.
+
+**Best for:** Azure-managed control plane (SLA-backed), prefer not running Istio Helm yourself.
+
+**Terraform:** `ingress_controller = "istio-addon"`, `istio_addon_revision = "asm-1-27"`
+
+> **Note:** Revision must match an available AKS service mesh revision. Check: `az aks mesh get-upgrades -g <rg> -n <cluster>`
+
+---
+
+### Option 4: AGIC — Application Gateway Ingress Controller
+
+**How it works:** Creates an Azure Application Gateway (v2) and installs the AGIC Helm chart. AGIC watches Kubernetes Ingress resources and programs AGW rules directly. Requires a dedicated subnet.
+
+**DNS:**
+- Application Gateway gets a public IP with an FQDN: `{name}-pip.{region}.cloudapp.azure.com` (auto-assigned)
+- OR `langsmith_domain` pointing at the AGW public IP
+
+**TLS:**
+- AGW-native SSL: upload cert to Key Vault, AGW reads it via Managed Identity
+- cert-manager DNS-01 (HTTP-01 is not compatible with AGW in most configurations)
+- `frontdoor` — AGW can sit behind Front Door
+
+**WAF integration:** Application Gateway v2 has native WAF support — no separate WAF module needed when using AGIC.
+
+**Best for:** Enterprise Azure customers already running Application Gateway, want native WAF, align with Azure-native ingress patterns (similar to AWS ALB + LBC).
+
+**Terraform:** `ingress_controller = "agic"` ✅ implemented
+
+---
+
+### Option 5: Envoy Gateway
+
+**How it works:** CNCF Envoy Gateway (`envoyproxy/gateway-helm`) implements the Kubernetes Gateway API. Creates an Envoy proxy LoadBalancer. No relation to Istio — pure Envoy.
+
+**DNS:**
+- Public IP of the Envoy Gateway listener — no auto DNS label
+- Must set `langsmith_domain` and point CNAME/A record
+
+**TLS:**
+- cert-manager with Gateway API (`Gateway` + `HTTPRoute` resources)
+- `tls_certificate_source = "letsencrypt-http"` or `"letsencrypt-dns"`
+
+**Best for:** Gateway API-native deployments, Envoy ecosystem, avoiding Istio complexity.
+
+**Terraform:** `ingress_controller = "envoy-gateway"` ✅ implemented
+
+---
+
+## DNS Decision Guide
 
 ```
-Pass 1 — Infrastructure (Terraform only)
-  What:  VNet · AKS · Postgres · Redis · Blob · Key Vault
-         cert-manager · KEDA · namespace · ServiceAccount · K8s infra secrets
-  How:   source infra/setup-env.sh   (slim — infra vars only)
-         terraform apply
+Q: Do you have your own domain?
+  YES → set langsmith_domain = "langsmith.example.com"
+        Q: Which TLS?
+          cert-manager HTTP-01 → tls_certificate_source = "letsencrypt"
+          cert-manager DNS-01 (no public HTTP needed) → tls_certificate_source = "dns01"
+                                                         + create_dns_zone = true
+          Bring your cert → tls_certificate_source = "existing"
 
-Pass 1.5 — Cluster Access
-  How:   bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
+  NO (need auto hostname):
+    Set dns_label = "myco-langsmith"
+    → hostname: myco-langsmith.{region}.cloudapp.azure.com
+    → works for nginx, istio, istio-addon, envoy-gateway
+    → deploy.sh annotates the correct LB service automatically
+    → tls_certificate_source = "letsencrypt"  ← simplest path
 
-Pass 1.6 — TLS Cluster Issuers (if using Let's Encrypt)
-  How:   ACME_EMAIL=you@example.com bash helm/scripts/apply-cluster-issuers.sh
-
-Pass 2 — LangSmith (Helm)
-  What:  LangSmith application stack
-  How:   bash helm/scripts/generate-secrets.sh      # writes K8s secrets + values-overrides.yaml
-         bash helm/scripts/deploy.sh                # helm upgrade --install
-
-Pass 3 — LangGraph Deployments (Helm overlay)
-  How:   bash helm/scripts/deploy.sh --overlay overlays/deployments.yaml
-
-Pass 4 — Agent Builder (Helm overlay + bootstrap)
-  How:   bash helm/scripts/deploy.sh --overlay overlays/deployments.yaml \
-                                     --overlay overlays/agent-builder.yaml
-         bash helm/scripts/bootstrap-agent-builder.sh
-
-Pass 5 — Insights (Helm overlay + bootstrap)
-  How:   bash helm/scripts/deploy.sh --overlay overlays/deployments.yaml \
-                                     --overlay overlays/insights.yaml
-         bash helm/scripts/bootstrap-insights.sh
+    Using AGIC? → AGW auto-FQDN is assigned (less readable)
+                  → better to bring your own domain
 ```
 
-## Before vs After: Pass Structure
+---
 
-| | Before | After |
+## Implementation Tasks
+
+### Completed
+
+| Item | Status | Notes |
 |---|---|---|
-| Pass 1 | `source setup-env.sh; terraform apply` | `source setup-env.sh; terraform apply` (slimmer) |
-| Pass 2 | `source setup-env.sh --deploy; terraform apply` | `generate-secrets.sh; deploy.sh` |
-| Pass 3 | `source setup-env.sh --deploy --enable-deployments; terraform apply` | `deploy.sh --overlay overlays/deployments.yaml` |
-| Pass 4 | `source setup-env.sh --deploy --enable-deployments --enable-agent-builder; terraform apply` | `deploy.sh --overlay ...; bootstrap-agent-builder.sh` |
-| Pass 5 | `source setup-env.sh --deploy ... --enable-insights; terraform apply` | `deploy.sh --overlay ...; bootstrap-insights.sh` |
-
-## File Inventory
-
-### Created (New Files)
-
-| File | Purpose |
-|------|---------|
-| `helm/values/values-overrides-demo.yaml.example` | Template operators copy → `values-overrides.yaml` |
-| `helm/values/overlays/deployments.yaml` | Pass 3: LangGraph Platform overlay |
-| `helm/values/overlays/agent-builder.yaml` | Pass 4: Agent Builder overlay |
-| `helm/values/overlays/insights.yaml` | Pass 5: Insights overlay |
-| `kubectl/letsencrypt-issuers.yaml` | ClusterIssuer manifests (staging + prod) |
-| `kubectl/rbac-bootstrap.yaml` | Role + RoleBinding for agent/insights bootstrap |
-| `helm/scripts/apply-cluster-issuers.sh` | Wait for cert-manager CRD + apply ClusterIssuers |
-| `helm/scripts/bootstrap-agent-builder.sh` | Agent Builder bootstrap (extracted from Terraform null_resource) |
-| `helm/scripts/bootstrap-insights.sh` | Insights bootstrap (extracted from Terraform null_resource) |
-
-### Modified (Existing Files)
-
-| File | Change |
-|------|--------|
-| `infra/modules/k8s-bootstrap/main.tf` | **Remove**: `helm_release.langsmith`, all `null_resource`, RBAC Role/Binding, entire `locals {}` block. **Keep**: namespace, SA, quota, network policies, cert-manager, KEDA, K8s secrets |
-| `infra/modules/k8s-bootstrap/variables.tf` | Remove 20 app-deployment variables, keep 10 infra variables |
-| `infra/main.tf` | Remove app-deployment vars from `k8s_bootstrap` module call; update header comments |
-| `infra/variables.tf` | Remove `deploy_langsmith`, `langsmith_hostname`, `langsmith_admin_email`, `langsmith_version`, `tls_certificate_source`, `acme_email`, `blob_storage_account_key`, `enable_*` feature flags |
-| `helm/scripts/deploy.sh` | Add `--overlay` flag support for multiple value overlays |
-| `helm/scripts/generate-secrets.sh` | Expand: read from Key Vault + TF outputs, write all K8s secrets, populate `values-overrides.yaml` |
-| `infra/setup-env.sh` | Slim down: remove deploy flags, hostname detection, blob key fetch. Mark deprecated with pointer to new scripts |
-
-### Documentation Updated
-
-- `README.md` — New pass structure, new script commands
-- `QUICK_REFERENCE.md` — Updated step-by-step commands
-- `ARCHITECTURE.md` — Updated pass descriptions and component diagram
-
-## Terraform: What Moves Where
-
-### Removed from `k8s-bootstrap` → Moved to Scripts/YAML
-
-| Terraform Resource | Moved To |
-|-------------------|----------|
-| `helm_release.langsmith` | `helm/scripts/deploy.sh` + `helm/values/values-overrides.yaml` |
-| `null_resource.letsencrypt_issuers` | `helm/scripts/apply-cluster-issuers.sh` + `kubectl/letsencrypt-issuers.yaml` |
-| `null_resource.agent_builder_bootstrap` | `helm/scripts/bootstrap-agent-builder.sh` |
-| `null_resource.insights_bootstrap` | `helm/scripts/bootstrap-insights.sh` |
-| `kubernetes_role_v1.backend_bootstrap` | `kubectl/rbac-bootstrap.yaml` |
-| `kubernetes_role_binding_v1.backend_bootstrap` | `kubectl/rbac-bootstrap.yaml` |
-
-### Stays in Terraform (k8s-bootstrap)
-
-- `kubernetes_namespace_v1.langsmith` — namespace with Workload Identity labels
-- `kubernetes_service_account_v1.langsmith` — `langsmith-ksa` with managed identity annotation
-- `kubernetes_resource_quota_v1.langsmith` — namespace resource limits
-- `kubernetes_network_policy_v1.*` — default-deny + allow-from-ingress-nginx
-- `kubernetes_secret_v1.postgres` — connection URL (infrastructure dependency)
-- `kubernetes_secret_v1.redis` — connection URL (infrastructure dependency)
-- `kubernetes_secret_v1.license` — license key from Key Vault
-- `helm_release.cert_manager` — TLS automation infrastructure
-- `helm_release.keda` — autoscaling infrastructure
-
-## Migration: Existing Deployments
-
-If you have an existing Terraform state with the old Helm release and null_resources, you need to
-remove those resources from state before running `terraform apply` with the new code:
-
-```bash
-# Remove LangSmith Helm release from Terraform state (it stays deployed)
-terraform state rm module.k8s_bootstrap.helm_release.langsmith[0]
-
-# Remove null resources (they don't create real cloud resources)
-terraform state rm module.k8s_bootstrap.null_resource.letsencrypt_issuers[0]
-terraform state rm module.k8s_bootstrap.null_resource.agent_builder_bootstrap[0]
-terraform state rm module.k8s_bootstrap.null_resource.insights_bootstrap[0]
-
-# Remove RBAC resources (kept as kubectl/rbac-bootstrap.yaml)
-terraform state rm module.k8s_bootstrap.kubernetes_role_v1.backend_bootstrap[0]
-terraform state rm module.k8s_bootstrap.kubernetes_role_binding_v1.backend_bootstrap[0]
-```
-
-## Teardown Gotchas (learned in field)
-
-### `make clean` must run AFTER `make destroy` — not before
-
-Running `make clean` before `make destroy` wipes `terraform.tfstate`. Terraform then has no record of what it created and cannot destroy anything. You're left with live Azure resources you have to delete manually:
-
-```bash
-az group delete --name langsmith-rg-<identifier> --yes --no-wait
-```
-
-**Correct teardown order:**
-```bash
-make uninstall   # 1. remove Helm release (removes Azure Load Balancer)
-make destroy     # 2. terraform destroy (~10-15 min)
-make clean       # 3. remove local secrets and generated files
-```
-
-`clean.sh` now detects a non-empty tfstate and warns before proceeding.
-
-### Key Vault soft-delete — reusing the same identifier
-
-After `terraform destroy` (or `az group delete`), the Key Vault enters Azure's soft-delete state for **7 days**. If you re-deploy with the same `identifier`, Terraform will silently recover the old Key Vault — including any `purge_protection_enabled = true` setting it had. If `keyvault_purge_protection = false` is set in the new tfvars, the apply fails.
-
-**Fix — purge the soft-deleted KV immediately after destroy:**
-```bash
-az keyvault purge --name langsmith-kv-<identifier> --location <region>
-```
-
-Or use a different `identifier` for the fresh deploy.
+| `app/` Terraform Helm module | [x] done | `app/main.tf`, `variables.tf`, `locals.tf`, `outputs.tf`, `versions.tf`, `backend.tf.example`, `terraform.tfvars.example`, `scripts/pull-infra-outputs.sh` |
+| `make init-app` / `plan-app` / `apply-app` / `destroy-app` / `deploy-all-tf` | [x] done | Makefile updated |
+| SIZING.md for Azure | [x] done | `helm/values/examples/SIZING.md` — matches AWS sizing numbers |
+| Sizing YAML files updated to match SIZING.md | [x] done | `langsmith-values-sizing-dev.yaml`, `langsmith-values-sizing-minimum.yaml` updated |
+| README.md command glossary | [x] done | All 5 new targets documented |
+| QUICK_REFERENCE.md updated | [x] done | Terraform Helm path, Day-2 ops, Deployment Summary table |
+| docs/content/azure/quick-reference.md synced | [x] done | Mirrors QUICK_REFERENCE.md |
+| `quickstart.sh` + `make quickstart` | [x] done | `infra/scripts/quickstart.sh` — 10-section wizard, writes terraform.tfvars |
+| `manage-keyvault.sh` + `make keyvault` | [x] done | `infra/scripts/manage-keyvault.sh` — 6 subcommands: list/get/set/validate/diff/delete |
+| SA_WRITEUP.md for Azure | [x] done | `terraform/azure/SA_WRITEUP.md` — mirrors AWS SA_WRITEUP.md |
+| `status.sh` section 10 (Terraform Helm App) | [x] done | Added `APP_DIR`, section 10, fixed ingress IP check (all controllers), removed stale Front Door ref |
 
 ---
 
-## Implementation Phases
+### Phase 1: AWS Parity (no new infrastructure)
 
-### Phase 1: Create New File Structure (this PR)
-1. Create `helm/values/values-overrides-demo.yaml.example`
-2. Create `helm/values/overlays/*.yaml` (3 files)
-3. Create `kubectl/*.yaml` (2 files)
-4. Create new scripts in `helm/scripts/` (3 files)
+#### 1.1 `make quickstart` — Interactive setup wizard
 
-### Phase 2: Simplify Terraform
-5. Rework `infra/modules/k8s-bootstrap/main.tf`
-6. Rework `infra/modules/k8s-bootstrap/variables.tf`
-7. Update `infra/main.tf` module call
-8. Update `infra/variables.tf`
+**File:** `infra/scripts/quickstart.sh`
 
-### Phase 3: Update Existing Scripts
-9. Expand `helm/scripts/generate-secrets.sh`
-10. Update `helm/scripts/deploy.sh` (overlay support)
-11. Slim down `infra/setup-env.sh`
+Mirrors `aws/infra/scripts/quickstart.sh`. Prompts for:
+- `identifier`, `environment`, `location`, `subscription_id`
+- `ingress_controller` (choice menu: nginx / istio / istio-addon / agic / envoy-gateway)
+- TLS/DNS path (based on ingress choice)
+- `dns_label` (if nginx selected)
+- `langsmith_domain` (if custom domain)
+- `tls_certificate_source`
+- `letsencrypt_email` (if letsencrypt selected)
+- `create_frontdoor` (optional)
+- Postgres/Redis/ClickHouse sources
+- Node pool sizing (vm_size, min/max_count)
+- Sizing profile
+- Addons (deployments, agent_builder, insights, polly)
+- `keyvault_purge_protection` (default false for dev)
+- `create_diagnostics`
+
+Writes `infra/terraform.tfvars`.
+
+**Makefile target:**
+```makefile
+quickstart: ## Interactive setup wizard — generates terraform.tfvars
+    $(INFRA_DIR)/scripts/quickstart.sh
+```
+
+---
+
+#### 1.2 `make keyvault` — Key Vault secret manager
+
+**File:** `infra/scripts/manage-keyvault.sh`
+
+Mirrors `aws/infra/scripts/manage-ssm.sh` but uses `az keyvault secret` commands.
+
+**Subcommands:**
+
+| Subcommand | What it does |
+|---|---|
+| `list` | `az keyvault secret list` — shows all secrets with last-updated timestamps |
+| `get <key>` | `az keyvault secret show --name <key>` — decrypts and prints value |
+| `set <key> <value>` | `az keyvault secret set` — validates format (admin password symbol check), warns on stable secrets |
+| `validate` | Checks all required secrets exist and are non-empty |
+| `diff` | Compares Key Vault vs `langsmith-config-secret` K8s Secret — shows missing/mismatched keys |
+| `delete <key>` | Soft-deletes (double confirm for stable secrets) |
+
+**Required secrets:**
+- `postgres-password`
+- `langsmith-license-key`
+- `langsmith-admin-password`
+- `langsmith-api-key-salt` *(stable — warn on change)*
+- `langsmith-jwt-secret` *(stable — warn on change)*
+
+**Optional secrets:**
+- `deployments-encryption-key`
+- `agent-builder-encryption-key`
+- `insights-encryption-key`
+- `polly-encryption-key`
+
+**Makefile target:**
+```makefile
+keyvault: ## Interactive Key Vault secret manager
+    $(INFRA_DIR)/scripts/manage-keyvault.sh
+```
+
+**Sync command after updating:**
+```bash
+make k8s-secrets   # re-runs create-k8s-secrets.sh to sync KV → K8s secret
+```
+
+---
+
+#### ~~1.3 `make status` — Add 10th section (Terraform Helm App)~~ [x] done
+
+Section 10 added. Also fixed: ingress LB IP check now dispatches per `ingress_controller` (nginx/istio-addon/istio/envoy-gateway), removed stale Front Door TLS reference.
+
+---
+
+### Phase 2: Ingress Expansion [x] done
+
+#### 2.1 Add `agic` ingress option [x] done
+
+**Completed:**
+- `infra/variables.tf` — `"agic"` added to validation; `agic_subnet_address_prefix`, `agw_sku_tier` variables added
+- `infra/modules/networking/variables.tf` + `main.tf` + `outputs.tf` — `enable_agic` flag, `azurerm_subnet.subnet_agic`, `subnet_agic_id` output
+- `infra/modules/k8s-cluster/variables.tf` — `subscription_id`, `agic_subnet_id`, `agw_sku_tier` variables added
+- `infra/modules/k8s-cluster/main.tf` — App Gateway v2 + public IP + AGIC managed identity + role assignments (Contributor on AGW, Reader on RG) + federated credential + AGIC Helm chart (Workload Identity ARM auth)
+- `infra/modules/k8s-cluster/outputs.tf` — `agw_public_ip_address`, `agw_public_ip_fqdn`, `agw_name`
+- `infra/main.tf` — `enable_agic`/`agic_subnet_address_prefix` wired to vnet; `agic_subnet_id` from vnet → aks; `subscription_id`, `agw_sku_tier`, `envoy_gateway_version` passed to aks
+- `infra/outputs.tf` — `agw_public_ip_fqdn`, `agw_name` outputs; `langsmith_url` includes AGIC FQDN branch
+- `helm/values/examples/langsmith-values-ingress-agic.yaml` — AGIC annotations + cert-manager TLS example
+- `init-values.sh` — `agic) _ingress_class="azure/application-gateway"` case; AGW FQDN hostname detection from `terraform output agw_public_ip_fqdn`
+
+---
+
+#### 2.2 Add `envoy-gateway` ingress option [x] done
+
+**Completed:**
+- `infra/variables.tf` — `"envoy-gateway"` added to validation; `envoy_gateway_version` variable added
+- `infra/modules/k8s-cluster/variables.tf` — `envoy_gateway_version` variable
+- `infra/modules/k8s-cluster/main.tf` — `helm_release.envoy_gateway` (OCI chart `oci://docker.io/envoyproxy/gateway-helm`, namespace `envoy-gateway-system`)
+- `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` — Gateway API (GatewayClass + Gateway + HTTPRoute) instructions + `ingress.enabled: false`
+
+---
+
+#### 2.3 Confirm existing `istio` and `istio-addon` options [x] done
+
+- `helm/values/examples/langsmith-values-ingress-istio.yaml` — Istio ingressClassName reference values with cert-manager TLS
+
+---
+
+### Phase 3: DNS/TLS Expansion
+
+#### 3.1 Per-ingress DNS auto-detection in `init-values.sh`
+
+Current `init-values.sh` generates the hostname from: `langsmith_domain` → `dns_label` (works for all ingress types) → existing → prompt. **Front Door removed.**
+
+Need to extend for AGIC:
+
+```
+hostname priority (current, all ingress types):
+  1. langsmith_domain (always wins)
+  2. dns_label.{region}.cloudapp.azure.com (nginx/istio/istio-addon/envoy-gateway)
+  3. agw auto-FQDN from terraform output (if ingress = agic) ← TODO
+  4. existing hostname in overrides file
+  5. prompt user
+```
+
+New terraform output needed: `agw_public_ip_fqdn` (from Application Gateway public IP resource).
+
+#### 3.2 New `tls_certificate_source` values
+
+Current: `none`, `letsencrypt`, `existing`
+
+Proposed expanded values:
+- `none` — HTTP only
+- `letsencrypt` — cert-manager HTTP-01 (default)
+- `dns01` — cert-manager DNS-01 (requires Azure DNS zone)
+- `existing` — bring your own K8s TLS secret
+- `agw-cert` — Application Gateway native Key Vault cert (only valid for `ingress_controller = agic`)
+
+**Note:** Keep `letsencrypt` as alias for `letsencrypt-http` for backward compatibility.
+
+**Validation update:**
+```hcl
+validation {
+  condition = contains(["none", "letsencrypt", "letsencrypt-http", "letsencrypt-dns",
+                        "frontdoor", "existing", "agw-cert"], var.tls_certificate_source)
+  ...
+}
+```
+
+---
 
 ### Phase 4: Documentation
-12. Update `README.md`
-13. Update `QUICK_REFERENCE.md`
-14. Update `ARCHITECTURE.md`
+
+- [ ] Update `README.md` — Command Glossary section (mirror AWS README style)
+- [ ] Update `QUICK_REFERENCE.md` — Add ingress selection table
+- [ ] Update `ARCHITECTURE.md` — Add ingress topology diagrams for each option
+- [ ] Add `helm/values/examples/langsmith-values-ingress-agic.yaml`
+- [ ] Add `helm/values/examples/langsmith-values-ingress-istio.yaml`
+- [ ] Add `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml`
+
+---
+
+## Priority Order
+
+| Priority | Task | Effort | Value |
+|---|---|---|---|
+| **P1** | `manage-keyvault.sh` + `make keyvault` | M | High — missing parity gap SAs hit immediately |
+| **P1** | `quickstart.sh` + `make quickstart` | L | High — removes manual tfvars editing |
+| **P2** | AGIC ingress option | L | High — Azure-native ingress (analogous to AWS ALB+LBC) |
+| **P2** | Envoy Gateway ingress option | M | Medium — modern Gateway API path |
+| **P2** | Extend `init-values.sh` for Istio/AGIC/Envoy hostname detection | S | High |
+| **P3** | Expand `tls_certificate_source` values | S | Medium |
+| **P3** | status.sh section 10 | S | Low |
+| **P3** | README Command Glossary | S | Medium |
+
+---
+
+## Secret Flow Comparison (AWS vs Azure)
+
+| Step | AWS | Azure |
+|---|---|---|
+| First run | `source setup-env.sh` → prompts → stores in SSM | `source setup-env.sh` → prompts → stores in Key Vault via Terraform |
+| Subsequent runs | `source setup-env.sh` → reads from SSM silently | `source setup-env.sh` → reads from Key Vault silently |
+| K8s sync | ESO polls SSM every hour automatically | `make k8s-secrets` runs `create-k8s-secrets.sh` (manual) |
+| Secret management | `make ssm` → `manage-ssm.sh` | `make keyvault` → `manage-keyvault.sh` *(to build)* |
+| Rotation workflow | `make ssm set <key>` → ESO auto-syncs within 1h | `make keyvault set <key>` → `make k8s-secrets` |
+
+**Note on ESO for Azure:** ESO can also be used on Azure (it supports Azure Key Vault as a provider). If ESO is already installed by the k8s-bootstrap module, we could add a `ClusterSecretStore` backed by Key Vault and an `ExternalSecret`, eliminating the need for `create-k8s-secrets.sh`. This is a future upgrade path — the current `create-k8s-secrets.sh` approach works reliably and is simpler to debug.
+
+---
+
+## Ingress Compatibility Matrix
+
+| Ingress | TLS: none | TLS: letsencrypt-http | TLS: letsencrypt-dns | TLS: frontdoor | TLS: existing | TLS: agw-cert |
+|---|---|---|---|---|---|---|
+| `nginx` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| `istio` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| `istio-addon` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+| `agic` | ✓ | ✗* | ✓ | ✓ | ✓ | ✓ |
+| `envoy-gateway` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ |
+
+*AGIC + HTTP-01: Application Gateway sits in front of nginx and rewrites paths, breaking the ACME challenge endpoint. Use DNS-01 instead.
+
+---
+
+## Known Gaps Not in This Plan
+
+- **Multi-dataplane** ingress (multiple listeners per namespace) — out of scope for this plan, tracked in use-cases/
+- **Private AKS with AGIC** — AGIC in private cluster mode requires AKS-AGIC addon (not Helm chart). Different implementation path.
+- **Azure DNS auto-delegation** for DNS-01 — requires Azure DNS zone ownership. Out of scope; document as prerequisite.
+- **IPv6** — not planned for any ingress option.

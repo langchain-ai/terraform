@@ -1,6 +1,6 @@
 # LangSmith Azure — Light Deploy (All In-Cluster DBs)
 
-> **Tested and verified: 2026-03-24** — chart 0.13.29, AKS 1.32.11, eastus, all in-cluster DBs, NGINX + Let's Encrypt HTTP-01 TLS (`nginx_dns_label`), Azure Public IP DNS label. All 13 pods Running/Completed. URL: `https://langsmith-azngx.eastus.cloudapp.azure.com`
+> **Tested and verified: 2026-03-24** — chart 0.13.29, AKS 1.32.11, eastus, all in-cluster DBs, NGINX + Let's Encrypt HTTP-01 TLS (`dns_label`), Azure Public IP DNS label. All 13 pods Running/Completed. URL: `https://langsmith-azngx.eastus.cloudapp.azure.com`
 
 Full copy-paste guide for deploying LangSmith with **all databases running in-cluster** (no Azure DB for PostgreSQL, no Azure Cache for Redis, no external ClickHouse).
 
@@ -22,7 +22,7 @@ Full copy-paste guide for deploying LangSmith with **all databases running in-cl
 | ClickHouse | In-cluster pod | `langsmith-clickhouse-0` StatefulSet — dev/POC only |
 | Blob Storage | Azure Blob | Always external — payloads must not go into ClickHouse |
 | TLS | cert-manager + Let's Encrypt | HTTP-01 challenge via NGINX ingress — free, auto-renewing cert |
-| Hostname | `<nginx_dns_label>.<region>.cloudapp.azure.com` | Free Azure subdomain. Set `nginx_dns_label` in terraform.tfvars — no registrar needed |
+| Hostname | `<dns_label>.<region>.cloudapp.azure.com` | Free Azure subdomain. Set `dns_label` in terraform.tfvars — no registrar needed |
 
 **Total Azure cost:** AKS cluster + 1–3 Standard_DS4_v2 nodes (~$0.30/hr each) + Blob Storage (negligible) + Key Vault (negligible). All in-cluster DBs eliminate Azure DB for PostgreSQL (~$150/mo) and Azure Cache for Redis (~$200/mo).
 
@@ -76,7 +76,7 @@ Internet (HTTPS 443)
    │
    ▼
 Azure Public IP DNS label   (e.g. langsmith-azngx.eastus.cloudapp.azure.com → 20.x.x.x)
-   │  Set automatically when nginx_dns_label is configured — no registrar needed
+   │  Set automatically when dns_label is configured — no registrar needed
    ▼
 Azure Load Balancer  (public IP provisioned by AKS for NGINX)
    │
@@ -106,7 +106,7 @@ Azure assigns a free DNS label (`<label>.<region>.cloudapp.azure.com`) to any pu
 - A stable hostname that stays the same even if the IP changes (Azure updates the A record)
 - Compatibility with Let's Encrypt HTTP-01 challenge (cert-manager handles everything)
 
-The DNS label is set on the NGINX LoadBalancer service automatically during `make deploy`. The label format is `<nginx_dns_label>.<location>.cloudapp.azure.com`.
+The DNS label is set on the NGINX LoadBalancer service automatically during `make deploy`. The label format is `<dns_label>.<location>.cloudapp.azure.com`.
 
 ### Why Workload Identity for blob storage?
 The LangSmith backend pods write trace payloads to Azure Blob Storage using Azure Workload Identity instead of a static storage account key. Terraform creates a Managed Identity, assigns it `Storage Blob Data Contributor` on the storage account, and federates it to the `langsmith-ksa` Kubernetes Service Account via an OIDC trust relationship. The pods annotate themselves with the MI client ID — the AKS OIDC issuer exchanges the pod's token for a short-lived Azure token. No secrets to rotate, no credentials in the cluster.
@@ -179,10 +179,10 @@ keyvault_purge_protection = false
 
 # ── Ingress & TLS ──────────────────────────────────────────────────────────────
 # NGINX ingress + Let's Encrypt HTTP-01 (recommended for demos — no custom domain needed).
-# nginx_dns_label creates a free Azure subdomain: <label>.<region>.cloudapp.azure.com
+# dns_label creates a free Azure subdomain: <label>.<region>.cloudapp.azure.com
 # cert-manager issues and renews the TLS cert automatically via HTTP-01 ACME challenge.
 ingress_controller     = "nginx"
-nginx_dns_label        = "langsmith-demo"    # FILL IN: → langsmith-demo.eastus.cloudapp.azure.com
+dns_label        = "langsmith-demo"    # FILL IN: → langsmith-demo.eastus.cloudapp.azure.com
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"   # FILL IN: for Let's Encrypt notifications
 
@@ -270,7 +270,7 @@ keyvault_name                            = "langsmith-kv-demo"
 keyvault_uri                             = "https://langsmith-kv-demo.vault.azure.net/"
 langsmith_admin_email                    = "you@example.com"
 langsmith_namespace                      = "langsmith"
-langsmith_url                            = "No domain configured — set var.langsmith_domain or var.create_frontdoor = true"
+langsmith_url                            = "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
 resource_group_name                      = "langsmith-rg-demo"
 storage_account_name                     = "langsmithblobdemo"
 storage_container_name                   = "langsmithblobdemo-container"
@@ -339,7 +339,7 @@ kubectl get pods -n ingress-nginx
 
 ### DNS label assignment
 
-The `service.beta.kubernetes.io/azure-dns-label-name` annotation is set on the NGINX LoadBalancer service automatically during `make deploy` (Pass 2). You do not need to set it manually. Once set, Azure assigns the `<nginx_dns_label>.<region>.cloudapp.azure.com` subdomain to the public IP within 1–2 minutes.
+The `service.beta.kubernetes.io/azure-dns-label-name` annotation is set on the NGINX LoadBalancer service automatically during `make deploy` (Pass 2). You do not need to set it manually. Once set, Azure assigns the `<dns_label>.<region>.cloudapp.azure.com` subdomain to the public IP within 1–2 minutes.
 
 ---
 
@@ -519,7 +519,7 @@ kubectl get pods -n langsmith
 # langsmith-queue-xxxxx                         1/1     Running     0
 # langsmith-redis-0                             1/1     Running     0
 
-# Ingress — expect host = <nginx_dns_label>.<region>.cloudapp.azure.com
+# Ingress — expect host = <dns_label>.<region>.cloudapp.azure.com
 kubectl get ingress -n langsmith
 # NAME                CLASS   HOSTS                                           ADDRESS         PORTS
 # langsmith-ingress   nginx   langsmith-demo.eastus.cloudapp.azure.com        52.x.x.x        80, 443
@@ -540,7 +540,7 @@ kubectl get certificate -n langsmith
 
 **Accessing LangSmith:**
 ```
-URL:      https://<nginx_dns_label>.<region>.cloudapp.azure.com
+URL:      https://<dns_label>.<region>.cloudapp.azure.com
 Login:    the initialOrgAdminEmail you set in setup-env.sh
 Password: az keyvault secret show --vault-name langsmith-kv<identifier> \
             --name langsmith-admin-password --query value -o tsv
@@ -636,7 +636,7 @@ kubectl config delete-user clusterUser_langsmith-rg<identifier>_langsmith-aks<id
 
 ## Verified Working Output (2026-03-24)
 
-Deployment: identifier `-azngx`, chart 0.13.29, AKS 1.32.11, eastus, Standard_DS4_v2 × 3 nodes (autoscaled), `nginx_dns_label = "langsmith-azngx"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
+Deployment: identifier `-azngx`, chart 0.13.29, AKS 1.32.11, eastus, Standard_DS4_v2 × 3 nodes (autoscaled), `dns_label = "langsmith-azngx"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
 
 **Apply output:**
 ```
