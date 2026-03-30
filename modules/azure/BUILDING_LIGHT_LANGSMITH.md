@@ -115,18 +115,32 @@ The LangSmith backend pods write trace payloads to Azure Blob Storage using Azur
 
 ## Pass 1 — Infrastructure (Terraform)
 
-All Terraform commands run from `terraform/azure/infra/`.
+All `make` commands run from `terraform/azure/`.
 
 ### 1a — Configure terraform.tfvars
 
-Copy the example and fill in your values. The light deploy uses a minimal set of variables — most optional modules are disabled.
+**Option A — wizard (recommended):**
 
 ```bash
-cd terraform/azure/infra
-cp terraform.tfvars.example terraform.tfvars
+cd terraform/azure
+make quickstart
 ```
 
-**Full `terraform.tfvars` for light deploy — copy this exactly, fill in the two required fields:**
+The wizard asks 10 questions and writes `infra/terraform.tfvars`. When prompted, choose:
+- Profile: **Dev / POC**
+- Services: **In-cluster** for PostgreSQL, Redis, and ClickHouse
+- Ingress: **nginx**
+- TLS: **Let's Encrypt** with a DNS label
+- Sizing: **minimum**
+
+**Option B — copy and edit the example directly:**
+
+```bash
+cd terraform/azure
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+```
+
+**Full `terraform.tfvars` for light deploy — copy this exactly, fill in the four `FILL IN` fields:**
 
 ```hcl
 # ── Required ───────────────────────────────────────────────────────────────────
@@ -204,8 +218,8 @@ Every Azure resource name is derived from it: `langsmith-rg-demo`, `langsmith-ak
 `setup-env.sh` handles all sensitive values — passwords, license keys, and auto-generated cryptographic keys. **Never put secrets directly in `terraform.tfvars`.**
 
 ```bash
-cd terraform/azure/infra
-./setup-env.sh
+cd terraform/azure
+make setup-env
 ```
 
 **On first run**, the script:
@@ -244,20 +258,19 @@ Initial org admin email    : you@example.com
 ### 1c — Terraform init and apply
 
 ```bash
-cd terraform/azure/infra
+cd terraform/azure
 
 # First run only — downloads provider plugins (~300 MB)
-terraform init
-
-# Always preview before applying
-terraform plan
+make init
 
 # Apply — creates all Azure resources
-# Light deploy takes 8-12 minutes (dominated by AKS cluster provisioning)
-terraform apply
+# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
+# Run apply directly — it handles the ordering in three targeted stages automatically.
+# Light deploy takes 8–12 minutes (dominated by AKS cluster provisioning).
+make apply
 ```
 
-Type `yes` when prompted.
+Type `yes` when prompted (or use `-auto-approve` if you prefer).
 
 **Expected output (successful apply):**
 ```
@@ -379,7 +392,7 @@ Expected output:
   ✔  8 keys present — ready for Helm install
 ```
 
-> If any key shows `✗`, re-run `./infra/setup-env.sh` and then `make apply` to ensure Key Vault is populated.
+> If any key shows `✗`, re-run `make setup-env` and then `make apply` to ensure Key Vault is populated.
 
 ### 2b — Generate Helm values
 
@@ -603,23 +616,19 @@ az keyvault show --name langsmith-kv-demo   # verify KV exists
 Run these steps in order. Each step cleans up a layer — Helm first, then namespace, then Azure infra, then local config.
 
 ```bash
+cd terraform/azure
+
 # 1. Uninstall the LangSmith Helm release
 #    Removes all pods, services, PVCs (and in-cluster DB data), ConfigMaps, secrets managed by Helm.
-#    --wait blocks until all resources are deleted before returning.
-helm uninstall langsmith -n langsmith \
-  --kube-context langsmith-<identifier-suffix> \
-  --wait
+make uninstall
 
-# 2. Delete the namespace
-#    Catches any leftover resources not owned by Helm (e.g. manually created secrets, jobs).
-kubectl --context langsmith-<identifier-suffix> \
-  delete namespace langsmith --timeout=60s
-
-# 3. Destroy all Azure infrastructure
+# 2. Destroy all Azure infrastructure
 #    Deletes: AKS cluster, VNet, Blob storage, Key Vault, Managed Identity, resource group.
-#    Takes 5-10 minutes. Type 'yes' when prompted.
-cd terraform/azure/infra
-terraform destroy
+#    Takes 5–10 minutes. Type 'yes' when prompted.
+make destroy
+
+# 3. Remove local secrets and generated files
+make clean
 
 # 4. Remove the kubeconfig context (optional cleanup)
 #    Without this, the dead cluster context stays in your kubeconfig permanently.
