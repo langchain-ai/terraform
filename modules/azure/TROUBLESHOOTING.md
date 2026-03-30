@@ -52,6 +52,37 @@ default_node_pool_max_pods = 60   # must be set before first apply — immutable
 
 > **Note:** `max_pods` is immutable on an existing node pool. Changing it after initial apply requires a node pool rotation (temporary node = more quota). Always set it before the first `terraform apply`.
 
+**Alternative — switch VM family if DSv3 quota is fully exhausted:**
+
+If `az vm list-usage` shows `standardDSv3Family` at 100% (`Current == Limit`) and a quota increase is not possible, switch to an equivalent family in `terraform.tfvars`:
+
+```hcl
+# DSv2 family — equivalent vCPU count, slightly less RAM, different quota pool
+default_node_pool_vm_size = "Standard_DS4_v2"   # 8 vCPU, 28 GiB (vs D8s_v3: 8 vCPU, 32 GiB)
+
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_DS5_v2"   # 16 vCPU, 56 GiB (vs D16s_v3: 16 vCPU, 64 GiB)
+    min_count = 0
+    max_count = 2
+  }
+}
+```
+
+Check available families and remaining quota before choosing:
+```bash
+az vm list-usage --location eastus \
+  --query "[?contains(name.value,'standardDS')].{Family:name.localizedValue,Used:currentValue,Limit:limit}" \
+  -o table
+```
+
+| Recommended | Alternative | vCPU | RAM difference |
+|---|---|---|---|
+| `Standard_D8s_v3` | `Standard_DS4_v2` | 8 | −4 GiB (28 vs 32) |
+| `Standard_D16s_v3` | `Standard_DS5_v2` | 16 | −8 GiB (56 vs 64) |
+
+Validated: full pass 2–5 deploy (production sizing, all addons) ran successfully on DS4_v2 / DS5_v2 on 2026-03-30.
+
 ---
 
 ### Istio addon revision not supported
