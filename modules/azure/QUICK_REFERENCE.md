@@ -105,11 +105,11 @@ make init-app
 
 ---
 
-## Pass 3 — LangGraph Platform (Deployments)
+## Pass 3 — LangSmith Deployments
 
 **Prerequisite:** Pass 2 healthy — all core pods Running/Completed.
 
-LangGraph Platform adds `host-backend`, `listener`, and `operator`. The `operator` spawns agent deployment pods on demand into the `langsmith` namespace. Required before enabling Agent Builder or Insights.
+LangSmith Deployments adds `host-backend`, `listener`, and `operator`. The `operator` spawns agent deployment pods on demand into the `langsmith` namespace. Required before enabling Agent Builder or Insights.
 
 **Before enabling:** bump `default_node_pool_min_count` to at least `5` in `terraform.tfvars` — operator-spawned pods need headroom. Then re-apply infra:
 
@@ -130,7 +130,7 @@ make deploy         # rolls out host-backend + listener + operator
 ```bash
 kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
 # Expected: all Running
-kubectl get lgp -n langsmith          # list LangGraph Platform deployments
+kubectl get lgp -n langsmith          # list LangSmith Deployments
 kubectl get crd | grep langchain      # operator CRDs registered
 ```
 
@@ -224,9 +224,9 @@ Then re-run `make init-values && make deploy`.
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA | `make apply` |
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
-| **2 (Helm)** | LangSmith base (~17 pods) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
+| **2 (Helm)** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **2 (TF)** | Same via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
-| **3** | LangGraph Platform — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
+| **3** | LangSmith Deployments — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
 | **4** | Agent Builder — tool-server, trigger-server, agentBootstrap job | `make init-values && make deploy` |
 | **5** | Insights + Polly — clio analytics pods, Polly eval agent | `make init-values && make deploy` |
 
@@ -285,7 +285,7 @@ admin_email = "you@example.com"
 # chart_version = "0.7.0"        # pin version; empty = latest
 
 # ── Feature toggles ───────────────────────────────────────────────────────────
-# enable_agent_deploys = true    # Pass 3 — LangGraph Platform
+# enable_agent_deploys = true    # Pass 3 — LangSmith Deployments
 # enable_agent_builder = true    # Pass 4 — Agent Builder (requires agent_deploys)
 # enable_insights      = true    # Pass 5 — Insights (requires clickhouse_host)
 # enable_polly         = true    # Pass 5 — Polly (requires agent_deploys)
