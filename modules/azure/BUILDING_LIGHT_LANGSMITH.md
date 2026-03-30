@@ -643,48 +643,50 @@ kubectl config delete-user clusterUser_langsmith-rg<identifier>_langsmith-aks<id
 
 ---
 
-## Verified Working Output (2026-03-24)
+## Verified Working Output (2026-03-29)
 
-Deployment: identifier `-azngx`, chart 0.13.29, AKS 1.32.11, eastus, Standard_DS4_v2 × 3 nodes (autoscaled), `dns_label = "langsmith-azngx"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
+Deployment: identifier `-dzlight`, chart 0.13.35, AKS 1.32.11, eastus, Standard_DS4_v2 × 2 nodes (autoscaled to 3), `dns_label = "langsmith-dzlight"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
 
 **Apply output:**
 ```
 Apply complete! Resources: 41 added, 0 changed, 0 destroyed.
 
 Outputs:
-  aks_cluster_name     = "langsmith-aks-azngx"
-  keyvault_name        = "langsmith-kv-azngx"
-  resource_group_name  = "langsmith-rg-azngx"
-  storage_account_name = "langsmithblobazngx"
+  aks_cluster_name     = "langsmith-aks-dzlight"
+  keyvault_name        = "langsmith-kv-dzlight"
+  resource_group_name  = "langsmith-rg-dzlight"
+  storage_account_name = "langsmithblobdzlight"
+  langsmith_url        = "https://langsmith-dzlight.eastus.cloudapp.azure.com"
 ```
 
 **Pods:**
 ```
-NAME                                          READY   STATUS      RESTARTS   AGE
-langsmith-ace-backend-5f9ffd4988-pj7fb        1/1     Running     0          12m
-langsmith-backend-78f99fd4-qxt5h              1/1     Running     0          12m
-langsmith-backend-auth-bootstrap-k9jrl        0/1     Completed   0          12m
-langsmith-backend-ch-migrations-bzdm5         0/1     Completed   0          10m
-langsmith-backend-migrations-6h8mj            0/1     Completed   0          12m
-langsmith-clickhouse-0                        1/1     Running     0          12m
-langsmith-frontend-6d44dd87c-dkzts            1/1     Running     0          12m
-langsmith-platform-backend-7f8b94dc9-w4r7s    1/1     Running     2          12m
-langsmith-playground-5c8b9cf9c-k8f9l          1/1     Running     0          12m
-langsmith-postgres-0                          1/1     Running     0          12m
-langsmith-queue-7db6cfd9b-x9zkr               1/1     Running     0          12m
-langsmith-redis-0                             1/1     Running     0          12m
+NAME                                         READY   STATUS      RESTARTS   AGE
+langsmith-ace-backend-79745bd595-bg92c       1/1     Running     0          2m
+langsmith-backend-856949d7d5-29dq2           1/1     Running     1          2m
+langsmith-backend-auth-bootstrap-xzmrf       0/1     Completed   0          2m
+langsmith-backend-ch-migrations-2frj5        0/1     Completed   0          2m
+langsmith-backend-migrations-5bc62           0/1     Completed   0          2m
+langsmith-clickhouse-0                       1/1     Running     0          2m
+langsmith-frontend-694677f76f-qr9lg          1/1     Running     0          2m
+langsmith-ingest-queue-7dd7f7b69d-54ccs      1/1     Running     1          2m
+langsmith-platform-backend-d49657bb4-8hv9f   1/1     Running     2          2m
+langsmith-playground-676989c855-lfl2q        1/1     Running     0          2m
+langsmith-postgres-0                         1/1     Running     0          2m
+langsmith-queue-7499799fbf-nt5mm             1/1     Running     0          2m
+langsmith-redis-0                            1/1     Running     0          2m
 ```
 
 **Ingress:**
 ```
-NAME                CLASS   HOSTS                                        ADDRESS         PORTS
-langsmith-ingress   nginx   langsmith-azngx.eastus.cloudapp.azure.com   57.151.68.189   80, 443
+NAME                CLASS   HOSTS                                          ADDRESS        PORTS
+langsmith-ingress   nginx   langsmith-dzlight.eastus.cloudapp.azure.com   4.156.189.14   80, 443
 ```
 
 **TLS certificate:**
 ```
 NAME            READY   SECRET          AGE
-langsmith-tls   True    langsmith-tls   8m
+langsmith-tls   True    langsmith-tls   2m
 ```
 
-**Access URL:** `https://langsmith-azngx.eastus.cloudapp.azure.com`
+**Access URL:** `https://langsmith-dzlight.eastus.cloudapp.azure.com`
