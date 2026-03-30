@@ -105,24 +105,107 @@ make init-app
 
 ---
 
-## Enable Optional Addons (Passes 3–5)
+## Pass 3 — LangGraph Platform (Deployments)
 
-Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the flags, then re-run `init-values` to copy the corresponding values files:
+**Prerequisite:** Pass 2 healthy — all core pods Running/Completed.
 
-```hcl
+LangGraph Platform adds `host-backend`, `listener`, and `operator`. The `operator` spawns agent deployment pods on demand into the `langsmith` namespace. Required before enabling Agent Builder or Insights.
+
+**Before enabling:** bump `default_node_pool_min_count` to at least `5` in `terraform.tfvars` — operator-spawned pods need headroom. Then re-apply infra:
+
+```bash
 # infra/terraform.tfvars
-enable_deployments   = true    # Pass 3 — LangSmith Deployments (required for Agent Builder + Insights)
-enable_agent_builder = true    # Pass 4 — Agent Builder UI
-enable_insights      = true    # Pass 5 — ClickHouse-backed analytics
-enable_polly         = true    # Pass 5 — Polly AI eval/monitoring
+default_node_pool_min_count = 5      # operator pods need headroom
+enable_deployments          = true
 ```
 
 ```bash
-make init-values   # copies addon values files based on enable_* flags
+make apply          # scale up node pool
+make init-values    # picks up enable_deployments = true
+make deploy         # rolls out host-backend + listener + operator
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
+# Expected: all Running
+kubectl get lgp -n langsmith          # list LangGraph Platform deployments
+kubectl get crd | grep langchain      # operator CRDs registered
+```
+
+**Watchout:** `config.deployment.url` must include `https://` and point to your LangSmith URL. Missing protocol → operator-spawned agents stuck in `DEPLOYING` indefinitely.
+
+---
+
+## Pass 4 — Agent Builder
+
+**Prerequisite:** Pass 3 healthy — `listener` and `operator` pods Running.
+
+Agent Builder adds `agent-builder-tool-server`, `agent-builder-trigger-server`, and an `agentBootstrap` Job that registers the built-in Polly agent URL in a ConfigMap.
+
+```bash
+# infra/terraform.tfvars
+enable_agent_builder = true
+```
+
+```bash
+make init-values    # picks up enable_agent_builder = true
 make deploy
 ```
 
-**Sizing**: Set `sizing_profile` in `terraform.tfvars`:
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep agent-builder
+# Expected: tool-server Running, trigger-server Running, agentBootstrap Completed
+
+kubectl get pods -n langsmith | grep -E "tool-server|trigger-server|Bootstrap"
+```
+
+**Watchout:** The `agentBootstrap` Job creates the `langsmith-polly-config` ConfigMap that the frontend reads for the Polly UI. If the frontend was already running when bootstrap completed, roll it:
+
+```bash
+kubectl rollout restart deployment langsmith-frontend -n langsmith
+```
+
+---
+
+## Pass 5 — Insights + Polly
+
+**Prerequisite:** Pass 4 healthy — Agent Builder pods Running, `agentBootstrap` Completed.
+
+Insights enables ClickHouse-backed trace analytics. Polly is the AI eval/monitoring agent (requires Deployments + Agent Builder). Enable both together.
+
+```bash
+# infra/terraform.tfvars
+enable_insights = true
+enable_polly    = true
+```
+
+```bash
+make init-values    # picks up both flags
+make deploy
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "clickhouse|polly|clio"
+# ClickHouse already running from Pass 2; Insights operator deploys clio pods
+kubectl get pods -n langsmith -w     # watch for new clio/analytics pods to come up
+```
+
+**Watchouts:**
+
+- `insights_encryption_key` and `polly_encryption_key` **must never change** after first enable — changing either breaks all existing encrypted data permanently.
+- Roll frontend after first Polly enable if Polly UI shows "Unable to connect": `kubectl rollout restart deployment langsmith-frontend -n langsmith`
+
+---
+
+## Sizing
+
+Set `sizing_profile` in `infra/terraform.tfvars`:
 
 ```hcl
 sizing_profile = "production"         # multi-replica with HPA (recommended)
@@ -141,11 +224,11 @@ Then re-run `make init-values && make deploy`.
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA | `make apply` |
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
-| **2 (Helm)** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
-| **2 (TF)** | LangSmith Helm via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
-| **3** | + LangSmith Deployments (`enable_deployments = true`) | `make init-values && make deploy` |
-| **4** | + Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
-| **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
+| **2 (Helm)** | LangSmith base (~17 pods) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
+| **2 (TF)** | Same via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
+| **3** | LangGraph Platform — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
+| **4** | Agent Builder — tool-server, trigger-server, agentBootstrap job | `make init-values && make deploy` |
+| **5** | Insights + Polly — clio analytics pods, Polly eval agent | `make init-values && make deploy` |
 
 ---
 
@@ -255,21 +338,43 @@ kubectl rollout restart deployment/langsmith-backend -n langsmith
 
 ---
 
-## Pass 2 Expected Pods (~17)
+## Pass 2 Expected Pods
+
+Production sizing (`sizing_profile = "production"`) runs multiple replicas with HPA. Expect ~25–30 pods total:
 
 ```
-NAME                                          READY   STATUS      RESTARTS   AGE
-langsmith-ace-backend-xxxxxxxxx-xxxxx         1/1     Running     0          5m
-langsmith-backend-xxxxxxxxx-xxxxx             1/1     Running     0          5m
-langsmith-backend-auth-bootstrap-xxxxx        0/1     Completed   0          5m
-langsmith-backend-ch-migrations-xxxxx         0/1     Completed   0          5m
-langsmith-backend-migrations-xxxxx            0/1     Completed   0          5m
-langsmith-clickhouse-0                        1/1     Running     0          5m
-langsmith-frontend-xxxxxxxxx-xxxxx            1/1     Running     0          5m
-langsmith-ingest-queue-xxxxxxxxx-xxxxx        1/1     Running     0          5m
-langsmith-platform-backend-xxxxxxxxx-xxxxx    1/1     Running     0          5m
-langsmith-playground-xxxxxxxxx-xxxxx          1/1     Running     0          5m
-langsmith-queue-xxxxxxxxx-xxxxx               1/1     Running     0          5m
+NAME                                               READY   STATUS      RESTARTS   AGE
+langsmith-ace-backend-xxxxxxxxx-xxxxx              1/1     Running     0          5m
+langsmith-backend-xxxxxxxxx-xxxxx                  1/1     Running     0          5m   # ×3 replicas
+langsmith-backend-auth-bootstrap-xxxxx             0/1     Completed   0          5m
+langsmith-backend-ch-migrations-xxxxx              0/1     Completed   0          5m
+langsmith-backend-migrations-xxxxx                 0/1     Completed   0          5m
+langsmith-clickhouse-0                             1/1     Running     0          5m
+langsmith-frontend-xxxxxxxxx-xxxxx                 1/1     Running     0          5m   # ×2 replicas
+langsmith-ingest-queue-xxxxxxxxx-xxxxx             1/1     Running     0          5m   # ×3 replicas
+langsmith-platform-backend-xxxxxxxxx-xxxxx         1/1     Running     0          5m   # ×2 replicas
+langsmith-playground-xxxxxxxxx-xxxxx               1/1     Running     0          5m
+langsmith-queue-xxxxxxxxx-xxxxx                    1/1     Running     0          5m   # ×3 replicas
+```
+
+**Pass 3 adds** (after `enable_deployments = true`):
+```
+langsmith-host-backend-xxxxxxxxx-xxxxx             1/1     Running     0          5m
+langsmith-listener-xxxxxxxxx-xxxxx                 1/1     Running     0          5m
+langsmith-operator-xxxxxxxxx-xxxxx                 1/1     Running     0          5m
+```
+
+**Pass 4 adds** (after `enable_agent_builder = true`):
+```
+langsmith-agent-builder-tool-server-xxxxx          1/1     Running     0          5m
+langsmith-agent-builder-trigger-server-xxxxx       1/1     Running     0          5m
+langsmith-agent-builder-bootstrap-xxxxx            0/1     Completed   0          5m
+```
+
+**Pass 5 adds** (after `enable_insights = true`, `enable_polly = true`):
+```
+langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0          5m   # Insights analytics
+# Polly agent pod appears in langsmith ns after agentBootstrap registers it
 ```
 
 ---
