@@ -9,22 +9,35 @@ All commands run from `terraform/aws/`. Run `make help` to see all targets.
 ```bash
 cd terraform/aws
 
-# 1. Generate terraform.tfvars (interactive wizard)
+# 1. Generate terraform.tfvars (interactive wizard — region, node size, TLS, addons)
 make quickstart
 
-# 2. Set up secrets in SSM Parameter Store
+# 2. Set up secrets in SSM Parameter Store — prompts for passwords + license key,
+#    auto-generates api_key_salt and jwt_secret, exports TF_VAR_* into your shell
+#    Must use `source` — Make runs in a subshell and cannot export to your shell
 source infra/scripts/setup-env.sh
 
-# 3. Deploy infrastructure (~20-25 min)
+# 3. Deploy infrastructure (~20–25 min)
 make init
-make plan
+make plan      # review — confirm no unexpected destroy/replace actions
 make apply
 
-# 4. Generate Helm values from Terraform outputs
+# 4. Update kubeconfig for the EKS cluster
+make kubeconfig
+
+# 5. Generate Helm values from Terraform outputs
 make init-values
 
-# 5. Deploy LangSmith (~10 min)
+# 6. Deploy LangSmith (~10 min)
 make deploy
+```
+
+**Prefer editing over the wizard?** Copy the example and fill in manually:
+
+```bash
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+vi infra/terraform.tfvars   # required: name_prefix, region, tls_certificate_source
+# then continue from step 2 above
 ```
 
 ---

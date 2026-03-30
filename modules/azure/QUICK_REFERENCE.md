@@ -11,26 +11,26 @@ For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIG
 ```bash
 cd terraform/azure
 
-# 1. Copy and fill in your variables
-cp infra/terraform.tfvars.example infra/terraform.tfvars
-vi infra/terraform.tfvars    # set subscription_id, identifier, location
+# 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
+make quickstart
 
-# 2. Bootstrap secrets (prompts on first run, reads from Key Vault on repeat)
+# 2. Bootstrap secrets — prompts for passwords + license key on first run,
+#    reads silently from Key Vault on every subsequent run
 make setup-env
 
-# 3. Check prerequisites (az CLI, login, resource providers, RBAC)
+# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC, quotas)
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
 # Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it handles the ordering in three stages.
+# Skip plan and run apply directly — it runs three targeted stages automatically.
 make init
 make apply
 
 # 5. Get cluster credentials
 make kubeconfig
 
-# 6. Create K8s secrets from Key Vault
+# 6. Create K8s secrets from Key Vault (langsmith-config-secret)
 make k8s-secrets
 
 # 7. Generate Helm values from Terraform outputs
@@ -43,10 +43,18 @@ make deploy
 make status
 ```
 
-Or run the full deployment in one shot:
+Or run everything after `make apply` in one shot:
 
 ```bash
-make deploy-all   # apply → kubeconfig → k8s-secrets → init-values → deploy
+make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
+```
+
+**Prefer editing over the wizard?** Copy the example and fill in manually:
+
+```bash
+cp infra/terraform.tfvars.example infra/terraform.tfvars
+vi infra/terraform.tfvars   # required: subscription_id, identifier, location
+# then continue from step 2 above
 ```
 
 **Terraform Helm path** (alternative Pass 2 — Helm release managed in Terraform state):
