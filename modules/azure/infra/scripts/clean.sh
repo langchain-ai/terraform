@@ -40,7 +40,7 @@ echo ""
 # Deleting tfstate before destroy means Terraform loses track of all Azure
 # resources — you'll have to delete them manually via az group delete.
 if [[ -f "$INFRA_DIR/terraform.tfstate" ]]; then
-  _state_resources=$(grep -c '"type":' "$INFRA_DIR/terraform.tfstate" 2>/dev/null || echo 0)
+  _state_resources=$(grep -c '"type":' "$INFRA_DIR/terraform.tfstate" 2>/dev/null; true)
   if [[ "$_state_resources" -gt 0 ]]; then
     echo ""
     fail "terraform.tfstate exists with ${_state_resources} tracked resource(s)."
