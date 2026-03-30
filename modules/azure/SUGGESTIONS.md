@@ -587,16 +587,9 @@ No Prometheus/Grafana setup is included. LangSmith emits metrics that are useful
 
 ---
 
-### 3.8 `make clean` Bug
+### 3.8 `make clean` Bug ✅ Fixed
 
-`infra/scripts/clean.sh` has a syntax error that breaks non-interactive cleanup:
-
-```bash
-# Line 44:
-[[ 0 -eq 0 ]]  # causes "syntax error in expression (error token is 0)"
-```
-
-This forces users to manually delete generated files. Fix by testing the script with the current POSIX shell.
+`infra/scripts/clean.sh` had a syntax error where `grep -c` exits 1 on no matches (outputting "0"), and `|| echo 0` appended a second "0", making `_state_resources="0\n0"` which `[[ -gt 0 ]]` rejected. Fixed by using `; true` instead of `|| echo 0`.
 
 ---
 
