@@ -12,9 +12,9 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 |------|------|-----|------|
 | **Pass 1** | AKS cluster, Postgres, Redis, Blob, Key Vault, cert-manager, KEDA | `make apply` | ~15–20 min |
 | **Pass 1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` | ~2 min |
-| **Pass 2** | LangSmith Helm chart (17 pods) — **Helm path** | `make init-values` → `make deploy` | ~10 min |
-| **Pass 2** | LangSmith Helm chart (17 pods) — **Terraform path** | `make init-app` → `make apply-app` | ~10 min |
-| **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) | `make init-values && make deploy` | ~5 min |
+| **Pass 2** | LangSmith Helm chart (~25 pods production) — **Helm path** | `make init-values` → `make deploy` | ~10 min |
+| **Pass 2** | LangSmith Helm chart (~25 pods production) — **Terraform path** | `make init-app` → `make apply-app` | ~10 min |
+| **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` | ~5 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
@@ -88,9 +88,12 @@ az account show   # verify correct subscription
 ```bash
 cd terraform/azure
 
-# 1. Copy and fill in your variables
-cp infra/terraform.tfvars.example infra/terraform.tfvars
-vi infra/terraform.tfvars   # set subscription_id, identifier, location, langsmith_domain
+# 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
+make quickstart
+
+# Prefer editing manually? Copy the example instead:
+# cp infra/terraform.tfvars.example infra/terraform.tfvars
+# vi infra/terraform.tfvars
 
 # 2. Bootstrap secrets (prompts on first run, reads from Key Vault on repeat)
 make setup-env
@@ -152,7 +155,7 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
 | **2 (Helm)** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
 | **2 (TF)** | LangSmith Helm via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
-| **3** | + LangSmith Deployments (`enable_deployments = true`) | `make init-values && make deploy` |
+| **3** | + LangSmith Deployments (`enable_deployments = true`) — bump `min_count` to 5 first | `make apply && make init-values && make deploy` |
 | **4** | + Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
 | **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
 
@@ -472,15 +475,19 @@ Runs 10 checks and prints a pass/warn/fail for each:
 
 ### Addon feature flags
 
-Addon passes (3–5) are controlled by flags in `infra/terraform.tfvars`. Set the flags, then re-run `make init-values && make deploy` — no `terraform apply` needed:
+Addon passes (3–5) are controlled by flags in `infra/terraform.tfvars`:
 
 ```hcl
 sizing_profile       = "production"   # minimum | dev | production | production-large
-enable_deployments   = true           # Pass 3 — LangGraph Platform (listener + operator + host-backend)
+enable_deployments   = true           # Pass 3 — LangSmith Deployments (listener + operator + host-backend)
 enable_agent_builder = true           # Pass 4 — Agent Builder UI (requires enable_deployments)
 enable_insights      = true           # Pass 5 — Insights / Clio (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 ```
+
+**Pass 3** requires a node pool scale-up before deploying — operator-spawned pods need headroom. Set `default_node_pool_min_count = 5` and run `make apply` first, then `make init-values && make deploy`.
+
+**Passes 4–5** only need `make init-values && make deploy` — no `terraform apply` required.
 
 ---
 
