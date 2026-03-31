@@ -118,6 +118,18 @@ $(if _ssm_key_exists "${_ssm_prefix}/polly-encryption-key"; then cat <<PEOF
         key: ${_ssm_prefix}/polly-encryption-key
 PEOF
 fi)
+$(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF
+    - secretKey: oauth_client_secret
+      remoteRef:
+        key: ${_ssm_prefix}/oauth-client-secret
+    - secretKey: oauth_client_id
+      remoteRef:
+        key: ${_ssm_prefix}/oauth-client-id
+    - secretKey: oauth_issuer_url
+      remoteRef:
+        key: ${_ssm_prefix}/oauth-issuer-url
+OEOF
+fi)
 EOF
 
 # ── Wait for sync ────────────────────────────────────────────────────────────
