@@ -95,6 +95,7 @@ resource "aws_security_group" "alb" {
   # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
   # If using VPC peering for targets outside this VPC, add those CIDRs here.
   egress {
+    description = "Allow all outbound to VPC"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
