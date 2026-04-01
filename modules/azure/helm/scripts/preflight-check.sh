@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # preflight-check.sh — Validate tools and cluster connectivity before deploying.
 #
 # Called by deploy.sh before running helm upgrade.

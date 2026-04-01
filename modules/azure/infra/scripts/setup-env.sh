@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 set -euo pipefail
 # setup-env.sh — Bootstrap LangSmith secrets for Terraform (Pass 1)
 #

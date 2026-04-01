@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # status.sh — Check the current state of the AWS LangSmith deployment
 #              and tell you what to run next.
 #

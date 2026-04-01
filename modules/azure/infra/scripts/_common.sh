@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # _common.sh — Shared helpers for Azure LangSmith scripts.
 #
 # Usage: source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"

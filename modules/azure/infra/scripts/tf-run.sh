@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # tf-run.sh — Run setup-env.sh (if needed) then execute terraform with all provided args.
 #
 # Useful in CI environments where secrets.auto.tfvars must be regenerated
