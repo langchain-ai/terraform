@@ -226,6 +226,10 @@ kubectl get crd | grep langchain
 ## Common gcloud Commands
 
 ```bash
+# Re-auth if you hit oauth2 invalid_grant / invalid_rapt errors
+gcloud auth login
+gcloud auth application-default login
+
 # Get cluster credentials
 gcloud container clusters get-credentials <cluster-name> --region <region> --project <project-id>
 
