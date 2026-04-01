@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2024 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # migrate-ssm.sh — Move SSM parameters from a legacy path to the standard path
 #
 # The standard path is:  /langsmith/{name_prefix}-{environment}/<key>

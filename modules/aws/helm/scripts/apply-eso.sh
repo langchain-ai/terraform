@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2024 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # apply-eso.sh — Apply ESO ClusterSecretStore + ExternalSecret for LangSmith.
 #
 # Creates (or updates) the ESO resources that sync SSM Parameter Store secrets

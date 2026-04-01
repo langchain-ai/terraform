@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2024 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # Sets KUBECONFIG in the current shell for the EKS cluster.
 # Writes to ~/.kube/langsmith-<cluster> — never touches ~/.kube/config.
 #
