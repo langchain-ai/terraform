@@ -58,7 +58,10 @@ Do you have a custom domain (langsmith.mycompany.com)?
 
 ### nginx — recommended default
 
-**Validated: ✅ nginx + none (HTTP), nginx + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
+**Validated: ✅ nginx + none (HTTP) — full 5-pass including LangGraph Platform, Agent Builder, Insights, Polly**
+**Validated: ✅ nginx + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform, Agent Builder, Insights, Polly**
+**Validated: ✅ nginx + letsencrypt + external postgres + external redis — Pass 3, managed Azure services**
+**Validated: ✅ nginx + none + production sizing profile — multi-replica HPA, Standard_D8s_v3 ×3**
 
 ```hcl
 # Quickstart default — HTTP, zero cert setup
@@ -88,6 +91,7 @@ letsencrypt_email      = "you@example.com"
 ### istio-addon — AKS managed Istio mesh
 
 **Validated: ✅ istio-addon + none (HTTP) — full 5-pass including LangGraph Platform**
+**Validated: ✅ istio-addon + none + production sizing — multi-replica HPA, Standard_D8s_v3 ×3**
 **TLS constraint: ⚠️ `letsencrypt` NOT supported — use `dns01` or `none`**
 
 ```hcl
