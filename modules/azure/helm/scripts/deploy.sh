@@ -407,6 +407,77 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo ""
 fi
 
+# ── Pre-deploy: Envoy Gateway GatewayClass + Gateway ─────────────────────
+# Must exist before helm install so the chart's gateway.enabled: true passes
+# chart validation (validate.yaml requires ingress, gateway, or istioGateway).
+# HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
+  [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
+
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: langsmith-eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+EOF
+
+  # Build Gateway listeners — always include HTTP; add HTTPS only when TLS is enabled.
+  if [[ "$_tls_source" == "none" ]]; then
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${_eg_namespace}
+spec:
+  gatewayClassName: langsmith-eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+EOF
+  else
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${_eg_namespace}
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  gatewayClassName: langsmith-eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "${_eg_hostname}"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: langsmith-tls
+    allowedRoutes:
+      namespaces:
+        from: Same
+EOF
+  fi
+  pass "Envoy Gateway GatewayClass + Gateway created (tls: ${_tls_source})"
+fi
+
 # ── Deploy ────────────────────────────────────────────────────────────────
 info "Deploying LangSmith (sizing: ${_sizing_profile})..."
 info "(waiting for pods — 5-15 min on a cold cluster)"
@@ -459,86 +530,13 @@ else
 fi
 echo ""
 
-# ── Post-deploy Envoy Gateway routing ─────────────────────────────────────
-# Envoy Gateway uses Gateway API (GatewayClass → Gateway → HTTPRoute).
-# The LangSmith Helm chart ingress is disabled (ingress.enabled: false).
-# We create the Gateway API resources here so make deploy is fully automated.
+# ── Post-deploy Envoy Gateway: DNS label annotation ───────────────────────
+# GatewayClass + Gateway were created before helm install (pre-deploy block above).
+# The chart creates HTTPRoutes via gateway.enabled: true.
+# Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
-  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
-  _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
-  [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
-  _eg_release=$(_parse_tfvar "langsmith_release_name") || _eg_release="langsmith"
 
-  # GatewayClass — points to the Envoy Gateway controller
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: langsmith-eg
-spec:
-  controllerName: gateway.envoyproxy.io/gatewayclass-controller
-EOF
-
-  # Gateway — creates the Envoy proxy LB with TLS termination
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: langsmith-gateway
-  namespace: ${_eg_namespace}
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-spec:
-  gatewayClassName: langsmith-eg
-  listeners:
-  - name: http
-    protocol: HTTP
-    port: 80
-    allowedRoutes:
-      namespaces:
-        from: Same
-  - name: https
-    protocol: HTTPS
-    port: 443
-    hostname: "${_eg_hostname}"
-    tls:
-      mode: Terminate
-      certificateRefs:
-      - name: langsmith-tls
-    allowedRoutes:
-      namespaces:
-        from: Same
-EOF
-  pass "Envoy Gateway GatewayClass + Gateway created"
-
-  # HTTPRoute — routes all traffic to LangSmith frontend
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: langsmith
-  namespace: ${_eg_namespace}
-spec:
-  parentRefs:
-  - name: langsmith-gateway
-    namespace: ${_eg_namespace}
-  hostnames:
-  - "${_eg_hostname}"
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: ${_eg_release}-frontend
-      port: 80
-EOF
-  pass "Envoy Gateway HTTPRoute created: ${_eg_hostname}"
-
-  # Wait for Gateway LB service and annotate with DNS label.
-  # Envoy Gateway creates the LB in envoy-gateway-system namespace with label:
-  #   gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
   for i in $(seq 1 30); do
@@ -554,7 +552,7 @@ EOF
       "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" --overwrite &>/dev/null
     pass "DNS label '${_dns_label}' set on envoy-gateway-system/${_eg_svc_name}"
   else
-    warn "Could not find Envoy Gateway LB service — DNS label not set. Run: make deploy again after pods are ready"
+    warn "Could not find Envoy Gateway LB service — DNS label not set. Re-run: make deploy"
   fi
 fi
 

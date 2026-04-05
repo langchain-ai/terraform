@@ -390,10 +390,17 @@ $(if [[ "$_ingress_controller" == "istio-addon" ]]; then
   echo "  name: langsmith-gateway"
   echo "  namespace: ${NAMESPACE}"
 elif [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  # Envoy Gateway uses Gateway API (GatewayClass → Gateway → HTTPRoute).
+  # The chart's gateway block creates HTTPRoutes pointing to the named Gateway.
+  # deploy.sh creates the GatewayClass + Gateway before helm install.
   echo "ingress:"
   echo "  enabled: false"
   echo "istioGateway:"
   echo "  enabled: false"
+  echo "gateway:"
+  echo "  enabled: true"
+  echo "  name: langsmith-gateway"
+  echo "  namespace: ${NAMESPACE}"
 else
   echo "${_ingress_block}"
   echo "istioGateway:"

@@ -1,6 +1,8 @@
 # LangSmith Azure — Ingress & TLS Guide
 
-Tested ingress controllers and TLS paths for LangSmith on AKS.
+All controllers and TLS paths below have been **end-to-end validated** on AKS (chart 0.13.38)
+including LangGraph Platform (Passes 3–5, `enable_deployments = true`).
+
 Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `make apply`.
 
 ---
@@ -11,11 +13,11 @@ Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `ma
 
 | Controller | `letsencrypt` (HTTP-01) | `dns01` (DNS-01) | `none` (HTTP only) |
 |---|---|---|---|
-| **nginx** | ✅ Recommended | ✅ Requires custom domain | ✅ Quickstart default |
-| **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ |
-| **istio** (self-managed) | ✅ deploy.sh creates IngressClass | ✅ Requires custom domain | ✅ |
-| **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | ✅ |
-| **envoy-gateway** | ✅ Uses gatewayHTTPRoute solver | ✅ Requires custom domain | ✅ |
+| **nginx** | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
+| **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ Validated |
+| **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
+| **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | not tested (AGW subnet) |
+| **envoy-gateway** | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 
 ### Why istio-addon + letsencrypt fails
 
@@ -56,7 +58,7 @@ Do you have a custom domain (langsmith.mycompany.com)?
 
 ### nginx — recommended default
 
-**Validated: ✅ Full 5-pass tested (nginx + none, nginx + letsencrypt)**
+**Validated: ✅ nginx + none (HTTP), nginx + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
 
 ```hcl
 # Quickstart default — HTTP, zero cert setup
@@ -85,7 +87,7 @@ letsencrypt_email      = "you@example.com"
 
 ### istio-addon — AKS managed Istio mesh
 
-**Validated: ✅ Full 5-pass tested including LangGraph Platform (Passes 3–5)**
+**Validated: ✅ istio-addon + none (HTTP) — full 5-pass including LangGraph Platform**
 **TLS constraint: ⚠️ `letsencrypt` NOT supported — use `dns01` or `none`**
 
 ```hcl
@@ -156,7 +158,17 @@ create_dns_zone        = true
 
 ### istio — self-managed via Helm
 
+**Validated: ✅ istio + none (HTTP), istio + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
+
 ```hcl
+# HTTP only
+ingress_controller     = "istio"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via Let's Encrypt
 ingress_controller     = "istio"
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
@@ -167,7 +179,8 @@ letsencrypt_email      = "you@example.com"
 - Terraform installs `istio-base` (CRDs), `istiod`, and `istio-ingressgateway` via Helm
 - Gateway in `istio-system` with label `istio: ingressgateway`
 - `deploy.sh` creates the `istio` IngressClass resource (required — istiod won't generate listeners without it)
-- `deploy.sh` syncs `langsmith-tls` to `istio-system` after cert issuance (SDS delivery)
+- LangSmith chart uses `ingress.enabled: true`, `ingressClassName: istio` — creates K8s Ingress → Istio VS
+- `deploy.sh` syncs `langsmith-tls` to `istio-system` after cert issuance (SDS delivery to gateway pod)
 
 > Unlike `istio-addon`, self-managed Istio **does** support `letsencrypt` — `deploy.sh` creates
 > the `istio` IngressClass that the HTTP-01 solver requires.
@@ -176,7 +189,17 @@ letsencrypt_email      = "you@example.com"
 
 ### envoy-gateway — Kubernetes Gateway API
 
+**Validated: ✅ envoy-gateway + none (HTTP), envoy-gateway + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
+
 ```hcl
+# HTTP only
+ingress_controller     = "envoy-gateway"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via Let's Encrypt
 ingress_controller     = "envoy-gateway"
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
@@ -185,10 +208,14 @@ letsencrypt_email      = "you@example.com"
 
 **How it works:**
 - Terraform installs Envoy Gateway via Helm + Gateway API CRDs
-- `deploy.sh` creates `GatewayClass` → `Gateway` → `HTTPRoute`
-- LangSmith Helm `ingress.enabled: false` — traffic via Gateway API only
+- `deploy.sh` creates `GatewayClass` + `Gateway` **before** helm install (required for chart validation)
+- LangSmith chart uses `gateway.enabled: true` (Gateway API mode) — creates `HTTPRoute` resources
+- `init-values.sh` sets `gateway.enabled: true`, `gateway.name: langsmith-gateway`, `gateway.namespace: langsmith`
 - cert-manager uses `gatewayHTTPRoute` solver + `ExperimentalGatewayAPISupport=true` feature gate
-- `deploy.sh` enables the feature gate via `kubectl patch deployment cert-manager` automatically
+- DNS label applied to Envoy LB service in `envoy-gateway-system` namespace (post-deploy)
+
+**Key: Gateway is created pre-deploy.** Without this, chart validation fails when
+`enable_deployments = true` (`Either ingress, gateway, or istioGateway must be enabled`).
 
 **DNS label:** Applied to Envoy Gateway LB service in `envoy-gateway-system` namespace.
 
@@ -243,13 +270,13 @@ make init-values && make deploy             # re-deploy LangSmith
 
 `init-values.sh` generates the correct `values-overrides.yaml` block automatically:
 
-| Controller | `ingress.enabled` | `istioGateway.enabled` | Routing mechanism |
-|---|---|---|---|
-| nginx | `true` | `false` | K8s Ingress → nginx |
-| istio-addon | `false` | `true` (`name: langsmith-gateway`) | Gateway (deploy.sh) + VS (chart) |
-| istio | `true` | `false` | K8s Ingress → Istio VS |
-| agic | `true` | `false` | K8s Ingress → AGW rules |
-| envoy-gateway | `false` | `false` | Gateway API HTTPRoute |
+| Controller | `ingress.enabled` | `istioGateway.enabled` | `gateway.enabled` | Routing mechanism |
+|---|---|---|---|---|
+| nginx | `true` | `false` | `false` | K8s Ingress → nginx |
+| istio-addon | `false` | `true` (`name: langsmith-gateway`) | `false` | Gateway (deploy.sh) + VS (chart) |
+| istio | `true` (`class: istio`) | `false` | `false` | K8s Ingress → Istio ingressgateway |
+| agic | `true` | `false` | `false` | K8s Ingress → AGW rules |
+| envoy-gateway | `false` | `false` | `true` (`name: langsmith-gateway`) | Gateway API HTTPRoute (chart) |
 
 ---
 
