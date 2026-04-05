@@ -299,17 +299,52 @@ LANGSMITH_DOMAIN=""
 LE_EMAIL=""
 
 _ask_choice "TLS certificate:" \
-  "Let's Encrypt — auto via cert-manager (recommended)" \
-  "DNS-01        — cert-manager DNS-01 (requires Azure DNS zone)" \
-  "Existing      — bring your own K8s TLS secret" \
-  "None          — HTTP only (not recommended for production)"
+  "None          — HTTP only (quickstart default, zero setup)" \
+  "Let's Encrypt — HTTPS via HTTP-01 (nginx, istio, envoy-gateway only)" \
+  "DNS-01        — HTTPS via DNS-01 (all controllers, requires custom domain)" \
+  "Existing      — bring your own K8s TLS secret"
 
 case "$_CHOICE" in
-  1) TLS_SOURCE="letsencrypt" ;;
-  2) TLS_SOURCE="dns01" ;;
-  3) TLS_SOURCE="existing" ;;
-  4) TLS_SOURCE="none" ;;
+  1) TLS_SOURCE="none" ;;
+  2) TLS_SOURCE="letsencrypt" ;;
+  3) TLS_SOURCE="dns01" ;;
+  4) TLS_SOURCE="existing" ;;
 esac
+
+# ── Warn on incompatible controller + TLS combinations ────────────────────
+if [[ "$TLS_SOURCE" == "letsencrypt" && "$INGRESS_CONTROLLER" == "istio-addon" ]]; then
+  echo ""
+  _yellow "⚠  WARNING: istio-addon + letsencrypt is NOT supported."
+  printf "   The AKS managed Istio addon does not register a Kubernetes IngressClass.\n"
+  printf "   cert-manager HTTP-01 solver creates a temp Ingress that needs an IngressClass\n"
+  printf "   to route the ACME challenge — without one, the cert times out and is never issued.\n"
+  echo ""
+  printf "   Supported options for istio-addon:\n"
+  printf "     • none   — HTTP (dev/internal, no cert setup)\n"
+  printf "     • dns01  — HTTPS via DNS-01 (requires custom domain + Azure DNS zone)\n"
+  echo ""
+  if ! _ask_yn "Continue anyway (cert will fail to issue)?" "n"; then
+    echo "Aborted. Re-run and select a compatible TLS option."
+    exit 1
+  fi
+fi
+
+if [[ "$TLS_SOURCE" == "letsencrypt" && "$INGRESS_CONTROLLER" == "agic" ]]; then
+  echo ""
+  _yellow "⚠  WARNING: agic + letsencrypt is NOT supported."
+  printf "   Azure Application Gateway rewrites all request paths. The ACME HTTP-01\n"
+  printf "   challenge path (/.well-known/acme-challenge/<token>) is modified by AGW\n"
+  printf "   and Let's Encrypt cannot verify the token.\n"
+  echo ""
+  printf "   Supported options for agic:\n"
+  printf "     • none   — HTTP\n"
+  printf "     • dns01  — HTTPS via DNS-01 (requires custom domain + Azure DNS zone)\n"
+  echo ""
+  if ! _ask_yn "Continue anyway (cert will fail to issue)?" "n"; then
+    echo "Aborted. Re-run and select a compatible TLS option."
+    exit 1
+  fi
+fi
 
 if [[ "$TLS_SOURCE" != "none" && "$TLS_SOURCE" != "existing" ]]; then
   echo ""

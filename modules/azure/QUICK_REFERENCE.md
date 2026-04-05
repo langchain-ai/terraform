@@ -251,16 +251,20 @@ default_node_pool_max_count = 12
 default_node_pool_max_pods  = 60
 
 # ── TLS (pick one approach) ───────────────────────────────────────────────────
-# Option A — Azure Public IP DNS label (fastest, free, no custom domain needed)
-#   → langsmith-prod.eastus.cloudapp.azure.com
-dns_label        = "langsmith-prod"
-tls_certificate_source = "letsencrypt"
-letsencrypt_email      = "you@example.com"
+# Option A — HTTP only (quickstart default, zero setup — validated ✅)
+#   → http://langsmith-prod.eastus.cloudapp.azure.com
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
 
-# Option B — Custom domain + DNS-01 challenge (production recommended)
+# Option B — HTTPS via Let's Encrypt HTTP-01 (nginx, istio, envoy-gateway only — validated ✅)
+# tls_certificate_source = "letsencrypt"
+# letsencrypt_email      = "you@example.com"
+
+# Option C — Custom domain + DNS-01 challenge (all controllers — validated ✅)
 # tls_certificate_source = "dns01"
 # langsmith_domain       = "langsmith.example.com"
 # letsencrypt_email      = "you@example.com"
+# create_dns_zone        = true
 
 # ── Sizing + addon flags ───────────────────────────────────────────────────────
 sizing_profile = "production"
