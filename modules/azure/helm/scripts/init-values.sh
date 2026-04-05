@@ -379,7 +379,17 @@ agentBuilderTriggerServer:
 # istio: aks-istio-ingressgateway-external — no match, no listeners.
 # deploy.sh creates an explicit Istio Gateway + VirtualService instead.
 # Disable chart-managed Ingress and istioGateway — routing is handled externally.
-$(if [[ "$_ingress_controller" == "istio-addon" || "$_ingress_controller" == "envoy-gateway" ]]; then
+$(if [[ "$_ingress_controller" == "istio-addon" ]]; then
+  echo "ingress:"
+  echo "  enabled: false"
+  # Point the chart at the external Gateway deploy.sh creates (langsmith-gateway).
+  # The chart creates VirtualServices only — no Gateway resource is created.
+  # This satisfies the chart validation when LangGraph Platform is enabled.
+  echo "istioGateway:"
+  echo "  enabled: true"
+  echo "  name: langsmith-gateway"
+  echo "  namespace: ${NAMESPACE}"
+elif [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   echo "ingress:"
   echo "  enabled: false"
   echo "istioGateway:"

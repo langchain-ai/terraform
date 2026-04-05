@@ -163,36 +163,48 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 
 ## Ingress Controllers
 
-Five ingress options are supported. Set `ingress_controller` in `terraform.tfvars` before `make apply`:
+Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full TLS compatibility matrix and per-controller setup guide.
 
-| Value | What Terraform installs | `ingressClassName` | Best for |
-|-------|------------------------|-------------------|----------|
-| `nginx` (default) | `ingress-nginx` Helm chart → Azure LB | `nginx` | Standard deployments. Simplest setup. |
-| `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio control plane) | `istio` | Azure-managed Istio SLA. Recommended over self-managed. |
-| `istio` | `istio/base` + `istiod` + `istio/gateway` Helm charts | `istio` | Self-managed Istio. Full mesh features, sidecars, mTLS. |
-| `agic` | Azure Application Gateway v2 + AGIC Helm chart (Workload Identity ARM auth) | `azure/application-gateway` | Enterprise Azure. Native WAF integration. Similar to AWS ALB + LBC. |
-| `envoy-gateway` | `envoyproxy/gateway-helm` (OCI) — Gateway API native | Gateway/HTTPRoute | Gateway API-native. No Istio. Envoy ecosystem. |
-| `none` | Nothing | — | Bring your own. |
-
-See `helm/values/examples/langsmith-values-ingress-*.yaml` for per-controller Helm values examples.
+| Value | What Terraform installs | Best for |
+|-------|------------------------|----------|
+| `nginx` **(default)** | `ingress-nginx` Helm chart → Azure LB | Standard deployments. Simplest setup. Use this for quickstart. |
+| `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
+| `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
+| `agic` | Azure Application Gateway v2 + AGIC Helm chart | Enterprise Azure. Native L7 WAF. Requires custom domain + dns01. |
+| `envoy-gateway` | `gateway-helm` OCI chart — Kubernetes Gateway API | Gateway API-native. Modern alternative to Ingress. |
 
 ---
 
-## TLS / DNS Options
+## DNS + TLS
 
-Azure Public IP DNS labels work with **all ingress controllers** — nginx, istio, istio-addon, and envoy-gateway. `deploy.sh` automatically applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to the correct LoadBalancer service based on `ingress_controller`.
+`dns_label` gives you a free Azure subdomain — `<label>.<region>.cloudapp.azure.com` — with no domain registration or DNS zone needed. `deploy.sh` annotates the correct LB service automatically.
 
-| Option | Variables | When to use |
-|--------|-----------|-------------|
-| **Public IP DNS label** ⭐ | `dns_label` + `tls_certificate_source = "letsencrypt"` | Fastest. Free Azure subdomain (`<label>.<region>.cloudapp.azure.com`). cert-manager HTTP-01. No DNS zone or registrar needed. Works for nginx, istio, istio-addon, envoy-gateway. |
-| **AGIC auto-FQDN** | `ingress_controller = "agic"` | AGW public IP gets an auto-assigned FQDN. `init-values.sh` reads it from `terraform output agw_public_ip_fqdn`. Use `langsmith_domain` for a cleaner hostname. |
-| **Custom domain + DNS-01** | `tls_certificate_source = "dns01"` + `langsmith_domain` + `create_dns_zone = true` | Custom domain + Let's Encrypt DNS-01 challenge via Azure DNS zone. |
-| **Custom domain + existing cert** | `tls_certificate_source = "existing"` + `langsmith_domain` | Bring your own TLS secret. |
-| **No TLS** | `tls_certificate_source = "none"` | HTTP only (dev/internal). |
+**Quickstart default (HTTP, zero setup):**
+```hcl
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
 
-**Recommended for most deployments** — Azure Public IP DNS label with Let's Encrypt HTTP-01. Works across all ingress types except AGIC. No custom domain, no DNS zone, instant certificate. Terraform creates the cert-manager `ClusterIssuer` automatically in Pass 1.
+**Add HTTPS with Let's Encrypt (nginx only — HTTP-01 requires an IngressClass):**
+```hcl
+dns_label              = "langsmith-prod"
+tls_certificate_source = "letsencrypt"
+letsencrypt_email      = "you@example.com"
+```
 
-The subdomain (`<label>.<region>.cloudapp.azure.com`) is ready immediately after `make apply`.
+**Custom domain + DNS-01 (all controllers, works behind firewalls):**
+```hcl
+langsmith_domain       = "langsmith.mycompany.com"
+tls_certificate_source = "dns01"
+letsencrypt_email      = "you@example.com"
+create_dns_zone        = true    # see INGRESS_CONTROLLERS.md for NS delegation steps
+```
+
+> ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
+> `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
+> For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
+>
+> See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix.
 
 ---
 

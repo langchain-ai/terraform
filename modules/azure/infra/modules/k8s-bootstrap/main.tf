@@ -231,6 +231,7 @@ resource "helm_release" "cert_manager" {
     content {
       name  = "podLabels.azure\\.workload\\.identity/use"
       value = "true"
+      type  = "string"
     }
   }
   dynamic "set" {
