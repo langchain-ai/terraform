@@ -13,7 +13,7 @@ Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `ma
 
 | Controller | `letsencrypt` (HTTP-01) | `dns01` (DNS-01) | `none` (HTTP only) |
 |---|---|---|---|
-| **nginx** | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
+| **nginx** | ✅ Validated | ✅ Validated (azurelangsmith.dzmitry.dev) | ✅ Validated |
 | **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ Validated |
 | **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 | **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | not tested (AGW subnet) |
@@ -225,31 +225,65 @@ letsencrypt_email      = "you@example.com"
 
 ---
 
-## dns01 Prerequisites (custom domain path)
+## dns01 — Custom Domain Path (Validated ✅)
 
-Required when `tls_certificate_source = "dns01"`:
+**Validated: nginx + dns01 + custom domain (`azurelangsmith.dzmitry.dev`) — cert issued in < 4 min, HTTPS 200**
+
+### How it works
+
+```
+Your registrar (Cloudflare, Route53, Squarespace, etc.)
+  └── NS records for subdomain → Azure DNS zone
+        └── cert-manager (Workload Identity) writes TXT record:
+              _acme-challenge.langsmith.mycompany.com = <token>
+                └── Let's Encrypt validates → issues cert
+                      └── cert-manager stores cert as K8s secret → nginx serves HTTPS
+```
+
+cert-manager uses **Workload Identity** (no static credentials) to write TXT records in the Azure DNS zone. The managed identity is created by Terraform and scoped to DNS Zone Contributor on that zone only.
+
+### Why NS records, not CNAME
+
+A CNAME aliases traffic but does not delegate DNS authority. cert-manager needs to **write** TXT records to the zone — that requires Azure DNS to be **authoritative** for the subdomain. NS delegation transfers that authority. CNAME alone will cause the DNS-01 challenge to fail.
+
+### Step-by-step
 
 1. **Set in `terraform.tfvars`:**
    ```hcl
-   langsmith_domain  = "langsmith.mycompany.com"
-   create_dns_zone   = true
-   letsencrypt_email = "you@example.com"
+   ingress_controller     = "nginx"         # works with all controllers
+   tls_certificate_source = "dns01"
+   langsmith_domain       = "langsmith.mycompany.com"
+   create_dns_zone        = true
+   letsencrypt_email      = "you@example.com"
    ```
 
-2. **`make apply`** — creates the Azure DNS zone
+2. **`make apply`** — creates the Azure DNS zone, outputs 4 nameservers
 
-3. **Get nameservers and delegate at your registrar:**
+3. **Get the nameservers:**
    ```bash
    terraform -chdir=infra output dns_nameservers
-   # Add these 4 NS records at your registrar under langsmith.mycompany.com
+   # → ns1-04.azure-dns.com. ns2-04.azure-dns.net. ...
    ```
 
-4. **Verify delegation (wait 5–30 min for propagation):**
+4. **Add NS records at your registrar** (wherever the parent domain is managed):
+   - Apex domain (`mycompany.com`): add 4 NS records for `langsmith` pointing to the Azure nameservers
+   - Full domain (`mycompany.com`): replace existing NS records with the 4 Azure ones (delegates entire zone)
+
+5. **Verify propagation** (usually < 5 min):
    ```bash
    dig NS langsmith.mycompany.com @8.8.8.8
    ```
 
-5. **`make deploy`** — `deploy.sh` creates the DNS-01 ClusterIssuer (azureDNS solver + Workload Identity) automatically
+6. **`make deploy`** — `deploy.sh` creates the DNS-01 ClusterIssuer automatically (azureDNS solver + Workload Identity). cert-manager issues the cert without any further manual steps.
+
+7. **After deploy — get LB IP and set A record:**
+   ```bash
+   kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   # Add to terraform.tfvars: ingress_ip = "<lb-ip>"
+   make apply   # creates A record in Azure DNS zone
+   ```
+
+   `make status` guides you through this — it prints the exact A record command if `ingress_ip` is not yet set.
 
 > ⚠️ `create_dns_zone = true` with empty `langsmith_domain` causes a Terraform 502 error.
 > Always set `langsmith_domain` before enabling `create_dns_zone`.

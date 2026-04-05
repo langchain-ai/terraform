@@ -192,19 +192,32 @@ tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
 ```
 
-**Custom domain + DNS-01 (all controllers, works behind firewalls):**
+**Custom domain + DNS-01 (all controllers, works behind firewalls) — Validated ✅:**
 ```hcl
 langsmith_domain       = "langsmith.mycompany.com"
 tls_certificate_source = "dns01"
 letsencrypt_email      = "you@example.com"
-create_dns_zone        = true    # see INGRESS_CONTROLLERS.md for NS delegation steps
+create_dns_zone        = true
+# After deploy: add ingress_ip = "<lb-ip>" and re-run make apply (creates A record)
 ```
+
+**dns01 flow:**
+1. `make apply` → Terraform creates Azure DNS zone, outputs 4 nameservers
+2. At your registrar: add NS records for the subdomain pointing to those 4 nameservers
+3. Verify: `dig NS langsmith.mycompany.com @8.8.8.8`
+4. `make deploy` → cert-manager issues cert via DNS-01 automatically (Workload Identity writes TXT record to Azure DNS)
+5. Get LB IP → add `ingress_ip = "<ip>"` to `terraform.tfvars` → `make apply` (creates A record)
+6. `make status` shows exactly what NS and A records to add at each stage
+
+> **Why NS records, not CNAME:** cert-manager must *write* TXT records to the zone to prove ownership.
+> That requires Azure DNS to be authoritative for the subdomain — NS delegation grants that authority.
+> A CNAME only aliases traffic and does not transfer DNS authority; the DNS-01 challenge will fail.
 
 > ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
 > For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
 >
-> See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix.
+> See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix and validated paths.
 
 ---
 
@@ -220,10 +233,13 @@ All commands run from `terraform/azure/`. Run `make help` to see the list at any
 Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scratch. Mirrors the AWS quickstart experience.
 
 - Sections: profile → subscription/naming → networking → AKS sizing → ingress controller → DNS/TLS → backend services → Key Vault → sizing profile → security add-ons
+- Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
+- After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
 - Auto-detects Azure subscription ID from `az account show`
 - Validates identifier format (`-prod`, `-staging`, `-myco`)
 - Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
-- Prints a Next Steps summary with the exact commands to run after generating the file
+- Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
+- Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 
 > **Run this first** on a new deployment. After it completes, run `source infra/scripts/setup-env.sh` to set up secrets.
 
