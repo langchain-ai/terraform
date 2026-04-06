@@ -2,6 +2,8 @@
 
 This is the Azure LangSmith deployment directory. It provisions AKS + managed services via Terraform and deploys LangSmith via Helm. Everything is driven through `make` — do not run `terraform`, `helm`, or `kubectl` directly unless debugging a specific issue.
 
+This project works extensively with LangSmith self-hosted deployments (Helm, Kubernetes, Azure/AWS/GCP). Key technologies: TypeScript, Python, Markdown docs, YAML (Helm/k8s), Terraform, Bash. When helping with customer issues, always check official LangSmith docs before answering — use the `support_workspace` memory entry which points to the local checkout of all LangSmith Helm charts, source code, and docs.
+
 ---
 
 ## Ownership and context
