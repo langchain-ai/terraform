@@ -397,11 +397,13 @@ langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0        
 
 > **Uninstall Helm BEFORE `terraform destroy`.** The Azure Load Balancer created by NGINX blocks VNet deletion. Run `helm uninstall langsmith -n langsmith --wait` first.
 
-> **DNS label works for nginx, istio, istio-addon, and envoy-gateway.** `dns_label` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to whichever LB service your ingress controller creates. No custom domain needed — `<label>.<region>.cloudapp.azure.com` resolves immediately. Not applicable to AGIC — use `langsmith_domain` with an A record pointing to `terraform output agw_public_ip_address`, or use the auto-assigned FQDN from `terraform output agw_public_ip_fqdn`.
+> **DNS label works for nginx, istio, istio-addon, and envoy-gateway.** `dns_label` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to whichever LB service your ingress controller creates. No custom domain needed — `<label>.<region>.cloudapp.azure.com` resolves immediately. For AGIC, `dns_label` is applied directly to the AGW public IP resource — the FQDN is available via `terraform output agw_public_ip_fqdn` after apply.
 
 > **AGIC requires a dedicated `/24` subnet.** Terraform creates it automatically (`10.0.96.0/24`) when `ingress_controller = "agic"`. Application Gateway v2 requires an exclusive subnet — no pods, VMs, or other resources. The subnet is managed by the networking module; no manual creation needed.
 
 > **AGIC `ignore_changes` lifecycle.** Terraform creates the App Gateway with placeholder backend/listener/rule. AGIC rewrites these on first reconcile. `ignore_changes` in the AGW resource prevents Terraform from overwriting AGIC-managed routing on subsequent `terraform apply` runs.
+
+> **AGIC RBAC timing — known issue.** The AKS AGIC addon creates its managed identity during cluster provisioning, but Azure AD needs ~5 minutes to register it before role assignments take effect. Terraform adds a 300s `time_sleep` before creating role assignments to avoid this. If the AGIC pod is still in CrashLoopBackOff after `make apply`, run: `az aks update --name <cluster> --resource-group <rg> --yes` then `kubectl delete pod -n kube-system -l app=ingress-azure`.
 
 > **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
 

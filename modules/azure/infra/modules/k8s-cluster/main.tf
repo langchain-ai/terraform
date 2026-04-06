@@ -482,27 +482,39 @@ resource "azurerm_application_gateway" "agw" {
 #   azurerm_kubernetes_cluster.main.ingress_application_gateway[0]
 #     .ingress_application_gateway_identity[0].object_id
 # Both agic_addon_principal_id and agic_vnet_id are defined in the locals block at the top of this file.
+#
+# Root cause: AKS creates the AGIC managed identity during cluster provisioning, but the identity
+# is not immediately usable for RBAC evaluation. Role assignments created too soon result in
+# persistent 403 errors from the AGIC controller even though the assignments exist in ARM.
+# A 5-minute wait after cluster creation allows Azure AD to fully register the identity.
+resource "time_sleep" "agic_identity_propagation" {
+  count           = var.ingress_controller == "agic" ? 1 : 0
+  create_duration = "300s"
+  depends_on      = [azurerm_kubernetes_cluster.main]
+}
 
 resource "azurerm_role_assignment" "agic_rg_reader" {
-  count                = var.ingress_controller == "agic" && local.agic_addon_principal_id != null ? 1 : 0
+  count                = var.ingress_controller == "agic" ? 1 : 0
   scope                = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
   role_definition_name = "Reader"
-  principal_id         = local.agic_addon_principal_id
+  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  depends_on           = [time_sleep.agic_identity_propagation]
 }
 
 resource "azurerm_role_assignment" "agic_agw_contributor" {
-  count                = var.ingress_controller == "agic" && local.agic_addon_principal_id != null ? 1 : 0
+  count                = var.ingress_controller == "agic" ? 1 : 0
   scope                = azurerm_application_gateway.agw[0].id
   role_definition_name = "Contributor"
-  principal_id         = local.agic_addon_principal_id
-  depends_on           = [azurerm_application_gateway.agw]
+  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
 
 resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
-  count                = var.ingress_controller == "agic" && local.agic_addon_principal_id != null && local.agic_vnet_id != "" ? 1 : 0
+  count                = var.ingress_controller == "agic" ? 1 : 0
   scope                = local.agic_vnet_id
   role_definition_name = "Network Contributor"
-  principal_id         = local.agic_addon_principal_id
+  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  depends_on           = [time_sleep.agic_identity_propagation]
 }
 
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────

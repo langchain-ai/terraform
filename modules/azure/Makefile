@@ -15,7 +15,7 @@
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
         init-app plan-app apply-app destroy-app deploy-all-tf \
-        deploy-observability uninstall-observability \
+
         clean
 
 INFRA_DIR := infra
@@ -79,11 +79,17 @@ apply: ## terraform apply (infra) — two-stage: Azure infra first, then k8s boo
 	@echo "→ Stage 3: ClusterIssuer + remaining resources (cert-manager CRDs now ready)..."
 	terraform -chdir=$(INFRA_DIR) apply -auto-approve
 
-destroy: ## terraform destroy (infra)
+destroy: ## terraform destroy (infra) — prompts for confirmation
 	terraform -chdir=$(INFRA_DIR) destroy
+
+destroy-force: ## terraform destroy without confirmation prompt (use after make uninstall)
+	terraform -chdir=$(INFRA_DIR) destroy -auto-approve
 
 clean: ## Remove all local secrets and generated files (run after destroy)
 	$(INFRA_DIR)/scripts/clean.sh
+
+clean-force: ## Remove all local secrets and generated files without confirmation
+	echo "y" | $(INFRA_DIR)/scripts/clean.sh
 
 # ── Pass 1.5: Cluster Access + K8s Secrets ────────────────────────────────────
 
@@ -103,19 +109,6 @@ deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + 
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
-
-# ── Pass 5.5: Observability (OTEL Collector) ──────────────────────────────────
-
-deploy-observability: ## Deploy OTEL collector (separate release, langsmith namespace)
-	@helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts 2>/dev/null || true
-	@helm repo update open-telemetry
-	helm upgrade --install langsmith-observability open-telemetry/opentelemetry-collector \
-		--namespace langsmith \
-		--values $(HELM_DIR)/values/examples/langsmith-observability-collector.yaml \
-		--wait --timeout 5m
-
-uninstall-observability: ## Uninstall OTEL collector release
-	helm uninstall langsmith-observability --namespace langsmith --ignore-not-found
 
 # ── Pass 2: App (Terraform Helm) ──────────────────────────────────────────────
 

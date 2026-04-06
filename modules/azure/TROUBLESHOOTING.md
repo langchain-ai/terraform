@@ -855,29 +855,35 @@ ErrorApplicationGatewayForbidden: does not have authorization to perform action
 Microsoft.Network/applicationGateways/read
 ```
 
-**Cause:** AKS creates its own managed identity for the `ingress_application_gateway` add-on (named `ingressapplicationgateway-<cluster>` in the MC_ resource group). Azure does NOT automatically grant the required permissions.
+**Cause:** AKS creates its own managed identity for the `ingress_application_gateway` add-on (named `ingressapplicationgateway-<cluster>` in the MC_ resource group). The identity is created during cluster provisioning but requires ~5 minutes to register in Azure AD before role assignments take effect. If Terraform creates assignments too quickly, the AGIC controller gets persistent 403s even though the assignments appear valid in ARM.
 
-**Fix (Terraform — automated from v1+):**
-The `k8s-cluster` module now creates all three role assignments automatically using the add-on identity extracted from `azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id`.
+**Fix (Terraform — current):**
+The `k8s-cluster` module creates all three role assignments automatically and waits 300s after cluster creation (`time_sleep.agic_identity_propagation`) to allow Azure AD registration before creating them. On fresh deploys this is handled automatically.
 
-**Fix (manual — for existing clusters or debugging):**
+**Fix (existing cluster — if AGIC is still 403 after `make apply`):**
 ```bash
-# Get the add-on identity object_id
+# Trigger AKS reconciliation — this re-registers the AGIC identity
+az aks update --name <CLUSTER> --resource-group <RG> --yes
+
+# Wait 2-3 min, then restart the AGIC pod
+kubectl delete pod -n kube-system -l app=ingress-azure
+```
+
+**Fix (manual role assignments — for debugging or pre-existing clusters):**
+```bash
 AGIC_OID=$(az aks show -g <RG> -n <CLUSTER> \
   --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
 
-# Get resource IDs
 RG_ID="/subscriptions/<sub>/resourceGroups/<RG>"
 AGW_ID=$(az network application-gateway show -g <RG> -n <AGW> --query id -o tsv)
 VNET_ID=$(az network vnet show -g <RG> -n <VNET> --query id -o tsv)
 
-# Assign all three roles
 az role assignment create --role Reader --scope "$RG_ID" --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
 az role assignment create --role Contributor --scope "$AGW_ID" --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
 az role assignment create --role "Network Contributor" --scope "$VNET_ID" --assignee-object-id "$AGIC_OID" --assignee-principal-type ServicePrincipal
 
-# Restart AGIC pod to pick up new token
-kubectl rollout restart deployment/ingress-appgw-deployment -n kube-system
+# Wait 5 min for propagation, then restart AGIC pod
+kubectl delete pod -n kube-system -l app=ingress-azure
 ```
 
 ---

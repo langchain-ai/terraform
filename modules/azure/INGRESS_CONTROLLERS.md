@@ -16,7 +16,7 @@ Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `ma
 | **nginx** | ✅ Validated | ✅ Validated (azurelangsmith.dzmitry.dev) | ✅ Validated |
 | **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ Validated |
 | **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
-| **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | not tested (AGW subnet) |
+| **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | ✅ Validated (Standard_v2) |
 | **envoy-gateway** | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 
 ### Why istio-addon + letsencrypt fails
@@ -135,11 +135,21 @@ in `values-overrides.yaml`. Required for chart validation — no manual steps ne
 
 ### agic — Azure Application Gateway
 
+**Validated: ✅ agic + none (HTTP) — Standard_v2, LangGraph Platform (`enable_deployments = true`)**
 **TLS constraint: ⚠️ `letsencrypt` NOT supported — must use `dns01` + custom domain**
 
 ```hcl
+# HTTP-only (validated)
 ingress_controller     = "agic"
 agw_sku_tier           = "Standard_v2"    # or "WAF_v2" for built-in WAF
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via DNS-01 (requires custom domain)
+ingress_controller     = "agic"
+agw_sku_tier           = "Standard_v2"
 langsmith_domain       = "langsmith.mycompany.com"
 tls_certificate_source = "dns01"
 letsencrypt_email      = "you@example.com"
@@ -147,11 +157,17 @@ create_dns_zone        = true
 ```
 
 **How it works:**
-- Terraform creates Application Gateway v2 + dedicated `/24` subnet + AGIC Helm chart
+- Terraform creates Application Gateway v2 + dedicated `/24` subnet
 - AKS provisions `IngressClass` named `azure-application-gateway`
 - AGIC watches `Ingress` resources and programs AGW routing rules
 - cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
 - Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor on VNet
+
+**RBAC timing — known issue:** The AKS AGIC addon creates its managed identity during cluster
+provisioning, but the identity requires ~5 minutes to register in Azure AD before role assignments
+take effect. Terraform adds a `time_sleep` of 300s between cluster creation and role assignment
+creation to prevent the AGIC controller from entering CrashLoopBackOff with persistent 403 errors.
+Without this delay, AGIC fails immediately and requires `az aks update` to trigger reconciliation.
 
 **Enable WAF:** set `agw_sku_tier = "WAF_v2"` — built into AGW, no separate WAF module needed.
 
@@ -328,4 +344,5 @@ make init-values && make deploy             # re-deploy LangSmith
 | VirtualService ownership conflict on re-deploy | VS was created by kubectl, not Helm | `kubectl delete vs langsmith -n langsmith` then `make deploy` |
 | `create_dns_zone` 502 error | `langsmith_domain` not set | Set `langsmith_domain` or `create_dns_zone = false` |
 | AGW HTTP-01 cert fails | AGW rewrites ACME challenge path | Use `dns01` for AGIC |
+| AGIC pod CrashLoopBackOff, persistent 403 on AGW | AGIC addon identity not yet registered in Azure AD when role assignments were created | Wait 5 min then run `az aks update --name <cluster> --resource-group <rg> --yes` — Terraform now adds a 300s `time_sleep` before role assignments to prevent this |
 | `bool cannot unmarshal into string` on cert-manager | Missing `type = "string"` on podLabels set block | Fixed in k8s-bootstrap/main.tf — run `make apply` |
