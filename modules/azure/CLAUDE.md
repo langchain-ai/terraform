@@ -262,7 +262,8 @@ az keyvault purge --name "langsmith-kv-<identifier>" --location eastus
 ## What NOT to do
 
 - **Do not switch kubectl context to a non-Azure cluster.** Always verify context before any kubectl command: `kubectl config current-context`. The correct context is the AKS cluster — set it with `kubectl config use-context <aks-cluster-name>` or re-run `make kubeconfig`. Never run kubectl commands against a GKE, EKS, or other cloud cluster while working in this directory.
-- **Do not run `terraform apply` directly.** Use `make apply` — it ensures `secrets.auto.tfvars` exists first.
+- **Always use `make` targets — never invoke `terraform`, `helm`, `kubectl`, or scripts directly.** The Makefile is the single entry point: it wires secrets, ordering, and side effects correctly. If a `make` target doesn't do what you need, **edit the Makefile or the underlying script** rather than running the raw command by hand. Direct invocations silently skip DNS annotation, ClusterIssuer creation, secrets injection, and two-stage apply ordering.
+- **Do not run `terraform apply` directly.** Use `make apply` — it ensures `secrets.auto.tfvars` exists first and runs the two-stage apply (Azure infra → k8s bootstrap → ClusterIssuer).
 - **Do not run `helm upgrade` directly.** `deploy.sh` handles DNS annotation, ClusterIssuer, and values chain. Manual helm skips all of that.
 - **Do not commit `terraform.tfvars` or `secrets.auto.tfvars`.** Both are gitignored. They contain subscription IDs, passwords, and license keys.
 - **Do not set secrets inline in values files.** Secrets flow through `langsmith-config-secret`. Inline secrets appear in Helm release metadata and `helm get values` output.
