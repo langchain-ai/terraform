@@ -261,6 +261,18 @@ az keyvault purge --name "langsmith-kv-<identifier>" --location eastus
 
 ---
 
+## Working style
+
+These are patterns learned from real sessions — follow them to avoid repeated correction cycles.
+
+- **Start with the simplest solution.** Do not over-engineer initial implementations. No extra services, tabs, or abstractions beyond what was asked. Ask before adding complexity. (Repeated friction: 3-tab UIs when a single page was requested, Prometheus added when Azure Monitor only was wanted.)
+- **When a specific tool or approach is specified, use exactly that.** Do not substitute with raw bash commands, alternative CLIs, or workarounds without asking first. (Repeated friction: raw bash instead of `make` targets, unwanted tools added to scripts.)
+- **Before marking a task done, check for related files and downstream side effects.** A change to one file often requires a corresponding change elsewhere — round-trip fidelity, scoped CSS, values chain ordering. Explicitly scan for related files before finishing.
+- **When updating dates, branding, or text that may appear in multiple files, grep the whole repo first.** Use `grep -r '2024' --include='*.md' --include='*.ts' --include='*.yaml'` (or the relevant term) to find all instances before committing. Partial updates cause multi-pass fix cycles.
+- **For customer debugging sessions, investigate before proposing fixes.** Read logs, check actual cluster state, cross-reference docs — then propose a root cause. Serial trial-and-error wastes time; parallel investigation via subagents is preferred for complex issues.
+
+---
+
 ## What NOT to do
 
 - **Do not switch kubectl context to a non-Azure cluster.** Always verify context before any kubectl command: `kubectl config current-context`. The correct context is the AKS cluster — set it with `kubectl config use-context <aks-cluster-name>` or re-run `make kubeconfig`. Never run kubectl commands against a GKE, EKS, or other cloud cluster while working in this directory.
