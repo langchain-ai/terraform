@@ -144,6 +144,12 @@ output "tls_certificate_source" {
   value       = var.tls_certificate_source
 }
 
+# ── cert-manager Workload Identity (dns01 path) ──────────────────────────────
+output "cert_manager_identity_client_id" {
+  description = "Client ID of the cert-manager managed identity (used for DNS-01 AzureDNS ClusterIssuer)"
+  value       = module.aks.cert_manager_identity_client_id
+}
+
 # ── DNS ───────────────────────────────────────────────────────────────────────
 output "dns_nameservers" {
   description = "Azure nameservers for the DNS zone — configure at your registrar"

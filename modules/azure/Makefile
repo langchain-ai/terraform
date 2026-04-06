@@ -15,6 +15,7 @@
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
         init-app plan-app apply-app destroy-app deploy-all-tf \
+
         clean
 
 INFRA_DIR := infra
@@ -78,11 +79,17 @@ apply: ## terraform apply (infra) — two-stage: Azure infra first, then k8s boo
 	@echo "→ Stage 3: ClusterIssuer + remaining resources (cert-manager CRDs now ready)..."
 	terraform -chdir=$(INFRA_DIR) apply -auto-approve
 
-destroy: ## terraform destroy (infra)
+destroy: ## terraform destroy (infra) — prompts for confirmation
 	terraform -chdir=$(INFRA_DIR) destroy
+
+destroy-force: ## terraform destroy without confirmation prompt (use after make uninstall)
+	terraform -chdir=$(INFRA_DIR) destroy -auto-approve
 
 clean: ## Remove all local secrets and generated files (run after destroy)
 	$(INFRA_DIR)/scripts/clean.sh
+
+clean-force: ## Remove all local secrets and generated files without confirmation
+	echo "y" | $(INFRA_DIR)/scripts/clean.sh
 
 # ── Pass 1.5: Cluster Access + K8s Secrets ────────────────────────────────────
 

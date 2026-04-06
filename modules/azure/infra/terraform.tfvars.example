@@ -86,30 +86,38 @@ ingress_controller = "nginx"
 
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
-# istio_addon_revision = "asm-1-22"
+# istio_addon_revision = "asm-1-27"
 
 # AGIC options — only used when ingress_controller = "agic"
 # agw_sku_tier            = "Standard_v2"   # or "WAF_v2" to enable WAF on the App Gateway
 # agic_subnet_address_prefix = ["10.0.96.0/24"]  # must not overlap other subnets
 
 # ── DNS + TLS ─────────────────────────────────────────────────────────────────
-# Azure Public IP DNS label — works with nginx, istio, istio-addon, envoy-gateway.
-# Azure assigns <dns_label>.<location>.cloudapp.azure.com to the ingress LB
-# public IP via the service.beta.kubernetes.io/azure-dns-label-name annotation.
-# Free, no DNS zone needed, no custom domain required.
+# Azure Public IP DNS label — free Azure subdomain, no domain registration needed.
+# Azure assigns <dns_label>.<location>.cloudapp.azure.com to the ingress LB public IP.
 # deploy.sh applies the annotation to the right LB service based on ingress_controller.
-# Note: not applicable to AGIC — use langsmith_domain with an A record, or use the
-# auto-assigned FQDN from: terraform output agw_public_ip_fqdn
+# Not applicable to AGIC — use langsmith_domain or terraform output agw_public_ip_fqdn.
 #
-# Option A: Azure Public IP DNS label + Let's Encrypt HTTP-01 (recommended for nginx/istio)
-#   → https://<dns_label>.<location>.cloudapp.azure.com
+# ⚠️  TLS compatibility:
+#   letsencrypt (HTTP-01) works with: nginx, istio (self-managed), envoy-gateway
+#   letsencrypt does NOT work with:   istio-addon, agic  (no IngressClass — ACME challenge fails)
+#   dns01 works with: all controllers (requires custom domain — see Option C)
+#   See INGRESS_CONTROLLERS.md for the full compatibility matrix.
 #
-dns_label        = "langsmith-prod"       # → langsmith-prod.eastus.cloudapp.azure.com
-tls_certificate_source = "letsencrypt"
-letsencrypt_email      = "you@example.com"
+# Option A: HTTP only — quickstart default, zero cert setup (validated ✅)
+#   → http://<dns_label>.<location>.cloudapp.azure.com
+#
+dns_label              = "langsmith-prod"     # → langsmith-prod.eastus.cloudapp.azure.com
+tls_certificate_source = "none"
 
-# Option B: Custom domain + DNS-01 cert-manager (cert issued on cluster)
-#   Requires: Azure DNS zone + NS delegation at registrar (one-time).
+# Option B: HTTPS via Let's Encrypt HTTP-01 — nginx only (validated ✅)
+#   → https://<dns_label>.<location>.cloudapp.azure.com
+# tls_certificate_source = "letsencrypt"
+# letsencrypt_email      = "you@example.com"
+
+# Option C: Custom domain + DNS-01 — all controllers, works behind firewalls
+#   Requires: Azure DNS zone + NS delegation at registrar (one-time setup).
+#   → https://langsmith.example.com
 # tls_certificate_source = "dns01"
 # create_dns_zone        = true
 # langsmith_domain       = "langsmith.example.com"

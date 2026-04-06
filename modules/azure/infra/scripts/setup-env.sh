@@ -32,11 +32,23 @@ fi
 _kv_name="langsmith-kv${_identifier}"
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
+# If stdin is not a tty and the env var is not set, exit with a clear error
+# rather than silently storing empty/garbage values in secrets.auto.tfvars.
 _prompt() {
   local env_var="$1"
   local prompt_text="$2"
   local val="${!env_var:-}"
   if [[ -z "$val" ]]; then
+    if [[ ! -t 0 ]]; then
+      echo "ERROR: setup-env.sh requires interactive input (stdin is not a tty)." >&2
+      echo "       Set env vars to skip prompts:" >&2
+      echo "         export LANGSMITH_PG_PASSWORD=..." >&2
+      echo "         export LANGSMITH_LICENSE_KEY=..." >&2
+      echo "         export LANGSMITH_ADMIN_PASSWORD=..." >&2
+      echo "         export LANGSMITH_ADMIN_EMAIL=..." >&2
+      echo "       Then re-run: make setup-env" >&2
+      exit 1
+    fi
     printf "%s: " "$prompt_text"
     read -rs val
     echo

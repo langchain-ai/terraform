@@ -298,12 +298,12 @@ variable "langsmith_helm_chart_version" {
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = automatic via cert-manager. 'existing' = bring your own cert. 'none' = HTTP only (demo/dev)."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = bring your own cert. 'none' = HTTP only (demo/dev)."
   default     = "letsencrypt"
 
   validation {
-    condition     = contains(["none", "letsencrypt", "existing"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be 'none', 'letsencrypt', or 'existing'."
+    condition     = contains(["none", "letsencrypt", "dns01", "existing"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be 'none', 'letsencrypt', 'dns01', or 'existing'."
   }
 }
 

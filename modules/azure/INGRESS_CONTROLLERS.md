@@ -1,198 +1,348 @@
-# LangSmith Azure — Ingress Controller Guide
+# LangSmith Azure — Ingress & TLS Guide
 
-Tested ingress controllers for LangSmith on AKS. Each controller is a standalone deployment pattern — switch by changing `ingress_controller` in `terraform.tfvars` and re-running `make apply`.
+All controllers and TLS paths below have been **end-to-end validated** on AKS (chart 0.13.38)
+including LangGraph Platform (Passes 3–5, `enable_deployments = true`).
 
----
-
-## Quick Comparison
-
-| Controller | `ingress_controller` value | How it works | `dns_label` support | Notes |
-|---|---|---|---|---|
-| **nginx** | `nginx` | K8s Ingress via NGINX ingress controller Helm chart | Yes — LB service annotation | Simplest, recommended default |
-| **istio** | `istio` | Self-managed Istio via Helm (istiod + ingressgateway) | Yes — LB service annotation | Full mesh features available |
-| **istio-addon** | `istio-addon` | AKS managed Istio Service Mesh add-on | Yes — LB service annotation | No Helm install, Azure managed revision |
-| **agic** | `agic` | Azure Application Gateway via AKS add-on | Yes — AGW public IP `domain_name_label` | L7 WAF built-in when `agw_sku_tier = "WAF_v2"` |
-| **envoy-gateway** | `envoy-gateway` | Envoy Gateway with Kubernetes Gateway API | Yes — LB service annotation | Gateway API (not Ingress), most modern |
+Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `make apply`.
 
 ---
 
-## terraform.tfvars Snippets
+## TLS Compatibility Matrix
 
-### nginx (default, simplest)
+**Invalid combinations fail silently or produce a broken cert — use this table before choosing.**
+
+| Controller | `letsencrypt` (HTTP-01) | `dns01` (DNS-01) | `none` (HTTP only) |
+|---|---|---|---|
+| **nginx** | ✅ Validated | ✅ Validated (azurelangsmith.dzmitry.dev) | ✅ Validated |
+| **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ Validated |
+| **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
+| **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | ✅ Validated (Standard_v2) |
+| **envoy-gateway** | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
+
+### Why istio-addon + letsencrypt fails
+
+The AKS managed Istio addon does **not** create a Kubernetes `IngressClass` resource.
+cert-manager's HTTP-01 solver creates a temporary `Ingress` with `ingressClassName: istio`,
+but with no IngressClass registered, Istiod ignores it — the ACME challenge never gets
+routed and the cert times out. **Confirmed in testing: `kubectl get ingressclass` returns empty.**
+
+**For istio-addon + TLS:** use `dns01` with a custom domain (cert-manager validates via
+Azure DNS API using Workload Identity — no HTTP routing required).
+
+### Why agic + letsencrypt fails
+
+Azure Application Gateway rewrites all paths. The ACME HTTP-01 challenge endpoint
+(`/.well-known/acme-challenge/<token>`) gets modified or absorbed by AGW health probes,
+and Let's Encrypt cannot verify the token.
+
+**For agic + TLS:** always use `dns01` with a custom domain.
+
+---
+
+## Quick Decision Guide
+
+```
+Do you have a custom domain (langsmith.mycompany.com)?
+│
+├── No  → Use dns_label (Azure free subdomain: <label>.eastus.cloudapp.azure.com)
+│         ├── Want HTTPS?  → nginx + letsencrypt  ✅ (5 min, just need an email)
+│         └── HTTP ok?     → nginx + none         ✅ (fastest, quickstart default)
+│
+└── Yes → langsmith_domain + create_dns_zone = true + NS delegation at registrar
+          └── Any controller → dns01  ✅ (works behind firewalls, no port 80 needed)
+```
+
+---
+
+## Controller Reference
+
+### nginx — recommended default
+
+**Validated: ✅ nginx + none (HTTP) — full 5-pass including LangGraph Platform, Agent Builder, Insights, Polly**
+**Validated: ✅ nginx + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform, Agent Builder, Insights, Polly**
+**Validated: ✅ nginx + letsencrypt + external postgres + external redis — Pass 3, managed Azure services**
+**Validated: ✅ nginx + none + production sizing profile — multi-replica HPA, Standard_D8s_v3 ×3**
 
 ```hcl
+# Quickstart default — HTTP, zero cert setup
+ingress_controller     = "nginx"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# With HTTPS via Let's Encrypt (just add letsencrypt_email)
 ingress_controller     = "nginx"
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
-langsmith_domain       = "langsmith-prod.eastus.cloudapp.azure.com"
 ```
 
 **How it works:**
 - Terraform installs the NGINX ingress controller via Helm chart
-- `dns_label` sets `service.beta.kubernetes.io/azure-dns-label-name` annotation on the LB service
+- `dns_label` sets `service.beta.kubernetes.io/azure-dns-label-name` on the LB service
 - cert-manager issues TLS via HTTP-01 using `ingressClassName: nginx`
+- LangSmith Helm chart creates an `Ingress` resource with `ingressClassName: nginx`
+
+**URL:** `http://langsmith-prod.eastus.cloudapp.azure.com` (or `https://` with letsencrypt)
 
 ---
 
-### istio-addon (AKS managed)
+### istio-addon — AKS managed Istio mesh
+
+**Validated: ✅ istio-addon + none (HTTP) — full 5-pass including LangGraph Platform**
+**Validated: ✅ istio-addon + none + production sizing — multi-replica HPA, Standard_D8s_v3 ×3**
+**TLS constraint: ⚠️ `letsencrypt` NOT supported — use `dns01` or `none`**
 
 ```hcl
+# HTTP-only (dev/internal, no cert needed)
 ingress_controller     = "istio-addon"
+istio_addon_revision   = "asm-1-27"       # check: az aks mesh get-upgrades -g <rg> -n <cluster>
 dns_label              = "langsmith-prod"
-tls_certificate_source = "letsencrypt"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via DNS-01 (production, requires custom domain)
+ingress_controller     = "istio-addon"
+istio_addon_revision   = "asm-1-27"
+langsmith_domain       = "langsmith.mycompany.com"
+tls_certificate_source = "dns01"
 letsencrypt_email      = "you@example.com"
-langsmith_domain       = "langsmith-prod.eastus.cloudapp.azure.com"
+create_dns_zone        = true
 ```
 
 **How it works:**
-- AKS enables the managed Istio service mesh add-on (`istio_addon_revision` in tfvars)
-- External gateway runs in `aks-istio-ingress` namespace with label `istio: aks-istio-ingressgateway-external`
+- AKS enables the managed Istio add-on (Azure manages the revision — no Helm install)
+- External gateway pod in `aks-istio-ingress` ns, label: `istio: aks-istio-ingressgateway-external`
 - `dns_label` sets the DNS label annotation on the AKS-managed external gateway LB service
-- `deploy.sh` creates:
-  1. `ClusterIssuer` with `ingressClassName: istio`
-  2. `networking.istio.io/v1beta1 Gateway` targeting `istio: aks-istio-ingressgateway-external`
-  3. LangSmith `VirtualService`
-  4. TLS secret synced to `aks-istio-ingress` namespace (gateway reads certs from its own namespace)
+- `deploy.sh` creates a `networking.istio.io/v1beta1 Gateway` targeting the external gateway selector
+- LangSmith Helm chart creates the `VirtualService` via `istioGateway.enabled: true` in values
+- For dns01: TLS secret synced to `aks-istio-ingress` namespace after cert issuance
 
-> **Watchout:** `ingressClassName: istio` targets label `istio: ingressgateway` — the AKS gateway has a different label. `make deploy` creates explicit Gateway + VirtualService instead of relying on Kubernetes Ingress.
+**Why Gateway + VirtualService instead of Kubernetes Ingress:**
+The AKS external gateway label is `istio: aks-istio-ingressgateway-external`.
+Kubernetes Ingress with `ingressClassName: istio` targets `istio: ingressgateway` — a mismatch.
+`make deploy` creates an explicit `Gateway` resource with the correct selector.
+
+**For LangGraph Platform (`enable_deployments = true`):**
+`init-values.sh` automatically sets `istioGateway.enabled: true` with `name: langsmith-gateway`
+in `values-overrides.yaml`. Required for chart validation — no manual steps needed.
+
+**URL:** `http://langsmith-prod.eastus.cloudapp.azure.com` (or `https://` with dns01)
 
 ---
 
-### agic (Azure Application Gateway)
+### agic — Azure Application Gateway
+
+**Validated: ✅ agic + none (HTTP) — Standard_v2, LangGraph Platform (`enable_deployments = true`)**
+**TLS constraint: ⚠️ `letsencrypt` NOT supported — must use `dns01` + custom domain**
 
 ```hcl
+# HTTP-only (validated)
 ingress_controller     = "agic"
 agw_sku_tier           = "Standard_v2"    # or "WAF_v2" for built-in WAF
 dns_label              = "langsmith-prod"
-tls_certificate_source = "letsencrypt"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via DNS-01 (requires custom domain)
+ingress_controller     = "agic"
+agw_sku_tier           = "Standard_v2"
+langsmith_domain       = "langsmith.mycompany.com"
+tls_certificate_source = "dns01"
 letsencrypt_email      = "you@example.com"
-langsmith_domain       = "langsmith-prod.eastus.cloudapp.azure.com"
+create_dns_zone        = true
 ```
 
 **How it works:**
-- Terraform creates an Azure Application Gateway + enables the `ingress_application_gateway` AKS add-on
-- AKS provisions an `IngressClass` named `azure-application-gateway`
-- `dns_label` sets `domain_name_label` on the AGW public IP resource (not a K8s annotation)
-- AGIC watches `Ingress` resources with `ingressClassName: azure-application-gateway` and programs AGW routing rules
-- cert-manager issues TLS via HTTP-01 using `ingressClassName: azure-application-gateway`
+- Terraform creates Application Gateway v2 + dedicated `/24` subnet
+- AKS provisions `IngressClass` named `azure-application-gateway`
+- AGIC watches `Ingress` resources and programs AGW routing rules
+- cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
+- Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor on VNet
 
-**Required role assignments for the AKS-provisioned AGIC identity:**
-- Reader on the resource group
-- Contributor on the Application Gateway
-- Network Contributor on the VNet (for subnet join action)
+**RBAC timing — known issue:** The AKS AGIC addon creates its managed identity during cluster
+provisioning, but the identity requires ~5 minutes to register in Azure AD before role assignments
+take effect. Terraform adds a `time_sleep` of 300s between cluster creation and role assignment
+creation to prevent the AGIC controller from entering CrashLoopBackOff with persistent 403 errors.
+Without this delay, AGIC fails immediately and requires `az aks update` to trigger reconciliation.
 
-> All three roles are automated in Terraform via data source lookup of the add-on identity. For manually provisioned clusters, use `az role assignment create` (see TROUBLESHOOTING.md).
+**Enable WAF:** set `agw_sku_tier = "WAF_v2"` — built into AGW, no separate WAF module needed.
 
-**Enable WAF:**
-```hcl
-agw_sku_tier = "WAF_v2"
-```
-No separate WAF module needed — WAF is built into the Application Gateway.
+> **AGIC requires full cluster rebuild** to enable — the AGW subnet must be provisioned at
+> VNet creation time and cannot be added to an existing VNet.
 
 ---
 
-### istio (self-managed Helm)
+### istio — self-managed via Helm
+
+**Validated: ✅ istio + none (HTTP), istio + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
 
 ```hcl
+# HTTP only
+ingress_controller     = "istio"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via Let's Encrypt
 ingress_controller     = "istio"
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
-langsmith_domain       = "langsmith-prod.eastus.cloudapp.azure.com"
 ```
 
 **How it works:**
-- Terraform installs `istio-base` (CRDs), `istiod` (control plane), and `istio-ingressgateway` via Helm
-- istiod configured with `meshConfig.ingressControllerMode: STRICT` + `meshConfig.ingressClass: istio`
-- Gateway runs in `istio-system` with label `istio: ingressgateway`
-- Standard Kubernetes Ingress with `ingressClassName: istio`
-- `deploy.sh` creates the `istio` IngressClass resource (required for istiod to generate listeners)
-- `deploy.sh` syncs the `langsmith-tls` secret to `istio-system` after cert issuance (required for SDS TLS delivery to the gateway)
+- Terraform installs `istio-base` (CRDs), `istiod`, and `istio-ingressgateway` via Helm
+- Gateway in `istio-system` with label `istio: ingressgateway`
+- `deploy.sh` creates the `istio` IngressClass resource (required — istiod won't generate listeners without it)
+- LangSmith chart uses `ingress.enabled: true`, `ingressClassName: istio` — creates K8s Ingress → Istio VS
+- `deploy.sh` syncs `langsmith-tls` to `istio-system` after cert issuance (SDS delivery to gateway pod)
 
-> **Watchouts:**
-> - Without `meshConfig.ingressControllerMode: STRICT`, istiod ignores Ingress resources — LDS push has 0 listeners
-> - Without the `istio` IngressClass resource, istiod won't generate listeners even with STRICT mode
-> - TLS secret must be copied to `istio-system` — istiod serves it to the gateway via SDS (`kubernetes://langsmith-tls`)
-> - All three issues are handled automatically by `make deploy`
+> Unlike `istio-addon`, self-managed Istio **does** support `letsencrypt` — `deploy.sh` creates
+> the `istio` IngressClass that the HTTP-01 solver requires.
 
 ---
 
-### envoy-gateway (Gateway API)
+### envoy-gateway — Kubernetes Gateway API
+
+**Validated: ✅ envoy-gateway + none (HTTP), envoy-gateway + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
 
 ```hcl
+# HTTP only
+ingress_controller     = "envoy-gateway"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via Let's Encrypt
 ingress_controller     = "envoy-gateway"
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
 letsencrypt_email      = "you@example.com"
-langsmith_domain       = "langsmith-prod.eastus.cloudapp.azure.com"
 ```
 
 **How it works:**
-- Terraform installs Envoy Gateway via Helm chart + installs Gateway API CRDs
-- Uses Kubernetes Gateway API (`GatewayClass` → `Gateway` → `HTTPRoute`) instead of `Ingress`
-- `deploy.sh` creates all Gateway API resources automatically:
-  1. `GatewayClass` named `langsmith-eg` (controller: `gateway.envoyproxy.io/gatewayclass-controller`)
-  2. `Gateway` in the langsmith namespace with HTTP + HTTPS listeners
-  3. `HTTPRoute` routing all traffic to `langsmith-frontend`
-- LangSmith Helm `ingress.enabled: false` — traffic flows via Gateway API only
-- `dns_label` sets the Azure DNS label annotation on the Envoy Gateway LB service in `envoy-gateway-system` namespace (label: `gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway`)
+- Terraform installs Envoy Gateway via Helm + Gateway API CRDs
+- `deploy.sh` creates `GatewayClass` + `Gateway` **before** helm install (required for chart validation)
+- LangSmith chart uses `gateway.enabled: true` (Gateway API mode) — creates `HTTPRoute` resources
+- `init-values.sh` sets `gateway.enabled: true`, `gateway.name: langsmith-gateway`, `gateway.namespace: langsmith`
+- cert-manager uses `gatewayHTTPRoute` solver + `ExperimentalGatewayAPISupport=true` feature gate
+- DNS label applied to Envoy LB service in `envoy-gateway-system` namespace (post-deploy)
 
-**TLS:**
-- cert-manager uses `gatewayHTTPRoute` solver (not `ingress` HTTP-01)
-- Requires cert-manager v1.14+ with `ExperimentalGatewayAPISupport=true` feature gate
-- `deploy.sh` enables the feature gate automatically via `kubectl patch`
+**Key: Gateway is created pre-deploy.** Without this, chart validation fails when
+`enable_deployments = true` (`Either ingress, gateway, or istioGateway must be enabled`).
 
-> **Note:** The Envoy Gateway LB service is in `envoy-gateway-system` namespace, not the langsmith namespace. The DNS label annotation must be applied there, not on `langsmith-frontend`.
+**DNS label:** Applied to Envoy Gateway LB service in `envoy-gateway-system` namespace.
+
+---
+
+## dns01 — Custom Domain Path (Validated ✅)
+
+**Validated: nginx + dns01 + custom domain (`azurelangsmith.dzmitry.dev`) — cert issued in < 4 min, HTTPS 200**
+
+### How it works
+
+```
+Your registrar (Cloudflare, Route53, Squarespace, etc.)
+  └── NS records for subdomain → Azure DNS zone
+        └── cert-manager (Workload Identity) writes TXT record:
+              _acme-challenge.langsmith.mycompany.com = <token>
+                └── Let's Encrypt validates → issues cert
+                      └── cert-manager stores cert as K8s secret → nginx serves HTTPS
+```
+
+cert-manager uses **Workload Identity** (no static credentials) to write TXT records in the Azure DNS zone. The managed identity is created by Terraform and scoped to DNS Zone Contributor on that zone only.
+
+### Why NS records, not CNAME
+
+A CNAME aliases traffic but does not delegate DNS authority. cert-manager needs to **write** TXT records to the zone — that requires Azure DNS to be **authoritative** for the subdomain. NS delegation transfers that authority. CNAME alone will cause the DNS-01 challenge to fail.
+
+### Step-by-step
+
+1. **Set in `terraform.tfvars`:**
+   ```hcl
+   ingress_controller     = "nginx"         # works with all controllers
+   tls_certificate_source = "dns01"
+   langsmith_domain       = "langsmith.mycompany.com"
+   create_dns_zone        = true
+   letsencrypt_email      = "you@example.com"
+   ```
+
+2. **`make apply`** — creates the Azure DNS zone, outputs 4 nameservers
+
+3. **Get the nameservers:**
+   ```bash
+   terraform -chdir=infra output dns_nameservers
+   # → ns1-04.azure-dns.com. ns2-04.azure-dns.net. ...
+   ```
+
+4. **Add NS records at your registrar** (wherever the parent domain is managed):
+   - Apex domain (`mycompany.com`): add 4 NS records for `langsmith` pointing to the Azure nameservers
+   - Full domain (`mycompany.com`): replace existing NS records with the 4 Azure ones (delegates entire zone)
+
+5. **Verify propagation** (usually < 5 min):
+   ```bash
+   dig NS langsmith.mycompany.com @8.8.8.8
+   ```
+
+6. **`make deploy`** — `deploy.sh` creates the DNS-01 ClusterIssuer automatically (azureDNS solver + Workload Identity). cert-manager issues the cert without any further manual steps.
+
+7. **After deploy — get LB IP and set A record:**
+   ```bash
+   kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   # Add to terraform.tfvars: ingress_ip = "<lb-ip>"
+   make apply   # creates A record in Azure DNS zone
+   ```
+
+   `make status` guides you through this — it prints the exact A record command if `ingress_ip` is not yet set.
+
+> ⚠️ `create_dns_zone = true` with empty `langsmith_domain` causes a Terraform 502 error.
+> Always set `langsmith_domain` before enabling `create_dns_zone`.
 
 ---
 
 ## Switching Controllers
 
-Change `ingress_controller` in `terraform.tfvars`, then:
-
 ```bash
-# 1. Uninstall LangSmith first (frees LB resources)
-make uninstall
-
-# 2. Re-apply infrastructure (switches controller)
-make apply
-
-# 3. Get fresh kubeconfig (in case cluster was recreated)
-make kubeconfig
-
-# 4. Re-create K8s secrets
-make k8s-secrets
-
-# 5. Re-generate values and re-deploy
-make init-values
-make deploy
+make uninstall                              # remove Helm release, free LB resources
+# edit terraform.tfvars: ingress_controller, tls_certificate_source
+make apply                                  # install new controller
+make kubeconfig && make k8s-secrets         # refresh credentials + secrets
+make init-values && make deploy             # re-deploy LangSmith
 ```
 
-Or one-shot:
-```bash
-make uninstall && make apply && make kubeconfig && make k8s-secrets && make init-values && make deploy
-```
+> **AGIC requires full destroy/rebuild** — App Gateway subnet must exist at VNet creation time.
 
 ---
 
-## Helm Values Examples
+## How init-values.sh Configures Routing
 
-Per-controller overlay files in `helm/values/examples/`:
+`init-values.sh` generates the correct `values-overrides.yaml` block automatically:
 
-| File | Controller |
-|---|---|
-| `langsmith-values-ingress-agic.yaml` | AGIC |
-| `langsmith-values-ingress-istio.yaml` | istio / istio-addon |
-| `langsmith-values-ingress-envoy-gateway.yaml` | envoy-gateway |
-
-NGINX uses the default values — no dedicated overlay needed.
+| Controller | `ingress.enabled` | `istioGateway.enabled` | `gateway.enabled` | Routing mechanism |
+|---|---|---|---|---|
+| nginx | `true` | `false` | `false` | K8s Ingress → nginx |
+| istio-addon | `false` | `true` (`name: langsmith-gateway`) | `false` | Gateway (deploy.sh) + VS (chart) |
+| istio | `true` (`class: istio`) | `false` | `false` | K8s Ingress → Istio ingressgateway |
+| agic | `true` | `false` | `false` | K8s Ingress → AGW rules |
+| envoy-gateway | `false` | `false` | `true` (`name: langsmith-gateway`) | Gateway API HTTPRoute (chart) |
 
 ---
 
 ## Troubleshooting
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for per-controller gotchas:
-- AGIC: add-on identity role assignments (Reader on RG, Contributor on AGW, Network Contributor on VNet)
-- istio-addon: gateway label mismatch, TLS secret namespace sync
-- Envoy Gateway: Gateway API vs Ingress distinction
+| Symptom | Cause | Fix |
+|---|---|---|
+| Cert stuck Pending, `istio-addon` + `letsencrypt` | No IngressClass — not supported | Switch to `dns01` + custom domain, or `none` |
+| Cert stuck Pending, `nginx` + `letsencrypt` | DNS label not on nginx LB | Re-run `make deploy` |
+| Chart validation error: must enable ingress or gateway | LangGraph Platform enabled, istioGateway disabled | Re-run `make init-values && make deploy` |
+| VirtualService ownership conflict on re-deploy | VS was created by kubectl, not Helm | `kubectl delete vs langsmith -n langsmith` then `make deploy` |
+| `create_dns_zone` 502 error | `langsmith_domain` not set | Set `langsmith_domain` or `create_dns_zone = false` |
+| AGW HTTP-01 cert fails | AGW rewrites ACME challenge path | Use `dns01` for AGIC |
+| AGIC pod CrashLoopBackOff, persistent 403 on AGW | AGIC addon identity not yet registered in Azure AD when role assignments were created | Wait 5 min then run `az aks update --name <cluster> --resource-group <rg> --yes` — Terraform now adds a 300s `time_sleep` before role assignments to prevent this |
+| `bool cannot unmarshal into string` on cert-manager | Missing `type = "string"` on podLabels set block | Fixed in k8s-bootstrap/main.tf — run `make apply` |
