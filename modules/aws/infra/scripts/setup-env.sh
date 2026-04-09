@@ -234,15 +234,28 @@ _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENS
   "" "LangSmith license key" "true"
 
 _ssm_secret "langsmith-admin-password" "$_SETUP_DIR/.admin_password" "LANGSMITH_ADMIN_PASSWORD" \
-  "" "Admin password (must contain a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
+  "" "Admin password (min 12 chars, must contain lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
 
-# Validate admin password contains a required symbol. Helm chart enforces this at deploy time;
-# catching it here prevents storing an invalid password in SSM and discovering the error
-# 10 minutes later when the Helm release times out.
+_ssm_secret "langsmith-admin-email" "" "LANGSMITH_ADMIN_EMAIL" \
+  "" "Admin email" "false"
+
+# Validate admin password meets Helm chart requirements. Catching it here prevents
+# storing an invalid password in SSM and discovering the error 10 minutes later
+# when the Helm release times out.
 if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
-  if ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-    echo "ERROR: Admin password does not contain a required symbol: !#\$%()+,-./:?@[\\]^_{~}" >&2
-    echo "       The Helm chart will reject this password. Unset LANGSMITH_ADMIN_PASSWORD," >&2
+  _pw_error=""
+  if [[ ${#LANGSMITH_ADMIN_PASSWORD} -lt 12 ]]; then
+    _pw_error="must be at least 12 characters long"
+  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
+    _pw_error="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
+  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -q '[a-z]'; then
+    _pw_error="must contain at least one lowercase letter"
+  elif ! printf '%s' "$LANGSMITH_ADMIN_PASSWORD" | grep -q '[A-Z]'; then
+    _pw_error="must contain at least one uppercase letter"
+  fi
+  if [[ -n "$_pw_error" ]]; then
+    echo "ERROR: Admin password is invalid — ${_pw_error}." >&2
+    echo "       Unset LANGSMITH_ADMIN_PASSWORD," >&2
     echo "       delete the SSM parameter at ${_ssm_prefix}/langsmith-admin-password," >&2
     echo "       and re-source this script with a valid password." >&2
     return 1
@@ -282,6 +295,7 @@ echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-sa
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
+echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"
 echo "  deploy_key        = (hidden — SSM: ${_ssm_prefix}/deployments-encryption-key)"
 echo "  ab_key            = (hidden — SSM: ${_ssm_prefix}/agent-builder-encryption-key)"
 echo "  insights_key      = (hidden — SSM: ${_ssm_prefix}/insights-encryption-key)"
