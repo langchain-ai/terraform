@@ -112,7 +112,8 @@ aws/
 │       ├── k8s-bootstrap/  ← Namespace, KEDA, cert-manager, ESO Helm release
 │       ├── bastion/        ← EC2 bastion host for private cluster access (optional)
 │       ├── cloudtrail/     ← CloudTrail trail to S3 (optional)
-│       └── waf/            ← WAFv2 Web ACL attached to ALB (optional)
+│       ├── waf/            ← WAFv2 Web ACL attached to ALB (optional)
+│       └── firewall/       ← AWS Network Firewall, FQDN-based egress filtering (optional)
 ├── helm/                   ← Pass 2 option A: script-driven Helm deploy
 │   ├── scripts/
 │   │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
@@ -761,6 +762,9 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
 | `cloudtrail_log_retention_days` | `365` | no | Days to retain CloudTrail logs |
 | `create_waf` | `false` | no | Attach WAFv2 Web ACL to ALB |
+| `create_firewall` | `false` | no | Deploy AWS Network Firewall for FQDN-based egress filtering. Requires `create_vpc = true`. Cost: ~$0.395/hr/endpoint + $0.065/GB. |
+| `firewall_allowed_fqdns` | `["beacon.langchain.com"]` | no | Domains allowed for outbound internet traffic when `create_firewall = true`. Matched against TLS SNI (HTTPS) and HTTP Host header. All other destinations are dropped. |
+| `firewall_subnet_cidr` | `"10.0.64.0/21"` | no | CIDR for the firewall subnet. Must not overlap with private (10.0.0.0/21–10.0.32.0/21) or public (10.0.40.0/21–10.0.56.0/21) subnets. |
 | `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
 | `enable_deployments` | `false` | no | Enable LangGraph Platform (listener, operator, host-backend) |
 | `enable_agent_builder` | `false` | no | Enable Agent Builder (requires `enable_deployments`) |
