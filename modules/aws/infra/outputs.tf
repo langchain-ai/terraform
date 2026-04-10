@@ -106,6 +106,29 @@ output "vpc_cidr_block" {
 }
 
 #------------------------------------------------------------------------------
+# Network Firewall (populated only when create_firewall = true)
+#------------------------------------------------------------------------------
+output "firewall_enabled" {
+  description = "Whether AWS Network Firewall egress filtering is active"
+  value       = var.create_firewall
+}
+
+output "firewall_arn" {
+  description = "ARN of the AWS Network Firewall (null when create_firewall = false)"
+  value       = var.create_firewall ? module.firewall[0].firewall_arn : null
+}
+
+output "firewall_endpoint_id" {
+  description = "VPC endpoint ID of the firewall. Private route tables send 0.0.0.0/0 here (null when create_firewall = false)."
+  value       = var.create_firewall ? module.firewall[0].firewall_endpoint_id : null
+}
+
+output "firewall_allowed_fqdns" {
+  description = "Domains permitted for outbound internet traffic through the firewall"
+  value       = var.create_firewall ? var.firewall_allowed_fqdns : []
+}
+
+#------------------------------------------------------------------------------
 # IAM / IRSA
 #------------------------------------------------------------------------------
 output "langsmith_irsa_role_arn" {
@@ -229,6 +252,7 @@ output "resource_summary" {
     tls                = var.tls_certificate_source
     alb                = module.alb.alb_dns_name
     bastion            = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall           = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
     deployments        = var.enable_deployments
     agent_builder      = var.enable_agent_builder
     insights           = var.enable_insights

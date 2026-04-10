@@ -43,3 +43,9 @@ variable "extra_private_subnet_tags" {
     "kubernetes.io/role/internal-elb" = 1
   }
 }
+
+variable "firewall_enabled" {
+  type        = bool
+  description = "When true, suppresses the 0.0.0.0/0 → NAT GW route in private route tables so the firewall module can own that route instead."
+  default     = false
+}

@@ -66,6 +66,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !var.create_firewall || var.create_vpc
+      error_message = "create_firewall = true requires create_vpc = true. Bring-your-own-VPC deployments must configure firewall routing manually."
+    }
+
+    precondition {
       condition     = var.create_vpc || var.alb_scheme == "internal" || length(var.public_subnets) > 0
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
@@ -85,9 +90,26 @@ resource "terraform_data" "validate_inputs" {
 module "vpc" {
   source = "./modules/vpc"
 
-  count        = var.create_vpc ? 1 : 0
-  vpc_name     = local.vpc_name
-  cluster_name = local.cluster_name
+  count            = var.create_vpc ? 1 : 0
+  vpc_name         = local.vpc_name
+  cluster_name     = local.cluster_name
+  firewall_enabled = var.create_firewall
+}
+
+module "firewall" {
+  source = "./modules/firewall"
+  count  = var.create_firewall ? 1 : 0
+
+  name                    = local.firewall_name
+  vpc_id                  = local.vpc_id
+  nat_gateway_id          = module.vpc[0].nat_gateway_id
+  nat_gateway_az          = module.vpc[0].nat_gateway_az
+  firewall_subnet_cidr    = var.firewall_subnet_cidr
+  private_route_table_ids = module.vpc[0].private_route_table_ids
+  allowed_fqdns           = var.firewall_allowed_fqdns
+  tags                    = local.common_tags
+
+  depends_on = [module.vpc]
 }
 
 module "eks" {

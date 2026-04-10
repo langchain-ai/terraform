@@ -37,6 +37,13 @@ module "vpc" {
   single_nat_gateway   = true
   enable_dns_hostnames = true
 
+  # When the firewall module is enabled it owns the 0.0.0.0/0 route in private
+  # route tables. Setting a non-routable destination here prevents the vpc
+  # module from creating a conflicting 0.0.0.0/0 → NAT GW route.
+  # 100.64.0.0/10 is RFC 6598 Shared Address Space — reserved, never reaches
+  # the internet, so this route is effectively inert.
+  nat_gateway_destination_cidr_block = var.firewall_enabled ? "100.64.0.0/10" : "0.0.0.0/0"
+
   public_subnet_tags = local.public_subnet_tags
 
   private_subnet_tags = local.private_subnet_tags

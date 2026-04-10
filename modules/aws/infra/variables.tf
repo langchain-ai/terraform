@@ -284,6 +284,32 @@ variable "cloudtrail_log_retention_days" {
 }
 
 #------------------------------------------------------------------------------
+# Network Firewall — egress filtering
+#------------------------------------------------------------------------------
+variable "create_firewall" {
+  type        = bool
+  description = "Deploy AWS Network Firewall with FQDN-based egress filtering. Intercepts all outbound internet traffic from private subnets and drops everything not in firewall_allowed_fqdns. Requires create_vpc = true. Cost: ~$0.395/hr per endpoint + $0.065/GB processed."
+  default     = false
+}
+
+variable "firewall_allowed_fqdns" {
+  type        = list(string)
+  description = "Domains allowed for outbound internet traffic when create_firewall = true. Matched against TLS SNI (HTTPS) and HTTP Host headers. All other destinations are dropped."
+  default     = ["beacon.langchain.com"]
+}
+
+variable "firewall_subnet_cidr" {
+  type        = string
+  description = "CIDR block for the firewall subnet. Must be within the VPC CIDR (default 10.0.0.0/16) and must not overlap with private_subnets (10.0.0.0/21–10.0.32.0/21) or public_subnets (10.0.40.0/21–10.0.56.0/21)."
+  default     = "10.0.64.0/21"
+
+  validation {
+    condition     = can(cidrhost(var.firewall_subnet_cidr, 0))
+    error_message = "firewall_subnet_cidr must be a valid CIDR block (e.g. 10.0.64.0/21)."
+  }
+}
+
+#------------------------------------------------------------------------------
 # WAF
 #------------------------------------------------------------------------------
 #------------------------------------------------------------------------------
