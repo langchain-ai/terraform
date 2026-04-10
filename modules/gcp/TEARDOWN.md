@@ -16,6 +16,11 @@ Both follow the same reverse-dependency order. Pick the section that matches you
 Before starting, confirm:
 
 ```bash
+# Re-auth first if Terraform/gcloud shows:
+# oauth2: "invalid_grant" "reauth related error (invalid_rapt)"
+gcloud auth login
+gcloud auth application-default login
+
 # Verify GCP identity and active project
 gcloud auth list
 gcloud config get-value project
@@ -126,12 +131,16 @@ gke_deletion_protection      = false
 postgres_deletion_protection = false
 ```
 
-Apply the change first:
+Apply the change first (targeted — avoids reconciling in-cluster addons like KEDA/cert-manager/ingress):
 
 ```bash
 cd terraform/gcp
-make apply   # pushes the deletion-protection change
+terraform -chdir=infra apply \
+  -target=module.gke_cluster \
+  -target=module.cloudsql
 ```
+
+> Why not `make apply` here? A full infra apply can re-run Kubernetes/Helm bootstrap paths and recreate components you just removed.
 
 ## A6 — Destroy GCP Infrastructure
 

@@ -163,36 +163,61 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 
 ## Ingress Controllers
 
-Five ingress options are supported. Set `ingress_controller` in `terraform.tfvars` before `make apply`:
+Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full TLS compatibility matrix and per-controller setup guide.
 
-| Value | What Terraform installs | `ingressClassName` | Best for |
-|-------|------------------------|-------------------|----------|
-| `nginx` (default) | `ingress-nginx` Helm chart → Azure LB | `nginx` | Standard deployments. Simplest setup. |
-| `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio control plane) | `istio` | Azure-managed Istio SLA. Recommended over self-managed. |
-| `istio` | `istio/base` + `istiod` + `istio/gateway` Helm charts | `istio` | Self-managed Istio. Full mesh features, sidecars, mTLS. |
-| `agic` | Azure Application Gateway v2 + AGIC Helm chart (Workload Identity ARM auth) | `azure/application-gateway` | Enterprise Azure. Native WAF integration. Similar to AWS ALB + LBC. |
-| `envoy-gateway` | `envoyproxy/gateway-helm` (OCI) — Gateway API native | Gateway/HTTPRoute | Gateway API-native. No Istio. Envoy ecosystem. |
-| `none` | Nothing | — | Bring your own. |
-
-See `helm/values/examples/langsmith-values-ingress-*.yaml` for per-controller Helm values examples.
+| Value | What Terraform installs | Best for |
+|-------|------------------------|----------|
+| `nginx` **(default)** | `ingress-nginx` Helm chart → Azure LB | Standard deployments. Simplest setup. Use this for quickstart. |
+| `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
+| `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
+| `agic` | Azure Application Gateway v2 + AGIC Helm chart | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
+| `envoy-gateway` | `gateway-helm` OCI chart — Kubernetes Gateway API | Gateway API-native. Modern alternative to Ingress. |
 
 ---
 
-## TLS / DNS Options
+## DNS + TLS
 
-Azure Public IP DNS labels work with **all ingress controllers** — nginx, istio, istio-addon, and envoy-gateway. `deploy.sh` automatically applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to the correct LoadBalancer service based on `ingress_controller`.
+`dns_label` gives you a free Azure subdomain — `<label>.<region>.cloudapp.azure.com` — with no domain registration or DNS zone needed. `deploy.sh` annotates the correct LB service automatically.
 
-| Option | Variables | When to use |
-|--------|-----------|-------------|
-| **Public IP DNS label** ⭐ | `dns_label` + `tls_certificate_source = "letsencrypt"` | Fastest. Free Azure subdomain (`<label>.<region>.cloudapp.azure.com`). cert-manager HTTP-01. No DNS zone or registrar needed. Works for nginx, istio, istio-addon, envoy-gateway. |
-| **AGIC auto-FQDN** | `ingress_controller = "agic"` | AGW public IP gets an auto-assigned FQDN. `init-values.sh` reads it from `terraform output agw_public_ip_fqdn`. Use `langsmith_domain` for a cleaner hostname. |
-| **Custom domain + DNS-01** | `tls_certificate_source = "dns01"` + `langsmith_domain` + `create_dns_zone = true` | Custom domain + Let's Encrypt DNS-01 challenge via Azure DNS zone. |
-| **Custom domain + existing cert** | `tls_certificate_source = "existing"` + `langsmith_domain` | Bring your own TLS secret. |
-| **No TLS** | `tls_certificate_source = "none"` | HTTP only (dev/internal). |
+**Quickstart default (HTTP, zero setup):**
+```hcl
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
 
-**Recommended for most deployments** — Azure Public IP DNS label with Let's Encrypt HTTP-01. Works across all ingress types except AGIC. No custom domain, no DNS zone, instant certificate. Terraform creates the cert-manager `ClusterIssuer` automatically in Pass 1.
+**Add HTTPS with Let's Encrypt (nginx only — HTTP-01 requires an IngressClass):**
+```hcl
+dns_label              = "langsmith-prod"
+tls_certificate_source = "letsencrypt"
+letsencrypt_email      = "you@example.com"
+```
 
-The subdomain (`<label>.<region>.cloudapp.azure.com`) is ready immediately after `make apply`.
+**Custom domain + DNS-01 (all controllers, works behind firewalls) — Validated ✅:**
+```hcl
+langsmith_domain       = "langsmith.mycompany.com"
+tls_certificate_source = "dns01"
+letsencrypt_email      = "you@example.com"
+create_dns_zone        = true
+# After deploy: add ingress_ip = "<lb-ip>" and re-run make apply (creates A record)
+```
+
+**dns01 flow:**
+1. `make apply` → Terraform creates Azure DNS zone, outputs 4 nameservers
+2. At your registrar: add NS records for the subdomain pointing to those 4 nameservers
+3. Verify: `dig NS langsmith.mycompany.com @8.8.8.8`
+4. `make deploy` → cert-manager issues cert via DNS-01 automatically (Workload Identity writes TXT record to Azure DNS)
+5. Get LB IP → add `ingress_ip = "<ip>"` to `terraform.tfvars` → `make apply` (creates A record)
+6. `make status` shows exactly what NS and A records to add at each stage
+
+> **Why NS records, not CNAME:** cert-manager must *write* TXT records to the zone to prove ownership.
+> That requires Azure DNS to be authoritative for the subdomain — NS delegation grants that authority.
+> A CNAME only aliases traffic and does not transfer DNS authority; the DNS-01 challenge will fail.
+
+> ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
+> `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
+> For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
+>
+> See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix and validated paths.
 
 ---
 
@@ -208,10 +233,13 @@ All commands run from `terraform/azure/`. Run `make help` to see the list at any
 Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scratch. Mirrors the AWS quickstart experience.
 
 - Sections: profile → subscription/naming → networking → AKS sizing → ingress controller → DNS/TLS → backend services → Key Vault → sizing profile → security add-ons
+- Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
+- After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
 - Auto-detects Azure subscription ID from `az account show`
 - Validates identifier format (`-prod`, `-staging`, `-myco`)
 - Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
-- Prints a Next Steps summary with the exact commands to run after generating the file
+- Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
+- Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 
 > **Run this first** on a new deployment. After it completes, run `source infra/scripts/setup-env.sh` to set up secrets.
 
@@ -307,6 +335,11 @@ Runs `terraform destroy` in `infra/`. Permanently deletes all Azure resources. *
 
 ---
 
+### `make destroy-force` — Destroy without confirmation prompt
+Runs `terraform destroy -auto-approve` in `infra/`. Same as `make destroy` but skips the interactive "yes" confirmation — useful in non-interactive shells or CI. **Run `make uninstall` first.**
+
+---
+
 ### `make clean` — Remove generated local files
 **Script:** `infra/scripts/clean.sh`
 
@@ -317,6 +350,11 @@ Prompts for confirmation, then removes all generated and sensitive local files. 
 - Removes `infra/terraform.tfstate` and `terraform.tfstate.backup` (only present when not using remote backend)
 - Removes `helm/values/values-overrides.yaml` and all `helm/values/langsmith-values-*.yaml` (generated by `make init-values`)
 - Keeps `terraform.tfvars.example`, `helm/values/examples/`, and `.terraform/` cache
+
+---
+
+### `make clean-force` — Remove generated local files without confirmation prompt
+Same as `make clean` but skips the interactive confirmation — useful in non-interactive shells or after `make destroy-force`.
 
 ---
 

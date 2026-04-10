@@ -1,5 +1,22 @@
 # LangSmith on GCP — Quick Reference
 
+All commands run from `terraform/gcp/`. Run `make help` to see all targets.
+
+---
+
+## Deployment Overview
+
+| Pass | What gets deployed | Command |
+|------|-------------------|---------|
+| **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + cert-manager + KEDA + Envoy Gateway | `make apply` |
+| **1.5** | Cluster credentials | `make kubeconfig` |
+| **2** | LangSmith base — frontend, backend, ingest, queue, clickhouse | `make init-values && make deploy` |
+| **3** | LangSmith Deployments — host-backend, listener, operator | `make apply && make init-values && make deploy` |
+| **4** | Agent Builder — tool-server, trigger-server + deep-agent LGP | `make init-values && make deploy` |
+| **5** | Insights + Polly — Clio analytics, Polly eval agent | `make init-values && make deploy` |
+
+Each pass builds on the previous. Verify pods are healthy before enabling the next pass.
+
 ---
 
 ## First-Time Setup
@@ -158,21 +175,169 @@ kubectl get gateway -n langsmith \
 
 ---
 
-## Pass 3 — LangSmith Deployments (Optional)
+## Pass 3 — LangSmith Deployments
+
+**Prerequisite:** Pass 2 healthy — all core pods Running/Completed.
+
+Adds `host-backend`, `listener`, and `operator`. The operator spawns agent deployment pods on demand. Required before enabling Agent Builder or Insights.
+
+**Step 1 — enable flag in `infra/terraform.tfvars`:**
+
+```hcl
+enable_deployments = true
+```
+
+**Step 2 — apply and deploy:**
 
 ```bash
-# Set in terraform.tfvars, then re-apply
-enable_deployments   = true
-enable_agent_builder = true   # if you have the Agent Builder entitlement
-
-make apply
-make deploy   # re-deploys with addon overlay files
-
-# Verify KEDA and operator
-kubectl get pods -n keda
-kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
-kubectl get lgp -n langsmith
+make apply          # pushes enable_deployments flag
+make init-values    # picks up enable_deployments = true
+make deploy         # rolls out host-backend + listener + operator
 ```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
+# Expected: all Running
+
+kubectl get lgp -n langsmith      # list LangSmith Deployments
+kubectl get crd | grep langchain  # operator CRDs registered
+kubectl get pods -n keda          # KEDA running
+```
+
+> **Watchout:** `config.deployment.url` must include `https://`. Missing the protocol → operator-spawned agents stuck in `DEPLOYING` indefinitely.
+
+---
+
+## Pass 4 — Agent Builder
+
+**Prerequisite:** Pass 3 healthy — `listener` and `operator` pods Running.
+
+Adds `agent-builder-tool-server`, `agent-builder-trigger-server`, and an `agentBootstrap` Job that registers the Polly agent URL.
+
+**Step 1 — enable flag in `infra/terraform.tfvars`:**
+
+```hcl
+enable_agent_builder = true
+```
+
+**Step 2 — deploy:**
+
+```bash
+make init-values    # picks up enable_agent_builder = true
+make deploy
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "tool-server|trigger-server|bootstrap"
+# Expected: tool-server Running, trigger-server Running, agentBootstrap Completed
+```
+
+**Roll frontend** after `agentBootstrap` completes (picks up the `langsmith-polly-config` ConfigMap):
+
+```bash
+kubectl rollout restart deployment langsmith-frontend -n langsmith
+```
+
+> **Watchout:** If you skip the frontend restart, Polly shows "Unable to connect to LangGraph server".
+
+---
+
+## Pass 5 — Insights + Polly
+
+**Prerequisite:** Pass 4 healthy — Agent Builder pods Running, `agentBootstrap` Completed.
+
+Insights enables ClickHouse-backed trace analytics. Polly is the AI eval/monitoring agent. Enable both together.
+
+**Step 1 — enable flags in `infra/terraform.tfvars`:**
+
+```hcl
+enable_insights = true
+enable_polly    = true   # requires Polly license entitlement
+```
+
+**Step 2 — deploy:**
+
+```bash
+make init-values    # picks up both flags
+make deploy
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "clio|polly"
+# Expected: clio Running, smith-polly Running (operator-spawned)
+
+kubectl get pods -n langsmith -w   # watch until all new pods stabilize
+```
+
+> **Watchout:** `insights_encryption_key` and `polly_encryption_key` **must never change** after first enable — rotating either key permanently breaks existing encrypted data.
+
+---
+
+## Expected Pods by Pass
+
+**Pass 2 — base:**
+
+```
+langsmith-ace-backend-xxx          1/1  Running    0
+langsmith-backend-xxx              1/1  Running    0
+langsmith-backend-auth-bootstrap   0/1  Completed  0
+langsmith-backend-migrations       0/1  Completed  0
+langsmith-clickhouse-0             1/1  Running    0
+langsmith-frontend-xxx             1/1  Running    0
+langsmith-ingest-queue-xxx         1/1  Running    0
+langsmith-platform-backend-xxx     1/1  Running    0
+langsmith-playground-xxx           1/1  Running    0
+langsmith-queue-xxx                1/1  Running    0
+```
+
+**Pass 3 adds:**
+
+```
+langsmith-host-backend-xxx         1/1  Running    0
+langsmith-listener-xxx             1/1  Running    0
+langsmith-operator-xxx             1/1  Running    0
+```
+
+**Pass 4 adds:**
+
+```
+langsmith-agent-builder-tool-server-xxx      1/1  Running    0
+langsmith-agent-builder-trigger-server-xxx   1/1  Running    0
+langsmith-agent-builder-bootstrap-xxx        0/1  Completed  0
+agent-builder-<hash>-xxx                     1/1  Running    0   # operator-spawned
+```
+
+**Pass 5 adds:**
+
+```
+clio-<hash>-xxx                    1/1  Running    0   # Insights analytics
+smith-polly-<hash>-xxx             1/1  Running    0   # Polly eval agent
+lg-<hash>-0                        1/1  Running    0   # LangGraph StatefulSet
+```
+
+---
+
+## Key Watchouts
+
+> **Uninstall Helm BEFORE `terraform destroy`.** The Envoy Gateway load balancer references the VPC — leaving it blocks VNet deletion. Always run `make uninstall` first.
+
+> **`config.deployment.url` must include `https://`.** Missing the protocol → operator-spawned agents stuck in `DEPLOYING` indefinitely.
+
+> **`config.deployment.enabled: true` is required for Pass 3.** Setting only the URL without `enabled: true` causes the chart to silently skip `listener` and `operator`.
+
+> **Encryption keys must never change after first enable.** `insights_encryption_key` and `polly_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
+
+> **Roll frontend after first Polly enable.** `agentBootstrap` creates the `langsmith-polly-config` ConfigMap after registering. Frontend pods started before bootstrap completed won't pick it up automatically.
+
+> **Envoy Gateway IP changes on teardown.** GCP releases the external IP when the Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
+
+> **langsmith-ksa annotation is not permanent.** The operator creates `langsmith-ksa` at runtime — it does not survive namespace deletion. `deploy.sh` re-annotates it idempotently; re-run `make deploy` if operator pods lose GCS access after a cluster rebuild.
 
 ---
 
@@ -226,6 +391,10 @@ kubectl get crd | grep langchain
 ## Common gcloud Commands
 
 ```bash
+# Re-auth if you hit oauth2 invalid_grant / invalid_rapt errors
+gcloud auth login
+gcloud auth application-default login
+
 # Get cluster credentials
 gcloud container clusters get-credentials <cluster-name> --region <region> --project <project-id>
 

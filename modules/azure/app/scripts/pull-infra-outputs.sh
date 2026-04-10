@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # pull-infra-outputs.sh — Reads Terraform outputs from ../infra and writes
 # app/infra.auto.tfvars.json so the app module can consume them as variables.
 #

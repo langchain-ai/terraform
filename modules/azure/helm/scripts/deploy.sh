@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # deploy.sh — Deploy or upgrade LangSmith via Helm on Azure.
 #
 # Values files loaded (in order, last wins):
@@ -101,10 +106,9 @@ if [[ -n "$_dns_label" ]]; then
   fi
 fi
 
-# ── Apply letsencrypt-prod ClusterIssuer ──────────────────────────────────
-# kubernetes_manifest in Terraform can't create this on fresh deploy (no cluster
+# ── Apply ClusterIssuer ────────────────────────────────────────────────────
+# kubernetes_manifest in Terraform can't create these on fresh deploy (no cluster
 # exists during plan). Applied here instead — idempotent, safe to re-run.
-# The ingress class used by the HTTP-01 solver must match the active ingress controller.
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
@@ -164,6 +168,47 @@ spec:
           ingressClassName: ${_acme_ingress_class}
 EOF
     pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class})"
+  fi
+fi
+
+if [[ "$_tls_source" == "dns01" ]]; then
+  # DNS-01 via Azure DNS + Workload Identity.
+  # Requires: langsmith_domain set, create_dns_zone = true, Azure DNS zone NS-delegated.
+  # cert-manager WI setup (pod labels + SA annotation) is handled by Terraform k8s-bootstrap.
+  _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
+  _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
+  _dns_zone="$_le_domain"                          # zone name = domain name
+  _dns_rg=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || _dns_rg=""
+  _subscription_id=$(_parse_tfvar "subscription_id") || _subscription_id=""
+  _cert_manager_client_id=$(terraform -chdir="$INFRA_DIR" output -raw cert_manager_identity_client_id 2>/dev/null) || _cert_manager_client_id=""
+
+  if [[ -z "$_le_domain" ]]; then
+    warn "dns01 requires langsmith_domain to be set in terraform.tfvars — ClusterIssuer skipped"
+  elif [[ -z "$_cert_manager_client_id" ]]; then
+    warn "dns01 requires cert_manager_identity_client_id output — run make apply first"
+  else
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: ${_le_email}
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - dns01:
+        azureDNS:
+          subscriptionID: ${_subscription_id}
+          resourceGroupName: ${_dns_rg}
+          hostedZoneName: ${_dns_zone}
+          environment: AzurePublicCloud
+          managedIdentity:
+            clientID: ${_cert_manager_client_id}
+EOF
+    pass "ClusterIssuer letsencrypt-prod configured (solver: dns01/azureDNS)"
   fi
 fi
 
@@ -362,6 +407,77 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo ""
 fi
 
+# ── Pre-deploy: Envoy Gateway GatewayClass + Gateway ─────────────────────
+# Must exist before helm install so the chart's gateway.enabled: true passes
+# chart validation (validate.yaml requires ingress, gateway, or istioGateway).
+# HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
+  [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
+
+  kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: langsmith-eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+EOF
+
+  # Build Gateway listeners — always include HTTP; add HTTPS only when TLS is enabled.
+  if [[ "$_tls_source" == "none" ]]; then
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${_eg_namespace}
+spec:
+  gatewayClassName: langsmith-eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+EOF
+  else
+    kubectl apply -f - &>/dev/null <<EOF
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: langsmith-gateway
+  namespace: ${_eg_namespace}
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  gatewayClassName: langsmith-eg
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: "${_eg_hostname}"
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: langsmith-tls
+    allowedRoutes:
+      namespaces:
+        from: Same
+EOF
+  fi
+  pass "Envoy Gateway GatewayClass + Gateway created (tls: ${_tls_source})"
+fi
+
 # ── Deploy ────────────────────────────────────────────────────────────────
 info "Deploying LangSmith (sizing: ${_sizing_profile})..."
 info "(waiting for pods — 5-15 min on a cold cluster)"
@@ -414,86 +530,13 @@ else
 fi
 echo ""
 
-# ── Post-deploy Envoy Gateway routing ─────────────────────────────────────
-# Envoy Gateway uses Gateway API (GatewayClass → Gateway → HTTPRoute).
-# The LangSmith Helm chart ingress is disabled (ingress.enabled: false).
-# We create the Gateway API resources here so make deploy is fully automated.
+# ── Post-deploy Envoy Gateway: DNS label annotation ───────────────────────
+# GatewayClass + Gateway were created before helm install (pre-deploy block above).
+# The chart creates HTTPRoutes via gateway.enabled: true.
+# Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
-  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
-  _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
-  [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
-  _eg_release=$(_parse_tfvar "langsmith_release_name") || _eg_release="langsmith"
 
-  # GatewayClass — points to the Envoy Gateway controller
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: langsmith-eg
-spec:
-  controllerName: gateway.envoyproxy.io/gatewayclass-controller
-EOF
-
-  # Gateway — creates the Envoy proxy LB with TLS termination
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: langsmith-gateway
-  namespace: ${_eg_namespace}
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-spec:
-  gatewayClassName: langsmith-eg
-  listeners:
-  - name: http
-    protocol: HTTP
-    port: 80
-    allowedRoutes:
-      namespaces:
-        from: Same
-  - name: https
-    protocol: HTTPS
-    port: 443
-    hostname: "${_eg_hostname}"
-    tls:
-      mode: Terminate
-      certificateRefs:
-      - name: langsmith-tls
-    allowedRoutes:
-      namespaces:
-        from: Same
-EOF
-  pass "Envoy Gateway GatewayClass + Gateway created"
-
-  # HTTPRoute — routes all traffic to LangSmith frontend
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: langsmith
-  namespace: ${_eg_namespace}
-spec:
-  parentRefs:
-  - name: langsmith-gateway
-    namespace: ${_eg_namespace}
-  hostnames:
-  - "${_eg_hostname}"
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /
-    backendRefs:
-    - name: ${_eg_release}-frontend
-      port: 80
-EOF
-  pass "Envoy Gateway HTTPRoute created: ${_eg_hostname}"
-
-  # Wait for Gateway LB service and annotate with DNS label.
-  # Envoy Gateway creates the LB in envoy-gateway-system namespace with label:
-  #   gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
   for i in $(seq 1 30); do
@@ -509,7 +552,7 @@ EOF
       "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" --overwrite &>/dev/null
     pass "DNS label '${_dns_label}' set on envoy-gateway-system/${_eg_svc_name}"
   else
-    warn "Could not find Envoy Gateway LB service — DNS label not set. Run: make deploy again after pods are ready"
+    warn "Could not find Envoy Gateway LB service — DNS label not set. Re-run: make deploy"
   fi
 fi
 
@@ -545,17 +588,13 @@ print(json.dumps(s))
   fi
 fi
 
-# ── Post-deploy Istio routing (istio-addon only) ──────────────────────────
-# After cert-manager issues the TLS cert, copy the secret to aks-istio-ingress
+# ── Post-deploy TLS sync (istio-addon only) ───────────────────────────────
+# After cert-manager issues the TLS cert, copy it to aks-istio-ingress namespace
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
-# Also create the LangSmith VirtualService to route traffic through the Gateway.
+# The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
   _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
-  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-  _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
-  [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
 
-  # Wait for TLS cert to be ready (max 3 min) then sync to gateway namespace
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false
   for i in $(seq 1 18); do
@@ -582,41 +621,6 @@ print(json.dumps(s))
   else
     warn "TLS certificate not ready within 3 min — sync skipped. Re-run: make deploy"
   fi
-
-  # Create VirtualService for LangSmith routing through the Istio Gateway
-  _release=$(_parse_tfvar "langsmith_release_name") || _release="langsmith"
-  kubectl apply -f - &>/dev/null <<EOF
-apiVersion: networking.istio.io/v1beta1
-kind: VirtualService
-metadata:
-  name: langsmith
-  namespace: ${_namespace}
-spec:
-  hosts:
-  - "${_istio_hostname}"
-  gateways:
-  - langsmith-gateway
-  http:
-  - match:
-    - uri:
-        prefix: "/.well-known/acme-challenge/"
-    route:
-    - destination:
-        host: $(kubectl get svc -n "$_namespace" -l acme.cert-manager.io/http01-solver=true \
-          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "cm-acme-http-solver").${_namespace}.svc.cluster.local
-        port:
-          number: $(kubectl get svc -n "$_namespace" -l acme.cert-manager.io/http01-solver=true \
-            -o jsonpath='{.items[0].spec.ports[0].port}' 2>/dev/null || echo "8089")
-  - match:
-    - uri:
-        prefix: "/"
-    route:
-    - destination:
-        host: ${_release}-frontend.${_namespace}.svc.cluster.local
-        port:
-          number: 80
-EOF
-  pass "VirtualService configured for ${_istio_hostname}"
 fi
 
 # ── Ensure langsmith-ksa carries the WI annotation ───────────────────────
@@ -636,13 +640,16 @@ _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
 _kv_name=$(terraform -chdir="$INFRA_DIR" output -raw keyvault_name 2>/dev/null || true)
 _admin_email=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null || true)
+_tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
+_url_protocol="http"
+[[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]] && _url_protocol="https"
 
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  LangSmith deployed"
 echo "══════════════════════════════════════════════════════"
 echo ""
-[[ -n "$_hostname" ]] && echo "  URL      : https://${_hostname}"
+[[ -n "$_hostname" ]] && echo "  URL      : ${_url_protocol}://${_hostname}"
 [[ -n "$_admin_email" ]] && echo "  Login    : ${_admin_email}"
 [[ -n "$_kv_name" ]] && echo "  Password : az keyvault secret show --vault-name ${_kv_name} --name langsmith-admin-password --query value -o tsv"
 echo ""

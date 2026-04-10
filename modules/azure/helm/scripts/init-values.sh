@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # init-values.sh — Generate Helm values files from Terraform outputs.
 #
 # Usage (from azure/):
@@ -374,11 +379,28 @@ agentBuilderTriggerServer:
 # istio: aks-istio-ingressgateway-external — no match, no listeners.
 # deploy.sh creates an explicit Istio Gateway + VirtualService instead.
 # Disable chart-managed Ingress and istioGateway — routing is handled externally.
-$(if [[ "$_ingress_controller" == "istio-addon" || "$_ingress_controller" == "envoy-gateway" ]]; then
+$(if [[ "$_ingress_controller" == "istio-addon" ]]; then
+  echo "ingress:"
+  echo "  enabled: false"
+  # Point the chart at the external Gateway deploy.sh creates (langsmith-gateway).
+  # The chart creates VirtualServices only — no Gateway resource is created.
+  # This satisfies the chart validation when LangGraph Platform is enabled.
+  echo "istioGateway:"
+  echo "  enabled: true"
+  echo "  name: langsmith-gateway"
+  echo "  namespace: ${NAMESPACE}"
+elif [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  # Envoy Gateway uses Gateway API (GatewayClass → Gateway → HTTPRoute).
+  # The chart's gateway block creates HTTPRoutes pointing to the named Gateway.
+  # deploy.sh creates the GatewayClass + Gateway before helm install.
   echo "ingress:"
   echo "  enabled: false"
   echo "istioGateway:"
   echo "  enabled: false"
+  echo "gateway:"
+  echo "  enabled: true"
+  echo "  name: langsmith-gateway"
+  echo "  namespace: ${NAMESPACE}"
 else
   echo "${_ingress_block}"
   echo "istioGateway:"

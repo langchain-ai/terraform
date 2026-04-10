@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # status.sh — Check the current state of the Azure LangSmith deployment
 #             and tell you what to run next.
 #
@@ -406,6 +411,42 @@ else
       fi
     else
       skip "Ingress IP (${_ingress_controller}) not yet assigned"
+    fi
+  fi
+
+  # dns01 — NS delegation + A record guidance
+  _tls_source=$(_read_tfvar tls_certificate_source 2>/dev/null) || _tls_source=""
+  _langsmith_domain=$(_read_tfvar langsmith_domain 2>/dev/null) || _langsmith_domain=""
+  _create_dns_zone=$(_read_tfvar create_dns_zone 2>/dev/null) || _create_dns_zone=""
+  if [[ "$_tls_source" == "dns01" && -n "$_langsmith_domain" && "$_create_dns_zone" == "true" ]]; then
+    # Extract subdomain label (e.g. "azurelangsmith" from "azurelangsmith.dzmitry.dev")
+    _subdomain="${_langsmith_domain%%.*}"
+    _parent_domain="${_langsmith_domain#*.}"
+    _ns_list=$(terraform -chdir="$SCRIPT_DIR/.." output -json dns_nameservers 2>/dev/null \
+      | python3 -c "import sys,json; ns=json.load(sys.stdin); print('\n'.join(ns))" 2>/dev/null) || _ns_list=""
+    if [[ -n "$_ns_list" ]]; then
+      echo ""
+      info "── dns01: NS delegation required ────────────────────────────────"
+      info "  Domain : ${_langsmith_domain}"
+      info "  At your registrar (wherever ${_parent_domain} is managed):"
+      info "  Add these NS records for subdomain: ${_subdomain}"
+      while IFS= read -r ns; do
+        info "    Type: NS   Name: ${_subdomain}   Value: ${ns}"
+      done <<< "$_ns_list"
+      echo ""
+      if [[ -n "${_ingress_ip:-}" ]]; then
+        _current_ingress_ip=$(_parse_tfvar ingress_ip 2>/dev/null) || _current_ingress_ip=""
+        if [[ "$_current_ingress_ip" == "$_ingress_ip" ]]; then
+          pass "A record: ${_langsmith_domain} → ${_ingress_ip} (set in terraform.tfvars)"
+        else
+          warn "A record not yet set — add to terraform.tfvars and re-run make apply:"
+          info "  ingress_ip = \"${_ingress_ip}\""
+        fi
+      else
+        skip "A record: ingress LB IP not yet assigned (run make deploy first)"
+      fi
+      echo ""
+      info "  Verify NS propagation: dig NS ${_langsmith_domain} @8.8.8.8"
     fi
   fi
 

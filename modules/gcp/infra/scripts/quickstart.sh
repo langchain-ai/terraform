@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# MIT License - Copyright (c) 2026 LangChain, Inc.
+# NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
+# See LICENSE at the root of this repository for full license text.
+
 # quickstart.sh — Interactive setup wizard for LangSmith on GCP
 #
 # Generates infra/terraform.tfvars from a guided questionnaire.
