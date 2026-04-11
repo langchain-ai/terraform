@@ -71,6 +71,8 @@ resource "azurerm_kubernetes_cluster" "main" {
   kubernetes_version  = var.kubernetes_version
   tags                = merge(var.tags, { module = "aks" })
 
+  role_based_access_control_enabled = true
+
   # OIDC issuer: exposes a discovery document at a well-known URL so Azure AD
   # can verify tokens issued by this cluster. Required for Workload Identity.
   oidc_issuer_enabled = true
