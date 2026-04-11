@@ -13,14 +13,15 @@ resource "random_id" "bucket_suffix" {
 }
 
 locals {
-  base_name     = "${var.name_prefix}-${var.environment}"
-  vpc_name      = "${local.base_name}-vpc"
-  cluster_name  = "${local.base_name}-eks"
-  redis_name    = "${local.base_name}-redis"
-  bucket_name   = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
-  postgres_name = "${local.base_name}-pg"
-  alb_name      = "${local.base_name}-alb"
-  bastion_name  = "${local.base_name}-bastion"
+  base_name      = "${var.name_prefix}-${var.environment}"
+  vpc_name       = "${local.base_name}-vpc"
+  cluster_name   = "${local.base_name}-eks"
+  redis_name     = "${local.base_name}-redis"
+  bucket_name    = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
+  postgres_name  = "${local.base_name}-pg"
+  alb_name       = "${local.base_name}-alb"
+  bastion_name   = "${local.base_name}-bastion"
+  firewall_name  = "${local.base_name}-fw"
 
   common_tags = merge(
     {

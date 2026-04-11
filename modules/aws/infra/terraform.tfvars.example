@@ -486,6 +486,44 @@ langsmith_namespace = "langsmith"
 #   Cost: ~$5/mo base + $1/mo per rule group + $0.60/million requests.
 # create_waf = false
 
+# Network Firewall — FQDN-based egress filtering for outbound internet traffic.
+#   Deploys an AWS Network Firewall between private subnets and the NAT gateway.
+#   All traffic leaving the VPC is inspected. Only destinations in
+#   firewall_allowed_fqdns are permitted; everything else is dropped.
+#
+#   Requires create_vpc = true (BYOV is not supported with this flag).
+#
+#   How it works:
+#     1. A firewall subnet and endpoint are created in the NAT gateway's AZ.
+#     2. Private route tables are updated: 0.0.0.0/0 → firewall endpoint
+#        (instead of directly to the NAT gateway).
+#     3. The firewall subnet routes 0.0.0.0/0 → NAT gateway.
+#     4. The firewall inspects TLS SNI (HTTPS) and HTTP Host headers and
+#        passes only traffic matching firewall_allowed_fqdns.
+#     5. All other established connections are dropped at the firewall.
+#
+#   Internal VPC traffic (RDS, ElastiCache, pod-to-pod) is unaffected —
+#   it routes via the local VPC route and never hits the firewall.
+#
+#   Cost: ~$0.395/hr per firewall endpoint + $0.065/GB data processed
+#         ≈ $285/mo base before data charges.
+#   Docs: https://docs.aws.amazon.com/network-firewall/latest/developerguide/
+#
+# create_firewall = false
+
+# Domains allowed for outbound internet traffic when create_firewall = true.
+# Add more entries if LangSmith components need additional external endpoints
+# (e.g. LangChain Managed ClickHouse, external model providers, package registries).
+# Default covers the LangSmith beacon/telemetry endpoint only.
+#
+# firewall_allowed_fqdns = ["beacon.langchain.com"]
+
+# CIDR block for the firewall subnet. Must not overlap with existing subnets.
+# Default fits within 10.0.0.0/16 after the default private (10.0.0.0/21–10.0.32.0/21)
+# and public (10.0.40.0/21–10.0.56.0/21) subnets.
+#
+# firewall_subnet_cidr = "10.0.64.0/21"
+
 #------------------------------------------------------------------------------
 # HELM SIZING PROFILE
 #------------------------------------------------------------------------------
