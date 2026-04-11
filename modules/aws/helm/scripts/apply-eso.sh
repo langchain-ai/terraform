@@ -99,6 +99,9 @@ spec:
     - secretKey: initial_org_admin_password
       remoteRef:
         key: ${_ssm_prefix}/langsmith-admin-password
+    - secretKey: initial_org_admin_email
+      remoteRef:
+        key: ${_ssm_prefix}/langsmith-admin-email
 $(if _ssm_key_exists "${_ssm_prefix}/agent-builder-encryption-key"; then cat <<ABEOF
     - secretKey: agent_builder_encryption_key
       remoteRef:
