@@ -46,6 +46,7 @@ LangSmith on AWS is deployed in three passes.
 │  Cache:      ElastiCache Redis (cache.m6g.xlarge, private subnets)          │
 │  Storage:    S3 bucket (VPC Gateway Endpoint — no public internet)          │
 │  Add-ons:    ALB controller + EBS CSI driver + metrics server               │
+│  Opt-in:     Network Firewall (FQDN-based egress filtering)                 │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -85,6 +86,29 @@ EKS Cluster (private subnets)
                     └── S3 bucket ──────────────► VPC Gateway Endpoint (no public route)
 ```
 
+### Egress path with Network Firewall (optional — `create_firewall = true`)
+
+When Network Firewall is enabled, all outbound internet traffic from private subnets is
+inspected before reaching the NAT gateway:
+
+```
+EKS pods / RDS / ElastiCache (private subnets)
+    │  0.0.0.0/0 → firewall endpoint (private route table)
+    ▼
+AWS Network Firewall (firewall subnet, same AZ as NAT gateway)
+    │  domain allowlist: TLS SNI + HTTP Host inspection
+    │  ALLOWLIST: firewall_allowed_fqdns (default: beacon.langchain.com)
+    │  DROP: all other established connections
+    ▼
+NAT Gateway (public subnet)
+    │
+    ▼
+Internet
+```
+
+Internal traffic (pod-to-pod, pod-to-RDS, pod-to-ElastiCache) routes via the local VPC
+route and never touches the firewall.
+
 ---
 
 ## IRSA (IAM Roles for Service Accounts)
@@ -101,25 +125,28 @@ IRSA is used instead of static credentials for S3 access:
 ## Module Dependency Graph
 
 ```
-vpc  ──►  eks  ──►  k8s-bootstrap (cert-manager, KEDA, ESO)
+vpc  ──►  firewall  (AWS Network Firewall, optional — create_firewall = true)
+│
+├──►  eks  ──►  k8s-bootstrap (cert-manager, KEDA, ESO)
 │
 ├──►  postgres    (RDS, private subnets from VPC)
 ├──►  redis       (ElastiCache, private subnets from VPC)
 ├──►  storage     (S3 bucket + VPC Gateway Endpoint)
 ├──►  alb         (pre-provisioned ALB, public subnets)
 ├──►  dns         (Route 53 zone + ACM cert, optional)
-├──►  secrets     (Secrets Manager)
 ├──►  cloudtrail  (audit logging, optional)
-└──►  waf         (WAF ACL on ALB, optional)
+├──►  waf         (WAF ACL on ALB, optional)
+└──►  bastion     (jump host for private EKS access, optional)
           all ──►  langsmith (root module)
 ```
 
 ### Opt-In Security Modules
 
-Three modules are disabled by default and can be enabled in `terraform.tfvars`:
+Four modules are disabled by default and can be enabled in `terraform.tfvars`:
 
 | Module | Variable | Default | Purpose |
 |--------|----------|---------|---------|
+| Network Firewall | `create_firewall` | `false` | FQDN-based egress filtering — drops all outbound traffic not in `firewall_allowed_fqdns`. Requires `create_vpc = true`. Cost: ~$0.395/hr/endpoint + $0.065/GB processed. |
 | ALB access logs | `alb_access_logs_enabled` | `false` | Traffic analysis and compliance |
 | CloudTrail | `create_cloudtrail` | `false` | API call logging (skip if org trail exists) |
 | WAF | `create_waf` | `false` | WAFv2 Web ACL — OWASP Top 10, IP reputation, known bad inputs |
