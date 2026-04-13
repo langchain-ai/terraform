@@ -17,10 +17,16 @@ make quickstart
 #    Must use `source` — Make runs in a subshell and cannot export to your shell
 source infra/scripts/setup-env.sh
 
+# 2a. Confirm secrets are set and TF_VAR_* are exported (optional but recommended)
+make secrets
+
 # 3. Deploy infrastructure (~20–25 min)
 make init
 make plan      # review — confirm no unexpected destroy/replace actions
 make apply
+
+# 3a. Verify post-infra state (optional — checks kubectl + SSM + values + TLS)
+make preflight-post
 
 # 4. Update kubeconfig for the EKS cluster
 make kubeconfig
@@ -30,6 +36,13 @@ make init-values
 
 # 6. Deploy LangSmith (~10 min)
 make deploy
+```
+
+**Fast path** — if `make quickstart` and `source infra/scripts/setup-env.sh` are already done:
+
+```bash
+make quickdeploy        # interactive (prompts for terraform apply confirmation)
+make quickdeploy-auto   # non-interactive (auto-approve terraform)
 ```
 
 **Prefer editing over the wizard?** Copy the example and fill in manually:
@@ -57,11 +70,32 @@ make init-values
 # Re-sync ESO secrets without redeploying
 make apply-eso
 
-# Manage SSM secrets interactively
+# Check SSM secrets status + TF_VAR_* export status (read-only)
+make secrets
+
+# List all SSM parameters with last-modified timestamps
+make secrets-list
+
+# Manage SSM secrets interactively (view, set, rotate, diff vs K8s)
 make ssm
 
 # Update kubeconfig for the EKS cluster
 make kubeconfig
+```
+
+---
+
+## Preflight Checks
+
+```bash
+# Pre-Terraform: check AWS credentials + IAM permissions
+make preflight
+
+# Post-apply: check kubectl + SSM params + Helm values + TLS config
+make preflight-post
+
+# SSM only: confirm all parameters are populated (after make setup-env)
+make preflight-ssm
 ```
 
 ---

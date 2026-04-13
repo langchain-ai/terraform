@@ -78,6 +78,12 @@ variable "langsmith_namespace" {
   default     = null
 }
 
+variable "langsmith_domain" {
+  description = "Custom domain for LangSmith (e.g. langsmith.example.com). Auto-populated from infra outputs by make init-app. When set, used as config.hostname instead of the ALB DNS name."
+  type        = string
+  default     = null
+}
+
 #------------------------------------------------------------------------------
 # App configuration — set these in terraform.tfvars
 #------------------------------------------------------------------------------

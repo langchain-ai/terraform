@@ -38,5 +38,9 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
+# Test reports and run artifacts
+reports/test-runs/
+reports/infrastructure/
+reports
 # OS artifacts
 .DS_Store

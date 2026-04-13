@@ -190,6 +190,11 @@ output "tls_certificate_source" {
   value       = var.tls_certificate_source
 }
 
+output "langsmith_domain" {
+  description = "Custom domain for LangSmith (empty string if not configured)"
+  value       = var.langsmith_domain
+}
+
 #------------------------------------------------------------------------------
 # DNS / ACM (auto-provisioned)
 #------------------------------------------------------------------------------
@@ -206,6 +211,14 @@ output "dns_zone_id" {
 output "acm_certificate_arn" {
   description = "ACM certificate ARN (from dns module or provided directly)"
   value       = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled ? module.dns[0].certificate_arn : null)
+}
+
+#------------------------------------------------------------------------------
+# cert-manager IRSA
+#------------------------------------------------------------------------------
+output "cert_manager_irsa_role_arn" {
+  description = "ARN of the IRSA role for cert-manager DNS-01 (null if create_cert_manager_irsa = false)"
+  value       = var.create_cert_manager_irsa ? module.cert_manager[0].cert_manager_irsa_role_arn : null
 }
 
 #------------------------------------------------------------------------------
@@ -234,6 +247,11 @@ output "enable_polly" {
 output "enable_envoy_gateway" {
   description = "Whether Envoy Gateway is installed for Kubernetes Gateway API routing"
   value       = var.enable_envoy_gateway
+}
+
+output "gateway_target_group_arn" {
+  description = "ARN of the ALB target group for gateway proxy (Envoy or Istio). Null when gateway mode is not enabled."
+  value       = module.alb.gateway_target_group_arn
 }
 
 #------------------------------------------------------------------------------

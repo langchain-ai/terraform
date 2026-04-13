@@ -55,6 +55,21 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_envoy_gateway=false
 _tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 
+_enable_istio_gateway=false
+_tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
+
+_enable_nginx_ingress=false
+_tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+
+_gateway_modes=0
+[[ "$_enable_envoy_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
+[[ "$_enable_istio_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
+[[ "$_enable_nginx_ingress" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
+if (( _gateway_modes > 1 )); then
+  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true in terraform.tfvars." >&2
+  exit 1
+fi
+
 if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
   echo "       Ensure terraform.tfvars has these values set." >&2
@@ -133,13 +148,20 @@ fi
 if [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
-else
+elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
+  ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
+  echo "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
+elif [[ -t 0 ]]; then
+  # Interactive terminal — prompt
   printf "Admin email: "
   read -r ADMIN_EMAIL
   if [[ -z "$ADMIN_EMAIL" ]]; then
     echo "ERROR: Admin email is required." >&2
     exit 1
   fi
+else
+  echo "ERROR: Admin email is required. Set LANGSMITH_ADMIN_EMAIL env var or re-run interactively." >&2
+  exit 1
 fi
 echo ""
 
@@ -328,8 +350,9 @@ echo ""
 _routing_block=""
 
 if [[ "$_enable_envoy_gateway" == "true" ]]; then
-  # Gateway API mode: disable chart Ingress, enable HTTPRoute creation.
-  # The bridge Ingress (ALB → Envoy proxy) is created by deploy.sh.
+  # ALB-always + Envoy Gateway mode: ALB is the external entry point.
+  # The ALB forwards to Envoy proxy pods via a TargetGroupBinding (Terraform-managed).
+  # Frontend service is ClusterIP — no internet-facing NLB is created.
   _routing_block="
 ingress:
   enabled: false
@@ -337,7 +360,55 @@ ingress:
 gateway:
   enabled: true
   name: \"langsmith-gateway\"
-  namespace: \"${NAMESPACE:-langsmith}\""
+  namespace: \"${NAMESPACE:-langsmith}\"
+
+# ALB-always: frontend is ClusterIP. External traffic: ALB → Envoy proxy → HTTPRoute → frontend.
+# The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
+frontend:
+  service:
+    type: ClusterIP"
+elif [[ "$_enable_istio_gateway" == "true" ]]; then
+  # ALB-always + Istio Gateway mode: ALB is the external entry point.
+  # The ALB forwards to Istio ingress gateway pods via a TargetGroupBinding (Terraform-managed).
+  # Frontend service is ClusterIP — no internet-facing NLB is created.
+  # Requires: istiod + istio-ingressgateway + a Gateway resource in the langsmith namespace.
+  # See: helm/values/examples/langsmith-values-ingress-istio.yaml for the full prereq chain.
+  _routing_block="
+ingress:
+  enabled: false
+
+gateway:
+  enabled: false
+
+istioGateway:
+  enabled: true
+  name: \"langsmith-gateway\"
+  namespace: \"${NAMESPACE:-langsmith}\"
+
+# ALB-always: frontend is ClusterIP. External traffic: ALB → Istio gateway → VirtualService → frontend.
+# The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
+frontend:
+  service:
+    type: ClusterIP"
+elif [[ "$_enable_nginx_ingress" == "true" ]]; then
+  # ALB-always + NGINX Ingress mode: ALB is the external entry point.
+  # The ALB forwards to ingress-nginx-controller pods via a TargetGroupBinding (Terraform-managed).
+  # Frontend service is ClusterIP — no internet-facing NLB is created.
+  # NGINX handles host-based routing via standard Kubernetes Ingress resources.
+  _routing_block="
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: \"0\"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: \"3600\"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: \"3600\"
+
+# ALB-always: frontend is ClusterIP. External traffic: ALB → NGINX controller → Ingress → frontend.
+# The Terraform ALB module provisions a target group; k8s-bootstrap creates a TargetGroupBinding.
+frontend:
+  service:
+    type: ClusterIP"
 else
   # Classic ALB Ingress mode
   _ingress_annotations=()
@@ -407,8 +478,8 @@ cat > "$OUT_FILE" << YAML
 
 config:
   # ALB hostname — required for OAuth and Deployments features.
-  # Find it with: kubectl get ingress -n langsmith langsmith-ingress \
-  #     -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+  # In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
+  # Find it with: terraform -chdir=infra output -raw alb_dns_name
   # Or check: AWS Console → EC2 → Load Balancers → DNS name
   hostname: "${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"

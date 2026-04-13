@@ -25,7 +25,8 @@ locals {
 
   # Derived
   ssm_prefix = "/langsmith/${local.name_prefix}-${local.environment}"
-  hostname   = coalesce(var.hostname, local.alb_dns_name, "")
+  # hostname: explicit var.hostname wins, then custom domain from infra, then ALB DNS name
+  hostname   = coalesce(var.hostname, var.langsmith_domain, local.alb_dns_name, "")
   protocol   = local.tls_certificate_source == "none" ? "http" : "https"
 
   tls_enabled_for_deploys = var.tls_enabled_for_deploys != null ? var.tls_enabled_for_deploys : (local.tls_certificate_source != "none")

@@ -412,11 +412,11 @@ variable "eks_addons" {
 
 variable "name_prefix" {
   type        = string
-  description = "Prefix for all resource names. Use your company/team name (max 11 chars). Format: {prefix}-{environment}-{resource}"
+  description = "Prefix for all resource names. Use your company/team name (max 15 chars). Format: {prefix}-{environment}-{resource}"
 
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{0,10}$", var.name_prefix))
-    error_message = "name_prefix must be 1-11 characters, start with a lowercase letter, and contain only lowercase letters, numbers, and hyphens."
+    condition     = can(regex("^[a-z][a-z0-9-]{0,14}$", var.name_prefix))
+    error_message = "name_prefix must be 1-15 characters, start with a lowercase letter, and contain only lowercase letters, numbers, and hyphens."
   }
 }
 
@@ -443,9 +443,19 @@ variable "langsmith_namespace" {
 }
 
 variable "tls_certificate_source" {
-  type        = string
-  description = "TLS certificate provider: 'acm' (AWS Certificate Manager, default), 'letsencrypt' (cert-manager), or 'none' (HTTP only)"
-  default     = "acm"
+  type    = string
+  default = "acm"
+  description = <<-EOT
+    TLS certificate provider for in-cluster gateways (Istio, Envoy):
+      'acm'          — AWS Certificate Manager. ALB-native, non-exportable. Only valid with ALB ingress.
+      'letsencrypt'  — cert-manager with Let's Encrypt DNS-01 (ACME). Reference implementation.
+                       In production, swap the ClusterIssuer for any cert-manager-compatible issuer:
+                         - ACM Private CA  (aws-privateca-issuer) — AWS-native, ~$400/mo, air-gap friendly
+                         - Venafi          (cert-manager-venafi)  — enterprise PKI
+                         - HashiCorp Vault (cert-manager-vault)   — self-hosted PKI
+                         - DigiCert / sectigo / others via ACME or custom issuer
+      'none'         — HTTP only. No certificate.
+  EOT
   validation {
     condition     = contains(["acm", "letsencrypt", "none"], var.tls_certificate_source)
     error_message = "tls_certificate_source must be 'acm', 'letsencrypt', or 'none'."
@@ -465,7 +475,7 @@ variable "acm_certificate_arn" {
 
 variable "letsencrypt_email" {
   type        = string
-  description = "Email for Let's Encrypt certificate registration. Required when tls_certificate_source = 'letsencrypt'."
+  description = "Email for Let's Encrypt ACME certificate registration. Required when tls_certificate_source = 'letsencrypt'. Not needed when using ACM Private CA, Venafi, or other non-ACME issuers."
   default     = ""
 }
 
@@ -577,6 +587,49 @@ variable "enable_envoy_gateway" {
   type        = bool
   description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."
   default     = false
+}
+
+variable "enable_istio_gateway" {
+  type        = bool
+  description = "Open port 15017 on the node SG for the istiod sidecar-injector webhook. Required when running Istio on EKS — the upstream EKS module does not include this port by default."
+  default     = false
+}
+
+variable "istio_nlb_scheme" {
+  type        = string
+  description = "Scheme for the Istio ingress gateway NLB: 'internet-facing' (public) or 'internal' (VPC-only). Passed to the Istio Helm values as the service.annotations load balancer scheme."
+  default     = "internet-facing"
+
+  validation {
+    condition     = contains(["internet-facing", "internal"], var.istio_nlb_scheme)
+    error_message = "istio_nlb_scheme must be 'internet-facing' or 'internal'."
+  }
+}
+
+variable "enable_nginx_ingress" {
+  type        = bool
+  description = "Install NGINX ingress controller (ingress-nginx chart). ALB forwards to nginx controller pods via a TargetGroupBinding; LangSmith uses ingressClassName: nginx."
+  default     = false
+}
+
+#------------------------------------------------------------------------------
+# cert-manager (IRSA for Route 53 DNS-01 TLS)
+#------------------------------------------------------------------------------
+variable "create_cert_manager_irsa" {
+  type        = bool
+  description = "Create the IRSA role and IAM policy for cert-manager to perform DNS-01 ACME challenges via Route 53. Required when using Let's Encrypt with Istio Gateway (DNS-01 solver). After terraform apply, run: make tls"
+  default     = false
+}
+
+variable "cert_manager_hosted_zone_id" {
+  type        = string
+  description = "Route 53 hosted zone ID that cert-manager will write DNS-01 TXT records to. Required when create_cert_manager_irsa = true."
+  default     = ""
+
+  validation {
+    condition     = var.cert_manager_hosted_zone_id == "" || can(regex("^Z[A-Z0-9]{1,31}$", var.cert_manager_hosted_zone_id))
+    error_message = "cert_manager_hosted_zone_id must be a valid Route 53 hosted zone ID (starts with Z, e.g., Z1ABCDEF123456)."
+  }
 }
 
 #------------------------------------------------------------------------------

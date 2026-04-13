@@ -91,7 +91,7 @@ _ssm_path() { echo "${SSM_PREFIX}/${1}"; }
 
 _get_param() {
   local _out
-  _out=$(aws ssm get-parameter \
+  _out=$(_aws ssm get-parameter \
     --region "$_region" \
     --name "$(_ssm_path "$1")" \
     --with-decryption \
@@ -101,11 +101,12 @@ _get_param() {
     return 1
   fi
   echo "ERROR: SSM query failed for $1: $_out" >&2
-  return 1
+  # Return 2 to signal a real AWS error (not just "not found")
+  return 2
 }
 
 _param_exists() {
-  aws ssm get-parameter \
+  _aws ssm get-parameter \
     --region "$_region" \
     --name "$(_ssm_path "$1")" \
     --query 'Parameter.Name' \
@@ -118,7 +119,7 @@ cmd_list() {
   echo ""
 
   local params
-  params=$(aws ssm get-parameters-by-path \
+  params=$(_aws ssm get-parameters-by-path \
     --region "$_region" \
     --path "$SSM_PREFIX/" \
     --with-decryption \
@@ -159,12 +160,17 @@ cmd_get() {
     exit 1
   fi
 
-  local val
-  val=$(_get_param "$key") || {
+  local val rc
+  val=$(_get_param "$key"); rc=$?
+  if [[ $rc -eq 0 ]]; then
+    echo "$val"
+  elif [[ $rc -eq 2 ]]; then
+    # Real AWS error — message already printed to stderr by _get_param
+    exit 1
+  else
     _red "ERROR"; echo ": Parameter not found: $(_ssm_path "$key")"
     exit 1
-  }
-  echo "$val"
+  fi
 }
 
 # ── set ─────────────────────────────────────────────────────────────────────
@@ -203,7 +209,7 @@ cmd_set() {
   local path
   path="$(_ssm_path "$key")"
 
-  aws ssm put-parameter \
+  _aws ssm put-parameter \
     --region "$_region" \
     --name "$path" \
     --value "$val" \
@@ -239,14 +245,21 @@ cmd_delete() {
     [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
   fi
 
-  aws ssm delete-parameter \
+  local _del_err
+  _del_err=$(_aws ssm delete-parameter \
     --region "$_region" \
-    --name "$(_ssm_path "$key")" 2>/dev/null && {
+    --name "$(_ssm_path "$key")" 2>&1)
+  local _del_rc=$?
+
+  if [[ $_del_rc -eq 0 ]]; then
     _green "OK"; echo ": Deleted $(_ssm_path "$key")"
-  } || {
-    _red "ERROR"; echo ": Parameter not found or could not be deleted."
+  elif echo "$_del_err" | grep -q "ParameterNotFound"; then
+    _green "OK"; echo ": $(_ssm_path "$key") already absent (nothing to delete)"
+  else
+    _red "ERROR"; echo ": Failed to delete $(_ssm_path "$key")"
+    echo "  AWS error: $_del_err" >&2
     exit 1
-  }
+  fi
 }
 
 # ── validate ────────────────────────────────────────────────────────────────

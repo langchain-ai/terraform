@@ -32,3 +32,8 @@ output "access_logs_bucket_name" {
   description = "Name of the S3 bucket receiving ALB access logs (null when access_logs_enabled = false)"
   value       = var.access_logs_enabled ? aws_s3_bucket.access_logs[0].id : null
 }
+
+output "gateway_target_group_arn" {
+  description = "ARN of the target group for gateway proxy (Envoy or Istio). Null when gateway mode is not enabled."
+  value       = local.gateway_enabled ? aws_lb_target_group.gateway[0].arn : null
+}

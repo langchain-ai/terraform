@@ -130,9 +130,13 @@ aws/
 │       │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
 │       │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
 │       │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
-│       │   └── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+│       │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+│       │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
+│       │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
+│       │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
 │       ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
 │       ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
+│       ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
 │       └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
 └── app/                    ← Pass 2 option B: Terraform-managed Helm deploy
     ├── main.tf             ← Providers, ESO resources, helm_release
@@ -216,12 +220,15 @@ Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC
 ```bash
 cd terraform/aws
 
-# First time? Generate terraform.tfvars interactively:
+# Generate terraform.tfvars interactively (re-run safe — Enter accepts current values):
 make quickstart
 
 # Create and populate secrets in SSM Parameter Store
 # (must be sourced — Make can't do this; run `make setup-env` for the exact command)
 source infra/scripts/setup-env.sh
+
+# Check secret status and confirm TF_VAR_* are exported
+make secrets
 
 # Deploy infrastructure
 make init
@@ -246,6 +253,20 @@ kubectl get pods -n kube-system
 ## Pass 2 — LangSmith Application
 
 Two paths — pick one:
+
+### Fast Path — Single Command Deploy
+
+If `source infra/scripts/setup-env.sh` and `make quickstart` have already been run, you can chain all of Pass 1 and Pass 2 in one command:
+
+```bash
+# Interactive (prompts for terraform apply confirmation)
+make quickdeploy
+
+# Non-interactive (auto-approves terraform apply)
+make quickdeploy-auto
+```
+
+`make quickdeploy` gates on secrets being loaded and `terraform.tfvars` existing, then runs: `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` in sequence. If any step fails it exits with instructions to retry that step individually.
 
 ### Option A: Script-driven Helm deploy (recommended)
 
@@ -297,6 +318,62 @@ clickhouse_host      = "clickhouse.example.com"
 ```
 
 For "bring your own infra" — skip `make init-app` and set all variables manually in `app/terraform.tfvars`.
+
+---
+
+## Envoy Gateway — Alternative Ingress (Gateway API)
+
+By default, LangSmith uses the AWS Load Balancer Controller (ALB) for ingress. Set `enable_envoy_gateway = true` in `terraform.tfvars` to install Envoy Gateway instead.
+
+When enabled, the `k8s-bootstrap` module:
+1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
+2. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
+
+The LangSmith Helm chart then creates an `HTTPRoute` (not an `Ingress`) pointing to `langsmith-frontend`.
+
+### Why Envoy Gateway?
+
+- Required for multi-namespace dataplane deployments — HTTPRoutes in different namespaces can attach to a shared Gateway using `ReferenceGrants`, without modifying the shared Gateway resource.
+- Envoy Gateway is the recommended ingress for environments running the `langgraph-dataplane` chart in a separate namespace.
+
+### Enable
+
+```hcl
+# infra/terraform.tfvars
+enable_envoy_gateway = true
+```
+
+Then apply and deploy:
+
+```bash
+source infra/scripts/setup-env.sh
+make apply
+
+# Use the Envoy Gateway Helm values overlay
+make init-values
+# Copy the envoy gateway overlay:
+cp helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml helm/values/
+make deploy
+```
+
+### TLS with ACM
+
+Set `tls_certificate_source = "acm"` and `acm_certificate_arn` in `terraform.tfvars`. The `deploy.sh` script annotates the Envoy Gateway NLB service with the ACM certificate ARN automatically. TLS is terminated at the NLB — Envoy sees plain HTTP internally.
+
+Traffic flow:
+```
+Client → NLB:443 (ACM TLS termination) → Envoy proxy:80 → HTTPRoute → langsmith-frontend:80
+```
+
+### Dataplane RBAC
+
+When running the `langgraph-dataplane` chart in a separate namespace (e.g. `langsmith-agents`), apply the RBAC manifest once per dataplane namespace to allow `langsmith-host-backend` to read pods and logs:
+
+```bash
+kubectl apply -f helm/values/dataplane-rbac.yaml
+```
+
+The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmith` namespace) read access to pods, pod logs, deployments, and ReplicaSets in the `langsmith-agents` namespace. Without this, agent run logs will not stream in the LangSmith UI.
 
 ---
 
@@ -377,9 +454,9 @@ All commands are run from `terraform/aws/`. Run `make help` for a quick summary.
 
 ### `make quickstart`
 
-**When to use:** First time setting up a new deployment.
+**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. When `terraform.tfvars` already exists the wizard pre-selects your current values at every prompt — press Enter to keep them, or type a different number to change.
 
-Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, addons) and writes a ready-to-use `infra/terraform.tfvars` file. Saves you from editing the example file by hand.
+Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, addons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu shows a `(default)` marker on the pre-selected option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
 
 ```bash
 make quickstart
@@ -673,6 +750,89 @@ Runs: `make apply` → `make init-values` → `make deploy` in sequence. Conveni
 
 ---
 
+### `make quickdeploy`
+
+**When to use:** Fastest path from a freshly sourced shell to a running LangSmith deployment.
+
+Runs `infra/scripts/quickdeploy.sh`. Before doing anything it gates on two prerequisites:
+
+1. `TF_VAR_langsmith_api_key_salt` is exported — confirms `source infra/scripts/setup-env.sh` has been run.
+2. `infra/terraform.tfvars` exists — confirms `make quickstart` has been run.
+
+If either gate fails it prints the exact command to fix and exits. If terraform is not yet initialized (`.terraform/` missing), it runs `terraform init` automatically.
+
+Then chains 5 steps: `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` → success banner with LangSmith URL.
+
+Each step is individually fenced — if any step fails, the error message tells you exactly which `make` target to retry.
+
+```bash
+# Interactive (prompts for terraform apply confirmation)
+make quickdeploy
+
+# Non-interactive (auto-approves terraform apply — use in automation)
+make quickdeploy-auto
+```
+
+---
+
+### `make secrets`
+
+**When to use:** To check the status of all SSM secrets and confirm `TF_VAR_*` vars are exported before running `make plan` or `make apply`.
+
+Runs `infra/scripts/secrets-status.sh`. Queries SSM Parameter Store for each required parameter and prints a table showing `✓ SET` or `✗ MISSING` per entry. Then checks whether `TF_VAR_*` vars are exported in the current shell. Finally prints actionable next steps — either "run `source infra/scripts/setup-env.sh`" or "ready to run `make plan`".
+
+```bash
+make secrets          # standard output
+make secrets          # re-run after sourcing setup-env.sh to confirm all green
+```
+
+Does not modify anything — read-only status check.
+
+---
+
+### `make secrets-list`
+
+**When to use:** To see a raw list of all SSM parameter paths under your deployment prefix, with last-modified timestamps.
+
+Runs `infra/scripts/manage-ssm.sh list`. Useful for confirming which parameters exist and when they were last rotated. For full CRUD operations use `make ssm` (interactive menu).
+
+---
+
+### `make preflight-post`
+
+**When to use:** After `make apply` completes, before running `make init-values` or `make deploy`.
+
+Runs `infra/scripts/preflight.sh --post-infra`. Checks:
+- `kubectl` context is set and the cluster API is reachable
+- All required SSM parameters exist in Parameter Store
+- `helm/values/` directory contains the required values files
+- TLS configuration is present (ACM ARN or Let's Encrypt email, depending on `tls_certificate_source`)
+
+Useful as a sanity gate before Pass 2, especially when handing off to a colleague or running in a pipeline.
+
+```bash
+make apply
+make preflight-post   # verify all post-infra conditions before proceeding
+make init-values
+make deploy
+```
+
+---
+
+### `make preflight-ssm`
+
+**When to use:** After `make setup-env` (or `source infra/scripts/setup-env.sh`) to quickly confirm all SSM parameters are populated before running `make plan`.
+
+Runs `infra/scripts/preflight.sh --ssm-only`. Narrower scope than `make preflight-post` — checks SSM only, does not verify cluster access or values files.
+
+```bash
+source infra/scripts/setup-env.sh
+make preflight-ssm    # confirm all params are in SSM before plan
+make plan
+```
+
+---
+
 ## Supporting Scripts
 
 These scripts are not exposed as `make` targets but are used internally by the scripts above.
@@ -685,6 +845,30 @@ Shared library sourced by every script. Provides:
 - `INFRA_DIR` — absolute path to `infra/`, resolved from the sourcing script's location
 - Terminal color helpers: `_green`, `_red`, `_yellow`, `_bold`
 - Status output helpers: `pass`, `fail`, `warn`, `skip`, `info`, `action`, `header` (used by `status.sh`)
+
+### `infra/scripts/migrate-ssm.sh`
+
+One-time operational script for moving SSM parameters from a legacy path to the standard path (`/langsmith/{name_prefix}-{environment}/`). Use this when an older deployment wrote secrets under a different prefix (for example, from the deprecated `modules/secrets` module).
+
+```bash
+# Dry run — show what would be copied without making changes
+./infra/scripts/migrate-ssm.sh --old-prefix /old-prefix --dry-run
+
+# Copy all params to the standard path
+./infra/scripts/migrate-ssm.sh --old-prefix /old-prefix
+
+# Copy and delete old params in one step
+./infra/scripts/migrate-ssm.sh --old-prefix /old-prefix --delete-old
+```
+
+Reads `name_prefix`, `environment`, and `region` from `terraform.tfvars` to determine the target prefix. Skips params that already exist at the target with the same value; warns if the target has a different value (never overwrites silently). After a successful copy, prints the `kubectl annotate` command to force an immediate ESO resync.
+
+To find the old prefix if you are not sure what it is:
+
+```bash
+aws ssm get-parameters-by-path --path / --recursive \
+  --query 'Parameters[].Name' --output table | grep -i langsmith
+```
 
 ### `helm/scripts/preflight-check.sh`
 

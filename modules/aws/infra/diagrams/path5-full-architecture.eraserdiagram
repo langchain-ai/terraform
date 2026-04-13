@@ -1,0 +1,417 @@
+direction down
+colorMode pastel
+styleMode shadow
+typeface clean
+
+// ============================================================
+// PATH 5: FULL AWS LangSmith Architecture — All Deployment Paths
+// Macro view: all components, all gateway options, all opt-ins
+// Shows ALB-native, NGINX, Envoy, and Istio as parallel options
+// Use this diagram when presenting to a customer CTO or architect
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// EXTERNAL — outside AWS Account boundary
+// ─────────────────────────────────────────────────────────────
+
+// Internet users — originators of all inbound HTTPS traffic
+Internet Users [icon: users, color: gray] {
+  Client Browser [icon: globe, color: gray]
+}
+
+// LangChain Beacon — REQUIRED egress for license validation
+// Every LangSmith installation must be able to reach this endpoint
+// Blocked egress = LangSmith will not start or will degrade
+LangChain Beacon [icon: globe, color: orange] {
+  beacon.langchain.com [icon: globe, color: orange]
+}
+
+// LangChain Managed ClickHouse — OPTIONAL production ClickHouse
+// Accessed via AWS PrivateLink (preferred) or NAT egress
+// Required for production; in-cluster ClickHouse is dev/POC only
+LangChain Managed ClickHouse [icon: database, color: yellow] {
+  ClickHouse Cloud Endpoint [icon: database, color: yellow]
+}
+
+// Let's Encrypt ACME — OPTIONAL, only needed for DNS-01 cert path
+// cert-manager performs DNS-01 challenge via Route 53 API
+// Not required when using ACM certificates (the default path)
+Lets Encrypt ACME [icon: shield, color: gray] {
+  acme-v02.api.letsencrypt.org [icon: shield, color: gray]
+}
+
+// ─────────────────────────────────────────────────────────────
+// AWS ACCOUNT BOUNDARY
+// ─────────────────────────────────────────────────────────────
+AWS Account [icon: aws, color: blue] {
+
+  // ── Account-level services (outside VPC) ──────────────────
+
+  // CloudTrail — opt-in: create_cloudtrail = true in tfvars
+  // Captures EKS API audit events and AWS API calls for compliance
+  CloudTrail [icon: aws-cloudtrail, color: gray]
+
+  // CloudWatch Logs — receives logs from EKS nodes, controllers, LangSmith pods
+  CloudWatch Logs [icon: server, color: gray]
+
+  // SSM Parameter Store — primary secret store for most deployments
+  // Holds: postgres_password, redis_auth_token, langsmith_license_key,
+  //        langsmith_salt, openai_api_key, agent_builder_key, etc.
+  SSM Parameter Store [icon: aws-systems-manager, color: green]
+
+  // Secrets Manager — alternative to SSM for credential storage
+  // Some deployments use this instead of or alongside SSM
+  AWS Secrets Manager [icon: aws-systems-manager, color: green]
+
+  // S3 Traces Bucket — ALWAYS REQUIRED
+  // All LangSmith trace payloads must go to S3 (not ClickHouse)
+  // Accessed via VPC Gateway Endpoint — no NAT cost, no public route
+  S3 Traces Bucket [icon: aws-simple-storage-service, color: green]
+
+  // ACM Certificate — auto-provisioned by Terraform dns module
+  // Validated via Route 53 DNS-01 challenge (automatic)
+  // BYO cert option: supply certificate_arn in tfvars
+  ACM Certificate [icon: aws-certificatemanager, color: green]
+
+  // IAM — three IRSA roles provisioned by Terraform
+  // langsmith-pod-role: S3 read/write for trace payloads
+  // cert-manager-role: Route 53 DNS manipulation for ACME challenge
+  // eso-role: SSM/Secrets Manager read for ESO secret sync
+  IAM IRSA Roles [icon: aws-iam, color: gray] {
+    LangSmith Pod Role [icon: aws-iam, color: gray]
+    Cert Manager Role [icon: aws-iam, color: gray]
+    ESO Role [icon: aws-iam, color: gray]
+  }
+
+  // ── Route 53 ──────────────────────────────────────────────
+  // Terraform dns module manages the hosted zone and all records
+  // ACM validation records are automatically provisioned
+  // ALB alias record points to the pre-provisioned or LBC-managed ALB
+  Route 53 [icon: aws-route-53, color: blue] {
+    Public Hosted Zone [icon: aws-route-53, color: blue]
+    ACM DNS Validation Record [icon: aws-route-53, color: green]
+    ALB Alias Record [icon: aws-route-53, color: blue]
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // VPC 10.0.0.0/16
+  // Three-tier subnet layout: public, firewall (opt-in), private
+  // ─────────────────────────────────────────────────────────
+  VPC 10.0.0.0/16 [icon: aws-vpc, color: blue] {
+
+    // ── Public Subnets AZ1-3 ────────────────────────────────
+    // ALB lives here — internet-facing, receives inbound HTTPS
+    // NAT Gateway provides outbound internet for private subnets
+    Public Subnets AZ1-3 [color: gray] {
+
+      // ALB — either pre-provisioned by Terraform alb module (Paths 2-4)
+      // or created by AWS LBC via Kubernetes Ingress (Path 1)
+      // TLS terminates here via ACM certificate — :443 in, HTTP out
+      ALB Internet-Facing [icon: aws-elb-application-load-balancer, color: blue]
+
+      // NAT Gateway — single by default (cost-optimised)
+      // HA option: one NAT Gateway per AZ (tfvars: single_nat_gateway = false)
+      NAT Gateway [icon: aws-nat-gateway, color: gray]
+    }
+
+    // ── AWS Network Firewall Subnet (opt-in) ─────────────────
+    // Sits between private subnets and the NAT Gateway
+    // Enforces domain-based egress rules (e.g. allow beacon.langchain.com only)
+    // Enable with: create_network_firewall = true in tfvars
+    Network Firewall Subnet [color: gray] {
+      AWS Network Firewall [icon: aws-network-firewall, color: gray]
+    }
+
+    // ── Private Subnets AZ1-3 ────────────────────────────────
+    // EKS worker nodes, RDS, ElastiCache — no public endpoints
+    Private Subnets AZ1-3 [color: blue] {
+
+      // VPC Gateway Endpoint — S3 traffic stays on AWS fabric
+      // No internet traversal, no NAT cost for blob storage access
+      S3 Gateway Endpoint [icon: aws-simple-storage-service, color: green]
+
+      // PrivateLink Interface Endpoint — optional
+      // Required only when using LangChain Managed ClickHouse via PrivateLink
+      // Avoids routing ClickHouse traffic through NAT Gateway
+      PrivateLink Endpoint [icon: server, color: yellow]
+
+      // ── EKS Cluster ─────────────────────────────────────
+      EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
+
+        // ── kube-system ───────────────────────────────────
+        // Core cluster controllers — always present
+        kube-system [color: gray] {
+          aws-load-balancer-controller [icon: aws-elastic-kubernetes-service, color: gray]
+          keda-operator [icon: aws-elastic-kubernetes-service, color: gray]
+          keda-metrics-apiserver [icon: aws-elastic-kubernetes-service, color: gray]
+          ebs-csi-controller [icon: aws-elastic-kubernetes-service, color: gray]
+          cluster-autoscaler [icon: aws-elastic-kubernetes-service, color: gray]
+          metrics-server [icon: aws-elastic-kubernetes-service, color: gray]
+          coredns [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── external-secrets ──────────────────────────────
+        // ESO controller syncs AWS secrets into Kubernetes Secrets
+        // ClusterSecretStore points to SSM or Secrets Manager
+        external-secrets [color: green] {
+          ESO Controller [icon: kubernetes, color: green]
+          ESO Webhook [icon: kubernetes, color: green]
+          ClusterSecretStore [icon: lock, color: green]
+        }
+
+        // ── cert-manager (opt-in) ─────────────────────────
+        // Only needed for Let's Encrypt DNS-01 path
+        // NOT required when using ACM (the default)
+        // Enable with: enable_cert_manager = true in tfvars
+        cert-manager [color: gray] {
+          cert-manager Controller [icon: kubernetes, color: gray]
+          cert-manager Webhook [icon: kubernetes, color: gray]
+          ClusterIssuer letsencrypt-prod [icon: shield, color: gray]
+          Certificate langsmith-tls [icon: lock, color: gray]
+        }
+
+        // ── GATEWAY OPTIONS — choose one per deployment ────
+        // All four are shown as parallel options; only one is active at a time
+
+        // Path 1: ALB-Native (AWS LBC manages ALB via Kubernetes Ingress)
+        // No separate gateway controller — AWS LBC IS the gateway layer
+        // ingress-nginx not needed; Ingress resource lives in langsmith ns
+        // opt-in: enable_nginx_ingress = false (default: ALB native)
+
+        // Path 2: NGINX Ingress Controller
+        // ALB → NLB/NodePort → NGINX → LangSmith services
+        // Enable with: enable_nginx_ingress = true
+        ingress-nginx [color: purple] {
+          nginx-ingress-controller [icon: server, color: purple]
+        }
+
+        // Path 3: Envoy Gateway
+        // ALB (Terraform-pre-provisioned) → TargetGroupBinding → Envoy proxy
+        // ACM TLS terminates at ALB; Envoy handles HTTP routing internally
+        // Enable with: enable_envoy_gateway = true
+        envoy-gateway-system [color: blue] {
+          envoy-gateway Controller [icon: server, color: blue]
+          envoy-langsmith-proxy Pods [icon: server, color: blue]
+        }
+
+        // Path 4: Istio
+        // ALB → TargetGroupBinding → istio-ingressgateway → VirtualService
+        // istiod programs the data plane; mTLS available in-mesh
+        // Enable with: enable_istio = true
+        istio-system [color: purple] {
+          istiod [icon: server, color: purple]
+          istio-ingressgateway [icon: server, color: purple]
+        }
+
+        // ── langsmith namespace ────────────────────────────
+        // All LangSmith application workloads in one namespace
+        langsmith [color: blue] {
+
+          // Gateway API / Ingress resources (one active per path)
+          Ingress langsmith [icon: kubernetes, color: blue]
+          Gateway langsmith-gateway [icon: kubernetes, color: blue]
+          HTTPRoutes [icon: kubernetes, color: blue]
+          VirtualService langsmith [icon: kubernetes, color: purple]
+          TargetGroupBinding [icon: kubernetes, color: blue]
+
+          // Secrets wired by ESO
+          ExternalSecret langsmith-config [icon: lock, color: green]
+          Secret langsmith-config-secret [icon: lock, color: green]
+          ServiceAccount langsmith [icon: aws-iam, color: gray]
+
+          // ── Core LangSmith pods ──────────────────────
+          Core Services [color: blue] {
+            langsmith-frontend [icon: server, color: blue]
+            langsmith-backend [icon: server, color: blue]
+            langsmith-platform-backend [icon: server, color: blue]
+            langsmith-ace-backend [icon: server, color: blue]
+            langsmith-playground [icon: server, color: blue]
+          }
+
+          // ── Async trace ingestion pipeline ───────────
+          Async Pipeline [color: blue] {
+            langsmith-queue [icon: server, color: blue]
+            langsmith-ingest-queue [icon: server, color: blue]
+          }
+
+          // ── LangGraph Deployments (opt-in) ────────────
+          // enable_deployments = true in tfvars
+          // KEDA scales agent pods based on queue depth
+          LangGraph Deployments [color: green] {
+            langsmith-host-backend [icon: server, color: green]
+            langsmith-listener [icon: server, color: green]
+            langsmith-operator [icon: server, color: green]
+            langsmith-agent-pods [icon: server, color: green]
+            ScaledObject agent [icon: kubernetes, color: green]
+          }
+
+          // ── Agent Builder (opt-in) ────────────────────
+          // enable_agent_builder = true in tfvars
+          Agent Builder [color: pink] {
+            langsmith-agent-builder-tool-server [icon: server, color: pink]
+            langsmith-agent-builder-trigger-server [icon: server, color: pink]
+          }
+
+          // ── Insights / Polly / Clio (opt-in) ──────────
+          // Operator-spawned pods for analytics and insights features
+          Insights [color: gray] {
+            polly [icon: server, color: gray]
+            clio [icon: server, color: gray]
+          }
+
+          // ── In-cluster data stores (dev/POC ONLY) ─────
+          // NOT for production — single pod, no HA, no backups
+          // Replace with RDS + ElastiCache + Managed ClickHouse for prod
+          In-Cluster Data Stores [color: red] {
+            langsmith-clickhouse [icon: database, color: red]
+            langsmith-redis [icon: database, color: red]
+            langsmith-postgres [icon: database, color: red]
+          }
+
+        }
+
+      }
+
+      // ── Managed External Data Stores ──────────────────
+      // Production-grade: deployed in private subnets, no public endpoint
+      RDS PostgreSQL [icon: aws-rds, color: blue]
+      ElastiCache Redis [icon: aws-elasticache, color: blue]
+
+    }
+
+  }
+
+}
+
+// ============================================================
+// CONNECTIONS
+// ============================================================
+
+// ── Inbound traffic path ─────────────────────────────────────
+Client Browser > Public Hosted Zone: DNS lookup
+Public Hosted Zone > ALB Alias Record: resolves to ALB
+ALB Alias Record > ALB Internet-Facing: CNAME alias
+Client Browser > ALB Internet-Facing: HTTPS :443 (ACM TLS terminates here)
+
+// ── ACM certificate provisioning ─────────────────────────────
+ACM Certificate > ACM DNS Validation Record: DNS-01 validation
+ACM DNS Validation Record > ALB Internet-Facing: cert bound to ALB listener
+
+// ── Gateway path options (parallel — one active per deployment) ─
+
+// Path 1: ALB-Native — AWS LBC creates and owns the ALB
+ALB Internet-Facing > Ingress langsmith: Path 1 — LBC-managed ALB
+aws-load-balancer-controller --> Ingress langsmith: watches and reconciles
+
+// Path 2: NGINX — ALB forwards to NGINX NodePort
+ALB Internet-Facing > nginx-ingress-controller: Path 2 — HTTPS :443 → NodePort
+
+// Path 3: Envoy — ALB TGB forwards to Envoy proxy pod IPs
+ALB Internet-Facing > TargetGroupBinding: Path 3 — HTTP :10080 (TLS offloaded)
+TargetGroupBinding > envoy-langsmith-proxy Pods: HTTP :10080 (type: ip)
+envoy-gateway Controller --> envoy-langsmith-proxy Pods: xDS config push
+envoy-gateway Controller --> Gateway langsmith-gateway: watches Gateway API
+Gateway langsmith-gateway --> HTTPRoutes: reconciles route rules
+
+// Path 4: Istio — ALB TGB forwards to istio-ingressgateway
+ALB Internet-Facing > istio-ingressgateway: Path 4 — HTTP (TLS offloaded)
+istiod --> istio-ingressgateway: xDS programs data plane
+istiod --> VirtualService langsmith: reconciles traffic rules
+
+// ── Gateway → LangSmith services ─────────────────────────────
+nginx-ingress-controller > langsmith-frontend: /
+nginx-ingress-controller > langsmith-backend: /api/*
+nginx-ingress-controller > langsmith-platform-backend: /platform-api/*
+envoy-langsmith-proxy Pods > langsmith-frontend: HTTPRoute /
+envoy-langsmith-proxy Pods > langsmith-backend: HTTPRoute /api
+istio-ingressgateway > langsmith-frontend: VirtualService /
+istio-ingressgateway > langsmith-backend: VirtualService /api
+Ingress langsmith > langsmith-frontend: ALB-native rule /
+
+// ── Frontend internal routing ─────────────────────────────────
+langsmith-frontend > langsmith-backend: /api/*
+langsmith-frontend > langsmith-platform-backend: /platform-api/*
+langsmith-frontend > langsmith-ace-backend: /ace/*
+langsmith-frontend > langsmith-playground: /playground/*
+langsmith-frontend > langsmith-host-backend: /langgraph/*
+
+// ── Backend → external data stores (production path) ──────────
+langsmith-backend > RDS PostgreSQL: :5432 Postgres
+langsmith-backend > ElastiCache Redis: :6379 Redis
+langsmith-backend > S3 Gateway Endpoint: :443 HTTPS (trace payloads)
+langsmith-platform-backend > RDS PostgreSQL: :5432 Postgres
+langsmith-queue > RDS PostgreSQL: :5432 Postgres
+langsmith-ingest-queue > RDS PostgreSQL: :5432 Postgres
+langsmith-ingest-queue > S3 Gateway Endpoint: :443 HTTPS
+S3 Gateway Endpoint > S3 Traces Bucket: private AWS fabric (no NAT)
+
+// ── ClickHouse — production path via PrivateLink ─────────────
+langsmith-backend --> PrivateLink Endpoint: ClickHouse :9000 (via PrivateLink)
+langsmith-ingest-queue --> PrivateLink Endpoint: ClickHouse :9000
+PrivateLink Endpoint > ClickHouse Cloud Endpoint: PrivateLink tunnel
+
+// ── ClickHouse — dev/POC in-cluster path ─────────────────────
+langsmith-backend > langsmith-clickhouse: :9000 TCP (in-cluster)
+langsmith-ingest-queue > langsmith-clickhouse: :9000 TCP (in-cluster)
+
+// ── LangGraph Deployments ─────────────────────────────────────
+langsmith-listener > langsmith-operator: event stream
+langsmith-operator > langsmith-agent-pods: spawn managed deployments
+langsmith-operator > polly: spawn insights pod
+langsmith-operator > clio: spawn analytics pod
+keda-operator --> ScaledObject agent: watches queue depth
+ScaledObject agent --> langsmith-agent-pods: scale replicas
+
+// ── Secrets management flow ───────────────────────────────────
+ESO Controller --> SSM Parameter Store: GetParameter (IRSA auth)
+ESO Controller --> AWS Secrets Manager: GetSecretValue (IRSA auth)
+ClusterSecretStore --> ESO Controller: backend config
+ExternalSecret langsmith-config --> ClusterSecretStore: references store
+ESO Controller --> Secret langsmith-config-secret: reconciles secret data
+Secret langsmith-config-secret --> langsmith-backend: env injection
+Secret langsmith-config-secret --> langsmith-platform-backend: env injection
+Secret langsmith-config-secret --> langsmith-queue: env injection
+ServiceAccount langsmith --> LangSmith Pod Role: IRSA annotation bound role
+
+// ── cert-manager DNS-01 path (opt-in) ────────────────────────
+cert-manager Controller --> Public Hosted Zone: DNS-01 TXT record via IRSA
+cert-manager Controller --> acme-v02.api.letsencrypt.org: ACME challenge
+Certificate langsmith-tls --> cert-manager Controller: requests certificate
+ClusterIssuer letsencrypt-prod --> Certificate langsmith-tls: issues cert
+
+// ── IRSA role bindings ────────────────────────────────────────
+LangSmith Pod Role --> S3 Traces Bucket: s3:GetObject / PutObject
+Cert Manager Role --> Public Hosted Zone: route53:ChangeResourceRecordSets
+ESO Role --> SSM Parameter Store: ssm:GetParameter
+
+// ── Egress via NAT ────────────────────────────────────────────
+NAT Gateway --> beacon.langchain.com: :443 HTTPS (REQUIRED — license validation)
+NAT Gateway --> ClickHouse Cloud Endpoint: :9000 TCP (if not PrivateLink)
+NAT Gateway --> acme-v02.api.letsencrypt.org: :443 HTTPS (cert-manager only)
+
+// ── Network Firewall (opt-in) ─────────────────────────────────
+Private Subnets AZ1-3 --> AWS Network Firewall: egress filtered by domain rules
+AWS Network Firewall --> NAT Gateway: allowed domains only
+
+// ── Observability ─────────────────────────────────────────────
+CloudTrail --> CloudWatch Logs: API audit events
+langsmith-backend --> CloudWatch Logs: application logs
+aws-load-balancer-controller --> CloudWatch Logs: controller logs
+
+// ============================================================
+// LEGEND
+// ============================================================
+Legend [icon: shield, color: gray] {
+  Sync Data Path [icon: server, color: blue]
+  Async or Management Path [icon: server, color: gray]
+  Core LangSmith Services [icon: server, color: blue]
+  LangGraph Deployments optional [icon: server, color: green]
+  Agent Builder optional [icon: server, color: pink]
+  Operator Managed Pods [icon: server, color: gray]
+  In-Cluster Dev Only Data [icon: database, color: red]
+  External Production Data [icon: database, color: blue]
+  Secrets and IAM [icon: lock, color: green]
+  Gateway Controllers [icon: server, color: purple]
+  Required Egress [icon: globe, color: orange]
+  S3 VPC Gateway No NAT [icon: aws-simple-storage-service, color: green]
+}

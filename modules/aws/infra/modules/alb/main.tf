@@ -18,6 +18,14 @@ terraform {
 data "aws_caller_identity" "current" {}
 data "aws_elb_service_account" "current" {}
 
+locals {
+  gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress
+  # Envoy proxy: port 80 in the Gateway → container port 10080 (Envoy Gateway adds 10000).
+  # Istio ingress gateway: listens directly on port 80 (envoy with NET_BIND_SERVICE).
+  # NGINX ingress controller: listens on port 80.
+  gateway_target_port = var.enable_envoy_gateway ? 10080 : 80
+}
+
 # ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
 # Created only when access_logs_enabled = true.
 # The ELB service requires a specific bucket policy — it cannot write to an
@@ -110,6 +118,7 @@ resource "aws_security_group" "alb" {
 resource "aws_lb" "this" {
   name                       = var.name
   drop_invalid_header_fields = true
+  idle_timeout               = 3600
   internal                   = var.internal
   load_balancer_type         = "application"
   security_groups            = [aws_security_group.alb.id]
@@ -131,10 +140,50 @@ resource "aws_lb" "this" {
   tags = var.tags
 }
 
+# ── Gateway Target Group ───────────────────────────────────────────────────────
+# When Envoy Gateway or Istio is enabled, the ALB forwards to the gateway proxy
+# pods directly (target-type: ip via VPC-CNI) instead of relying on a NodePort.
+# A TargetGroupBinding in k8s-bootstrap wires this TG to the gateway proxy service
+# so the ALB controller registers pod IPs automatically.
+#
+# Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset).
+# Istio:         pods listen on port 80    (istio-ingressgateway with NET_BIND_SERVICE).
+# NGINX:         pods listen on port 80    (ingress-nginx-controller).
+# Health check uses "200-404": Envoy/Istio returns 404 on unknown paths, which is
+# still a sign the proxy is alive and ready to serve traffic.
+
+resource "aws_lb_target_group" "gateway" {
+  count = local.gateway_enabled ? 1 : 0
+
+  name        = substr("${var.name}-gw", 0, 32)
+  port        = local.gateway_target_port
+  protocol    = "HTTP"
+  vpc_id      = var.vpc_id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    path                = "/"
+    port                = tostring(local.gateway_target_port)
+    protocol            = "HTTP"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 15
+    timeout             = 5
+    matcher             = "200-404"
+  }
+
+  tags = var.tags
+}
+
 # ── Listeners ─────────────────────────────────────────────────────────────────
-# The ALB Ingress Controller manages routing rules on top of these listeners.
-# For tls_certificate_source = "acm":   HTTP:80 → redirect HTTPS, HTTPS:443 → forward
-# For tls_certificate_source = "none":  HTTP:80 → forward (controller adds rules)
+# Traffic routing by mode:
+#   ALB mode (no gateway):  HTTP:80 → fixed-response 404 (ALB Ingress Controller adds rules)
+#                           HTTP:80 → redirect HTTPS (when tls=acm)
+#                           HTTPS:443 → fixed-response 404 (ALB Ingress Controller adds rules)
+#   Gateway mode:           HTTP:80 → forward to gateway TG (Envoy/Istio proxy pods)
+#                           HTTP:80 → redirect HTTPS (when tls=acm)
+#                           HTTPS:443 → forward to gateway TG (when tls=acm + gateway)
 
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.this.arn
@@ -142,7 +191,12 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = var.tls_certificate_source == "acm" ? "redirect" : "fixed-response"
+    # Priority: ACM redirect > gateway forward > ALB-controller (fixed-response placeholder)
+    type = (
+      var.tls_certificate_source == "acm" ? "redirect" :
+      local.gateway_enabled ? "forward" :
+      "fixed-response"
+    )
 
     dynamic "redirect" {
       for_each = var.tls_certificate_source == "acm" ? [1] : []
@@ -153,8 +207,20 @@ resource "aws_lb_listener" "http" {
       }
     }
 
+    # gateway_enabled + no ACM: ALB forwards directly to Envoy/Istio proxy pods.
+    dynamic "forward" {
+      for_each = var.tls_certificate_source != "acm" && local.gateway_enabled ? [aws_lb_target_group.gateway[0].arn] : []
+      content {
+        target_group {
+          arn = forward.value
+        }
+      }
+    }
+
+    # ALB-only mode (no gateway, no ACM): placeholder 404 — the ALB Ingress Controller
+    # adds real forwarding rules via Ingress resource annotations.
     dynamic "fixed_response" {
-      for_each = var.tls_certificate_source != "acm" ? [1] : []
+      for_each = var.tls_certificate_source != "acm" && !local.gateway_enabled ? [1] : []
       content {
         content_type = "text/plain"
         message_body = "Not Found"
@@ -174,11 +240,26 @@ resource "aws_lb_listener" "https" {
   certificate_arn   = var.acm_certificate_arn
 
   default_action {
-    type = "fixed-response"
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "Not Found"
-      status_code  = "404"
+    # Gateway mode with ACM: forward HTTPS to the Envoy/Istio proxy.
+    # ALB-only mode: placeholder 404 — the ALB Ingress Controller adds real rules.
+    type = local.gateway_enabled ? "forward" : "fixed-response"
+
+    dynamic "forward" {
+      for_each = local.gateway_enabled ? [aws_lb_target_group.gateway[0].arn] : []
+      content {
+        target_group {
+          arn = forward.value
+        }
+      }
+    }
+
+    dynamic "fixed_response" {
+      for_each = !local.gateway_enabled ? [1] : []
+      content {
+        content_type = "text/plain"
+        message_body = "Not Found"
+        status_code  = "404"
+      }
     }
   }
 }

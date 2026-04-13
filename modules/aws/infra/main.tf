@@ -84,6 +84,21 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_polly || var.enable_deployments
       error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
     }
+
+    precondition {
+      condition     = !(var.tls_certificate_source == "letsencrypt" && var.create_cert_manager_irsa)
+      error_message = "tls_certificate_source = 'letsencrypt' (HTTP-01 via ALB) and create_cert_manager_irsa = true (DNS-01 via Route 53) are mutually exclusive. Both create ClusterIssuer/letsencrypt-prod. Use DNS-01 for Istio Gateway, HTTP-01 for ALB."
+    }
+
+    precondition {
+      condition     = !var.create_cert_manager_irsa || var.cert_manager_hosted_zone_id != ""
+      error_message = "cert_manager_hosted_zone_id is required when create_cert_manager_irsa = true. Find it: aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table"
+    }
+
+    precondition {
+      condition     = !var.create_cert_manager_irsa || var.letsencrypt_email != ""
+      error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
+    }
   }
 }
 
@@ -129,6 +144,7 @@ module "eks" {
   langsmith_namespace             = var.langsmith_namespace
   eks_addons                      = var.eks_addons
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
+  enable_istio_gateway            = var.enable_istio_gateway
 }
 
 # State migration: adding count changes the module address.
@@ -268,6 +284,25 @@ resource "aws_iam_role_policy" "eso_ssm" {
   })
 }
 
+# ── cert-manager IRSA ────────────────────────────────────────────────────────
+# Provisions the IAM role + Route 53 policy for cert-manager DNS-01 challenges.
+# Activated when create_cert_manager_irsa = true and a hosted_zone_id is set.
+# After apply, run `make tls` to install cert-manager, create the ClusterIssuer,
+# Certificate, and patch the Istio Gateway for HTTPS + HTTP redirect.
+
+module "cert_manager" {
+  source = "./modules/cert-manager"
+  count  = var.create_cert_manager_irsa ? 1 : 0
+
+  cluster_name      = local.cluster_name
+  oidc_provider     = module.eks.oidc_provider
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  hosted_zone_id    = var.cert_manager_hosted_zone_id
+  tags              = local.common_tags
+
+  depends_on = [module.eks]
+}
+
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
 # Activates whenever langsmith_domain is set (regardless of tls_certificate_source).
 # This lets you deploy with tls_certificate_source = "none" first, delegate
@@ -323,9 +358,63 @@ module "alb" {
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
   bucket_suffix          = random_id.bucket_suffix.hex
+  enable_envoy_gateway   = var.enable_envoy_gateway
+  enable_istio_gateway   = var.enable_istio_gateway
+  enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
 
   depends_on = [module.vpc]
+}
+
+# ── ALB → Gateway proxy: security group rule ─────────────────────────────────
+# With target-type: ip, ALB sends traffic directly to pod IPs via VPC-CNI.
+# The EKS cluster primary SG (attached to all nodes) blocks inbound from the ALB SG
+# by default — only cluster-internal traffic is allowed. These rules open the specific
+# gateway proxy port so ALB health checks and traffic can reach the pods.
+#
+# Envoy Gateway: port 10080 (Gateway listener port 80 + 10000 offset, Envoy runs non-root)
+# Istio Gateway: port 80    (istio-ingressgateway listens on 80 directly via NET_BIND_SERVICE)
+# NGINX Ingress:  port 80    (ingress-nginx-controller)
+
+resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
+  count = var.enable_envoy_gateway ? 1 : 0
+
+  # Target the NODE security group (attached to EC2 instances and pod ENIs via VPC-CNI).
+  # The cluster primary SG is on the control plane only — not on worker nodes.
+  security_group_id            = module.eks.node_security_group_id
+  referenced_security_group_id = module.alb.security_group_id
+  from_port                    = 10080
+  to_port                      = 10080
+  ip_protocol                  = "tcp"
+  description                  = "Allow ALB to reach Envoy Gateway proxy pods on HTTP (target-type: ip)"
+
+  tags = local.common_tags
+}
+
+resource "aws_vpc_security_group_ingress_rule" "alb_to_istio" {
+  count = var.enable_istio_gateway ? 1 : 0
+
+  security_group_id            = module.eks.node_security_group_id
+  referenced_security_group_id = module.alb.security_group_id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "Allow ALB to reach Istio ingress gateway pods on HTTP (target-type: ip)"
+
+  tags = local.common_tags
+}
+
+resource "aws_vpc_security_group_ingress_rule" "alb_to_nginx" {
+  count = var.enable_nginx_ingress ? 1 : 0
+
+  security_group_id            = module.eks.node_security_group_id
+  referenced_security_group_id = module.alb.security_group_id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "Allow ALB to reach NGINX ingress controller pods on HTTP (target-type: ip)"
+
+  tags = local.common_tags
 }
 
 module "cloudtrail" {
@@ -380,20 +469,61 @@ resource "time_sleep" "wait_for_alb_webhook" {
   create_duration = "30s"
 }
 
+# ── In-cluster credentials ────────────────────────────────────────────────────
+# When postgres or redis runs in-cluster (deployed by the LangSmith Helm chart),
+# Terraform still creates the k8s Secret so the chart can initialize the DB and
+# backend pods can connect without manual patching after deploy.
+# Passwords are generated here so they are stable across re-applies.
+
+resource "random_password" "in_cluster_postgres" {
+  count   = var.postgres_source == "in-cluster" ? 1 : 0
+  length  = 32
+  special = false
+}
+
+
+locals {
+  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : (
+    "postgresql://langsmith:${random_password.in_cluster_postgres[0].result}@langsmith-postgres:5432/langsmith"
+  )
+  redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
+    "redis://langsmith-redis:6379"
+  )
+}
+
 module "k8s_bootstrap" {
   source = "./modules/k8s-bootstrap"
 
   namespace = var.langsmith_namespace
 
-  postgres_connection_url = var.postgres_source == "external" ? module.postgres[0].connection_url : ""
-  redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
+  postgres_connection_url  = local.postgres_connection_url
+  postgres_in_cluster_user = var.postgres_source == "in-cluster" ? "langsmith" : ""
+  postgres_in_cluster_db   = var.postgres_source == "in-cluster" ? "langsmith" : ""
+  postgres_in_cluster_pass = var.postgres_source == "in-cluster" ? random_password.in_cluster_postgres[0].result : ""
+
+  redis_connection_url  = local.redis_connection_url
 
   tls_certificate_source = var.tls_certificate_source
   letsencrypt_email      = var.letsencrypt_email
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
 
-  enable_envoy_gateway = var.enable_envoy_gateway
+  enable_envoy_gateway     = var.enable_envoy_gateway
+  enable_istio_gateway     = var.enable_istio_gateway
+  enable_nginx_ingress     = var.enable_nginx_ingress
+  gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
 
-  depends_on = [time_sleep.wait_for_alb_webhook]
+  # cert-manager DNS-01 (Route 53 / Istio Gateway)
+  # Pass create_cert_manager_irsa as a static bool so count= expressions in
+  # k8s-bootstrap can be evaluated at plan time without depending on computed
+  # module outputs (which are "known after apply" and cause plan-time errors).
+  # The actual role ARN is still passed for runtime use (ClusterIssuer, SA annotation).
+  create_cert_manager_irsa    = var.create_cert_manager_irsa
+  cert_manager_irsa_role_arn  = length(module.cert_manager) > 0 ? module.cert_manager[0].cert_manager_irsa_role_arn : ""
+  langsmith_domain             = var.langsmith_domain
+  region                       = var.region
+  cert_manager_hosted_zone_id  = var.cert_manager_hosted_zone_id
+  cluster_name                 = local.cluster_name
+
+  depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
 }

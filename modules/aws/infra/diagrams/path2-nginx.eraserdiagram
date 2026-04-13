@@ -1,0 +1,287 @@
+direction down
+colorMode pastel
+styleMode shadow
+typeface clean
+
+// ─────────────────────────────────────────────
+// Path 2: Pre-provisioned ALB + NGINX Ingress Controller
+// TLS terminates at ALB via ACM certificate
+// ALB is created by Terraform (not Kubernetes) — static, pre-provisioned
+// TargetGroupBinding (AWS LBC CRD) wires the ALB target group → NGINX pods
+// NGINX handles all L7 routing inside the cluster
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// Internet
+// ─────────────────────────────────────────────
+Internet [icon: globe, color: gray] {
+  Client Browser [icon: users, color: gray]
+}
+
+// ─────────────────────────────────────────────
+// DNS Layer — Route 53
+// CNAME / A alias points to the pre-provisioned ALB hostname
+// ALB hostname is known at Terraform apply time (static)
+// ACM cert attached to ALB listener at Terraform apply time
+// ─────────────────────────────────────────────
+AWS Route 53 [icon: aws-route-53, color: blue] {
+  Public Hosted Zone [icon: aws-route-53, color: blue]
+  ACM Certificate [icon: shield, color: green]
+}
+
+// ─────────────────────────────────────────────
+// LangChain Beacon — required egress
+// ─────────────────────────────────────────────
+LangChain Beacon [icon: globe, color: orange] {
+  beacon.langchain.com [icon: globe, color: orange]
+}
+
+// ─────────────────────────────────────────────
+// ClickHouse Options (choose one per deployment)
+// ─────────────────────────────────────────────
+Option A: LangChain Managed ClickHouse [icon: database, color: yellow] {
+  LangChain ClickHouse Cloud [icon: database, color: yellow]
+}
+
+Option B: In-Cluster ClickHouse [icon: database, color: red] {
+  ClickHouse StatefulSet [icon: database, color: red]
+  ClickHouse PVC [icon: server, color: red]
+}
+
+// ─────────────────────────────────────────────
+// AWS Account
+// ─────────────────────────────────────────────
+AWS Account [icon: aws, color: orange] {
+
+  // ── Account-level services ──────────────────
+  CloudTrail [icon: aws-cloudtrail, color: gray]
+  CloudWatch Logs [icon: aws-cloudwatch, color: orange]
+  SSM Parameter Store [icon: aws-systems-manager, color: gray]
+  AWS Secrets Manager [icon: aws-systems-manager, color: gray]
+  S3 Traces Bucket [icon: aws-simple-storage-service, color: green]
+
+  // ─────────────────────────────────────────────
+  // VPC 10.0.0.0/16
+  // Same topology as Path 1:
+  //   Public subnets: ALB + NAT Gateway
+  //   Private subnets: EKS nodes, RDS, ElastiCache
+  // Key difference: ALB is provisioned by Terraform alb module,
+  // not by Kubernetes / AWS LBC
+  // ─────────────────────────────────────────────
+  VPC 10.0.0.0/16 [icon: aws-vpc, color: blue] {
+
+    // ── Public Subnets — ALB + NAT ──────────────
+    Public Subnets AZ1-3 [color: gray] {
+
+      // Pre-provisioned by Terraform alb module
+      // Listener :443 → ACM cert → Target Group → NGINX controller pods :80
+      // Listener :80 → redirect to :443 (optional, configure in Terraform)
+      // ALB security group: allows :443 + :80 from 0.0.0.0/0
+      // EKS node SG: allows :80 from ALB SG only
+      ALB Internet-Facing [icon: aws-elb-application-load-balancer, color: blue]
+
+      // ALB Target Group (created by Terraform alb module)
+      // Type: ip — targets NGINX controller pod IPs directly
+      // Health check: HTTP :80 /healthz on NGINX controller
+      ALB Target Group [icon: server, color: blue]
+
+      // Single NAT Gateway (HA = one per AZ)
+      NAT Gateway [icon: aws-nat-gateway, color: gray]
+    }
+
+    // ── Private Subnets — EKS + Data Stores ─────
+    Private Subnets AZ1-3 [color: blue] {
+
+      // S3 access stays on-fabric — no NAT cost for blob storage
+      S3 Gateway Endpoint [icon: aws-endpoints, color: green]
+
+      // ── EKS Cluster ───────────────────────────
+      EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
+
+        // ── kube-system ───────────────────────
+        // AWS LBC is still required in this path:
+        // it manages the TargetGroupBinding CRD (not the ALB itself)
+        kube-system [color: gray] {
+          AWS LB Controller [icon: aws-elastic-kubernetes-service, color: gray]
+          KEDA Operator [icon: aws-elastic-kubernetes-service, color: gray]
+          EBS CSI Driver [icon: aws-elastic-kubernetes-service, color: gray]
+          Metrics Server [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── ingress-nginx namespace ────────────
+        // NGINX ingress-nginx controller deployed by k8s-bootstrap module
+        // Listens on port 80 (HTTP only — TLS already terminated at ALB)
+        // Controller pod IPs are registered in the ALB Target Group via TGB
+        ingress-nginx [color: pink] {
+          NGINX Controller Pod [icon: server, color: pink]
+          NGINX Service ClusterIP [icon: kubernetes, color: pink]
+        }
+
+        // ── external-secrets ──────────────────
+        // ESO syncs secrets from SSM / Secrets Manager
+        external-secrets [color: gray] {
+          ESO Controller [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── cert-manager (optional) ───────────
+        // Not needed for this path (ACM handles TLS at ALB)
+        // Included here as an optional add-on if in-cluster certs are needed
+        cert-manager [color: gray] {
+          cert-manager Controller [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── langsmith namespace ───────────────
+        // TargetGroupBinding lives here — it binds the pre-existing
+        // Terraform-managed ALB Target Group to NGINX controller pods
+        langsmith [color: purple] {
+
+          // TargetGroupBinding (AWS LBC CRD)
+          // spec.targetGroupARN: <Terraform output alb_target_group_arn>
+          // spec.targetType: ip
+          // spec.serviceRef: ingress-nginx/nginx-controller :80
+          TargetGroupBinding [icon: kubernetes, color: blue]
+
+          // Kubernetes Ingress resource
+          // ingressClassName: nginx  ← routes to NGINX, not ALB directly
+          // NGINX reads this and programs its own virtual host routing
+          Ingress Resource [icon: kubernetes, color: pink]
+
+          // Core application services
+          Core Services [color: blue] {
+            frontend [icon: aws-elastic-kubernetes-service, color: blue]
+            backend [icon: aws-elastic-kubernetes-service, color: blue]
+            platformBackend [icon: aws-elastic-kubernetes-service, color: blue]
+            aceBackend [icon: aws-elastic-kubernetes-service, color: blue]
+            playground [icon: aws-elastic-kubernetes-service, color: blue]
+          }
+
+          // frontend is exposed as ClusterIP — NGINX routes to it
+          frontend ClusterIP [icon: kubernetes, color: blue]
+
+          // Async trace ingestion pipeline
+          Async Processing [color: yellow] {
+            queue [icon: aws-elastic-kubernetes-service, color: yellow]
+            ingestQueue [icon: aws-elastic-kubernetes-service, color: yellow]
+          }
+
+          // LangGraph agent deployment subsystem (optional add-on)
+          LangGraph Deployments [color: green] {
+            listener [icon: aws-elastic-kubernetes-service, color: green]
+            operator [icon: aws-elastic-kubernetes-service, color: green]
+            hostBackend [icon: aws-elastic-kubernetes-service, color: green]
+            Agent Pods [icon: aws-elastic-kubernetes-service, color: green]
+          }
+
+        }
+
+      }
+
+      // ── Managed Data Stores ───────────────────
+      // Both in private subnets — no public endpoints
+      RDS PostgreSQL [icon: aws-rds, color: blue]
+      ElastiCache Redis [icon: aws-elasticache, color: red]
+
+    }
+
+  }
+
+}
+
+// ─────────────────────────────────────────────
+// Connections
+// ─────────────────────────────────────────────
+
+// ── Ingress traffic path ──────────────────────
+// Client → Route 53 CNAME → ALB :443 (ACM TLS terminates here)
+// ALB → Target Group → NGINX controller pod :80 (HTTP, TLS already stripped)
+// NGINX → langsmith-frontend ClusterIP :80
+// frontend → internal services
+Client Browser > Public Hosted Zone: DNS lookup
+Public Hosted Zone > ACM Certificate: cert ARN bound at Terraform apply
+Public Hosted Zone > ALB Internet-Facing: CNAME / A alias (static ALB hostname)
+Client Browser > ALB Internet-Facing: HTTPS :443
+ALB Internet-Facing > ALB Target Group: :443 listener → Target Group
+ALB Target Group > NGINX Controller Pod: :80 HTTP (TLS terminated at ALB)
+
+// ── TargetGroupBinding wires TG → NGINX ───────
+// AWS LBC watches TargetGroupBinding and registers NGINX pod IPs in the TG
+// This is the critical link between Terraform-managed ALB and Kubernetes NGINX
+AWS LB Controller > TargetGroupBinding: watches and reconciles
+TargetGroupBinding > ALB Target Group: registers NGINX pod IPs (type: ip, port: 80)
+
+// ── NGINX → LangSmith services ────────────────
+// NGINX reads Ingress resource (ingressClassName: nginx)
+// Routes /  → langsmith-frontend ClusterIP :80
+NGINX Controller Pod > Ingress Resource: reads routing rules
+NGINX Controller Pod > frontend ClusterIP: :80 ClusterIP routing
+frontend ClusterIP > frontend: :80
+
+// ── Frontend → internal service routing ───────
+frontend > backend: /api/*
+frontend > platformBackend: /platform-api/*
+frontend > aceBackend: /ace/*
+frontend > playground: /playground/*
+
+// ── Backend → data stores ──────────────────────
+backend > RDS PostgreSQL: :5432
+backend > ElastiCache Redis: :6379
+backend > S3 Gateway Endpoint: :443 HTTPS
+platformBackend > RDS PostgreSQL: :5432
+queue > RDS PostgreSQL: :5432
+ingestQueue > RDS PostgreSQL: :5432
+ingestQueue > S3 Gateway Endpoint: :443 HTTPS
+S3 Gateway Endpoint > S3 Traces Bucket: :443 VPC Gateway (no NAT)
+
+// ── ClickHouse — Option A: LangChain Managed ──
+backend --> LangChain ClickHouse Cloud: :9000 TCP (egress via NAT)
+ingestQueue --> LangChain ClickHouse Cloud: :9000 TCP (egress via NAT)
+
+// ── ClickHouse — Option B: In-Cluster (dev/POC) ─
+// Single StatefulSet pod — no replication, no backups, NOT production
+backend > ClickHouse StatefulSet: :9000 TCP (in-cluster)
+ingestQueue > ClickHouse StatefulSet: :9000 TCP (in-cluster)
+ClickHouse StatefulSet > ClickHouse PVC: persistent volume
+
+// ── LangGraph Deployments ─────────────────────
+listener > operator: event stream
+operator > Agent Pods: spawn deployment
+KEDA Operator > Agent Pods: HPA / autoscale
+
+// ── Secrets management ────────────────────────
+ESO Controller --> SSM Parameter Store: :443 GetParameter
+ESO Controller --> AWS Secrets Manager: :443 GetSecretValue
+ESO Controller --> langsmith: inject langsmith-config-secret
+
+// ── Controlled egress (private → internet via NAT) ─
+Private Subnets AZ1-3 > NAT Gateway: controlled egress only
+NAT Gateway --> beacon.langchain.com: :443 HTTPS (required)
+NAT Gateway --> LangChain ClickHouse Cloud: :9000 TCP (Option A only)
+
+// ── Observability ─────────────────────────────
+backend --> CloudWatch Logs: :443 HTTPS
+ingestQueue --> CloudWatch Logs: :443 HTTPS
+NGINX Controller Pod --> CloudWatch Logs: access logs
+CloudTrail --> CloudWatch Logs: API audit trail
+
+// ─────────────────────────────────────────────
+// Legend
+// ─────────────────────────────────────────────
+legend [position: bottom-right] {
+  [connection: >, label: Synchronous data path]
+  [connection: -->, label: Async / management / egress]
+  [color: blue, label: Core LangSmith services and ALB/TGB ingress layer]
+  [color: pink, label: NGINX ingress-nginx controller (ingress-nginx namespace)]
+  [color: gray, label: AWS infrastructure and system controllers]
+  [color: green, label: LangGraph agent deployments (optional)]
+  [color: yellow, label: Async trace ingestion pipeline]
+  [color: red, label: Option B — In-cluster ClickHouse (dev/POC only — no HA)]
+  [color: yellow, label: Option A — LangChain Managed ClickHouse (production)]
+  [color: orange, label: Required egress — beacon.langchain.com]
+  [color: purple, label: langsmith Kubernetes namespace]
+  [color: green, label: S3 — always via VPC Gateway Endpoint (no NAT cost)]
+  [note: KEY DIFFERENCE FROM PATH 1 — ALB is pre-provisioned by Terraform alb module]
+  [note: TargetGroupBinding (AWS LBC CRD) wires Terraform ALB TG → NGINX pods]
+  [note: NGINX handles all L7 routing inside the cluster (ingressClassName: nginx)]
+  [note: ALB health check: HTTP :80 /healthz on NGINX controller pod]
+  [note: No split dataplane — Ingress is namespace-scoped to langsmith]
+}

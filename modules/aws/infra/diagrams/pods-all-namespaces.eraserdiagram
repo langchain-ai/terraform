@@ -1,0 +1,422 @@
+direction down
+colorMode pastel
+styleMode shadow
+typeface clean
+
+// ============================================================
+// KUBERNETES VIEW: All Pods Across All Namespaces
+// Full-featured LangSmith deployment — all features enabled:
+//   LangGraph Deployments, Agent Builder, Insights, NGINX, cert-manager
+// AWS services shown as external reference boxes only
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// EXTERNAL REFERENCES — AWS services outside the cluster
+// ─────────────────────────────────────────────────────────────
+
+// AWS SSM Parameter Store / Secrets Manager
+// ESO syncs credentials from here into Kubernetes Secrets
+AWS SSM Parameter Store [icon: aws-systems-manager, color: green]
+AWS Secrets Manager [icon: aws-systems-manager, color: green]
+
+// RDS PostgreSQL — managed external database (production)
+RDS PostgreSQL [icon: aws-rds, color: blue]
+
+// ElastiCache Redis — managed external cache (production)
+ElastiCache Redis [icon: aws-elasticache, color: blue]
+
+// S3 Traces Bucket — blob storage for trace payloads (always required)
+// Accessed via IRSA + VPC Gateway Endpoint (no NAT traversal)
+S3 Traces Bucket [icon: aws-simple-storage-service, color: green]
+
+// LangChain Managed ClickHouse — external production ClickHouse
+// Accessed via PrivateLink or NAT egress
+LangChain Managed ClickHouse [icon: database, color: yellow]
+
+// Route 53 Hosted Zone — cert-manager performs DNS-01 challenge here
+Route 53 Hosted Zone [icon: aws-route-53, color: blue]
+
+// ─────────────────────────────────────────────────────────────
+// EKS CLUSTER — all namespaces
+// ─────────────────────────────────────────────────────────────
+EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
+
+  // ── kube-system ──────────────────────────────────────────
+  // Core cluster controllers — always present regardless of gateway path
+  kube-system [color: gray] {
+
+    // AWS Load Balancer Controller — manages ALB lifecycle
+    // In ALB-native mode: watches Ingress resources, provisions ALB
+    // In Envoy/Istio/NGINX modes: manages TargetGroupBinding CRD
+    // Runs as 2-replica Deployment for HA
+    aws-load-balancer-controller [icon: kubernetes, color: gray]
+
+    // KEDA — Kubernetes Event-Driven Autoscaling
+    // Scales LangGraph agent pods based on queue depth or custom metrics
+    keda-operator [icon: kubernetes, color: gray]
+    keda-metrics-apiserver [icon: kubernetes, color: gray]
+
+    // EBS CSI Driver — dynamic EBS volume provisioning
+    // Required for ClickHouse StatefulSet PVCs (dev/POC in-cluster path)
+    ebs-csi-controller [icon: kubernetes, color: gray]
+
+    // Cluster Autoscaler — scales EC2 node groups based on pod pending state
+    cluster-autoscaler [icon: kubernetes, color: gray]
+
+    // Metrics Server — provides resource metrics for HPA and kubectl top
+    metrics-server [icon: kubernetes, color: gray]
+
+    // CoreDNS — cluster DNS resolution for all service discovery
+    // Runs as 2-replica Deployment
+    coredns [icon: kubernetes, color: gray]
+  }
+
+  // ── external-secrets ─────────────────────────────────────
+  // External Secrets Operator — syncs AWS credentials into k8s Secrets
+  // ClusterSecretStore defines the AWS backend (SSM or Secrets Manager)
+  // ExternalSecret in langsmith namespace references this store
+  external-secrets [color: green] {
+
+    // Main ESO controller — reconciles ExternalSecret resources
+    external-secrets [icon: kubernetes, color: green]
+
+    // Webhook — validates ExternalSecret and SecretStore resources
+    external-secrets-webhook [icon: kubernetes, color: green]
+
+    // ClusterSecretStore CRD — points to SSM Parameter Store or Secrets Manager
+    // IRSA annotation on ESO ServiceAccount provides AWS auth
+    ClusterSecretStore [icon: lock, color: green]
+  }
+
+  // ── cert-manager (opt-in) ────────────────────────────────
+  // Only required when using Let's Encrypt DNS-01 for TLS certificates
+  // NOT needed when using ACM certificates (default recommended path)
+  // Enable with: enable_cert_manager = true
+  cert-manager [color: gray] {
+
+    // Main cert-manager controller — reconciles Certificate resources
+    cert-manager [icon: kubernetes, color: gray]
+
+    // Webhook — validates Certificate and Issuer resources at admission
+    cert-manager-webhook [icon: kubernetes, color: gray]
+
+    // ClusterIssuer CRD — defines the Let's Encrypt ACME issuer
+    // Uses DNS-01 challenge via Route 53 (IRSA-authenticated)
+    ClusterIssuer letsencrypt-prod [icon: shield, color: gray]
+
+    // Certificate CRD — requests a TLS cert for the LangSmith domain
+    // cert-manager fulfills this via ACME challenge → stores as TLS Secret
+    Certificate langsmith-tls [icon: lock, color: gray]
+  }
+
+  // ── ingress-nginx (opt-in, NGINX mode — Path 2) ──────────
+  // Deployed when enable_nginx_ingress = true
+  // ALB forwards HTTPS traffic to NGINX NodePort → NGINX routes internally
+  ingress-nginx [color: purple] {
+
+    // NGINX Ingress Controller — single Deployment, handles all routing
+    // Reads Ingress resources in langsmith namespace
+    // Terminates TLS here (Let's Encrypt cert from cert-manager)
+    ingress-nginx-controller [icon: server, color: purple]
+  }
+
+  // ── envoy-gateway-system (opt-in, Envoy mode — Path 3) ───
+  // Deployed when enable_envoy_gateway = true
+  // ALB (Terraform-pre-provisioned) → TargetGroupBinding → Envoy proxy
+  // Envoy Gateway controller programs proxy pods via xDS
+  envoy-gateway-system [color: blue] {
+
+    // Envoy Gateway controller — watches Gateway API resources
+    // Programs envoy proxy pods via xDS; no manual Envoy config needed
+    envoy-gateway [icon: server, color: blue]
+
+    // Managed Envoy proxy pods — provisioned automatically by Gateway resource
+    // Listen on :10080 (non-root port; NET_BIND_SERVICE workaround)
+    // TargetGroupBinding routes ALB traffic directly to these pod IPs (type: ip)
+    envoy-langsmith-gateway-proxy [icon: server, color: blue]
+  }
+
+  // ── istio-system (opt-in, Istio mode — Path 4) ───────────
+  // Deployed when enable_istio = true
+  // istiod programs the data plane; mTLS available for in-mesh services
+  istio-system [color: purple] {
+
+    // istiod — Istio control plane (Pilot, Citadel, Galley combined)
+    // Programs Envoy sidecars and the ingressgateway via xDS
+    istiod [icon: server, color: purple]
+
+    // istio-ingressgateway — Istio data plane for inbound traffic
+    // ALB forwards to this Deployment via TargetGroupBinding
+    // Routes traffic according to Gateway + VirtualService resources
+    istio-ingressgateway [icon: server, color: purple]
+  }
+
+  // ── langsmith ────────────────────────────────────────────
+  // All LangSmith application workloads in a single namespace
+  langsmith [color: blue] {
+
+    // ── Kubernetes resources (non-pod) ─────────────────────
+    // ServiceAccount — carries IRSA annotation for AWS API access
+    // Grants langsmith pods access to S3 without static credentials
+    ServiceAccount langsmith [icon: aws-iam, color: gray]
+
+    // ExternalSecret — declares which SSM params to sync
+    // Reconciled by ESO controller; output is Secret/langsmith-config-secret
+    ExternalSecret langsmith-config [icon: lock, color: green]
+
+    // Secret — populated by ESO; injected into all langsmith pods as env vars
+    // Contains: license key, DB creds, Redis auth token, API keys
+    Secret langsmith-config-secret [icon: lock, color: green]
+
+    // TargetGroupBinding — present in Envoy and Istio modes
+    // Wires the Terraform-pre-provisioned ALB target group to pod IPs
+    // AWS LBC watches this CRD and updates ALB target group membership
+    TargetGroupBinding [icon: kubernetes, color: blue]
+
+    // Ingress langsmith — ALB-native mode only (Path 1)
+    // AWS LBC watches this and creates/updates the ALB
+    Ingress langsmith [icon: kubernetes, color: blue]
+
+    // Gateway langsmith-gateway — Envoy and Istio modes (Paths 3+4)
+    // Defines the listener (port, protocol, TLS settings)
+    Gateway langsmith-gateway [icon: kubernetes, color: blue]
+
+    // HTTPRoutes — Envoy mode only (Path 3)
+    // Path-based routing rules: /, /api, /platform-api, /ace, etc.
+    HTTPRoute main [icon: kubernetes, color: blue]
+    HTTPRoute agent-builder [icon: kubernetes, color: pink]
+    HTTPRoute polly [icon: kubernetes, color: gray]
+    HTTPRoute clio [icon: kubernetes, color: gray]
+
+    // VirtualService langsmith — Istio mode only (Path 4)
+    // Equivalent to HTTPRoute but in Istio's resource model
+    VirtualService langsmith [icon: kubernetes, color: purple]
+
+    // ScaledObject — KEDA resource; triggers agent pod scaling
+    // Watches a queue metric (Redis list length or custom metric)
+    ScaledObject agent [icon: kubernetes, color: green]
+
+    // ── Core LangSmith services ─────────────────────────────
+    // Production replicas: frontend 1+, backend 2, platform-backend 3
+    Core Services [color: blue] {
+
+      // Frontend — serves the LangSmith web UI
+      // Routes API calls to backend services via internal service DNS
+      langsmith-frontend [icon: server, color: blue]
+
+      // Backend — primary API server
+      // Reads/writes RDS PostgreSQL; publishes traces to ingest queue
+      // Uses IRSA ServiceAccount for S3 access
+      langsmith-backend [icon: server, color: blue]
+
+      // Platform Backend — workspace and organization management API
+      // Separate service for platform-level operations (users, orgs, billing)
+      langsmith-platform-backend [icon: server, color: blue]
+
+      // ACE Backend — Agent Control Execution backend
+      // Shared between core and Agent Builder feature
+      langsmith-ace-backend [icon: server, color: blue]
+
+      // Playground — LLM prompt testing and evaluation UI backend
+      langsmith-playground [icon: server, color: blue]
+    }
+
+    // ── Async trace ingestion pipeline ─────────────────────
+    // Decouples trace write path from synchronous API path
+    // queue reads from internal queue; ingest-queue writes to S3 + ClickHouse
+    Async Pipeline [color: blue] {
+      langsmith-queue [icon: server, color: blue]
+      langsmith-ingest-queue [icon: server, color: blue]
+    }
+
+    // ── LangGraph Deployments (opt-in) ─────────────────────
+    // enable_deployments = true in Helm values
+    // Provides managed LangGraph agent lifecycle within LangSmith
+    LangGraph Deployments [color: green] {
+
+      // host-backend — API server for LangGraph agent management
+      // Exposes /langgraph/* routes; stores agent state in RDS
+      langsmith-host-backend [icon: server, color: green]
+
+      // listener — watches for new deployment events from host-backend
+      // Translates deployment intents into Kubernetes resources
+      langsmith-listener [icon: server, color: green]
+
+      // operator — reconciles managed agent Deployments
+      // Creates, updates, and deletes agent pods; spawns Polly and Clio
+      langsmith-operator [icon: server, color: green]
+
+      // Managed agent pods — one Deployment per user-defined agent
+      // Scaled by KEDA ScaledObject based on queue depth
+      langsmith-agent-pods [icon: server, color: green]
+    }
+
+    // ── Agent Builder (opt-in) ─────────────────────────────
+    // enable_agent_builder = true in Helm values
+    // Provides visual agent building and tool registration features
+    Agent Builder [color: pink] {
+
+      // tool-server — manages agent tool definitions and invocations
+      langsmith-agent-builder-tool-server [icon: server, color: pink]
+
+      // trigger-server — handles agent trigger events and webhooks
+      langsmith-agent-builder-trigger-server [icon: server, color: pink]
+    }
+
+    // ── Insights / Polly / Clio (opt-in) ──────────────────
+    // Operator-spawned pods; created dynamically by langsmith-operator
+    // polly: trace analytics and aggregation
+    // clio: insights synthesis and report generation
+    Insights [color: gray] {
+      polly [icon: server, color: gray]
+      clio [icon: server, color: gray]
+    }
+
+    // ── In-cluster data stores (dev/POC ONLY) ──────────────
+    // NOT production-grade — single pod per service, no HA, no backups
+    // Use RDS + ElastiCache + LangChain Managed ClickHouse for production
+    In-Cluster Data Stores [color: red] {
+
+      // ClickHouse StatefulSet — single pod, no replication
+      // Only suitable for dev/POC — will be a bottleneck under load
+      langsmith-clickhouse [icon: database, color: red]
+
+      // In-cluster Redis — no requirepass, no auth, no persistence guarantee
+      // Use ElastiCache for any real workload
+      langsmith-redis [icon: database, color: red]
+
+      // In-cluster Postgres StatefulSet — no Multi-AZ, no automated backups
+      // Use RDS for any real workload
+      langsmith-postgres [icon: database, color: red]
+    }
+
+  }
+
+}
+
+// ============================================================
+// CONNECTIONS
+// ============================================================
+
+// ── ESO secret sync flow ─────────────────────────────────────
+// ESO pulls from AWS, populates Secret, pods consume Secret as env vars
+external-secrets --> AWS SSM Parameter Store: GetParameter (IRSA)
+external-secrets --> AWS Secrets Manager: GetSecretValue (IRSA)
+ClusterSecretStore --> external-secrets: backend definition
+ExternalSecret langsmith-config --> ClusterSecretStore: references store
+external-secrets --> Secret langsmith-config-secret: reconciles secret data
+Secret langsmith-config-secret --> langsmith-backend: env injection
+Secret langsmith-config-secret --> langsmith-platform-backend: env injection
+Secret langsmith-config-secret --> langsmith-queue: env injection
+Secret langsmith-config-secret --> langsmith-ingest-queue: env injection
+Secret langsmith-config-secret --> langsmith-host-backend: env injection
+Secret langsmith-config-secret --> langsmith-agent-builder-tool-server: env injection
+Secret langsmith-config-secret --> langsmith-agent-builder-trigger-server: env injection
+
+// ── cert-manager → Route 53 DNS-01 flow ──────────────────────
+cert-manager --> Route 53 Hosted Zone: DNS-01 TXT record (IRSA auth)
+cert-manager --> Certificate langsmith-tls: fulfills certificate request
+ClusterIssuer letsencrypt-prod --> cert-manager: issues certificate
+Certificate langsmith-tls --> Secret langsmith-config-secret: stores TLS secret
+
+// ── Gateway controllers — control plane → data plane ─────────
+envoy-gateway --> envoy-langsmith-gateway-proxy: xDS config push
+envoy-gateway --> Gateway langsmith-gateway: watches Gateway API resources
+Gateway langsmith-gateway --> HTTPRoute main: reconciles routing rules
+Gateway langsmith-gateway --> HTTPRoute agent-builder: reconciles
+Gateway langsmith-gateway --> HTTPRoute polly: reconciles
+Gateway langsmith-gateway --> HTTPRoute clio: reconciles
+istiod --> istio-ingressgateway: xDS programs data plane
+istiod --> VirtualService langsmith: reconciles traffic rules
+aws-load-balancer-controller --> TargetGroupBinding: manages CRD lifecycle
+aws-load-balancer-controller --> Ingress langsmith: provisions ALB (Path 1)
+
+// ── Inbound traffic → gateway → services ────────────────────
+// NGINX path (opt-in, Path 2)
+ingress-nginx-controller > langsmith-frontend: / (NGINX route)
+ingress-nginx-controller > langsmith-backend: /api/* (NGINX route)
+ingress-nginx-controller > langsmith-platform-backend: /platform-api/*
+ingress-nginx-controller > langsmith-ace-backend: /ace/*
+ingress-nginx-controller > langsmith-playground: /playground/*
+ingress-nginx-controller > langsmith-host-backend: /langgraph/*
+
+// Envoy path (opt-in, Path 3)
+envoy-langsmith-gateway-proxy > langsmith-frontend: HTTPRoute /
+envoy-langsmith-gateway-proxy > langsmith-backend: HTTPRoute /api
+envoy-langsmith-gateway-proxy > langsmith-platform-backend: HTTPRoute /platform-api
+envoy-langsmith-gateway-proxy > langsmith-ace-backend: HTTPRoute /ace
+envoy-langsmith-gateway-proxy > langsmith-playground: HTTPRoute /playground
+envoy-langsmith-gateway-proxy > langsmith-host-backend: HTTPRoute /langgraph
+envoy-langsmith-gateway-proxy > langsmith-agent-builder-tool-server: HTTPRoute agent-tool
+envoy-langsmith-gateway-proxy > langsmith-agent-builder-trigger-server: HTTPRoute agent-trigger
+envoy-langsmith-gateway-proxy > polly: HTTPRoute polly
+envoy-langsmith-gateway-proxy > clio: HTTPRoute clio
+
+// Istio path (opt-in, Path 4)
+istio-ingressgateway > langsmith-frontend: VirtualService /
+istio-ingressgateway > langsmith-backend: VirtualService /api
+istio-ingressgateway > langsmith-platform-backend: VirtualService /platform-api
+
+// ── Frontend → backend services ──────────────────────────────
+langsmith-frontend > langsmith-backend: /api/* (cluster DNS)
+langsmith-frontend > langsmith-platform-backend: /platform-api/*
+langsmith-frontend > langsmith-ace-backend: /ace/*
+langsmith-frontend > langsmith-playground: /playground/*
+langsmith-frontend > langsmith-host-backend: /langgraph/*
+
+// ── Backend → external data stores (production path) ──────────
+langsmith-backend > RDS PostgreSQL: :5432 reads/writes
+langsmith-backend > ElastiCache Redis: :6379 cache + queue
+langsmith-backend > S3 Traces Bucket: :443 HTTPS via IRSA (trace payloads)
+langsmith-platform-backend > RDS PostgreSQL: :5432
+langsmith-queue > RDS PostgreSQL: :5432 job state
+langsmith-ingest-queue > RDS PostgreSQL: :5432
+langsmith-ingest-queue > S3 Traces Bucket: :443 HTTPS (write payloads)
+langsmith-host-backend > RDS PostgreSQL: :5432 agent state
+
+// ── ClickHouse writes ─────────────────────────────────────────
+// Production: external managed ClickHouse
+langsmith-ingest-queue --> LangChain Managed ClickHouse: :9000 analytics writes
+clio --> LangChain Managed ClickHouse: :9000 analytics reads
+// Dev/POC: in-cluster ClickHouse
+langsmith-ingest-queue > langsmith-clickhouse: :9000 (dev/POC only)
+clio > langsmith-clickhouse: :9000 (dev/POC only)
+
+// ── In-cluster data store connections (dev/POC) ───────────────
+langsmith-backend > langsmith-redis: :6379 (dev/POC only)
+langsmith-backend > langsmith-postgres: :5432 (dev/POC only)
+
+// ── LangGraph Deployments flow ────────────────────────────────
+langsmith-listener > langsmith-operator: deployment events
+langsmith-operator > langsmith-agent-pods: spawn and manage Deployments
+langsmith-operator > polly: spawn insights pod
+langsmith-operator > clio: spawn analytics pod
+keda-operator --> ScaledObject agent: watches metric source
+ScaledObject agent --> langsmith-agent-pods: scale replicas up/down
+langsmith-agent-pods > ElastiCache Redis: :6379 agent state
+langsmith-agent-pods > RDS PostgreSQL: :5432 agent persistence
+
+// ── Agent Builder flow ────────────────────────────────────────
+langsmith-ace-backend > langsmith-agent-builder-tool-server: tool invocations
+langsmith-ace-backend > langsmith-agent-builder-trigger-server: trigger events
+langsmith-agent-builder-trigger-server > langsmith-listener: trigger new deployment
+
+// ── IRSA → AWS services ───────────────────────────────────────
+ServiceAccount langsmith --> S3 Traces Bucket: IRSA-scoped s3:PutObject
+
+// ============================================================
+// LEGEND
+// ============================================================
+Legend [icon: shield, color: gray] {
+  Sync Data Path [icon: server, color: blue]
+  Async or Management Path [icon: server, color: gray]
+  Core LangSmith blue [icon: server, color: blue]
+  LangGraph Deployments opt-in green [icon: server, color: green]
+  Agent Builder opt-in pink [icon: server, color: pink]
+  Operator Managed Pods orange [icon: server, color: gray]
+  In-Cluster Dev Only red [icon: database, color: red]
+  Infrastructure Controllers gray [icon: kubernetes, color: gray]
+  Gateway Controllers purple [icon: server, color: purple]
+  Secrets and ESO green [icon: lock, color: green]
+  External AWS Services [icon: aws-rds, color: blue]
+}

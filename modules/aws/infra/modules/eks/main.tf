@@ -104,6 +104,23 @@ resource "kubernetes_storage_class" "gp3_default" {
   depends_on = [aws_eks_addon.ebs-csi]
 }
 
+# Port 15017 is the istiod sidecar-injector webhook port. The EKS API server must
+# reach it from the cluster security group (sg-* associated with the control plane).
+# The upstream EKS module does not include this port in its default webhook rules.
+resource "aws_security_group_rule" "istiod_webhook" {
+  count = var.enable_istio_gateway ? 1 : 0
+
+  type                     = "ingress"
+  from_port                = 15017
+  to_port                  = 15017
+  protocol                 = "tcp"
+  security_group_id        = module.eks.node_security_group_id
+  source_security_group_id = module.eks.cluster_primary_security_group_id
+  description              = "Cluster API to node 15017/tcp istio sidecar-injector webhook"
+
+  depends_on = [module.eks]
+}
+
 # IRSA role for LangSmith pods — allows pods to access S3 via their service account.
 # https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
 resource "aws_iam_role" "langsmith" {

@@ -14,6 +14,8 @@
 #   ./scripts/preflight.sh --domain langsmith.example.com  # + ACM/Route53 domain check
 #   ./scripts/preflight.sh --create-test-resources # + create/destroy real AWS resources
 #   ./scripts/preflight.sh -y                      # non-interactive
+#   ./scripts/preflight.sh --post-infra            # post-terraform checks (kubectl + SSM + helm values)
+#   ./scripts/preflight.sh --ssm-only              # check SSM params only (after make setup-env)
 set -euo pipefail
 export AWS_PAGER=""
 
@@ -31,6 +33,7 @@ SKIP_RESOURCE_TESTS=false
 NON_INTERACTIVE=false
 CREATE_TEST_RESOURCES=false
 ACM_DOMAIN=""
+MODE="default"   # default | post-infra | ssm-only
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -38,9 +41,11 @@ while [[ $# -gt 0 ]]; do
     -y|--yes)                 NON_INTERACTIVE=true; shift ;;
     --create-test-resources)  CREATE_TEST_RESOURCES=true; shift ;;
     --domain)                 [[ $# -lt 2 ]] && { printf "ERROR: --domain requires an argument\n" >&2; exit 1; }; ACM_DOMAIN="$2"; shift 2 ;;
+    --post-infra)             MODE="post-infra"; shift ;;
+    --ssm-only)               MODE="ssm-only"; shift ;;
     *)
       printf "Unknown option: %s\n" "$1"
-      printf "Usage: %s [-s] [-y] [--create-test-resources] [--domain <domain>]\n" "$0"
+      printf "Usage: %s [-s] [-y] [--create-test-resources] [--domain <domain>] [--post-infra] [--ssm-only]\n" "$0"
       exit 1 ;;
   esac
 done
@@ -48,12 +53,226 @@ done
 [[ "${CI:-false}" == "true" ]] && NON_INTERACTIVE=true
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+# NOTE: helpers are defined here so they are available in all modes below.
 info()    { printf "${BLUE}[INFO]${NC}    %s\n" "$1"; }
 success() { printf "${GREEN}[OK]${NC}      %s\n" "$1"; }
 warning() { printf "${YELLOW}[WARN]${NC}    %s\n" "$1"; }
 error()   { printf "${RED}[ERROR]${NC}   %s\n" "$1"; }
 
 check_denied() { echo "$1" | grep -Eqi "$DENY_RE"; }
+
+# ── Post-infra / SSM-only mode functions ──────────────────────────────────────
+# These run AFTER 'terraform apply' but BEFORE 'make deploy'.
+# They are invoked by the routing block below and exit the script when done.
+
+# Parse a value from terraform.tfvars for a given key.
+# Usage: _tfvars_get <key> <tfvars_path>
+_tfvars_get() {
+  local key="$1" file="$2"
+  grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null \
+    | head -1 \
+    | sed -E 's/^[^=]+=//; s/[[:space:]]*//g; s/^"//; s/"$//'
+}
+
+# Check that all required SSM params exist under /langsmith/{prefix}-{env}/
+run_ssm_checks() {
+  local tfvars="$1"
+  local region="$2"
+
+  info "--- SSM Parameter Check ---"
+
+  # Derive the SSM path prefix from tfvars
+  local name_prefix environment ssm_path
+  name_prefix=$(_tfvars_get "name_prefix" "$tfvars")
+  environment=$(_tfvars_get "environment" "$tfvars")
+
+  if [[ -z "$name_prefix" || -z "$environment" ]]; then
+    error "Could not read 'name_prefix' or 'environment' from terraform.tfvars — cannot construct SSM path."
+    return 1
+  fi
+
+  ssm_path="/langsmith/${name_prefix}-${environment}"
+  info "SSM path prefix : $ssm_path"
+
+  local required_params=(
+    "langsmith-license-key"
+    "langsmith-api-key-salt"
+    "langsmith-jwt-secret"
+    "langsmith-admin-password"
+  )
+
+  local all_ok=true
+  for param in "${required_params[@]}"; do
+    local full_path="${ssm_path}/${param}"
+    local out
+    out=$(aws ssm get-parameter --name "$full_path" --region "$region" \
+          --query "Parameter.Name" --output text 2>&1 || true)
+    if echo "$out" | grep -qi "ParameterNotFound\|does not exist\|AccessDenied\|not authorized"; then
+      if echo "$out" | grep -qi "AccessDenied\|not authorized"; then
+        error "SSM access denied for: $full_path"
+      else
+        error "SSM param missing : $full_path"
+      fi
+      all_ok=false
+    else
+      success "SSM param found   : $full_path"
+    fi
+  done
+
+  if [[ "$all_ok" == "false" ]]; then
+    error "One or more SSM params are missing. Run 'make setup-env' to populate them."
+    return 1
+  fi
+  success "All required SSM params are populated."
+}
+
+# Full post-infra check: kubectl context + cluster health + SSM + helm values + TLS config
+run_post_infra_checks() {
+  local script_dir="$1"
+  local tfvars="${script_dir}/../terraform.tfvars"
+  local helm_dir="${script_dir}/../../helm/values"
+
+  printf "\n"
+  info "=== LangSmith AWS Preflight (Pass 2 — post-Terraform) ==="
+  info "Validating cluster access, SSM params, Helm values, and TLS config."
+  printf "\n"
+
+  # Resolve region (same logic as the default mode)
+  local region
+  region=$(aws configure get region 2>/dev/null || true)
+  region=${region:-${AWS_DEFAULT_REGION:-us-east-2}}
+  info "Region : $region"
+  printf "\n"
+
+  # ── 1. kubectl context ──────────────────────────────────────────────────────
+  info "--- kubectl Context Check ---"
+  local ctx
+  ctx=$(kubectl config current-context 2>&1 || true)
+  if [[ -z "$ctx" || "$ctx" == *"error"* ]]; then
+    error "kubectl has no current context. Run 'make kubeconfig' to configure it."
+    return 1
+  fi
+  info "Current context : $ctx"
+
+  # Verify the context name references the expected cluster (name_prefix + environment)
+  local name_prefix environment
+  name_prefix=$(_tfvars_get "name_prefix" "$tfvars")
+  environment=$(_tfvars_get "environment" "$tfvars")
+  local expected_fragment="${name_prefix}-${environment}"
+  if [[ -n "$expected_fragment" ]] && ! echo "$ctx" | grep -q "$expected_fragment"; then
+    warning "Context '$ctx' does not contain '$expected_fragment' — verify you are targeting the correct cluster."
+  else
+    success "Context matches expected cluster fragment: $expected_fragment"
+  fi
+  printf "\n"
+
+  # ── 2. Cluster reachability ─────────────────────────────────────────────────
+  info "--- Cluster Reachability ---"
+  local version_out
+  version_out=$(kubectl version --short 2>&1 || kubectl version 2>&1 || true)
+  if echo "$version_out" | grep -qi "error\|unable to connect\|refused\|timed out"; then
+    error "Cannot reach the cluster: $version_out"
+    error "Check VPN/network access and re-run 'make kubeconfig'."
+    return 1
+  fi
+  success "Cluster API server is reachable."
+  printf "\n"
+
+  # ── 3. Node readiness ───────────────────────────────────────────────────────
+  info "--- Node Readiness ---"
+  local nodes_out ready_count
+  nodes_out=$(kubectl get nodes --no-headers 2>&1 || true)
+  if echo "$nodes_out" | grep -qi "error\|unable\|refused"; then
+    error "kubectl get nodes failed: $nodes_out"
+    return 1
+  fi
+  ready_count=$(echo "$nodes_out" | grep -c " Ready" || true)
+  if [[ "$ready_count" -lt 1 ]]; then
+    error "No Ready nodes found. Check node group status in the AWS console."
+    return 1
+  fi
+  success "Ready nodes : $ready_count"
+  printf "\n"
+
+  # ── 4. SSM params ───────────────────────────────────────────────────────────
+  run_ssm_checks "$tfvars" "$region" || return 1
+  printf "\n"
+
+  # ── 5. Helm values files ────────────────────────────────────────────────────
+  info "--- Helm Values Files ---"
+  local values_ok=true
+  for f in "langsmith-values.yaml" "langsmith-values-overrides.yaml"; do
+    local full_path="${helm_dir}/${f}"
+    if [[ -f "$full_path" ]]; then
+      success "Found : $full_path"
+    else
+      error "Missing: $full_path  — run 'make init-values' to generate it."
+      values_ok=false
+    fi
+  done
+  [[ "$values_ok" == "false" ]] && return 1
+  printf "\n"
+
+  # ── 6. TLS readiness ────────────────────────────────────────────────────────
+  info "--- TLS Configuration ---"
+  local tls_source langsmith_domain
+  tls_source=$(_tfvars_get "tls_certificate_source" "$tfvars")
+  langsmith_domain=$(_tfvars_get "langsmith_domain" "$tfvars")
+
+  if [[ "$tls_source" == "acm" ]]; then
+    if [[ -z "$langsmith_domain" ]]; then
+      error "tls_certificate_source = \"acm\" requires 'langsmith_domain' to also be set in terraform.tfvars."
+      return 1
+    fi
+    success "ACM TLS mode: langsmith_domain = $langsmith_domain"
+  elif [[ -n "$tls_source" ]]; then
+    info "TLS source : $tls_source (no additional checks required)"
+  else
+    info "tls_certificate_source not set — skipping TLS check."
+  fi
+  printf "\n"
+
+  success "Post-infra preflight complete! Ready to run 'make deploy'."
+}
+
+# ── Mode routing ──────────────────────────────────────────────────────────────
+# Resolve SCRIPT_DIR early so the new modes can use it without re-deriving later.
+_SCRIPT_DIR_EARLY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "$MODE" == "ssm-only" ]]; then
+  # For SSM-only we still need AWS credentials; do a quick check.
+  if ! aws sts get-caller-identity &>/dev/null; then
+    error "Not authenticated. Run 'aws configure' or set AWS_* environment variables."
+    exit 1
+  fi
+  _REGION=$(aws configure get region 2>/dev/null || true)
+  _REGION=${_REGION:-${AWS_DEFAULT_REGION:-us-east-2}}
+  _TFVARS="${_SCRIPT_DIR_EARLY}/../terraform.tfvars"
+  if [[ ! -f "$_TFVARS" ]]; then
+    error "terraform.tfvars not found at $_TFVARS"
+    exit 1
+  fi
+  printf "\n"
+  info "=== LangSmith AWS Preflight (SSM-only) ==="
+  printf "\n"
+  run_ssm_checks "$_TFVARS" "$_REGION" || exit 1
+  exit 0
+fi
+
+if [[ "$MODE" == "post-infra" ]]; then
+  # Credentials check is embedded in run_post_infra_checks via AWS calls.
+  if ! aws sts get-caller-identity &>/dev/null; then
+    error "Not authenticated. Run 'aws configure' or set AWS_* environment variables."
+    exit 1
+  fi
+  _TFVARS="${_SCRIPT_DIR_EARLY}/../terraform.tfvars"
+  if [[ ! -f "$_TFVARS" ]]; then
+    error "terraform.tfvars not found at $_TFVARS"
+    exit 1
+  fi
+  run_post_infra_checks "$_SCRIPT_DIR_EARLY" || exit 1
+  exit 0
+fi
 
 # ── Required tools ────────────────────────────────────────────────────────────
 REQUIRED_TOOLS=(aws terraform kubectl helm)

@@ -79,6 +79,9 @@ _ssm_put_safe() {
   local _path="$1" _val="$2"
   local _tmpjson
   _tmpjson="$(mktemp)" || return 1
+  chmod 600 "$_tmpjson"
+  # shellcheck disable=SC2064
+  trap "rm -f '$_tmpjson'" RETURN
 
   if command -v jq &>/dev/null; then
     jq -n --arg name "$_path" --arg val "$_val" \

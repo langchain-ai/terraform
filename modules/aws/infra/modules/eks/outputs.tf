@@ -31,3 +31,13 @@ output "cluster_certificate_authority_data" {
   description = "Base64-encoded certificate authority data for the EKS cluster"
   value       = module.eks.cluster_certificate_authority_data
 }
+
+output "cluster_primary_security_group_id" {
+  description = "Primary security group ID for the EKS cluster (control plane SG, not attached to worker nodes)."
+  value       = module.eks.cluster_primary_security_group_id
+}
+
+output "node_security_group_id" {
+  description = "Security group ID attached to EKS worker nodes and pod ENIs. Used to grant ALB access to gateway proxy pods (target-type: ip)."
+  value       = module.eks.node_security_group_id
+}

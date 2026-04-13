@@ -87,6 +87,13 @@ variable "langsmith_namespace" {
   default     = "langsmith"
 }
 
+# Istio support
+variable "enable_istio_gateway" {
+  type        = bool
+  description = "Open port 15017 on the node SG so the EKS API server can reach the istiod sidecar-injector webhook"
+  default     = false
+}
+
 # EKS Blueprints Addons
 variable "eks_addons" {
   type        = any

@@ -477,6 +477,66 @@ langsmith_namespace = "langsmith"
 # cloudtrail_multi_region       = true    # recommended — catches global IAM events
 # cloudtrail_log_retention_days = 365     # set 0 to keep indefinitely
 
+#------------------------------------------------------------------------------
+# INGRESS / GATEWAY MODE
+#------------------------------------------------------------------------------
+# Three mutually exclusive options (only one should be true at a time):
+#
+#   ALB only (default)
+#     enable_envoy_gateway = false
+#     enable_istio_gateway = false
+#     → Chart creates a standard Kubernetes Ingress; the AWS LB Controller
+#       provisions an Application Load Balancer.
+#
+#   Envoy Gateway
+#     enable_envoy_gateway = true
+#     enable_istio_gateway = false
+#     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
+#       Supports split dataplane routing across namespaces.
+#
+#   Istio Gateway
+#     enable_envoy_gateway = false
+#     enable_istio_gateway = true
+#     → Chart uses istioGateway:; requires istiod + istio-ingressgateway + a
+#       Gateway resource already installed in the cluster.
+#       Also opens port 15017 on the node SG for the istiod webhook.
+#
+enable_envoy_gateway = false
+enable_istio_gateway = false
+
+#------------------------------------------------------------------------------
+# CERT-MANAGER (Let's Encrypt + Route 53 DNS-01)
+#------------------------------------------------------------------------------
+# Required when using Istio Gateway with Let's Encrypt TLS on EKS.
+# cert-manager handles certificate issuance and renewal via DNS-01 challenge —
+# no HTTP endpoint exposure needed, works behind internal NLBs.
+#
+# Why DNS-01 instead of HTTP-01?
+#   EKS NLBs have a hairpin NAT limitation: pods cannot reach the NLB's own
+#   external IP from inside the cluster. cert-manager's HTTP-01 self-check
+#   connects to the NLB to verify ownership and times out. DNS-01 creates a
+#   TXT record instead — no inbound HTTP needed.
+#
+# How it works:
+#   1. Terraform creates an IAM role with Route 53 write access (this section).
+#   2. After `terraform apply`, run `make tls` to:
+#      - Install cert-manager via Helm
+#      - Annotate the cert-manager SA with the IRSA role
+#      - Create a ClusterIssuer (Route53 DNS-01 solver)
+#      - Request a Certificate from Let's Encrypt
+#      - Patch the Istio Gateway for HTTPS + HTTP redirect
+#
+# Prerequisites:
+#   - enable_istio_gateway = true
+#   - A Route 53 hosted zone for your domain (managed in this account)
+#   - Your domain's NS records delegated to Route 53
+
+# create_cert_manager_irsa = false
+#
+# Route 53 hosted zone ID for your domain. Find it:
+#   aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table
+# cert_manager_hosted_zone_id = "Z1ABCDEF123456"
+
 # WAF (Web Application Firewall) — attaches a WAFv2 Web ACL to the ALB.
 #   Docs: https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-list.html
 #   Includes AWS managed rule groups:

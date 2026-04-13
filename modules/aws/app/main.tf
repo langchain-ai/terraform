@@ -44,13 +44,30 @@ provider "helm" {
   }
 }
 
+# kubectl provider — same auth as kubernetes/helm but defers CRD schema validation
+# to apply time. Required for ESO resources (ClusterSecretStore, ExternalSecret)
+# whose CRDs are installed by the infra module (k8s-bootstrap). Using kubernetes_manifest
+# for these would cause terraform plan to fail on a fresh cluster before ESO is installed.
+provider "kubectl" {
+  host                   = data.aws_eks_cluster.this.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  load_config_file       = false
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", local.cluster_name, "--region", local.region]
+  }
+}
+
 # ── ESO: ClusterSecretStore ───────────────────────────────────────────────────
 # Tells ESO how to reach AWS SSM Parameter Store.
 # Auth: uses the ESO controller pod's IRSA role (provisioned in infra/).
-# The ESO CRDs must exist before plan — run infra apply (k8s-bootstrap) first.
+# Uses kubectl_manifest (not kubernetes_manifest) so that terraform plan succeeds
+# on a fresh cluster before the ESO CRDs are installed by infra/k8s-bootstrap.
 
-resource "kubernetes_manifest" "cluster_secret_store" {
-  manifest = {
+resource "kubectl_manifest" "cluster_secret_store" {
+  yaml_body = yamlencode({
     apiVersion = "external-secrets.io/v1"
     kind       = "ClusterSecretStore"
     metadata = {
@@ -64,7 +81,7 @@ resource "kubernetes_manifest" "cluster_secret_store" {
         }
       }
     }
-  }
+  })
 }
 
 # ── SSM parameter existence checks ──────────────────────────────────────────
@@ -96,10 +113,10 @@ data "aws_ssm_parameter" "polly_key" {
 # Syncs secrets from SSM → K8s Secret (langsmith-config).
 # deploy.sh does this with kubectl apply; here we manage it in Terraform.
 
-resource "kubernetes_manifest" "external_secret" {
-  depends_on = [kubernetes_manifest.cluster_secret_store]
+resource "kubectl_manifest" "external_secret" {
+  depends_on = [kubectl_manifest.cluster_secret_store]
 
-  manifest = {
+  yaml_body = yamlencode({
     apiVersion = "external-secrets.io/v1"
     kind       = "ExternalSecret"
     metadata = {
@@ -166,7 +183,7 @@ resource "kubernetes_manifest" "external_secret" {
         ] : [],
       )
     }
-  }
+  })
 }
 
 # ── ClickHouse Secret (only when Insights is enabled) ────────────────────────
@@ -194,7 +211,7 @@ resource "kubernetes_secret" "clickhouse" {
 # ── Helm Release ──────────────────────────────────────────────────────────────
 
 resource "helm_release" "langsmith" {
-  depends_on = [kubernetes_manifest.external_secret, kubernetes_secret.clickhouse]
+  depends_on = [kubectl_manifest.external_secret, kubernetes_secret.clickhouse]
 
   name             = var.release_name
   namespace        = local.namespace

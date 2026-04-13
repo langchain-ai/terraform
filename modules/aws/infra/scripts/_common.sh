@@ -46,6 +46,41 @@ _tfvar_is_true() {
   [[ "$val" == "true" ]]
 }
 
+# ── AWS credential helpers ───────────────────────────────────────────────────
+# Problem: AWS_CREDENTIAL_EXPIRATION (set by `eval $(aws configure export-credentials)`)
+# poisons all subprocesses — even fresh inline credentials get rejected because the
+# SDK sees the expired expiry timestamp and refuses to use them.
+#
+# Solution: _aws() strips the four stale env vars before every AWS call so the
+# SDK falls through to ~/.aws/credentials (kept fresh by `hydrate-creds.sh`).
+# All scripts in this repo use _aws instead of aws directly.
+#
+# The central credential file:
+#   ~/.aws/credentials [default]  ← written by hydrate-creds.sh
+#
+# To refresh from any terminal:
+#   infra/scripts/hydrate-creds.sh   (reads from awslogin / aws configure export-credentials)
+#   # or with explicit values:
+#   infra/scripts/hydrate-creds.sh KEY SECRET TOKEN
+
+_AWS_STALE_VARS=(AWS_CREDENTIAL_EXPIRATION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN)
+
+_aws() {
+  env "${_AWS_STALE_VARS[@]/#/-u }" aws "$@"
+}
+
+_kubectl() {
+  env "${_AWS_STALE_VARS[@]/#/-u }" kubectl "$@"
+}
+
+_helm() {
+  env "${_AWS_STALE_VARS[@]/#/-u }" helm "$@"
+}
+
+_terraform() {
+  env "${_AWS_STALE_VARS[@]/#/-u }" terraform "$@"
+}
+
 # ── Color helpers ────────────────────────────────────────────────────────────
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }

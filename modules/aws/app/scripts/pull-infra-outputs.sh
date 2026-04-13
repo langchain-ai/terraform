@@ -50,6 +50,7 @@ alb_scheme=$(terraform -chdir="$INFRA_DIR" output -raw alb_scheme) || {
 }
 tls_certificate_source=$(terraform -chdir="$INFRA_DIR" output -raw tls_certificate_source)
 acm_certificate_arn=$(terraform -chdir="$INFRA_DIR" output -raw acm_certificate_arn 2>/dev/null || echo "")
+langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null || echo "")
 postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/dev/null || echo "external")
 redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
 langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace)
@@ -85,6 +86,7 @@ cat > "$OUT_FILE" <<EOF
   "alb_scheme": "$alb_scheme",
   "tls_certificate_source": "$tls_certificate_source",
   "acm_certificate_arn": "$acm_certificate_arn",
+  "langsmith_domain": "$langsmith_domain",
   "postgres_source": "$postgres_source",
   "redis_source": "$redis_source",
   "langsmith_namespace": "$langsmith_namespace"

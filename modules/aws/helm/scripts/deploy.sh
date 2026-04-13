@@ -64,22 +64,58 @@ echo ""
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
 
-# ── Apply ESO ClusterSecretStore + ExternalSecret ─────────────────────────────
-# These CRD resources can't be managed by Terraform (CRDs must exist at plan time).
-# Applied here after ESO is installed by terraform apply.
-# Run standalone to re-sync ESO without a full redeploy: ./helm/scripts/apply-eso.sh
-NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/apply-eso.sh"
+# ── Apply ESO ClusterSecretStore + ExternalSecret (or direct secret for workers) ──
+# SKIP_ESO=true bypasses SSM/ESO and creates langsmith-config directly from env vars.
+# Used by test workers that have TF_VAR_* / LANGSMITH_* secrets in the environment
+# but have no SSM parameters (SSM is never provisioned for short-lived test clusters).
+if [[ "${SKIP_ESO:-false}" == "true" ]]; then
+  echo "Configuring secrets (SKIP_ESO=true — creating langsmith-config directly from env)..."
+
+  _require_env() {
+    local var="$1"
+    if [[ -z "${!var:-}" ]]; then
+      echo "ERROR: SKIP_ESO=true but required env var $var is not set." >&2
+      echo "       Source setup-env.sh or export the secret vars before running deploy.sh." >&2
+      exit 1
+    fi
+  }
+  _require_env "TF_VAR_langsmith_api_key_salt"
+  _require_env "TF_VAR_langsmith_jwt_secret"
+  _require_env "LANGSMITH_LICENSE_KEY"
+  _require_env "LANGSMITH_ADMIN_PASSWORD"
+  _require_env "LANGSMITH_ADMIN_EMAIL"
+
+  kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic langsmith-config \
+    --namespace "$NAMESPACE" \
+    --from-literal=langsmith_license_key="${LANGSMITH_LICENSE_KEY}" \
+    --from-literal=api_key_salt="${TF_VAR_langsmith_api_key_salt}" \
+    --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
+    --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
+    --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  echo "  langsmith-config secret ready (direct)."
+else
+  # These CRD resources can't be managed by Terraform (CRDs must exist at plan time).
+  # Applied here after ESO is installed by terraform apply.
+  # Run standalone to re-sync ESO without a full redeploy: ./helm/scripts/apply-eso.sh
+  NAMESPACE="$NAMESPACE" INFRA_DIR="$INFRA_DIR" "$SCRIPT_DIR/apply-eso.sh"
+fi
 echo ""
 
-# ── Read product feature flags from terraform.tfvars ─────────────────────────
+# ── Read feature flags from terraform.tfvars ─────────────────────────────────
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
+_enable_envoy_gateway=false
+_enable_istio_gateway=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
+_tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
+_tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -155,19 +191,19 @@ else
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
-# If the ingress already exists (i.e. this is not a first deploy), verify that
-# config.hostname matches the actual ALB hostname. A stale hostname causes the
-# operator to set unreachable agent endpoints, which keeps the bootstrap hook
-# stuck at DEPLOYING and times out the release.
-_live_alb=$(kubectl get ingress -n "$NAMESPACE" langsmith-ingress \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
-if [[ -n "$_live_alb" && -z "$_langsmith_domain" ]]; then
+# On upgrades verify config.hostname matches the ALB DNS name.
+# In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
+# A stale hostname causes the operator to set unreachable agent endpoints, which
+# keeps the bootstrap hook stuck at DEPLOYING and times out the release.
+_live_lb=""
+_live_lb=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || true
+if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _configured_hostname=""
-  if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_alb" ]]; then
+  if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_lb" ]]; then
     echo "WARNING: config.hostname is stale."
     echo "  Configured: $_configured_hostname"
-    echo "  Actual ALB: $_live_alb"
+    echo "  Actual:     $_live_lb"
     echo "  Updating $(basename "$ENV_FILE") before deploy..."
 
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
@@ -175,8 +211,8 @@ if [[ -n "$_live_alb" && -z "$_langsmith_domain" ]]; then
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_live_alb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_live_alb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     echo "  Done."
     echo ""
   fi
@@ -207,6 +243,28 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo "         Proceeding with upgrade (helm upgrade works on failed releases)."
   echo ""
 fi
+
+# Ensure langsmith-ksa service account exists before Helm runs the bootstrap hook.
+# The hook deploys operator-managed agent pods that reference this SA. It must exist
+# before the post-install/post-upgrade hook fires — not after Helm returns.
+# Source the IRSA ARN from the overrides file (written by init-values.sh) so this
+# works on fresh clusters where langsmith-platform-backend doesn't exist yet.
+_irsa_arn_pre=$(grep -m1 'eks.amazonaws.com/role-arn' "${ENV_FILE}" 2>/dev/null \
+  | sed 's/.*role-arn:[[:space:]]*"\?\([^"]*\)"\?.*/\1/' | tr -d '[:space:]') || _irsa_arn_pre=""
+if [[ -n "$_irsa_arn_pre" ]]; then
+  kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || true
+  kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl annotate serviceaccount langsmith-ksa -n "$NAMESPACE" \
+    eks.amazonaws.com/role-arn="$_irsa_arn_pre" --overwrite
+fi
+
+# Pre-delete any completed/failed bootstrap job from a previous deploy.
+# The bootstrap job is a post-upgrade hook — if a previous run left it in a
+# completed or failed state Helm treats it as blocking and times out the release.
+# Deleting it here lets Helm create a fresh job on every upgrade without error.
+kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
+  --ignore-not-found=true 2>/dev/null || true
 
 # Deploy with --server-side=false to avoid SSA field ownership conflicts with the
 # ALB ingress controller. Helm 3.14+ defaults to server-side apply, which fights
@@ -265,47 +323,33 @@ else
 fi
 echo ""
 
-# Ensure langsmith-ksa service account exists and carries the IRSA annotation.
-# This SA is used by operator-spawned agent deployment pods. It is created by
-# the operator on first use and is NOT part of the Helm release, so it does not
-# survive namespace teardowns or fresh cluster rebuilds. Without it, new agent
-# pod revisions cannot be scheduled and the agent-bootstrap job hangs indefinitely.
-_irsa_arn=$(kubectl get serviceaccount langsmith-platform-backend -n "$NAMESPACE" \
-  -o jsonpath='{.metadata.annotations.eks\.amazonaws\.com/role-arn}' 2>/dev/null || true)
-if [[ -n "$_irsa_arn" ]]; then
-  kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \
-    --dry-run=client -o yaml | kubectl apply -f -
-  kubectl annotate serviceaccount langsmith-ksa -n "$NAMESPACE" \
-    eks.amazonaws.com/role-arn="$_irsa_arn" --overwrite
-fi
-
 # Restart frontend to ensure it picks up the latest configmap.
 kubectl rollout restart deployment/"$RELEASE_NAME"-frontend -n "$NAMESPACE"
 kubectl rollout status deployment/"$RELEASE_NAME"-frontend -n "$NAMESPACE" --timeout=2m
 
-# Print ALB hostname. On first deploy, set config.hostname in the env values file
-# to this value and re-run deploy.sh.
-ALB_HOST=$(kubectl get ingress -n "$NAMESPACE" langsmith-ingress \
-  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+# ── Detect active hostname (ALB — always the external entry point) ─────────────
+# In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
+# Read the ALB DNS name from Terraform output, which is always available once
+# terraform apply completes (ALB is provisioned before Helm deploy).
+# Patch config.hostname + deployment.url in the overrides file if stale, then
+# re-run helm upgrade so HTTPRoute hostname filters and deployment URLs are correct.
+_active_host=""
+_active_host=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || true
+[[ -n "$_active_host" ]] && echo "ALB hostname: $_active_host"
 
-if [[ -n "$ALB_HOST" ]]; then
-  echo "ALB hostname: $ALB_HOST"
+if [[ -n "$_active_host" ]]; then
   echo ""
-  # Auto-update hostname in env values file if blank or stale (e.g. pre-provisioned ALB
-  # DNS differs from the ingress-controller-managed ALB the chart actually receives).
-  # Skip when langsmith_domain is set — custom domain takes precedence over ALB hostname.
   _current_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_hostname=""
-  if [[ "$_current_hostname" != "$ALB_HOST" && -z "$_langsmith_domain" ]]; then
-    # Derive protocol from the existing deployment.url value so we don't need tfvars here.
+  if [[ "$_current_hostname" != "$_active_host" && -z "$_langsmith_domain" ]]; then
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
       | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${ALB_HOST}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${ALB_HOST}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → $ALB_HOST"
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → $_active_host"
     echo "Re-running deploy for hostname to take effect..."
     echo ""
     helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
@@ -315,16 +359,16 @@ if [[ -n "$ALB_HOST" ]]; then
       --server-side=false \
       --timeout 20m
     echo ""
-    echo "LangSmith redeployed with hostname: $ALB_HOST"
+    echo "LangSmith redeployed with hostname: $_active_host"
   fi
 else
-  echo "(Ingress not yet ready — re-run after a few minutes to get the ALB hostname)"
+  echo "(Load balancer not yet ready — re-run deploy after a few minutes to get the hostname)"
 fi
 
 echo ""
 echo "Access LangSmith:"
 echo "  Port-forward:  kubectl port-forward svc/${RELEASE_NAME}-frontend -n ${NAMESPACE} 8080:80"
 echo "  Then open:     http://localhost:8080"
-if [[ -n "${ALB_HOST:-}" ]]; then
-  echo "  ALB:           http://${ALB_HOST}"
+if [[ -n "${_active_host:-}" ]]; then
+  echo "  URL:           http://${_active_host}"
 fi

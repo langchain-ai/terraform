@@ -1,0 +1,252 @@
+direction down
+colorMode pastel
+styleMode shadow
+typeface clean
+
+// ─────────────────────────────────────────────
+// Path 1: ALB-Native (AWS Load Balancer Controller)
+// TLS terminates at ALB via ACM certificate
+// ALB is created and owned by Kubernetes Ingress + AWS LBC
+// No NGINX required — AWS LBC manages ALB lifecycle directly
+// ─────────────────────────────────────────────
+
+// ─────────────────────────────────────────────
+// Internet
+// ─────────────────────────────────────────────
+Internet [icon: globe, color: gray] {
+  Client Browser [icon: users, color: gray]
+}
+
+// ─────────────────────────────────────────────
+// DNS Layer — Route 53
+// Hosted zone managed by Terraform dns module
+// ACM cert validated via DNS-01 challenge (auto-provisioned)
+// ─────────────────────────────────────────────
+AWS Route 53 [icon: aws-route-53, color: blue] {
+  Public Hosted Zone [icon: aws-route-53, color: blue]
+  ACM Certificate [icon: shield, color: green]
+}
+
+// ─────────────────────────────────────────────
+// LangChain Beacon — required egress
+// All LangSmith installations must reach this endpoint
+// ─────────────────────────────────────────────
+LangChain Beacon [icon: globe, color: orange] {
+  beacon.langchain.com [icon: globe, color: orange]
+}
+
+// ─────────────────────────────────────────────
+// ClickHouse Options (choose one per deployment)
+// ─────────────────────────────────────────────
+Option A: LangChain Managed ClickHouse [icon: database, color: yellow] {
+  LangChain ClickHouse Cloud [icon: database, color: yellow]
+}
+
+Option B: In-Cluster ClickHouse [icon: database, color: red] {
+  ClickHouse StatefulSet [icon: database, color: red]
+  ClickHouse PVC [icon: server, color: red]
+}
+
+// ─────────────────────────────────────────────
+// AWS Account
+// ─────────────────────────────────────────────
+AWS Account [icon: aws, color: orange] {
+
+  // ── Account-level services ──────────────────
+  CloudTrail [icon: aws-cloudtrail, color: gray]
+  CloudWatch Logs [icon: aws-cloudwatch, color: orange]
+  SSM Parameter Store [icon: aws-systems-manager, color: gray]
+  AWS Secrets Manager [icon: aws-systems-manager, color: gray]
+  S3 Traces Bucket [icon: aws-simple-storage-service, color: green]
+
+  // ─────────────────────────────────────────────
+  // VPC 10.0.0.0/16
+  // Private subnets: EKS nodes, RDS, Redis
+  // Public subnets: ALB, NAT Gateway
+  // ─────────────────────────────────────────────
+  VPC 10.0.0.0/16 [icon: aws-vpc, color: blue] {
+
+    // ── Public Subnets — ALB + NAT ──────────────
+    Public Subnets AZ1-3 [color: gray] {
+
+      // Internet-facing ALB
+      // Created and managed by AWS LBC via Kubernetes Ingress resource
+      // Annotations: kubernetes.io/ingress.class: alb
+      //              alb.ingress.kubernetes.io/scheme: internet-facing
+      //              alb.ingress.kubernetes.io/certificate-arn: <ACM ARN>
+      //              alb.ingress.kubernetes.io/listen-ports: [443, 80]
+      //              alb.ingress.kubernetes.io/actions.ssl-redirect: redirect :80 → :443
+      ALB Internet-Facing [icon: aws-elb-application-load-balancer, color: blue]
+
+      // Single NAT Gateway (cost-optimised default; HA = one per AZ)
+      NAT Gateway [icon: aws-nat-gateway, color: gray]
+    }
+
+    // ── Private Subnets — EKS + Data Stores ─────
+    Private Subnets AZ1-3 [color: blue] {
+
+      // S3 access stays on-fabric — no NAT traversal for blob storage
+      S3 Gateway Endpoint [icon: aws-endpoints, color: green]
+
+      // ── EKS Cluster ───────────────────────────
+      EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
+
+        // ── kube-system ───────────────────────
+        // AWS LBC is the critical controller for this path:
+        // it watches Ingress resources and reconciles the ALB
+        kube-system [color: gray] {
+          AWS LB Controller [icon: aws-elastic-kubernetes-service, color: gray]
+          KEDA Operator [icon: aws-elastic-kubernetes-service, color: gray]
+          EBS CSI Driver [icon: aws-elastic-kubernetes-service, color: gray]
+          Cluster Autoscaler [icon: aws-elastic-kubernetes-service, color: gray]
+          Metrics Server [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── external-secrets ──────────────────
+        // ESO pulls secrets from SSM Parameter Store or Secrets Manager
+        // and injects them as Kubernetes secrets into langsmith namespace
+        external-secrets [color: gray] {
+          ESO Controller [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── cert-manager (optional) ───────────
+        // Used only when TLS = Let's Encrypt HTTP-01 (not ACM path)
+        // For ACM path, cert-manager is NOT required
+        cert-manager [color: gray] {
+          cert-manager Controller [icon: aws-elastic-kubernetes-service, color: gray]
+        }
+
+        // ── langsmith namespace ───────────────
+        // All LangSmith workloads in a single namespace
+        // Ingress resource in this namespace is the entrypoint for AWS LBC
+        langsmith [color: purple] {
+
+          // Kubernetes Ingress resource (ingressClass: alb)
+          // AWS LBC watches this and provisions the ALB
+          Ingress Resource [icon: kubernetes, color: blue]
+
+          // Core application services
+          Core Services [color: blue] {
+            frontend [icon: aws-elastic-kubernetes-service, color: blue]
+            backend [icon: aws-elastic-kubernetes-service, color: blue]
+            platformBackend [icon: aws-elastic-kubernetes-service, color: blue]
+            aceBackend [icon: aws-elastic-kubernetes-service, color: blue]
+            playground [icon: aws-elastic-kubernetes-service, color: blue]
+          }
+
+          // Async trace ingestion pipeline
+          Async Processing [color: yellow] {
+            queue [icon: aws-elastic-kubernetes-service, color: yellow]
+            ingestQueue [icon: aws-elastic-kubernetes-service, color: yellow]
+          }
+
+          // LangGraph agent deployment subsystem (optional add-on)
+          LangGraph Deployments [color: green] {
+            listener [icon: aws-elastic-kubernetes-service, color: green]
+            operator [icon: aws-elastic-kubernetes-service, color: green]
+            hostBackend [icon: aws-elastic-kubernetes-service, color: green]
+            Agent Pods [icon: aws-elastic-kubernetes-service, color: green]
+          }
+
+        }
+
+      }
+
+      // ── Managed Data Stores ───────────────────
+      // Both deployed in private subnets — no public endpoint
+      RDS PostgreSQL [icon: aws-rds, color: blue]
+      ElastiCache Redis [icon: aws-elasticache, color: red]
+
+    }
+
+  }
+
+}
+
+// ─────────────────────────────────────────────
+// Connections
+// ─────────────────────────────────────────────
+
+// ── Ingress traffic path ──────────────────────
+// Client → Route 53 CNAME → ALB :443 (ACM TLS terminates here)
+// ALB :80 listener auto-redirects to :443
+// ALB forwards :443 → frontend NodePort :80 (HTTP internally)
+Client Browser > Public Hosted Zone: DNS lookup
+Public Hosted Zone > ACM Certificate: cert ARN bound to ALB
+Public Hosted Zone > ALB Internet-Facing: CNAME / A alias
+Client Browser > ALB Internet-Facing: HTTPS :443
+ALB Internet-Facing > frontend: :80 NodePort (TLS terminates at ALB)
+
+// ── AWS LBC manages the ALB lifecycle ─────────
+AWS LB Controller > Ingress Resource: watches and reconciles
+Ingress Resource > ALB Internet-Facing: provisions / updates ALB
+
+// ── Frontend → internal service routing ───────
+frontend > backend: /api/*
+frontend > platformBackend: /platform-api/*
+frontend > aceBackend: /ace/*
+frontend > playground: /playground/*
+
+// ── Backend → data stores ──────────────────────
+backend > RDS PostgreSQL: :5432
+backend > ElastiCache Redis: :6379
+backend > S3 Gateway Endpoint: :443 HTTPS
+platformBackend > RDS PostgreSQL: :5432
+queue > RDS PostgreSQL: :5432
+ingestQueue > RDS PostgreSQL: :5432
+ingestQueue > S3 Gateway Endpoint: :443 HTTPS
+S3 Gateway Endpoint > S3 Traces Bucket: :443 VPC Gateway (no NAT)
+
+// ── ClickHouse — Option A: LangChain Managed ──
+// Requires network path from cluster egress to LangChain's ClickHouse Cloud
+backend --> LangChain ClickHouse Cloud: :9000 TCP (egress via NAT)
+ingestQueue --> LangChain ClickHouse Cloud: :9000 TCP (egress via NAT)
+
+// ── ClickHouse — Option B: In-Cluster (dev/POC) ─
+// Single StatefulSet pod — no replication, no backups
+// NOT for production use
+backend > ClickHouse StatefulSet: :9000 TCP (in-cluster)
+ingestQueue > ClickHouse StatefulSet: :9000 TCP (in-cluster)
+ClickHouse StatefulSet > ClickHouse PVC: persistent volume
+
+// ── LangGraph Deployments ─────────────────────
+listener > operator: event stream
+operator > Agent Pods: spawn deployment
+KEDA Operator > Agent Pods: HPA / autoscale
+
+// ── Secrets management ────────────────────────
+// ESO syncs from SSM/Secrets Manager → Kubernetes secret → langsmith namespace
+ESO Controller --> SSM Parameter Store: :443 GetParameter
+ESO Controller --> AWS Secrets Manager: :443 GetSecretValue
+ESO Controller --> langsmith: inject langsmith-config-secret
+
+// ── Controlled egress (private → internet via NAT) ─
+Private Subnets AZ1-3 > NAT Gateway: controlled egress only
+NAT Gateway --> beacon.langchain.com: :443 HTTPS (required)
+NAT Gateway --> LangChain ClickHouse Cloud: :9000 TCP (Option A only)
+
+// ── Observability ─────────────────────────────
+backend --> CloudWatch Logs: :443 HTTPS
+ingestQueue --> CloudWatch Logs: :443 HTTPS
+AWS LB Controller --> CloudWatch Logs: :443 HTTPS
+CloudTrail --> CloudWatch Logs: API audit trail
+
+// ─────────────────────────────────────────────
+// Legend
+// ─────────────────────────────────────────────
+legend [position: bottom-right] {
+  [connection: >, label: Synchronous data path]
+  [connection: -->, label: Async / management / egress]
+  [color: blue, label: Core LangSmith services and ingress]
+  [color: gray, label: AWS infrastructure and system controllers]
+  [color: green, label: LangGraph agent deployments (optional)]
+  [color: yellow, label: Async trace ingestion pipeline]
+  [color: red, label: Option B — In-cluster ClickHouse (dev/POC only — no HA)]
+  [color: yellow, label: Option A — LangChain Managed ClickHouse (production)]
+  [color: orange, label: Required egress — beacon.langchain.com]
+  [color: purple, label: langsmith Kubernetes namespace]
+  [color: green, label: S3 — always via VPC Gateway Endpoint (no NAT cost)]
+  [note: ALB is Kubernetes-native in this path — provisioned by AWS LBC via Ingress resource]
+  [note: TLS terminates at ALB with ACM certificate — no cert-manager required for ACM path]
+  [note: No split dataplane — Ingress is namespace-scoped to langsmith]
+}

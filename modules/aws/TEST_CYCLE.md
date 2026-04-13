@@ -60,6 +60,13 @@ Confirm the account ID and region match the target deployment.
 ```
 All checks must be green before proceeding. Fix any permission errors first.
 
+### Step 1.5 — Verify secrets status
+```bash
+make secrets              # verify SSM params and TF_VAR_* are set
+make secrets-list         # list all SSM parameter paths
+```
+Run after `source ./infra/scripts/setup-env.sh` to confirm all required parameters are populated and exported before running Terraform.
+
 ### Step 2 — Set secrets and open a terraform shell
 ```bash
 source ./infra/scripts/setup-env.sh
@@ -122,6 +129,12 @@ Typical duration: **20–30 min** (EKS cluster provisioning takes ~15 min alone)
 
 If apply fails partway through, it is safe to re-run — Terraform is idempotent. See the
 Known Issues section for specific error patterns.
+
+### Step 6.5 — Post-infra preflight
+```bash
+make preflight-post       # after apply: verify kubectl + SSM + helm values
+```
+Run this before starting Pass 2 (Helm). Confirms the cluster is reachable, all SSM parameters are present, and Helm values files exist.
 
 ---
 
@@ -253,6 +266,19 @@ aws wafv2 get-web-acl-for-resource --region "$REGION" \
   --resource-arn "$ALB_ARN" \
   --query 'WebACL.Name'   # "{name_prefix}-{environment}-waf"
 ```
+
+---
+
+## Pass 2 Quick Start
+
+After Pass 1 completes and `make preflight-post` is green, use `make quickdeploy` as a shortcut to run the full Pass 2 sequence in one command:
+
+```bash
+make quickdeploy          # init-values + deploy (interactive)
+make quickdeploy-auto     # same, non-interactive (auto-approves all prompts)
+```
+
+Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tfvars` existing before proceeding.
 
 ---
 

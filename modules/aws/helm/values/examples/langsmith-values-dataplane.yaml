@@ -1,0 +1,95 @@
+# langgraph-dataplane Helm values — separate namespace deployment
+#
+# Deploys the LangGraph listener + operator into a dedicated namespace
+# (e.g. langsmith-agents), isolating agent pods from the LangSmith control plane.
+#
+# Prerequisites before applying:
+#   1. Postgres flags set (see helm/scripts/apply-eso.sh or DATAPLANE-DEPLOY-RUNBOOK.md)
+#   2. kubectl create namespace langsmith-agents
+#   3. langsmith-ksa SA created with IRSA annotation in langsmith-agents
+#   4. IRSA trust policy updated to include system:serviceaccount:langsmith-agents:langsmith-ksa
+#   5. host-backend RBAC applied to langsmith-agents
+#   6. Listener UUID created in LangSmith UI (Settings > Deployments > Listeners)
+#   7. Workspace API key created (Settings > API Keys)
+#
+# Usage:
+#   helm upgrade --install langgraph-dataplane langchain/langgraph-dataplane \
+#     --namespace langsmith-agents \
+#     --values langsmith-values-dataplane.yaml
+
+config:
+  langsmithApiKey: "<workspace-api-key>"          # Settings > API Keys
+  langsmithWorkspaceId: "<workspace-uuid>"         # Settings > Workspaces > Copy ID
+  # In-cluster service URLs — do not use the external ALB/NLB hostname here.
+  # Using in-cluster URLs avoids a network round-trip through the load balancer.
+  hostBackendUrl: "http://langsmith-host-backend.langsmith.svc.cluster.local:1985"
+  smithBackendUrl: "http://langsmith-platform-backend.langsmith.svc.cluster.local:1986"
+  langgraphListenerId: "<listener-uuid>"           # Settings > Deployments > Listeners > Copy ID
+  watchNamespaces: "langsmith-agents"
+  enableLGPDeploymentHealthCheck: true
+
+ingress:
+  enabled: false   # Envoy Gateway handles all routing — standard Ingress not used
+
+operator:
+  enabled: true
+  createCRDs: false    # lgps.apps.langchain.ai CRD already installed by the LangSmith chart
+  kedaEnabled: true    # KEDA scales agent Deployments to zero when idle
+  watchNamespaces: "langsmith-agents"
+  deployment:
+    replicas: 2        # 1 active (holds lease), 1 standby
+  templates:
+    deployment: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${name}
+        namespace: ${namespace}
+      spec:
+        replicas: ${replicas}
+        revisionHistoryLimit: 10
+        selector:
+          matchLabels:
+            app: ${name}
+        template:
+          metadata:
+            labels:
+              app: ${name}
+          spec:
+            enableServiceLinks: false
+            serviceAccountName: langsmith-ksa   # SA with IRSA annotation (eks.amazonaws.com/role-arn)
+            containers:
+            - name: api-server
+              image: ${image}
+              envFrom:
+              - secretRef:
+                  name: ${name}-secrets   # operator creates this secret with LangGraph env vars
+              env:
+              - name: LANGSMITH_WORKSPACE_ID
+                value: "<workspace-uuid>"         # must match config.langsmithWorkspaceId above
+              ports:
+              - name: api-server
+                containerPort: 8000
+                protocol: TCP
+              livenessProbe:
+                httpGet: { path: /ok, port: 8000 }
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              readinessProbe:
+                httpGet: { path: /ok, port: 8000 }
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              resources:
+                requests: { cpu: 100m, memory: 256Mi }
+                limits:   { cpu: 1000m, memory: 1Gi }
+
+listener:
+  deployment:
+    resources:
+      requests: { cpu: "500m", memory: "1Gi" }
+      limits:   { cpu: "1000m", memory: "2Gi" }
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "<irsa-role-arn>"  # arn:aws:iam::<account>:role/<role-name>
