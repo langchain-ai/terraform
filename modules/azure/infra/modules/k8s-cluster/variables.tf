@@ -21,7 +21,7 @@ variable "subnet_id" {
 variable "kubernetes_version" {
   type        = string
   description = "Kubernetes version of the cluster"
-  default     = "1.32" # 1.30 is LTS-only; use 1.31 or 1.32 for standard tier
+  default     = "1.33" # 1.32 and below are LTS-only in eastus as of April 2026; use 1.33+ for standard tier
 }
 
 variable "default_node_pool_vm_size" {

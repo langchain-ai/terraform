@@ -6,6 +6,38 @@ Issues, gotchas, and fixes. Updated as deployments are validated.
 
 ## Pass 1 — Infrastructure
 
+### K8sVersionNotSupported — version is LTS-only
+
+**Symptom:**
+```
+Error: creating Kubernetes Cluster ... unexpected status 400 (400 Bad Request)
+"code": "K8sVersionNotSupported"
+"message": "Managed cluster ... is on version 1.32.x, which is only available for Long-Term Support (LTS).
+If you intend to onboard to LTS, please ensure the cluster is in Premium tier ..."
+```
+
+**Cause:** Azure periodically retires minor versions from Standard tier support and moves them to LTS-only. As of April 2026, 1.32 and below are LTS-only in eastus — Standard tier clusters must use 1.33+.
+
+**Fix:** Update `kubernetes_version` in `terraform/azure/infra/modules/k8s-cluster/variables.tf` to a version with `KubernetesOfficial` support:
+
+```bash
+# Check available versions in your region
+az aks get-versions --location eastus -o table
+
+# Versions with KubernetesOfficial in the SupportPlan column work on Standard tier
+# As of April 2026: 1.33, 1.34, 1.35 are Standard-tier-compatible in eastus
+```
+
+The module default has been updated to `1.33`. If you pinned `kubernetes_version` in `terraform.tfvars`, remove or update that line. Then re-run:
+
+```bash
+make apply
+```
+
+> **Note:** This does not affect existing clusters — it only blocks new cluster creation. Existing clusters on 1.32 continue to run; you'll encounter this on fresh deploys or `terraform destroy` + recreate cycles.
+
+---
+
 ### vCPU quota exceeded — autoscaler backoff or node pool rotation fails
 
 **Symptom — autoscaler backoff (pods pending):**
@@ -478,7 +510,7 @@ Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmi
 **Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy:
 ```hcl
 # terraform.tfvars
-langsmith_helm_chart_version = "0.13.30"   # pin to working version
+langsmith_helm_chart_version = "0.14.0"   # pin to working version
 ```
 ```bash
 make init-values && make deploy
