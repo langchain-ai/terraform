@@ -15,7 +15,6 @@
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
         init-app plan-app apply-app destroy-app deploy-all-tf \
-
         clean
 
 INFRA_DIR := infra
