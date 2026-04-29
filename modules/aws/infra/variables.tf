@@ -39,6 +39,24 @@ variable "public_subnets" {
   default     = []
 }
 
+variable "vpc_private_subnets" {
+  type        = list(string)
+  description = "Override CIDRs for VPC private subnets when create_vpc = true. Empty list uses the module default."
+  default     = []
+}
+
+variable "vpc_public_subnets" {
+  type        = list(string)
+  description = "Override CIDRs for VPC public subnets when create_vpc = true. Empty list uses the module default."
+  default     = []
+}
+
+variable "dns_include_wildcard_san" {
+  type        = bool
+  description = "Include a wildcard SAN (*.<langsmith_domain>) on the ACM certificate created by module.dns. Needed for HTTPS on subdomains like mission-control.langsmith.example.com."
+  default     = false
+}
+
 variable "vpc_cidr_block" {
   type        = string
   description = "VPC CIDR block. Required if create_vpc is false."

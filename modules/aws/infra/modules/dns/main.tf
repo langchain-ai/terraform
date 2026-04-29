@@ -51,7 +51,7 @@ locals {
 resource "aws_acm_certificate" "langsmith" {
   count                     = var.create_certificate ? 1 : 0
   domain_name               = var.domain_name
-  subject_alternative_names = []
+  subject_alternative_names = var.include_wildcard_san ? ["*.${var.domain_name}"] : []
   validation_method         = "DNS"
 
   lifecycle {

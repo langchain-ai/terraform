@@ -109,6 +109,9 @@ module "vpc" {
   vpc_name         = local.vpc_name
   cluster_name     = local.cluster_name
   firewall_enabled = var.create_firewall
+
+  private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
+  public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 }
 
 module "firewall" {
@@ -324,10 +327,11 @@ module "dns" {
   source = "./modules/dns"
   count  = local.dns_enabled ? 1 : 0
 
-  domain_name         = var.langsmith_domain
-  create_zone         = true
-  create_certificate  = true
-  wait_for_validation = var.tls_certificate_source == "acm"
+  domain_name          = var.langsmith_domain
+  create_zone          = true
+  create_certificate   = true
+  wait_for_validation  = var.tls_certificate_source == "acm"
+  include_wildcard_san = var.dns_include_wildcard_san
 }
 
 # Alias record lives here (not in the dns module) to avoid a circular
