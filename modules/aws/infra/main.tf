@@ -109,6 +109,9 @@ module "vpc" {
   vpc_name         = local.vpc_name
   cluster_name     = local.cluster_name
   firewall_enabled = var.create_firewall
+
+  private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
+  public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
 }
 
 module "firewall" {
@@ -324,10 +327,11 @@ module "dns" {
   source = "./modules/dns"
   count  = local.dns_enabled ? 1 : 0
 
-  domain_name         = var.langsmith_domain
-  create_zone         = true
-  create_certificate  = true
-  wait_for_validation = var.tls_certificate_source == "acm"
+  domain_name          = var.langsmith_domain
+  create_zone          = true
+  create_certificate   = true
+  wait_for_validation  = var.tls_certificate_source == "acm"
+  include_wildcard_san = var.dns_include_wildcard_san
 }
 
 # Alias record lives here (not in the dns module) to avoid a circular
@@ -383,8 +387,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
   # The cluster primary SG is on the control plane only — not on worker nodes.
   security_group_id            = module.eks.node_security_group_id
   referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 10080
-  to_port                      = 10080
+  from_port                    = 8080
+  to_port                      = 8080
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Envoy Gateway proxy pods on HTTP (target-type: ip)"
 

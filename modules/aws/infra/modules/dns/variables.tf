@@ -27,3 +27,9 @@ variable "wait_for_validation" {
   default     = true
 }
 
+variable "include_wildcard_san" {
+  description = "Whether to include a wildcard SAN (*.<domain_name>) on the ACM certificate. Required if you want to serve subdomains (e.g. mission-control.langsmith.example.com) with HTTPS via the same cert."
+  type        = bool
+  default     = false
+}
+

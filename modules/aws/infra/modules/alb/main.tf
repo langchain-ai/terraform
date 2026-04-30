@@ -20,10 +20,10 @@ data "aws_elb_service_account" "current" {}
 
 locals {
   gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress
-  # Envoy proxy: port 80 in the Gateway → container port 10080 (Envoy Gateway adds 10000).
+  # Envoy Gateway v1.0+: pods listen on port 8080 (matches the Gateway listener port; no offset).
   # Istio ingress gateway: listens directly on port 80 (envoy with NET_BIND_SERVICE).
   # NGINX ingress controller: listens on port 80.
-  gateway_target_port = var.enable_envoy_gateway ? 10080 : 80
+  gateway_target_port = var.enable_envoy_gateway ? 8080 : 80
 }
 
 # ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ resource "aws_lb" "this" {
 resource "aws_lb_target_group" "gateway" {
   count = local.gateway_enabled ? 1 : 0
 
-  name        = substr("${var.name}-gw", 0, 32)
+  name_prefix = substr("${var.name}-gw-", 0, 6)
   port        = local.gateway_target_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -171,6 +171,10 @@ resource "aws_lb_target_group" "gateway" {
     interval            = 15
     timeout             = 5
     matcher             = "200-404"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   tags = var.tags
