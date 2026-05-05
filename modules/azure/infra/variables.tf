@@ -53,6 +53,29 @@ variable "keyvault_purge_protection" {
   default     = true
 }
 
+variable "keyvault_default_action" {
+  type        = string
+  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — first apply creates ~10 secrets via the data plane and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate keyvault_allowed_ips."
+  default     = "Allow"
+
+  validation {
+    condition     = contains(["Allow", "Deny"], var.keyvault_default_action)
+    error_message = "keyvault_default_action must be 'Allow' or 'Deny'."
+  }
+}
+
+variable "keyvault_allowed_ips" {
+  type        = list(string)
+  description = "Public IPs / CIDRs allowed through the Key Vault firewall when keyvault_default_action = \"Deny\". The AKS subnet is allowlisted automatically via the Microsoft.KeyVault service endpoint."
+  default     = []
+}
+
+variable "aks_authorized_ip_ranges" {
+  type        = list(string)
+  description = "External CIDRs permitted to reach the AKS API server. Empty list (default) omits the api_server_access_profile block, leaving the master publicly reachable so Terraform-driven Helm/kubectl steps work from any apply host. Production deployments populate this with operator/CI egress CIDRs."
+  default     = []
+}
+
 variable "location" {
   type        = string
   description = "The location of the LangSmith deployment"

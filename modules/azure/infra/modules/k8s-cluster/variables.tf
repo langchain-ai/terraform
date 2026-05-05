@@ -179,3 +179,11 @@ variable "envoy_gateway_version" {
   description = "Envoy Gateway Helm chart version (e.g. 'v1.2.0'). See: https://gateway.envoyproxy.io/releases"
   default     = "v1.2.0"
 }
+
+# ── API server access ─────────────────────────────────────────────────────────
+
+variable "authorized_ip_ranges" {
+  type        = list(string)
+  description = "External CIDRs permitted to reach the AKS API server. Empty list (default) omits the api_server_access_profile block, leaving the master publicly reachable so the apply host's Helm/kubectl steps work from any operator. Production deployments populate this with operator/CI egress CIDRs."
+  default     = []
+}

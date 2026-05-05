@@ -120,6 +120,18 @@ resource "azurerm_kubernetes_cluster" "main" {
     type = "SystemAssigned"
   }
 
+  # API server authorized IP ranges. Empty list (default) omits the block so
+  # the master endpoint stays publicly reachable — required for the apply
+  # host's Helm/kubectl steps that install cert-manager / KEDA / ESO and for
+  # operators running ad-hoc kubectl from anywhere. Production deployments
+  # populate var.authorized_ip_ranges with their CI runner / jumpbox CIDRs.
+  dynamic "api_server_access_profile" {
+    for_each = length(var.authorized_ip_ranges) > 0 ? [1] : []
+    content {
+      authorized_ip_ranges = var.authorized_ip_ranges
+    }
+  }
+
   # Azure CNI: pods get IPs directly from the VNet subnet, giving them full
   # network reachability to PostgreSQL/Redis without any NAT.
   # service_cidr must NOT overlap with the VNet or any peered network.

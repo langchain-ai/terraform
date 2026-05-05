@@ -34,6 +34,29 @@ variable "purge_protection_enabled" {
   default     = true
 }
 
+variable "network_default_action" {
+  type        = string
+  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — Terraform's first apply creates ~10 secrets via the data plane and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate allowed_ips / allowed_subnet_ids."
+  default     = "Allow"
+
+  validation {
+    condition     = contains(["Allow", "Deny"], var.network_default_action)
+    error_message = "network_default_action must be 'Allow' or 'Deny'."
+  }
+}
+
+variable "allowed_ips" {
+  type        = list(string)
+  description = "Public IPs / CIDRs allowed through the Key Vault firewall when network_default_action = \"Deny\". Operator workstations, CI runners, or jumpboxes that legitimately need to call the data plane."
+  default     = []
+}
+
+variable "allowed_subnet_ids" {
+  type        = list(string)
+  description = "Subnet IDs allowlisted via the Microsoft.KeyVault service endpoint. Typically the AKS subnet so pods can read secrets while the rest of the internet is denied. The subnet must have service_endpoints = [\"Microsoft.KeyVault\", ...] configured."
+  default     = []
+}
+
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
 variable "postgres_admin_password" {

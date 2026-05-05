@@ -51,6 +51,19 @@ resource "azurerm_key_vault" "langsmith" {
   # Set false for dev environments where you need to quickly destroy and recreate.
   purge_protection_enabled = var.purge_protection_enabled
 
+  # Network ACLs gate the data plane (azurerm_key_vault_secret etc.). Default
+  # is "Allow" because the first apply creates ~10 secrets via the data plane
+  # and would be 403'd under "Deny" without an operator-supplied IP allowlist.
+  # Production deployments override default_action = "Deny" plus allowed_ips /
+  # allowed_subnet_ids. AKS pods reach KV via the Microsoft.KeyVault service
+  # endpoint on the AKS subnet (see networking module).
+  network_acls {
+    default_action             = var.network_default_action
+    bypass                     = "AzureServices"
+    ip_rules                   = var.allowed_ips
+    virtual_network_subnet_ids = var.allowed_subnet_ids
+  }
+
   tags = merge(var.tags, { module = "keyvault" })
 }
 

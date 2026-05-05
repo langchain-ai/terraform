@@ -138,6 +138,11 @@ module "aks" {
 
   availability_zones = var.availability_zones
 
+  # API server access — empty list keeps the master publicly reachable for
+  # Terraform-driven Helm/kubectl steps. Populate var.aks_authorized_ip_ranges
+  # in terraform.tfvars to restrict to operator/CI CIDRs.
+  authorized_ip_ranges = var.aks_authorized_ip_ranges
+
   tags = local.common_tags
 }
 
@@ -231,6 +236,14 @@ module "keyvault" {
   # The managed identity used by LangSmith pods gets read-only access to
   # all secrets so future CSI-driver integration requires no RBAC changes.
   managed_identity_principal_id = module.blob.k8s_managed_identity_principal_id
+
+  # Network ACLs — default Allow keeps first-apply secret creation working.
+  # Production deployments override keyvault_default_action = "Deny" and
+  # populate keyvault_allowed_ips. The AKS subnet is always allowlisted so
+  # pods can read secrets via the Microsoft.KeyVault service endpoint.
+  network_default_action = var.keyvault_default_action
+  allowed_ips            = var.keyvault_allowed_ips
+  allowed_subnet_ids     = [local.aks_subnet_id]
 
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
