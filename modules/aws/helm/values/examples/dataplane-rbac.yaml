@@ -1,0 +1,37 @@
+# dataplane-rbac.yaml
+#
+# Grants langsmith-host-backend (in the langsmith namespace) read access to pods
+# and logs in the dataplane namespace. Required for agent run logs to stream in
+# the LangSmith UI when using a separate namespace deployment.
+#
+# Apply once per dataplane namespace:
+#   kubectl apply -f dataplane-rbac.yaml
+#
+# To use for a different namespace, replace langsmith-agents below.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: host-backend-pod-reader
+  namespace: langsmith-agents
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: host-backend-pod-reader
+  namespace: langsmith-agents
+subjects:
+- kind: ServiceAccount
+  name: langsmith-host-backend
+  namespace: langsmith
+roleRef:
+  kind: Role
+  name: host-backend-pod-reader
+  apiGroup: rbac.authorization.k8s.io

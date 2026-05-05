@@ -1,0 +1,188 @@
+# ============================================================================
+# WARNING: NOT FOR PRODUCTION USE
+#
+# Enough headroom for a developer to run traces, test agents, and use the
+# playground without constant OOM kills. Single replica, no autoscaling.
+#
+# Fits comfortably on Standard_D8s_v3 (8 vCPU / 32 GiB) nodes.
+# For production: use langsmith-values-sizing-production.yaml
+#   (sizing_profile = "production" in terraform.tfvars)
+#
+# Resource numbers sourced from SIZING.md — Dev profile.
+# Total reserved: 7.3 vCPU / 18.5Gi  |  Limits: 17.0 vCPU / 37.0Gi
+# ============================================================================
+
+# -- Application components ----------------------------------------------------
+
+backend:
+  e2eTest:
+    enabled: false
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+frontend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+platformBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+playground:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+queue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+ingestQueue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+aceBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# -- Deployments feature components --------------------------------------------
+
+hostBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+listener:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+operator:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# -- Agent Builder infrastructure ----------------------------------------------
+
+agentBuilderToolServer:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+agentBuilderTriggerServer:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# -- In-cluster data services (Tier 1 only) -----------------------------------
+# These apply when using in-cluster postgres, redis, and clickhouse.
+# If pointing at managed services (Azure DB for PostgreSQL, Azure Cache for Redis),
+# these blocks are ignored — the StatefulSets won't be created.
+
+postgres:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+redis:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "2"
+        memory: "8Gi"
+      limits:
+        cpu: "4"
+        memory: "16Gi"

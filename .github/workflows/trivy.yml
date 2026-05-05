@@ -1,0 +1,62 @@
+name: Trivy Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 8 * * 1" # Weekly on Mondays at 08:00 UTC
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  scan-misconfigurations:
+    name: Terraform & Helm Misconfigurations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy config scan (Terraform + Helm)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: config
+          severity: CRITICAL,HIGH,MEDIUM
+          format: sarif
+          output: trivy-misconfig.sarif
+          exit-code: "0"
+          trivyignores: .trivyignore.yaml
+
+      - name: Upload misconfiguration results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-misconfig.sarif
+          category: trivy-misconfigurations
+
+  scan-secrets:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy secret scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: fs
+          scanners: secret
+          format: sarif
+          output: trivy-secrets.sarif
+          exit-code: "1"
+
+      - name: Upload secret scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-secrets.sarif
+          category: trivy-secrets

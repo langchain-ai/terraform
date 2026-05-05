@@ -1,0 +1,59 @@
+# LangSmith AWS — Envoy Gateway (Gateway API) Values
+# ──────────────────────────────────────────────────────────────────────────────
+# Use this overlay when enable_envoy_gateway = true in terraform.tfvars.
+#
+# Prerequisites:
+#   • terraform apply with enable_envoy_gateway = true
+#     (installs Envoy Gateway Helm chart + GatewayClass + Gateway in langsmith ns)
+#   • make init-values   (sets ingress.enabled: false, gateway.enabled: true)
+#   • make deploy        (creates HTTPRoutes via the chart, annotates NLB with ACM)
+#
+# How it works:
+#   Envoy Gateway implements the Kubernetes Gateway API (GatewayClass → Gateway →
+#   HTTPRoute) — NOT classic Kubernetes Ingress. The LangSmith Helm chart ingress
+#   block is disabled. The chart creates HTTPRoutes automatically when
+#   gateway.enabled: true.
+#
+#   Traffic flow (with ACM TLS):
+#     Client → NLB:443 (ACM TLS termination) → Envoy proxy:80 → HTTPRoute → langsmith-frontend:80
+#
+#   Traffic flow (HTTP only):
+#     Client → NLB:80 → Envoy proxy:80 → HTTPRoute → langsmith-frontend:80
+#
+# GatewayClass:  eg  (controller: gateway.envoyproxy.io/gatewayclass-controller)
+# Gateway:       langsmith/langsmith-gateway  (created by terraform apply)
+# HTTPRoute:     langsmith/langsmith          (created by the Helm chart)
+# NLB service:   envoy-gateway-system/envoy-langsmith-langsmith-gateway-<hash>
+#
+# TLS (ACM):
+#   Set tls_certificate_source = "acm" and acm_certificate_arn in terraform.tfvars.
+#   deploy.sh annotates the Envoy NLB service with:
+#     service.beta.kubernetes.io/aws-load-balancer-ssl-cert: <acm_arn>
+#     service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+#     service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+#   TLS is terminated at the NLB — Envoy sees plain HTTP internally.
+#
+# Hostname:
+#   After deploy, the NLB hostname is auto-written to config.hostname in
+#   langsmith-values-overrides.yaml. Point your DNS CNAME to this hostname.
+#   Or set langsmith_domain in terraform.tfvars to use a custom domain.
+#
+# Multi-namespace (why Gateway API is recommended for multi-tenant setups):
+#   Gateway API allows HTTPRoutes in different namespaces to attach to a shared
+#   Gateway using ReferenceGrants. Classic Ingress requires all rules in one object.
+#   When deploying multiple isolated LangSmith workspaces, each namespace can have
+#   its own HTTPRoute without modifying the shared Gateway resource.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Disable the chart-managed Ingress — Gateway API is used instead.
+# The chart creates HTTPRoutes when gateway.enabled: true.
+ingress:
+  enabled: false
+
+# Gateway API routing — chart creates HTTPRoute pointing to langsmith-frontend.
+# gateway.name and gateway.namespace must match the Gateway created by terraform apply.
+# init-values.sh sets these automatically.
+gateway:
+  enabled: true
+  name: "langsmith-gateway"
+  namespace: "langsmith"

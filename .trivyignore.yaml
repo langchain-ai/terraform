@@ -1,0 +1,50 @@
+---
+# Trivy suppressions for Terraform misconfiguration scans.
+# Each entry: id (bare provider-number, no AVD- prefix), paths, statement
+# (real rationale), expired_at. Trivy 0.69 honours the bare-ID format here;
+# the AVD- prefixed form documented in older guides does not match.
+
+misconfigurations:
+  - id: AWS-0053
+    paths:
+      - "modules/aws/infra/modules/alb/main.tf"
+    statement: |
+      The ALB is intentionally internet-facing in the default starter configuration.
+      It is the published entry point for the LangSmith UI and ingest API and must be
+      reachable by browsers and SDKs. The behaviour is gated by var.internal (default
+      false) — operators who require an internal-only ALB pass internal = true.
+    expired_at: 2027-01-01
+
+  - id: AZU-0013
+    paths:
+      - "modules/azure/infra/modules/keyvault/main.tf"
+    statement: |
+      The Key Vault network_acls block is configurable via var.network_default_action
+      (default "Allow"), var.allowed_ips, and var.allowed_subnet_ids. The starter ships
+      permissive because Terraform's first apply creates ~10 secrets via the data plane
+      and would be blocked under a strict default-deny without operator-supplied IP
+      allowlists. Production deployments override the variables — see
+      modules/azure/infra/terraform.tfvars.example.
+    expired_at: 2027-01-01
+
+  - id: AZU-0041
+    paths:
+      - "modules/azure/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      AKS api_server_access_profile.authorized_ip_ranges is configurable via
+      var.authorized_ip_ranges (default []). Empty list omits the block, preserving
+      starter UX. Default-deny would block the apply host's Helm/kubectl steps that
+      install cert-manager/KEDA/ESO. Production deployments populate
+      var.aks_authorized_ip_ranges with their CI runner / jumpbox egress CIDRs.
+    expired_at: 2027-01-01
+
+  - id: GCP-0061
+    paths:
+      - "modules/gcp/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      GKE master_authorized_networks_config is configurable via
+      var.master_authorized_cidrs (default []). Empty list omits the block, preserving
+      starter UX. Default-deny would block the apply host's Helm/kubectl steps that
+      target the master endpoint. Production deployments populate
+      var.gke_master_authorized_cidrs with their operator-controlled CIDRs.
+    expired_at: 2027-01-01

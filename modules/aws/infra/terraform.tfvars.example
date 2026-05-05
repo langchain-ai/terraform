@@ -1,0 +1,656 @@
+# =============================================================================
+# LangSmith on AWS — Terraform Variables
+# =============================================================================
+#
+# This file configures all infrastructure provisioned by Terraform (Pass 1).
+# Pass 2 (Helm deployment) is handled separately — see aws/helm/.
+#
+# LangSmith self-hosted docs: https://docs.smith.langchain.com/self_hosting
+#
+# Quick start:
+#
+#   1. Copy this file:
+#        cp terraform.tfvars.example terraform.tfvars
+#
+#   2. Fill in each section below — comments explain every field.
+#
+#   3. Set up secrets (passwords, tokens, keys) via SSM-backed script:
+#        source ./scripts/setup-env.sh
+#      This auto-generates secrets, stores them in SSM Parameter Store, and
+#      exports TF_VAR_* into your shell. Run it once before `terraform apply`.
+#
+#      Alternatively, export secrets manually:
+#        export TF_VAR_postgres_password="your-password"
+#        export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
+#
+#   4. Run Terraform:
+#        terraform init
+#        terraform plan    # review what will be created
+#        terraform apply   # provision infrastructure
+#
+# =============================================================================
+# CHOOSE YOUR DEPLOYMENT TIER
+# =============================================================================
+#
+# Before filling this out, decide which tier fits your needs:
+#
+#   Tier 1 — All internal (simplest, not recommended for production)
+#     postgres_source    = "in-cluster"
+#     redis_source       = "in-cluster"
+#     clickhouse_source  = "in-cluster"
+#     → Everything runs as pods inside EKS. No RDS, no ElastiCache.
+#     → Good for: quick demos, dev/test environments.
+#
+#   Tier 2 — External Postgres + Redis, internal ClickHouse (recommended)
+#     postgres_source    = "external"    ← RDS instance
+#     redis_source       = "external"    ← ElastiCache cluster
+#     clickhouse_source  = "in-cluster"  ← pod in EKS
+#     → Best balance of reliability and simplicity. RDS handles backups,
+#       failover, and scaling. ElastiCache provides a managed Redis.
+#     → Good for: production deployments.
+#
+#   Tier 3 — All external (fully managed)
+#     postgres_source    = "external"
+#     redis_source       = "external"
+#     clickhouse_source  = "external"
+#     → Requires a ClickHouse Cloud subscription or self-managed ClickHouse.
+#       Connection details are configured in Helm values, not here.
+#     → Good for: large-scale production with dedicated ClickHouse ops.
+#
+# The rest of this file is organized top-to-bottom — fill it out in order.
+
+#------------------------------------------------------------------------------
+# IDENTITY — Who is this deployment for?
+#------------------------------------------------------------------------------
+# name_prefix is prepended to every AWS resource. Use your company or team
+# name so resources are easy to identify in the AWS Console.
+#
+# Rules: 1-11 characters, lowercase letters/numbers/hyphens, must start with a letter.
+# All resource names follow the pattern: {name_prefix}-{environment}-{resource}
+#
+# Example with name_prefix = "acme" and environment = "prod":
+#   EKS cluster:   acme-prod-eks
+#   RDS instance:   acme-prod-pg
+#   S3 bucket:      acme-prod-traces
+#   ElastiCache:    acme-prod-redis
+name_prefix = "myco"
+
+# Environment label — used in resource names and tags.
+# Must be one of: dev, staging, prod, test, uat.
+#
+# IMPORTANT: Once set and deployed, do not change name_prefix or environment.
+# Changing either one creates new resources with different names and breaks
+# SSM parameter lookups, IRSA trust policies, and S3 bucket references.
+environment = "dev"
+
+#------------------------------------------------------------------------------
+# TAGGING — For cost tracking and ownership in AWS
+#------------------------------------------------------------------------------
+# These are applied as tags to every resource Terraform creates.
+
+# Team or individual responsible for this deployment.
+owner = "platform-team"
+
+# Billing label — shows up in AWS Cost Explorer when you group by tag.
+cost_center = "engineering"
+
+# Additional custom tags. Add any your organization requires
+# (e.g. compliance tags, project codes, etc.).
+tags = {
+  # "department" = "engineering"
+  # "project"    = "langsmith"
+}
+
+#------------------------------------------------------------------------------
+# REGION — Where to deploy
+#------------------------------------------------------------------------------
+# All resources are created in this region. Pick the region closest to your
+# users for lowest latency. Common choices:
+#   us-east-1    (N. Virginia)   — largest selection of instance types
+#   us-west-2    (Oregon)        — good US West Coast option
+#   eu-west-1    (Ireland)       — common for EU deployments
+#   ap-southeast-1 (Singapore)   — common for APAC
+region = "us-west-2"
+
+#------------------------------------------------------------------------------
+# NETWORKING — VPC configuration
+#------------------------------------------------------------------------------
+# By default, Terraform creates a new VPC with public and private subnets,
+# NAT gateway, and internet gateway. This is the simplest path.
+#
+# Set create_vpc = false if your organization requires deploying into an
+# existing VPC (e.g. for VPC peering, Transit Gateway, or compliance).
+create_vpc = true
+
+# BRING YOUR OWN VPC (BYOV) — only fill these in if create_vpc = false.
+# To find these values:
+#   AWS Console → VPC → Your VPCs → copy the VPC ID
+#   AWS Console → VPC → Subnets → filter by your VPC → copy Subnet IDs
+#   Or via CLI:
+#     aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId,CidrBlock,Tags[?Key==`Name`].Value|[0]]' --output table
+#     aws ec2 describe-subnets --filters "Name=vpc-id,Values=vpc-xxx" --query 'Subnets[*].[SubnetId,AvailabilityZone,CidrBlock,MapPublicIpOnLaunch]' --output table
+#
+# Requirements:
+#   - At least 2 private subnets in different AZs (for EKS, RDS, ElastiCache)
+#   - At least 2 public subnets in different AZs (for the ALB)
+#   - Private subnets must have NAT gateway access (for pulling container images)
+#   - Subnets must be tagged for the AWS Load Balancer Controller
+#     (https://docs.aws.amazon.com/eks/latest/userguide/alb-ingress.html):
+#       Public subnets:  kubernetes.io/role/elb = 1
+#       Private subnets: kubernetes.io/role/internal-elb = 1
+#
+# vpc_id          = "vpc-0123456789abcdef0"
+# vpc_cidr_block  = "10.0.0.0/16"
+# private_subnets = ["subnet-aaa", "subnet-bbb", "subnet-ccc"]
+# public_subnets  = ["subnet-ddd", "subnet-eee"]
+
+#------------------------------------------------------------------------------
+# EKS — Kubernetes cluster
+#------------------------------------------------------------------------------
+
+# Kubernetes version. Check AWS docs for supported versions:
+# https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html
+eks_cluster_version = "1.33"
+
+# Public API endpoint — controls whether the EKS API server is reachable
+# from outside the VPC.
+# Docs: https://docs.aws.amazon.com/eks/latest/userguide/cluster-endpoint.html
+#
+# false (default) — private endpoint only. kubectl must run from inside the
+#   VPC (e.g. via VPN, bastion host, or SSM Session Manager). More secure.
+#
+# true — public endpoint. kubectl works from your laptop, CI/CD runners, etc.
+#   If you enable this, you SHOULD also set eks_public_access_cidrs below
+#   to restrict who can reach it.
+enable_public_eks_cluster = false
+
+# CIDR allowlist for the public EKS API endpoint (ignored when
+# enable_public_eks_cluster = false).
+# Default is 0.0.0.0/0 (open to the internet). Restrict this to your team's
+# IP addresses or corporate VPN egress IPs.
+#
+# To find your current IP:
+#   curl -s https://checkip.amazonaws.com
+#
+# Examples:
+#   eks_public_access_cidrs = ["203.0.113.0/24"]            # corporate VPN range
+#   eks_public_access_cidrs = ["198.51.100.5/32"]           # single IP
+#   eks_public_access_cidrs = ["203.0.113.0/24", "10.0.0.0/8"]  # multiple ranges
+#
+# eks_public_access_cidrs = ["0.0.0.0/0"]
+
+# Node group sizing — controls the EC2 instances that run your pods.
+#
+# Instance type guidance:
+# Full specs: https://aws.amazon.com/ec2/instance-types/m5/
+#   ClickHouse (in-cluster) requires nodes with at least 4 vCPU and 16 GB RAM.
+#   m5.4xlarge  = 16 vCPU, 64 GB RAM  (recommended for production)
+#   m5.2xlarge  =  8 vCPU, 32 GB RAM  (minimum viable for ClickHouse)
+#   m5.xlarge   =  4 vCPU, 16 GB RAM  (tight — only if no in-cluster ClickHouse)
+#
+# min_size guidance:
+#   3  — base LangSmith with no addons. Enough to schedule all core pods
+#         without waiting for the autoscaler to provision new nodes.
+#   6  — recommended if you plan to enable Agent Builder, Deployments, and/or
+#         Insights from the start. All workloads schedule immediately.
+#  10  — max_size ceiling for autoscaler. Adjust based on expected load.
+#
+# Cost estimate (us-east-1, on-demand):
+#   3x m5.4xlarge ≈ $1.38/hr ≈ $1,000/mo
+#   6x m5.4xlarge ≈ $2.76/hr ≈ $2,000/mo
+eks_managed_node_groups = {
+  default = {
+    name           = "node-group-default"
+    instance_types = ["m5.4xlarge"]
+    min_size       = 3
+    max_size       = 10
+  }
+}
+
+# EKS control plane logging — sent to CloudWatch Logs (charges apply).
+# Default enables all 5 log types. Set to [] to disable.
+# eks_cluster_enabled_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+
+# gp3 StorageClass — creates a gp3 (General Purpose SSD) StorageClass and
+# sets it as the cluster default. Required for ClickHouse persistent volumes.
+# Only set false if your cluster already has a gp3 StorageClass configured.
+create_gp3_storage_class = true
+
+#------------------------------------------------------------------------------
+# POSTGRESQL (RDS)
+#------------------------------------------------------------------------------
+# Controls where PostgreSQL runs. This is the primary database for LangSmith
+# metadata (projects, runs, users, API keys, etc.).
+#
+#   "external"   — (recommended) Provisions an RDS PostgreSQL instance in a
+#                  private subnet. Terraform manages backups, encryption, and
+#                  security groups. Only accessible from within the VPC.
+#
+#   "in-cluster" — PostgreSQL runs as a pod inside EKS. No RDS is created.
+#                  Simpler, but you lose automated backups, failover, and
+#                  point-in-time recovery. Not recommended for production.
+#                  Skip the rest of this section if using in-cluster.
+postgres_source = "external"
+
+# --- The settings below only apply when postgres_source = "external" ---
+
+# Database username. This is the master user for the RDS instance.
+# "langsmith" is conventional but any valid PostgreSQL identifier works.
+postgres_username = "langsmith"
+
+# Instance size. Determines CPU and RAM for the database server.
+# Full specs: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.DBInstanceClass.Types.html
+#   db.t3.medium  =  2 vCPU,  4 GB RAM  (dev/test)
+#   db.t3.large   =  2 vCPU,  8 GB RAM  (small production)
+#   db.r6g.xlarge =  4 vCPU, 32 GB RAM  (large production)
+postgres_instance_type = "db.t3.large"
+
+# Storage — starts at this size and auto-scales up to the max.
+# RDS uses gp3 (General Purpose SSD) by default.
+postgres_storage_gb     = 20    # initial size
+postgres_max_storage_gb = 100   # auto-scaling ceiling
+
+# Password — DO NOT put your password in this file.
+# Either export it manually:
+#   export TF_VAR_postgres_password="your-secure-password"
+# Or let setup-env.sh auto-generate one and store it in SSM:
+#   source ./setup-env.sh
+
+# IAM database authentication — allows pods to connect to RDS using their
+# AWS IAM role instead of a password. Recommended for production.
+# Docs: https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html
+# When enabled, the EKS pods' IRSA role is trusted to authenticate to RDS.
+postgres_iam_database_authentication_enabled = true
+
+# IAM database user — if you want a separate PostgreSQL user for IAM auth,
+# set this. After terraform apply, you must create the user in RDS manually:
+#   CREATE USER langsmith_iam WITH LOGIN;
+#   GRANT rds_iam TO langsmith_iam;
+#   GRANT ALL ON DATABASE langsmith TO langsmith_iam;
+# postgres_iam_database_user = "langsmith_iam"
+
+# Deletion protection — prevents accidental destruction of the RDS instance.
+# Set to false for dev/test environments where you need to `terraform destroy`.
+# IMPORTANT: You must set this to false BEFORE running terraform destroy,
+# otherwise the destroy will fail on the RDS instance.
+postgres_deletion_protection = true
+
+# Backup retention — days to keep automated snapshots. 0 disables backups.
+# postgres_backup_retention_period = 7
+
+#------------------------------------------------------------------------------
+# REDIS (ElastiCache)
+#------------------------------------------------------------------------------
+# Controls where Redis runs. Redis is used for caching and as a message broker
+# for LangSmith's async task processing.
+#
+#   "external"   — (recommended) Provisions an ElastiCache Redis cluster in a
+#                  private subnet. Managed failover, encryption in transit.
+#
+#   "in-cluster" — Redis runs as a pod inside EKS. No ElastiCache is created.
+#                  Skip the rest of this section if using in-cluster.
+redis_source = "external"
+
+# --- The settings below only apply when redis_source = "external" ---
+
+# Instance size.
+# Full specs: https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/CacheNodes.SupportedTypes.html
+#   cache.t3.medium  = 2 vCPU,  3.09 GB RAM  (dev/test)
+#   cache.m6g.large  = 2 vCPU,  6.38 GB RAM  (small production)
+#   cache.m6g.xlarge = 4 vCPU, 13.07 GB RAM  (production)
+redis_instance_type = "cache.m6g.xlarge"
+
+# Auth token — DO NOT put your token in this file.
+# Either export it manually:
+#   export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
+# Or let setup-env.sh auto-generate one and store it in SSM:
+#   source ./setup-env.sh
+
+#------------------------------------------------------------------------------
+# CLICKHOUSE
+#------------------------------------------------------------------------------
+# Controls where ClickHouse runs. ClickHouse is the analytics database for
+# LangSmith traces and metrics.
+#
+#   "in-cluster" — (default) Deployed as a StatefulSet inside EKS via Helm.
+#                  Requires nodes with 4+ vCPU and 16+ GB RAM (see EKS section).
+#                  Data is stored on gp3 EBS volumes.
+#
+#   "external"   — Use a ClickHouse Cloud instance or your own self-managed
+#                  ClickHouse deployment. Connection details are configured
+#                  in Helm values (Pass 2), not in this file. Terraform does
+#                  not provision anything for external ClickHouse.
+clickhouse_source = "in-cluster"
+
+#------------------------------------------------------------------------------
+# TLS / HTTPS
+#------------------------------------------------------------------------------
+# Choose how TLS is handled for the LangSmith web UI and API.
+#
+# ┌─────────────────────────────────────────────────────────────────────────────
+# │ RECOMMENDED: Staged deploy with auto-provisioned DNS + ACM
+# │
+# │ This is the easiest path. Terraform creates a Route 53 hosted zone and
+# │ ACM certificate for your domain. You deploy HTTP first, delegate DNS at
+# │ your own pace, then flip to HTTPS in a second apply.
+# │
+# │ Step 1 — Initial deploy (HTTP, no DNS needed yet):
+# │
+# │   tls_certificate_source = "none"
+# │   langsmith_domain       = "langsmith.example.com"
+# │
+# │   Run: terraform apply
+# │   → Creates all infra (EKS, RDS, ALB, etc.) immediately.
+# │   → Also creates a Route 53 zone + ACM cert request (non-blocking).
+# │   → LangSmith is accessible via the ALB hostname over HTTP.
+# │
+# │ Step 2 — Delegate DNS (do this anytime after step 1):
+# │
+# │   Run: terraform output dns_name_servers
+# │   → Add these NS records at your registrar or parent DNS zone.
+# │   → ACM certificate validates automatically once DNS propagates (~5-30 min).
+# │   → Check status: AWS Console → Certificate Manager, or:
+# │     aws acm describe-certificate \
+# │       --certificate-arn "$(terraform output -raw acm_certificate_arn)" \
+# │       --query 'Certificate.Status'
+# │
+# │ Step 3 — Enable HTTPS (after cert shows "ISSUED"):
+# │
+# │   tls_certificate_source = "acm"
+# │
+# │   Run: terraform apply
+# │   → Adds HTTPS listener, redirects HTTP → HTTPS.
+# │   → Your domain now serves LangSmith over HTTPS.
+# └─────────────────────────────────────────────────────────────────────────────
+#
+# ALTERNATIVE OPTIONS:
+#
+# Option B — ACM with existing certificate (skip Route 53):
+#   1. Set tls_certificate_source = "acm"
+#   2. Set acm_certificate_arn to your pre-existing certificate ARN
+#      Find it: AWS Console → Certificate Manager → list certificates
+#      Or: aws acm list-certificates --query 'CertificateSummaryList[*].[DomainName,CertificateArn]' --output table
+#   3. After apply, point your domain's DNS (CNAME or alias) to the ALB
+#      hostname in the alb_dns_name output.
+#
+# Option C — Let's Encrypt (via cert-manager, free):
+#   Docs: https://cert-manager.io/docs/
+#   1. Set tls_certificate_source = "letsencrypt"
+#   2. Set letsencrypt_email (used for expiry notifications)
+#   3. After apply, point your domain's DNS to the ALB hostname.
+#   4. cert-manager handles certificate issuance and renewal automatically.
+#
+# Option D — None (HTTP only, not recommended for production):
+#   Set tls_certificate_source = "none" (without langsmith_domain)
+#   WARNING: Passwords and API keys are sent in cleartext.
+#   Acceptable for local dev/test behind a VPN.
+
+# Start with "none" for initial deploy, flip to "acm" after NS delegation.
+# See the staged deploy guide above.
+tls_certificate_source = "none"
+
+# Your domain for LangSmith. When set (without acm_certificate_arn), Terraform
+# auto-provisions a Route 53 hosted zone, ACM certificate, DNS validation
+# records, and an alias record pointing the domain to the ALB.
+# langsmith_domain = "langsmith.example.com"
+
+# Pre-existing ACM certificate ARN — only needed for Option B above.
+# When set, the dns module is skipped (you manage DNS yourself).
+# acm_certificate_arn = "arn:aws:acm:us-west-2:123456789012:certificate/..."
+
+# Let's Encrypt email — only needed for Option C above.
+# letsencrypt_email = "your-email@example.com"
+
+#------------------------------------------------------------------------------
+# STORAGE (S3) — Trace blob lifecycle
+#------------------------------------------------------------------------------
+# LangSmith stores trace payloads (inputs, outputs, intermediate steps) in S3.
+# These can be large — lifecycle rules automatically delete old objects to
+# control storage costs.
+#
+# Objects are written under two prefixes:
+#   ttl_s/ — short-lived traces (e.g. development runs, debugging)
+#   ttl_l/ — long-lived traces (e.g. production monitoring, compliance)
+#
+# The LangSmith application decides which prefix to use based on the project's
+# retention settings. You only control the expiration age here.
+s3_ttl_enabled    = true
+s3_ttl_short_days = 14     # delete short-lived traces after 14 days
+s3_ttl_long_days  = 400    # delete long-lived traces after ~13 months
+
+# S3 KMS encryption — upgrades from SSE-S3 (AES256) to SSE-KMS with a customer-managed key.
+# Adds ~$1/mo per key plus $0.03/10k requests. Leave empty for default SSE-S3.
+# s3_kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/..."
+
+# S3 versioning — retains all previous versions of trace objects. Increases storage costs.
+# s3_versioning_enabled = false
+
+#------------------------------------------------------------------------------
+# KUBERNETES NAMESPACE
+#------------------------------------------------------------------------------
+# Namespace where LangSmith pods, secrets, and services are deployed.
+# "langsmith" is conventional. Only change if you have a specific reason
+# (e.g. deploying multiple LangSmith instances in the same cluster).
+langsmith_namespace = "langsmith"
+
+#------------------------------------------------------------------------------
+# SECURITY ADD-ONS (all optional, all default to off)
+#------------------------------------------------------------------------------
+# These are independent features you can enable for compliance or auditing.
+# Each one adds AWS resources and may have additional costs.
+
+# ── ALB Network Access ───────────────────────────────────────────────────────
+#
+# alb_scheme = "internet-facing" or "internal"
+#   "internet-facing" → ALB on public subnets (default).
+#   "internal"        → ALB on private subnets (reachable only from within the
+#                       VPC or via VPN/peering/Transit Gateway).
+#
+# alb_allowed_cidr_blocks = ["10.0.0.0/8", "172.16.0.0/12"]
+#   Restricts which IPs can reach ports 80/443 on the ALB security group.
+#   Defaults to ["0.0.0.0/0"] (open). Set to your VPN/office CIDRs for
+#   internal or limited-access deployments.
+#
+# GOING PUBLIC LATER:
+#   1. Set alb_scheme = "internet-facing"  (switches to public subnets)
+#   2. Set alb_allowed_cidr_blocks = ["0.0.0.0/0"]  (opens to all)
+#   3. Run: terraform apply
+#   The ALB DNS name will change — update any DNS records or bookmarks.
+
+# alb_scheme              = "internet-facing"
+# alb_allowed_cidr_blocks = ["0.0.0.0/0"]
+
+# ALB Access Logs — captures every request that hits the ALB:
+#   client IP, request URI, response latency, HTTP status code.
+#   Docs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+#   Creates a dedicated S3 bucket with the required ELB delivery policy.
+#   Useful for: traffic analysis, security forensics, compliance audits.
+#   Cost: S3 storage only (~$0.023/GB/month in us-east-1).
+# alb_access_logs_enabled = false
+
+# CloudTrail — records all AWS API calls in this account to S3:
+#   who did what, when, from where (IAM, S3, EKS, RDS, etc.).
+#   SKIP THIS if your organization already has an account-level or org-level
+#   CloudTrail — adding another is redundant and doubles your storage costs.
+#   To check: aws cloudtrail describe-trails --query 'trailList[*].Name'
+# create_cloudtrail             = false
+# cloudtrail_multi_region       = true    # recommended — catches global IAM events
+# cloudtrail_log_retention_days = 365     # set 0 to keep indefinitely
+
+#------------------------------------------------------------------------------
+# INGRESS / GATEWAY MODE
+#------------------------------------------------------------------------------
+# Three mutually exclusive options (only one should be true at a time):
+#
+#   ALB only (default)
+#     enable_envoy_gateway = false
+#     enable_istio_gateway = false
+#     → Chart creates a standard Kubernetes Ingress; the AWS LB Controller
+#       provisions an Application Load Balancer.
+#
+#   Envoy Gateway
+#     enable_envoy_gateway = true
+#     enable_istio_gateway = false
+#     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
+#       Supports split dataplane routing across namespaces.
+#
+#   Istio Gateway
+#     enable_envoy_gateway = false
+#     enable_istio_gateway = true
+#     → Chart uses istioGateway:; requires istiod + istio-ingressgateway + a
+#       Gateway resource already installed in the cluster.
+#       Also opens port 15017 on the node SG for the istiod webhook.
+#
+enable_envoy_gateway = false
+enable_istio_gateway = false
+
+#------------------------------------------------------------------------------
+# CERT-MANAGER (Let's Encrypt + Route 53 DNS-01)
+#------------------------------------------------------------------------------
+# Required when using Istio Gateway with Let's Encrypt TLS on EKS.
+# cert-manager handles certificate issuance and renewal via DNS-01 challenge —
+# no HTTP endpoint exposure needed, works behind internal NLBs.
+#
+# Why DNS-01 instead of HTTP-01?
+#   EKS NLBs have a hairpin NAT limitation: pods cannot reach the NLB's own
+#   external IP from inside the cluster. cert-manager's HTTP-01 self-check
+#   connects to the NLB to verify ownership and times out. DNS-01 creates a
+#   TXT record instead — no inbound HTTP needed.
+#
+# How it works:
+#   1. Terraform creates an IAM role with Route 53 write access (this section).
+#   2. After `terraform apply`, run `make tls` to:
+#      - Install cert-manager via Helm
+#      - Annotate the cert-manager SA with the IRSA role
+#      - Create a ClusterIssuer (Route53 DNS-01 solver)
+#      - Request a Certificate from Let's Encrypt
+#      - Patch the Istio Gateway for HTTPS + HTTP redirect
+#
+# Prerequisites:
+#   - enable_istio_gateway = true
+#   - A Route 53 hosted zone for your domain (managed in this account)
+#   - Your domain's NS records delegated to Route 53
+
+# create_cert_manager_irsa = false
+#
+# Route 53 hosted zone ID for your domain. Find it:
+#   aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table
+# cert_manager_hosted_zone_id = "Z1ABCDEF123456"
+
+# WAF (Web Application Firewall) — attaches a WAFv2 Web ACL to the ALB.
+#   Docs: https://docs.aws.amazon.com/waf/latest/developerguide/aws-managed-rule-groups-list.html
+#   Includes AWS managed rule groups:
+#     - AWSManagedRulesCommonRuleSet (OWASP Top 10)
+#     - AWSManagedRulesKnownBadInputsRuleSet (Log4Shell, etc.)
+#     - AWSManagedRulesAmazonIpReputationList (known bad IPs)
+#   Cost: ~$5/mo base + $1/mo per rule group + $0.60/million requests.
+# create_waf = false
+
+# Network Firewall — FQDN-based egress filtering for outbound internet traffic.
+#   Deploys an AWS Network Firewall between private subnets and the NAT gateway.
+#   All traffic leaving the VPC is inspected. Only destinations in
+#   firewall_allowed_fqdns are permitted; everything else is dropped.
+#
+#   Requires create_vpc = true (BYOV is not supported with this flag).
+#
+#   How it works:
+#     1. A firewall subnet and endpoint are created in the NAT gateway's AZ.
+#     2. Private route tables are updated: 0.0.0.0/0 → firewall endpoint
+#        (instead of directly to the NAT gateway).
+#     3. The firewall subnet routes 0.0.0.0/0 → NAT gateway.
+#     4. The firewall inspects TLS SNI (HTTPS) and HTTP Host headers and
+#        passes only traffic matching firewall_allowed_fqdns.
+#     5. All other established connections are dropped at the firewall.
+#
+#   Internal VPC traffic (RDS, ElastiCache, pod-to-pod) is unaffected —
+#   it routes via the local VPC route and never hits the firewall.
+#
+#   Cost: ~$0.395/hr per firewall endpoint + $0.065/GB data processed
+#         ≈ $285/mo base before data charges.
+#   Docs: https://docs.aws.amazon.com/network-firewall/latest/developerguide/
+#
+# create_firewall = false
+
+# Domains allowed for outbound internet traffic when create_firewall = true.
+# Add more entries if LangSmith components need additional external endpoints
+# (e.g. LangChain Managed ClickHouse, external model providers, package registries).
+# Default covers the LangSmith beacon/telemetry endpoint only.
+#
+# firewall_allowed_fqdns = ["beacon.langchain.com"]
+
+# CIDR block for the firewall subnet. Must not overlap with existing subnets.
+# Default fits within 10.0.0.0/16 after the default private (10.0.0.0/21–10.0.32.0/21)
+# and public (10.0.40.0/21–10.0.56.0/21) subnets.
+#
+# firewall_subnet_cidr = "10.0.64.0/21"
+
+#------------------------------------------------------------------------------
+# HELM SIZING PROFILE
+#------------------------------------------------------------------------------
+# Controls resource requests/limits and replica counts for LangSmith pods.
+# deploy.sh uses this to select the correct sizing values file.
+#
+# Profiles are based on the LangSmith scale guide:
+#   https://docs.langchain.com/langsmith/self-host-scale
+#
+#   "production"       — Multi-replica with HPA autoscaling. Fits the
+#                        Medium/Medium pattern (~20 users, ~100 traces/sec).
+#                        Good starting point for most production deployments.
+#   "production-large" — Higher baselines and wider HPA ranges. Fits the
+#                        High/High pattern (~50 users, ~1000 traces/sec).
+#                        Use when you know the deployment handles heavy volume.
+#   "dev"              — Single-replica, minimal resources. For local dev, CI
+#                        pipelines, demos, and short-lived POCs. Chart defaults
+#                        request 1+ CPU per component and 3.5 CPU / 12Gi for
+#                        ClickHouse — without this profile, pods won't schedule
+#                        on small clusters.
+#   "default"          — Chart defaults (no sizing file applied).
+sizing_profile = "production"
+
+#------------------------------------------------------------------------------
+# LANGGRAPH PLATFORM FEATURES (product addons)
+#------------------------------------------------------------------------------
+# These flags control which LangSmith product features are enabled.
+# Each requires the corresponding entitlement in your LangSmith license key.
+# deploy.sh reads these to decide which Helm values overlay files to include.
+#
+# If you're doing a base LangSmith deployment, leave all three as false.
+#
+#   enable_deployments   — LangGraph Platform (listener, operator, host-backend)
+#   enable_agent_builder — Visual agent builder UI (requires enable_deployments)
+#   enable_insights      — ClickHouse-backed analytics dashboard
+#
+enable_deployments   = false
+enable_agent_builder = false
+enable_insights      = false
+
+# Extended usage telemetry — sends anonymized usage metrics to LangChain.
+# Default is off. Enable if you want to share usage data.
+enable_usage_telemetry = false
+
+#------------------------------------------------------------------------------
+# LANGGRAPH PLATFORM ENCRYPTION KEYS (optional — for addons only)
+#------------------------------------------------------------------------------
+# These Fernet encryption keys are ONLY needed when the corresponding
+# feature flag above is set to true. If all three flags are false, skip
+# this entire section.
+#
+# Each key corresponds to a feature flag:
+#   Deployments  → enable_deployments   = true
+#   Agent Builder → enable_agent_builder = true
+#   Insights     → enable_insights      = true
+#
+# Generate a Fernet key (https://cryptography.io/en/latest/fernet/):
+#   python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+#
+# IMPORTANT: Generate each key once and never rotate on a live deployment.
+# Rotating breaks encrypted data stored by that feature.
+#
+# Set via environment variable (not this file) or let setup-env.sh manage them:
+#   export TF_VAR_langsmith_deployments_encryption_key="..."
+#   export TF_VAR_langsmith_agent_builder_encryption_key="..."
+#   export TF_VAR_langsmith_insights_encryption_key="..."
+#
+# langsmith_deployments_encryption_key   = ""   # set via TF_VAR or setup-env.sh
+# langsmith_agent_builder_encryption_key = ""   # set via TF_VAR or setup-env.sh
+# langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh

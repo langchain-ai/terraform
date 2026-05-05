@@ -1,0 +1,148 @@
+# LangSmith AWS — Istio Gateway Values
+# ──────────────────────────────────────────────────────────────────────────────
+# Validated: 2026-04-08 on EKS 1.31 (dzco-dev-eks, us-west-2)
+#   This file documents the expected configuration once Istio is installed.
+#   Validated on Azure AKS with Istio addon (see terraform/azure/helm/values/
+#   use-cases/multi-dataplane-listener-and-operator/values-dp-ws1.yaml.example).
+#
+# Use this overlay when Istio is already installed on the cluster and you want
+# to use it for LangSmith ingress instead of ALB or Envoy Gateway.
+#
+# Why choose Istio over Envoy Gateway on AWS:
+#   - Cluster already runs Istio for service mesh (mTLS, observability, traffic policies)
+#   - Prefer VirtualService routing over HTTPRoutes
+#   - No extra NLB — Istio Ingress Gateway reuses its existing LoadBalancer service
+#
+# Prerequisites — in order:
+#
+#   Step 1: Install istiod (control plane)
+#     helm repo add istio https://istio-release.storage.googleapis.com/charts
+#     helm repo update
+#     helm upgrade --install istio-base istio/base \
+#       --namespace istio-system --create-namespace
+#     helm upgrade --install istiod istio/istiod \
+#       --namespace istio-system --wait
+#
+#   Step 2: Install Istio Ingress Gateway
+#     helm upgrade --install istio-ingressgateway istio/gateway \
+#       --namespace istio-system --wait
+#     # Verify LoadBalancer service is provisioned:
+#     kubectl get svc istio-ingressgateway -n istio-system
+#     # EXTERNAL-IP = <nlb>.elb.<region>.amazonaws.com
+#
+#   Step 3: Create the Istio Gateway resource
+#     kubectl apply -f - <<'EOF'
+#     apiVersion: networking.istio.io/v1beta1
+#     kind: Gateway
+#     metadata:
+#       name: langsmith-gateway
+#       namespace: langsmith
+#     spec:
+#       selector:
+#         istio: ingressgateway   # targets the istio-ingressgateway pod
+#       servers:
+#       - port:
+#           number: 80
+#           name: http
+#           protocol: HTTP
+#         hosts:
+#         - "<your-domain>"      # e.g. langsmith.example.com
+#       - port:
+#           number: 443
+#           name: https
+#           protocol: HTTPS
+#         tls:
+#           mode: SIMPLE
+#           credentialName: langsmith-tls   # k8s secret with TLS cert/key
+#         hosts:
+#         - "<your-domain>"
+#     EOF
+#
+#   Step 4: Apply this values file (see Helm command below)
+#
+# Namespace of the Istio Ingress Gateway service:
+#   Self-managed Istio:  istio-system  (default, used below)
+#   AKS Istio addon:     aks-istio-ingress
+#   Verify with: kubectl get svc -n istio-system | grep ingressgateway
+#
+# TLS:
+#   Istio handles TLS termination at the ingress gateway using a Kubernetes
+#   secret (credentialName in the Gateway resource). Create the secret:
+#     kubectl create secret tls langsmith-tls \
+#       --cert=path/to/cert.pem \
+#       --key=path/to/key.pem \
+#       --namespace istio-system
+#   Or use cert-manager to provision it automatically.
+#
+# Traffic flow:
+#   Client → Istio Ingress Gateway NLB:443 (TLS termination)
+#          → VirtualService → langsmith-frontend:80
+#
+# Split dataplane:
+#   When langgraph-dataplane is deployed in langsmith-agents namespace,
+#   set istioGateway in the dataplane values to the same gateway.
+#   NOTE: the langgraph-dataplane chart requires hostname — without it the
+#         operator creates a VirtualService with empty hosts[], which Istio rejects.
+#     istioGateway:
+#       enabled: true
+#       name: "langsmith-gateway"
+#       namespace: "langsmith"       # namespace where the Gateway resource lives
+#       hostname: "langsmith.example.com"  # required — must match hosts[] in the Gateway resource
+#   The operator creates a VirtualService per agent deployment that attaches
+#   to this gateway for cross-namespace routing.
+#
+# NLB scheme — internal vs internet-facing (AWS EKS only):
+#
+#   The istio/gateway Helm chart picks subnets automatically. On EKS it defaults
+#   to PRIVATE subnets → internal NLB (not reachable from the internet).
+#   If you need a public NLB, you must pass annotations explicitly:
+#
+#   Get public subnet IDs:
+#     aws ec2 describe-subnets \
+#       --filters "Name=vpc-id,Values=<vpc-id>" \
+#       --query 'Subnets[?MapPublicIpOnLaunch==`true`].SubnetId' \
+#       --output text
+#
+#   Switch to internet-facing:
+#     helm upgrade istio-ingressgateway istio/gateway \
+#       --namespace istio-system \
+#       --set service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-scheme"=internet-facing \
+#       --set service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-subnets"="subnet-aaa,subnet-bbb,subnet-ccc" \
+#       --wait
+#
+#   Switch back to internal:
+#     helm upgrade istio-ingressgateway istio/gateway \
+#       --namespace istio-system \
+#       --set service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-scheme"=internal \
+#       --set service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-subnets"="subnet-xxx,subnet-yyy,subnet-zzz" \
+#       --wait
+#
+#   IMPORTANT: changing the scheme provisions a NEW NLB with a new hostname.
+#   Update your DNS CNAME after switching:
+#     kubectl get svc istio-ingressgateway -n istio-system \
+#       -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+#
+# Helm command:
+#   helm upgrade --install langsmith langchain/langsmith \
+#     --namespace langsmith \
+#     -f langsmith-values.yaml \
+#     -f langsmith-values-overrides.yaml \
+#     -f langsmith-values-ingress-istio.yaml \
+#     --wait
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Disable the chart-managed Ingress and Envoy Gateway — Istio is used instead.
+ingress:
+  enabled: false
+
+gateway:
+  enabled: false
+
+# Istio VirtualService routing — chart creates a VirtualService pointing to
+# langsmith-frontend when istioGateway.enabled: true.
+# name and namespace must match the Gateway resource created in Step 3 above.
+istioGateway:
+  enabled: true
+  name: "langsmith-gateway"
+  namespace: "langsmith"            # namespace where the Gateway resource lives
+                                    # NOT the namespace of the istio-ingressgateway pod

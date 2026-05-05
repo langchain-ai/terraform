@@ -1,0 +1,110 @@
+# Deployments (LangGraph Platform) — enables the Deployments UI, listener, and operator.
+#
+# init-values.sh copies this to ../langsmith-values-agent-deploys.yaml when you choose
+# a product tier that includes Deployments (tier 2+).
+# Manual: cp examples/langsmith-values-agent-deploys.yaml ../langsmith-values-agent-deploys.yaml
+
+config:
+  deployment:
+    # Enables the Deployments nav item in the UI and starts listener + operator pods.
+    # url must match the publicly reachable LangSmith hostname (with https:// protocol).
+    # init-values.sh populates url and tlsEnabled automatically from terraform.tfvars.
+    enabled: true
+    url: ""        # populated by init-values.sh → https://<dns_label>.<region>.cloudapp.azure.com
+    # Set to true when tls_certificate_source = "letsencrypt" or "dns01".
+    # The operator uses this to build agent deployment endpoint URLs.
+    # Wrong value (false when TLS is enabled) keeps deployments stuck in DEPLOYING state.
+    tlsEnabled: false  # populated by init-values.sh
+
+# Resource sizing for shared components (backend, frontend, playground, aceBackend)
+# is handled by the sizing files (langsmith-values-sizing-{production,production-large,dev}.yaml).
+# Do not set replicaCount or resources for those components here — it silently
+# overrides HPA/autoscaling settings from the sizing file because this file
+# is loaded after them in Helm's values merge order.
+
+hostBackend:
+  enabled: true
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 70
+
+listener:
+  enabled: true
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+operator:
+  enabled: true
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+  # Deployment template for operator-spawned agent pods.
+  # Agent pods run as langsmith-ksa (created by deploy.sh with WI annotation).
+  # Workload Identity is used for blob storage access — no static credentials needed.
+  templates:
+    deployment: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ${name}
+        namespace: ${namespace}
+      spec:
+        replicas: ${replicas}
+        revisionHistoryLimit: 10
+        selector:
+          matchLabels:
+            app: ${name}
+        template:
+          metadata:
+            labels:
+              app: ${name}
+          spec:
+            enableServiceLinks: false
+            serviceAccountName: langsmith-ksa
+            containers:
+            - name: api-server
+              image: ${image}
+              ports:
+              - name: api-server
+                containerPort: 8000
+                protocol: TCP
+              livenessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              readinessProbe:
+                httpGet:
+                  path: /ok
+                  port: 8000
+                periodSeconds: 15
+                timeoutSeconds: 5
+                failureThreshold: 6
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 1000m
+                  memory: 1Gi

@@ -1,0 +1,201 @@
+direction down
+colorMode pastel
+styleMode shadow
+typeface clean
+
+// ============================================================
+// PATH 3: AWS LangSmith — Envoy Gateway Ingress
+// ALB (Terraform-provisioned) → TargetGroupBinding → Envoy proxy
+// ACM TLS terminates at ALB; Envoy proxy handles HTTP internally
+// ============================================================
+
+// ── External actors ─────────────────────────────────────────
+Internet [icon: globe, color: gray]
+Client [icon: users, color: blue]
+
+// ── AWS DNS ─────────────────────────────────────────────────
+Route53 [icon: aws-route-53, color: orange] {
+  HostedZone [icon: aws-route-53, color: orange]
+}
+
+// ── AWS VPC boundary ─────────────────────────────────────────
+VPC [icon: aws-vpc, color: blue] {
+
+  // ── Public subnets — ALB lives here ──────────────────────
+  PublicSubnets [icon: aws-vpc, color: green] {
+    // Pre-provisioned by Terraform alb module (NOT via k8s Ingress)
+    // Listens on :443 with ACM certificate; TLS terminates here
+    ALB [icon: aws-elb-application-load-balancer, color: orange]
+  }
+
+  // ── NAT Gateway — outbound from private subnets ───────────
+  NATGateway [icon: aws-nat-gateway, color: gray]
+
+  // ── Private subnets — EKS nodes, RDS, Redis ──────────────
+  PrivateSubnets [icon: aws-vpc, color: blue] {
+
+    // ── EKS cluster ────────────────────────────────────────
+    EKSCluster [icon: aws-elastic-kubernetes-service, color: blue] {
+
+      // ── kube-system namespace ───────────────────────────
+      // Platform controllers: ALB controller manages TargetGroupBinding CRDs
+      KubeSystem [icon: kubernetes, color: gray] {
+        AWSLoadBalancerController [icon: kubernetes, color: gray]
+        KEDA [icon: kubernetes, color: purple]
+        MetricsServer [icon: kubernetes, color: gray]
+        // TargetGroupBinding CRD — wires ALB TG directly to Envoy pod IPs
+        // type: ip, port: 10080 (no NodePort needed)
+        TargetGroupBinding [icon: kubernetes, color: orange]
+      }
+
+      // ── envoy-gateway-system namespace ──────────────────
+      // Envoy Gateway controller programs proxy pods via xDS
+      // Proxy pods listen on :10080 (non-root; NET_BIND_SERVICE workaround)
+      EnvoyGatewaySystem [icon: kubernetes, color: blue] {
+        EnvoyGatewayController [icon: server, color: blue]
+        // Managed Envoy proxy pods — provisioned by Gateway resource
+        EnvoyProxyPod1 [icon: server, color: blue]
+        EnvoyProxyPod2 [icon: server, color: blue]
+      }
+
+      // ── keda namespace ───────────────────────────────────
+      // KEDA operator scales LangGraph agent pods based on queue depth
+      KedaNamespace [icon: kubernetes, color: purple] {
+        KEDAOperator [icon: kubernetes, color: purple]
+      }
+
+      // ── external-secrets namespace ───────────────────────
+      // ESO pulls secrets from AWS SSM Parameter Store / Secrets Manager
+      ExternalSecretsNamespace [icon: kubernetes, color: green] {
+        ESOController [icon: kubernetes, color: green]
+      }
+
+      // ── langsmith namespace ──────────────────────────────
+      // Core LangSmith application + Gateway API resources
+      LangSmithNamespace [icon: kubernetes, color: orange] {
+
+        // Gateway API resources (GatewayClass: eg)
+        // Gateway listener on :80 HTTP — ACM handles TLS at ALB above
+        GatewayResource [icon: kubernetes, color: orange]
+
+        // HTTPRoutes — one per service group
+        HTTPRouteMain [icon: kubernetes, color: orange]
+        HTTPRouteAgentBuilder [icon: kubernetes, color: orange]
+        HTTPRoutePolly [icon: kubernetes, color: orange]
+        HTTPRouteClio [icon: kubernetes, color: orange]
+
+        // Core LangSmith pods
+        Frontend [icon: server, color: blue]
+        Backend [icon: server, color: blue]
+        PlatformBackend [icon: server, color: blue]
+        ACEBackend [icon: server, color: blue]
+        Playground [icon: server, color: blue]
+
+        // LangGraph Deployments (host-backend, listener, operator, agents)
+        HostBackend [icon: server, color: purple]
+        LangGraphListener [icon: server, color: purple]
+        LangGraphOperator [icon: server, color: purple]
+        ManagedAgentPods [icon: server, color: purple]
+
+        // Agent Builder service pods
+        AgentBuilderToolServer [icon: server, color: green]
+        AgentBuilderTriggerServer [icon: server, color: green]
+
+        // Observability / data pipeline
+        PollyPods [icon: server, color: gray]
+        ClioPods [icon: server, color: gray]
+
+        // ReferenceGrant allows HTTPRoutes to reach services in other namespaces
+        ReferenceGrant [icon: shield, color: gray]
+      }
+    }
+
+    // ── Managed external services ───────────────────────────
+    RDSPostgres [icon: aws-rds, color: orange]
+    ElastiCacheRedis [icon: aws-elasticache, color: red]
+    // ClickHouse: in-cluster StatefulSet for dev/POC only
+    // For production use LangChain Managed ClickHouse (external)
+    ClickHouseInCluster [icon: database, color: gray]
+  }
+
+  // ── S3 via VPC endpoint (no internet egress for blob traffic) ─
+  S3VPCEndpoint [icon: aws-simple-storage-service, color: green]
+}
+
+// ── AWS platform services (outside VPC) ──────────────────────
+SSMParameterStore [icon: aws-systems-manager, color: green]
+SecretsManager [icon: aws-systems-manager, color: green]
+CloudTrail [icon: aws-cloudtrail, color: gray]
+
+// ============================================================
+// CONNECTIONS
+// ============================================================
+
+// External ingress path
+Client > Internet: HTTPS :443
+Internet > Route53: DNS lookup
+Route53 > ALB: A record (alias)
+ALB > TargetGroupBinding: target group lookup (type: ip)
+TargetGroupBinding > EnvoyProxyPod1: HTTP :10080 (TLS offloaded at ALB)
+TargetGroupBinding > EnvoyProxyPod2: HTTP :10080 (active-active)
+
+// Envoy Gateway control plane programs the proxy pods via xDS
+EnvoyGatewayController --> EnvoyProxyPod1: xDS config push
+EnvoyGatewayController --> EnvoyProxyPod2: xDS config push
+EnvoyGatewayController --> GatewayResource: watches Gateway API resources
+GatewayResource --> HTTPRouteMain: reconciles HTTPRoutes
+GatewayResource --> HTTPRouteAgentBuilder: reconciles
+GatewayResource --> HTTPRoutePolly: reconciles
+GatewayResource --> HTTPRouteClio: reconciles
+
+// ALB controller manages the TargetGroupBinding CRD lifecycle
+AWSLoadBalancerController --> TargetGroupBinding: manages CRD lifecycle
+AWSLoadBalancerController --> ALB: syncs target group membership
+
+// Envoy proxy → LangSmith services (routed via HTTPRoutes)
+EnvoyProxyPod1 > Frontend: HTTPRoute match /
+EnvoyProxyPod1 > Backend: HTTPRoute match /api
+EnvoyProxyPod1 > PlatformBackend: HTTPRoute match /platform
+EnvoyProxyPod1 > ACEBackend: HTTPRoute match /ace
+EnvoyProxyPod1 > Playground: HTTPRoute match /playground
+EnvoyProxyPod1 > HostBackend: HTTPRoute match /langgraph
+EnvoyProxyPod1 > AgentBuilderToolServer: HTTPRoute agent-builder-tool
+EnvoyProxyPod1 > AgentBuilderTriggerServer: HTTPRoute agent-builder-trigger
+EnvoyProxyPod1 > PollyPods: HTTPRoute polly
+EnvoyProxyPod1 > ClioPods: HTTPRoute clio
+
+// KEDA scales LangGraph agent pods
+KEDAOperator --> ManagedAgentPods: scales replicas (queue-based HPA)
+KEDA --> KEDAOperator: kube-system KEDA metrics source
+
+// ESO pulls secrets from AWS
+ESOController --> SSMParameterStore: ExternalSecret sync
+ESOController --> SecretsManager: ExternalSecret sync
+ESOController --> LangSmithNamespace: injects Kubernetes Secret
+
+// LangSmith services → external dependencies
+Backend > RDSPostgres: Postgres :5432
+Backend > ElastiCacheRedis: Redis :6379
+Backend > S3VPCEndpoint: blob storage (payloads)
+PlatformBackend > RDSPostgres: Postgres :5432
+HostBackend > RDSPostgres: Postgres (agent state)
+ClioPods > ClickHouseInCluster: ClickHouse analytics writes
+
+// NAT for outbound (image pulls, external APIs)
+NATGateway --> Internet: outbound egress
+
+// Audit logging
+CloudTrail --> EKSCluster: API audit log stream
+
+// ReferenceGrant enables cross-namespace HTTPRoute → service
+ReferenceGrant --> HTTPRouteAgentBuilder: allows cross-ns service ref
+
+// ============================================================
+// LEGEND
+// ============================================================
+Legend [icon: shield, color: gray] {
+  SyncConnection [icon: server, color: blue]
+  AsyncOrMgmt [icon: server, color: gray]
+  GatewayAPILayer [icon: kubernetes, color: orange]
+  ExternalService [icon: database, color: orange]
+}

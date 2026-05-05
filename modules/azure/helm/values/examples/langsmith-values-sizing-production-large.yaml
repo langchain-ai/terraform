@@ -1,0 +1,221 @@
+# Production Large sizing — high-volume deployments with elevated baselines.
+#
+# Based on the High/High pattern from the LangSmith scale guide:
+#   https://docs.langchain.com/langsmith/self-host-scale
+#   ~50 concurrent users, ~1000 traces/sec
+#
+# Use this when you know the deployment will handle heavy ingest volume or
+# a large number of concurrent users from day one. For most production
+# deployments, start with sizing_profile = "production" and scale up if
+# monitoring shows sustained pressure.
+#
+# Covers ALL chart components including infrastructure (ClickHouse, operator,
+# agent-builder servers) — not just the application pods.
+#
+# Monitor actual usage with:
+#   kubectl top pods -n langsmith
+
+# -- Application components ----------------------------------------------------
+
+backend:
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "4"
+        memory: "8Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 10
+      maxReplicas: 50
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+platformBackend:
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 5
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+ingestQueue:
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "4"
+        memory: "8Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 6
+      maxReplicas: 24
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+queue:
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "4"
+        memory: "8Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 6
+      maxReplicas: 24
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+frontend:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 4
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+playground:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "8Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+aceBackend:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+# -- Deployments feature components --------------------------------------------
+
+hostBackend:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 4
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+listener:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 4
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 50
+      targetMemoryUtilizationPercentage: 80
+
+operator:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+
+# -- Agent Builder infrastructure ----------------------------------------------
+
+agentBuilderToolServer:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+
+agentBuilderTriggerServer:
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
+
+# -- In-cluster ClickHouse (dev/POC only — production should use external) -----
+# High/High pattern: 14+ CPU / 24+ Gi per node, 3-node cluster recommended.
+# In-cluster ClickHouse is a single StatefulSet pod — it cannot do 3-node.
+# If you're at this scale, you should be using LangChain Managed ClickHouse.
+# These limits are set high to squeeze maximum performance from a single pod.
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "4"
+        memory: "16Gi"
+      limits:
+        cpu: "8"
+        memory: "32Gi"

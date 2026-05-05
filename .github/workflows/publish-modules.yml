@@ -1,0 +1,100 @@
+name: Publish Terraform Modules to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'modules/**'
+      - '.github/workflows/publish-modules.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build zip files
+        run: |
+          mkdir -p dist
+
+          for provider in azure aws gcp; do
+            if [ -d "modules/${provider}" ]; then
+              echo "Zipping ${provider}..."
+              zip -r "dist/${provider}.zip" "modules/${provider}/" \
+                --exclude "modules/${provider}/infra/.modules/*" \
+                --exclude "modules/${provider}/infra/tfplan" \
+                --exclude "modules/${provider}/infra/*.tfstate" \
+                --exclude "modules/${provider}/infra/*.tfstate.backup" \
+                --exclude "modules/${provider}/infra/terraform.tfvars" \
+                --exclude "modules/${provider}/diagrams/*"
+            fi
+          done
+
+          ls -lh dist/
+
+      - name: Generate index.html
+        run: |
+          ET=$(TZ="America/New_York"    date "+%Y-%m-%d %H:%M %Z")
+          CT=$(TZ="America/Chicago"     date "+%H:%M %Z")
+          MT=$(TZ="America/Denver"      date "+%H:%M %Z")
+          PT=$(TZ="America/Los_Angeles" date "+%H:%M %Z")
+          PUBLISHED="${ET} · ${CT} · ${MT} · ${PT}"
+
+          cat > dist/index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>LangSmith Terraform Modules</title>
+            <style>
+              body { font-family: monospace; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+              h2 { border-bottom: 1px solid #ccc; padding-bottom: 6px; }
+              ul { list-style: none; padding: 0; }
+              li { padding: 4px 0; }
+              a { color: #0366d6; }
+              .badge { font-size: 11px; color: #666; margin-left: 8px; }
+              .published { font-size: 12px; color: #666; margin-bottom: 24px; }
+            </style>
+          </head>
+          <body>
+            <h1>LangSmith Terraform Modules</h1>
+            <p class="published">Published: ${PUBLISHED}</p>
+            <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:4px;padding:10px 14px;margin-bottom:20px;font-size:13px;color:#5d4037;">
+              <strong>Notice:</strong> These modules and scripts are actively being tested and are subject to change.
+              They are not officially supported by LangChain.
+              Licensed under the <a href="https://opensource.org/licenses/MIT">MIT License</a>.
+            </div>
+            <p>Use <code>wget</code> or <code>curl</code> to download any module:</p>
+            <pre>wget https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/azure.zip</pre>
+          EOF
+
+          for provider in azure aws gcp; do
+            if [ -f "dist/${provider}.zip" ]; then
+              size=$(du -sh "dist/${provider}.zip" | cut -f1)
+              echo "<h2>${provider}</h2><ul>" >> dist/index.html
+              echo "<li><a href=\"${provider}.zip\">${provider}.zip</a> <span class=\"badge\">${size}</span></li>" >> dist/index.html
+              echo "</ul>" >> dist/index.html
+            fi
+          done
+
+          echo "</body></html>" >> dist/index.html
+
+          # Vercel ignore step needs docs/ to exist on gh-pages to run before failing
+          mkdir -p dist/docs
+          echo '<html><body>placeholder</body></html>' > dist/docs/index.html
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          force_orphan: true
+          commit_message: "chore: publish terraform modules [${{ github.sha }}]"

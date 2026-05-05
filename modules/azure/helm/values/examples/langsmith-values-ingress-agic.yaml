@@ -1,0 +1,54 @@
+# LangSmith Azure — AGIC (Application Gateway Ingress Controller) Values
+# ──────────────────────────────────────────────────────────────────────────────
+# Use this overlay when ingress_controller = "agic" in terraform.tfvars.
+#
+# Prerequisites:
+#   • terraform apply with ingress_controller = "agic"
+#     Terraform creates:
+#       - Azure Application Gateway (Standard_v2 or WAF_v2)
+#       - AKS ingress_application_gateway add-on (no Helm chart needed)
+#       - AGW public IP with optional DNS label (dns_label in tfvars)
+#       - Reader role on RG + Contributor role on AGW for the add-on identity
+#   • make k8s-secrets
+#   • make init-values  (generates values-overrides.yaml with ingressClassName: azure-application-gateway)
+#   • make deploy
+#
+# How it works:
+#   AGIC watches Kubernetes Ingress resources with
+#   ingressClassName: azure-application-gateway and programs the App Gateway
+#   routing rules dynamically. No manual AGW config needed after terraform apply.
+#
+#   The AKS add-on creates an IngressClass named "azure-application-gateway"
+#   (NOT "azure/application-gateway" — that slash format was the legacy annotation approach).
+#
+# Hostname:
+#   Option A — DNS label (fastest, no custom domain):
+#     Set dns_label = "langsmith-prod" in terraform.tfvars
+#     → langsmith-prod.<region>.cloudapp.azure.com
+#     Run: terraform output agw_public_ip_fqdn
+#
+#   Option B — Custom domain:
+#     Create a DNS A record: langsmith.example.com → $(terraform output -raw agw_public_ip_address)
+#     Set langsmith_domain = "langsmith.example.com" in terraform.tfvars
+#
+# TLS:
+#   cert-manager issues a Let's Encrypt cert via HTTP-01 challenge through AGIC.
+#   deploy.sh sets the ClusterIssuer solver ingressClassName to "azure-application-gateway".
+#
+# AGW health probes:
+#   By default AGIC derives health probes from the Ingress path.
+#   The annotation below overrides the probe path/codes for the LangSmith backend.
+# ──────────────────────────────────────────────────────────────────────────────
+
+ingress:
+  enabled: true
+  ingressClassName: "azure-application-gateway"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Optional — AGIC health probe override (defaults to Ingress path)
+    appgw.ingress.kubernetes.io/health-probe-path: "/health"
+    appgw.ingress.kubernetes.io/health-probe-status-codes: "200-399"
+  tls:
+    - secretName: langsmith-tls
+      hosts:
+        - "<HOSTNAME>"  # e.g. langsmith-prod.eastus.cloudapp.azure.com

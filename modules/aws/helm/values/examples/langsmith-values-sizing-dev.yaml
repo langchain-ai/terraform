@@ -1,0 +1,237 @@
+# ============================================================================
+# WARNING: NOT FOR PRODUCTION USE
+#
+# Resource profile for non-production environments: local dev, CI pipelines,
+# integration tests (k3d/kind/EKS dev), demos, and short-lived POCs.
+# Single replica per component, no autoscaling, but enough headroom for a
+# developer to actually use the system — run traces, test agents, use the
+# playground without hitting OOM kills every five minutes.
+#
+# For cost parking / idle standby: use langsmith-values-sizing-minimum.yaml
+# For production: use langsmith-values-sizing-production.yaml
+#   (sizing_profile = "production" in terraform.tfvars)
+# ============================================================================
+#
+# Why this exists:
+#   Chart defaults request 1+ CPU per component and 3.5 CPU / 12Gi for
+#   ClickHouse alone. A base LangSmith install won't schedule on anything
+#   smaller than ~12 vCPU without this overlay. For CI or dev clusters
+#   running on 2-4 vCPU nodes, you need these reduced requests or pods
+#   stay Pending indefinitely.
+#
+# Covers ALL chart components including infrastructure (ClickHouse, operator,
+# agent-builder servers, operator-managed agents) — not just the app pods.
+#
+# NOTE: Uses deployment.resources / deployment.replicas nesting to match the
+# current LangSmith chart schema (aligned with GCP and Azure values).
+
+# -- Application components ----------------------------------------------------
+
+backend:
+  e2eTest:
+    enabled: false
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+frontend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+platformBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+playground:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+queue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+ingestQueue:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+aceBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# -- Deployments feature components --------------------------------------------
+
+hostBackend:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+
+listener:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+operator:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# -- Agent Builder infrastructure ----------------------------------------------
+
+agentBuilderToolServer:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+agentBuilderTriggerServer:
+  deployment:
+    replicas: 1
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+# -- Operator-managed agent resources ------------------------------------------
+# Chart defaults are 2 CPU / 4Gi per agent — way too heavy for dev.
+# These control the server and queue pod sizing written into LGP CRs by the
+# bootstrap job.
+
+config:
+  polly:
+    agent:
+      resources:
+        cpu: 0.25
+        cpuLimit: 0.5
+        memoryMb: 512
+        memoryLimitMb: 1024
+        minScale: 1
+        maxScale: 1
+  insights:
+    agent:
+      resources:
+        cpu: 0.25
+        cpuLimit: 0.5
+        memoryMb: 512
+        memoryLimitMb: 1024
+        minScale: 1
+        maxScale: 1
+  agentBuilder:
+    agent:
+      resources:
+        cpu: 0.25
+        cpuLimit: 0.5
+        memoryMb: 512
+        memoryLimitMb: 1024
+        minScale: 1
+        maxScale: 1
+
+# -- In-cluster data services (Tier 1 only) -----------------------------------
+# These apply when using in-cluster postgres, redis, and clickhouse.
+# If you're pointing at managed services (RDS, ElastiCache, ClickHouse Cloud),
+# these blocks are ignored — the StatefulSets won't be created.
+#
+# Chart default for ClickHouse is 3.5 CPU / 12Gi — wildly oversized for dev.
+
+postgres:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "1Gi"
+      limits:
+        cpu: "1"
+        memory: "2Gi"
+
+redis:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+clickhouse:
+  statefulSet:
+    resources:
+      requests:
+        cpu: "2"
+        memory: "8Gi"
+      limits:
+        cpu: "4"
+        memory: "16Gi"

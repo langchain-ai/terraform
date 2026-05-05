@@ -1,0 +1,30 @@
+# OCP-specific Helm values for LangSmith.
+# These are checked in and applied on every deploy alongside values-overrides.yaml.
+# They configure OpenShift-specific settings: Route-based ingress, restricted SCC, and OCP storage.
+
+ingress:
+  # OpenShift uses Routes rather than Ingress objects.
+  # Disable the standard Ingress resource; the Route is managed by the dns Terraform module.
+  enabled: false
+
+route:
+  enabled: true
+
+# Run as non-root to satisfy OpenShift's restricted SCC
+podSecurityContext:
+  runAsNonRoot: true
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+      - ALL
+
+storage:
+  storageClassName: ""  # Use cluster default; set explicitly if needed (e.g. ocs-storagecluster-ceph-rbd)
+
+config:
+  blobStorageBackend: s3  # Override in values-overrides.yaml if using a different backend

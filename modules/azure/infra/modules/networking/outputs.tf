@@ -1,0 +1,29 @@
+output "vnet_id" {
+  value       = azurerm_virtual_network.vnet.id
+  description = "The ID of the VNet."
+}
+
+output "subnet_main_id" {
+  value       = azurerm_subnet.subnet_main.id
+  description = "The ID of the main subnet to be used by the AKS cluster."
+}
+
+output "subnet_postgres_id" {
+  value       = try(azurerm_subnet.subnet_postgres[0].id, null)
+  description = "The ID of the Postgres subnet, if created."
+}
+
+output "subnet_redis_id" {
+  value       = try(azurerm_subnet.subnet_redis[0].id, null)
+  description = "The ID of the Redis subnet, if created."
+}
+
+output "subnet_bastion_id" {
+  description = "ID of the bastion subnet (empty string when enable_bastion = false)"
+  value       = var.enable_bastion ? azurerm_subnet.subnet_bastion[0].id : ""
+}
+
+output "subnet_agic_id" {
+  description = "ID of the Application Gateway subnet (empty string when enable_agic = false)"
+  value       = var.enable_agic ? azurerm_subnet.subnet_agic[0].id : ""
+}

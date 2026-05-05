@@ -1,0 +1,193 @@
+# LangSmith on Azure — Terraform Variables Example
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy to terraform.tfvars and fill in your values:
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# Sensitive values (passwords, license key, Fernet keys) are NOT set here.
+# Run ./setup-env.sh — prompts on first run, reads from Key Vault on subsequent runs.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Required ──────────────────────────────────────────────────────────────────
+subscription_id = "your-azure-subscription-id"   # az account show --query id -o tsv
+
+# ── Naming ────────────────────────────────────────────────────────────────────
+# Suffix appended to every resource name to distinguish deployments.
+# Must start with a hyphen or be empty. Examples: "-prod", "-staging", "-dz"
+identifier  = "-prod"
+environment = "dev"    # dev | staging | prod
+location    = "eastus"
+
+# Optional tags for cost allocation and compliance
+# owner       = "platform-team"
+# cost_center = "engineering"
+
+# ── Sources — external managed services ───────────────────────────────────────
+postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
+redis_source      = "external"    # "external" = Azure Cache for Redis Premium
+clickhouse_source = "in-cluster"  # ClickHouse always in-cluster (dev/POC)
+                                  # Production: use LangChain Managed ClickHouse
+
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+postgres_admin_username      = "langsmith"
+postgres_database_name       = "langsmith"    # database name on the server
+postgres_deletion_protection = false          # set true for production
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+redis_capacity = 1   # P1 = 6 GB RAM (sufficient for most deployments)
+                     # P2 = 13 GB RAM (required for high write load ≥26 GiB)
+
+# ── AKS ───────────────────────────────────────────────────────────────────────
+# Node sizing: Standard_D8s_v3 (8 vCPU, 32 GiB) — AKS reserves ~1.7 vCPU/node,
+# leaving ~6.3 allocatable per node.
+#
+# CPU requests at minimum replicas (production sizing):
+#   backend ×3 (3.0) + platformBackend ×2 (1.0) + ingestQueue ×3 (3.0)
+#   + queue ×3 (3.0) + frontend ×2 (1.0) + playground (0.5) + aceBackend (0.2)
+#   + clickhouse (2.0) + system pods (0.7) = ~14.4 vCPU total requests
+#
+# min_count guidance (autoscaler scales up from this floor immediately):
+#   3  — Pass 2 (core LangSmith, no addons). ~76% CPU utilization. Min for prod.
+#   5  — Pass 3+ (+ Deployments, Agent Builder). Headroom for HPA burst.
+#   6  — Pass 4+ (+ Agent Builder + dynamic operator pods). Recommended if enabling all.
+#  10  — max_count ceiling; autoscaler handles load spikes.
+#
+# Cost estimate (eastus, on-demand):
+#   3× Standard_D8s_v3 ≈ $0.38/hr each ≈ $830/mo
+#   5× Standard_D8s_v3 ≈ $1.38/mo
+#
+default_node_pool_vm_size   = "Standard_D8s_v3"  # 8 vCPU, 32 GiB
+default_node_pool_min_count = 3                   # minimum 3 for Pass 2 production
+default_node_pool_max_count = 10                  # autoscaler ceiling
+default_node_pool_max_pods  = 60                  # AKS default 30 is too low; Pass 2 needs ~32 pods
+aks_deletion_protection     = false               # set true for production
+
+# Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
+# ClickHouse production sizing requests 2 vCPU / 8 GiB — fits on the default pool.
+# Use the large pool to dedicate a node to ClickHouse for predictable I/O, or
+# to host operator-spawned agent deployment pods which have unpredictable resource usage.
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v3"  # 16 vCPU, 64 GiB
+    min_count = 0                   # scales from zero — not needed for Pass 2 alone
+    max_count = 2
+  }
+}
+
+# ── Ingress controller ────────────────────────────────────────────────────────
+# "nginx"         — NGINX ingress via Helm (standard, start here)
+# "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
+# "istio"         — Istio via Helm (self-managed)
+# "agic"          — Application Gateway Ingress Controller (enterprise Azure, native WAF)
+#                   Provisions App Gateway v2 + dedicated /24 subnet + AGIC Helm chart
+#                   Use agw_sku_tier = "WAF_v2" to enable WAF on the gateway
+# "envoy-gateway" — Envoy Gateway via Helm (Gateway API native, uses Gateway/HTTPRoute)
+# "none"          — skip (bring your own)
+ingress_controller = "nginx"
+
+# Istio addon revision — only used when ingress_controller = "istio-addon"
+# Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
+# istio_addon_revision = "asm-1-27"
+
+# AGIC options — only used when ingress_controller = "agic"
+# agw_sku_tier            = "Standard_v2"   # or "WAF_v2" to enable WAF on the App Gateway
+# agic_subnet_address_prefix = ["10.0.96.0/24"]  # must not overlap other subnets
+
+# ── DNS + TLS ─────────────────────────────────────────────────────────────────
+# Azure Public IP DNS label — free Azure subdomain, no domain registration needed.
+# Azure assigns <dns_label>.<location>.cloudapp.azure.com to the ingress LB public IP.
+# deploy.sh applies the annotation to the right LB service based on ingress_controller.
+# Not applicable to AGIC — use langsmith_domain or terraform output agw_public_ip_fqdn.
+#
+# ⚠️  TLS compatibility:
+#   letsencrypt (HTTP-01) works with: nginx, istio (self-managed), envoy-gateway
+#   letsencrypt does NOT work with:   istio-addon, agic  (no IngressClass — ACME challenge fails)
+#   dns01 works with: all controllers (requires custom domain — see Option C)
+#   See INGRESS_CONTROLLERS.md for the full compatibility matrix.
+#
+# Option A: HTTP only — quickstart default, zero cert setup (validated ✅)
+#   → http://<dns_label>.<location>.cloudapp.azure.com
+#
+dns_label              = "langsmith-prod"     # → langsmith-prod.eastus.cloudapp.azure.com
+tls_certificate_source = "none"
+
+# Option B: HTTPS via Let's Encrypt HTTP-01 — nginx only (validated ✅)
+#   → https://<dns_label>.<location>.cloudapp.azure.com
+# tls_certificate_source = "letsencrypt"
+# letsencrypt_email      = "you@example.com"
+
+# Option C: Custom domain + DNS-01 — all controllers, works behind firewalls
+#   Requires: Azure DNS zone + NS delegation at registrar (one-time setup).
+#   → https://langsmith.example.com
+# tls_certificate_source = "dns01"
+# create_dns_zone        = true
+# langsmith_domain       = "langsmith.example.com"
+# letsencrypt_email      = "you@example.com"
+
+# ── Key Vault ─────────────────────────────────────────────────────────────────
+keyvault_purge_protection = false   # set true for production
+
+# Optional: override the generated Key Vault name (must be globally unique, 3–24 chars)
+# keyvault_name = "my-langsmith-kv"
+
+# ── Blob storage ──────────────────────────────────────────────────────────────
+blob_ttl_enabled    = true
+blob_ttl_short_days = 14    # short-lived trace payloads
+blob_ttl_long_days  = 400   # run attachments (~13 months)
+
+# ── LangSmith ─────────────────────────────────────────────────────────────────
+langsmith_namespace    = "langsmith"
+langsmith_release_name = "langsmith"
+
+# ── Helm sizing + addon feature flags ─────────────────────────────────────────
+# Read by helm/scripts/init-values.sh and helm/scripts/deploy.sh.
+# Set flags and re-run `make init-values && make deploy` to enable each pass.
+#
+# Sizing profiles (controls which examples/langsmith-values-sizing-*.yaml is applied):
+#   minimum          — absolute minimum (demos, very constrained clusters)
+#   dev              — single-replica, minimal resources (dev / CI / demos)
+#   production       — multi-replica with HPA (recommended for all real workloads)
+#   production-large — high-volume (~50 concurrent users, ~1000 traces/sec)
+#
+sizing_profile = "production"
+
+# Pass 3 — LangGraph Platform (hostBackend, listener, operator)
+# Required before enabling agent_builder, insights, or polly.
+# enable_deployments = true
+
+# Pass 4 — Agent Builder UI (agentBuilderToolServer, agentBuilderTriggerServer, agentBootstrap Job)
+# enable_agent_builder = true
+
+# Pass 5 — Insights / Clio (ClickHouse-backed trace analytics — deploys via operator)
+# enable_insights = true
+
+# Pass 5 — Polly (AI eval / monitoring agent)
+# enable_polly = true
+
+# ── Optional modules ──────────────────────────────────────────────────────────
+# Each is independently toggleable — safe to add after initial deploy.
+# create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)
+# create_diagnostics = true   # Log Analytics + diagnostic settings (recommended for prod)
+# create_bastion     = true   # Jump VM for private AKS node access
+
+# ── Multi-AZ (optional) ───────────────────────────────────────────────────────
+# availability_zones                   = ["1", "2", "3"]  # zone-redundant HA
+# postgres_standby_availability_zone   = "2"              # Postgres HA standby
+# postgres_geo_redundant_backup        = true             # geo-redundant backups
+
+# ── Networking (optional — override only if reusing existing VNet) ─────────────
+# create_vnet          = false
+# vnet_id              = "/subscriptions/.../virtualNetworks/my-vnet"
+# aks_subnet_id        = "/subscriptions/.../subnets/aks"
+# postgres_subnet_id   = "/subscriptions/.../subnets/postgres"
+# redis_subnet_id      = "/subscriptions/.../subnets/redis"
+
+# ── Network hardening (production) ────────────────────────────────────────────
+# Storage / Key Vault / AKS default-deny firewalls. AKS pods are allowlisted
+# automatically via service endpoints on the AKS subnet — add operator IPs
+# here only for clients that need to reach the data plane (CI runners,
+# jumpboxes, operator workstations). Empty lists keep the legacy permissive
+# defaults so the starter quickstart works without extra plumbing.
+# storage_allowed_ips      = ["203.0.113.42/32"]
+# keyvault_default_action  = "Deny"
+# keyvault_allowed_ips     = ["203.0.113.42/32"]
+# aks_authorized_ip_ranges = ["203.0.113.42/32", "198.51.100.0/24"]

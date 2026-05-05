@@ -1,0 +1,214 @@
+direction down
+colorMode pastel
+styleMode shadow
+typeface clean
+
+// ============================================================
+// PATH 4: AWS LangSmith — Istio Ingress Gateway
+// ALB (Terraform-provisioned) → TargetGroupBinding → istio-ingressgateway
+// TLS terminates INSIDE the cluster at ingressgateway (not at ALB)
+// ALB passes TCP through on :443; cert-manager issues Let's Encrypt cert
+// ============================================================
+
+// ── External actors ─────────────────────────────────────────
+Internet [icon: globe, color: gray]
+Client [icon: users, color: blue]
+LetsEncrypt [icon: shield, color: green]
+
+// ── AWS DNS ─────────────────────────────────────────────────
+Route53 [icon: aws-route-53, color: orange] {
+  HostedZone [icon: aws-route-53, color: orange]
+}
+
+// ── AWS VPC boundary ─────────────────────────────────────────
+VPC [icon: aws-vpc, color: blue] {
+
+  // ── Public subnets — ALB lives here ──────────────────────
+  PublicSubnets [icon: aws-vpc, color: green] {
+    // Pre-provisioned by Terraform alb module (NOT via k8s Ingress)
+    // ALB listener on :443 — passes TCP through to ingressgateway:80
+    // TLS is NOT terminated here; ACM is not used for this path
+    ALB [icon: aws-elb-application-load-balancer, color: orange]
+  }
+
+  // ── NAT Gateway — outbound from private subnets ───────────
+  NATGateway [icon: aws-nat-gateway, color: gray]
+
+  // ── Private subnets — EKS nodes, RDS, Redis ──────────────
+  PrivateSubnets [icon: aws-vpc, color: blue] {
+
+    // ── EKS cluster ────────────────────────────────────────
+    EKSCluster [icon: aws-elastic-kubernetes-service, color: blue] {
+
+      // ── kube-system namespace ───────────────────────────
+      // ALB controller manages TargetGroupBinding CRDs (no Ingress resource)
+      KubeSystem [icon: kubernetes, color: gray] {
+        AWSLoadBalancerController [icon: kubernetes, color: gray]
+        KEDA [icon: kubernetes, color: purple]
+        MetricsServer [icon: kubernetes, color: gray]
+        // TargetGroupBinding — type: ip, port: 80 (ingressgateway direct)
+        // Health check port: 80; SG must allow :80 from ALB
+        TargetGroupBinding [icon: kubernetes, color: orange]
+      }
+
+      // ── istio-system namespace ──────────────────────────
+      // istiod: control plane (xDS, mTLS cert rotation, config distribution)
+      // istio-ingressgateway: data plane, listens on :80/:443 via NET_BIND_SERVICE
+      // CRITICAL: Istio 1.23+ binds port 80 directly — NOT port 8080
+      // cert-manager: issues TLS cert via ACME DNS-01 (IRSA, no static creds)
+      IstioSystem [icon: kubernetes, color: blue] {
+        Istiod [icon: server, color: blue]
+        IngressGateway [icon: server, color: blue]
+        IngressGateway2 [icon: server, color: blue]
+        // TLS secret created by cert-manager and referenced by Gateway credentialName
+        LangSmithTLSSecret [icon: shield, color: green]
+        CertManager [icon: shield, color: green]
+        // Certificate CR triggers DNS-01 ACME challenge via Route 53
+        CertificateCR [icon: kubernetes, color: green]
+      }
+
+      // ── keda namespace ───────────────────────────────────
+      KedaNamespace [icon: kubernetes, color: purple] {
+        KEDAOperator [icon: kubernetes, color: purple]
+      }
+
+      // ── external-secrets namespace ───────────────────────
+      // ESO syncs secrets from SSM / Secrets Manager into k8s Secrets
+      ExternalSecretsNamespace [icon: kubernetes, color: green] {
+        ESOController [icon: kubernetes, color: green]
+      }
+
+      // ── langsmith namespace ──────────────────────────────
+      // Istio Gateway + VirtualService live alongside app pods
+      LangSmithNamespace [icon: kubernetes, color: orange] {
+
+        // Istio Gateway resource: listener :443 HTTPS
+        // credentialName: langsmith-tls (references secret in istio-system)
+        IstioGateway [icon: kubernetes, color: orange]
+
+        // VirtualService: routes langsmith.example.com to LangSmith services
+        // Can reference services in other namespaces (split dataplane)
+        VirtualService [icon: kubernetes, color: orange]
+
+        // Core LangSmith pods
+        Frontend [icon: server, color: blue]
+        Backend [icon: server, color: blue]
+        PlatformBackend [icon: server, color: blue]
+        ACEBackend [icon: server, color: blue]
+        Playground [icon: server, color: blue]
+
+        // LangGraph Deployments (host-backend, listener, operator, agents)
+        HostBackend [icon: server, color: purple]
+        LangGraphListener [icon: server, color: purple]
+        LangGraphOperator [icon: server, color: purple]
+        ManagedAgentPods [icon: server, color: purple]
+
+        // Agent Builder
+        AgentBuilderToolServer [icon: server, color: green]
+        AgentBuilderTriggerServer [icon: server, color: green]
+
+        // Observability / data pipeline
+        PollyPods [icon: server, color: gray]
+        ClioPods [icon: server, color: gray]
+      }
+    }
+
+    // ── Managed external services ───────────────────────────
+    RDSPostgres [icon: aws-rds, color: orange]
+    ElastiCacheRedis [icon: aws-elasticache, color: red]
+    // ClickHouse: in-cluster StatefulSet for dev/POC only
+    // For production use LangChain Managed ClickHouse (external)
+    ClickHouseInCluster [icon: database, color: gray]
+  }
+
+  // ── S3 via VPC endpoint ────────────────────────────────────
+  S3VPCEndpoint [icon: aws-simple-storage-service, color: green]
+}
+
+// ── AWS platform services ─────────────────────────────────────
+SSMParameterStore [icon: aws-systems-manager, color: green]
+SecretsManager [icon: aws-systems-manager, color: green]
+CloudTrail [icon: aws-cloudtrail, color: gray]
+// cert-manager IRSA role: route53:ChangeResourceRecordSets on hosted zone
+IRSACertManagerRole [icon: shield, color: orange]
+
+// ============================================================
+// CONNECTIONS
+// ============================================================
+
+// External ingress path (TCP passthrough — TLS NOT terminated at ALB)
+Client > Internet: HTTPS :443
+Internet > Route53: DNS lookup
+Route53 > ALB: A record (alias)
+ALB > TargetGroupBinding: target group lookup (type: ip)
+// ALB passes encrypted TCP to ingressgateway; TLS terminates here
+TargetGroupBinding > IngressGateway: HTTPS :443 → TLS termination at pod
+TargetGroupBinding > IngressGateway2: HTTPS :443 (active-active)
+
+// ALB controller manages TargetGroupBinding CRD lifecycle
+AWSLoadBalancerController --> TargetGroupBinding: manages CRD lifecycle
+AWSLoadBalancerController --> ALB: syncs target group membership
+
+// Istiod programs the ingressgateway via xDS (same as Envoy internally)
+Istiod --> IngressGateway: xDS config + mTLS cert rotation
+Istiod --> IngressGateway2: xDS config + mTLS cert rotation
+Istiod --> IstioGateway: watches Gateway resource
+IstioGateway --> VirtualService: binds VirtualService hosts
+
+// ── TLS certificate issuance flow (cert-manager DNS-01) ──────
+// NOTE: Helm does NOT upgrade Istio CRDs — apply CRDs manually on version bumps
+CertificateCR --> CertManager: triggers ACME DNS-01 challenge
+CertManager --> IRSACertManagerRole: assumes IRSA role (no static creds)
+IRSACertManagerRole --> Route53: ChangeResourceRecordSets (DNS-01 token)
+Route53 --> LetsEncrypt: ACME DNS-01 challenge validation
+LetsEncrypt --> CertManager: issues signed certificate
+CertManager --> LangSmithTLSSecret: writes TLS secret (langsmith-tls)
+// Gateway references the TLS secret by credentialName
+LangSmithTLSSecret --> IstioGateway: credentialName: langsmith-tls
+
+// ingressgateway → LangSmith services (routed via VirtualService)
+IngressGateway > Frontend: VirtualService match /
+IngressGateway > Backend: VirtualService match /api
+IngressGateway > PlatformBackend: VirtualService match /platform
+IngressGateway > ACEBackend: VirtualService match /ace
+IngressGateway > Playground: VirtualService match /playground
+IngressGateway > HostBackend: VirtualService match /langgraph
+IngressGateway > AgentBuilderToolServer: VirtualService agent-builder-tool
+IngressGateway > AgentBuilderTriggerServer: VirtualService agent-builder-trigger
+IngressGateway > PollyPods: VirtualService polly
+IngressGateway > ClioPods: VirtualService clio
+
+// KEDA scales LangGraph agent pods
+KEDAOperator --> ManagedAgentPods: scales replicas (queue-based HPA)
+
+// ESO pulls secrets from AWS
+ESOController --> SSMParameterStore: ExternalSecret sync
+ESOController --> SecretsManager: ExternalSecret sync
+ESOController --> LangSmithNamespace: injects Kubernetes Secret
+
+// LangSmith services → external dependencies
+Backend > RDSPostgres: Postgres :5432
+Backend > ElastiCacheRedis: Redis :6379
+Backend > S3VPCEndpoint: blob storage (payloads)
+PlatformBackend > RDSPostgres: Postgres :5432
+HostBackend > RDSPostgres: Postgres (agent state)
+ClioPods > ClickHouseInCluster: ClickHouse analytics writes
+
+// Outbound egress via NAT (image pulls, external APIs, ACME)
+NATGateway --> Internet: outbound egress (image pulls, ACME challenge)
+
+// Audit logging
+CloudTrail --> EKSCluster: API audit log stream
+
+// ============================================================
+// LEGEND
+// ============================================================
+Legend [icon: shield, color: gray] {
+  // > sync connection (request path)
+  SyncTrafficPath [icon: server, color: blue]
+  // --> async or management connection
+  AsyncOrControlPlane [icon: server, color: gray]
+  TLSCertFlow [icon: shield, color: green]
+  IstioDataPlane [icon: kubernetes, color: blue]
+  GatewayAPIResources [icon: kubernetes, color: orange]
+}

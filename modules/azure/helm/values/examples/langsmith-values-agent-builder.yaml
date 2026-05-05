@@ -1,0 +1,38 @@
+# Agent Builder — visual agent building UI (requires Deployments).
+#
+# init-values.sh copies this to ../langsmith-values-agent-builder.yaml when you choose
+# a product tier that includes Agent Builder (tier 3+).
+# Manual: cp examples/langsmith-values-agent-builder.yaml ../langsmith-values-agent-builder.yaml
+#
+# Prerequisites:
+#   - Agent Builder / LangGraph Platform entitlement in your LangSmith license
+#   - Sufficient cluster resources (Agent Builder runs additional workloads)
+
+config:
+  agentBuilder:
+    enabled: true
+    # encryptionKey is read from langsmith-config-secret (agent_builder_encryption_key).
+    # Do NOT set encryptionKey inline — it's already in the secret via existingSecretName.
+    #
+    # Agent worker pod resources (applied to operator-managed agent deployments).
+    # Chart defaults are 4096/8192 MiB — oversized for dev/POC.
+    # These control the server container in each LGP pod (agent-builder, clio, polly).
+    agent:
+      resources:
+        cpu: 1
+        cpuLimit: 2
+        memoryMb: 512
+        memoryLimitMb: 1024
+
+backend:
+  agentBootstrap:
+    # Runs a post-upgrade Job that creates the langsmith-agent-builder-config ConfigMap
+    # and registers Agent Builder as an LGP deployment. Required for the Agent Builder
+    # nav item to appear in the UI. The job is idempotent — safe to run on every upgrade.
+    enabled: true
+
+agentBuilderToolServer:
+  enabled: true
+
+agentBuilderTriggerServer:
+  enabled: true

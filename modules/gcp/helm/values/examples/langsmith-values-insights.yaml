@@ -1,0 +1,41 @@
+# Insights — ClickHouse-backed analytics (requires external ClickHouse).
+#
+# init-values.sh copies this to ../langsmith-values-insights.yaml when you choose
+# a product tier that includes Insights. You'll be prompted for ClickHouse connection details.
+# Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
+#
+# Prerequisites:
+#   - ClickHouse instance reachable from the GKE cluster
+#   - clickhouse_source = "langsmith-managed" or "external" in terraform.tfvars
+
+config:
+  insights:
+    enabled: true
+    # encryptionKey must be set in values-overrides.yaml or via --set on each deploy.
+    # Generate a Fernet key:
+    #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Rotating this key requires re-encrypting all existing Insights data.
+    # encryptionKey: "YOUR_INSIGHTS_FERNET_KEY"
+
+clickhouse:
+  external:
+    enabled: true
+    host: ""          # ClickHouse hostname or endpoint
+    port: "8123"      # HTTP port (default 8123); use 8443 for HTTPS
+    database: "default"
+    user: "default"
+    # tls: true       # Uncomment if using HTTPS/TLS
+    #
+    # Option A (recommended): Store credentials in a K8s Secret and reference it.
+    # The chart reads each field by its *SecretKey name.
+    #   kubectl create secret generic langsmith-clickhouse -n langsmith \
+    #     --from-literal=clickhouse_host=<host> \
+    #     --from-literal=clickhouse_port=8123 \
+    #     --from-literal=clickhouse_user=default \
+    #     --from-literal=clickhouse_password=<password> \
+    #     --from-literal=clickhouse_db=default \
+    #     --from-literal=clickhouse_tls=false
+    existingSecretName: "langsmith-clickhouse"
+    #
+    # Option B: Inline password (not recommended — visible in Helm release metadata):
+    # password: ""

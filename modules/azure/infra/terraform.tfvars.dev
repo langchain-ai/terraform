@@ -1,0 +1,99 @@
+# =============================================================================
+# LangSmith on Azure — Dev Profile
+# =============================================================================
+# Opinionated defaults for development and testing.
+# External Postgres + Redis (recommended even for dev), in-cluster ClickHouse,
+# single-replica Helm sizing.
+#
+# Copy to terraform.tfvars and fill in your values:
+#
+#   cp terraform.tfvars.dev terraform.tfvars
+#
+# For the full annotated reference with every option explained, see:
+#   terraform.tfvars.example
+# =============================================================================
+
+#------------------------------------------------------------------------------
+# REQUIRED — Change these
+#------------------------------------------------------------------------------
+subscription_id = "your-azure-subscription-id"   # az account show --query id -o tsv
+
+#------------------------------------------------------------------------------
+# Naming
+#------------------------------------------------------------------------------
+identifier  = "-dev"
+environment = "dev"
+location    = "eastus"
+
+#------------------------------------------------------------------------------
+# Sources
+#------------------------------------------------------------------------------
+postgres_source   = "external"     # Azure DB for PostgreSQL Flexible Server
+redis_source      = "external"     # Azure Cache for Redis
+clickhouse_source = "in-cluster"   # in-cluster for dev
+
+#------------------------------------------------------------------------------
+# PostgreSQL
+#------------------------------------------------------------------------------
+postgres_admin_username      = "langsmith"
+postgres_database_name       = "langsmith"
+postgres_deletion_protection = false
+
+#------------------------------------------------------------------------------
+# Redis
+#------------------------------------------------------------------------------
+redis_capacity = 1   # P1 = 6 GB RAM
+
+#------------------------------------------------------------------------------
+# AKS — Standard_D8s_v3 (8 vCPU, 32 GiB), 3 nodes minimum
+#------------------------------------------------------------------------------
+# 3× Standard_D8s_v3 = 18,870m allocatable vCPU.
+# Pass 2 core LangSmith requires ~14.4 vCPU — fits with headroom.
+default_node_pool_vm_size   = "Standard_D8s_v3"
+default_node_pool_min_count = 3
+default_node_pool_max_count = 6
+default_node_pool_max_pods  = 60
+aks_deletion_protection     = false
+
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v3"
+    min_count = 0
+    max_count = 1
+  }
+}
+
+#------------------------------------------------------------------------------
+# Ingress
+#------------------------------------------------------------------------------
+ingress_controller = "nginx"
+
+#------------------------------------------------------------------------------
+# DNS + TLS — Public IP DNS label + Let's Encrypt HTTP-01
+#------------------------------------------------------------------------------
+dns_label        = "langsmith-dev"        # → langsmith-dev.eastus.cloudapp.azure.com
+tls_certificate_source = "letsencrypt"
+letsencrypt_email      = "you@example.com"
+
+#------------------------------------------------------------------------------
+# Key Vault
+#------------------------------------------------------------------------------
+keyvault_purge_protection = false
+
+#------------------------------------------------------------------------------
+# Blob storage
+#------------------------------------------------------------------------------
+blob_ttl_enabled    = true
+blob_ttl_short_days = 7
+blob_ttl_long_days  = 90
+
+#------------------------------------------------------------------------------
+# LangSmith
+#------------------------------------------------------------------------------
+langsmith_namespace    = "langsmith"
+langsmith_release_name = "langsmith"
+
+#------------------------------------------------------------------------------
+# Sizing — dev profile (single-replica, minimal resources)
+#------------------------------------------------------------------------------
+sizing_profile = "dev"

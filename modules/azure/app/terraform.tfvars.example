@@ -1,0 +1,42 @@
+# App-specific configuration for the Terraform Helm deployment.
+#
+# Infrastructure values (subscription_id, resource_group_name, cluster_name,
+# keyvault_name, storage_account_name, etc.) are auto-populated by:
+#   make init-app
+# Or set them manually for "bring your own infra" scenarios.
+
+# ── Required ──────────────────────────────────────────────────────────────────
+
+admin_email = "admin@example.com"
+
+# ── Optional overrides ────────────────────────────────────────────────────────
+
+# hostname = "langsmith.example.com"   # Defaults to dns_label or Front Door FQDN
+# chart_version = "0.7.0"              # Empty = latest
+# release_name  = "langsmith"
+
+# ── Sizing ────────────────────────────────────────────────────────────────────
+# "production"       = multi-replica with HPA (~20 users, ~100 traces/sec)
+# "production-large" = high-volume (~50 users, ~1000 traces/sec)
+# "dev"              = single-replica, minimal resources (dev/CI/demos)
+# "none"             = chart defaults
+# See: helm/values/examples/SIZING.md
+
+# sizing = "production"
+
+# ── Feature toggles ──────────────────────────────────────────────────────────
+
+# enable_agent_deploys   = true    # Deployments feature (LangGraph Platform)
+# enable_agent_builder   = true    # Agent Builder (requires agent_deploys)
+# enable_insights        = true    # Insights (requires ClickHouse below)
+# enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
+# enable_usage_telemetry = true    # Extended usage telemetry reporting
+
+# ── ClickHouse (required when enable_insights = true) ────────────────────────
+
+# clickhouse_host     = "clickhouse.example.com"
+# clickhouse_port     = 8123
+# clickhouse_database = "default"
+# clickhouse_username = "default"
+# clickhouse_password = "changeme"
+# clickhouse_tls      = true

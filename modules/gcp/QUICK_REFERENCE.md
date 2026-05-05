@@ -1,228 +1,480 @@
-# LangSmith GCP - Quick Reference Guide
+# LangSmith on GCP — Quick Reference
 
-This guide provides step-by-step commands to deploy LangSmith on GCP using Terraform.
+All commands run from `terraform/gcp/`. Run `make help` to see all targets.
 
-## Prerequisites and Setup Commands
+---
 
-### 1. Authenticate with GCP
+## Deployment Overview
+
+| Pass | What gets deployed | Command |
+|------|-------------------|---------|
+| **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + cert-manager + KEDA + Envoy Gateway | `make apply` |
+| **1.5** | Cluster credentials | `make kubeconfig` |
+| **2** | LangSmith base — frontend, backend, ingest, queue, clickhouse | `make init-values && make deploy` |
+| **3** | LangSmith Deployments — host-backend, listener, operator | `make apply && make init-values && make deploy` |
+| **4** | Agent Builder — tool-server, trigger-server + deep-agent LGP | `make init-values && make deploy` |
+| **5** | Insights + Polly — Clio analytics, Polly eval agent | `make init-values && make deploy` |
+
+Each pass builds on the previous. Verify pods are healthy before enabling the next pass.
+
+---
+
+## First-Time Setup
 
 ```bash
-# Login to GCP (opens browser for authentication)
-gcloud auth login
+cd terraform/gcp
 
-# Set application default credentials for Terraform
+# Interactive wizard — generates terraform.tfvars from guided prompts
+make quickstart
+
+# Set up secrets in Secret Manager (auto-generates passwords + Fernet keys)
+# Must be sourced so it can export TF_VAR_* into your shell
+source infra/scripts/setup-env.sh
+
+# Verify secrets are stored correctly
+make secrets        # → infra/scripts/manage-secrets.sh validate
+
+# Deploy infrastructure
+make init
+make plan
+make apply
+
+# Generate Helm values from Terraform outputs
+make init-values    # → helm/scripts/init-values.sh
+
+# Deploy LangSmith
+make deploy         # → helm/scripts/deploy.sh
+```
+
+---
+
+## Day-2 Operations
+
+```bash
+# Check deployment state and get next-step guidance
+make status              # full check
+make status-quick        # skip Secret Manager and K8s queries
+
+# Re-deploy after changing Helm values or upgrading chart version
+make deploy
+
+# Re-generate Helm values after Terraform changes
+make init-values
+
+# Manage Secret Manager secrets interactively
+make secrets             # list/get/set/validate/delete
+
+# Update kubeconfig for the GKE cluster
+make kubeconfig
+```
+
+---
+
+## Enable Optional Addons
+
+Set the feature flags in `terraform.tfvars`, then `make init-values && make deploy`. `init-values.sh` copies the matching example file into `helm/values/` automatically.
+
+```hcl
+# terraform.tfvars
+enable_deployments   = true
+enable_agent_builder = true   # requires enable_deployments = true
+enable_insights      = true
+enable_polly         = true   # requires enable_deployments = true + Polly license entitlement
+
+# Usage telemetry (optional)
+enable_usage_telemetry = true
+```
+
+To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
+
+```bash
+cp helm/values/examples/langsmith-values-agent-deploys.yaml helm/values/
+cp helm/values/examples/langsmith-values-agent-builder.yaml helm/values/
+cp helm/values/examples/langsmith-values-insights.yaml      helm/values/
+cp helm/values/examples/langsmith-values-polly.yaml         helm/values/
+
+make deploy
+```
+
+## Sizing Profiles
+
+Set `sizing_profile` in `terraform.tfvars` before running `make init-values`:
+
+```hcl
+sizing_profile = "production"   # default | minimum | dev | production | production-large
+```
+
+| Profile | When to use |
+|---|---|
+| `default` | Chart defaults — quick tests, no overlay applied |
+| `minimum` | Absolute floor — fits e2-standard-4; use for cost parking or CI smoke tests |
+| `dev` | Single replica, minimal resources — dev/CI environments |
+| `production` | Multi-replica with HPA — recommended for real workloads |
+| `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
+
+After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+
+> **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
+
+---
+
+## Pass 1 — Terraform Infrastructure
+
+```bash
+# Authenticate
+gcloud auth login
+gcloud config set project <your-project-id>
 gcloud auth application-default login
 
-# Set your project (replace with your actual project ID)
-gcloud config set project YOUR_PROJECT_ID
+# Recommended workflow
+cd terraform/gcp
+make preflight
+make init
+make plan
+make apply
 
-# Verify you're using the correct project
-gcloud config get-value project
-```
-
-### 2. Navigate to the LangSmith Module Directory
-
-```bash
-cd terraform/modules/gcp/langsmith
-```
-
-### 3. Configure Terraform Variables
-
-```bash
-# Copy the example variables file
+# Configure
+cd terraform/gcp/infra
 cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your values
 
-# Edit terraform.tfvars with your values (at minimum, set project_id)
-# You can use your preferred editor:
-nano terraform.tfvars
-# or
-vim terraform.tfvars
-```
-
-### 4. Initialize Terraform
-
-```bash
+# Direct Terraform (equivalent)
 terraform init
-```
+terraform plan -var-file=terraform.tfvars
+terraform apply -var-file=terraform.tfvars
 
-### 5. Review Terraform Plan
+# Get cluster credentials
+make kubeconfig
 
-```bash
-# Review what will be created (recommended before applying)
-terraform plan
-```
-
-### 6. Apply Terraform Configuration
-
-```bash
-# Apply the configuration (creates all resources)
-terraform apply
-
-# Or use auto-approve to skip confirmation (use with caution)
-terraform apply -auto-approve
-```
-
-### 7. Get GKE Cluster Credentials
-
-```bash
-# Get cluster credentials (replace values from terraform output)
-gcloud container clusters get-credentials $(terraform output -raw cluster_name) \
-  --region us-west2 \
-  --project $(gcloud config get-value project)
-
-# Or manually (replace with actual values from terraform outputs):
-gcloud container clusters get-credentials CLUSTER_NAME --region us-west2 --project YOUR_PROJECT_ID
-```
-
-### 8. Verify Cluster Access
-
-```bash
-# Verify kubectl is configured correctly
-kubectl cluster-info
-
-# Check nodes
+# Verify
 kubectl get nodes
+kubectl get ns
+kubectl get pods -n cert-manager
+kubectl get pods -n keda
+kubectl get secrets -n langsmith
 ```
 
-### 9. Prepare for Helm Installation
+---
+
+## Pass 2 — LangSmith Helm Deploy
 
 ```bash
-# Generate required secrets
-export API_KEY_SALT=$(openssl rand -base64 32)
-export JWT_SECRET=$(openssl rand -base64 32)
+# Recommended: use the scripted deployment
+cd terraform/gcp
+make init-values   # generates values-overrides.yaml from Terraform outputs
+make deploy        # runs helm upgrade --install with the full values chain
 
-# Add LangChain Helm repository
-helm repo add langchain https://langchain-ai.github.io/helm
-helm repo update
+# Check what was deployed
+helm status langsmith -n langsmith
+kubectl get pods -n langsmith
+
+# Get Gateway IP for DNS
+kubectl get gateway -n langsmith \
+  -o jsonpath='{.items[0].status.addresses[0].value}'
 ```
 
-### 10. Get Terraform Outputs (for Helm values)
+---
+
+## Pass 3 — LangSmith Deployments
+
+**Prerequisite:** Pass 2 healthy — all core pods Running/Completed.
+
+Adds `host-backend`, `listener`, and `operator`. The operator spawns agent deployment pods on demand. Required before enabling Agent Builder or Insights.
+
+**Step 1 — enable flag in `infra/terraform.tfvars`:**
+
+```hcl
+enable_deployments = true
+```
+
+**Step 2 — apply and deploy:**
 
 ```bash
-# View all outputs
+make apply          # pushes enable_deployments flag
+make init-values    # picks up enable_deployments = true
+make deploy         # rolls out host-backend + listener + operator
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "host-backend|listener|operator"
+# Expected: all Running
+
+kubectl get lgp -n langsmith      # list LangSmith Deployments
+kubectl get crd | grep langchain  # operator CRDs registered
+kubectl get pods -n keda          # KEDA running
+```
+
+> **Watchout:** `config.deployment.url` must include `https://`. Missing the protocol → operator-spawned agents stuck in `DEPLOYING` indefinitely.
+
+---
+
+## Pass 4 — Agent Builder
+
+**Prerequisite:** Pass 3 healthy — `listener` and `operator` pods Running.
+
+Adds `agent-builder-tool-server`, `agent-builder-trigger-server`, and an `agentBootstrap` Job that registers the Polly agent URL.
+
+**Step 1 — enable flag in `infra/terraform.tfvars`:**
+
+```hcl
+enable_agent_builder = true
+```
+
+**Step 2 — deploy:**
+
+```bash
+make init-values    # picks up enable_agent_builder = true
+make deploy
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "tool-server|trigger-server|bootstrap"
+# Expected: tool-server Running, trigger-server Running, agentBootstrap Completed
+```
+
+**Roll frontend** after `agentBootstrap` completes (picks up the `langsmith-polly-config` ConfigMap):
+
+```bash
+kubectl rollout restart deployment langsmith-frontend -n langsmith
+```
+
+> **Watchout:** If you skip the frontend restart, Polly shows "Unable to connect to LangGraph server".
+
+---
+
+## Pass 5 — Insights + Polly
+
+**Prerequisite:** Pass 4 healthy — Agent Builder pods Running, `agentBootstrap` Completed.
+
+Insights enables ClickHouse-backed trace analytics. Polly is the AI eval/monitoring agent. Enable both together.
+
+**Step 1 — enable flags in `infra/terraform.tfvars`:**
+
+```hcl
+enable_insights = true
+enable_polly    = true   # requires Polly license entitlement
+```
+
+**Step 2 — deploy:**
+
+```bash
+make init-values    # picks up both flags
+make deploy
+```
+
+**Verify:**
+
+```bash
+kubectl get pods -n langsmith | grep -E "clio|polly"
+# Expected: clio Running, smith-polly Running (operator-spawned)
+
+kubectl get pods -n langsmith -w   # watch until all new pods stabilize
+```
+
+> **Watchout:** `insights_encryption_key` and `polly_encryption_key` **must never change** after first enable — rotating either key permanently breaks existing encrypted data.
+
+---
+
+## Expected Pods by Pass
+
+**Pass 2 — base:**
+
+```
+langsmith-ace-backend-xxx          1/1  Running    0
+langsmith-backend-xxx              1/1  Running    0
+langsmith-backend-auth-bootstrap   0/1  Completed  0
+langsmith-backend-migrations       0/1  Completed  0
+langsmith-clickhouse-0             1/1  Running    0
+langsmith-frontend-xxx             1/1  Running    0
+langsmith-ingest-queue-xxx         1/1  Running    0
+langsmith-platform-backend-xxx     1/1  Running    0
+langsmith-playground-xxx           1/1  Running    0
+langsmith-queue-xxx                1/1  Running    0
+```
+
+**Pass 3 adds:**
+
+```
+langsmith-host-backend-xxx         1/1  Running    0
+langsmith-listener-xxx             1/1  Running    0
+langsmith-operator-xxx             1/1  Running    0
+```
+
+**Pass 4 adds:**
+
+```
+langsmith-agent-builder-tool-server-xxx      1/1  Running    0
+langsmith-agent-builder-trigger-server-xxx   1/1  Running    0
+langsmith-agent-builder-bootstrap-xxx        0/1  Completed  0
+agent-builder-<hash>-xxx                     1/1  Running    0   # operator-spawned
+```
+
+**Pass 5 adds:**
+
+```
+clio-<hash>-xxx                    1/1  Running    0   # Insights analytics
+smith-polly-<hash>-xxx             1/1  Running    0   # Polly eval agent
+lg-<hash>-0                        1/1  Running    0   # LangGraph StatefulSet
+```
+
+---
+
+## Key Watchouts
+
+> **Uninstall Helm BEFORE `terraform destroy`.** The Envoy Gateway load balancer references the VPC — leaving it blocks VNet deletion. Always run `make uninstall` first.
+
+> **`config.deployment.url` must include `https://`.** Missing the protocol → operator-spawned agents stuck in `DEPLOYING` indefinitely.
+
+> **`config.deployment.enabled: true` is required for Pass 3.** Setting only the URL without `enabled: true` causes the chart to silently skip `listener` and `operator`.
+
+> **Encryption keys must never change after first enable.** `insights_encryption_key` and `polly_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
+
+> **Roll frontend after first Polly enable.** `agentBootstrap` creates the `langsmith-polly-config` ConfigMap after registering. Frontend pods started before bootstrap completed won't pick it up automatically.
+
+> **Envoy Gateway IP changes on teardown.** GCP releases the external IP when the Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
+
+> **langsmith-ksa annotation is not permanent.** The operator creates `langsmith-ksa` at runtime — it does not survive namespace deletion. `deploy.sh` re-annotates it idempotently; re-run `make deploy` if operator pods lose GCS access after a cluster rebuild.
+
+---
+
+## Common kubectl Commands
+
+```bash
+# All pods — status, restarts, age
+kubectl get pods -n langsmith
+
+# Watch pods in real time
+kubectl get pods -n langsmith -w
+
+# Describe a crashing/pending pod
+kubectl describe pod <pod-name> -n langsmith
+
+# Pod logs (live)
+kubectl logs <pod-name> -n langsmith --tail=100 -f
+
+# Previous crashed container logs
+kubectl logs <pod-name> -n langsmith --previous --tail=50
+
+# Stream backend logs
+kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
+
+# Gateway / HTTPRoute
+kubectl get gateway -n langsmith
+kubectl get httproute -n langsmith
+kubectl get svc -n envoy-gateway-system
+
+# TLS
+kubectl get certificate -n langsmith
+kubectl get challenges -n langsmith
+kubectl describe certificate <cert-name> -n langsmith
+kubectl get clusterissuer
+
+# Workload Identity
+kubectl get serviceaccount langsmith-ksa -n langsmith -o yaml | grep annotation -A5
+
+# Helm status
+helm status langsmith -n langsmith
+helm history langsmith -n langsmith
+helm get values langsmith -n langsmith
+
+# LangSmith Deployments
+kubectl get lgp -n langsmith
+kubectl get crd | grep langchain
+```
+
+---
+
+## Common gcloud Commands
+
+```bash
+# Re-auth if you hit oauth2 invalid_grant / invalid_rapt errors
+gcloud auth login
+gcloud auth application-default login
+
+# Get cluster credentials
+gcloud container clusters get-credentials <cluster-name> --region <region> --project <project-id>
+
+# List clusters
+gcloud container clusters list --project <project-id>
+
+# Check cluster status
+gcloud container clusters describe <cluster-name> --region <region> --format="value(status)"
+
+# Check Cloud SQL
+gcloud sql instances list --project <project-id>
+gcloud sql instances describe <instance-name> --format="value(ipAddresses)"
+
+# Check Memorystore Redis
+gcloud redis instances list --region <region>
+gcloud redis instances describe <instance-name> --region <region> --format="value(host)"
+
+# Check GCS bucket
+gsutil ls gs://<bucket-name>
+gsutil iam get gs://<bucket-name>
+
+# Check Workload Identity binding
+gcloud iam service-accounts get-iam-policy <gsa-email> --project <project-id>
+
+# Check enabled APIs
+gcloud services list --enabled --project <project-id>
+
+# Check VPC peering
+gcloud services vpc-peerings list --network <vpc-name> --project <project-id>
+
+# Check Secret Manager secrets
+gcloud secrets list --project <project-id> --filter="name:langsmith"
+gcloud secrets versions access latest --secret=<secret-id> --project <project-id>
+```
+
+---
+
+## Terraform Commands
+
+```bash
+# Initialize
+terraform init
+
+# Plan
+terraform plan -var-file=terraform.tfvars
+
+# Apply
+terraform apply -var-file=terraform.tfvars
+
+# Target a specific module
+terraform apply -var-file=terraform.tfvars -target=module.networking
+
+# Show all outputs
 terraform output
 
-# Get specific values
-terraform output -raw storage_bucket_name
-terraform output -raw postgres_connection_ip
-terraform output -raw redis_host
+# Show a specific output
 terraform output -raw cluster_name
+terraform output -raw storage_bucket_name
+
+# Show resource state
+terraform state list
+terraform state show module.gke_cluster
+
+# Refresh state
+terraform refresh -var-file=terraform.tfvars
 ```
 
-### 11. Install LangSmith via Helm
+---
 
-**Note:** The Gateway uses HTTPS only (port 443). TLS must be configured in `terraform.tfvars` before installing the ingress. Set `tls_certificate_source = "letsencrypt"` or `"existing"` and provide the required TLS configuration, then run `terraform apply` before installing Helm.
-
-#### Installation
-
-TLS is configured in the Gateway resource via Terraform. The Gateway uses HTTPS only (port 443). Set `tls_certificate_source` to `"letsencrypt"` or `"existing"` in `terraform.tfvars` before running `terraform apply`. No additional Helm flags are needed for TLS.
+## Teardown
 
 ```bash
-helm install langsmith langchain/langsmith \
-  -f langsmith-values.yaml \
-  -n langsmith \
-  --set config.langsmithLicenseKey="YOUR_LICENSE_KEY" \
-  --set config.apiKeySalt="$API_KEY_SALT" \
-  --set config.basicAuth.jwtSecret="$JWT_SECRET" \
-  --set config.hostname="langsmith.example.com" \
-  --set blobStorage.gcs.bucket="$(terraform output -raw storage_bucket_name)" \
-  --set blobStorage.gcs.projectId="$(gcloud config get-value project)" \
-  --set 'config.basicAuth.initialOrgAdminEmail=your-email@example.com' \
-  --set 'config.basicAuth.initialOrgAdminPassword=YourSecurePassword123!' \
-  --set gateway.enabled=true \
-  --set ingress.enabled=false \
-  --set gateway.name="$(terraform output -raw gateway_name 2>/dev/null || echo 'langsmith-gateway')" \
-  --set gateway.namespace="envoy-gateway-system"
+# 1. Remove LangSmith Deployments (if Pass 3 was enabled)
+kubectl delete lgp --all -n langsmith 2>/dev/null || true
+
+# 2. Uninstall LangSmith
+make uninstall    # or: helm/scripts/uninstall.sh
+
+# 3. Set deletion protection = false in terraform.tfvars, then:
+make destroy
 ```
 
-### 12. Configure DNS
-
-Point your domain to the Gateway external IP:
-
-```bash
-# Get the external IP from Envoy Gateway
-kubectl get svc -n envoy-gateway-system envoy-envoy-gateway-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-
-# Or get it from Terraform output
-terraform output -raw ingress_ip
-```
-
-Then configure your DNS:
-```
-langsmith.example.com -> <EXTERNAL_IP>
-```
-
-## Quick Reference Commands
-
-### View Terraform State
-
-```bash
-terraform show
-```
-
-### Upgrade LangSmith Helm Release
-
-```bash
-helm upgrade langsmith langchain/langsmith \
-  -f langsmith-values.yaml \
-  -n langsmith
-```
-
-### Uninstall LangSmith
-
-```bash
-helm uninstall langsmith -n langsmith
-```
-
-### Destroy All Resources (Use with Caution!)
-
-```bash
-# First uninstall Helm release
-helm uninstall langsmith -n langsmith
-
-# Then destroy Terraform resources
-terraform destroy
-```
-
-## Troubleshooting
-
-### Check Helm Release Status
-
-```bash
-helm status langsmith -n langsmith
-```
-
-### View LangSmith Pods
-
-```bash
-kubectl get pods -n langsmith
-```
-
-### View LangSmith Logs
-
-```bash
-# Backend logs
-kubectl logs -n langsmith -l app=langsmith-backend --tail=100
-
-# Frontend logs
-kubectl logs -n langsmith -l app=langsmith-frontend --tail=100
-```
-
-### Check Gateway Configuration
-
-```bash
-# Check Gateway resource
-kubectl get gateway -n envoy-gateway-system
-kubectl describe gateway -n envoy-gateway-system
-
-# Check HTTPRoute (created by Helm)
-kubectl get httproute -n langsmith
-kubectl describe httproute -n langsmith
-```
-
-## Important Notes
-
-- **TLS Configuration**: Set `tls_certificate_source` in `terraform.tfvars` to `"letsencrypt"` or `"existing"` before running `terraform apply` to enable TLS in the Helm install command output.
-- **PostgreSQL and Redis**: Configure via `postgres_source` and `redis_source` variables. Options: `"external"` (default, Cloud SQL/Memorystore with private IP) or `"in-cluster"` (deployed via Helm). External services always use private connections via VPC peering. Connection details are automatically configured via Kubernetes secrets.
-- **GCS Authentication**: The bucket and projectId are set via Helm flags. For GCS access, you'll need to configure HMAC credentials (access key and secret) separately. See `langsmith-values.yaml` comments or the [LangSmith blob storage documentation](https://docs.langchain.com/langsmith/self-host-blob-storage) for details.
-- **State Management**: Consider using a GCS backend for Terraform state in production (uncomment backend configuration in `main.tf`).
+> Set `gke_deletion_protection = false` and `postgres_deletion_protection = false` before running `make destroy` in production.

@@ -1,0 +1,153 @@
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "20.37.2"
+
+  cluster_name    = var.cluster_name
+  cluster_version = var.cluster_version
+
+  vpc_id                                   = var.vpc_id
+  subnet_ids                               = var.subnet_ids
+  cluster_endpoint_public_access           = var.public_cluster_enabled
+  cluster_endpoint_public_access_cidrs     = var.public_access_cidrs
+  enable_cluster_creator_admin_permissions = true
+  cluster_enabled_log_types                = var.cluster_enabled_log_types
+
+  eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
+
+  # The community module ignores desired_size changes (lifecycle ignore_changes) so
+  # the cluster autoscaler can manage it. min_size and max_size DO propagate through
+  # terraform apply. If plan shows no changes after modifying min/max, run
+  # `terraform refresh` first — the ASG may have been changed out-of-band (e.g. via
+  # AWS CLI or console) and the state already reflects the new values.
+  eks_managed_node_groups = {
+    for k, v in var.eks_managed_node_groups : k => merge(v, {
+      desired_size = coalesce(v.desired_size, v.min_size)
+    })
+  }
+
+  tags = var.tags
+}
+
+# https://aws.amazon.com/blogs/containers/amazon-ebs-csi-driver-is-now-generally-available-in-amazon-eks-add-ons/
+data "aws_iam_policy" "ebs_csi_policy" {
+  arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+module "irsa-ebs-csi" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role-with-oidc"
+  version = "4.24.1"
+
+  create_role                   = true
+  role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  provider_url                  = module.eks.oidc_provider
+  role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
+  oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+
+  depends_on = [module.eks]
+}
+
+# Create the EBS CSI Driver addon for volume provisioning.
+resource "aws_eks_addon" "ebs-csi" {
+  cluster_name             = module.eks.cluster_name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
+  tags                     = var.tags
+
+  depends_on = [module.eks]
+}
+
+# Create some important addons for the EKS cluster.
+module "eks_blueprints_addons" {
+  source  = "aws-ia/eks-blueprints-addons/aws"
+  version = "1.23.0"
+
+  cluster_name      = module.eks.cluster_name
+  cluster_endpoint  = module.eks.cluster_endpoint
+  cluster_version   = module.eks.cluster_version
+  oidc_provider_arn = module.eks.oidc_provider_arn
+
+  enable_aws_load_balancer_controller = true
+  enable_karpenter                    = false
+  enable_metrics_server               = true
+  enable_cluster_autoscaler           = true
+
+  # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
+  cluster_autoscaler = {
+    chart_version = "9.56.0"
+  }
+
+  # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
+  eks_addons = var.eks_addons
+
+  depends_on = [module.eks]
+}
+
+# Create the gp3 storage class, make it the default storage class, and allow volume expansion.
+resource "kubernetes_storage_class" "gp3_default" {
+  count = var.create_gp3_storage_class ? 1 : 0
+  metadata {
+    name = "gp3"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
+  }
+
+  storage_provisioner    = "ebs.csi.aws.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    type = "gp3"
+  }
+
+  depends_on = [aws_eks_addon.ebs-csi]
+}
+
+# Port 15017 is the istiod sidecar-injector webhook port. The EKS API server must
+# reach it from the cluster security group (sg-* associated with the control plane).
+# The upstream EKS module does not include this port in its default webhook rules.
+resource "aws_security_group_rule" "istiod_webhook" {
+  count = var.enable_istio_gateway ? 1 : 0
+
+  type                     = "ingress"
+  from_port                = 15017
+  to_port                  = 15017
+  protocol                 = "tcp"
+  security_group_id        = module.eks.node_security_group_id
+  source_security_group_id = module.eks.cluster_primary_security_group_id
+  description              = "Cluster API to node 15017/tcp istio sidecar-injector webhook"
+
+  depends_on = [module.eks]
+}
+
+# IRSA role for LangSmith pods — allows pods to access S3 via their service account.
+# https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+resource "aws_iam_role" "langsmith" {
+  count = var.create_langsmith_irsa_role ? 1 : 0
+
+  name = "${module.eks.cluster_name}-irsa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = module.eks.oidc_provider_arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${module.eks.oidc_provider}:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "${module.eks.oidc_provider}:sub" = "system:serviceaccount:${var.langsmith_namespace}:*"
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [module.eks]
+}
