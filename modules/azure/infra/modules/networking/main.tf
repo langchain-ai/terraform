@@ -29,11 +29,19 @@ resource "azurerm_virtual_network" "vnet" {
 # Main subnet — used by AKS nodes and pods (Azure CNI).
 # With Standard_D4_v5 nodes (30 max pods each) and up to 10 nodes,
 # you need at least 300 IPs. /19 = 8 192 IPs — plenty of headroom.
+#
+# service_endpoints: enabling Microsoft.Storage and Microsoft.KeyVault on the
+# AKS subnet lets the storage account and key vault default-deny firewalls
+# allowlist this subnet directly (via virtual_network_subnet_ids). Without the
+# endpoints the data-plane traffic from pods would be NAT'd to a public IP and
+# blocked by the deny rule. Cheap to enable and required for the storage/KV
+# default-deny posture in modules/storage and modules/keyvault.
 resource "azurerm_subnet" "subnet_main" {
   name                 = "${var.network_name}-subnet-0"
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = var.main_subnet_address_prefix
+  service_endpoints    = ["Microsoft.Storage", "Microsoft.KeyVault"]
 }
 
 # PostgreSQL subnet — created only when enable_external_postgres = true.

@@ -51,3 +51,15 @@ variable "tags" {
   description = "Common Azure resource tags to apply to all resources in this module"
   default     = {}
 }
+
+variable "allowed_ips" {
+  type        = list(string)
+  description = "Public IPs / CIDRs allowed through the default-deny storage firewall. Add operator workstations, CI runner egress, or other clients that legitimately need to reach the data plane. AKS pod traffic uses a service endpoint allowlist (allowed_subnet_ids), not this list."
+  default     = []
+}
+
+variable "allowed_subnet_ids" {
+  type        = list(string)
+  description = "Subnet IDs allowlisted via the Microsoft.Storage service endpoint. Typically the AKS subnet so pods can reach the blob data plane while the rest of the internet is denied. The subnet must have service_endpoints = [\"Microsoft.Storage\", ...] configured."
+  default     = []
+}

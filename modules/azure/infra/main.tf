@@ -203,6 +203,13 @@ module "blob" {
   workload_identity_principal_id = module.aks.workload_identity_principal_id
   workload_identity_client_id    = module.aks.workload_identity_client_id
 
+  # Default-deny on the storage data plane. AKS pods reach blobs via the
+  # Microsoft.Storage service endpoint on the AKS subnet (see networking module).
+  # Operators with extra clients (CI runners, jumpboxes) add their public IPs
+  # via var.storage_allowed_ips.
+  allowed_subnet_ids = [local.aks_subnet_id]
+  allowed_ips        = var.storage_allowed_ips
+
   tags = local.common_tags
 }
 

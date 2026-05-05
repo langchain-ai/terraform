@@ -180,3 +180,14 @@ sizing_profile = "production"
 # aks_subnet_id        = "/subscriptions/.../subnets/aks"
 # postgres_subnet_id   = "/subscriptions/.../subnets/postgres"
 # redis_subnet_id      = "/subscriptions/.../subnets/redis"
+
+# ── Network hardening (production) ────────────────────────────────────────────
+# Storage / Key Vault / AKS default-deny firewalls. AKS pods are allowlisted
+# automatically via service endpoints on the AKS subnet — add operator IPs
+# here only for clients that need to reach the data plane (CI runners,
+# jumpboxes, operator workstations). Empty lists keep the legacy permissive
+# defaults so the starter quickstart works without extra plumbing.
+# storage_allowed_ips      = ["203.0.113.42/32"]
+# keyvault_default_action  = "Deny"
+# keyvault_allowed_ips     = ["203.0.113.42/32"]
+# aks_authorized_ip_ranges = ["203.0.113.42/32", "198.51.100.0/24"]

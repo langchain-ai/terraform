@@ -27,6 +27,19 @@ resource "azurerm_storage_account" "storage_account" {
   account_tier             = "Standard"
   account_replication_type = "LRS" # Stage 3: consider ZRS or RA-GRS
   tags                     = merge(var.tags, { module = "blob" })
+
+  # Default-deny on the storage data plane (blob anonymous/SharedKey traffic).
+  # Terraform itself uses the management plane (azurerm_storage_account /
+  # azurerm_storage_container with storage_account_id / azurerm_storage_management_policy)
+  # so it is unaffected by this rule. Runtime AKS pods reach the account via
+  # the Microsoft.Storage service endpoint added to the AKS subnet (see the
+  # networking module) — that subnet is allowlisted via virtual_network_subnet_ids.
+  network_rules {
+    default_action             = "Deny"
+    bypass                     = ["AzureServices"]
+    ip_rules                   = var.allowed_ips
+    virtual_network_subnet_ids = var.allowed_subnet_ids
+  }
 }
 
 # Blob container — private container that holds all LangSmith trace objects.

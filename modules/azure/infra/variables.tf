@@ -169,6 +169,12 @@ variable "blob_ttl_long_days" {
   default     = 400
 }
 
+variable "storage_allowed_ips" {
+  type        = list(string)
+  description = "Public IPs / CIDRs allowed through the storage account default-deny firewall. AKS pod traffic is allowlisted automatically via the Microsoft.Storage service endpoint on the AKS subnet — only add operator workstations, CI runners, or other external clients that need to reach the blob data plane."
+  default     = []
+}
+
 # ── AKS node pool sizing guidance ─────────────────────────────────────────────
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)
