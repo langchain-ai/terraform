@@ -13,29 +13,40 @@ permissions:
   contents: read
   security-events: write
 
+# No CodeQL-supported languages in this repo yet (Terraform/HCL is not supported).
+# Uncomment and populate the matrix as new assets are introduced
+# (e.g. "python", "javascript-typescript", "go").
+#
+# jobs:
+#   analyze:
+#     name: Analyze (${{ matrix.language }})
+#     runs-on: ubuntu-latest
+#     strategy:
+#       fail-fast: false
+#       matrix:
+#         language: ["python", "javascript-typescript"]
+#
+#     steps:
+#       - name: Checkout
+#         uses: actions/checkout@v4
+#
+#       - name: Initialize CodeQL
+#         uses: github/codeql-action/init@v3
+#         with:
+#           languages: ${{ matrix.language }}
+#           queries: security-extended
+#
+#       - name: Autobuild
+#         uses: github/codeql-action/autobuild@v3
+#
+#       - name: Perform CodeQL Analysis
+#         uses: github/codeql-action/analyze@v3
+#         with:
+#           category: "/language:${{ matrix.language }}"
 jobs:
-  analyze:
-    name: Analyze (${{ matrix.language }})
+  noop:
+    name: CodeQL (no supported languages)
+    if: false
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        language: ["python", "javascript-typescript"]
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-          queries: security-extended
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{ matrix.language }}"
+      - run: 'echo "No CodeQL-supported languages in this repo. See comments above."'
