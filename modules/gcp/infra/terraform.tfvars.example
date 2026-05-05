@@ -89,6 +89,14 @@ gke_release_channel         = "REGULAR"    # RAPID, REGULAR, or STABLE
 gke_deletion_protection     = true         # Prevent accidental cluster deletion
 gke_network_policy_provider = "DATA_PLANE_V2"  # CALICO (legacy) or DATA_PLANE_V2 (recommended)
 
+# Master authorized networks. Empty list keeps the GKE master publicly
+# reachable so Terraform-managed Helm/kubectl steps work from any apply host.
+# Production deployments restrict to operator/CI egress CIDRs.
+# gke_master_authorized_cidrs = [
+#   { cidr_block = "203.0.113.42/32",  display_name = "operator-laptop" },
+#   { cidr_block = "198.51.100.0/24",  display_name = "ci-runners"      },
+# ]
+
 #------------------------------------------------------------------------------
 # Optional: PostgreSQL Configuration
 #------------------------------------------------------------------------------

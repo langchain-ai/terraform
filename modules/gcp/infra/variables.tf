@@ -191,6 +191,15 @@ variable "gke_network_policy_provider" {
   }
 }
 
+variable "gke_master_authorized_cidrs" {
+  description = "External CIDRs permitted to reach the GKE master endpoint. Empty list (default) omits the master_authorized_networks_config block, leaving the master publicly reachable so Terraform-managed Helm/kubectl steps work from any apply host. Production deployments populate this with operator/CI egress CIDRs."
+  type = list(object({
+    cidr_block   = string
+    display_name = string
+  }))
+  default = []
+}
+
 #------------------------------------------------------------------------------
 # Cloud SQL (PostgreSQL) Configuration
 #------------------------------------------------------------------------------

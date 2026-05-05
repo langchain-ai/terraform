@@ -44,11 +44,20 @@ resource "google_container_cluster" "primary" {
     master_ipv4_cidr_block  = "172.17.0.0/28"
   }
 
-  # Master authorized networks
-  master_authorized_networks_config {
-    cidr_blocks {
-      cidr_block   = "0.0.0.0/0"
-      display_name = "All networks"
+  # Master authorized networks. Empty list (default) omits the block so the
+  # master endpoint stays publicly reachable — required for Terraform-managed
+  # Helm/kubectl steps that target the master from the apply host. Production
+  # deployments populate var.master_authorized_cidrs with operator/CI CIDRs.
+  dynamic "master_authorized_networks_config" {
+    for_each = length(var.master_authorized_cidrs) > 0 ? [1] : []
+    content {
+      dynamic "cidr_blocks" {
+        for_each = var.master_authorized_cidrs
+        content {
+          cidr_block   = cidr_blocks.value.cidr_block
+          display_name = cidr_blocks.value.display_name
+        }
+      }
     }
   }
 
@@ -234,11 +243,20 @@ resource "google_container_cluster" "autopilot" {
     enable_private_endpoint = false
   }
 
-  # Master authorized networks
-  master_authorized_networks_config {
-    cidr_blocks {
-      cidr_block   = "0.0.0.0/0"
-      display_name = "All networks"
+  # Master authorized networks. Empty list (default) omits the block so the
+  # master endpoint stays publicly reachable — required for Terraform-managed
+  # Helm/kubectl steps that target the master from the apply host. Production
+  # deployments populate var.master_authorized_cidrs with operator/CI CIDRs.
+  dynamic "master_authorized_networks_config" {
+    for_each = length(var.master_authorized_cidrs) > 0 ? [1] : []
+    content {
+      dynamic "cidr_blocks" {
+        for_each = var.master_authorized_cidrs
+        content {
+          cidr_block   = cidr_blocks.value.cidr_block
+          display_name = cidr_blocks.value.display_name
+        }
+      }
     }
   }
 

@@ -227,6 +227,11 @@ module "gke_cluster" {
   deletion_protection     = var.gke_deletion_protection
   network_policy_provider = var.gke_network_policy_provider
 
+  # Master authorized networks — empty list keeps the master publicly reachable
+  # for Terraform-driven Helm/kubectl steps. Populate var.gke_master_authorized_cidrs
+  # in terraform.tfvars to restrict to operator/CI CIDRs.
+  master_authorized_cidrs = var.gke_master_authorized_cidrs
+
   # Labels
   labels = local.common_labels
 
