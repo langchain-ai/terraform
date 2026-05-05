@@ -123,8 +123,12 @@ resource "azurerm_kubernetes_cluster" "main" {
   # Azure CNI: pods get IPs directly from the VNet subnet, giving them full
   # network reachability to PostgreSQL/Redis without any NAT.
   # service_cidr must NOT overlap with the VNet or any peered network.
+  # network_policy = "azure" enables the Azure NetworkPolicy engine so
+  # NetworkPolicy resources actually deny traffic — without it, NetworkPolicy
+  # objects are accepted by the API but never enforced.
   network_profile {
     network_plugin = "azure"
+    network_policy = "azure"
     service_cidr   = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
     dns_service_ip = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
   }
