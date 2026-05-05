@@ -283,6 +283,17 @@ variable "postgres_password" {
   }
 }
 
+variable "postgres_ssl_mode" {
+  description = "Cloud SQL SSL enforcement. ENCRYPTED_ONLY (default) requires TLS for every connection — LangSmith already speaks TLS. ALLOW_UNENCRYPTED_AND_ENCRYPTED accepts plaintext, only choose this if a legacy migration tool cannot be configured for SSL. TRUSTED_CLIENT_CERTIFICATE_REQUIRED additionally requires a client cert."
+  type        = string
+  default     = "ENCRYPTED_ONLY"
+
+  validation {
+    condition     = contains(["ALLOW_UNENCRYPTED_AND_ENCRYPTED", "ENCRYPTED_ONLY", "TRUSTED_CLIENT_CERTIFICATE_REQUIRED"], var.postgres_ssl_mode)
+    error_message = "postgres_ssl_mode must be one of ALLOW_UNENCRYPTED_AND_ENCRYPTED, ENCRYPTED_ONLY, TRUSTED_CLIENT_CERTIFICATE_REQUIRED."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Redis Configuration
 #------------------------------------------------------------------------------

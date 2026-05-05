@@ -257,6 +257,7 @@ module "cloudsql" {
   high_availability   = var.postgres_high_availability
   deletion_protection = var.postgres_deletion_protection
   database_flags      = var.postgres_database_flags
+  ssl_mode            = var.postgres_ssl_mode
 
   network_id                 = module.networking.vpc_id
   private_network_connection = module.networking.private_service_connection

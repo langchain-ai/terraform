@@ -116,6 +116,12 @@ postgres_deletion_protection = true                 # Prevent accidental deletio
 #   { name = "log_disconnections", value = "on"  },
 # ]
 
+# SSL enforcement on the Cloud SQL connection (default: ENCRYPTED_ONLY).
+# ENCRYPTED_ONLY                      — require TLS for every connection (default)
+# ALLOW_UNENCRYPTED_AND_ENCRYPTED     — accept plaintext (only for legacy migration tools)
+# TRUSTED_CLIENT_CERTIFICATE_REQUIRED — TLS + client certificate required
+# postgres_ssl_mode = "ENCRYPTED_ONLY"
+
 #------------------------------------------------------------------------------
 # Optional: Redis Configuration
 #------------------------------------------------------------------------------

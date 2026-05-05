@@ -20,7 +20,7 @@ resource "google_sql_database_instance" "postgres" {
     ip_configuration {
       ipv4_enabled                                  = false
       private_network                               = var.network_id
-      ssl_mode                                      = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      ssl_mode                                      = var.ssl_mode
       enable_private_path_for_google_cloud_services = true
     }
 
