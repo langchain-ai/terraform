@@ -1,9 +1,11 @@
 ---
 # Trivy suppressions for Terraform misconfiguration scans.
-# Each entry: id (AVD prefix), paths, statement (real rationale), expired_at.
+# Each entry: id (bare provider-number, no AVD- prefix), paths, statement
+# (real rationale), expired_at. Trivy 0.69 honours the bare-ID format here;
+# the AVD- prefixed form documented in older guides does not match.
 
 misconfigurations:
-  - id: AVD-AWS-0053
+  - id: AWS-0053
     paths:
       - "modules/aws/infra/modules/alb/main.tf"
     statement: |
@@ -13,7 +15,7 @@ misconfigurations:
       false) — operators who require an internal-only ALB pass internal = true.
     expired_at: 2027-01-01
 
-  - id: AVD-AZU-0013
+  - id: AZU-0013
     paths:
       - "modules/azure/infra/modules/keyvault/main.tf"
     statement: |
@@ -25,7 +27,7 @@ misconfigurations:
       modules/azure/infra/terraform.tfvars.example.
     expired_at: 2027-01-01
 
-  - id: AVD-AZU-0041
+  - id: AZU-0041
     paths:
       - "modules/azure/infra/modules/k8s-cluster/main.tf"
     statement: |
@@ -36,7 +38,7 @@ misconfigurations:
       var.aks_authorized_ip_ranges with their CI runner / jumpbox egress CIDRs.
     expired_at: 2027-01-01
 
-  - id: AVD-GCP-0053
+  - id: GCP-0061
     paths:
       - "modules/gcp/infra/modules/k8s-cluster/main.tf"
     statement: |
