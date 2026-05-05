@@ -419,7 +419,7 @@ else
   _langsmith_domain=$(_read_tfvar langsmith_domain 2>/dev/null) || _langsmith_domain=""
   _create_dns_zone=$(_read_tfvar create_dns_zone 2>/dev/null) || _create_dns_zone=""
   if [[ "$_tls_source" == "dns01" && -n "$_langsmith_domain" && "$_create_dns_zone" == "true" ]]; then
-    # Extract subdomain label (e.g. "azurelangsmith" from "azurelangsmith.dzmitry.dev")
+    # Extract subdomain label (e.g. "langsmith" from "langsmith.example.com")
     _subdomain="${_langsmith_domain%%.*}"
     _parent_domain="${_langsmith_domain#*.}"
     _ns_list=$(terraform -chdir="$SCRIPT_DIR/.." output -json dns_nameservers 2>/dev/null \

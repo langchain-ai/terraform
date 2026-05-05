@@ -46,12 +46,12 @@ terraform/<provider>/
 
 ## Providers
 
-| Directory | Provider | Owner |
-|---|---|---|
-| `aws/` | Amazon Web Services | Michael |
-| `azure/` | Microsoft Azure | Dzmitry |
-| `gcp/` | Google Cloud Platform | David |
-| `ocp/` | OpenShift Container Platform | — |
+| Directory | Provider |
+|---|---|
+| `aws/` | Amazon Web Services |
+| `azure/` | Microsoft Azure |
+| `gcp/` | Google Cloud Platform |
+| `ocp/` | OpenShift Container Platform |
 
 ## Modules
 

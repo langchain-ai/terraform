@@ -98,7 +98,7 @@ az keyvault list-deleted --query "[].name" -o table
 **Option A — Change the identifier:**
 ```hcl
 # azure/infra/terraform.tfvars
-identifier = "-azonf2"  # any unused suffix
+identifier = "-demo2"  # any unused suffix
 ```
 
 **Option B — Disable purge protection before next teardown:**

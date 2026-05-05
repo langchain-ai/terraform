@@ -277,7 +277,7 @@ Key behaviors:
 
 Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name from `identifier` in `terraform.tfvars` (e.g. `langsmith-kv-azonf`)
+- Derives the Key Vault name from `identifier` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
 - **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
 - **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
 - Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists

@@ -13,7 +13,7 @@ Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `ma
 
 | Controller | `letsencrypt` (HTTP-01) | `dns01` (DNS-01) | `none` (HTTP only) |
 |---|---|---|---|
-| **nginx** | ✅ Validated | ✅ Validated (azurelangsmith.dzmitry.dev) | ✅ Validated |
+| **nginx** | ✅ Validated | ✅ Validated (langsmith.example.com) | ✅ Validated |
 | **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ Validated |
 | **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 | **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | ✅ Validated (Standard_v2) |
@@ -243,7 +243,7 @@ letsencrypt_email      = "you@example.com"
 
 ## dns01 — Custom Domain Path (Validated ✅)
 
-**Validated: nginx + dns01 + custom domain (`azurelangsmith.dzmitry.dev`) — cert issued in < 4 min, HTTPS 200**
+**Validated: nginx + dns01 + custom domain (`langsmith.example.com`) — cert issued in < 4 min, HTTPS 200**
 
 ### How it works
 

@@ -1,6 +1,6 @@
 # LangSmith Azure — Light Deploy (All In-Cluster DBs)
 
-> **Tested and verified: 2026-03-24** — chart 0.13.29, AKS 1.32.11, eastus, all in-cluster DBs, NGINX + Let's Encrypt HTTP-01 TLS (`dns_label`), Azure Public IP DNS label. All 13 pods Running/Completed. URL: `https://langsmith-azngx.eastus.cloudapp.azure.com`
+> **Tested and verified: 2026-03-24** — chart 0.13.29, AKS 1.32.11, eastus, all in-cluster DBs, NGINX + Let's Encrypt HTTP-01 TLS (`dns_label`), Azure Public IP DNS label. All 13 pods Running/Completed. URL: `https://langsmith-demo.eastus.cloudapp.azure.com`
 
 Full copy-paste guide for deploying LangSmith with **all databases running in-cluster** (no Azure DB for PostgreSQL, no Azure Cache for Redis, no external ClickHouse).
 
@@ -75,7 +75,7 @@ This guide uses a **named context** (`--context langsmith-<suffix>`) on every `k
 Internet (HTTPS 443)
    │
    ▼
-Azure Public IP DNS label   (e.g. langsmith-azngx.eastus.cloudapp.azure.com → 20.x.x.x)
+Azure Public IP DNS label   (e.g. langsmith-demo.eastus.cloudapp.azure.com → 20.x.x.x)
    │  Set automatically when dns_label is configured — no registrar needed
    ▼
 Azure Load Balancer  (public IP provisioned by AKS for NGINX)
@@ -387,7 +387,7 @@ make k8s-secrets
 
 Expected output:
 ```
-  ✔  Reading secrets from Key Vault: langsmith-kv-azngx
+  ✔  Reading secrets from Key Vault: langsmith-kv-demo
   ✔  langsmith-config-secret applied to namespace/langsmith
   ✔  8 keys present — ready for Helm install
 ```

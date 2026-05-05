@@ -563,7 +563,7 @@ Even though `enable_deployments = true` is clearly set in tfvars.
 config:
   deployment:
     enabled: true
-    url: "https://langsmith-azonf.eastus.cloudapp.azure.com"   # must include https://
+    url: "https://langsmith-demo.eastus.cloudapp.azure.com"   # must include https://
     tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt or dns01
 ```
 
