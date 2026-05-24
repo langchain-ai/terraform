@@ -1,3 +1,10 @@
+---
+title: "Troubleshooting Guide"
+description: "Common issues, diagnostics, and fixes for LangSmith deployments on GCP."
+provider: "gcp"
+type: "troubleshooting"
+---
+
 # LangSmith on GCP — Troubleshooting Guide
 
 > Check the [LangSmith Self-Hosted Changelog](https://docs.langchain.com/langsmith/self-hosted-changelog) before upgrading for breaking changes and required variable updates.

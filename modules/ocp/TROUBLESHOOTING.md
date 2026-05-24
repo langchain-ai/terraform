@@ -1,3 +1,10 @@
+---
+title: "Troubleshooting Guide"
+description: "Common issues, diagnostics, and fixes for LangSmith deployments on OpenShift."
+provider: "ocp"
+type: "troubleshooting"
+---
+
 # LangSmith on OCP — Troubleshooting Guide
 
 > **Status: Coming Soon** — This guide will be updated as the OCP module is developed.

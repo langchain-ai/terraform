@@ -1,3 +1,10 @@
+---
+title: "Troubleshooting Guide"
+description: "Common issues, diagnostics, and fixes for LangSmith deployments on Azure."
+provider: "azure"
+type: "troubleshooting"
+---
+
 # LangSmith Azure — Troubleshooting
 
 Issues, gotchas, and fixes. Updated as deployments are validated.

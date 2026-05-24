@@ -1,3 +1,10 @@
+---
+title: "Troubleshooting Guide"
+description: "Common issues, diagnostics, and fixes for LangSmith deployments on AWS."
+provider: "aws"
+type: "troubleshooting"
+---
+
 # LangSmith on AWS — Troubleshooting Guide
 
 > Check the [LangSmith Self-Hosted Changelog](https://docs.langchain.com/langsmith/self-hosted-changelog) before upgrading for breaking changes and required variable updates.

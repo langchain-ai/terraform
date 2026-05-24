@@ -1,3 +1,10 @@
+---
+title: "Quick Reference"
+description: "Essential commands and shortcuts for managing a LangSmith deployment on AWS."
+provider: "aws"
+type: "reference"
+---
+
 # LangSmith on AWS — Quick Reference
 
 All commands run from `terraform/aws/`. Run `make help` to see all targets.

@@ -1,3 +1,10 @@
+---
+title: "Teardown Guide"
+description: "Step-by-step instructions for safely destroying a LangSmith deployment on Azure."
+provider: "azure"
+type: "teardown"
+---
+
 # LangSmith Azure — Teardown Guide
 
 > Before destroying, back up any traces or data you want to keep — PostgreSQL and Blob Storage are permanently deleted.

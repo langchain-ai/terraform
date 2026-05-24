@@ -1,3 +1,10 @@
+---
+title: "Teardown Guide"
+description: "Step-by-step instructions for safely destroying a LangSmith deployment on OpenShift."
+provider: "ocp"
+type: "teardown"
+---
+
 # LangSmith on OCP — Teardown Guide
 
 > **Status: Coming Soon** — This guide will be updated when the OCP module is available.

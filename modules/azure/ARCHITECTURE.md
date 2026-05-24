@@ -1,3 +1,10 @@
+---
+title: "Architecture Reference"
+description: "Platform layers, component overview, and infrastructure architecture for LangSmith on Azure."
+provider: "azure"
+type: "reference"
+---
+
 # LangSmith Azure — Architecture
 
 *Updated as deployment is validated.*
