@@ -8,7 +8,7 @@
 
 **[LangSmith Azure — Production Architecture (v0.13.28)](https://app.eraser.io/workspace/oto9FgBOY2s7877578R2)**
 
-![LangSmith Azure Production Architecture](diagrams/production-deploy-architecture.png)
+![LangSmith Azure Production Architecture](diagrams/lang_smith_deployment_pass_4_5.png)
 
 Full topology: all passes (2–4), AKS namespaces, pod names, external managed services, Workload Identity flow, Key Vault, TLS, KEDA, NGINX.
 
@@ -51,7 +51,7 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 **[LangSmith Azure — Light Deploy Architecture (v0.13.28)](https://app.eraser.io/workspace/sQxjXna8084czm2eRPFj)**
 
-![LangSmith Azure Light Deploy Architecture](diagrams/light-deploy-architecture.png)
+![LangSmith Azure Light Deploy Architecture](diagrams/lang_smith_deployment_light.png)
 
 ---
 

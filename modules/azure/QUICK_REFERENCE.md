@@ -1,6 +1,6 @@
 # LangSmith Azure — Quick Reference
 
-All commands run from `terraform/azure/`. Run `make help` to see all targets.
+All commands run from `modules/azure/`. Run `make help` to see all targets.
 
 For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
@@ -9,7 +9,7 @@ For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIG
 ## First-Time Setup
 
 ```bash
-cd terraform/azure
+cd modules/azure
 
 # 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
 make quickstart
