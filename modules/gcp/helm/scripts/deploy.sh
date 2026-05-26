@@ -7,13 +7,16 @@
 # Deploys or upgrades LangSmith via Helm on GCP.
 #
 # Values files loaded (in order, last wins):
-#   1. values.yaml                                  — base GCP config (always)
-#   2. values-overrides.yaml                        — env-specific: hostname, WI annotations, GCS (required)
-#   3. langsmith-values-sizing-{profile}.yaml       — sizing profile (from sizing_profile in terraform.tfvars)
-#   4. langsmith-values-agent-deploys.yaml          — Deployments feature (if enabled)
-#   5. langsmith-values-agent-builder.yaml          — Agent Builder feature (if enabled)
-#   6. langsmith-values-insights.yaml               — ClickHouse/Insights (if enabled)
-#   7. langsmith-values-polly.yaml                  — Polly AI eval/monitoring (if enabled)
+#   1. values.yaml                                      — base GCP config (always)
+#   2. values-overrides.yaml                            — env-specific: hostname, WI annotations, GCS (required)
+#   3. langsmith-values-sizing-{profile}.yaml           — sizing profile (from sizing_profile in terraform.tfvars)
+#   4. langsmith-values-agent-deploys.yaml              — Deployments feature (if enabled)
+#   5. langsmith-values-agent-builder.yaml              — Agent Builder legacy (if enabled)
+#   6. langsmith-values-insights.yaml                   — ClickHouse/Insights legacy (if enabled)
+#   7. langsmith-values-polly.yaml                      — Polly legacy (if enabled)
+#   8. langsmith-values-fleet.yaml                      — Fleet standalone v0.15+ (if enable_fleet)
+#   9. langsmith-values-standalone-polly.yaml           — Polly standalone v0.15+ (if enable_standalone_polly)
+#  10. langsmith-values-standalone-insights.yaml        — Insights standalone v0.15+ (if enable_standalone_insights)
 #
 # Generate values files: ./helm/scripts/init-values.sh
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -135,13 +138,19 @@ _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
+_enable_fleet=false
+_enable_standalone_polly=false
+_enable_standalone_insights=false
 _any_flag_set=false
-_tfvar_is_true "enable_deployments"   && { _enable_deployments=true;  _any_flag_set=true; }
-_tfvar_is_true "enable_agent_builder" && { _enable_agent_builder=true; _any_flag_set=true; }
-_tfvar_is_true "enable_insights"      && { _enable_insights=true;      _any_flag_set=true; }
-_tfvar_is_true "enable_polly"         && { _enable_polly=true;          _any_flag_set=true; }
+_tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _any_flag_set=true; }
+_tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _any_flag_set=true; }
+_tfvar_is_true "enable_insights"           && { _enable_insights=true;            _any_flag_set=true; }
+_tfvar_is_true "enable_polly"              && { _enable_polly=true;               _any_flag_set=true; }
+_tfvar_is_true "enable_fleet"              && { _enable_fleet=true;               _any_flag_set=true; }
+_tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
+_tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
 
-# Validate addon dependencies
+# Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
@@ -156,6 +165,9 @@ _addon_gate=(
   "agent-builder:agent_builder:$_enable_agent_builder"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
+  "fleet:fleet:$_enable_fleet"
+  "standalone-polly:standalone_polly:$_enable_standalone_polly"
+  "standalone-insights:standalone_insights:$_enable_standalone_insights"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -222,11 +234,19 @@ echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
+# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14).
+# Helm silently skips any version tagged with -rc./-alpha./-beta. without it.
+_devel_flag=""
+if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
+  _devel_flag="--devel"
+fi
+
 set +e
 _helm_output=$(helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
+  ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
   --timeout 20m 2>&1)
 _helm_exit=$?
@@ -263,6 +283,9 @@ if [[ "$_enable_deployments" == "true" ]]; then
     "${RELEASE_NAME}-operator"
   )
 fi
+[[ "$_enable_fleet" == "true" ]]              && _core_deployments+=("langsmith-standalone-fleet-api-server")
+[[ "$_enable_standalone_polly" == "true" ]]   && _core_deployments+=("langsmith-standalone-polly-api-server")
+[[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("langsmith-standalone-insights-api-server")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do

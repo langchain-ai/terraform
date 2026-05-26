@@ -226,6 +226,9 @@ _sm_secret "agent-builder-encryption-key" "TF_VAR_langsmith_agent_builder_encryp
 _sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" \
   "$_fernet_gen" "" "true"
 
+_sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
+  "$_fernet_gen" "" "true"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Terraform environment variables set."
@@ -242,6 +245,7 @@ echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"
 echo "  insights_key      = (hidden — SM: ${_sm_prefix}-insights-encryption-key)"
+echo "  polly_key         = (hidden — SM: ${_sm_prefix}-polly-encryption-key)"
 echo "  sm_prefix         = ${_sm_prefix}"
 echo ""
 echo "Next:  terraform -chdir=infra init"

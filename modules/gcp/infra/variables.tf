@@ -667,7 +667,14 @@ variable "langsmith_agent_builder_encryption_key" {
 
 variable "langsmith_insights_encryption_key" {
   type        = string
-  description = "Fernet key for Insights. Generate once — changing breaks existing Insights data."
+  description = "Fernet key for Insights. Generate once — changing breaks existing Insights data. Shared by enable_insights and enable_standalone_insights."
+  sensitive   = true
+  default     = ""
+}
+
+variable "langsmith_polly_encryption_key" {
+  type        = string
+  description = "Fernet key for Polly. Generate once — changing breaks existing Polly data. Shared by enable_polly and enable_standalone_polly."
   sensitive   = true
   default     = ""
 }
@@ -692,6 +699,24 @@ variable "sizing_profile" {
 variable "enable_polly" {
   type        = bool
   description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  default     = false
+}
+
+variable "enable_fleet" {
+  type        = bool
+  description = "Enable Fleet standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder."
+  default     = false
+}
+
+variable "enable_standalone_polly" {
+  type        = bool
+  description = "Enable Polly standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_polly_encryption_key."
+  default     = false
+}
+
+variable "enable_standalone_insights" {
+  type        = bool
+  description = "Enable Insights standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_insights_encryption_key."
   default     = false
 }
 
