@@ -7,7 +7,7 @@ type: "reference"
 
 # LangSmith on GCP — Quick Reference
 
-All commands run from `terraform/gcp/`. Run `make help` to see all targets.
+All commands run from `modules/gcp/`. Run `make help` to see all targets.
 
 ---
 
@@ -29,7 +29,7 @@ Each pass builds on the previous. Verify pods are healthy before enabling the ne
 ## First-Time Setup
 
 ```bash
-cd terraform/gcp
+cd modules/gcp
 
 # Interactive wizard — generates terraform.tfvars from guided prompts
 make quickstart
@@ -134,14 +134,14 @@ gcloud config set project <your-project-id>
 gcloud auth application-default login
 
 # Recommended workflow
-cd terraform/gcp
+cd modules/gcp
 make preflight
 make init
 make plan
 make apply
 
 # Configure
-cd terraform/gcp/infra
+cd modules/gcp/infra
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your values
 
@@ -167,7 +167,7 @@ kubectl get secrets -n langsmith
 
 ```bash
 # Recommended: use the scripted deployment
-cd terraform/gcp
+cd modules/gcp
 make init-values   # generates values-overrides.yaml from Terraform outputs
 make deploy        # runs helm upgrade --install with the full values chain
 

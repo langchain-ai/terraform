@@ -7,14 +7,14 @@ type: "reference"
 
 # LangSmith on AWS — Quick Reference
 
-All commands run from `terraform/aws/`. Run `make help` to see all targets.
+All commands run from `modules/aws/`. Run `make help` to see all targets.
 
 ---
 
 ## First-Time Setup
 
 ```bash
-cd terraform/aws
+cd modules/aws
 
 # 1. Generate terraform.tfvars (interactive wizard — region, node size, TLS, addons)
 make quickstart
@@ -214,7 +214,7 @@ aws iam get-role --role-name <irsa-role-name>
 ## Terraform Commands
 
 ```bash
-cd terraform/aws/infra
+cd modules/aws/infra
 
 terraform init
 terraform plan
@@ -233,7 +233,7 @@ terraform state list
 ## Teardown
 
 ```bash
-cd terraform/aws
+cd modules/aws
 
 # Option A: script-driven deploy
 make uninstall
