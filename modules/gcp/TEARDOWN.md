@@ -1,3 +1,10 @@
+---
+title: "Teardown Guide"
+description: "Step-by-step instructions for safely destroying a LangSmith deployment on GCP."
+provider: "gcp"
+type: "teardown"
+---
+
 # LangSmith on GCP — Teardown Guide
 
 > Check the [LangSmith Self-Hosted Changelog](https://docs.langchain.com/langsmith/self-hosted-changelog) before destroying for any notes on data migration or export.

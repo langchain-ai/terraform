@@ -1,3 +1,10 @@
+---
+title: "Quick Reference"
+description: "Essential commands and shortcuts for managing a LangSmith deployment on GCP."
+provider: "gcp"
+type: "reference"
+---
+
 # LangSmith on GCP — Quick Reference
 
 All commands run from `terraform/gcp/`. Run `make help` to see all targets.

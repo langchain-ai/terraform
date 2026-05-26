@@ -1,3 +1,10 @@
+---
+title: "Quick Reference"
+description: "Essential commands and shortcuts for managing a LangSmith deployment on Azure."
+provider: "azure"
+type: "reference"
+---
+
 # LangSmith Azure — Quick Reference
 
 All commands run from `terraform/azure/`. Run `make help` to see all targets.

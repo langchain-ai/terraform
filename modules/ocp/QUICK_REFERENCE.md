@@ -1,3 +1,10 @@
+---
+title: "Quick Reference"
+description: "Essential commands and shortcuts for managing a LangSmith deployment on OpenShift."
+provider: "ocp"
+type: "reference"
+---
+
 # LangSmith on OCP — Quick Reference
 
 > **Status: Coming Soon** — Commands will be added when the OCP module is available.

@@ -1,3 +1,10 @@
+---
+title: "Architecture Reference"
+description: "Platform layers, component overview, and infrastructure architecture for LangSmith on AWS."
+provider: "aws"
+type: "reference"
+---
+
 # LangSmith on AWS — Architecture
 
 ---

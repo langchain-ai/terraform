@@ -1,3 +1,10 @@
+---
+title: "Architecture Reference"
+description: "Platform layers, component overview, and infrastructure architecture for LangSmith on OpenShift."
+provider: "ocp"
+type: "reference"
+---
+
 # LangSmith on OCP — Architecture
 
 ## POC: Single Node OpenShift on Azure Baremetal Host

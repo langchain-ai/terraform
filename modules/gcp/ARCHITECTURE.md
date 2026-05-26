@@ -1,3 +1,10 @@
+---
+title: "Architecture Reference"
+description: "Platform layers, component overview, and infrastructure architecture for LangSmith on GCP."
+provider: "gcp"
+type: "reference"
+---
+
 # LangSmith on GCP — Architecture
 
 ---
