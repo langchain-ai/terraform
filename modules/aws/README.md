@@ -79,6 +79,42 @@ export AWS_DEFAULT_REGION=us-west-2
 aws sts get-caller-identity
 ```
 
+#### If your AWS account uses SSO (e.g. Okta-federated)
+
+Federated SSO accounts do **not** issue long-lived access keys — `aws configure` won't work because you have nothing to paste. Use `aws configure sso` instead, which stores a pointer to your SSO portal (in `~/.aws/config`) and mints short-lived credentials on demand.
+
+**One-time setup:**
+
+```bash
+aws configure sso
+# SSO start URL:        <your AWS access portal URL, e.g. https://<org>.awsapps.com/start>
+# SSO region:           us-east-1                    # or wherever Identity Center lives
+# (browser opens → sign in via Okta → approve the CLI request)
+# Pick account + permission set from the list shown
+# Default client region: us-west-2
+# Default output format: json
+# Profile name:          langchain-aws               # any name you like
+```
+
+**Each session (creds expire ~1 hour):**
+
+```bash
+aws sso login --profile langchain-aws
+export AWS_PROFILE=langchain-aws
+aws sts get-caller-identity   # verify
+```
+
+After this, `terraform`, `kubectl`, `helm`, and all the `make` targets in this repo pick up the SSO credentials automatically via `AWS_PROFILE`.
+
+**IAM permissions note:** the policies listed in the table above must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
+
+**Optional helper:** some sub-tooling in this repo (parallel test workers, scripts that assume a `[default]` block in `~/.aws/credentials`) doesn't honor `AWS_PROFILE`. For those, run `./infra/scripts/hydrate-creds.sh` after `aws sso login` to dump the temporary key/secret/session-token triple into `~/.aws/credentials [default]`. Re-run it whenever your SSO session expires.
+
+```bash
+# Auto-mode — pulls from the SSO profile in ~/.aws/config
+AWS_SSO_PROFILE=langchain-aws ./infra/scripts/hydrate-creds.sh
+```
+
 ---
 
 ## Repository Layout
