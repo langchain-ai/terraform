@@ -70,7 +70,7 @@ resource "aws_iam_instance_profile" "bastion" {
 
 resource "aws_security_group" "bastion" {
   name_prefix = "${var.name}-bastion-"
-  description = "Bastion host — SSM + optional SSH ingress"
+  description = "Bastion host - SSM + optional SSH ingress"
   vpc_id      = var.vpc_id
   tags        = var.tags
 
