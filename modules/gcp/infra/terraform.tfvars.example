@@ -196,7 +196,7 @@ langsmith_helm_chart_version = ""
 # Pass 1 — HTTP only (get the Gateway IP):
 #   tls_certificate_source = "none"
 #   terraform apply
-#   # Note the gateway IP from terraform output or: kubectl get gateway -n langsmith
+#   # Note the gateway IP from terraform output or: kubectl get gateway -n envoy-gateway-system
 #   # Point your DNS A record to the gateway IP, then wait for DNS to propagate.
 #
 # Pass 2 — Enable TLS:
