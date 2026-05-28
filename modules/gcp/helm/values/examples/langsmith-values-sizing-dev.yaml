@@ -141,7 +141,7 @@ operator:
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
     replicas: 1
     resources:
@@ -152,7 +152,7 @@ agentBuilderToolServer:
         cpu: "500m"
         memory: "512Mi"
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     replicas: 1
     resources:
