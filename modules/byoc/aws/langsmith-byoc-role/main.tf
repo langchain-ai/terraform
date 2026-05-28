@@ -10,7 +10,7 @@ resource "aws_iam_role" "langchain_byoc" {
       {
         Effect = "Allow"
         Principal = {
-          AWS = var.control_plane_role_arn
+          AWS = var.control_plane_reconcile_role_arn
         }
         Action = "sts:AssumeRole"
         Condition = {
@@ -29,5 +29,5 @@ resource "aws_iam_role" "langchain_byoc" {
 
 locals {
   account_id               = data.aws_caller_identity.current.account_id
-  control_plane_account_id = split(":", var.control_plane_role_arn)[4]
+  control_plane_account_id = split(":", var.control_plane_reconcile_role_arn)[4]
 }

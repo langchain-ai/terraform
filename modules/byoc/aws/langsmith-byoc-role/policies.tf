@@ -16,10 +16,11 @@ locals {
   lambda_statements                     = jsondecode(templatefile("${path.module}/policies/lambda.json", local.policy_template_vars))
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
-  route53_public_statements             = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
-  s3_statements                         = jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars))
-  secrets_manager_statements            = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
-  vpc_statements                        = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
+  # Optional. Only applied if allow_public_ingress is true.
+  route53_public_statements  = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
+  s3_statements              = jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars))
+  secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
+  vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
 
   role_policies = {
     vpc                        = local.vpc_statements

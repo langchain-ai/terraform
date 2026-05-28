@@ -14,12 +14,12 @@ variable "tags" {
   default     = {}
 }
 
-variable "control_plane_role_arn" {
-  description = "ARN of the trusted control plane role."
+variable "control_plane_reconcile_role_arn" {
+  description = "ARN of the LangChain control plane reconciliation role."
   type        = string
 }
 
-variable "langsmith_break_glass_role_arn" {
+variable "control_plane_breakglass_role_arn" {
   description = "ARN of the LangChain control-plane break-glass IAM role."
   type        = string
 }
