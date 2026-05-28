@@ -1,0 +1,91 @@
+[
+  {
+    "Sid": "IAMInstanceProfileCreate",
+    "Effect": "Allow",
+    "Action": ["iam:CreateInstanceProfile"],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMInstanceProfileRead",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile"
+  },
+  {
+    "Sid": "IAMInstanceProfileManage",
+    "Effect": "Allow",
+    "Action": [
+      "iam:DeleteInstanceProfile",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:TagInstanceProfile",
+      "iam:UntagInstanceProfile"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMEKSInstanceProfileRead",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/eks-*"
+  },
+  {
+    "Sid": "IAMEKSInstanceProfileManage",
+    "Effect": "Allow",
+    "Action": ["iam:RemoveRoleFromInstanceProfile"],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/eks-*",
+    "Condition": {
+      "StringLike": {
+        "aws:ResourceTag/eks:cluster-name": "*-smith*"
+      }
+    }
+  },
+  {
+    "Sid": "IAMPolicyCreate",
+    "Effect": "Allow",
+    "Action": ["iam:CreatePolicy"],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMPolicyRead",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy"
+  },
+  {
+    "Sid": "IAMPolicyManage",
+    "Effect": "Allow",
+    "Action": [
+      "iam:DeletePolicy",
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:TagPolicy",
+      "iam:UntagPolicy"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

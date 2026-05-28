@@ -1,0 +1,40 @@
+[
+  {
+    "Sid": "Route53CreatePublicHostedZone",
+    "Effect": "Allow",
+    "Action": ["route53:CreateHostedZone"],
+    "Resource": "*",
+    "Condition": {
+      "Null": {
+        "route53:VPCs": "true"
+      }
+    }
+  },
+  {
+    "Sid": "Route53DeleteHostedZone",
+    "Effect": "Allow",
+    "Action": ["route53:DeleteHostedZone"],
+    "Resource": "arn:aws:route53:::hostedzone/*"
+  },
+  {
+    "Sid": "Route53ChangeAcmValidationRecords",
+    "Effect": "Allow",
+    "Action": ["route53:ChangeResourceRecordSets"],
+    "Resource": "arn:aws:route53:::hostedzone/*",
+    "Condition": {
+      "ForAllValues:StringEquals": {
+        "route53:ChangeResourceRecordSetsRecordTypes": ["CNAME"],
+        "route53:ChangeResourceRecordSetsActions": [
+          "CREATE",
+          "UPSERT",
+          "DELETE"
+        ]
+      },
+      "ForAllValues:StringLike": {
+        "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
+          "*.aws.langchain-byoc.com"
+        ]
+      }
+    }
+  }
+]

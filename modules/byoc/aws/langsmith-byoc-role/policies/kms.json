@@ -1,0 +1,41 @@
+[
+  {
+    "Sid": "KMSListAliases",
+    "Effect": "Allow",
+    "Action": ["kms:ListAliases"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "KMSGrantViaRDS",
+    "Effect": "Allow",
+    "Action": ["kms:CreateGrant"],
+    "Resource": "arn:aws:kms:*:${account_id}:key/*",
+    "Condition": {
+      "StringLike": {
+        "kms:ViaService": "rds.*.amazonaws.com"
+      },
+      "Bool": {
+        "kms:GrantIsForAWSResource": "true"
+      }
+    }
+  },
+  {
+    "Sid": "KMSEncryptViaRDS",
+    "Effect": "Allow",
+    "Action": [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo"
+    ],
+    "Resource": "arn:aws:kms:*:${account_id}:key/*",
+    "Condition": {
+      "StringLike": {
+        "kms:ViaService": "rds.*.amazonaws.com"
+      }
+    }
+  }
+]

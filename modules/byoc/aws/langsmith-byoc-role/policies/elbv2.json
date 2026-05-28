@@ -1,0 +1,94 @@
+[
+  {
+    "Sid": "ELBv2Describe",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:Describe*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "ELBv2LoadBalancerCreate",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateLoadBalancer"],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2LoadBalancerManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteLoadBalancer",
+      "elasticloadbalancing:ModifyLoadBalancerAttributes",
+      "elasticloadbalancing:SetSecurityGroups",
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2TargetGroupCreate",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateTargetGroup"],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:targetgroup/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2TargetGroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteTargetGroup",
+      "elasticloadbalancing:RegisterTargets",
+      "elasticloadbalancing:DeregisterTargets",
+      "elasticloadbalancing:ModifyTargetGroup",
+      "elasticloadbalancing:ModifyTargetGroupAttributes",
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:targetgroup/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2ListenerCreate",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:CreateListener"],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2ListenerManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteListener",
+      "elasticloadbalancing:ModifyListener",
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:listener/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

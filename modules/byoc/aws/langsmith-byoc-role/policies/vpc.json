@@ -1,0 +1,237 @@
+[
+  {
+    "Sid": "EC2Describe",
+    "Effect": "Allow",
+    "Action": ["ec2:Describe*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "VPCEndpointAllowMultiRegion",
+    "Effect": "Allow",
+    "Action": ["vpce:AllowMultiRegion"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*"
+    ]
+  },
+  {
+    "Sid": "EC2CreateNewResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateVpc",
+      "ec2:CreateSubnet",
+      "ec2:CreateInternetGateway",
+      "ec2:CreateNatGateway",
+      "ec2:CreateRouteTable",
+      "ec2:CreateSecurityGroup",
+      "ec2:AllocateAddress",
+      "ec2:CreateVpcEndpoint",
+      "ec2:CreateVpcEndpointServiceConfiguration",
+      "ec2:CreateFlowLogs"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateOnParentResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateSubnet",
+      "ec2:CreateRouteTable",
+      "ec2:CreateSecurityGroup",
+      "ec2:CreateNatGateway",
+      "ec2:CreateVpcEndpoint",
+      "ec2:CreateFlowLogs"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2AuthorizeSecurityGroupRules",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:AuthorizeSecurityGroupEgress"
+    ],
+    "Resource": ["arn:aws:ec2:*:${account_id}:security-group-rule/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2ManageExistingResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DeleteVpc",
+      "ec2:DeleteSubnet",
+      "ec2:DeleteInternetGateway",
+      "ec2:DeleteNatGateway",
+      "ec2:DeleteRouteTable",
+      "ec2:DeleteSecurityGroup",
+      "ec2:ReleaseAddress",
+      "ec2:DisassociateAddress",
+      "ec2:DeleteVpcEndpoints",
+      "ec2:DeleteVpcEndpointServiceConfigurations",
+      "ec2:DeleteFlowLogs",
+      "ec2:ModifyVpcAttribute",
+      "ec2:ModifySubnetAttribute",
+      "ec2:ModifyVpcEndpoint",
+      "ec2:ModifyVpcEndpointServiceConfiguration",
+      "ec2:ModifyVpcEndpointServicePermissions",
+      "ec2:AttachInternetGateway",
+      "ec2:DetachInternetGateway",
+      "ec2:AssociateRouteTable",
+      "ec2:DisassociateRouteTable",
+      "ec2:CreateRoute",
+      "ec2:DeleteRoute",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupEgress",
+      "ec2:CreateNetworkAclEntry",
+      "ec2:DeleteNetworkAclEntry",
+      "ec2:ReplaceNetworkAclEntry",
+      "ec2:ReplaceNetworkAclAssociation"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateTagsOnNewResources",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*",
+      "arn:aws:ec2:*:${account_id}:network-interface/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateTagsOnExistingResources",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2DeleteTags",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2EBSEncryptionByDefault",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:EnableEbsEncryptionByDefault",
+      "ec2:GetEbsEncryptionByDefault"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "CloudWatchLogsDeliveryForVpcFlowLogs",
+    "Effect": "Allow",
+    "Action": [
+      "logs:CreateLogDelivery",
+      "logs:DeleteLogDelivery",
+      "logs:GetLogDelivery",
+      "logs:UpdateLogDelivery",
+      "logs:ListLogDeliveries"
+    ],
+    "Resource": "*"
+  }
+]

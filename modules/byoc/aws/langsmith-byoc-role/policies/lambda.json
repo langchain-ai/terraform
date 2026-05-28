@@ -1,0 +1,99 @@
+[
+  {
+    "Sid": "LambdaFunctionCreate",
+    "Effect": "Allow",
+    "Action": ["lambda:CreateFunction"],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "LambdaFunctionRead",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:ListVersionsByFunction",
+      "lambda:ListTags"
+    ],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ]
+  },
+  {
+    "Sid": "LambdaFunctionManage",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:DeleteFunction",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:PublishVersion",
+      "lambda:TagResource",
+      "lambda:UntagResource"
+    ],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "LambdaPermissionRead",
+    "Effect": "Allow",
+    "Action": ["lambda:GetPolicy"],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ]
+  },
+  {
+    "Sid": "LambdaPermissionManage",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:AddPermission",
+      "lambda:RemovePermission"
+    ],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith",
+        "lambda:Principal": "events.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "ECRCrossAccountLambdaImage",
+    "Effect": "Allow",
+    "Action": [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer"
+    ],
+    "Resource": "arn:aws:ecr:*:${control_plane_account_id}:repository/byoc-privatelink-lambdas"
+  }
+]

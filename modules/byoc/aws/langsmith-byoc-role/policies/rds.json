@@ -1,0 +1,96 @@
+[
+  {
+    "Sid": "RDSDescribe",
+    "Effect": "Allow",
+    "Action": ["rds:Describe*", "rds:ListTagsForResource"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "RDSInstanceCreate",
+    "Effect": "Allow",
+    "Action": ["rds:CreateDBInstance"],
+    "Resource": [
+      "arn:aws:rds:*:${account_id}:db:*",
+      "arn:aws:rds:*:${account_id}:subgrp:*",
+      "arn:aws:rds:*:${account_id}:pg:default.*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "rds:DatabaseEngine": "postgres"
+      },
+      "Bool": {
+        "rds:StorageEncrypted": "true"
+      }
+    }
+  },
+  {
+    "Sid": "RDSInstanceManage",
+    "Effect": "Allow",
+    "Action": [
+      "rds:ModifyDBInstance",
+      "rds:RebootDBInstance",
+      "rds:DeleteDBInstance",
+      "rds:AddTagsToResource",
+      "rds:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:rds:*:${account_id}:db:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "RDSSubnetGroupCreate",
+    "Effect": "Allow",
+    "Action": ["rds:CreateDBSubnetGroup"],
+    "Resource": "arn:aws:rds:*:${account_id}:subgrp:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "RDSSubnetGroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "rds:ModifyDBSubnetGroup",
+      "rds:DeleteDBSubnetGroup",
+      "rds:AddTagsToResource",
+      "rds:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:rds:*:${account_id}:subgrp:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "RDSCreateSnapshot",
+    "Effect": "Allow",
+    "Action": ["rds:CreateDBSnapshot"],
+    "Resource": [
+      "arn:aws:rds:*:${account_id}:db:*-smith-*",
+      "arn:aws:rds:*:${account_id}:snapshot:*-smith-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "RDSSnapshotAddTags",
+    "Effect": "Allow",
+    "Action": ["rds:AddTagsToResource"],
+    "Resource": "arn:aws:rds:*:${account_id}:snapshot:*-smith-*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

@@ -1,0 +1,147 @@
+[
+  {
+    "Sid": "EKSDescribe",
+    "Effect": "Allow",
+    "Action": ["eks:Describe*", "eks:List*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "EKSClusterCreate",
+    "Effect": "Allow",
+    "Action": ["eks:CreateCluster"],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSClusterManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteCluster",
+      "eks:UpdateClusterConfig",
+      "eks:UpdateClusterVersion",
+      "eks:AccessKubernetesApi",
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSNodegroupCreate",
+    "Effect": "Allow",
+    "Action": ["eks:CreateNodegroup"],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSNodegroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteNodegroup",
+      "eks:UpdateNodegroupConfig",
+      "eks:UpdateNodegroupVersion",
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:nodegroup/*-smith-eks/*/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAddonCreate",
+    "Effect": "Allow",
+    "Action": ["eks:CreateAddon"],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAddonManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteAddon",
+      "eks:UpdateAddon",
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:addon/*-smith-eks/*/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAccessEntryCreate",
+    "Effect": "Allow",
+    "Action": ["eks:CreateAccessEntry"],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAccessEntryManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteAccessEntry",
+      "eks:AssociateAccessPolicy",
+      "eks:DisassociateAccessPolicy",
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:access-entry/*-smith-eks/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSPodIdentityCreate",
+    "Effect": "Allow",
+    "Action": ["eks:CreatePodIdentityAssociation"],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSPodIdentityManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeletePodIdentityAssociation",
+      "eks:UpdatePodIdentityAssociation",
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:podidentityassociation/*-smith-eks/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

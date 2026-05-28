@@ -1,0 +1,143 @@
+[
+  {
+    "Sid": "ServiceLinkedRoles",
+    "Effect": "Allow",
+    "Action": ["iam:CreateServiceLinkedRole", "iam:GetRole"],
+    "Resource": [
+      "arn:aws:iam::*:role/aws-service-role/*",
+      "arn:aws:iam::*:role/AWSServiceRoleForAmazonEKS",
+      "arn:aws:iam::*:role/AWSServiceRoleForAmazonEKSNodegroup",
+      "arn:aws:iam::*:role/AWSServiceRoleForElasticLoadBalancing",
+      "arn:aws:iam::*:role/AWSServiceRoleForRDS",
+      "arn:aws:iam::*:role/AWSServiceRoleForElastiCache",
+      "arn:aws:iam::*:role/AWSServiceRoleForAmazonElasticFileSystem",
+      "arn:aws:iam::*:role/AWSServiceRoleForAutoScaling"
+    ]
+  },
+  {
+    "Sid": "IAMRoleCreate",
+    "Effect": "Allow",
+    "Action": ["iam:CreateRole"],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMRoleRead",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetRole",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListRolePolicies",
+      "iam:GetRolePolicy",
+      "iam:ListInstanceProfilesForRole"
+    ],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+    ]
+  },
+  {
+    "Sid": "IAMRoleManage",
+    "Effect": "Allow",
+    "Action": [
+      "iam:DeleteRole",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy"
+    ],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMRoleAttachPolicy",
+    "Effect": "Allow",
+    "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role"
+    ],
+    "Condition": {
+      "ArnEquals": {
+        "iam:PolicyARN": [
+          "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
+          "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+          "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+          "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+          "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy",
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole",
+          "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "IAMPassRole",
+    "Effect": "Allow",
+    "Action": ["iam:PassRole"],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+    ]
+  }
+]
