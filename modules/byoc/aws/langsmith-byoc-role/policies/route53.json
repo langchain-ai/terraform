@@ -1,0 +1,59 @@
+[
+  {
+    "Sid": "Route53GetChange",
+    "Effect": "Allow",
+    "Action": ["route53:GetChange"],
+    "Resource": "arn:aws:route53:::change/*"
+  },
+  {
+    "Sid": "Route53CreatePrivateHostedZone",
+    "Effect": "Allow",
+    "Action": ["route53:CreateHostedZone"],
+    "Resource": "*",
+    "Condition": {
+      "Null": {
+        "route53:VPCs": "false"
+      }
+    }
+  },
+  {
+    "Sid": "Route53ReadHostedZone",
+    "Effect": "Allow",
+    "Action": [
+      "route53:GetHostedZone",
+      "route53:ListResourceRecordSets",
+      "route53:ListTagsForResource"
+    ],
+    "Resource": "arn:aws:route53:::hostedzone/*"
+  },
+  {
+    "Sid": "Route53ChangeLangsmithRecords",
+    "Effect": "Allow",
+    "Action": ["route53:ChangeResourceRecordSets"],
+    "Resource": "arn:aws:route53:::hostedzone/*",
+    "Condition": {
+      "ForAllValues:StringEquals": {
+        "route53:ChangeResourceRecordSetsRecordTypes": ["A"],
+        "route53:ChangeResourceRecordSetsActions": [
+          "CREATE",
+          "UPSERT",
+          "DELETE"
+        ]
+      },
+      "ForAllValues:StringLike": {
+        "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
+          "*.eks.amazonaws.com",
+          "*.smith.langchain.com",
+          "*.aws.langchain-byoc.com",
+          "beacon.*.langchain.com"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "Route53TagHostedZone",
+    "Effect": "Allow",
+    "Action": ["route53:ChangeTagsForResource"],
+    "Resource": "arn:aws:route53:::hostedzone/*"
+  }
+]

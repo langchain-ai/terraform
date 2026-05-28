@@ -1,0 +1,138 @@
+[
+  {
+    "Sid": "ElastiCacheRead",
+    "Effect": "Allow",
+    "Action": ["elasticache:Describe*", "elasticache:ListTagsForResource"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "ElastiCacheReplicationGroupCreateOnNewResources",
+    "Effect": "Allow",
+    "Action": ["elasticache:CreateReplicationGroup"],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:cluster:*",
+      "arn:aws:elasticache:*:${account_id}:replicationgroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheReplicationGroupCreateOnReferencedResources",
+    "Effect": "Allow",
+    "Action": ["elasticache:CreateReplicationGroup"],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:subnetgroup:*-smith-redis-subnet-group",
+      "arn:aws:elasticache:*:${account_id}:usergroup:*-smith-redis-ug"
+    ]
+  },
+  {
+    "Sid": "ElastiCacheReplicationGroupCreateOnDefaultParameterGroup",
+    "Effect": "Allow",
+    "Action": ["elasticache:CreateReplicationGroup"],
+    "Resource": "arn:aws:elasticache:*:${account_id}:parametergroup:*"
+  },
+  {
+    "Sid": "ElastiCacheReplicationGroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:ModifyReplicationGroup",
+      "elasticache:ModifyReplicationGroupShardConfiguration",
+      "elasticache:IncreaseReplicaCount",
+      "elasticache:DecreaseReplicaCount",
+      "elasticache:DeleteReplicationGroup",
+      "elasticache:AddTagsToResource",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:cluster:*",
+      "arn:aws:elasticache:*:${account_id}:replicationgroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheSubnetGroupCreate",
+    "Effect": "Allow",
+    "Action": ["elasticache:CreateCacheSubnetGroup"],
+    "Resource": "arn:aws:elasticache:*:${account_id}:subnetgroup:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheSubnetGroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:DeleteCacheSubnetGroup",
+      "elasticache:AddTagsToResource",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:elasticache:*:${account_id}:subnetgroup:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheUserCreate",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:CreateUser",
+      "elasticache:CreateUserGroup"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:user:*",
+      "arn:aws:elasticache:*:${account_id}:usergroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheUserGroupCreateOnReferencedUsers",
+    "Effect": "Allow",
+    "Action": ["elasticache:CreateUserGroup"],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:user:default",
+      "arn:aws:elasticache:*:${account_id}:user:*-smith-redis-user"
+    ]
+  },
+  {
+    "Sid": "ElastiCacheUserManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:ModifyUser",
+      "elasticache:ModifyUserGroup",
+      "elasticache:DeleteUser",
+      "elasticache:DeleteUserGroup",
+      "elasticache:AddTagsToResource",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:user:*",
+      "arn:aws:elasticache:*:${account_id}:usergroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheCreateSnapshot",
+    "Effect": "Allow",
+    "Action": ["elasticache:CreateSnapshot"],
+    "Resource": "arn:aws:elasticache:*:${account_id}:snapshot:*"
+  }
+]

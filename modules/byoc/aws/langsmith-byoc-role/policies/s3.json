@@ -1,0 +1,67 @@
+[
+  {
+    "Sid": "S3BucketCreate",
+    "Effect": "Allow",
+    "Action": ["s3:CreateBucket"],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob",
+      "arn:aws:s3:::*-smith-clickhouse-backups",
+      "arn:aws:s3:::*-smith-vpc-flow-logs"
+    ]
+  },
+  {
+    "Sid": "S3BucketRead",
+    "Effect": "Allow",
+    "Action": [
+      "s3:GetBucketLocation",
+      "s3:GetBucketTagging",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketOwnershipControls",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:GetBucketPolicy",
+      "s3:GetBucketAcl",
+      "s3:GetBucketCORS",
+      "s3:GetBucketVersioning",
+      "s3:GetBucketLogging",
+      "s3:GetBucketWebsite",
+      "s3:GetBucketRequestPayment",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetReplicationConfiguration",
+      "s3:GetAccelerateConfiguration",
+      "s3:GetBucketNotification",
+      "s3:ListBucket"
+    ],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob",
+      "arn:aws:s3:::*-smith-clickhouse-backups",
+      "arn:aws:s3:::*-smith-vpc-flow-logs"
+    ]
+  },
+  {
+    "Sid": "S3BucketTag",
+    "Effect": "Allow",
+    "Action": ["s3:PutBucketTagging"],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob",
+      "arn:aws:s3:::*-smith-clickhouse-backups",
+      "arn:aws:s3:::*-smith-vpc-flow-logs"
+    ]
+  },
+  {
+    "Sid": "S3BucketConfig",
+    "Effect": "Allow",
+    "Action": [
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketOwnershipControls",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutBucketPolicy"
+    ],
+    "Resource": [
+      "arn:aws:s3:::*-smith-blob",
+      "arn:aws:s3:::*-smith-clickhouse-backups",
+      "arn:aws:s3:::*-smith-vpc-flow-logs"
+    ]
+  }
+]

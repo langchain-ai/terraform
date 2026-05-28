@@ -1,0 +1,59 @@
+[
+  {
+    "Sid": "EventBridgePutRule",
+    "Effect": "Allow",
+    "Action": ["events:PutRule"],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EventBridgeReadRule",
+    "Effect": "Allow",
+    "Action": [
+      "events:DescribeRule",
+      "events:ListTargetsByRule",
+      "events:ListTagsForResource"
+    ],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ]
+  },
+  {
+    "Sid": "EventBridgeManageTaggedRule",
+    "Effect": "Allow",
+    "Action": [
+      "events:DeleteRule",
+      "events:TagResource",
+      "events:UntagResource"
+    ],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EventBridgeManageTargets",
+    "Effect": "Allow",
+    "Action": [
+      "events:PutTargets",
+      "events:RemoveTargets"
+    ],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ]
+  }
+]
