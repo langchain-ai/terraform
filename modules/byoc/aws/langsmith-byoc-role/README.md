@@ -64,6 +64,8 @@ output "role_arns" {
 
 After `terraform apply`, share all four output ARNs with the LangChain team.
 
+We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation. Configure the backend in your root module according to your organization's Terraform state management practices.
+
 ### Public-internet ingress
 
 If your deployment exposes the LangSmith data plane on the public internet (Route 53 public hosted zones + ACM public certs), set:
