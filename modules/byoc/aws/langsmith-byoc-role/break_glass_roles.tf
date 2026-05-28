@@ -19,7 +19,7 @@ resource "aws_iam_role" "readonly_access" {
     Statement = [{
       Effect = "Deny"
       Principal = {
-        AWS = var.langsmith_break_glass_role_arn
+        AWS = var.langchain_break_glass_role_arn
       }
       Action = "sts:AssumeRole"
     }]
@@ -48,7 +48,7 @@ resource "aws_iam_role" "cluster_admin_access" {
     Statement = [{
       Effect = "Deny"
       Principal = {
-        AWS = var.langsmith_break_glass_role_arn
+        AWS = var.langchain_break_glass_role_arn
       }
       Action = "sts:AssumeRole"
     }]
@@ -77,7 +77,7 @@ resource "aws_iam_role" "data_access" {
     Statement = [{
       Effect = "Deny"
       Principal = {
-        AWS = var.langsmith_break_glass_role_arn
+        AWS = var.langchain_break_glass_role_arn
       }
       Action = "sts:AssumeRole"
     }]

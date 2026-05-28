@@ -19,7 +19,7 @@ variable "control_plane_reconcile_role_arn" {
   type        = string
 }
 
-variable "control_plane_breakglass_role_arn" {
+variable "langchain_break_glass_role_arn" {
   description = "ARN of the LangChain control-plane break-glass IAM role."
   type        = string
 }

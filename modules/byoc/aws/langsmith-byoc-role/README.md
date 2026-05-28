@@ -18,7 +18,7 @@ This module creates four roles:
 3. Three values provided to you out-of-band by LangChain:
    - `control_plane_reconcile_role_arn` — ARN of the LangSmith control-plane Crossplane IRSA role that will assume into your account.
    - `external_id` — Per-tenant secret used in the trust policy `sts:ExternalId` condition. Treat as sensitive; do not commit to source control in plaintext.
-   - `control_plane_breakglass_role_arn` — ARN of the LangChain support principal that the break-glass roles trust (Deny by default).
+   - `langchain_break_glass_role_arn` — ARN of the LangChain support principal that the break-glass roles trust (Deny by default).
 
 ## Usage
 
@@ -44,7 +44,7 @@ module "langsmith_byoc_role" {
   role_name                      = "langsmith-byoc"
   control_plane_reconcile_role_arn         = "arn:aws:iam::<langsmith-account-id>:role/<crossplane-irsa-role>"
   external_id                    = var.external_id
-  control_plane_breakglass_role_arn = "arn:aws:iam::<langsmith-account-id>:role/<break-glass-role>"
+  langchain_break_glass_role_arn = "arn:aws:iam::<langsmith-account-id>:role/<break-glass-role>"
 
   tags = {
     Environment = "prod"
@@ -81,7 +81,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `role_name` | `string` | yes | — | Name of the Crossplane-assumed IAM role created in your account. |
 | `control_plane_reconcile_role_arn` | `string` | yes | — | ARN of the LangSmith control-plane principal trusted to assume the role. |
 | `external_id` | `string` | yes | — | Per-tenant `sts:ExternalId` value. Treat as a secret. |
-| `control_plane_breakglass_role_arn` | `string` | yes | — | ARN of the LangChain support principal trusted (Deny by default) by the break-glass roles. |
+| `langchain_break_glass_role_arn` | `string` | yes | — | ARN of the LangChain support principal trusted (Deny by default) by the break-glass roles. |
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
 
