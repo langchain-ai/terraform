@@ -137,9 +137,13 @@ run_post_infra_checks() {
   info "Validating cluster access, SSM params, Helm values, and TLS config."
   printf "\n"
 
-  # Resolve region (same logic as the default mode)
+  # Resolve region — terraform.tfvars is the source of truth (matches
+  # secrets-status.sh, manage-ssm.sh, etc.). Falls back to env vars and
+  # `aws configure` when tfvars is absent or has no `region`.
   local region
-  region=$(aws configure get region 2>/dev/null || true)
+  region=$(_tfvars_get "region" "$tfvars")
+  region=${region:-${AWS_REGION:-}}
+  region=${region:-$(aws configure get region 2>/dev/null || true)}
   region=${region:-${AWS_DEFAULT_REGION:-us-east-2}}
   info "Region : $region"
   printf "\n"
@@ -245,13 +249,18 @@ if [[ "$MODE" == "ssm-only" ]]; then
     error "Not authenticated. Run 'aws configure' or set AWS_* environment variables."
     exit 1
   fi
-  _REGION=$(aws configure get region 2>/dev/null || true)
-  _REGION=${_REGION:-${AWS_DEFAULT_REGION:-us-east-2}}
   _TFVARS="${_SCRIPT_DIR_EARLY}/../terraform.tfvars"
   if [[ ! -f "$_TFVARS" ]]; then
     error "terraform.tfvars not found at $_TFVARS"
     exit 1
   fi
+  # Resolve region — terraform.tfvars is the source of truth (matches
+  # secrets-status.sh, manage-ssm.sh, etc.). Falls back to env vars and
+  # `aws configure` when tfvars has no `region`.
+  _REGION=$(_tfvars_get "region" "$_TFVARS")
+  _REGION=${_REGION:-${AWS_REGION:-}}
+  _REGION=${_REGION:-$(aws configure get region 2>/dev/null || true)}
+  _REGION=${_REGION:-${AWS_DEFAULT_REGION:-us-east-2}}
   printf "\n"
   info "=== LangSmith AWS Preflight (SSM-only) ==="
   printf "\n"
@@ -332,7 +341,12 @@ fi
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 USER_ARN=$(aws sts get-caller-identity --query Arn --output text)
-REGION=$(aws configure get region 2>/dev/null || true)
+# Resolve region — terraform.tfvars is the source of truth (matches
+# secrets-status.sh, manage-ssm.sh, etc.). Falls back to env vars and
+# `aws configure` when tfvars has no `region`.
+REGION=$(_tfvars_get "region" "$TFVARS")
+REGION=${REGION:-${AWS_REGION:-}}
+REGION=${REGION:-$(aws configure get region 2>/dev/null || true)}
 REGION=${REGION:-${AWS_DEFAULT_REGION:-us-east-2}}
 
 info "Account ID : $ACCOUNT_ID"
