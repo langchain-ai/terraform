@@ -198,7 +198,12 @@ printf "\n"
 info "Checking IAM permissions..."
 info "(Uses Cloud Resource Manager testIamPermissions REST API — may not reflect org policy constraints)"
 
-# Core permissions always required
+# Core permissions always required.
+# Note: bucket-level permissions (e.g. storage.buckets.setIamPolicy) are
+# intentionally omitted — testIamPermissions applies to the project resource,
+# not to individual buckets, so those permissions always appear absent here
+# even when the caller holds roles/storage.admin. storage.buckets.create is
+# testable at the project level and is sufficient as a proxy for storage access.
 CORE_PERMISSIONS=(
   "container.clusters.create"
   "container.clusters.delete"
@@ -208,7 +213,6 @@ CORE_PERMISSIONS=(
   "iam.serviceAccounts.create"
   "iam.serviceAccounts.setIamPolicy"
   "storage.buckets.create"
-  "storage.buckets.setIamPolicy"
   "resourcemanager.projects.getIamPolicy"
   "resourcemanager.projects.setIamPolicy"
   "serviceusage.services.enable"
