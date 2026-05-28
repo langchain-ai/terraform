@@ -15,10 +15,16 @@ This module creates four roles:
 
 1. An AWS account where the LangSmith data plane will live, and AWS credentials with permission to create IAM roles and policies in it.
 2. Terraform `>= 1.5` and the AWS provider `~> 6.0`.
-3. Three values provided to you out-of-band by LangChain:
+3. Two values provided to you out-of-band by LangChain (in the table below):
    - `control_plane_reconcile_role_arn` — ARN of the LangSmith control-plane Crossplane IRSA role that will assume into your account.
-   - `external_id` — Per-tenant secret used in the trust policy `sts:ExternalId` condition. Treat as sensitive; do not commit to source control in plaintext.
    - `langchain_break_glass_role_arn` — ARN of the LangChain support principal that the break-glass roles trust (Deny by default).
+4. An `external_id` value that you generate and provide to LangChain at data plane creation time. It is used in the trust policy `sts:ExternalId` condition.
+
+Current LangSmith control-plane role values:
+
+| Control-plane region | `control_plane_reconcile_role_arn` | `langchain_break_glass_role_arn` |
+|----------------------|------------------------------------|----------------------------------|
+| `us-east-2` | `arn:aws:iam::808407022534:role/LangSmithCrossPlaneRole` | `arn:aws:iam::808407022534:role/LangSmithBYOCBreakGlass` |
 
 ## Usage
 
