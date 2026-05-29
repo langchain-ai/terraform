@@ -110,12 +110,44 @@ _enable_insights=false
 _enable_polly=false
 _enable_envoy_gateway=false
 _enable_istio_gateway=false
+_enable_nginx_ingress=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 _tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
+_tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+
+# Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
+# In that mode the AWS Load Balancer Controller creates and owns the ALB, so the
+# external hostname must be read from the Ingress status — not the Terraform ALB
+# (alb_dns_name), which is a separate, unused ALB in this mode.
+_alb_ingress_mode=false
+if [[ "$_enable_envoy_gateway" != "true" && "$_enable_istio_gateway" != "true" && "$_enable_nginx_ingress" != "true" ]]; then
+  _alb_ingress_mode=true
+fi
+
+# Resolve the external entry hostname for the hostname-sync logic below.
+#   $1 = max attempts (1 = single best-effort read, no waiting between attempts).
+# In ALB Ingress mode the controller-owned ALB's DNS is published on the Ingress
+# status; it appears a couple minutes after the first helm upgrade, so callers
+# that run post-deploy pass a retry count. In NGINX/Envoy/Istio modes the
+# Terraform-provisioned ALB is the entry point and is read from its output.
+_resolve_entry_hostname() {
+  local _retries="${1:-1}" _h="" _i
+  if [[ "$_alb_ingress_mode" == "true" ]]; then
+    for (( _i = 1; _i <= _retries; _i++ )); do
+      _h=$(kubectl get ingress "${RELEASE_NAME}-ingress" -n "$NAMESPACE" \
+        -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null) || _h=""
+      [[ -n "$_h" ]] && break
+      (( _i < _retries )) && sleep "${INGRESS_HOSTNAME_RETRY_INTERVAL:-15}"
+    done
+    printf '%s' "$_h"
+  else
+    terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null || true
+  fi
+}
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -191,12 +223,15 @@ else
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
-# On upgrades verify config.hostname matches the ALB DNS name.
-# In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
-# A stale hostname causes the operator to set unreachable agent endpoints, which
-# keeps the bootstrap hook stuck at DEPLOYING and times out the release.
+# On upgrades verify config.hostname matches the external entry hostname.
+# The entry point is the ALB in all modes, but in classic ALB Ingress mode that
+# ALB is controller-owned and its DNS is read from the Ingress status (single
+# best-effort attempt here — on a first deploy the Ingress doesn't exist yet and
+# there is nothing to sync). A stale hostname causes the operator to set
+# unreachable agent endpoints, which keeps the bootstrap hook stuck at DEPLOYING
+# and times out the release.
 _live_lb=""
-_live_lb=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || true
+_live_lb=$(_resolve_entry_hostname 1) || true
 if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _configured_hostname=""
@@ -328,13 +363,14 @@ kubectl rollout restart deployment/"$RELEASE_NAME"-frontend -n "$NAMESPACE"
 kubectl rollout status deployment/"$RELEASE_NAME"-frontend -n "$NAMESPACE" --timeout=2m
 
 # ── Detect active hostname (ALB — always the external entry point) ─────────────
-# In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
-# Read the ALB DNS name from Terraform output, which is always available once
-# terraform apply completes (ALB is provisioned before Helm deploy).
+# The ALB is the external entry point in all modes. In classic ALB Ingress mode
+# the controller owns the ALB and publishes its DNS on the Ingress status, which
+# appears a couple minutes after the first helm upgrade — so we retry. In
+# NGINX/Envoy/Istio modes the Terraform-provisioned ALB output is used.
 # Patch config.hostname + deployment.url in the overrides file if stale, then
 # re-run helm upgrade so HTTPRoute hostname filters and deployment URLs are correct.
 _active_host=""
-_active_host=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || true
+_active_host=$(_resolve_entry_hostname 10) || true
 [[ -n "$_active_host" ]] && echo "ALB hostname: $_active_host"
 
 if [[ -n "$_active_host" ]]; then

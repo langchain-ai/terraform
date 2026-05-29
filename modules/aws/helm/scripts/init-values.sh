@@ -70,6 +70,11 @@ if (( _gateway_modes > 1 )); then
   exit 1
 fi
 
+# Classic ALB Ingress mode = none of the gateway/nginx routing modes enabled.
+# In that mode the AWS Load Balancer Controller creates and owns the ALB.
+_alb_ingress_mode=false
+(( _gateway_modes == 0 )) && _alb_ingress_mode=true
+
 if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
   echo "       Ensure terraform.tfvars has these values set." >&2
@@ -122,7 +127,22 @@ echo "  acm_certificate_arn    = ${ACM_CERT_ARN:-(not set)}"
 echo ""
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
-# Hostname priority: custom domain > existing value > ALB DNS name
+# Hostname priority: custom domain > existing value > entry-ALB hostname.
+# The entry-ALB hostname depends on the routing mode:
+#   - Classic ALB Ingress mode: the AWS Load Balancer Controller creates and owns
+#     the ALB; its DNS name is only known from the Ingress status after the Ingress
+#     is reconciled. Do NOT use the Terraform alb_dns_name here — that is a
+#     separate, unused ALB in this mode, and pointing at it strands all routing.
+#     On first run the Ingress doesn't exist yet, so this resolves to blank and
+#     deploy.sh patches config.hostname/deployment.url once the controller
+#     provisions the ALB.
+#   - NGINX / Envoy / Istio modes: the Terraform-provisioned ALB is the entry
+#     point (it fronts the in-cluster controller/gateway via a TargetGroupBinding).
+_ingress_alb_hostname() {
+  kubectl get ingress langsmith-ingress -n "${NAMESPACE:-langsmith}" \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true
+}
+
 EXISTING_HOSTNAME=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_HOSTNAME=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
@@ -132,6 +152,8 @@ if [[ -n "$_langsmith_domain" ]]; then
   HOSTNAME="$_langsmith_domain"
 elif [[ -n "$EXISTING_HOSTNAME" ]]; then
   HOSTNAME="$EXISTING_HOSTNAME"
+elif [[ "$_alb_ingress_mode" == "true" ]]; then
+  HOSTNAME="$(_ingress_alb_hostname)"
 elif [[ -n "$ALB_DNS_NAME" ]]; then
   HOSTNAME="$ALB_DNS_NAME"
 else
@@ -410,19 +432,19 @@ frontend:
   service:
     type: ClusterIP"
 else
-  # Classic ALB Ingress mode
+  # Classic ALB Ingress mode — the AWS Load Balancer Controller creates and owns
+  # the ALB for this Ingress. There is no supported annotation to bind an Ingress
+  # to a pre-provisioned ALB: the old `load-balancer-arn` annotation is not a real
+  # controller annotation and was silently ignored, which produced a second,
+  # orphaned ALB and stranded all routing. We therefore let the controller own the
+  # ALB. `group.name` keeps the controller reusing a single stable ALB across
+  # Ingress reconciliations (including the operator's dynamic /lgp/* deployment
+  # paths). The hostname is read back from the Ingress status (see deploy.sh).
   _ingress_annotations=()
 
   # Always set scheme — the base values file no longer hardcodes it.
   _ingress_annotations+=("    alb.ingress.kubernetes.io/scheme: \"${ALB_SCHEME}\"")
-
-  if [[ -n "$ALB_ARN" ]]; then
-    _ingress_annotations+=("    alb.ingress.kubernetes.io/load-balancer-arn: \"${ALB_ARN}\"")
-    # group.name tells the ALB controller to bind to the existing pre-provisioned ALB
-    # instead of creating a new one on each ingress reconciliation. Without this,
-    # ingress recreation provisions a new ALB with a different hostname.
-    _ingress_annotations+=("    alb.ingress.kubernetes.io/group.name: \"${_name_prefix}-${_environment}\"")
-  fi
+  _ingress_annotations+=("    alb.ingress.kubernetes.io/group.name: \"${_name_prefix}-${_environment}\"")
 
   if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
     _ingress_annotations+=("    alb.ingress.kubernetes.io/listen-ports: '[{\"HTTP\": 80}, {\"HTTPS\": 443}]'")
