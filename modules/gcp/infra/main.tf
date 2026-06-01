@@ -352,6 +352,13 @@ module "iam" {
     "langsmith-frontend",
     "langsmith-playground",
     "langsmith-operator",
+    # Standalone agent SAs (v0.15+) — created by the chart, harmless if features are off.
+    "langsmith-standalone-fleet-api-server",
+    "langsmith-standalone-fleet-queue",
+    "langsmith-standalone-polly-api-server",
+    "langsmith-standalone-polly-queue",
+    "langsmith-standalone-insights-api-server",
+    "langsmith-standalone-insights-queue",
   ]
   gcs_bucket_name = module.storage.bucket_name
 }
@@ -444,6 +451,109 @@ module "k8s_bootstrap" {
   labels = local.common_labels
 
   depends_on = [time_sleep.wait_for_cluster, module.cloudsql, module.iam]
+}
+
+#------------------------------------------------------------------------------
+# Standalone Agent Databases (chart v0.15+)
+# Each standalone agent gets its own logical database on the shared Cloud SQL
+# instance. K8s secrets are created here so they exist before Helm runs.
+#------------------------------------------------------------------------------
+
+resource "google_sql_database" "fleet" {
+  count      = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  project    = var.project_id
+  instance   = local.postgres_instance_name
+  name       = "langsmith_fleet"
+  depends_on = [module.cloudsql]
+}
+
+resource "kubernetes_secret" "fleet_postgres" {
+  count = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-fleet-postgres"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    postgres_connection_url = "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/langsmith_fleet?sslmode=require"
+  }
+  depends_on = [google_sql_database.fleet, module.k8s_bootstrap]
+}
+
+# Memorystore Cluster mode does not support logical DB numbers — see MIGRATION_NOTES_v15.md.
+resource "kubernetes_secret" "fleet_redis" {
+  count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-fleet-redis"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
+  }
+  depends_on = [module.k8s_bootstrap]
+}
+
+resource "google_sql_database" "polly" {
+  count      = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  project    = var.project_id
+  instance   = local.postgres_instance_name
+  name       = "langsmith_polly"
+  depends_on = [module.cloudsql]
+}
+
+resource "kubernetes_secret" "standalone_polly_postgres" {
+  count = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-polly-postgres"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    postgres_connection_url = "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/langsmith_polly?sslmode=require"
+  }
+  depends_on = [google_sql_database.polly, module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "standalone_polly_redis" {
+  count = var.enable_standalone_polly && var.redis_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-polly-redis"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/2"
+  }
+  depends_on = [module.k8s_bootstrap]
+}
+
+resource "google_sql_database" "insights" {
+  count      = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  project    = var.project_id
+  instance   = local.postgres_instance_name
+  name       = "langsmith_insights"
+  depends_on = [module.cloudsql]
+}
+
+resource "kubernetes_secret" "standalone_insights_postgres" {
+  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-insights-postgres"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    postgres_connection_url = "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/langsmith_insights?sslmode=require"
+  }
+  depends_on = [google_sql_database.insights, module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "standalone_insights_redis" {
+  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-insights-redis"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/3"
+  }
+  depends_on = [module.k8s_bootstrap]
 }
 
 #------------------------------------------------------------------------------

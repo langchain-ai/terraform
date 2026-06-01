@@ -177,6 +177,24 @@ variable "enable_polly" {
   default     = false
 }
 
+variable "enable_fleet" {
+  description = "Enable Fleet standalone deployment (chart v0.15+)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_standalone_polly" {
+  description = "Enable Polly standalone deployment (chart v0.15+)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_standalone_insights" {
+  description = "Enable Insights standalone deployment (chart v0.15+)"
+  type        = bool
+  default     = false
+}
+
 variable "enable_usage_telemetry" {
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)"
   type        = bool

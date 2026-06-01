@@ -238,14 +238,26 @@ _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
+_enable_fleet=false
+_enable_standalone_polly=false
+_enable_standalone_insights=false
 _tfvars_drive_addons=false
 
+# Resolve encryption keys up front so the standalone copy+inject blocks below
+# can reference them before the _addon_keys_block section runs.
+_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
+_insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
+_polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
+
 # Read enable_* flags from terraform.tfvars if set
-_tfvar_is_true "enable_deployments"     && { _enable_deployments=true;     _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_agent_builder"   && { _enable_agent_builder=true;   _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_insights"        && { _enable_insights=true;         _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_polly"           && { _enable_polly=true;             _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_usage_telemetry" && { _enable_usage_telemetry=true;  _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_insights"           && { _enable_insights=true;           _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_polly"              && { _enable_polly=true;              _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_usage_telemetry"    && { _enable_usage_telemetry=true;    _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_fleet"              && { _enable_fleet=true;              _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -300,6 +312,43 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   else
     echo "  ✗ Polly (enable_polly = false)"
   fi
+
+  if [[ "$_enable_fleet" == "true" ]]; then
+    _fleet_file="$VALUES_DIR/langsmith-values-fleet.yaml"
+    if [[ ! -f "$_fleet_file" ]]; then
+      cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
+      echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
+    else
+      echo "  ✔ Fleet (existing)"
+    fi
+  else
+    echo "  ✗ Fleet (enable_fleet = false)"
+  fi
+
+  if [[ "$_enable_standalone_polly" == "true" ]]; then
+    _sp_file="$VALUES_DIR/langsmith-values-standalone-polly.yaml"
+    if [[ ! -f "$_sp_file" ]]; then
+      cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_sp_file"
+      echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to values-overrides.yaml)"
+    else
+      echo "  ✔ Standalone Polly (existing; encryptionKey in values-overrides.yaml)"
+    fi
+  else
+    echo "  ✗ Standalone Polly (enable_standalone_polly = false)"
+  fi
+
+  if [[ "$_enable_standalone_insights" == "true" ]]; then
+    _si_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml"
+    if [[ ! -f "$_si_file" ]]; then
+      cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_si_file"
+      echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to values-overrides.yaml)"
+    else
+      echo "  ✔ Standalone Insights (existing; encryptionKey in values-overrides.yaml)"
+    fi
+  else
+    echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
+  fi
+
 elif [[ "$_first_run" == "true" ]]; then
   # No tfvars flags set — interactive fallback on first run
   echo "  (no enable_* flags in terraform.tfvars — prompting interactively)"
@@ -345,6 +394,9 @@ else
   [[ -f "$_deploys_file" ]]  && { _enable_deployments=true;  echo "  ✔ Deployments (existing file)"; } || echo "  ✗ Deployments"
   [[ -f "$_builder_file" ]]  && { _enable_agent_builder=true; echo "  ✔ Agent Builder (existing file)"; } || echo "  ✗ Agent Builder"
   [[ -f "$_insights_file" ]] && { _enable_insights=true;      echo "  ✔ Insights (existing file)"; } || echo "  ✗ Insights"
+  [[ -f "$VALUES_DIR/langsmith-values-fleet.yaml" ]]               && echo "  ✔ Fleet (existing file)"               || echo "  ✗ Fleet"
+  [[ -f "$VALUES_DIR/langsmith-values-standalone-polly.yaml" ]]    && echo "  ✔ Standalone Polly (existing file)"    || echo "  ✗ Standalone Polly"
+  [[ -f "$VALUES_DIR/langsmith-values-standalone-insights.yaml" ]] && echo "  ✔ Standalone Insights (existing file)" || echo "  ✗ Standalone Insights"
 fi
 
 # Insights — create file based on clickhouse_source
@@ -453,18 +505,27 @@ fi
 
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
 _addon_keys_block=""
-if [[ "$_enable_agent_builder" == "true" || "$_enable_insights" == "true" ]]; then
-  _agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
-  _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
+_fleet_key_block=""
+_standalone_polly_key_block=""
+_standalone_insights_key_block=""
+if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
+      "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" || \
+      "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
 
-  if [[ "$_enable_agent_builder" == "true" && -z "$_agent_builder_key" ]]; then
-    echo "ERROR: enable_agent_builder=true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
+  if [[ ( "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ) && -z "$_agent_builder_key" ]]; then
+    echo "ERROR: TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
 
-  if [[ "$_enable_insights" == "true" && -z "$_insights_key" ]]; then
-    echo "ERROR: enable_insights=true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
+  if [[ ( "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ) && -z "$_insights_key" ]]; then
+    echo "ERROR: TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+
+  if [[ ( "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ) && -z "$_polly_key" ]]; then
+    echo "ERROR: TF_VAR_langsmith_polly_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -473,7 +534,27 @@ if [[ "$_enable_agent_builder" == "true" || "$_enable_insights" == "true" ]]; th
   agentBuilder:
     encryptionKey: \"${_agent_builder_key}\"
   insights:
-    encryptionKey: \"${_insights_key}\""
+    encryptionKey: \"${_insights_key}\"
+  polly:
+    encryptionKey: \"${_polly_key}\""
+
+  if [[ "$_enable_fleet" == "true" ]]; then
+    _fleet_key_block="
+fleet:
+  encryptionKey: \"${_agent_builder_key}\""
+  fi
+
+  if [[ "$_enable_standalone_polly" == "true" ]]; then
+    _standalone_polly_key_block="
+polly:
+  encryptionKey: \"${_polly_key}\""
+  fi
+
+  if [[ "$_enable_standalone_insights" == "true" ]]; then
+    _standalone_insights_key_block="
+insights:
+  encryptionKey: \"${_insights_key}\""
+  fi
 fi
 
 # ── Workload Identity annotation block ────────────────────────────────────────
@@ -564,6 +645,9 @@ gateway:
   namespace: "envoy-gateway-system"
 ${_wi_block}
 ${_external_services_block}
+${_fleet_key_block}
+${_standalone_polly_key_block}
+${_standalone_insights_key_block}
 YAML
 
 echo "Written: $OUT_FILE"

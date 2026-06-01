@@ -181,7 +181,7 @@ operator:
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
     resources:
       requests:
@@ -191,7 +191,7 @@ agentBuilderToolServer:
         cpu: "1"
         memory: "2Gi"
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     resources:
       requests:
