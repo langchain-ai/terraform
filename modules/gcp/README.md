@@ -244,10 +244,6 @@ Or run manually — generate secrets first:
 ```bash
 export API_KEY_SALT=$(openssl rand -base64 32)
 export JWT_SECRET=$(openssl rand -base64 32)
-export AGENT_BUILDER_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
-export INSIGHTS_ENCRYPTION_KEY=$(python3 -c \
-  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 export ADMIN_EMAIL="admin@example.com"
 export ADMIN_PASSWORD="<strong-password>"
 
@@ -271,8 +267,6 @@ helm upgrade --install langsmith langchain/langsmith \
   --set config.hostname="<your-langsmith-domain>" \
   --set config.basicAuth.initialOrgAdminEmail="$ADMIN_EMAIL" \
   --set config.basicAuth.initialOrgAdminPassword="$ADMIN_PASSWORD" \
-  --set config.agentBuilder.encryptionKey="$AGENT_BUILDER_ENCRYPTION_KEY" \
-  --set config.insights.encryptionKey="$INSIGHTS_ENCRYPTION_KEY" \
   --set config.blobStorage.bucketName="$(terraform output -raw storage_bucket_name)" \
   --set config.blobStorage.accessKey="$GCS_ACCESS_KEY" \
   --set config.blobStorage.accessKeySecret="$GCS_ACCESS_SECRET" \
@@ -377,6 +371,13 @@ helm upgrade langsmith langchain/langsmith \
 | `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt notifications |
 | `tls_secret_name` | `langsmith-tls` | no | Name for the TLS secret in Kubernetes |
 | `enable_langsmith_deployment` | `true` | no | Enable LangSmith Deployments — installs KEDA |
+| `enable_deployments` | `false` | no | Enable LangGraph Platform (host-backend, listener, operator) |
+| `enable_fleet` | `false` | no | Enable Fleet standalone (chart v0.15+) — replaces `enable_agent_builder`; does not require `enable_deployments` |
+| `enable_standalone_polly` | `false` | no | Enable Polly standalone (chart v0.15+) — replaces `enable_polly`; does not require `enable_deployments` |
+| `enable_standalone_insights` | `false` | no | Enable Insights standalone (chart v0.15+) — replaces `enable_insights`; does not require `enable_deployments` |
+| `enable_agent_builder` | `false` | no | Deprecated (chart v0.15+) — `config.agentBuilder.*` is superseded by `enable_fleet` (`fleet.*`) |
+| `enable_insights` | `false` | no | Deprecated (chart v0.15+) — `config.insights.*` is superseded by `enable_standalone_insights` (`insights.*`) |
+| `enable_polly` | `false` | no | Deprecated (chart v0.15+) — `config.polly.*` is superseded by `enable_standalone_polly` (`polly.*`) |
 | `owner` | `platform-team` | no | Owner label applied to all resources |
 | `cost_center` | `""` | no | Cost center label for billing attribution |
 | `labels` | `{}` | no | Additional labels applied to all resources |
