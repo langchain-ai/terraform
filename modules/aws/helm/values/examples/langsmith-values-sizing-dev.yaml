@@ -143,7 +143,7 @@ operator:
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
     replicas: 1
     resources:
@@ -154,7 +154,7 @@ agentBuilderToolServer:
         cpu: "1"
         memory: "2Gi"
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     replicas: 1
     resources:
@@ -166,38 +166,11 @@ agentBuilderTriggerServer:
         memory: "1Gi"
 
 # -- Operator-managed agent resources ------------------------------------------
-# Chart defaults are 2 CPU / 4Gi per agent — way too heavy for dev.
-# These control the server and queue pod sizing written into LGP CRs by the
-# bootstrap job.
-
-config:
-  polly:
-    agent:
-      resources:
-        cpu: 0.25
-        cpuLimit: 0.5
-        memoryMb: 512
-        memoryLimitMb: 1024
-        minScale: 1
-        maxScale: 1
-  insights:
-    agent:
-      resources:
-        cpu: 0.25
-        cpuLimit: 0.5
-        memoryMb: 512
-        memoryLimitMb: 1024
-        minScale: 1
-        maxScale: 1
-  agentBuilder:
-    agent:
-      resources:
-        cpu: 0.25
-        cpuLimit: 0.5
-        memoryMb: 512
-        memoryLimitMb: 1024
-        minScale: 1
-        maxScale: 1
+# Removed: chart 0.15.1+ dropped the bundled operator-managed agent path and its
+# validator hard-fails on the presence of config.polly / config.insights (even
+# when only sizing their nested agent.resources). Standalone Fleet/Polly/Insights
+# are sized via the top-level apiServer/queue resources in their own overlays
+# (langsmith-values-fleet.yaml, -standalone-polly.yaml, -standalone-insights.yaml).
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # These apply when using in-cluster postgres, redis, and clickhouse.

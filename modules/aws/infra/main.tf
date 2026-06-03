@@ -85,6 +85,24 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
     }
 
+    # Standalone agent features (chart v0.15+) run their own api-server + queue against
+    # per-feature databases on the shared RDS/ElastiCache. They do NOT require
+    # enable_deployments, but they DO require external Postgres and Redis to exist.
+    precondition {
+      condition     = !var.enable_fleet || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "enable_fleet requires postgres_source = \"external\" and redis_source = \"external\" (standalone Fleet uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+    }
+
+    precondition {
+      condition     = !var.enable_standalone_polly || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "enable_standalone_polly requires postgres_source = \"external\" and redis_source = \"external\" (standalone Polly uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+    }
+
+    precondition {
+      condition     = !var.enable_standalone_insights || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "enable_standalone_insights requires postgres_source = \"external\" and redis_source = \"external\" (standalone Insights uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+    }
+
     precondition {
       condition     = !(var.tls_certificate_source == "letsencrypt" && var.create_cert_manager_irsa)
       error_message = "tls_certificate_source = 'letsencrypt' (HTTP-01 via ALB) and create_cert_manager_irsa = true (DNS-01 via Route 53) are mutually exclusive. Both create ClusterIssuer/letsencrypt-prod. Use DNS-01 for Istio Gateway, HTTP-01 for ALB."
@@ -194,9 +212,9 @@ module "postgres" {
   source = "./modules/postgres"
   count  = var.postgres_source == "external" ? 1 : 0
 
-  identifier      = local.postgres_name
-  engine_version  = var.postgres_engine_version
-  vpc_id          = local.vpc_id
+  identifier     = local.postgres_name
+  engine_version = var.postgres_engine_version
+  vpc_id         = local.vpc_id
   subnet_ids     = local.private_subnets
   ingress_cidrs  = [local.vpc_cidr_block]
   vpc_cidr_block = local.vpc_cidr_block
@@ -505,7 +523,7 @@ module "k8s_bootstrap" {
   postgres_in_cluster_db   = var.postgres_source == "in-cluster" ? "langsmith" : ""
   postgres_in_cluster_pass = var.postgres_source == "in-cluster" ? random_password.in_cluster_postgres[0].result : ""
 
-  redis_connection_url  = local.redis_connection_url
+  redis_connection_url = local.redis_connection_url
 
   tls_certificate_source = var.tls_certificate_source
   letsencrypt_email      = var.letsencrypt_email
@@ -524,10 +542,199 @@ module "k8s_bootstrap" {
   # The actual role ARN is still passed for runtime use (ClusterIssuer, SA annotation).
   create_cert_manager_irsa    = var.create_cert_manager_irsa
   cert_manager_irsa_role_arn  = length(module.cert_manager) > 0 ? module.cert_manager[0].cert_manager_irsa_role_arn : ""
-  langsmith_domain             = var.langsmith_domain
-  region                       = var.region
-  cert_manager_hosted_zone_id  = var.cert_manager_hosted_zone_id
-  cluster_name                 = local.cluster_name
+  langsmith_domain            = var.langsmith_domain
+  region                      = var.region
+  cert_manager_hosted_zone_id = var.cert_manager_hosted_zone_id
+  cluster_name                = local.cluster_name
 
   depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
+}
+
+#------------------------------------------------------------------------------
+# Standalone Agent Features (chart v0.15+) — Fleet / Polly / Insights
+#------------------------------------------------------------------------------
+# Each standalone feature runs its own api-server + queue against a dedicated
+# logical database on the shared RDS instance and a dedicated logical DB index
+# on the shared ElastiCache. This mirrors the GCP module's per-feature backend
+# (Cloud SQL database + Memorystore index) using AWS-native equivalents:
+#   - RDS has no Terraform resource to create a logical database, so a one-shot
+#     in-cluster psql Job runs CREATE DATABASE (it has a network path to the
+#     private RDS instance; a local Terraform runner does not).
+#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes /1 /2 /3.
+#     DB index 0 is reserved for the main LangSmith install.
+# The K8s Secrets below feed the chart's fleet/polly/insights
+# postgres.external.existingSecretName / redis.external.existingSecretName.
+
+locals {
+  # Admin base URL (no database) for the shared RDS instance. Guarded by the
+  # external check so module.postgres[0] is only referenced when it exists.
+  standalone_pg_base = var.postgres_source == "external" ? (
+    "postgresql://${var.postgres_username}:${var.postgres_password}@${module.postgres[0].address}:${module.postgres[0].port}"
+  ) : ""
+
+  standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
+  standalone_polly_pg_url    = "${local.standalone_pg_base}/langsmith_polly?sslmode=require"
+  standalone_insights_pg_url = "${local.standalone_pg_base}/langsmith_insights?sslmode=require"
+
+  # Shared ElastiCache base URL (rediss://:<token>@<endpoint>:6379). Append the
+  # per-feature logical DB index. Guarded so module.redis[0] is only referenced
+  # when it exists.
+  standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
+
+  standalone_fleet_redis_url    = "${local.standalone_redis_base}/1"
+  standalone_polly_redis_url    = "${local.standalone_redis_base}/2"
+  standalone_insights_redis_url = "${local.standalone_redis_base}/3"
+}
+
+# ── Per-feature logical database creation (in-cluster psql Job) ───────────────
+# Idempotent: skips CREATE DATABASE if the database already exists. Sources the
+# admin connection URL from the langsmith-postgres Secret created by k8s-bootstrap
+# so the master password is not embedded in the Job manifest.
+resource "kubernetes_job_v1" "standalone_db" {
+  for_each = {
+    for k, v in {
+      fleet    = var.enable_fleet
+      polly    = var.enable_standalone_polly
+      insights = var.enable_standalone_insights
+    } : k => v if v && var.postgres_source == "external"
+  }
+
+  metadata {
+    name      = "langsmith-standalone-${each.key}-db-init"
+    namespace = var.langsmith_namespace
+  }
+
+  spec {
+    backoff_limit = 6
+    template {
+      metadata {
+        labels = {
+          app     = "langsmith-standalone-db-init"
+          feature = each.key
+        }
+      }
+      spec {
+        restart_policy = "Never"
+        container {
+          name  = "create-db"
+          image = "postgres:16"
+          command = [
+            "/bin/sh",
+            "-c",
+            <<-EOT
+              set -e
+              DB="langsmith_${each.key}"
+              if psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1; then
+                echo "Database $DB already exists — nothing to do."
+              else
+                echo "Creating database $DB..."
+                psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$DB\""
+                echo "Created database $DB."
+              fi
+            EOT
+          ]
+          env {
+            name = "ADMIN_URL"
+            value_from {
+              secret_key_ref {
+                name = "langsmith-postgres"
+                key  = "connection_url"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  wait_for_completion = true
+
+  timeouts {
+    create = "5m"
+    update = "5m"
+  }
+
+  depends_on = [module.postgres, module.k8s_bootstrap]
+}
+
+# ── Per-feature connection-URL Secrets ────────────────────────────────────────
+# Keys postgres_connection_url / redis_connection_url match what the chart's
+# standalone fleet/polly/insights blocks read via existingSecretName.
+
+resource "kubernetes_secret" "fleet_postgres" {
+  count = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-fleet-postgres"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    postgres_connection_url = local.standalone_fleet_pg_url
+  }
+  type       = "Opaque"
+  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "fleet_redis" {
+  count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-fleet-redis"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    redis_connection_url = local.standalone_fleet_redis_url
+  }
+  type       = "Opaque"
+  depends_on = [module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "standalone_polly_postgres" {
+  count = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-polly-postgres"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    postgres_connection_url = local.standalone_polly_pg_url
+  }
+  type       = "Opaque"
+  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "standalone_polly_redis" {
+  count = var.enable_standalone_polly && var.redis_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-polly-redis"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    redis_connection_url = local.standalone_polly_redis_url
+  }
+  type       = "Opaque"
+  depends_on = [module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "standalone_insights_postgres" {
+  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-insights-postgres"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    postgres_connection_url = local.standalone_insights_pg_url
+  }
+  type       = "Opaque"
+  depends_on = [kubernetes_job_v1.standalone_db, module.k8s_bootstrap]
+}
+
+resource "kubernetes_secret" "standalone_insights_redis" {
+  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  metadata {
+    name      = "langsmith-insights-redis"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    redis_connection_url = local.standalone_insights_redis_url
+  }
+  type       = "Opaque"
+  depends_on = [module.k8s_bootstrap]
 }

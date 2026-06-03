@@ -177,17 +177,28 @@ operator:
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
+    # Migration issue #13: the 0.15.x fleet-tool-server image CPU-pegs on startup
+    # (LANGGRAPH_DEPLOYMENT_URL sync/poll loop) and CrashLoopBackOffs on a 1-CPU
+    # limit because uvicorn can't bind port 1989 within the default probe window.
+    # Give it >= 2 CPU and relax the startup probe; CPU settles to < 20m afterward.
     resources:
       requests:
-        cpu: "500m"
+        cpu: "1"
         memory: "1Gi"
       limits:
-        cpu: "1"
-        memory: "2Gi"
+        cpu: "2500m"
+        memory: "3Gi"
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 1989
+      failureThreshold: 30
+      periodSeconds: 5
+      timeoutSeconds: 5
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     resources:
       requests:

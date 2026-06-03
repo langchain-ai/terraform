@@ -41,8 +41,8 @@ Absolute floor. Keeps LangSmith alive at the lowest possible cost. Fits on a sin
 | listener | 1 | 250m | 1,000m | 768Mi | 1,536Mi |
 | operator | 1 | 100m | 250m | 256Mi | 512Mi |
 | **Agent Builder** | | | | | |
-| agentBuilderToolServer | 1 | 500m | 1,000m | 768Mi | 1,536Mi |
-| agentBuilderTriggerServer | 1 | 100m | 250m | 256Mi | 384Mi |
+| fleetToolServer | 1 | 500m | 1,000m | 768Mi | 1,536Mi |
+| fleetTriggerServer | 1 | 100m | 250m | 256Mi | 384Mi |
 | **Operator-Managed Agents** | | | | | |
 | polly agent | 1 | 100m | 500m | 256Mi | 512Mi |
 | insights agent | 1 | 100m | 500m | 256Mi | 512Mi |
@@ -80,8 +80,8 @@ Enough headroom for a developer to run traces, test agents, and use the playgrou
 | listener | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
 | operator | 1 | 250m | 500m | 512Mi | 1,024Mi |
 | **Agent Builder** | | | | | |
-| agentBuilderToolServer | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
-| agentBuilderTriggerServer | 1 | 250m | 500m | 512Mi | 1,024Mi |
+| fleetToolServer | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
+| fleetTriggerServer | 1 | 250m | 500m | 512Mi | 1,024Mi |
 | **Operator-Managed Agents** | | | | | |
 | polly agent | 1 | 250m | 500m | 512Mi | 1,024Mi |
 | insights agent | 1 | 250m | 500m | 512Mi | 1,024Mi |
@@ -121,8 +121,8 @@ All autoscaled components target **50% CPU** and **80% memory** utilization.
 | listener | 2 | 10 | 500m | 1,000m | 1,024Mi | 2,048Mi |
 | operator | 1 | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
 | **Agent Builder** | | | | | | |
-| agentBuilderToolServer | 1 | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
-| agentBuilderTriggerServer | 1 | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
+| fleetToolServer | 1 | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
+| fleetTriggerServer | 1 | 1 | 500m | 1,000m | 1,024Mi | 2,048Mi |
 | **Operator-Managed Agents (chart defaults)** | | | | | | |
 | polly agent | 1 | 5 | 2,000m | 4,000m | 4,096Mi | 8,192Mi |
 | insights agent | 1 | 5 | 2,000m | 4,000m | 4,096Mi | 8,192Mi |
@@ -164,8 +164,8 @@ All autoscaled components target **50% CPU** and **80% memory** utilization.
 | listener | 4 | 10 | 500m | 2,000m | 1,024Mi | 4,096Mi |
 | operator | 1 | 1 | 500m | 2,000m | 1,024Mi | 4,096Mi |
 | **Agent Builder** | | | | | | |
-| agentBuilderToolServer | 1 | 1 | 500m | 2,000m | 1,024Mi | 4,096Mi |
-| agentBuilderTriggerServer | 1 | 1 | 500m | 2,000m | 1,024Mi | 4,096Mi |
+| fleetToolServer | 1 | 1 | 500m | 2,000m | 1,024Mi | 4,096Mi |
+| fleetTriggerServer | 1 | 1 | 500m | 2,000m | 1,024Mi | 4,096Mi |
 | **Operator-Managed Agents (chart defaults)** | | | | | | |
 | polly agent | 1 | 5 | 2,000m | 4,000m | 4,096Mi | 8,192Mi |
 | insights agent | 1 | 5 | 2,000m | 4,000m | 4,096Mi | 8,192Mi |

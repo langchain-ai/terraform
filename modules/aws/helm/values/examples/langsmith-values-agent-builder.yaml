@@ -35,8 +35,10 @@ backend:
     # nav item will not appear in the UI.
     enabled: true
 
-agentBuilderToolServer:
+# Chart v0.15 renamed agentBuilderToolServer/agentBuilderTriggerServer to
+# fleetToolServer/fleetTriggerServer. The underlying images are unchanged.
+fleetToolServer:
   enabled: true
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   enabled: true

@@ -139,7 +139,7 @@ operator:
 
 # -- Agent Builder infrastructure ----------------------------------------------
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
     replicas: 1
     resources:
@@ -150,7 +150,7 @@ agentBuilderToolServer:
         cpu: "1"
         memory: "1536Mi"
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     replicas: 1
     resources:
@@ -162,38 +162,11 @@ agentBuilderTriggerServer:
         memory: "384Mi"
 
 # -- Operator-managed agent resources ------------------------------------------
-# Sets initial server/queue pod sizing for the bootstrap job. The UI-managed
-# deployments are the real source of truth — these just control the defaults
-# written into LGP CRs at first deploy.
-
-config:
-  polly:
-    agent:
-      resources:
-        cpu: 0.1
-        cpuLimit: 0.5
-        memoryMb: 256
-        memoryLimitMb: 512
-        minScale: 1
-        maxScale: 1
-  insights:
-    agent:
-      resources:
-        cpu: 0.1
-        cpuLimit: 0.5
-        memoryMb: 256
-        memoryLimitMb: 512
-        minScale: 1
-        maxScale: 1
-  agentBuilder:
-    agent:
-      resources:
-        cpu: 0.1
-        cpuLimit: 0.5
-        memoryMb: 256
-        memoryLimitMb: 512
-        minScale: 1
-        maxScale: 1
+# Removed: chart 0.15.1+ dropped the bundled operator-managed agent path and its
+# validator hard-fails on the presence of config.polly / config.insights (even
+# when only sizing their nested agent.resources). Standalone Fleet/Polly/Insights
+# are sized via the top-level apiServer/queue resources in their own overlays
+# (langsmith-values-fleet.yaml, -standalone-polly.yaml, -standalone-insights.yaml).
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # ClickHouse is the one component that actually uses its resources.
