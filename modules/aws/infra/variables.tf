@@ -461,8 +461,8 @@ variable "langsmith_namespace" {
 }
 
 variable "tls_certificate_source" {
-  type    = string
-  default = "acm"
+  type        = string
+  default     = "acm"
   description = <<-EOT
     TLS certificate provider for in-cluster gateways (Istio, Envoy):
       'acm'          — AWS Certificate Manager. ALB-native, non-exportable. Only valid with ALB ingress.
@@ -592,6 +592,24 @@ variable "enable_insights" {
 variable "enable_polly" {
   type        = bool
   description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  default     = false
+}
+
+variable "enable_fleet" {
+  type        = bool
+  description = "Enable Fleet standalone deployment (chart v0.15+). Requires enable_deployments = true (the Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed with Deployments). Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder. Requires postgres_source = redis_source = external."
+  default     = false
+}
+
+variable "enable_standalone_polly" {
+  type        = bool
+  description = "Enable Polly standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_polly_encryption_key. Requires postgres_source = redis_source = external."
+  default     = false
+}
+
+variable "enable_standalone_insights" {
+  type        = bool
+  description = "Enable Insights standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_insights_encryption_key. ClickHouse is still required via the existing insights flow. Requires postgres_source = redis_source = external."
   default     = false
 }
 

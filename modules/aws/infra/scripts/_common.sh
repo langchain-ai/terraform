@@ -33,7 +33,10 @@ _parse_tfvar() {
   val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
   if [[ -z "$val" ]]; then
     # Unquoted value: key = true / key = 42 / key = {}
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
+    # Strip any trailing `# comment` BEFORE collapsing whitespace, otherwise
+    # `enable_fleet = true # note` parses to `true#note` and breaks _tfvar_is_true
+    # (migration issue #1).
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"')
   fi
   [[ -n "$val" ]] || return 1
   echo "$val"

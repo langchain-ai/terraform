@@ -10,10 +10,13 @@
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   4. langsmith-values-agent-builder.yaml  — Agent Builder feature (if enabled)
-#   5. langsmith-values-insights.yaml       — ClickHouse/Insights (if enabled)
-#   6. langsmith-values-polly.yaml          — Polly AI eval/monitoring (if enabled)
-#   7. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
+#   4. langsmith-values-agent-builder.yaml  — Agent Builder legacy (if enable_agent_builder)
+#   5. langsmith-values-insights.yaml       — ClickHouse/Insights legacy (if enable_insights)
+#   6. langsmith-values-polly.yaml          — Polly legacy (if enable_polly)
+#   7. langsmith-values-fleet.yaml          — Fleet standalone v0.15+ (if enable_fleet)
+#   8. langsmith-values-standalone-polly.yaml    — Polly standalone v0.15+ (if enable_standalone_polly)
+#   9. langsmith-values-standalone-insights.yaml — Insights standalone v0.15+ (if enable_standalone_insights)
+#  10. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -108,6 +111,9 @@ _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
+_enable_fleet=false
+_enable_standalone_polly=false
+_enable_standalone_insights=false
 _enable_envoy_gateway=false
 _enable_istio_gateway=false
 _enable_nginx_ingress=false
@@ -115,6 +121,9 @@ _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
+_tfvar_is_true "enable_fleet"               && _enable_fleet=true
+_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
+_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 _tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
 _tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
@@ -158,6 +167,13 @@ if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
+# Standalone Fleet's chat UI resolves OAuth provider/token connections via host-backend,
+# which only exists when Deployments is enabled. (Standalone Polly/Insights do not need it.)
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_fleet requires enable_deployments = true in terraform.tfvars." >&2
+  echo "       The Fleet chat UI needs host-backend (Deployments) for OAuth provider/token endpoints." >&2
+  exit 1
+fi
 
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
@@ -179,6 +195,9 @@ _addon_gate=(
   "agent-builder:agent_builder:$_enable_agent_builder"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
+  "fleet:fleet:$_enable_fleet"
+  "standalone-polly:standalone_polly:$_enable_standalone_polly"
+  "standalone-insights:standalone_insights:$_enable_standalone_insights"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -235,7 +254,10 @@ _live_lb=$(_resolve_entry_hostname 1) || true
 if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _configured_hostname=""
-  if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_lb" ]]; then
+  # Compare host-only: config.hostname carries a scheme (http(s)://) so the chart
+  # emits correct browser URLs, but _live_lb is the bare ALB DNS.
+  _configured_host_only="${_configured_hostname#*://}"
+  if [[ -n "$_configured_host_only" && "$_configured_host_only" != "$_live_lb" ]]; then
     echo "WARNING: config.hostname is stale."
     echo "  Configured: $_configured_hostname"
     echo "  Actual:     $_live_lb"
@@ -246,7 +268,8 @@ if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    # Keep the scheme on config.hostname (chart defaults bare host to https).
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_protocol}://${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     echo "  Done."
     echo ""
@@ -301,6 +324,18 @@ fi
 kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
   --ignore-not-found=true 2>/dev/null || true
 
+# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14). Helm
+# silently skips any version tagged -rc./-alpha./-beta. without it.
+_devel_flag=""
+if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
+  _devel_flag="--devel"
+fi
+
+# Helm timeout is configurable (migration issue #2). Chart 0.15 with all features
+# enabled (Insights + Deployments + Fleet) regularly exceeds the old hardcoded 20m
+# on the first upgrade because of sequential stateful rollouts + bootstrap jobs.
+_helm_timeout="${HELM_TIMEOUT:-30m}"
+
 # Deploy with --server-side=false to avoid SSA field ownership conflicts with the
 # ALB ingress controller. Helm 3.14+ defaults to server-side apply, which fights
 # with the controller over .spec.rules ownership. Client-side apply sidesteps this.
@@ -314,9 +349,10 @@ helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
+  ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
   --server-side=false \
-  --timeout 20m
+  --timeout "$_helm_timeout"
 
 echo ""
 echo "LangSmith deployed. Waiting for core pods..."
@@ -340,6 +376,11 @@ if [[ "$_enable_deployments" == "true" ]]; then
     "${RELEASE_NAME}-operator"
   )
 fi
+# Standalone agent features (chart v0.15+). Deployment names derive from
+# <release>-<namePrefix>-<component>; namePrefix is standalone-{fleet,polly,insights}.
+[[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
+[[ "$_enable_standalone_polly" == "true" ]]    && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
+[[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do
@@ -377,23 +418,27 @@ if [[ -n "$_active_host" ]]; then
   echo ""
   _current_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_hostname=""
-  if [[ "$_current_hostname" != "$_active_host" && -z "$_langsmith_domain" ]]; then
+  # Compare host-only: config.hostname carries a scheme; _active_host is bare DNS.
+  _current_host_only="${_current_hostname#*://}"
+  if [[ "$_current_host_only" != "$_active_host" && -z "$_langsmith_domain" ]]; then
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
       | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    # Keep the scheme on config.hostname (chart defaults bare host to https).
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_protocol}://${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → $_active_host"
+    echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → ${_protocol}://${_active_host}"
     echo "Re-running deploy for hostname to take effect..."
     echo ""
     helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
       --namespace "$NAMESPACE" \
       ${CHART_VERSION:+--version "$CHART_VERSION"} \
+      ${_devel_flag} \
       "${VALUES_ARGS[@]}" \
       --server-side=false \
-      --timeout 20m
+      --timeout "$_helm_timeout"
     echo ""
     echo "LangSmith redeployed with hostname: $_active_host"
   fi

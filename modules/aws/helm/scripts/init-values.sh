@@ -213,11 +213,17 @@ _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
+_enable_fleet=false
+_enable_standalone_polly=false
+_enable_standalone_insights=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
 _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
+_tfvar_is_true "enable_fleet"               && _enable_fleet=true
+_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
+_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -359,6 +365,47 @@ else
   echo "  ✗ Polly (enable_polly = false)"
 fi
 
+# ── Standalone agent features (chart v0.15+): Fleet / Polly / Insights ───────
+# Top-level fleet:/polly:/insights: deployments wired to per-feature databases on
+# the shared RDS/ElastiCache (K8s Secrets created by Terraform). encryptionKey and
+# IRSA service-account annotations are injected into the overrides file below.
+_fleet_file="$VALUES_DIR/langsmith-values-fleet.yaml"
+_standalone_polly_file="$VALUES_DIR/langsmith-values-standalone-polly.yaml"
+_standalone_insights_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml"
+
+if [[ "$_enable_fleet" == "true" ]]; then
+  if [[ ! -f "$_fleet_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
+    echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
+  else
+    echo "  ✔ Fleet (existing)"
+  fi
+else
+  echo "  ✗ Fleet (enable_fleet = false)"
+fi
+
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  if [[ ! -f "$_standalone_polly_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
+    echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+  else
+    echo "  ✔ Standalone Polly (existing; encryptionKey in langsmith-values-overrides.yaml)"
+  fi
+else
+  echo "  ✗ Standalone Polly (enable_standalone_polly = false)"
+fi
+
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  if [[ ! -f "$_standalone_insights_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_standalone_insights_file"
+    echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+  else
+    echo "  ✔ Standalone Insights (existing; encryptionKey in langsmith-values-overrides.yaml)"
+  fi
+else
+  echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
+fi
+
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
 # The example file defaults to false; fix it so deploys don't get stuck in DEPLOYING state.
 if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
@@ -489,6 +536,109 @@ redis:
     enabled: false"
 fi
 
+# ── Standalone agent feature overrides (chart v0.15+) ────────────────────────
+# Each enabled standalone feature needs (a) its Fernet encryptionKey and (b) IRSA
+# annotations on the service accounts the chart creates. These are written into
+# the gitignored overrides file (not the committed example overlays). Features
+# that are OFF get an explicit `enabled: false` so the chart's top-level default
+# (polly/insights default to enabled: true) cannot silently turn them on
+# (migration issue #6).
+_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
+_polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
+_insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
+
+_standalone_block=""
+
+# platformBackend extras merged into the single platformBackend block below (the
+# heredoc already sets platformBackend.serviceAccount; appending here keeps it one key).
+_platform_backend_fleet_block=""
+if [[ "$_enable_fleet" == "true" ]]; then
+  # Workaround for chart <= 0.15.x: the chart config-map wires MCP_SERVER_URL (tool
+  # server) but NOT TRIGGER_SERVER_ENDPOINT, so the platform-backend trigger proxy
+  # returns 502 for Fleet cron/Slack/Gmail triggers. Inject it here pointing at the
+  # in-cluster trigger server (port 1990). Remove once the chart sets it natively.
+  _platform_backend_fleet_block="
+  deployment:
+    extraEnv:
+      - name: TRIGGER_SERVER_ENDPOINT
+        value: \"http://langsmith-fleet-trigger-server.${NAMESPACE:-langsmith}.svc.cluster.local:1990\""
+fi
+
+if [[ "$_enable_fleet" == "true" ]]; then
+  if [[ -z "$_agent_builder_key" ]]; then
+    echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  _standalone_block+="
+fleet:
+  encryptionKey: \"${_agent_builder_key}\"
+  apiServer:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+  queue:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+
+fleetToolServer:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+
+fleetTriggerServer:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+fi
+
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  if [[ -z "$_polly_key" ]]; then
+    echo "ERROR: enable_standalone_polly = true but TF_VAR_langsmith_polly_encryption_key is not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  _standalone_block+="
+polly:
+  encryptionKey: \"${_polly_key}\"
+  apiServer:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+  queue:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+else
+  _standalone_block+="
+polly:
+  enabled: false"
+fi
+
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  if [[ -z "$_insights_key" ]]; then
+    echo "ERROR: enable_standalone_insights = true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  _standalone_block+="
+insights:
+  encryptionKey: \"${_insights_key}\"
+  apiServer:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+  queue:
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+else
+  _standalone_block+="
+insights:
+  enabled: false"
+fi
+
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
 # Secrets (license key, api key salt, jwt secret, admin password) are NOT written
 # here. ESO pulls them from SSM and creates the 'langsmith-config' K8s Secret.
@@ -503,7 +653,14 @@ config:
   # In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
   # Find it with: terraform -chdir=infra output -raw alb_dns_name
   # Or check: AWS Console → EC2 → Load Balancers → DNS name
-  hostname: "${HOSTNAME}"
+  #
+  # Include the protocol. The chart's hostnameWithProtocol helper defaults a bare
+  # hostname to https://, which makes the browser-facing Fleet URLs
+  # (VITE_AGENT_BUILDER_MCP_SERVER_URL, *_DEPLOYMENT_URL_PUBLIC, *_TRIGGERS_API_URL)
+  # https — unreachable on an HTTP/TLS-none ALB (Fleet MCP -32001 + CORS failures).
+  # Routing is unaffected: the chart strips the scheme via hostnameWithoutProtocol
+  # for ingress/HTTPRoute/VirtualService host matching.
+  hostname: "${_protocol}://${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
   deployment:
     # URL used by the operator to build agent deployment endpoints.
@@ -531,7 +688,7 @@ TELEMETRY
 platformBackend:
   serviceAccount:
     annotations:
-      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
+      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"${_platform_backend_fleet_block}
 
 backend:
   serviceAccount:
@@ -569,6 +726,7 @@ operator:
 #     eks.amazonaws.com/role-arn=<irsa_role_arn> --overwrite
 ${_routing_block}
 ${_external_services_block}
+${_standalone_block}
 YAML
 
 echo "Written: $OUT_FILE"
