@@ -93,6 +93,14 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_fleet requires postgres_source = \"external\" and redis_source = \"external\" (standalone Fleet uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
     }
 
+    # Fleet's chat UI resolves OAuth provider/token connections through host-backend,
+    # which only exists when Deployments is enabled. Without it the UI 500s on
+    # /v1/platform/fleet/providers/.../connection ("host-backend ... no such host").
+    precondition {
+      condition     = !var.enable_fleet || var.enable_deployments
+      error_message = "enable_fleet requires enable_deployments = true. The Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed when Deployments is enabled."
+    }
+
     precondition {
       condition     = !var.enable_standalone_polly || (var.postgres_source == "external" && var.redis_source == "external")
       error_message = "enable_standalone_polly requires postgres_source = \"external\" and redis_source = \"external\" (standalone Polly uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."

@@ -167,6 +167,13 @@ if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
   exit 1
 fi
+# Standalone Fleet's chat UI resolves OAuth provider/token connections via host-backend,
+# which only exists when Deployments is enabled. (Standalone Polly/Insights do not need it.)
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  echo "ERROR: enable_fleet requires enable_deployments = true in terraform.tfvars." >&2
+  echo "       The Fleet chat UI needs host-backend (Deployments) for OAuth provider/token endpoints." >&2
+  exit 1
+fi
 
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
@@ -247,7 +254,10 @@ _live_lb=$(_resolve_entry_hostname 1) || true
 if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _configured_hostname=""
-  if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_lb" ]]; then
+  # Compare host-only: config.hostname carries a scheme (http(s)://) so the chart
+  # emits correct browser URLs, but _live_lb is the bare ALB DNS.
+  _configured_host_only="${_configured_hostname#*://}"
+  if [[ -n "$_configured_host_only" && "$_configured_host_only" != "$_live_lb" ]]; then
     echo "WARNING: config.hostname is stale."
     echo "  Configured: $_configured_hostname"
     echo "  Actual:     $_live_lb"
@@ -258,7 +268,8 @@ if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    # Keep the scheme on config.hostname (chart defaults bare host to https).
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_protocol}://${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_live_lb}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     echo "  Done."
     echo ""
@@ -407,15 +418,18 @@ if [[ -n "$_active_host" ]]; then
   echo ""
   _current_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_hostname=""
-  if [[ "$_current_hostname" != "$_active_host" && -z "$_langsmith_domain" ]]; then
+  # Compare host-only: config.hostname carries a scheme; _active_host is bare DNS.
+  _current_host_only="${_current_hostname#*://}"
+  if [[ "$_current_host_only" != "$_active_host" && -z "$_langsmith_domain" ]]; then
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
       | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
-    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    # Keep the scheme on config.hostname (chart defaults bare host to https).
+    sed -i.bak "s|hostname: \"[^\"]*\"|hostname: \"${_protocol}://${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     sed -i.bak "s|url: \"${_protocol}://[^\"]*\"|url: \"${_protocol}://${_active_host}\"|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → $_active_host"
+    echo "Updated config.hostname in $(basename "$ENV_FILE"): ${_current_hostname:-<blank>} → ${_protocol}://${_active_host}"
     echo "Re-running deploy for hostname to take effect..."
     echo ""
     helm upgrade --install "$RELEASE_NAME" langchain/langsmith \

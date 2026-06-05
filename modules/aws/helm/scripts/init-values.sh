@@ -549,6 +549,21 @@ _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
 
 _standalone_block=""
 
+# platformBackend extras merged into the single platformBackend block below (the
+# heredoc already sets platformBackend.serviceAccount; appending here keeps it one key).
+_platform_backend_fleet_block=""
+if [[ "$_enable_fleet" == "true" ]]; then
+  # Workaround for chart <= 0.15.x: the chart config-map wires MCP_SERVER_URL (tool
+  # server) but NOT TRIGGER_SERVER_ENDPOINT, so the platform-backend trigger proxy
+  # returns 502 for Fleet cron/Slack/Gmail triggers. Inject it here pointing at the
+  # in-cluster trigger server (port 1990). Remove once the chart sets it natively.
+  _platform_backend_fleet_block="
+  deployment:
+    extraEnv:
+      - name: TRIGGER_SERVER_ENDPOINT
+        value: \"http://langsmith-fleet-trigger-server.${NAMESPACE:-langsmith}.svc.cluster.local:1990\""
+fi
+
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ -z "$_agent_builder_key" ]]; then
     echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
@@ -638,7 +653,14 @@ config:
   # In all modes (ALB, Envoy Gateway, Istio) the ALB is the external entry point.
   # Find it with: terraform -chdir=infra output -raw alb_dns_name
   # Or check: AWS Console → EC2 → Load Balancers → DNS name
-  hostname: "${HOSTNAME}"
+  #
+  # Include the protocol. The chart's hostnameWithProtocol helper defaults a bare
+  # hostname to https://, which makes the browser-facing Fleet URLs
+  # (VITE_AGENT_BUILDER_MCP_SERVER_URL, *_DEPLOYMENT_URL_PUBLIC, *_TRIGGERS_API_URL)
+  # https — unreachable on an HTTP/TLS-none ALB (Fleet MCP -32001 + CORS failures).
+  # Routing is unaffected: the chart strips the scheme via hostnameWithoutProtocol
+  # for ingress/HTTPRoute/VirtualService host matching.
+  hostname: "${_protocol}://${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
   deployment:
     # URL used by the operator to build agent deployment endpoints.
@@ -666,7 +688,7 @@ TELEMETRY
 platformBackend:
   serviceAccount:
     annotations:
-      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
+      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"${_platform_backend_fleet_block}
 
 backend:
   serviceAccount:

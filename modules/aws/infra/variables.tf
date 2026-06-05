@@ -597,7 +597,7 @@ variable "enable_polly" {
 
 variable "enable_fleet" {
   type        = bool
-  description = "Enable Fleet standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder. Requires postgres_source = redis_source = external."
+  description = "Enable Fleet standalone deployment (chart v0.15+). Requires enable_deployments = true (the Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed with Deployments). Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder. Requires postgres_source = redis_source = external."
   default     = false
 }
 
