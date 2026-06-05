@@ -100,6 +100,8 @@ NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
 RG_NAME=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || RG_NAME=""
+# AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
+REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
 
 echo ""
 pass "Terraform outputs read"
@@ -271,6 +273,13 @@ if [[ "$_redis_source" == "external" ]]; then
     enabled: true
     existingSecretName: "langsmith-redis-secret"
     connectionUrlSecretKey: "connection_url"'
+  # AMR is an OSS cluster reached over TLS by hostname — LangSmith must use a
+  # standalone client (clusterSafeMode), not a cluster client (whose node-IP TLS
+  # verification fails). Classic cache leaves this false.
+  if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
+    _redis_block="${_redis_block}
+    clusterSafeMode: true"
+  fi
 else
   _redis_block='# redis: in-cluster (managed by Helm chart)'
 fi

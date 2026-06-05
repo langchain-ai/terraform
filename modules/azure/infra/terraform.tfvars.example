@@ -32,9 +32,10 @@ postgres_admin_username      = "langsmith"
 postgres_database_name       = "langsmith"    # database name on the server
 postgres_deletion_protection = false          # set true for production
 
-# ── Redis ─────────────────────────────────────────────────────────────────────
-redis_capacity = 1   # P1 = 6 GB RAM (sufficient for most deployments)
-                     # P2 = 13 GB RAM (required for high write load ≥26 GiB)
+# ── Redis (Azure Managed Redis / AMR) ─────────────────────────────────────────
+# redis_source = "external" provisions Azure Managed Redis (Microsoft.Cache/redisEnterprise,
+# Redis 7.x, OSS clustering, private endpoint). amr_sku picks the size.
+amr_sku = "Balanced_B0"   # smallest. Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
 
 # ── AKS ───────────────────────────────────────────────────────────────────────
 # Node sizing: Standard_D8s_v3 (8 vCPU, 32 GiB) — AKS reserves ~1.7 vCPU/node,

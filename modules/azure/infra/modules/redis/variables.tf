@@ -1,6 +1,6 @@
 variable "name" {
   type        = string
-  description = "Name of the Redis instance"
+  description = "Name of the Azure Managed Redis cluster"
 }
 
 variable "location" {
@@ -10,31 +10,40 @@ variable "location" {
 
 variable "resource_group_name" {
   type        = string
-  description = "Resource group name of the Redis instance"
+  description = "Resource group name (for the private endpoint + DNS zone)"
+}
+
+variable "resource_group_id" {
+  type        = string
+  description = "Resource group ID — azapi parent_id for the AMR cluster"
 }
 
 variable "subnet_id" {
   type        = string
-  description = "Subnet ID of the Redis instance"
+  description = "Subnet ID for the AMR private endpoint (the dedicated redis subnet)"
 }
 
-variable "sku_name" {
+variable "vnet_id" {
   type        = string
-  description = "SKU name of the Redis instance"
-  default     = "Premium"
+  description = "VNet ID — linked to the private DNS zone so the hostname resolves to the PE"
 }
 
-variable "family" {
+variable "amr_sku" {
   type        = string
-  description = "Family of the Redis instance"
-  default     = "P"
+  description = "Azure Managed Redis SKU. Balanced_B0 is the smallest. See `az redisenterprise create -h` for the list."
+  default     = "Balanced_B0"
 }
 
-# You can see the capacity options here: https://azure.microsoft.com/en-us/pricing/details/cache/?cdn=disable
-variable "capacity" {
-  type        = number
-  description = "Capacity of the Redis instance"
-  default     = 2
+variable "clustering_policy" {
+  type        = string
+  description = "AMR clustering policy. OSSCluster is what LangSmith expects."
+  default     = "OSSCluster"
+}
+
+variable "high_availability" {
+  type        = bool
+  description = "Zone-redundant HA. NOT supported on the smallest (B0) SKU — keep false there."
+  default     = false
 }
 
 variable "tags" {

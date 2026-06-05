@@ -10,6 +10,11 @@ output "redis_connection_url" {
   value       = var.redis_source == "external" ? module.redis[0].connection_url : ""
 }
 
+output "redis_cluster_safe_mode" {
+  description = "Whether LangSmith should set redis.external.clusterSafeMode (true for AMR). init-values.sh reads this."
+  value       = var.redis_source == "external" ? module.redis[0].cluster_safe_mode : false
+}
+
 output "storage_account_name" {
   description = "Azure Blob Storage account name used for LangSmith traces and assets"
   value       = module.blob.storage_account_name
