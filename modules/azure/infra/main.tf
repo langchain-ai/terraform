@@ -182,8 +182,10 @@ module "redis" {
   name                = local.redis_name
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
-  subnet_id           = local.redis_subnet_id
-  capacity            = var.redis_capacity # P2 = 13 GB (default)
+  resource_group_id   = azurerm_resource_group.resource_group.id # azapi parent_id for AMR
+  subnet_id           = local.redis_subnet_id                    # private endpoint goes here
+  vnet_id             = local.vnet_id                            # private DNS zone link
+  amr_sku             = var.amr_sku
 
   tags = local.common_tags
 }

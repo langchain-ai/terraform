@@ -168,10 +168,10 @@ variable "postgres_subnet_address_prefix" {
   default     = ["10.0.32.0/20"] # 4k IP addresses
 }
 
-variable "redis_capacity" {
-  type        = number
-  description = "The capacity of the Redis server. This maps to a certain memory and CPU combination."
-  default     = 2
+variable "amr_sku" {
+  type        = string
+  description = "Azure Managed Redis SKU. Balanced_B0 is the smallest. Bump (Balanced_B1/B3/...) if the region reports AllocationFailed. (Replaces the classic redis_capacity.)"
+  default     = "Balanced_B0"
 }
 
 variable "blob_ttl_enabled" {
