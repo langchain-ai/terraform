@@ -4,22 +4,24 @@
 #   - enable_insights = true AND clickhouse_source != "in-cluster"
 #
 # For in-cluster ClickHouse (dev/POC), init-values.sh generates a minimal file automatically:
-#   config:
-#     insights:
-#       enabled: true
+#   insights:
+#     enabled: true
 # Manual: cp examples/langsmith-values-insights.yaml ../langsmith-values-insights.yaml
 #
 # Prerequisites:
 #   - External ClickHouse instance (LangChain Managed, Azure Marketplace, or self-hosted)
 #   - ClickHouse must be reachable from the AKS cluster
+#
+# NOTE: chart 0.15.1 removed config.insights → top-level insights block (migrated below).
+# The external-ClickHouse path below has NOT been validated on 0.15.x (only in-cluster was) —
+# verify the clickhouse block against the 0.15.x insights schema before using.
 
-config:
-  insights:
-    enabled: true
-    # encryptionKey is stored in Azure Key Vault and delivered via langsmith-config-secret.
-    # Terraform creates the key automatically in Key Vault during `make apply`.
-    # deploy.sh / make k8s-secrets pulls it and adds it to the langsmith-config-secret.
-    # Do not set encryptionKey inline here — it is already in existingSecretName.
+insights:
+  enabled: true
+  # encryptionKey is stored in Azure Key Vault and delivered via langsmith-config-secret.
+  # Terraform creates the key automatically in Key Vault during `make apply`.
+  # deploy.sh / make k8s-secrets pulls it and adds it to the langsmith-config-secret.
+  # Do not set encryptionKey inline here — it is already in existingSecretName.
 
 clickhouse:
   external:

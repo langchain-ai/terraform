@@ -295,6 +295,9 @@ module "k8s_bootstrap" {
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
 
+  # Ingress controller — drives the NetworkPolicy's allowed source namespace.
+  ingress_controller = var.ingress_controller
+
   # Backing services — connection URLs are injected as K8s secrets.
   # generate-secrets.sh also writes these secrets with the full URL from KV.
   use_external_postgres   = var.postgres_source == "external"
