@@ -182,9 +182,9 @@ operator:
         cpu: "2"
         memory: "4Gi"
 
-# -- Agent Builder infrastructure ----------------------------------------------
+# -- Fleet infrastructure (was Agent Builder; renamed in chart 0.15.0) ---------
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
     resources:
       requests:
@@ -194,7 +194,7 @@ agentBuilderToolServer:
         cpu: "2"
         memory: "4Gi"
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     resources:
       requests:
