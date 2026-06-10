@@ -592,7 +592,7 @@ Enables the LangGraph Platform: the Deployments nav item in the UI, the `listene
 
 **`langsmith-values-agent-builder.yaml`** — Pass 4 (`enable_agent_builder = true`)
 
-Enables the visual agent builder UI and its two supporting services: `agentBuilderToolServer` (exposes the tool registry) and `agentBuilderTriggerServer` (handles agent execution triggers). Also enables `backend.agentBootstrap` — a post-install job that registers Agent Builder as an LGP deployment and creates the required ConfigMap. Without this job, the Agent Builder nav item does not appear in the UI. Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi.
+Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Also enables `backend.agentBootstrap` — a post-install job that registers Agent Builder as an LGP deployment and creates the required ConfigMap. Without this job, the Agent Builder nav item does not appear in the UI. Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi.
 
 > Requires `enable_deployments = true`.
 

@@ -94,6 +94,12 @@ variable "cert_manager_version" {
   default     = "v1.14.4"
 }
 
+variable "ingress_controller" {
+  type        = string
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress)."
+  default     = "nginx"
+}
+
 variable "tls_certificate_source" {
   type        = string
   description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager (ClusterIssuer created by apply-cluster-issuers.sh). 'dns01' = DNS-01 via Azure DNS + Workload Identity (ClusterIssuer created by Terraform). 'none' = skip."

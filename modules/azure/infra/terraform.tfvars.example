@@ -155,7 +155,7 @@ sizing_profile = "production"
 # Required before enabling agent_builder, insights, or polly.
 # enable_deployments = true
 
-# Pass 4 — Agent Builder UI (agentBuilderToolServer, agentBuilderTriggerServer, agentBootstrap Job)
+# Pass 4 — Agent Builder UI (fleetToolServer, fleetTriggerServer, agentBootstrap Job)
 # enable_agent_builder = true
 
 # Pass 5 — Insights / Clio (ClickHouse-backed trace analytics — deploys via operator)

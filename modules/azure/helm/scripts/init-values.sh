@@ -366,7 +366,7 @@ listener:
     annotations:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 
-agentBuilderToolServer:
+fleetToolServer:
   deployment:
     labels:
       azure.workload.identity/use: "true"
@@ -374,7 +374,7 @@ agentBuilderToolServer:
     annotations:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   deployment:
     labels:
       azure.workload.identity/use: "true"
@@ -472,9 +472,10 @@ if [[ "$_enable_insights" == "true" ]]; then
 # Insights — ClickHouse-backed analytics (in-cluster ClickHouse).
 # clickhouse_source = "in-cluster" — the Helm chart manages ClickHouse.
 # No external ClickHouse configuration needed.
-config:
-  insights:
-    enabled: true
+# Chart 0.15.1 removed config.insights → top-level insights block. encryptionKey read from
+# langsmith-config-secret (insights_encryption_key) via config.existingSecretName.
+insights:
+  enabled: true
 INSIGHTS_EOF
     pass "Generated: langsmith-values-insights.yaml (in-cluster ClickHouse mode)"
   else

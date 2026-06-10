@@ -70,6 +70,34 @@ resource "kubernetes_resource_quota_v1" "langsmith" {
   }
 }
 
+# ── Limit Range ───────────────────────────────────────────────────────────────
+# Required companion to the ResourceQuota above: because the quota's `hard` includes
+# requests/limits, Kubernetes forces EVERY pod to declare them. Some chart components
+# (e.g. the bundled Postgres/Redis StatefulSets for the standalone insights/polly/fleet
+# agent features) ship without resource stanzas, so without defaults they're rejected
+# with "failed quota: must specify limits.cpu/... for: <container>" and never schedule.
+# This LimitRange supplies defaults so those pods inherit sane values and satisfy the quota.
+resource "kubernetes_limit_range_v1" "langsmith" {
+  metadata {
+    name      = "langsmith-defaults"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type = "Container"
+      default = {
+        cpu    = "1"
+        memory = "1Gi"
+      }
+      default_request = {
+        cpu    = "100m"
+        memory = "256Mi"
+      }
+    }
+  }
+}
+
 # ── Network Policy ────────────────────────────────────────────────────────────
 # Default-deny blocks all ingress to LangSmith pods unless explicitly allowed.
 # This is defense-in-depth: even if a pod is compromised, it cannot receive
@@ -87,24 +115,43 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
   }
 }
 
-# Allows ingress from the ingress-nginx namespace (external traffic via LB)
-# and from within the langsmith namespace itself (inter-service calls).
-# Both rules are required: without the intra-namespace rule, backend pods
-# cannot call each other (e.g. queue workers calling the internal API).
+# Namespace the selected ingress controller's data plane runs in. The
+# NetworkPolicy below must allow ingress from this namespace, or the controller's
+# proxy cannot reach LangSmith pods (default-deny drops it → 503 with ~10s
+# connection timeout). AGIC is intentionally excluded: Application Gateway routes
+# from its dedicated subnet (an ip_block), not an in-cluster pod namespace.
+locals {
+  ingress_namespace = lookup({
+    "nginx"         = "ingress-nginx"
+    "envoy-gateway" = "envoy-gateway-system"
+    "istio"         = "istio-system"
+    "istio-addon"   = "aks-istio-ingress"
+  }, var.ingress_controller, "")
+}
+
+# Allows ingress from the selected ingress controller's namespace (external
+# traffic via LB) and from within the langsmith namespace itself (inter-service
+# calls). The intra-namespace rule is required on its own: without it, backend
+# pods cannot call each other (e.g. queue workers calling the internal API).
 resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
   metadata {
-    name      = "allow-from-ingress-nginx"
+    name      = "allow-from-ingress"
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
 
   spec {
     pod_selector {}
 
-    ingress {
-      from {
-        namespace_selector {
-          match_labels = {
-            "kubernetes.io/metadata.name" = "ingress-nginx"
+    # Ingress controller namespace — skipped for controllers that do not run as
+    # in-cluster pods (e.g. agic), where ingress_namespace resolves to "".
+    dynamic "ingress" {
+      for_each = local.ingress_namespace != "" ? [local.ingress_namespace] : []
+      content {
+        from {
+          namespace_selector {
+            match_labels = {
+              "kubernetes.io/metadata.name" = ingress.value
+            }
           }
         }
       }

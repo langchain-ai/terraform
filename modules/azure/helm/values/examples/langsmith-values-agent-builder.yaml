@@ -31,8 +31,11 @@ backend:
     # nav item to appear in the UI. The job is idempotent — safe to run on every upgrade.
     enabled: true
 
-agentBuilderToolServer:
+# Renamed in chart 0.15.0 (was agentBuilderToolServer / agentBuilderTriggerServer).
+# config.agentBuilder + backend.agentBootstrap above remain the (deprecated-but-functional)
+# enablement path in 0.15.x; the tool/trigger server component keys are now fleet*.
+fleetToolServer:
   enabled: true
 
-agentBuilderTriggerServer:
+fleetTriggerServer:
   enabled: true
