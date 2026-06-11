@@ -11,12 +11,6 @@
     }
   },
   {
-    "Sid": "Route53DeleteHostedZone",
-    "Effect": "Allow",
-    "Action": ["route53:DeleteHostedZone"],
-    "Resource": "arn:aws:route53:::hostedzone/*"
-  },
-  {
     "Sid": "Route53ChangeAcmValidationRecords",
     "Effect": "Allow",
     "Action": ["route53:ChangeResourceRecordSets"],
