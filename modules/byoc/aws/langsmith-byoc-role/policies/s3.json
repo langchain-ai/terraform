@@ -63,5 +63,11 @@
       "arn:aws:s3:::*-smith-clickhouse-backups",
       "arn:aws:s3:::*-smith-vpc-flow-logs"
     ]
+  },
+  {
+    "Sid": "S3DenyObjectDataAccess",
+    "Effect": "Deny",
+    "Action": "s3:*",
+    "Resource": "arn:aws:s3:::*/*"
   }
 ]
