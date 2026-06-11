@@ -1,0 +1,148 @@
+name: Release (auto-tag on merge)
+
+# Cuts a global tag on every merge to main that touches modules/**.
+#
+# Versioning: MAJOR.MINOR is the supported LangSmith chart line (parsed from the
+# deploy.sh pins, see .github/scripts/chart-line.sh). PATCH is a module revision
+# counter that increments on any repo change, regardless of provider. The tag
+# PATCH is NOT the chart version - the chart is resolved as the latest patch in
+# the pinned line (e.g. ~0.15.1).
+#
+# Skip a release for a given merge by including "[skip release]" in the commit
+# message. Run manually with dry_run=true to preview the computed version.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'modules/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute the version and run checks without creating/pushing a tag"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Serialize runs so two quick merges can't race on version computation.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for [skip release]
+        id: skipcheck
+        run: |
+          msg="$(git log -1 --pretty=%B)"
+          if printf '%s' "$msg" | grep -qiF '[skip release]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Commit requests [skip release]; no tag will be cut."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve chart line (release guard)
+        if: steps.skipcheck.outputs.skip != 'true'
+        id: line
+        run: |
+          chmod +x .github/scripts/chart-line.sh
+          line="$(.github/scripts/chart-line.sh)"
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+          echo "Chart line: $line"
+
+      - name: Compute next tag
+        if: steps.skipcheck.outputs.skip != 'true'
+        id: ver
+        env:
+          LINE: ${{ steps.line.outputs.line }}
+        run: |
+          latest="$(git tag --list "v${LINE}.*" --sort=-v:refname | head -1)"
+          if [[ -z "$latest" ]]; then
+            # First cut on this line (e.g. v0.15.0).
+            next="v${LINE}.0"
+          else
+            patch="${latest##*.}"
+            next="v${LINE}.$((patch + 1))"
+          fi
+          if git rev-parse -q --verify "refs/tags/${next}" >/dev/null; then
+            echo "::error::computed tag ${next} already exists" >&2
+            exit 1
+          fi
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "prev=$latest" >> "$GITHUB_OUTPUT"
+          echo "Next tag: ${next} (previous: ${latest:-none})"
+
+      - name: Build release message
+        if: steps.skipcheck.outputs.skip != 'true'
+        id: msg
+        env:
+          LINE: ${{ steps.line.outputs.line }}
+          PREV: ${{ steps.ver.outputs.prev }}
+        run: |
+          changed=""
+          for p in aws gcp azure ocp byoc; do
+            if [[ -n "$PREV" ]]; then
+              diff="$(git diff --name-only "${PREV}..HEAD" -- "modules/${p}" || true)"
+            else
+              diff="$(git ls-files -- "modules/${p}" | head -1)"
+            fi
+            [[ -n "$diff" ]] && changed="${changed:+$changed, }${p}"
+          done
+          [[ -z "$changed" ]] && changed="repo"
+          subject="$(git log -1 --pretty=%s)"
+          # Untrusted commit subject is captured here and only ever consumed via
+          # env in later steps - never interpolated into a shell command.
+          {
+            echo "providers=$changed"
+            echo "subject=$subject"
+          } >> "$GITHUB_OUTPUT"
+          echo "Changed providers: $changed"
+
+      - name: Create and push tag
+        if: steps.skipcheck.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+          LINE: ${{ steps.line.outputs.line }}
+          PROVIDERS: ${{ steps.msg.outputs.providers }}
+          SUBJECT: ${{ steps.msg.outputs.subject }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEXT" -m "${PROVIDERS}: ${SUBJECT} (chart line ${LINE})"
+          git push origin "$NEXT"
+
+      - name: Create GitHub Release
+        if: steps.skipcheck.outputs.skip != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT: ${{ steps.ver.outputs.next }}
+          LINE: ${{ steps.line.outputs.line }}
+          PROVIDERS: ${{ steps.msg.outputs.providers }}
+          SUBJECT: ${{ steps.msg.outputs.subject }}
+        run: |
+          notes="Changed: ${PROVIDERS}
+          ${SUBJECT}
+
+          Chart line: ${LINE} (deploys latest ${LINE}.x via ~${LINE}.1)."
+          gh release create "$NEXT" --title "$NEXT" --notes "$notes"
+
+      - name: Dry-run summary
+        if: steps.skipcheck.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run
+        env:
+          NEXT: ${{ steps.ver.outputs.next }}
+          LINE: ${{ steps.line.outputs.line }}
+          PROVIDERS: ${{ steps.msg.outputs.providers }}
+        run: |
+          echo "DRY RUN - would create tag: $NEXT"
+          echo "Chart line: $LINE"
+          echo "Changed providers: $PROVIDERS"

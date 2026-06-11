@@ -4,6 +4,8 @@
 
 This folder will contain Terraform modules to deploy a self-hosted version of LangSmith on OpenShift Container Platform (OCP), including ROSA (Red Hat OpenShift Service on AWS) and on-premises OpenShift deployments.
 
+> **Releases:** when this module ships, deploy from the latest `v0.15.*` release tag, not `main`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`). See [Versioning and releases](../../README.md#versioning-and-releases).
+
 ## Planned modules
 
 - LangSmith (root module)

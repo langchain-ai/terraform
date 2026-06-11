@@ -29,7 +29,9 @@ VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-CHART_VERSION="${CHART_VERSION:-}"
+# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
+# Override with the CHART_VERSION env var for an exact patch if needed.
+CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 
 # ── tfvars helpers ────────────────────────────────────────────────────────────
 _parse_tfvar() {

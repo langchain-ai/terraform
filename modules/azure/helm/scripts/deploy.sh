@@ -372,26 +372,13 @@ done
 echo ""
 
 # ── Chart version ─────────────────────────────────────────────────────────
-# Read from terraform.tfvars first, then env var, then prompt (interactive only)
+# Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
+# We pin the chart *line* (~0.15.1 => latest 0.15.x, never 0.16) so an
+# un-pinned deploy can't silently jump a breaking minor.
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-
-if [[ -z "$CHART_VERSION" ]]; then
-  helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
-  helm repo update langchain &>/dev/null
-  echo "Available chart versions:"
-  helm search repo langchain/langsmith --versions | head -6
-  echo ""
-  if [[ -t 0 ]]; then
-    # Interactive terminal — prompt for version
-    printf "  Chart version to deploy (e.g. 0.13.29, or press Enter for latest): "
-    read -r CHART_VERSION
-  else
-    # Non-interactive — default to latest
-    info "Non-interactive mode: deploying latest chart version"
-  fi
-fi
+CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
