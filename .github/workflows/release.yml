@@ -43,10 +43,12 @@ jobs:
       - name: Check for [skip release]
         id: skipcheck
         run: |
-          msg="$(git log -1 --pretty=%B)"
-          if printf '%s' "$msg" | grep -qiF '[skip release]'; then
+          # Only the commit SUBJECT line is checked, not the full body, so a
+          # description that merely mentions "[skip release]" can't trip this.
+          subject="$(git log -1 --pretty=%s)"
+          if printf '%s' "$subject" | grep -qiF '[skip release]'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Commit requests [skip release]; no tag will be cut."
+            echo "Commit subject requests [skip release]; no tag will be cut."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
