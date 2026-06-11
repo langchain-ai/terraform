@@ -47,12 +47,38 @@ Each provider directory is a self-contained deployment with a `Makefile`, a two-
 
 ## Getting started
 
-1. Pick the provider folder above and read its `README.md`.
-2. Install the prerequisites it lists (Terraform ≥ 1.5, `kubectl`, `helm`, and your cloud CLI).
-3. Run the interactive wizard (`make quickstart` on AWS; equivalent setup on Azure / GCP).
-4. `make apply` → `make deploy`.
+1. **Check out the latest release tag, not `main`** — see [Versioning and releases](#versioning-and-releases) for the one-line command. `main` is the development branch and may move under you.
+2. Pick the provider folder above and read its `README.md`.
+3. Install the prerequisites it lists (Terraform ≥ 1.5, `kubectl`, `helm`, and your cloud CLI).
+4. Run the interactive wizard (`make quickstart` on AWS; equivalent setup on Azure / GCP).
+5. `make apply` → `make deploy`.
 
 A typical first deployment takes 20–30 minutes end-to-end.
+
+## Versioning and releases
+
+This repository is released as **global tags** `vMAJOR.MINOR.PATCH`. Always deploy from a tag — never from `main`.
+
+- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.15.1`, meaning the latest `0.15.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.16`). You always get the newest patch within the line.
+- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.15.4` does not mean chart `0.15.4`.
+
+Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.15.x` are not valid):
+
+```bash
+git fetch --tags
+git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"
+```
+
+What this means for you:
+
+- Pin to a tag for reproducible infrastructure; re-run the command above to move to a newer patch within the line as fixes land.
+- Moving to a new chart line (e.g. `0.16` / SmithDB) is an explicit switch to a `v0.16.*` tag (`git tag -l 'v0.16.*'`).
+- Browse all releases in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
+- Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch.
+
+The per-release history is published in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
+
+> Tags are immutable. Use `pre-terraform-migration` only for the legacy pre-`0.15` state (see [History](#history)).
 
 ## Documentation
 
