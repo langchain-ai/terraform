@@ -33,7 +33,7 @@ resource "kubernetes_secret" "postgres" {
     postgres_db       = var.postgres_in_cluster_db
     postgres_user     = var.postgres_in_cluster_user
     postgres_password = var.postgres_in_cluster_pass
-  } : {
+    } : {
     connection_url = var.postgres_connection_url
   }
   type = "Opaque"
@@ -267,7 +267,7 @@ MANIFEST
     interpreter = ["bash", "-c"]
     # Update kubeconfig before deleting — destroy provisioners cannot use
     # var.* so cluster_name and region are read from self.input.
-    command     = <<-EOT
+    command = <<-EOT
       _ctx=$(kubectl config current-context 2>/dev/null || echo "")
       if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
         aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
@@ -406,7 +406,7 @@ MANIFEST
     # Restore Gateway to HTTP-only on destroy (don't delete — may be referenced
     # by other resources). self.input holds namespace and domain since
     # destroy provisioners cannot reference var.*.
-    command     = <<-EOT
+    command = <<-EOT
       kubectl patch gateway langsmith-gateway -n ${self.input.namespace} \
         --type=json \
         -p='[{"op":"replace","path":"/spec/servers","value":[{"port":{"number":80,"name":"http","protocol":"HTTP"},"hosts":["${self.input.domain}"]}]}]' \
@@ -454,6 +454,12 @@ resource "helm_release" "envoy_gateway" {
 resource "terraform_data" "envoy_gateway_resource" {
   count = var.enable_envoy_gateway ? 1 : 0
 
+  input = {
+    namespace    = var.namespace
+    cluster_name = var.cluster_name
+    region       = var.region
+  }
+
   triggers_replace = [
     var.namespace,
   ]
@@ -492,6 +498,25 @@ spec:
       namespaces:
         from: All
 MANIFEST
+    EOT
+  }
+
+  # Delete the Gateway + GatewayClass while the Envoy Gateway controller is still
+  # installed so it can reclaim the controller-spawned Envoy proxy and its NLB.
+  # Runs before helm_release.envoy_gateway is uninstalled (reverse dependency
+  # order). --wait blocks until the controller finishes teardown, avoiding an
+  # orphaned NLB. Mirrors the destroy provisioners on envoy_target_group_binding
+  # and istio_gateway_resource.
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
+      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
+        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
+      fi
+      kubectl delete gateway langsmith-gateway -n ${self.input.namespace} --ignore-not-found=true --wait=true --timeout=180s 2>/dev/null || true
+      kubectl delete gatewayclass eg --ignore-not-found=true 2>/dev/null || true
     EOT
   }
 
