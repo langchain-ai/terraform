@@ -11,9 +11,10 @@
 #     pods to authenticate to Azure Blob Storage without static keys.
 #   • System-assigned Managed Identity: AKS manages its own identity for
 #     pulling images, accessing node resource group, and VMSS operations.
-#   • Default node pool: Standard_DS3_v2 (4 vCPU, 14 GB RAM) — DSv2 family
-#     has broad quota availability across subscriptions.
-#   • Additional "large" pool: Standard_DS4_v2 (8 vCPU, 28 GB) for ClickHouse
+#   • Default node pool: Standard_D8s_v3 (8 vCPU, 32 GB RAM) — Dsv3 family,
+#     the production baseline (matches the root module default). DSv2
+#     (DS3_v2 / DS4_v2) is the documented fallback when Dsv3 quota is short.
+#   • Additional "large" pool: Standard_D16s_v3 (16 vCPU, 64 GB) for ClickHouse
 #     and other stateful/memory-intensive workloads.
 #   • NGINX ingress: deployed via Helm, exposes a single Azure Load Balancer
 #     IP that routes to all LangSmith services by path/host.
@@ -86,7 +87,7 @@ resource "azurerm_kubernetes_cluster" "main" {
   default_node_pool {
     name = "default"
 
-    # Standard_DS3_v2: 4 vCPU, 14 GB RAM — DSv2 family has broad quota availability.
+    # Default Standard_D8s_v3: 8 vCPU, 32 GB RAM — Dsv3 family, the production baseline.
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size
 
@@ -193,7 +194,7 @@ resource "azurerm_kubernetes_cluster" "main" {
 }
 
 # Additional node pools for workloads that need different compute profiles.
-# Default: one "large" pool (Standard_DS4_v2, 8 vCPU / 28 GB) for ClickHouse
+# Default: one "large" pool (Standard_D16s_v3, 16 vCPU / 64 GB) for ClickHouse
 # and other memory-intensive services. Scales 0→2 (scales to zero when idle).
 resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   for_each = var.additional_node_pools
