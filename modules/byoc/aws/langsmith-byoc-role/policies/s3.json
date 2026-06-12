@@ -56,7 +56,9 @@
       "s3:PutBucketOwnershipControls",
       "s3:PutEncryptionConfiguration",
       "s3:PutLifecycleConfiguration",
-      "s3:PutBucketPolicy"
+      "s3:PutBucketPolicy",
+      "s3:PutBucketVersioning",
+      "s3:PutBucketObjectLockConfiguration"
     ],
     "Resource": [
       "arn:aws:s3:::*-smith-blob",
