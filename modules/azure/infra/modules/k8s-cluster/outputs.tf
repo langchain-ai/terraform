@@ -77,3 +77,8 @@ output "agw_name" {
   description = "Name of the Application Gateway resource (empty when ingress_controller != 'agic')"
   value       = var.ingress_controller == "agic" ? azurerm_application_gateway.agw[0].name : ""
 }
+
+output "private_fqdn" {
+  description = "Private FQDN of the AKS API server (empty/null when the cluster is public)"
+  value       = azurerm_kubernetes_cluster.main.private_fqdn
+}

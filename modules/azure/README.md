@@ -223,6 +223,29 @@ create_dns_zone        = true
 
 ---
 
+## Bring-Your-Own Network & Hardening
+
+Deploy into an **existing** resource group / VNet, route egress through your **firewall**
+(userDefinedRouting), enable **Azure CNI Overlay** (Cilium), and make the **API server
+private**. All of these are opt-in and off by default — the quickstart above is unaffected.
+
+Each flag and its prerequisites — required subnets, service endpoints, route tables, RBAC,
+and the in-VNet apply-host requirement for private clusters — is documented in
+**[BYO_NETWORK.md](BYO_NETWORK.md)**, with a worked config in
+[infra/terraform.tfvars.hardened.example](infra/terraform.tfvars.hardened.example).
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `create_resource_group` | `true` | Deploy into an existing resource group. |
+| `create_vnet` | `true` | Deploy into an existing VNet (BYO subnets). |
+| `aks_network_plugin_mode` | `""` | `"overlay"` → Azure CNI Overlay. |
+| `aks_network_policy` | `"azure"` | `"cilium"` / `"calico"` (required for overlay). |
+| `aks_outbound_type` | `"loadBalancer"` | `"userDefinedRouting"` → egress via your firewall. |
+| `aks_private_cluster_enabled` | `false` | Private API server (public FQDN off). |
+| `aks_create_cluster_identity` | `false` | User-assigned control-plane identity (recommended for BYO-VNet/UDR). |
+
+---
+
 ## Command Glossary
 
 All commands run from `terraform/azure/`. Run `make help` to see the list at any time.

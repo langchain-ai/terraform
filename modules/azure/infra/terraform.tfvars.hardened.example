@@ -1,0 +1,50 @@
+# Hardened "bring-your-own-network" profile.
+# Copy to terraform.tfvars and fill in the IDs/names from your landing zone.
+#
+# Prerequisites the customer must provide BEFORE apply:
+#   • An existing resource group (set create_resource_group = false).
+#   • An existing VNet + AKS subnet. The subnet MUST have:
+#       - a route table with 0.0.0.0/0 -> firewall/NVA private IP (for UDR),
+#       - Microsoft.Storage + Microsoft.KeyVault service endpoints (so the
+#         storage/Key Vault default-deny firewalls keep allowlisting the subnet),
+#       - the firewall configured to allow AKS egress (control-plane FQDNs/ports;
+#         see https://learn.microsoft.com/azure/aks/limit-egress-traffic).
+#   • An apply host inside/peered to the VNet that can resolve the private DNS
+#     zone (private API server). Set create_bastion = true to provision one.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "eastus"
+
+# BYO resource group
+create_resource_group = false
+resource_group_name   = "my-existing-rg"
+
+# BYO VNet / subnets
+create_vnet        = false
+vnet_id            = "/subscriptions/.../resourceGroups/my-existing-rg/providers/Microsoft.Network/virtualNetworks/my-vnet"
+aks_subnet_id      = "/subscriptions/.../virtualNetworks/my-vnet/subnets/aks"
+postgres_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/postgres"
+redis_subnet_id    = "/subscriptions/.../virtualNetworks/my-vnet/subnets/redis"
+
+# Azure CNI Overlay (Cilium)
+aks_network_plugin_mode = "overlay"
+aks_network_policy      = "cilium"
+aks_pod_cidr            = "10.244.0.0/16"
+
+# Egress through the customer firewall via the subnet route table
+aks_outbound_type = "userDefinedRouting"
+
+# Private API server, public FQDN disabled
+aks_private_cluster_enabled             = true
+aks_private_cluster_public_fqdn_enabled = false
+# aks_private_dns_zone_id               = ""   # "" => System-managed zone
+
+# Control-plane identity: module-created user-assigned + Network Contributor on the VNet
+# (recommended for BYO-VNet / UDR). For a custom API-server private DNS zone instead,
+# set aks_private_dns_zone_id to the zone resource ID, leave aks_create_cluster_identity =
+# false, and bring a pre-granted identity:
+#   aks_cluster_identity_id = "/subscriptions/.../userAssignedIdentities/my-aks-identity"
+aks_create_cluster_identity = true
+
+# Apply host with private API reachability
+create_bastion = true

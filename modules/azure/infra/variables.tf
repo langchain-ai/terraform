@@ -581,3 +581,106 @@ variable "envoy_gateway_version" {
   description = "Envoy Gateway Helm chart version. Only used when ingress_controller = 'envoy-gateway'."
   default     = "v1.2.0"
 }
+
+# ── BYO resource group ────────────────────────────────────────────────────────
+
+variable "create_resource_group" {
+  type        = bool
+  description = "Create the resource group. If false, set resource_group_name to an existing RG; all resources deploy into it and the region is taken from that RG."
+  default     = true
+}
+
+variable "resource_group_name" {
+  type        = string
+  description = "Name of the existing resource group when create_resource_group = false. Ignored when create_resource_group = true (name is derived as langsmith-rg<identifier>, e.g. langsmith-rg or langsmith-rg-prod)."
+  default     = ""
+}
+
+# ── BYO network: extra subnet IDs (used when create_vnet = false) ─────────────
+
+variable "agic_subnet_id" {
+  type        = string
+  description = "Existing Application Gateway subnet ID. Used when create_vnet = false and ingress_controller = \"agic\". Must be a dedicated /24+ subnet."
+  default     = ""
+}
+
+variable "bastion_subnet_id" {
+  type        = string
+  description = "Existing bastion subnet ID. Used when create_vnet = false and create_bastion = true."
+  default     = ""
+}
+
+# ── AKS networking (Azure CNI Overlay / egress) ──────────────────────────────
+
+variable "aks_network_plugin_mode" {
+  type        = string
+  description = "Azure CNI mode for AKS. \"\" = classic Azure CNI. \"overlay\" = Azure CNI Overlay. Immutable."
+  default     = ""
+
+  validation {
+    condition     = contains(["", "overlay"], var.aks_network_plugin_mode)
+    error_message = "aks_network_plugin_mode must be \"\" (classic) or \"overlay\"."
+  }
+}
+
+variable "aks_pod_cidr" {
+  type        = string
+  description = "Pod CIDR for Azure CNI Overlay. Must not overlap the VNet, aks_service_cidr, or peered/on-prem ranges. Ignored in classic mode."
+  default     = "10.244.0.0/16"
+}
+
+variable "aks_network_policy" {
+  type        = string
+  description = "AKS network policy engine: \"azure\" (default, classic), \"calico\", or \"cilium\". Overlay uses \"cilium\" (recommended); \"cilium\" auto-enables the eBPF data plane and requires overlay."
+  default     = "azure"
+
+  validation {
+    condition     = contains(["azure", "calico", "cilium"], var.aks_network_policy)
+    error_message = "aks_network_policy must be \"azure\", \"calico\", or \"cilium\"."
+  }
+}
+
+variable "aks_outbound_type" {
+  type        = string
+  description = "AKS egress routing: \"loadBalancer\" (default) or \"userDefinedRouting\". userDefinedRouting requires create_vnet = false (existing subnet with a route table to your firewall/NVA). Immutable."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting"], var.aks_outbound_type)
+    error_message = "aks_outbound_type must be \"loadBalancer\" or \"userDefinedRouting\"."
+  }
+}
+
+# ── AKS private API server ────────────────────────────────────────────────────
+
+variable "aks_private_cluster_enabled" {
+  type        = bool
+  description = "Deploy the AKS API server as a private endpoint. Requires terraform apply to run from inside/peered to the VNet (e.g. create_bastion = true). This module also enforces that aks_authorized_ip_ranges is empty when this is true (an IP allowlist is meaningless on a private cluster)."
+  default     = false
+}
+
+variable "aks_private_cluster_public_fqdn_enabled" {
+  type        = bool
+  description = "Expose a public FQDN for the private API server. Default false (disabled). Ignored when aks_private_cluster_enabled = false."
+  default     = false
+}
+
+variable "aks_private_dns_zone_id" {
+  type        = string
+  description = "Private DNS zone for the private API server. \"\" => \"System\" (AKS-managed). \"None\" => BYO DNS. Or a private DNS zone resource ID. Only used when aks_private_cluster_enabled = true. Note: \"None\" requires aks_private_cluster_public_fqdn_enabled = true — AKS does not support \"None\" together with a disabled public FQDN."
+  default     = ""
+}
+
+# ── AKS control-plane (cluster) managed identity ──────────────────────────────
+
+variable "aks_create_cluster_identity" {
+  type        = bool
+  description = "Create a user-assigned managed identity for the AKS control plane and grant it Network Contributor on the VNet (the parent of the AKS subnet) — VNet scope so it can join the subnet and link the System private DNS zone for a private cluster. Azure recommends a user-assigned identity for BYO-VNet / userDefinedRouting. Default false = system-assigned. Mutually exclusive with aks_cluster_identity_id."
+  default     = false
+}
+
+variable "aks_cluster_identity_id" {
+  type        = string
+  description = "Resource ID of an existing user-assigned managed identity to use as the AKS control-plane identity. Required for a custom (BYO) API-server private DNS zone — pre-grant it Private DNS Zone Contributor on the zone and Network Contributor on the VNet/subnet. Mutually exclusive with aks_create_cluster_identity. Empty => system-assigned."
+  default     = ""
+}

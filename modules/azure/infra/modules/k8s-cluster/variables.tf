@@ -187,3 +187,80 @@ variable "authorized_ip_ranges" {
   description = "External CIDRs permitted to reach the AKS API server. Empty list (default) omits the api_server_access_profile block, leaving the master publicly reachable so the apply host's Helm/kubectl steps work from any operator. Production deployments populate this with operator/CI egress CIDRs."
   default     = []
 }
+
+# ── Network plugin mode / policy (Azure CNI Overlay) ──────────────────────────
+
+variable "network_plugin_mode" {
+  type        = string
+  description = "Azure CNI mode. \"\" = classic Azure CNI (pods get VNet subnet IPs). \"overlay\" = Azure CNI Overlay (pods get IPs from pod_cidr). Immutable — changing forces cluster recreation."
+  default     = ""
+
+  validation {
+    condition     = contains(["", "overlay"], var.network_plugin_mode)
+    error_message = "network_plugin_mode must be \"\" (classic) or \"overlay\"."
+  }
+}
+
+variable "pod_cidr" {
+  type        = string
+  description = "Pod CIDR for Azure CNI Overlay (network_plugin_mode = overlay). Must not overlap the VNet, service_cidr, or peered/on-prem ranges. Ignored in classic mode."
+  default     = "10.244.0.0/16"
+}
+
+variable "network_policy" {
+  type        = string
+  description = "Network policy engine. \"azure\" (NPM, classic default), \"calico\", or \"cilium\". \"cilium\" auto-enables the eBPF data plane and requires overlay. Azure NPM is deprecating; Cilium is recommended for overlay."
+  default     = "azure"
+
+  validation {
+    condition     = contains(["azure", "calico", "cilium"], var.network_policy)
+    error_message = "network_policy must be \"azure\", \"calico\", or \"cilium\"."
+  }
+}
+
+# ── Egress / outbound ─────────────────────────────────────────────────────────
+
+variable "outbound_type" {
+  type        = string
+  description = "Cluster egress routing. \"loadBalancer\" (default) or \"userDefinedRouting\" (egress via a route table on an existing subnet → firewall/NVA). Immutable — changing forces cluster recreation. userDefinedRouting requires a BYO subnet with a pre-associated route table."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting"], var.outbound_type)
+    error_message = "outbound_type must be \"loadBalancer\" or \"userDefinedRouting\"."
+  }
+}
+
+# ── Private API server ────────────────────────────────────────────────────────
+
+variable "private_cluster_enabled" {
+  type        = bool
+  description = "Deploy the AKS API server as a private endpoint (no public IP). Requires the terraform apply host to reach the API server over the VNet (bastion/peered/self-hosted runner)."
+  default     = false
+}
+
+variable "private_cluster_public_fqdn_enabled" {
+  type        = bool
+  description = "When private_cluster_enabled, also expose a public FQDN resolving to the private IP. Default false (public FQDN disabled). Ignored when the cluster is public."
+  default     = false
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "Private DNS zone for the private API server. \"\" => \"System\" (AKS-managed zone). \"None\" => bring-your-own DNS. Or a private DNS zone resource ID (requires Private DNS Zone Contributor for the cluster identity + VNet link). Only used when private_cluster_enabled."
+  default     = ""
+}
+
+# ── Control-plane (cluster) managed identity ───────────────────────────────────
+
+variable "create_cluster_identity" {
+  type        = bool
+  description = "Create a user-assigned managed identity for the AKS control plane and grant it Network Contributor on the VNet (the parent of subnet_id) — VNet scope so it can both join the subnet and link the System private DNS zone for a private cluster. When false (default), the cluster uses a system-assigned identity. Mutually exclusive with cluster_identity_id."
+  default     = false
+}
+
+variable "cluster_identity_id" {
+  type        = string
+  description = "Resource ID of an existing user-assigned managed identity to use as the AKS control-plane identity. You manage its role assignments (Network Contributor on the VNet/subnet, Private DNS Zone Contributor on a custom private DNS zone). Mutually exclusive with create_cluster_identity. Empty => system-assigned."
+  default     = ""
+}

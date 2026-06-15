@@ -35,7 +35,7 @@ output "storage_account_k8s_managed_identity_client_id" {
 
 output "resource_group_name" {
   description = "Name of the Azure resource group containing all LangSmith resources"
-  value       = azurerm_resource_group.resource_group.name
+  value       = local.resource_group_name
 }
 
 # ── AKS cluster ───────────────────────────────────────────────────────────────
@@ -53,6 +53,11 @@ output "aks_cluster_id" {
 output "aks_oidc_issuer_url" {
   description = "OIDC issuer URL of the AKS cluster (used for Workload Identity federation)"
   value       = module.aks.oidc_issuer_url
+}
+
+output "aks_private_fqdn" {
+  description = "Private FQDN of the AKS API server. Empty/null unless aks_private_cluster_enabled = true. Reach it from a host with VNet connectivity that can resolve the private DNS zone."
+  value       = module.aks.private_fqdn
 }
 
 output "kubeconfig" {
@@ -77,7 +82,7 @@ output "langsmith_url" {
   description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.dns_label != ""  ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
+    var.dns_label != "" ? "https://${var.dns_label}.${local.location}.cloudapp.azure.com" :
     var.ingress_controller == "agic" && module.aks.agw_public_ip_fqdn != null && module.aks.agw_public_ip_fqdn != "" ? "https://${module.aks.agw_public_ip_fqdn}" :
     "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
   )
@@ -95,7 +100,7 @@ output "langsmith_namespace" {
 
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  value       = "az aks get-credentials --resource-group ${azurerm_resource_group.resource_group.name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value       = "az aks get-credentials --resource-group ${local.resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────

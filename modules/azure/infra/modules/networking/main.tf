@@ -29,6 +29,11 @@ resource "azurerm_virtual_network" "vnet" {
 # Main subnet — used by AKS nodes and pods (Azure CNI).
 # With Standard_D4_v5 nodes (30 max pods each) and up to 10 nodes,
 # you need at least 300 IPs. /19 = 8 192 IPs — plenty of headroom.
+# NOTE: this sizing assumes classic Azure CNI, where both node and pod IPs are
+# drawn from the subnet address space. With Azure CNI Overlay
+# (aks_network_plugin_mode = "overlay") pods draw IPs from aks_pod_cidr
+# instead, so the subnet only needs one IP per node — BYO subnets can be far
+# smaller (e.g. /27 for 10 nodes).
 #
 # service_endpoints: enabling Microsoft.Storage and Microsoft.KeyVault on the
 # AKS subnet lets the storage account and key vault default-deny firewalls

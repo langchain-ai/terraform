@@ -24,7 +24,9 @@ locals {
   identifier = var.identifier
 
   # Derived resource names — all prefixed with "langsmith-<identifier>"
-  resource_group_name = "langsmith-rg${local.identifier}"
+  resource_group_name = var.create_resource_group ? "langsmith-rg${local.identifier}" : var.resource_group_name
+  resource_group_id   = var.create_resource_group ? one(azurerm_resource_group.resource_group[*].id) : one(data.azurerm_resource_group.existing[*].id)
+  location            = var.create_resource_group ? var.location : one(data.azurerm_resource_group.existing[*].location)
   vnet_name           = "langsmith-vnet${local.identifier}"
   aks_name            = "langsmith-aks${local.identifier}"
   postgres_name       = "langsmith-postgres${local.identifier}"
@@ -37,11 +39,12 @@ locals {
 
   # Subnet ID resolution: use newly-created VNet subnets OR bring-your-own
   # existing ones (set create_vnet = false and supply the IDs via variables).
-  vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
-  aks_subnet_id      = var.create_vnet ? module.vnet.subnet_main_id : var.aks_subnet_id
-  postgres_subnet_id = var.create_vnet ? module.vnet.subnet_postgres_id : var.postgres_subnet_id
-  redis_subnet_id    = var.create_vnet ? module.vnet.subnet_redis_id : var.redis_subnet_id
-  agic_subnet_id     = var.create_vnet ? module.vnet.subnet_agic_id : ""
+  vnet_id            = var.create_vnet ? one(module.vnet[*].vnet_id) : var.vnet_id
+  aks_subnet_id      = var.create_vnet ? one(module.vnet[*].subnet_main_id) : var.aks_subnet_id
+  postgres_subnet_id = var.create_vnet ? one(module.vnet[*].subnet_postgres_id) : var.postgres_subnet_id
+  redis_subnet_id    = var.create_vnet ? one(module.vnet[*].subnet_redis_id) : var.redis_subnet_id
+  agic_subnet_id     = var.create_vnet ? one(module.vnet[*].subnet_agic_id) : var.agic_subnet_id
+  bastion_subnet_id  = var.create_vnet ? one(module.vnet[*].subnet_bastion_id) : var.bastion_subnet_id
 
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
@@ -61,9 +64,17 @@ locals {
 # The resource group that contains all LangSmith Azure resources.
 # Deleting this resource group will delete EVERYTHING inside it.
 resource "azurerm_resource_group" "resource_group" {
+  count    = var.create_resource_group ? 1 : 0
   name     = local.resource_group_name
   location = var.location
   tags     = local.common_tags
+}
+
+# Existing resource group lookup — used when create_resource_group = false.
+# Resources deploy into this RG and inherit its region via local.location.
+data "azurerm_resource_group" "existing" {
+  count = var.create_resource_group ? 0 : 1
+  name  = var.resource_group_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -71,10 +82,11 @@ resource "azurerm_resource_group" "resource_group" {
 # Skip this block (create_vnet = false) to reuse an existing VNet.
 
 module "vnet" {
+  count               = var.create_vnet ? 1 : 0
   source              = "./modules/networking"
   network_name        = local.vnet_name
-  location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = local.location
+  resource_group_name = local.resource_group_name
 
   # Controls whether the Postgres/Redis subnets are created.
   # Set false if using in-cluster Postgres/Redis (no dedicated subnets needed).
@@ -101,11 +113,15 @@ module "vnet" {
 module "aks" {
   source              = "./modules/k8s-cluster"
   cluster_name        = local.aks_name
-  location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = local.location
+  resource_group_name = local.resource_group_name
   subnet_id           = local.aks_subnet_id
   service_cidr        = var.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
+  network_plugin_mode = var.aks_network_plugin_mode
+  pod_cidr            = var.aks_pod_cidr
+  network_policy      = var.aks_network_policy
+  outbound_type       = var.aks_outbound_type
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count
@@ -143,6 +159,14 @@ module "aks" {
   # in terraform.tfvars to restrict to operator/CI CIDRs.
   authorized_ip_ranges = var.aks_authorized_ip_ranges
 
+  private_cluster_enabled             = var.aks_private_cluster_enabled
+  private_cluster_public_fqdn_enabled = var.aks_private_cluster_public_fqdn_enabled
+  private_dns_zone_id                 = var.aks_private_dns_zone_id
+
+  # Control-plane identity: system-assigned (default), module-created user-assigned, or BYO.
+  create_cluster_identity = var.aks_create_cluster_identity
+  cluster_identity_id     = var.aks_cluster_identity_id
+
   tags = local.common_tags
 }
 
@@ -155,8 +179,8 @@ module "postgres" {
   count               = var.postgres_source == "external" ? 1 : 0
   source              = "./modules/postgres"
   name                = local.postgres_name
-  location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = local.location
+  resource_group_name = local.resource_group_name
   vnet_id             = local.vnet_id # needed to link the private DNS zone
   subnet_id           = local.postgres_subnet_id
 
@@ -180,11 +204,11 @@ module "redis" {
   count               = var.redis_source == "external" ? 1 : 0
   source              = "./modules/redis"
   name                = local.redis_name
-  location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
-  resource_group_id   = azurerm_resource_group.resource_group.id # azapi parent_id for AMR
-  subnet_id           = local.redis_subnet_id                    # private endpoint goes here
-  vnet_id             = local.vnet_id                            # private DNS zone link
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  resource_group_id   = local.resource_group_id # azapi parent_id for AMR
+  subnet_id           = local.redis_subnet_id   # private endpoint goes here
+  vnet_id             = local.vnet_id           # private DNS zone link
   amr_sku             = var.amr_sku
 
   tags = local.common_tags
@@ -199,8 +223,8 @@ module "blob" {
   source               = "./modules/storage"
   storage_account_name = local.blob_name
   container_name       = "${local.blob_name}-container"
-  location             = var.location
-  resource_group_name  = azurerm_resource_group.resource_group.name
+  location             = local.location
+  resource_group_name  = local.resource_group_name
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days
@@ -232,8 +256,8 @@ module "blob" {
 module "keyvault" {
   source              = "./modules/keyvault"
   name                = local.keyvault_name
-  location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  location            = local.location
+  resource_group_name = local.resource_group_name
 
   # The managed identity used by LangSmith pods gets read-only access to
   # all secrets so future CSI-driver integration requires no RBAC changes.
@@ -250,7 +274,7 @@ module "keyvault" {
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
   # on subsequent applies, eliminating local .secret files.
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password  = var.postgres_admin_password
   langsmith_admin_password = var.langsmith_admin_password
   langsmith_license_key    = var.langsmith_license_key
   langsmith_api_key_salt   = var.langsmith_api_key_salt
@@ -323,7 +347,7 @@ module "k8s_bootstrap" {
   cert_manager_identity_client_id = module.aks.cert_manager_identity_client_id
   subscription_id                 = var.subscription_id
   dns_zone_name                   = var.create_dns_zone ? var.langsmith_domain : ""
-  dns_resource_group_name         = azurerm_resource_group.resource_group.name
+  dns_resource_group_name         = local.resource_group_name
 }
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
@@ -335,8 +359,8 @@ module "waf" {
   count               = var.create_waf ? 1 : 0
   source              = "./modules/waf"
   name                = "langsmith-waf${local.identifier}"
-  resource_group_name = azurerm_resource_group.resource_group.name
-  location            = var.location
+  resource_group_name = local.resource_group_name
+  location            = local.location
   waf_mode            = var.waf_mode
   tags                = local.common_tags
 }
@@ -349,8 +373,8 @@ module "diagnostics" {
   count               = var.create_diagnostics ? 1 : 0
   source              = "./modules/diagnostics"
   name                = "langsmith-logs${local.identifier}"
-  resource_group_name = azurerm_resource_group.resource_group.name
-  location            = var.location
+  resource_group_name = local.resource_group_name
+  location            = local.location
   retention_days      = var.log_retention_days
 
   aks_id      = module.aks.cluster_id
@@ -370,18 +394,16 @@ module "diagnostics" {
 # Enable with: create_bastion = true in terraform.tfvars
 
 module "bastion" {
-  count               = var.create_bastion ? 1 : 0
-  source              = "./modules/bastion"
-  name                = "langsmith-bastion${local.identifier}"
-  resource_group_name = azurerm_resource_group.resource_group.name
-  location            = var.location
-  subnet_id           = module.vnet.subnet_bastion_id
-  vm_size             = var.bastion_vm_size
+  count                = var.create_bastion ? 1 : 0
+  source               = "./modules/bastion"
+  name                 = "langsmith-bastion${local.identifier}"
+  resource_group_name  = local.resource_group_name
+  location             = local.location
+  subnet_id            = local.bastion_subnet_id
+  vm_size              = var.bastion_vm_size
   admin_ssh_public_key = var.bastion_admin_ssh_public_key
-  allowed_ssh_cidrs   = var.bastion_allowed_ssh_cidrs
-  tags                = local.common_tags
-
-  depends_on = [module.vnet]
+  allowed_ssh_cidrs    = var.bastion_allowed_ssh_cidrs
+  tags                 = local.common_tags
 }
 
 # ── DNS (optional) ────────────────────────────────────────────────────────────
@@ -392,7 +414,7 @@ module "dns" {
   count               = var.create_dns_zone ? 1 : 0
   source              = "./modules/dns"
   domain              = var.langsmith_domain
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.resource_group_name
   ingress_ip          = var.ingress_ip
   tags                = local.common_tags
 

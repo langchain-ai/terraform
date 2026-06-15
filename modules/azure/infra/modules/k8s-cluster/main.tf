@@ -3,14 +3,19 @@
 # Purpose: Azure Kubernetes Service cluster for running LangSmith workloads.
 #
 # Key design decisions:
-#   • Azure CNI network plugin: pods get IPs directly from the subnet, enabling
-#     full VNet connectivity (pods can reach PostgreSQL/Redis by private IP).
-#     Tradeoff: uses more IPs than kubenet, but required for private DB access.
+#   • Azure CNI: classic mode (default) gives pods VNet subnet IPs (full VNet
+#     reachability to PostgreSQL/Redis). Azure CNI Overlay (network_plugin_mode
+#     = "overlay") gives pods IPs from pod_cidr instead, so pod IPs do NOT
+#     consume subnet space — BYO subnets can be far smaller. Overlay egress is
+#     SNAT'd to the node IP. With overlay, network_policy must be calico or
+#     cilium (not azure); cilium also enables the eBPF data plane.
 #   • OIDC issuer + Workload Identity: allows Kubernetes service accounts to
 #     federate with Azure AD and assume Managed Identities — used by LangSmith
 #     pods to authenticate to Azure Blob Storage without static keys.
-#   • System-assigned Managed Identity: AKS manages its own identity for
-#     pulling images, accessing node resource group, and VMSS operations.
+#   • Control-plane identity: system-assigned by default. Optionally
+#     user-assigned (created by this module, or BYO) so its subnet-join
+#     permission can be granted before cluster creation — recommended for
+#     BYO-VNet / UDR and required for a custom API-server private DNS zone.
 #   • Default node pool: Standard_DS3_v2 (4 vCPU, 14 GB RAM) — DSv2 family
 #     has broad quota availability across subscriptions.
 #   • Additional "large" pool: Standard_DS4_v2 (8 vCPU, 28 GB) for ClickHouse
@@ -46,6 +51,19 @@ locals {
   agic_vnet_id = var.ingress_controller == "agic" && var.agic_subnet_id != "" ? (
     join("/subnets/", slice(split("/subnets/", var.agic_subnet_id), 0, 1))
   ) : ""
+
+  # Control-plane identity selection. Empty/false => system-assigned (default).
+  # create_cluster_identity => use the module-created user-assigned identity;
+  # otherwise a non-empty cluster_identity_id => use that BYO identity.
+  use_user_assigned_identity = var.create_cluster_identity || var.cluster_identity_id != ""
+  cluster_identity_id        = var.create_cluster_identity ? one(azurerm_user_assigned_identity.cluster[*].id) : var.cluster_identity_id
+
+  # VNet that owns the AKS subnet — derived by stripping the /subnets/<name>
+  # suffix (same approach as agic_vnet_id). The module-created control-plane
+  # identity is granted Network Contributor at this VNet scope so it can both
+  # join the subnet and link the System private DNS zone (the zone link needs
+  # VNet-level permission in custom-DNS hub-spoke topologies).
+  cluster_vnet_id = join("/subnets/", slice(split("/subnets/", var.subnet_id), 0, 1))
 }
 
 # Helm provider uses the AKS cluster credentials to deploy charts
@@ -60,6 +78,42 @@ provider "helm" {
   }
 }
 
+# ── Control-plane (cluster) managed identity ───────────────────────────────────
+# Default is system-assigned (see the identity block in the cluster resource).
+# Set var.create_cluster_identity to have the module create a user-assigned
+# identity and grant it Network Contributor on the VNet (the parent of
+# var.subnet_id). VNet scope — not just the subnet — so the identity can both
+# join the subnet (Microsoft.Network/virtualNetworks/subnets/join/action) AND
+# link the System private DNS zone for a private cluster, which needs VNet-level
+# permission in custom-DNS hub-spoke topologies. Azure recommends a user-assigned
+# identity for BYO-VNet / UDR so the grant exists before the cluster joins the
+# subnet. For a custom API-server private DNS zone, pass an existing identity via
+# var.cluster_identity_id and pre-grant its roles (incl. Private DNS Zone
+# Contributor on the zone) yourself.
+resource "azurerm_user_assigned_identity" "cluster" {
+  count               = var.create_cluster_identity ? 1 : 0
+  name                = "${var.cluster_name}-cluster-identity"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = merge(var.tags, { module = "aks" })
+}
+
+resource "azurerm_role_assignment" "cluster_identity_vnet" {
+  count                = var.create_cluster_identity ? 1 : 0
+  scope                = local.cluster_vnet_id
+  role_definition_name = "Network Contributor"
+  principal_id         = azurerm_user_assigned_identity.cluster[0].principal_id
+}
+
+# Give the Network Contributor grant time to propagate before the cluster tries
+# to join the subnet (RBAC propagation is not instant). 60s is usually enough;
+# cluster provisioning adds further buffer.
+resource "time_sleep" "cluster_identity_rbac" {
+  count           = var.create_cluster_identity ? 1 : 0
+  create_duration = "60s"
+  depends_on      = [azurerm_role_assignment.cluster_identity_vnet]
+}
+
 # The AKS cluster — the Kubernetes control plane + node pools.
 # All LangSmith application pods, supporting tools (cert-manager, KEDA),
 # and the ingress controller run here.
@@ -72,6 +126,15 @@ resource "azurerm_kubernetes_cluster" "main" {
   tags                = merge(var.tags, { module = "aks" })
 
   role_based_access_control_enabled = true
+
+  # Private API server: the control-plane endpoint gets a private IP reachable
+  # only from the VNet (or peered networks). The apply host must be able to
+  # REACH that private IP (DNS resolution alone is not enough) — run terraform
+  # from a bastion / self-hosted runner with VNet connectivity that can also
+  # resolve the private DNS zone. public_fqdn defaults to false (no public name).
+  private_cluster_enabled             = var.private_cluster_enabled
+  private_cluster_public_fqdn_enabled = var.private_cluster_enabled ? var.private_cluster_public_fqdn_enabled : null
+  private_dns_zone_id                 = var.private_cluster_enabled ? (var.private_dns_zone_id != "" ? var.private_dns_zone_id : "System") : null
 
   # OIDC issuer: exposes a discovery document at a well-known URL so Azure AD
   # can verify tokens issued by this cluster. Required for Workload Identity.
@@ -114,11 +177,19 @@ resource "azurerm_kubernetes_cluster" "main" {
     zones = var.availability_zones
   }
 
-  # System-assigned Managed Identity: AKS uses this to manage node VMs,
-  # pull from ACR (if configured), and interact with the node resource group.
+  # Control-plane identity. Default: system-assigned (AKS manages its own
+  # identity for node VMs, ACR pulls, and node resource group operations).
+  # Opt-in user-assigned (var.create_cluster_identity or var.cluster_identity_id)
+  # for BYO-VNet / UDR / a custom API-server private DNS zone.
   identity {
-    type = "SystemAssigned"
+    type         = local.use_user_assigned_identity ? "UserAssigned" : "SystemAssigned"
+    identity_ids = local.use_user_assigned_identity ? [local.cluster_identity_id] : null
   }
+
+  # When the module creates the control-plane identity, wait for its Network
+  # Contributor grant on the subnet to propagate before joining the subnet.
+  # No-op (empty list) when using system-assigned or a BYO identity.
+  depends_on = [time_sleep.cluster_identity_rbac]
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply
@@ -126,23 +197,35 @@ resource "azurerm_kubernetes_cluster" "main" {
   # operators running ad-hoc kubectl from anywhere. Production deployments
   # populate var.authorized_ip_ranges with their CI runner / jumpbox CIDRs.
   dynamic "api_server_access_profile" {
-    for_each = length(var.authorized_ip_ranges) > 0 ? [1] : []
+    for_each = length(var.authorized_ip_ranges) > 0 && !var.private_cluster_enabled ? [1] : []
     content {
       authorized_ip_ranges = var.authorized_ip_ranges
     }
   }
 
-  # Azure CNI: pods get IPs directly from the VNet subnet, giving them full
-  # network reachability to PostgreSQL/Redis without any NAT.
-  # service_cidr must NOT overlap with the VNet or any peered network.
-  # network_policy = "azure" enables the Azure NetworkPolicy engine so
-  # NetworkPolicy resources actually deny traffic — without it, NetworkPolicy
-  # objects are accepted by the API but never enforced.
+  # Azure CNI. Two IPAM modes via network_plugin_mode:
+  #   • classic (default, network_plugin_mode = ""): pods get IPs directly from
+  #     the VNet subnet, giving full network reachability to PostgreSQL/Redis
+  #     without NAT. Pods consume subnet IPs.
+  #   • overlay (network_plugin_mode = "overlay"): pods get IPs from pod_cidr
+  #     instead of the subnet (so pods do NOT consume subnet space); egress is
+  #     SNAT'd to the node IP.
+  # service_cidr (and pod_cidr in overlay) must NOT overlap the VNet or any
+  # peered network.
+  # network_policy selects the policy engine that makes NetworkPolicy resources
+  # actually deny traffic (without one, NetworkPolicy objects are accepted but
+  # never enforced): "azure" (NPM, classic default), "calico", or "cilium".
+  # "cilium" requires overlay and auto-enables the eBPF data plane
+  # (network_data_plane = "cilium"); it is the recommended engine for overlay.
   network_profile {
-    network_plugin = "azure"
-    network_policy = "azure"
-    service_cidr   = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
-    dns_service_ip = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+    network_plugin      = "azure"
+    network_plugin_mode = var.network_plugin_mode != "" ? var.network_plugin_mode : null
+    network_policy      = var.network_policy
+    network_data_plane  = var.network_policy == "cilium" ? "cilium" : null
+    pod_cidr            = var.network_plugin_mode == "overlay" ? var.pod_cidr : null
+    service_cidr        = var.service_cidr
+    dns_service_ip      = var.dns_service_ip
+    outbound_type       = var.outbound_type
   }
 
   # Key Vault CSI Secrets Store driver — enables pods to mount secrets from
@@ -245,7 +328,7 @@ resource "azurerm_user_assigned_identity" "cert_manager" {
 # Allows cert-manager pod to exchange its K8s OIDC token for an Azure AD token
 # so it can call the Azure DNS API without a static service principal secret.
 resource "azurerm_federated_identity_credential" "cert_manager" {
-  name      = "${var.cluster_name}-cert-manager-federated"
+  name                      = "${var.cluster_name}-cert-manager-federated"
   user_assigned_identity_id = azurerm_user_assigned_identity.cert_manager.id
 
   audience = ["api://AzureADTokenExchange"]
@@ -258,7 +341,7 @@ resource "azurerm_federated_identity_credential" "cert_manager" {
 resource "azurerm_federated_identity_credential" "k8s_app" {
   for_each = toset(local.service_accounts_for_workload_identity)
 
-  name      = "langsmith-federated-${each.value}"
+  name                      = "langsmith-federated-${each.value}"
   user_assigned_identity_id = azurerm_user_assigned_identity.k8s_app.id
 
   audience = ["api://AzureADTokenExchange"]
