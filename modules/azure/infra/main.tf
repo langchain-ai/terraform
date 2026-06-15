@@ -77,6 +77,22 @@ data "azurerm_resource_group" "existing" {
   name  = var.resource_group_name
 }
 
+# ── State migration for the count-gated RG and VNet ───────────────────────────
+# create_resource_group / create_vnet gate these with count, which changes their
+# resource addresses (e.g. azurerm_resource_group.resource_group ->
+# azurerm_resource_group.resource_group[0]). These moved blocks let deployments
+# created before the BYO flags existed upgrade in place. Without them, Terraform
+# would destroy and recreate the resource group and VNet on the next apply.
+moved {
+  from = azurerm_resource_group.resource_group
+  to   = azurerm_resource_group.resource_group[0]
+}
+
+moved {
+  from = module.vnet
+  to   = module.vnet[0]
+}
+
 # ── Networking ────────────────────────────────────────────────────────────────
 # Creates VNet + three dedicated subnets (AKS, PostgreSQL, Redis).
 # Skip this block (create_vnet = false) to reuse an existing VNet.
