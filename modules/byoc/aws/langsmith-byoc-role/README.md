@@ -1,13 +1,13 @@
 # LangSmith BYOC - AWS Customer Role
 
-Provisions the IAM roles in **your AWS account** that let the LangSmith control plane stand up and manage a LangSmith data plane on your behalf, for BYOC.
+Provisions the IAM roles in **your AWS account** that let the LangSmith control plane stand up and manage BYOC data planes in your account.
 
 This module creates two roles:
 
 | Role | Purpose | Trust |
 |------|---------|-------|
-| `var.role_name` (you choose) | Assumed by the LangSmith control-plane Crossplane controller to provision and manage EKS, VPC, RDS, ElastiCache, S3, IAM, etc. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
-| `LangSmithBYOCBreakGlass` | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default; optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved `identitystore:UserId` and `sts:SourceIdentity` values |
+| `var.role_name` (you choose) | Assumed by the LangSmith control-plane Crossplane controller to provision and manage resources. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
+| `LangSmithBYOCBreakGlass` | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
 
 ## Prerequisites
 
@@ -71,7 +71,7 @@ output "role_arns" {
 
 After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_arn` outputs with the LangChain team.
 
-We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation. Configure the backend in your root module according to your organization's Terraform state management practices.
+We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation.
 
 ### Enabling break-glass assume-role access
 
@@ -89,19 +89,9 @@ break_glass_source_identities = [
 ]
 ```
 
-The Identity Store user ID is the non-spoofable authorization boundary. The SourceIdentity value is the service identity used for CloudTrail readability and should match the engineer's LangChain email.
+The Identity Store user ID is the strict authorization boundary. The SourceIdentity value is the service identity used for CloudTrail readability and should match the engineer's LangChain email.
 
 Set `allow_break_glass_access` back to `false`, and remove the allowed identities when the break glass access is complete.
-
-### EKS access entries
-
-By default, `LangSmithBYOCBreakGlass` can describe LangSmith EKS clusters but does not receive Kubernetes access. When break-glass Kubernetes access is needed, create EKS access entries for `break_glass_role_arn` in the target cluster's region:
-
-- `read_only`: Use for inspection-only incidents. Associate `AmazonEKSAdminViewPolicy`.
-- `cluster_management`: Use for operational remediation that needs Kubernetes management but should avoid AWS-managed EKS cluster-admin. Map the access entry to Kubernetes group `langsmith-cluster-management`.
-- `data_access`: Use only when the incident requires the deepest cluster access, including workflows that reach customer data stores. Associate `AmazonEKSClusterAdminPolicy`.
-
-EKS access entries are regional resources. If you have data plane clusters in multiple regions, create the access entry separately in each target region. EKS allows only one access entry per principal per cluster, so choose the lowest access mode that is sufficient for the incident.
 
 ### Public-internet ingress
 
@@ -139,7 +129,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 
 ### Crossplane control role
 
-The role's trust policy allows exactly one principal (`var.control_plane_reconcile_role_arn`) and requires the matching `sts:ExternalId`. Both must be presented for any assume-role call to succeed. If either the role ARN or the External ID is compromised on its own, the trust still fails.
+The role's trust policy allows exactly one principal (`var.control_plane_reconcile_role_arn`) and requires the matching `sts:ExternalId`.
 
 The attached permissions are split into managed policies, scoped to the AWS surface Crossplane needs to operate a LangSmith data plane:
 
@@ -156,7 +146,7 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-lambda` | Lambda + EventBridge for periodic jobs |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
-The exact statements are in `policies/*.json` - read them before applying. Account IDs are templated in at apply time; no hardcoded customer principals reach the JSON files.
+The exact statements are in `policies/*.json`.
 
 ### Break-glass role
 
@@ -175,7 +165,7 @@ The break-glass role only carries an inline `eks:DescribeCluster` permission on 
 
 ## Operational notes
 
-- The Crossplane role's permissions are intentionally broad within the listed surfaces. Tightening them further breaks the control plane's ability to reconcile the data plane on upgrades - if you need tighter scope (e.g., resource-name prefixes), discuss with LangChain first.
+- The Crossplane role's permissions are intentionally broad within the listed surfaces. Tightening them further breaks the control plane's ability to reconcile the data plane on upgrades. If you need tighter scope, discuss with LangChain first.
 - `data.aws_caller_identity.current` is used at plan time to template account IDs into the policies. Run `terraform apply` from credentials in the **target** account, not the LangSmith control-plane account.
 - Removing this module will delete both roles and all attached policies. The LangSmith data plane will lose all control-plane reconciliation; do not apply destroys without coordinating with LangChain.
 
