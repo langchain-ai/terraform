@@ -75,13 +75,23 @@ We recommend keeping Terraform state in remote storage when possible, rather tha
 
 ### Enabling break-glass assume-role access
 
-`LangSmithBYOCBreakGlass` defaults to `Deny`. To allow the approved LangChain engineers in `break_glass_identitystore_user_ids` and `break_glass_source_identities` to assume the role, set:
+`LangSmithBYOCBreakGlass` defaults to `Deny`. To allow an approved LangChain engineer to assume the role, set `allow_break_glass_access = true` and include that engineer's Identity Store user ID and SourceIdentity email (the engineer will provide it to you):
 
 ```hcl
 allow_break_glass_access = true
+
+break_glass_identitystore_user_ids = [
+  "<langchain-identity-store-user-id>",
+]
+
+break_glass_source_identities = [
+  "<langchain-engineer-email>",
+]
 ```
 
-Set it back to `false` when the incident is complete.
+The Identity Store user ID is the non-spoofable authorization boundary. The SourceIdentity value is the service identity used for CloudTrail readability and should match the engineer's LangChain email.
+
+Set `allow_break_glass_access` back to `false`, and remove the allowed identities when the break glass access is complete.
 
 ### EKS access entries
 
@@ -158,7 +168,8 @@ The trust policy defaults to `Effect = "Deny"`. When `allow_break_glass_access =
 - `identitystore:UserId` is in `break_glass_identitystore_user_ids`
 - `sts:SourceIdentity` is in `break_glass_source_identities`
 
-The Identity Store user ID is the non-spoofable authorization boundary. SourceIdentity is included for auditability in CloudTrail and should match the engineer's LangChain email.
+The Identity Store user ID will be provided to you by a langchain user, and ensures that only their credentials can be used to assume the role.
+The source identity email will be added for better auditing in CloudTrail.
 
 The break-glass role only carries an inline `eks:DescribeCluster` permission on `*-smith-eks` clusters at the module layer. Kubernetes access is controlled separately with EKS access entries in each target cluster and region.
 
