@@ -19,9 +19,45 @@ variable "control_plane_reconcile_role_arn" {
   type        = string
 }
 
-variable "langchain_break_glass_role_arn" {
-  description = "ARN of the LangChain control-plane break-glass IAM role."
+variable "langsmith_control_plane_account_id" {
+  description = "AWS account ID of the LangSmith control plane."
   type        = string
+  default     = "808407022534"
+}
+
+variable "langsmith_byoc_break_glass_principal_arn_patterns" {
+  description = "IAM principal ARN patterns for LangSmith Identity Center BYOC break-glass sessions."
+  type        = list(string)
+  default = [
+    "arn:aws:iam::808407022534:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_BYOCBreakGlass_442d99d086ecd3c8",
+    "arn:aws:iam::808407022534:role/aws-reserved/sso.amazonaws.com/*/AWSReservedSSO_BYOCBreakGlass_442d99d086ecd3c8",
+  ]
+}
+
+variable "break_glass_identitystore_user_ids" {
+  description = "IAM Identity Center user IDs allowed to assume the customer-side break-glass role."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.break_glass_identitystore_user_ids) > 0
+    error_message = "At least one break-glass Identity Store user ID is required."
+  }
+}
+
+variable "break_glass_source_identities" {
+  description = "SourceIdentity values allowed when assuming the customer-side break-glass role."
+  type        = list(string)
+
+  validation {
+    condition     = length(var.break_glass_source_identities) > 0
+    error_message = "At least one break-glass SourceIdentity value is required."
+  }
+}
+
+variable "allow_break_glass_access" {
+  description = "Allow trusted LangSmith Identity Center users to assume the customer-side break-glass role."
+  type        = bool
+  default     = false
 }
 
 variable "allow_public_ingress" {
