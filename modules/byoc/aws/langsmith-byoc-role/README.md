@@ -110,8 +110,8 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `role_name` | `string` | yes | - | Name of the Crossplane-assumed IAM role created in your account. |
 | `control_plane_reconcile_role_arn` | `string` | yes | - | ARN of the LangSmith control-plane principal trusted to assume the role. |
 | `external_id` | `string` | yes | - | Per-tenant `sts:ExternalId` value. Treat as a secret. |
-| `break_glass_identitystore_user_ids` | `list(string)` | yes | - | IAM Identity Center user IDs allowed to assume the customer-side break-glass role. |
-| `break_glass_source_identities` | `list(string)` | yes | - | SourceIdentity values allowed when assuming the customer-side break-glass role. |
+| `break_glass_identitystore_user_ids` | `list(string)` | no | `[]` | IAM Identity Center user IDs allowed to assume the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
+| `break_glass_source_identities` | `list(string)` | no | `[]` | SourceIdentity values allowed when assuming the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
 | `allow_break_glass_access` | `bool` | no | `false` | Allows approved LangSmith Identity Center users to assume the customer-side break-glass role. |
 | `langsmith_control_plane_account_id` | `string` | no | `808407022534` | AWS account ID of the LangSmith control plane. |
 | `langsmith_byoc_break_glass_principal_arn_patterns` | `list(string)` | no | BYOCBreakGlass SSO role patterns | IAM principal ARN patterns for LangSmith Identity Center BYOC break-glass sessions. |

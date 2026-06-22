@@ -7,6 +7,12 @@ locals {
       Resource = "arn:aws:eks:*:${local.account_id}:cluster/*-smith-eks"
     }]
   })
+  break_glass_identitystore_user_ids = length(var.break_glass_identitystore_user_ids) > 0 ? var.break_glass_identitystore_user_ids : [
+    "__no_identitystore_user_ids_configured__",
+  ]
+  break_glass_source_identities = length(var.break_glass_source_identities) > 0 ? var.break_glass_source_identities : [
+    "__no_source_identities_configured__",
+  ]
 }
 
 resource "aws_iam_role" "break_glass" {
@@ -28,8 +34,8 @@ resource "aws_iam_role" "break_glass" {
           "aws:PrincipalArn" = var.langsmith_byoc_break_glass_principal_arn_patterns
         }
         StringEquals = {
-          "identitystore:UserId" = var.break_glass_identitystore_user_ids
-          "sts:SourceIdentity"   = var.break_glass_source_identities
+          "identitystore:UserId" = local.break_glass_identitystore_user_ids
+          "sts:SourceIdentity"   = local.break_glass_source_identities
         }
       }
     }]

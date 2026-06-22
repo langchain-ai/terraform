@@ -37,21 +37,13 @@ variable "langsmith_byoc_break_glass_principal_arn_patterns" {
 variable "break_glass_identitystore_user_ids" {
   description = "IAM Identity Center user IDs allowed to assume the customer-side break-glass role."
   type        = list(string)
-
-  validation {
-    condition     = length(var.break_glass_identitystore_user_ids) > 0
-    error_message = "At least one break-glass Identity Store user ID is required."
-  }
+  default     = []
 }
 
 variable "break_glass_source_identities" {
   description = "SourceIdentity values allowed when assuming the customer-side break-glass role."
   type        = list(string)
-
-  validation {
-    condition     = length(var.break_glass_source_identities) > 0
-    error_message = "At least one break-glass SourceIdentity value is required."
-  }
+  default     = []
 }
 
 variable "allow_break_glass_access" {
