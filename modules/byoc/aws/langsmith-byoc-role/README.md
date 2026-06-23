@@ -105,19 +105,19 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 
 ### Deletion permissions
 
-Delete permissions are disabled by default. For normal reconciliation, leave:
-
-```hcl
-allow_delete_permissions = false
-```
-
-When you need LangSmith to delete or tear down LangSmith-managed AWS resources, temporarily enable:
+Delete permissions are enabled by default so LangSmith can clean up or tear down LangSmith-managed AWS resources:
 
 ```hcl
 allow_delete_permissions = true
 ```
 
-Set it back to `false` when the deletion workflow is complete.
+To restrict the role from deleting managed resources, set:
+
+```hcl
+allow_delete_permissions = false
+```
+
+Set it back to `true` when deletion or teardown workflows are needed.
 
 ## Inputs
 
@@ -133,7 +133,7 @@ Set it back to `false` when the deletion workflow is complete.
 | `langsmith_byoc_break_glass_principal_arn_patterns` | `list(string)` | no | BYOCBreakGlass SSO role patterns | IAM principal ARN patterns for LangSmith Identity Center BYOC break-glass sessions. |
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
-| `allow_delete_permissions` | `bool` | no | `false` | Grants destructive permissions needed to delete LangSmith-managed AWS resources. Enable only for teardown or deletion workflows. |
+| `allow_delete_permissions` | `bool` | no | `true` | Grants destructive permissions needed to delete LangSmith-managed AWS resources. Set false to restrict the role from deleting managed resources. |
 
 ## Outputs
 
@@ -161,9 +161,9 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-storage` | S3 (trace blobs), ElastiCache (Redis) |
 | `-lambda` | Lambda + EventBridge for periodic jobs |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
-| `-delete` | Destructive actions for LangSmith-managed resources, attached only when `allow_delete_permissions = true` |
+| `-delete` | Destructive actions for LangSmith-managed resources, attached when `allow_delete_permissions = true` |
 
-The default policies intentionally exclude destructive actions. Those statements are isolated in `policies/deletes*.json` and attached only when `allow_delete_permissions = true`.
+Destructive actions are isolated in `policies/deletes*.json`. They are attached by default and can be removed by setting `allow_delete_permissions = false`.
 
 ### Break-glass role
 

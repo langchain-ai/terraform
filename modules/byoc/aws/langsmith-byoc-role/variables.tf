@@ -59,7 +59,7 @@ variable "allow_public_ingress" {
 }
 
 variable "allow_delete_permissions" {
-  description = "Grant destructive permissions needed to delete LangSmith-managed AWS resources. Leave false for normal reconciliation; enable only for teardown or deletion workflows."
+  description = "Grant destructive permissions needed to delete LangSmith-managed AWS resources. Set false to restrict the role from deleting managed resources."
   type        = bool
-  default     = false
+  default     = true
 }
