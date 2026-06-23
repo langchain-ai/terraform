@@ -1,0 +1,14 @@
+[
+  {
+    "Sid": "KMSListAliases",
+    "Effect": "Allow",
+    "Action": ["kms:ListAliases"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "KMSDescribeKeys",
+    "Effect": "Allow",
+    "Action": ["kms:DescribeKey"],
+    "Resource": "arn:aws:kms:*:${account_id}:key/*"
+  }
+]

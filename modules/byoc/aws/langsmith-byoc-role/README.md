@@ -2,11 +2,12 @@
 
 Provisions the IAM roles in **your AWS account** that let the LangSmith control plane stand up and manage BYOC data planes in your account.
 
-This module creates two roles:
+This module creates three roles:
 
 | Role | Purpose | Trust |
 |------|---------|-------|
-| `var.role_name` (you choose) | Assumed by the LangSmith control-plane Crossplane controller to provision and manage resources. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
+| `var.role_name` (you choose) | Higher-privilege provisioning role used for initial provisioning and explicit maintenance operations. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
+| `var.management_role_name` | Lower-privilege management/maintenance role used for day 1 operations after initial provisioning. | Allow `var.control_plane_reconcile_role_arn`, gated on `sts:ExternalId` |
 | `LangSmithBYOCBreakGlass` | Customer-side break-glass role for approved LangChain support engineers during incidents. | Deny by default. Optionally allow the LangSmith BYOCBreakGlass Identity Center permission set, gated on approved user IDs |
 
 ## Prerequisites
@@ -45,6 +46,7 @@ module "langsmith_byoc_role" {
   source = "github.com/langchain-ai/terraform//modules/byoc/aws/langsmith-byoc-role?ref=main"
 
   role_name                        = "langsmith-byoc"
+  management_role_name             = "LangSmithBYOCManagement"
   control_plane_reconcile_role_arn = "arn:aws:iam::<langsmith-account-id>:role/<crossplane-irsa-role>"
   external_id                      = var.external_id
 
@@ -63,13 +65,14 @@ module "langsmith_byoc_role" {
 
 output "role_arns" {
   value = {
-    crossplane  = module.langsmith_byoc_role.crossplane_role_arn
-    break_glass = module.langsmith_byoc_role.break_glass_role_arn
+    provisioning = module.langsmith_byoc_role.crossplane_role_arn
+    management   = module.langsmith_byoc_role.management_role_arn
+    break_glass  = module.langsmith_byoc_role.break_glass_role_arn
   }
 }
 ```
 
-After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_arn` outputs with the LangChain team.
+After `terraform apply`, share the `crossplane_role_arn`, `management_role_arn`, and `break_glass_role_arn` outputs with the LangChain team. The `crossplane_role_arn` output name is retained for compatibility, but it represents the higher-privilege provisioning role in the current model.
 
 We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation.
 
@@ -107,7 +110,8 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `role_name` | `string` | yes | - | Name of the Crossplane-assumed IAM role created in your account. |
+| `role_name` | `string` | yes | - | Name of the higher-privilege provisioning IAM role created in your account. |
+| `management_role_name` | `string` | no | `LangSmithBYOCManagement` | Name of the lower-privilege management/maintenance IAM role used for day 1 operations after initial provisioning. |
 | `control_plane_reconcile_role_arn` | `string` | yes | - | ARN of the LangSmith control-plane principal trusted to assume the role. |
 | `external_id` | `string` | yes | - | Per-tenant `sts:ExternalId` value. Treat as a secret. |
 | `break_glass_identitystore_user_ids` | `list(string)` | no | `[]` | IAM Identity Center user IDs allowed to assume the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
@@ -122,16 +126,17 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 
 | Output | Description |
 |--------|-------------|
-| `crossplane_role_arn` | ARN of the Crossplane-assumed control role. |
+| `crossplane_role_arn` | ARN of the higher-privilege provisioning role. |
+| `management_role_arn` | ARN of the lower-privilege management role. |
 | `break_glass_role_arn` | ARN of the customer-side LangSmith BYOC break-glass role. |
 
 ## Security model
 
-### Crossplane control role
+### Provisioning role
 
 The role's trust policy allows exactly one principal (`var.control_plane_reconcile_role_arn`) and requires the matching `sts:ExternalId`.
 
-The attached permissions are split into managed policies, scoped to the AWS surface Crossplane needs to operate a LangSmith data plane:
+The attached permissions are split into managed policies, scoped to the AWS surface Crossplane needs to provision and explicitly maintain a LangSmith data plane:
 
 | Policy suffix | Surface |
 |---------------|---------|
@@ -147,6 +152,24 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
 
 The exact statements are in `policies/*.json`.
+
+### Management role
+
+The management role, also referred to as the maintenance role, uses the same trust model as the provisioning role, but it carries a lower-privilege policy set for steady-state day 1 operations after the data plane has been provisioned.
+
+| Policy suffix | Surface |
+|---------------|---------|
+| `-guardrails` | Explicit deny guardrails for high-risk IAM, KMS, and data-store mutations outside the management role's scope |
+| `-vpc` | Read and tag existing VPC, subnet, route table, endpoint, security group, and flow-log resources |
+| `-iam` | Read and tag LangSmith-managed IAM roles, policies, and instance profiles |
+| `-eks` | Read and tag EKS clusters, node groups, access entries, and add-ons |
+| `-elbv2` | Read and tag load balancer resources |
+| `-data` | Read and tag RDS, Secrets Manager, and KMS resources |
+| `-storage` | Read and tag S3 and ElastiCache resources |
+| `-lambda` | Read and tag Lambda and EventBridge resources |
+| `-dns` | Read and tag Route 53 and ACM resources |
+
+The exact statements are in `management_policies/*.json`.
 
 ### Break-glass role
 
@@ -165,9 +188,10 @@ The break-glass role only carries an inline `eks:DescribeCluster` permission on 
 
 ## Operational notes
 
-- The Crossplane role's permissions are intentionally broad within the listed surfaces. Tightening them further breaks the control plane's ability to reconcile the data plane on upgrades. If you need tighter scope, discuss with LangChain first.
+- The provisioning role's permissions are intentionally broad within the listed surfaces. Tightening them further breaks the control plane's ability to create and maintain the data plane on upgrades. If you need tighter scope, discuss with LangChain first.
+- The management role is intended for routine post-provisioning operations and should be preferred by the control plane whenever elevated provisioning permissions are not required.
 - `data.aws_caller_identity.current` is used at plan time to template account IDs into the policies. Run `terraform apply` from credentials in the **target** account, not the LangSmith control-plane account.
-- Removing this module will delete both roles and all attached policies. The LangSmith data plane will lose all control-plane reconciliation; do not apply destroys without coordinating with LangChain.
+- Removing this module will delete all roles and all attached policies. The LangSmith data plane will lose control-plane reconciliation; do not apply destroys without coordinating with LangChain.
 
 ## License
 

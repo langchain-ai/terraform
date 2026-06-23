@@ -3,6 +3,12 @@ variable "role_name" {
   type        = string
 }
 
+variable "management_role_name" {
+  description = "Name of the lower-privilege IAM role used for day 1 management operations after initial provisioning."
+  type        = string
+  default     = "LangSmithBYOCManagement"
+}
+
 variable "external_id" {
   description = "External ID required to assume this role."
   type        = string

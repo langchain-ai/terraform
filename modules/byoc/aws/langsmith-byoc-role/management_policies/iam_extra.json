@@ -1,0 +1,77 @@
+[
+  {
+    "Sid": "IAMReadManagedPolicies",
+    "Effect": "Allow",
+    "Action": [
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy"
+  },
+  {
+    "Sid": "IAMTagManagedPolicies",
+    "Effect": "Allow",
+    "Action": [
+      "iam:TagPolicy",
+      "iam:UntagPolicy"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMAddLangsmithTagsToPolicies",
+    "Effect": "Allow",
+    "Action": ["iam:TagPolicy"],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMReadManagedInstanceProfiles",
+    "Effect": "Allow",
+    "Action": ["iam:GetInstanceProfile"],
+    "Resource": [
+      "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
+      "arn:aws:iam::${account_id}:instance-profile/eks-*"
+    ]
+  },
+  {
+    "Sid": "IAMTagManagedInstanceProfiles",
+    "Effect": "Allow",
+    "Action": [
+      "iam:TagInstanceProfile",
+      "iam:UntagInstanceProfile"
+    ],
+    "Resource": [
+      "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
+      "arn:aws:iam::${account_id}:instance-profile/eks-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMAddLangsmithTagsToInstanceProfiles",
+    "Effect": "Allow",
+    "Action": ["iam:TagInstanceProfile"],
+    "Resource": [
+      "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
+      "arn:aws:iam::${account_id}:instance-profile/eks-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

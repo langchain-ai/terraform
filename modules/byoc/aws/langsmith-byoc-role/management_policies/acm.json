@@ -1,0 +1,38 @@
+[
+  {
+    "Sid": "ACMReadAll",
+    "Effect": "Allow",
+    "Action": ["acm:ListCertificates"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "ACMManageTaggedCertificates",
+    "Effect": "Allow",
+    "Action": [
+      "acm:DescribeCertificate",
+      "acm:GetCertificate",
+      "acm:ListTagsForCertificate",
+      "acm:AddTagsToCertificate",
+      "acm:RemoveTagsFromCertificate",
+      "acm:RenewCertificate",
+      "acm:UpdateCertificateOptions"
+    ],
+    "Resource": "arn:aws:acm:*:${account_id}:certificate/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ACMAddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["acm:AddTagsToCertificate"],
+    "Resource": "arn:aws:acm:*:${account_id}:certificate/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "Sid": "EKSDescribe",
+    "Effect": "Allow",
+    "Action": ["eks:Describe*", "eks:List*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "EKSClusterManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:AccessKubernetesApi",
+      "eks:TagResource",
+      "eks:UntagResource",
+      "eks:UpdateClusterVersion"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSNodegroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:TagResource",
+      "eks:UntagResource",
+      "eks:UpdateNodegroupConfig",
+      "eks:UpdateNodegroupVersion"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:nodegroup/*-smith-eks/*/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAddonManage",
+    "Effect": "Allow",
+    "Action": [
+      "eks:TagResource",
+      "eks:UntagResource",
+      "eks:UpdateAddon"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:addon/*-smith-eks/*/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAccessEntryTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:access-entry/*-smith-eks/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["eks:TagResource"],
+    "Resource": [
+      "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+      "arn:aws:eks:*:${account_id}:nodegroup/*-smith-eks/*/*",
+      "arn:aws:eks:*:${account_id}:addon/*-smith-eks/*/*",
+      "arn:aws:eks:*:${account_id}:access-entry/*-smith-eks/*",
+      "arn:aws:eks:*:${account_id}:podidentityassociation/*-smith-eks/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSPodIdentityTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "eks:TagResource",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:podidentityassociation/*-smith-eks/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

@@ -1,0 +1,52 @@
+[
+  {
+    "Sid": "EventBridgeListRules",
+    "Effect": "Allow",
+    "Action": ["events:ListRules"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "EventBridgeReadManagedRules",
+    "Effect": "Allow",
+    "Action": [
+      "events:DescribeRule",
+      "events:ListTagsForResource",
+      "events:ListTargetsByRule"
+    ],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ]
+  },
+  {
+    "Sid": "EventBridgeTagManagedRules",
+    "Effect": "Allow",
+    "Action": [
+      "events:TagResource",
+      "events:UntagResource"
+    ],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EventBridgeAddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["events:TagResource"],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

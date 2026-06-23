@@ -1,0 +1,165 @@
+[
+  {
+    "Sid": "DenyAssumingOtherRoles",
+    "Effect": "Deny",
+    "Action": ["sts:AssumeRole"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenyIAMPrivilegeEscalation",
+    "Effect": "Deny",
+    "Action": [
+      "iam:AddRoleToInstanceProfile",
+      "iam:AttachRolePolicy",
+      "iam:CreateAccessKey",
+      "iam:CreateInstanceProfile",
+      "iam:CreateLoginProfile",
+      "iam:CreatePolicy",
+      "iam:CreatePolicyVersion",
+      "iam:CreateRole",
+      "iam:CreateServiceLinkedRole",
+      "iam:CreateUser",
+      "iam:DeletePolicy",
+      "iam:DeletePolicyVersion",
+      "iam:DeleteRole",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PassRole",
+      "iam:PutRolePolicy",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:SetDefaultPolicyVersion",
+      "iam:UpdateAssumeRolePolicy"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenySecretValueAccessAndMutation",
+    "Effect": "Deny",
+    "Action": [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:DeleteSecret",
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:PutSecretValue",
+      "secretsmanager:RestoreSecret",
+      "secretsmanager:RotateSecret",
+      "secretsmanager:UpdateSecret",
+      "secretsmanager:UpdateSecretVersionStage"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenyKMSDataAccessAndPolicyMutation",
+    "Effect": "Deny",
+    "Action": [
+      "kms:CreateGrant",
+      "kms:Decrypt",
+      "kms:DisableKey",
+      "kms:DisableKeyRotation",
+      "kms:Encrypt",
+      "kms:GenerateDataKey",
+      "kms:GenerateDataKeyPair",
+      "kms:GenerateDataKeyPairWithoutPlaintext",
+      "kms:GenerateDataKeyWithoutPlaintext",
+      "kms:PutKeyPolicy",
+      "kms:ReEncryptFrom",
+      "kms:ReEncryptTo",
+      "kms:ScheduleKeyDeletion"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenyCodeExecutionAndComputeCreation",
+    "Effect": "Deny",
+    "Action": [
+      "ec2:CreateLaunchTemplate",
+      "ec2:CreateLaunchTemplateVersion",
+      "ec2:RunInstances",
+      "ec2:TerminateInstances",
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:InvokeFunction",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenyEKSIdentityMutation",
+    "Effect": "Deny",
+    "Action": [
+      "eks:AssociateAccessPolicy",
+      "eks:CreateAccessEntry",
+      "eks:CreatePodIdentityAssociation",
+      "eks:DeleteAccessEntry",
+      "eks:DeletePodIdentityAssociation",
+      "eks:DisassociateAccessPolicy",
+      "eks:UpdateAccessEntry",
+      "eks:UpdatePodIdentityAssociation"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenyManagedResourceDeletion",
+    "Effect": "Deny",
+    "Action": [
+      "acm:DeleteCertificate",
+      "elasticache:DeleteCacheCluster",
+      "elasticache:DeleteCacheParameterGroup",
+      "elasticache:DeleteCacheSubnetGroup",
+      "elasticache:DeleteReplicationGroup",
+      "elasticache:DeleteServerlessCache",
+      "elasticache:DeleteSnapshot",
+      "elasticache:DeleteUser",
+      "elasticache:DeleteUserGroup",
+      "eks:DeleteAddon",
+      "eks:DeleteCluster",
+      "eks:DeleteFargateProfile",
+      "eks:DeleteNodegroup",
+      "events:DeleteRule",
+      "rds:DeleteDBCluster",
+      "rds:DeleteDBClusterSnapshot",
+      "rds:DeleteDBInstance",
+      "rds:DeleteDBInstanceAutomatedBackup",
+      "rds:DeleteDBParameterGroup",
+      "rds:DeleteDBSnapshot",
+      "rds:DeleteDBSubnetGroup",
+      "route53:DeleteHostedZone",
+      "s3:DeleteBucket",
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "DenyS3ObjectDataAccess",
+    "Effect": "Deny",
+    "Action": [
+      "s3:GetObject",
+      "s3:GetObjectVersion",
+      "s3:PutObject"
+    ],
+    "Resource": "arn:aws:s3:::*/*"
+  },
+  {
+    "Sid": "DenyElastiCacheDisableAuthToken",
+    "Effect": "Deny",
+    "Action": ["elasticache:ModifyReplicationGroup"],
+    "Resource": "*",
+    "Condition": {
+      "Bool": {
+        "elasticache:AuthTokenEnabled": "false"
+      }
+    }
+  },
+  {
+    "Sid": "DenyElastiCacheDisableTransitEncryption",
+    "Effect": "Deny",
+    "Action": ["elasticache:ModifyReplicationGroup"],
+    "Resource": "*",
+    "Condition": {
+      "Bool": {
+        "elasticache:TransitEncryptionEnabled": "false"
+      }
+    }
+  }
+]

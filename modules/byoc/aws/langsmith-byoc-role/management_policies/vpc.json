@@ -1,0 +1,78 @@
+[
+  {
+    "Sid": "EC2Describe",
+    "Effect": "Allow",
+    "Action": ["ec2:Describe*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "EC2EBSEncryptionByDefault",
+    "Effect": "Allow",
+    "Action": ["ec2:GetEbsEncryptionByDefault"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "EC2AddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*",
+      "arn:aws:ec2:*:${account_id}:network-interface/*",
+      "arn:aws:ec2:*:${account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2TagManagedResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateTags",
+      "ec2:DeleteTags"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*",
+      "arn:aws:ec2:*:${account_id}:network-interface/*",
+      "arn:aws:ec2:*:${account_id}:launch-template/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "CloudWatchLogsDeliveryForVpcFlowLogs",
+    "Effect": "Allow",
+    "Action": [
+      "logs:GetLogDelivery",
+      "logs:ListLogDeliveries"
+    ],
+    "Resource": "*"
+  }
+]

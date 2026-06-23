@@ -1,0 +1,60 @@
+[
+  {
+    "Sid": "LambdaListFunctions",
+    "Effect": "Allow",
+    "Action": ["lambda:ListFunctions"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "LambdaReadManagedFunctions",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetPolicy",
+      "lambda:ListVersionsByFunction",
+      "lambda:ListTags"
+    ],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ]
+  },
+  {
+    "Sid": "LambdaTagManagedFunctions",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:TagResource",
+      "lambda:UntagResource"
+    ],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "LambdaAddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["lambda:TagResource"],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

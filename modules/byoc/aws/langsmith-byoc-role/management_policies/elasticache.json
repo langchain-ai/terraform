@@ -1,0 +1,108 @@
+[
+  {
+    "Sid": "ElastiCacheRead",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:Describe*",
+      "elasticache:ListAllowedNodeTypeModifications",
+      "elasticache:ListTagsForResource"
+    ],
+    "Resource": "*"
+  },
+  {
+    "Sid": "ElastiCacheReplicationGroupManage",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:BatchApplyUpdateAction",
+      "elasticache:DecreaseReplicaCount",
+      "elasticache:AddTagsToResource",
+      "elasticache:IncreaseReplicaCount",
+      "elasticache:ModifyReplicationGroup",
+      "elasticache:ModifyReplicationGroupShardConfiguration",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:cluster:*-smith-*",
+      "arn:aws:elasticache:*:${account_id}:replicationgroup:*-smith-*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheRebootManagedClusters",
+    "Effect": "Allow",
+    "Action": ["elasticache:RebootCacheCluster"],
+    "Resource": "arn:aws:elasticache:*:${account_id}:cluster:*-smith-*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheParameterGroupTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:AddTagsToResource",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:elasticache:*:${account_id}:parametergroup:*-smith-redis-pg",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheSubnetGroupTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:AddTagsToResource",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:elasticache:*:${account_id}:subnetgroup:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheUserTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:AddTagsToResource",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:user:*",
+      "arn:aws:elasticache:*:${account_id}:usergroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheAddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["elasticache:AddTagsToResource"],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:cluster:*",
+      "arn:aws:elasticache:*:${account_id}:replicationgroup:*",
+      "arn:aws:elasticache:*:${account_id}:parametergroup:*-smith-redis-pg",
+      "arn:aws:elasticache:*:${account_id}:subnetgroup:*",
+      "arn:aws:elasticache:*:${account_id}:user:*",
+      "arn:aws:elasticache:*:${account_id}:usergroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

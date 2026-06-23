@@ -1,0 +1,65 @@
+[
+  {
+    "Sid": "ELBv2Describe",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:Describe*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "ELBv2LoadBalancerTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2TargetGroupTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:targetgroup/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2ListenerTagManaged",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:AddTags",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:listener/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2AddLangsmithTags",
+    "Effect": "Allow",
+    "Action": ["elasticloadbalancing:AddTags"],
+    "Resource": [
+      "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
+      "arn:aws:elasticloadbalancing:*:${account_id}:targetgroup/*",
+      "arn:aws:elasticloadbalancing:*:${account_id}:listener/net/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  }
+]
