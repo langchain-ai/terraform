@@ -20,11 +20,8 @@
     "Sid": "IAMInstanceProfileManage",
     "Effect": "Allow",
     "Action": [
-      "iam:DeleteInstanceProfile",
       "iam:AddRoleToInstanceProfile",
-      "iam:RemoveRoleFromInstanceProfile",
-      "iam:TagInstanceProfile",
-      "iam:UntagInstanceProfile"
+      "iam:TagInstanceProfile"
     ],
     "Resource": "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
     "Condition": {
@@ -38,17 +35,6 @@
     "Effect": "Allow",
     "Action": ["iam:GetInstanceProfile"],
     "Resource": "arn:aws:iam::${account_id}:instance-profile/eks-*"
-  },
-  {
-    "Sid": "IAMEKSInstanceProfileManage",
-    "Effect": "Allow",
-    "Action": ["iam:RemoveRoleFromInstanceProfile"],
-    "Resource": "arn:aws:iam::${account_id}:instance-profile/eks-*",
-    "Condition": {
-      "StringLike": {
-        "aws:ResourceTag/eks:cluster-name": "*-smith*"
-      }
-    }
   },
   {
     "Sid": "IAMPolicyCreate",
@@ -75,11 +61,8 @@
     "Sid": "IAMPolicyManage",
     "Effect": "Allow",
     "Action": [
-      "iam:DeletePolicy",
       "iam:CreatePolicyVersion",
-      "iam:DeletePolicyVersion",
-      "iam:TagPolicy",
-      "iam:UntagPolicy"
+      "iam:TagPolicy"
     ],
     "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy",
     "Condition": {

@@ -36,12 +36,10 @@
     "Sid": "LambdaFunctionManage",
     "Effect": "Allow",
     "Action": [
-      "lambda:DeleteFunction",
       "lambda:UpdateFunctionCode",
       "lambda:UpdateFunctionConfiguration",
       "lambda:PublishVersion",
-      "lambda:TagResource",
-      "lambda:UntagResource"
+      "lambda:TagResource"
     ],
     "Resource": [
       "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
@@ -69,10 +67,7 @@
   {
     "Sid": "LambdaPermissionManage",
     "Effect": "Allow",
-    "Action": [
-      "lambda:AddPermission",
-      "lambda:RemovePermission"
-    ],
+    "Action": ["lambda:AddPermission"],
     "Resource": [
       "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
       "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",

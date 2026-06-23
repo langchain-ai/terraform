@@ -29,11 +29,7 @@
   {
     "Sid": "EventBridgeManageTaggedRule",
     "Effect": "Allow",
-    "Action": [
-      "events:DeleteRule",
-      "events:TagResource",
-      "events:UntagResource"
-    ],
+    "Action": ["events:TagResource"],
     "Resource": [
       "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
       "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
@@ -47,10 +43,7 @@
   {
     "Sid": "EventBridgeManageTargets",
     "Effect": "Allow",
-    "Action": [
-      "events:PutTargets",
-      "events:RemoveTargets"
-    ],
+    "Action": ["events:PutTargets"],
     "Resource": [
       "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
       "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"

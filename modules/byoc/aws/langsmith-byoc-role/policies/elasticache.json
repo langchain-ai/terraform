@@ -42,9 +42,7 @@
       "elasticache:ModifyReplicationGroupShardConfiguration",
       "elasticache:IncreaseReplicaCount",
       "elasticache:DecreaseReplicaCount",
-      "elasticache:DeleteReplicationGroup",
-      "elasticache:AddTagsToResource",
-      "elasticache:RemoveTagsFromResource"
+      "elasticache:AddTagsToResource"
     ],
     "Resource": [
       "arn:aws:elasticache:*:${account_id}:cluster:*",
@@ -70,11 +68,7 @@
   {
     "Sid": "ElastiCacheSubnetGroupManage",
     "Effect": "Allow",
-    "Action": [
-      "elasticache:DeleteCacheSubnetGroup",
-      "elasticache:AddTagsToResource",
-      "elasticache:RemoveTagsFromResource"
-    ],
+    "Action": ["elasticache:AddTagsToResource"],
     "Resource": "arn:aws:elasticache:*:${account_id}:subnetgroup:*",
     "Condition": {
       "StringEquals": {
@@ -114,10 +108,7 @@
     "Action": [
       "elasticache:ModifyUser",
       "elasticache:ModifyUserGroup",
-      "elasticache:DeleteUser",
-      "elasticache:DeleteUserGroup",
-      "elasticache:AddTagsToResource",
-      "elasticache:RemoveTagsFromResource"
+      "elasticache:AddTagsToResource"
     ],
     "Resource": [
       "arn:aws:elasticache:*:${account_id}:user:*",

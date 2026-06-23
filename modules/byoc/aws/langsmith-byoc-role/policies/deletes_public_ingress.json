@@ -1,27 +1,13 @@
 [
   {
-    "Sid": "Route53CreatePublicHostedZone",
-    "Effect": "Allow",
-    "Action": ["route53:CreateHostedZone"],
-    "Resource": "*",
-    "Condition": {
-      "Null": {
-        "route53:VPCs": "true"
-      }
-    }
-  },
-  {
-    "Sid": "Route53ChangeAcmValidationRecords",
+    "Sid": "Route53DeleteAcmValidationRecords",
     "Effect": "Allow",
     "Action": ["route53:ChangeResourceRecordSets"],
     "Resource": "arn:aws:route53:::hostedzone/*",
     "Condition": {
       "ForAllValues:StringEquals": {
         "route53:ChangeResourceRecordSetsRecordTypes": ["CNAME"],
-        "route53:ChangeResourceRecordSetsActions": [
-          "CREATE",
-          "UPSERT"
-        ]
+        "route53:ChangeResourceRecordSetsActions": ["DELETE"]
       },
       "ForAllValues:StringLike": {
         "route53:ChangeResourceRecordSetsNormalizedRecordNames": [

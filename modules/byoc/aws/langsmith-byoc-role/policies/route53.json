@@ -36,8 +36,7 @@
         "route53:ChangeResourceRecordSetsRecordTypes": ["A"],
         "route53:ChangeResourceRecordSetsActions": [
           "CREATE",
-          "UPSERT",
-          "DELETE"
+          "UPSERT"
         ]
       },
       "ForAllValues:StringLike": {

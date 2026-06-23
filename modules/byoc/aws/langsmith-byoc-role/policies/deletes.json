@@ -1,0 +1,506 @@
+[
+  {
+    "Sid": "ACMDeleteTaggedCertificates",
+    "Effect": "Allow",
+    "Action": [
+      "acm:DeleteCertificate",
+      "acm:RemoveTagsFromCertificate"
+    ],
+    "Resource": "arn:aws:acm:*:${account_id}:certificate/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2DetachNetworkInterface",
+    "Effect": "Allow",
+    "Action": ["ec2:DetachNetworkInterface"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:network-interface/*",
+      "arn:aws:ec2:*:${account_id}:instance/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2DeleteTaggedResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:DeleteVpc",
+      "ec2:DeleteSubnet",
+      "ec2:DeleteInternetGateway",
+      "ec2:DeleteNatGateway",
+      "ec2:DeleteRouteTable",
+      "ec2:DeleteSecurityGroup",
+      "ec2:ReleaseAddress",
+      "ec2:DisassociateAddress",
+      "ec2:DeleteVpcEndpoints",
+      "ec2:DeleteVpcEndpointServiceConfigurations",
+      "ec2:DeleteFlowLogs",
+      "ec2:DetachInternetGateway",
+      "ec2:DisassociateRouteTable",
+      "ec2:DeleteRoute",
+      "ec2:DeleteNetworkAclEntry"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2DeleteTags",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:vpc/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:internet-gateway/*",
+      "arn:aws:ec2:*:${account_id}:natgateway/*",
+      "arn:aws:ec2:*:${account_id}:route-table/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:elastic-ip/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
+      "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
+      "arn:aws:ec2:*:${account_id}:network-acl/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "CloudWatchLogsDeleteDeliveryForVpcFlowLogs",
+    "Effect": "Allow",
+    "Action": ["logs:DeleteLogDelivery"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "EKSClusterDelete",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteCluster",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:cluster/*-smith-eks",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSNodegroupDelete",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteNodegroup",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:nodegroup/*-smith-eks/*/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAddonDelete",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteAddon",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:addon/*-smith-eks/*/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSAccessEntryDelete",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeleteAccessEntry",
+      "eks:DisassociateAccessPolicy",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:access-entry/*-smith-eks/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EKSPodIdentityDelete",
+    "Effect": "Allow",
+    "Action": [
+      "eks:DeletePodIdentityAssociation",
+      "eks:UntagResource"
+    ],
+    "Resource": "arn:aws:eks:*:${account_id}:podidentityassociation/*-smith-eks/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheReplicationGroupDelete",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:DeleteReplicationGroup",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:cluster:*",
+      "arn:aws:elasticache:*:${account_id}:replicationgroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheSubnetGroupDelete",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:DeleteCacheSubnetGroup",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:elasticache:*:${account_id}:subnetgroup:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ElastiCacheUserDelete",
+    "Effect": "Allow",
+    "Action": [
+      "elasticache:DeleteUser",
+      "elasticache:DeleteUserGroup",
+      "elasticache:RemoveTagsFromResource"
+    ],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:user:*",
+      "arn:aws:elasticache:*:${account_id}:usergroup:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2LoadBalancerDelete",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteLoadBalancer",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2TargetGroupDelete",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteTargetGroup",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:targetgroup/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "ELBv2ListenerDelete",
+    "Effect": "Allow",
+    "Action": [
+      "elasticloadbalancing:DeleteListener",
+      "elasticloadbalancing:RemoveTags"
+    ],
+    "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:listener/net/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EventBridgeDeleteTaggedRule",
+    "Effect": "Allow",
+    "Action": [
+      "events:DeleteRule",
+      "events:UntagResource"
+    ],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EventBridgeRemoveTargets",
+    "Effect": "Allow",
+    "Action": ["events:RemoveTargets"],
+    "Resource": [
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-create",
+      "arn:aws:events:*:${account_id}:rule/*-smith-eks-eni-cleanup"
+    ]
+  },
+  {
+    "Sid": "IAMInstanceProfileDelete",
+    "Effect": "Allow",
+    "Action": [
+      "iam:DeleteInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:UntagInstanceProfile"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/*-smith-karpenter-node-profile",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMEKSInstanceProfileRemoveRole",
+    "Effect": "Allow",
+    "Action": ["iam:RemoveRoleFromInstanceProfile"],
+    "Resource": "arn:aws:iam::${account_id}:instance-profile/eks-*",
+    "Condition": {
+      "StringLike": {
+        "aws:ResourceTag/eks:cluster-name": "*-smith*"
+      }
+    }
+  },
+  {
+    "Sid": "IAMPolicyDelete",
+    "Effect": "Allow",
+    "Action": [
+      "iam:DeletePolicy",
+      "iam:DeletePolicyVersion",
+      "iam:UntagPolicy"
+    ],
+    "Resource": "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMRoleDelete",
+    "Effect": "Allow",
+    "Action": [
+      "iam:DeleteRole",
+      "iam:UntagRole",
+      "iam:DeleteRolePolicy"
+    ],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "IAMRoleDetachPolicy",
+    "Effect": "Allow",
+    "Action": ["iam:DetachRolePolicy"],
+    "Resource": [
+      "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
+      "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
+      "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
+      "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
+      "arn:aws:iam::${account_id}:role/*-smith-lbc-role"
+    ],
+    "Condition": {
+      "ArnEquals": {
+        "iam:PolicyARN": [
+          "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
+          "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+          "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+          "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+          "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy",
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole",
+          "arn:aws:iam::${account_id}:policy/*-smith-karpenter-controller-policy"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "LambdaFunctionDelete",
+    "Effect": "Allow",
+    "Action": [
+      "lambda:DeleteFunction",
+      "lambda:UntagResource"
+    ],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "LambdaPermissionDelete",
+    "Effect": "Allow",
+    "Action": ["lambda:RemovePermission"],
+    "Resource": [
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-add-eni-ips:*",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips",
+      "arn:aws:lambda:*:${account_id}:function:*-smith-update-eni-ips:*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith",
+        "lambda:Principal": "events.amazonaws.com"
+      }
+    }
+  },
+  {
+    "Sid": "RDSInstanceDelete",
+    "Effect": "Allow",
+    "Action": [
+      "rds:DeleteDBInstance",
+      "rds:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:rds:*:${account_id}:db:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "RDSSubnetGroupDelete",
+    "Effect": "Allow",
+    "Action": [
+      "rds:DeleteDBSubnetGroup",
+      "rds:RemoveTagsFromResource"
+    ],
+    "Resource": "arn:aws:rds:*:${account_id}:subgrp:*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "Route53DeleteLangsmithRecords",
+    "Effect": "Allow",
+    "Action": ["route53:ChangeResourceRecordSets"],
+    "Resource": "arn:aws:route53:::hostedzone/*",
+    "Condition": {
+      "ForAllValues:StringEquals": {
+        "route53:ChangeResourceRecordSetsRecordTypes": ["A"],
+        "route53:ChangeResourceRecordSetsActions": ["DELETE"]
+      },
+      "ForAllValues:StringLike": {
+        "route53:ChangeResourceRecordSetsNormalizedRecordNames": [
+          "*.eks.amazonaws.com",
+          "*.smith.langchain.com",
+          "*.aws.langchain-byoc.com",
+          "beacon.*.langchain.com"
+        ]
+      }
+    }
+  },
+  {
+    "Sid": "Route53DeleteHostedZone",
+    "Effect": "Allow",
+    "Action": ["route53:DeleteHostedZone"],
+    "Resource": "arn:aws:route53:::hostedzone/*"
+  },
+  {
+    "Sid": "SecretsManagerDeleteForRDS",
+    "Effect": "Allow",
+    "Action": [
+      "secretsmanager:DeleteSecret",
+      "secretsmanager:UntagResource"
+    ],
+    "Resource": "arn:aws:secretsmanager:*:${account_id}:secret:rds!*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "SecretsManagerDeleteForLangsmith",
+    "Effect": "Allow",
+    "Action": [
+      "secretsmanager:DeleteSecret",
+      "secretsmanager:UntagResource"
+    ],
+    "Resource": "arn:aws:secretsmanager:*:${account_id}:secret:langsmith/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  }
+]

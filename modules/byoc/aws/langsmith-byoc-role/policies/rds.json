@@ -30,9 +30,7 @@
     "Action": [
       "rds:ModifyDBInstance",
       "rds:RebootDBInstance",
-      "rds:DeleteDBInstance",
-      "rds:AddTagsToResource",
-      "rds:RemoveTagsFromResource"
+      "rds:AddTagsToResource"
     ],
     "Resource": "arn:aws:rds:*:${account_id}:db:*",
     "Condition": {
@@ -57,9 +55,7 @@
     "Effect": "Allow",
     "Action": [
       "rds:ModifyDBSubnetGroup",
-      "rds:DeleteDBSubnetGroup",
-      "rds:AddTagsToResource",
-      "rds:RemoveTagsFromResource"
+      "rds:AddTagsToResource"
     ],
     "Resource": "arn:aws:rds:*:${account_id}:subgrp:*",
     "Condition": {

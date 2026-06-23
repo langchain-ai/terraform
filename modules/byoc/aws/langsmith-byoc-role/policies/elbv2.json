@@ -20,11 +20,9 @@
     "Sid": "ELBv2LoadBalancerManage",
     "Effect": "Allow",
     "Action": [
-      "elasticloadbalancing:DeleteLoadBalancer",
       "elasticloadbalancing:ModifyLoadBalancerAttributes",
       "elasticloadbalancing:SetSecurityGroups",
-      "elasticloadbalancing:AddTags",
-      "elasticloadbalancing:RemoveTags"
+      "elasticloadbalancing:AddTags"
     ],
     "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:loadbalancer/net/*",
     "Condition": {
@@ -48,13 +46,11 @@
     "Sid": "ELBv2TargetGroupManage",
     "Effect": "Allow",
     "Action": [
-      "elasticloadbalancing:DeleteTargetGroup",
       "elasticloadbalancing:RegisterTargets",
       "elasticloadbalancing:DeregisterTargets",
       "elasticloadbalancing:ModifyTargetGroup",
       "elasticloadbalancing:ModifyTargetGroupAttributes",
-      "elasticloadbalancing:AddTags",
-      "elasticloadbalancing:RemoveTags"
+      "elasticloadbalancing:AddTags"
     ],
     "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:targetgroup/*",
     "Condition": {
@@ -79,10 +75,8 @@
     "Sid": "ELBv2ListenerManage",
     "Effect": "Allow",
     "Action": [
-      "elasticloadbalancing:DeleteListener",
       "elasticloadbalancing:ModifyListener",
-      "elasticloadbalancing:AddTags",
-      "elasticloadbalancing:RemoveTags"
+      "elasticloadbalancing:AddTags"
     ],
     "Resource": "arn:aws:elasticloadbalancing:*:${account_id}:listener/net/*",
     "Condition": {

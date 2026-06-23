@@ -103,6 +103,22 @@ allow_public_ingress = true
 
 This grants the additional Route 53 public-zone permissions needed for ACM DNS-01 validation. Leave it off (the default) for private/VPC-only deployments.
 
+### Deletion permissions
+
+Delete permissions are disabled by default. For normal reconciliation, leave:
+
+```hcl
+allow_delete_permissions = false
+```
+
+When you need LangSmith to delete or tear down LangSmith-managed AWS resources, temporarily enable:
+
+```hcl
+allow_delete_permissions = true
+```
+
+Set it back to `false` when the deletion workflow is complete.
+
 ## Inputs
 
 | Variable | Type | Required | Default | Description |
@@ -117,6 +133,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `langsmith_byoc_break_glass_principal_arn_patterns` | `list(string)` | no | BYOCBreakGlass SSO role patterns | IAM principal ARN patterns for LangSmith Identity Center BYOC break-glass sessions. |
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
+| `allow_delete_permissions` | `bool` | no | `false` | Grants destructive permissions needed to delete LangSmith-managed AWS resources. Enable only for teardown or deletion workflows. |
 
 ## Outputs
 
@@ -136,7 +153,6 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | Policy suffix | Surface |
 |---------------|---------|
 | `-vpc` | VPC, subnets, NAT, route tables, endpoints, security groups, VPC flow logs |
-| `-ec2-eni` | `DetachNetworkInterface` on data-plane ENIs (Karpenter node teardown) |
 | `-iam` | IAM role lifecycle for the data plane (EKS, IRSA, Karpenter, etc.) |
 | `-iam-karpenter-eks-profiles` | EC2 instance profiles for Karpenter and EKS, plus the Karpenter controller customer-managed policy |
 | `-eks` | EKS cluster, node groups, add-ons |
@@ -145,8 +161,9 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 | `-storage` | S3 (trace blobs), ElastiCache (Redis) |
 | `-lambda` | Lambda + EventBridge for periodic jobs |
 | `-dns` | Route 53, ACM (private by default; public when `allow_public_ingress = true`) |
+| `-delete` | Destructive actions for LangSmith-managed resources, attached only when `allow_delete_permissions = true` |
 
-The exact statements are in `policies/*.json`.
+The default policies intentionally exclude destructive actions. Those statements are isolated in `policies/deletes*.json` and attached only when `allow_delete_permissions = true`.
 
 ### Break-glass role
 

@@ -20,12 +20,10 @@
     "Sid": "ACMManageTaggedCertificates",
     "Effect": "Allow",
     "Action": [
-      "acm:DeleteCertificate",
       "acm:DescribeCertificate",
       "acm:GetCertificate",
       "acm:ListTagsForCertificate",
       "acm:AddTagsToCertificate",
-      "acm:RemoveTagsFromCertificate",
       "acm:UpdateCertificateOptions",
       "acm:RenewCertificate"
     ],

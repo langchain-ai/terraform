@@ -5,7 +5,6 @@ locals {
   }
 
   acm_statements                        = jsondecode(templatefile("${path.module}/policies/acm.json", local.policy_template_vars))
-  ec2_eni_statements                    = jsondecode(templatefile("${path.module}/policies/ec2-eni.json", local.policy_template_vars))
   eks_statements                        = jsondecode(templatefile("${path.module}/policies/eks.json", local.policy_template_vars))
   elasticache_statements                = jsondecode(templatefile("${path.module}/policies/elasticache.json", local.policy_template_vars))
   elbv2_statements                      = jsondecode(templatefile("${path.module}/policies/elbv2.json", local.policy_template_vars))
@@ -18,13 +17,14 @@ locals {
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
   # Optional. Only applied if allow_public_ingress is true.
   route53_public_statements  = [for s in jsondecode(templatefile("${path.module}/policies/route53_public.json", local.policy_template_vars)) : s if var.allow_public_ingress]
+  delete_statements          = jsondecode(templatefile("${path.module}/policies/deletes.json", local.policy_template_vars))
+  delete_public_statements   = [for s in jsondecode(templatefile("${path.module}/policies/deletes_public_ingress.json", local.policy_template_vars)) : s if var.allow_public_ingress]
   s3_statements              = jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars))
   secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
   vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
 
-  role_policies = {
+  base_role_policies = {
     vpc                        = local.vpc_statements
-    ec2-eni                    = local.ec2_eni_statements
     iam                        = local.iam_statements
     iam-karpenter-eks-profiles = local.iam_karpenter_eks_profiles_statements
     eks                        = local.eks_statements
@@ -34,6 +34,13 @@ locals {
     lambda                     = concat(local.lambda_statements, local.eventbridge_statements)
     dns                        = concat(local.route53_statements, local.route53_public_statements, local.acm_statements)
   }
+
+  role_policies = merge(
+    local.base_role_policies,
+    var.allow_delete_permissions ? {
+      delete = concat(local.delete_statements, local.delete_public_statements)
+    } : {}
+  )
 }
 
 resource "aws_iam_policy" "this" {
