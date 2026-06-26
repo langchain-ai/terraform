@@ -30,7 +30,7 @@ resource "aws_elasticache_cluster" "redis" {
   engine               = "redis"
   node_type            = var.instance_type
   num_cache_nodes      = 1
-  parameter_group_name = "default.redis7"
+  parameter_group_name = var.parameter_group_name
   engine_version       = "7.0"
   port                 = 6379
   security_group_ids   = [aws_security_group.redis_sg.id]

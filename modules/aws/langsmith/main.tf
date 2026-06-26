@@ -51,6 +51,8 @@ module "redis" {
   subnet_ids    = local.private_subnets
   instance_type = var.redis_instance_type
   ingress_cidrs = [local.vpc_cidr_block]
+
+  parameter_group_name = var.redis_parameter_group_name
 }
 
 module "s3" {

@@ -23,3 +23,9 @@ variable "instance_type" {
   type        = string
   default     = "cache.m5.large" # 2 vCPU and 6 GB of memory
 }
+
+variable "parameter_group_name" {
+  description = "ElastiCache Redis parameter group name"
+  type        = string
+  default     = "default.redis7"
+}

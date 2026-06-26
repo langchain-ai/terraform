@@ -91,6 +91,12 @@ variable "redis_instance_type" {
   default     = "cache.m6g.xlarge"
 }
 
+variable "redis_parameter_group_name" {
+  type        = string
+  description = "ElastiCache Redis parameter group name"
+  default     = "default.redis7"
+}
+
 variable "postgres_instance_type" {
   type        = string
   description = "Instance type for the postgres database"
