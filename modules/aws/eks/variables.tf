@@ -34,7 +34,7 @@ variable "eks_managed_node_group_defaults" {
 }
 
 variable "eks_managed_node_groups" {
-  type        = map(any)
+  type        = any
   description = "EKS managed node groups"
   default = {
     default = {
