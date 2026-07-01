@@ -138,6 +138,17 @@
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
       "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
-    ]
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": [
+          "eks.amazonaws.com",
+          "ec2.amazonaws.com",
+          "pods.eks.amazonaws.com",
+          "monitoring.rds.amazonaws.com",
+          "lambda.amazonaws.com"
+        ]
+      }
+    }
   }
 ]
