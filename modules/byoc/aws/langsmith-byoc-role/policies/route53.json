@@ -8,7 +8,11 @@
   {
     "Sid": "Route53CreatePrivateHostedZone",
     "Effect": "Allow",
-    "Action": ["route53:CreateHostedZone"],
+    "Action": [
+      "route53:CreateHostedZone",
+      "route53:AssociateVPCWithHostedZone",
+      "route53:DisassociateVPCFromHostedZone"
+    ],
     "Resource": "*",
     "Condition": {
       "Null": {
