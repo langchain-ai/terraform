@@ -31,11 +31,38 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line* by default. Sandboxes require chart 0.16+, so the default
-# advances only when enable_sandboxes=true. Override CHART_VERSION for an exact patch.
+# Pin the chart *line* by default. Sandboxes require chart 0.16+, but the script
+# does not silently move chart lines; set CHART_VERSION explicitly when enabling them.
 _chart_version_provided=false
 [[ -n "${CHART_VERSION:-}" ]] && _chart_version_provided=true
 CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+
+_chart_version_supports_sandboxes() {
+  local version
+  version="$(printf '%s' "$1" | tr -d '[:space:]')"
+  version="${version#~>}"
+  version="${version#~}"
+  version="${version#v}"
+
+  case "$version" in
+    0.1[6-9].*|0.[2-9][0-9].*|[1-9].*|[1-9][0-9]*.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_validate_sandbox_values_file() {
+  local values_file="$1"
+
+  if ! grep -Eq '^[[:space:]]{2}sandboxes:[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{4}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{8}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{2}smithboxControlImage:[[:space:]]*$' "$values_file"; then
+    echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
+    echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
+    exit 1
+  fi
+}
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
@@ -45,8 +72,16 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 
-if [[ "$_enable_sandboxes" == "true" && "$_chart_version_provided" != "true" ]]; then
-  CHART_VERSION="~0.16.0"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if [[ "$_chart_version_provided" != "true" ]]; then
+    echo "ERROR: enable_sandboxes = true requires CHART_VERSION to be set explicitly to chart 0.16.0 or newer." >&2
+    echo "       Example: CHART_VERSION='~0.16.0' ./helm/scripts/deploy.sh" >&2
+    exit 1
+  fi
+  if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
+    echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
 fi
 
 if [[ -z "$_environment" || -z "$_region" ]]; then
@@ -61,6 +96,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: $ENV_FILE not found." >&2
   echo "Run: make init-values  (or: ./helm/scripts/init-values.sh)" >&2
   exit 1
+fi
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _validate_sandbox_values_file "$ENV_FILE"
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────

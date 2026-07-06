@@ -36,8 +36,10 @@ admin_email = "admin@example.com"
 # CSI config Secret in the LangSmith namespace; pass the same Secret name here.
 # Run `source infra/scripts/setup-env.sh` so TF_VAR_sandbox_x_service_auth_jwt_secret
 # is available before applying the app module.
+# Sandboxes require chart 0.16.0 or newer, and the chart version must be explicit.
 #
 # enable_sandboxes = true
+# chart_version = "~0.16.0"
 # sandbox_host_image_tag = "0.0.0"
 # smithbox_control_image_tag = "0.0.0"
 # sandbox_juicefs_csi_config_secret_name = "juicefs-csi-config"

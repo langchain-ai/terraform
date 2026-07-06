@@ -9,6 +9,8 @@
 *.crt
 credentials.json
 token.json
+
+# Local development caches
 node_modules/
 __pycache__/
 .venv/

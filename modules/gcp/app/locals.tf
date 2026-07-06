@@ -190,6 +190,10 @@ resource "terraform_data" "validate_required" {
       error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction."
     }
     precondition {
+      condition     = !var.enable_sandboxes || (var.chart_version != "" && can(regex("^(~>?)?v?(0\\.(1[6-9]|[2-9][0-9])\\.|[1-9][0-9]*\\.)", var.chart_version)))
+      error_message = "enable_sandboxes requires chart_version to be explicitly set to chart 0.16.0 or newer, for example \"~0.16.0\"."
+    }
+    precondition {
       condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
       error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
     }

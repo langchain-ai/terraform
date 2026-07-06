@@ -262,7 +262,7 @@ _tfvar_is_true "enable_usage_telemetry"    && { _enable_usage_telemetry=true;   
 _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;              _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
+_tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _smithbox_control_image_tag=$(_parse_tfvar "smithbox_control_image_tag") || _smithbox_control_image_tag=""

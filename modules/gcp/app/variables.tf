@@ -111,7 +111,7 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version. Empty string = latest. Must be explicitly set to 0.16.0 or newer when enable_sandboxes = true."
   type        = string
   default     = ""
 }
