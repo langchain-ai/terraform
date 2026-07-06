@@ -126,6 +126,12 @@ $(if _ssm_key_exists "${_ssm_prefix}/polly-encryption-key"; then cat <<PEOF
         key: ${_ssm_prefix}/polly-encryption-key
 PEOF
 fi)
+$(if _ssm_key_exists "${_ssm_prefix}/sandbox-x-service-auth-jwt-secret"; then cat <<SEOF
+    - secretKey: sandbox_x_service_auth_jwt_secret
+      remoteRef:
+        key: ${_ssm_prefix}/sandbox-x-service-auth-jwt-secret
+SEOF
+fi)
 $(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF
     - secretKey: oauth_client_secret
       remoteRef:

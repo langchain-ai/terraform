@@ -33,7 +33,7 @@ resource "aws_elasticache_replication_group" "redis" {
   description          = "LangSmith Redis"
   node_type            = var.instance_type
   num_cache_clusters   = 1
-  parameter_group_name = "default.redis7"
+  parameter_group_name = var.parameter_group_name
   engine_version       = "7.1"
   port                 = 6379
   security_group_ids   = [aws_security_group.redis_sg.id]

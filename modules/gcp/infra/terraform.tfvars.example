@@ -142,6 +142,35 @@ redis_high_availability = true # Standard HA tier
 redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 
 #------------------------------------------------------------------------------
+# Optional: Sandboxes
+#------------------------------------------------------------------------------
+# Enables infrastructure prerequisites for LangSmith Sandboxes.
+#
+# Sandboxes use the sandbox-host architecture in the same GKE cluster and
+# namespace as LangSmith. This creates a dedicated Standard GKE node pool with
+# nested virtualization and the label/taint expected by the Helm chart:
+#   sandbox.langsmith.com/host=true
+#
+# Requirements:
+#   - gke_use_autopilot = false. Autopilot does not support the required
+#     dedicated nested-virtualization node pool.
+#   - redis_source = "external". The shared Memorystore instance is used for
+#     JuiceFS metadata and is configured with maxmemory-policy=noeviction.
+#   - enable_gcp_iam_module = true so the JuiceFS CSI node service account can
+#     access the shared GCS bucket via Workload Identity.
+#
+# enable_sandboxes = true
+# sandbox_host_node_count = 1
+# sandbox_host_min_node_count = 1
+# sandbox_host_max_node_count = 5
+# sandbox_host_machine_type = "n2-standard-8"
+#
+# Required by init-values.sh when enable_sandboxes = true. Use the same release
+# tag as the other LangSmith images.
+# sandbox_host_image_tag = "0.0.0"
+# smithbox_control_image_tag = "0.0.0"
+
+#------------------------------------------------------------------------------
 # Optional: Storage Configuration
 #------------------------------------------------------------------------------
 storage_ttl_short_days = 14    # Short-lived trace TTL (ttl_s/ prefix, default: 14 days)

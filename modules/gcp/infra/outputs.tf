@@ -125,6 +125,16 @@ output "redis_port" {
   value       = var.redis_source == "external" ? module.redis[0].port : null
 }
 
+output "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_bucket_url" {
+  description = "GCS bucket URL passed to JuiceFS for sandbox object storage"
+  value       = var.enable_sandboxes ? module.storage.bucket_url : null
+}
+
 #------------------------------------------------------------------------------
 # ClickHouse Outputs
 #------------------------------------------------------------------------------

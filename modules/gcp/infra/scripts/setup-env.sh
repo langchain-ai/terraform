@@ -209,6 +209,9 @@ _sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
 _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
 
+_sm_secret "sandbox-x-service-auth-jwt-secret" "TF_VAR_sandbox_x_service_auth_jwt_secret" \
+  "openssl rand -base64 32 | tr -d '\n'" "" "true"
+
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
   "" "Initial LangSmith admin password" "true"
 
@@ -241,6 +244,7 @@ echo "  postgres_password = (hidden — SM: ${_sm_prefix}-postgres-password)"
 echo "  license_key       = (hidden — SM: ${_sm_prefix}-langsmith-license-key)"
 echo "  api_key_salt      = (hidden — SM: ${_sm_prefix}-api-key-salt)"
 echo "  jwt_secret        = (hidden — SM: ${_sm_prefix}-jwt-secret)"
+echo "  sandbox_auth      = (hidden — SM: ${_sm_prefix}-sandbox-x-service-auth-jwt-secret)"
 echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"

@@ -352,6 +352,75 @@ variable "redis_prevent_destroy" {
 }
 
 #------------------------------------------------------------------------------
+# Sandboxes
+#------------------------------------------------------------------------------
+variable "enable_sandboxes" {
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires Standard GKE, external Redis, Workload Identity, and nested-virtualization-capable nodes."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_host_node_count" {
+  description = "Initial number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_min_node_count" {
+  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_max_node_count" {
+  description = "Maximum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 5
+}
+
+variable "sandbox_host_machine_type" {
+  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization; N2 is the default."
+  type        = string
+  default     = "n2-standard-8"
+}
+
+variable "sandbox_host_disk_size_gb" {
+  description = "Boot disk size in GB for sandbox-host nodes."
+  type        = number
+  default     = 200
+}
+
+variable "sandbox_juicefs_name" {
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state."
+  type        = string
+  default     = "sandbox-juicefs"
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name containing JuiceFS CSI config. Created in the LangSmith namespace when enable_sandboxes = true."
+  type        = string
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  description = "Revision for the write-only JuiceFS CSI config Secret. Increment to intentionally rewrite the secret."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_image_tag" {
+  type        = string
+  description = "sandbox-host image tag. Required by init-values.sh when enable_sandboxes = true."
+  default     = ""
+}
+
+variable "smithbox_control_image_tag" {
+  type        = string
+  description = "smithbox-control image tag. Required by init-values.sh when enable_sandboxes = true."
+  default     = ""
+}
+
+#------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------
 variable "storage_ttl_short_days" {
@@ -675,6 +744,13 @@ variable "langsmith_insights_encryption_key" {
 variable "langsmith_polly_encryption_key" {
   type        = string
   description = "Fernet key for Polly. Generate once — changing breaks existing Polly data. Shared by enable_polly and enable_standalone_polly."
+  sensitive   = true
+  default     = ""
+}
+
+variable "sandbox_x_service_auth_jwt_secret" {
+  type        = string
+  description = "Sandbox service-auth JWT secret. Generate once and keep stable. Used by init-values.sh and the app module when sandboxes are enabled."
   sensitive   = true
   default     = ""
 }

@@ -26,8 +26,8 @@ locals {
   # Derived
   ssm_prefix = "/langsmith/${local.name_prefix}-${local.environment}"
   # hostname: explicit var.hostname wins, then custom domain from infra, then ALB DNS name
-  hostname   = coalesce(var.hostname, var.langsmith_domain, local.alb_dns_name, "")
-  protocol   = local.tls_certificate_source == "none" ? "http" : "https"
+  hostname = coalesce(var.hostname, var.langsmith_domain, local.alb_dns_name, "")
+  protocol = local.tls_certificate_source == "none" ? "http" : "https"
 
   tls_enabled_for_deploys = var.tls_enabled_for_deploys != null ? var.tls_enabled_for_deploys : (local.tls_certificate_source != "none")
 
@@ -125,6 +125,18 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_insights || var.clickhouse_host != ""
       error_message = "clickhouse_host is required when enable_insights = true"
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.redis_source == "external"
+      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
+      error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.smithbox_control_image_tag != ""
+      error_message = "smithbox_control_image_tag is required when enable_sandboxes = true."
     }
     precondition {
       condition     = fileexists("${local.values_path}/langsmith-values.yaml")

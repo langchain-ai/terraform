@@ -132,6 +132,26 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_polly || var.enable_deployments
       error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
     }
+
+    precondition {
+      condition     = !var.enable_sandboxes || !var.gke_use_autopilot
+      error_message = "enable_sandboxes requires Standard GKE because sandbox-host needs a dedicated nested-virtualization node pool."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.redis_source == "external"
+      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can reuse Memorystore with maxmemory-policy=noeviction."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.enable_gcp_iam_module
+      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the JuiceFS CSI node service account can access the shared GCS bucket."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= var.sandbox_host_min_node_count
+      error_message = "sandbox_host_max_node_count must be greater than or equal to sandbox_host_min_node_count."
+    }
   }
 }
 
@@ -227,6 +247,15 @@ module "gke_cluster" {
   deletion_protection     = var.gke_deletion_protection
   network_policy_provider = var.gke_network_policy_provider
 
+  # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
+  # virtualization and are isolated from the default LangSmith workload pool.
+  enable_sandbox_host_node_pool = var.enable_sandboxes
+  sandbox_host_node_count       = var.sandbox_host_node_count
+  sandbox_host_min_node_count   = var.sandbox_host_min_node_count
+  sandbox_host_max_node_count   = var.sandbox_host_max_node_count
+  sandbox_host_machine_type     = var.sandbox_host_machine_type
+  sandbox_host_disk_size_gb     = var.sandbox_host_disk_size_gb
+
   # Master authorized networks — empty list keeps the master publicly reachable
   # for Terraform-driven Helm/kubectl steps. Populate var.gke_master_authorized_cidrs
   # in terraform.tfvars to restrict to operator/CI CIDRs.
@@ -293,6 +322,7 @@ module "redis" {
   redis_version     = var.redis_version
   high_availability = var.redis_high_availability
   prevent_destroy   = var.redis_prevent_destroy
+  maxmemory_policy  = var.enable_sandboxes ? "noeviction" : "allkeys-lru"
 
   # Network
   network_id = module.networking.vpc_id
@@ -359,6 +389,7 @@ module "iam" {
     "langsmith-standalone-polly-queue",
     "langsmith-standalone-insights-api-server",
     "langsmith-standalone-insights-queue",
+    "juicefs-csi-node-sa",
   ]
   gcs_bucket_name = module.storage.bucket_name
 }
@@ -451,6 +482,28 @@ module "k8s_bootstrap" {
   labels = local.common_labels
 
   depends_on = [time_sleep.wait_for_cluster, module.cloudsql, module.iam]
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = var.langsmith_namespace
+  }
+
+  type = "Opaque"
+
+  data_wo = sensitive({
+    name    = var.sandbox_juicefs_name
+    metaurl = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
+    storage = "gs"
+    bucket  = module.storage.bucket_url
+  })
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
+
+  depends_on = [module.k8s_bootstrap]
 }
 
 #------------------------------------------------------------------------------

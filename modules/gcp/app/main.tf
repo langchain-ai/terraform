@@ -94,19 +94,19 @@ resource "helm_release" "langsmith" {
   # This is the same values chain as deploy.sh: base → overrides → sizing → addons.
   values = concat(
     # 1. Base GCP config (ingress type, storage, auth, external postgres/redis)
-    [file("${local.values_path}/langsmith-values.yaml")],
+    [file("${local.values_path}/values.yaml")],
     # 2. Dynamic overrides (hostname, Workload Identity annotations, GCS bucket)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
-    var.sizing == "production"       ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
+    var.sizing == "production" ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
     var.sizing == "production-large" ? [file("${local.values_path}/langsmith-values-sizing-production-large.yaml")] : [],
-    var.sizing == "dev"              ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
-    var.sizing == "minimum"          ? [file("${local.values_path}/langsmith-values-sizing-minimum.yaml")] : [],
+    var.sizing == "dev" ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
+    var.sizing == "minimum" ? [file("${local.values_path}/langsmith-values-sizing-minimum.yaml")] : [],
     # 4. Product addons
     var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
-    var.enable_insights      ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
-    var.enable_polly         ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
+    var.enable_insights ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
+    var.enable_polly ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
   )
 }
 
@@ -120,8 +120,8 @@ resource "kubernetes_service_account_v1" "langsmith_ksa" {
   count = var.enable_agent_deploys && length(local.wi_annotations) > 0 ? 1 : 0
 
   metadata {
-    name      = "langsmith-ksa"
-    namespace = local.namespace
+    name        = "langsmith-ksa"
+    namespace   = local.namespace
     annotations = local.wi_annotations
   }
 

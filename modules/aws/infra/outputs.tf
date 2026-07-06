@@ -79,6 +79,16 @@ output "redis_connection_url" {
   sensitive   = true
 }
 
+output "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_bucket_url" {
+  description = "S3 endpoint URL passed to JuiceFS for sandbox object storage"
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_bucket_url : null
+}
+
 #------------------------------------------------------------------------------
 # Storage (S3)
 #------------------------------------------------------------------------------
@@ -260,21 +270,21 @@ output "gateway_target_group_arn" {
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster            = module.eks.cluster_name
-    postgres_source    = var.postgres_source
-    postgres           = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
-    redis_source       = var.redis_source
-    redis              = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
-    storage_bucket     = local.bucket_name
-    namespace          = var.langsmith_namespace
-    tls                = var.tls_certificate_source
-    alb                = module.alb.alb_dns_name
-    bastion            = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall           = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
-    deployments        = var.enable_deployments
-    agent_builder      = var.enable_agent_builder
-    insights           = var.enable_insights
-    polly              = var.enable_polly
+    cluster         = module.eks.cluster_name
+    postgres_source = var.postgres_source
+    postgres        = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    redis_source    = var.redis_source
+    redis           = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
+    storage_bucket  = local.bucket_name
+    namespace       = var.langsmith_namespace
+    tls             = var.tls_certificate_source
+    alb             = module.alb.alb_dns_name
+    bastion         = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall        = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
+    deployments     = var.enable_deployments
+    agent_builder   = var.enable_agent_builder
+    insights        = var.enable_insights
+    polly           = var.enable_polly
   }
 }
 
@@ -283,7 +293,7 @@ output "resource_summary" {
 #------------------------------------------------------------------------------
 output "next_steps" {
   description = "Next steps after terraform apply"
-  value       = <<-EOT
+  value = <<-EOT
 
     ============================================
     LangSmith Infrastructure Provisioned (AWS)
@@ -327,7 +337,7 @@ ${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
        http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
 
 DNS
-: local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
+  : local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
 
     2. Deploy LangSmith (pick one):
 
@@ -347,7 +357,7 @@ DNS
        https://${var.langsmith_domain}
 
 ACMDONE
-: <<-NODNS
+  : <<-NODNS
 
     2. Run the Helm deployment:
        cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh

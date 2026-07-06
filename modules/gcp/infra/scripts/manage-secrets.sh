@@ -47,6 +47,7 @@ OPTIONAL_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-x-service-auth-jwt-secret
 )
 
 # Encryption keys that must NEVER change after first deploy.
@@ -56,6 +57,7 @@ STABLE_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-x-service-auth-jwt-secret
 )
 
 # SM key → TF_VAR name (for diff subcommand)
@@ -66,6 +68,7 @@ DIFF_SM_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-x-service-auth-jwt-secret
 )
 DIFF_TF_VARS=(
   TF_VAR_postgres_password
@@ -74,6 +77,7 @@ DIFF_TF_VARS=(
   TF_VAR_langsmith_agent_builder_encryption_key
   TF_VAR_langsmith_insights_encryption_key
   TF_VAR_langsmith_polly_encryption_key
+  TF_VAR_sandbox_x_service_auth_jwt_secret
 )
 
 ALL_KEYS=("${REQUIRED_KEYS[@]}" "${OPTIONAL_KEYS[@]}")

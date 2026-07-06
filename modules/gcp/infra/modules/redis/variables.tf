@@ -61,6 +61,17 @@ variable "prevent_destroy" {
   default     = false
 }
 
+variable "maxmemory_policy" {
+  description = "Redis maxmemory-policy. Sandboxes require noeviction because JuiceFS uses Redis for metadata."
+  type        = string
+  default     = "allkeys-lru"
+
+  validation {
+    condition     = contains(["noeviction", "allkeys-lru", "volatile-lru", "allkeys-random", "volatile-random", "volatile-ttl"], var.maxmemory_policy)
+    error_message = "maxmemory_policy must be a Memorystore-supported Redis maxmemory policy."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------

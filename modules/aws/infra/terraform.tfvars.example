@@ -307,6 +307,32 @@ redis_instance_type = "cache.m6g.xlarge"
 #   source ./setup-env.sh
 
 #------------------------------------------------------------------------------
+# SANDBOXES
+#------------------------------------------------------------------------------
+# Enables infrastructure prerequisites for LangSmith Sandboxes.
+#
+# Sandboxes use the sandbox-host architecture in the same EKS cluster and
+# namespace as LangSmith. This provisions a dedicated node group with the label
+# and taint expected by the Helm chart:
+#   sandbox.langsmith.com/host=true
+#
+# Requirements:
+#   - redis_source = "external". The shared Redis is used for JuiceFS metadata
+#     and is configured with maxmemory-policy=noeviction.
+#   - Dedicated bare-metal or nested-virtualization-capable nodes. The AWS
+#     default is m5d.metal and configures local NVMe instance store for swap
+#     and JuiceFS cache.
+#
+# enable_sandboxes = true
+# sandbox_host_node_count = 1
+# sandbox_host_instance_types = ["m5d.metal"]
+#
+# Required by init-values.sh when enable_sandboxes = true. Use the same release
+# tag as the other LangSmith images.
+# sandbox_host_image_tag = "0.0.0"
+# smithbox_control_image_tag = "0.0.0"
+
+#------------------------------------------------------------------------------
 # CLICKHOUSE
 #------------------------------------------------------------------------------
 # Controls where ClickHouse runs. ClickHouse is the analytics database for

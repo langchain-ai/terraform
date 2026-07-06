@@ -96,6 +96,48 @@ variable "disk_size_gb" {
   default     = 100
 }
 
+variable "enable_sandbox_host_node_pool" {
+  description = "Create a dedicated Standard GKE node pool for sandbox-host pods. Requires nested virtualization support."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_host_node_pool_name" {
+  description = "Name for the sandbox-host node pool."
+  type        = string
+  default     = "sandbox-host"
+}
+
+variable "sandbox_host_node_count" {
+  description = "Initial number of sandbox-host nodes per zone."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_min_node_count" {
+  description = "Minimum number of sandbox-host nodes per zone."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_max_node_count" {
+  description = "Maximum number of sandbox-host nodes per zone."
+  type        = number
+  default     = 5
+}
+
+variable "sandbox_host_machine_type" {
+  description = "Machine type for sandbox-host nodes. Must support nested virtualization; N2 is the default."
+  type        = string
+  default     = "n2-standard-8"
+}
+
+variable "sandbox_host_disk_size_gb" {
+  description = "Boot disk size in GB for sandbox-host nodes."
+  type        = number
+  default     = 200
+}
+
 variable "release_channel" {
   description = "GKE release channel"
   type        = string

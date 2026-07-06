@@ -29,9 +29,9 @@ VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
-# Override with the CHART_VERSION env var for an exact patch if needed.
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+# Pin the chart *line* by default. Sandboxes require chart 0.16+, so the default
+# advances only when enable_sandboxes=true. Override CHART_VERSION for an exact patch.
+CHART_VERSION="${CHART_VERSION:-}"
 
 # ── tfvars helpers ────────────────────────────────────────────────────────────
 _parse_tfvar() {
@@ -40,6 +40,16 @@ _parse_tfvar() {
     "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
 }
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
+
+_enable_sandboxes=false
+_tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+if [[ -z "$CHART_VERSION" ]]; then
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    CHART_VERSION="~0.16.0"
+  else
+    CHART_VERSION="~0.15.1"
+  fi
+fi
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -143,6 +153,7 @@ _enable_polly=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
+_enable_sandboxes=false
 _any_flag_set=false
 _tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _any_flag_set=true; }
 _tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _any_flag_set=true; }
@@ -151,6 +162,7 @@ _tfvar_is_true "enable_polly"              && { _enable_polly=true;             
 _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;               _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
+_tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
 
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -288,6 +300,7 @@ fi
 [[ "$_enable_fleet" == "true" ]]              && _core_deployments+=("langsmith-standalone-fleet-api-server")
 [[ "$_enable_standalone_polly" == "true" ]]   && _core_deployments+=("langsmith-standalone-polly-api-server")
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("langsmith-standalone-insights-api-server")
+[[ "$_enable_sandboxes" == "true" ]]          && _core_deployments+=("smithbox-control")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do
@@ -296,6 +309,13 @@ for dep in "${_core_deployments[@]}"; do
     _all_ready=false
   fi
 done
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl rollout status statefulset/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+    _all_ready=false
+  fi
+fi
 
 if [[ "$_all_ready" == "true" ]]; then
   echo "All core deployments ready."

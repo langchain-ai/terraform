@@ -232,6 +232,9 @@ _ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "TF_VAR_langsmi
 _ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32" "" "true"
 
+_ssm_secret "sandbox-x-service-auth-jwt-secret" "" "TF_VAR_sandbox_x_service_auth_jwt_secret" \
+  "openssl rand -base64 32" "" "true"
+
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
 _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
   "" "LangSmith license key" "true"
@@ -296,6 +299,7 @@ echo "  postgres_password = (hidden — SSM: ${_ssm_prefix}/postgres-password)"
 echo "  redis_auth_token  = (hidden — SSM: ${_ssm_prefix}/redis-auth-token)"
 echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-salt)"
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
+echo "  sandbox_auth      = (hidden — SSM: ${_ssm_prefix}/sandbox-x-service-auth-jwt-secret)"
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
 echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"

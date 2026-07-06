@@ -30,6 +30,15 @@ admin_email = "admin@example.com"
 # enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
 # enable_usage_telemetry = true    # Extended usage telemetry reporting
 
+# ── Sandboxes ────────────────────────────────────────────────────────────────
+# Requires infra enable_sandboxes = true. The infra module creates the JuiceFS
+# CSI config Secret in the LangSmith namespace; pass the same Secret name here.
+#
+# enable_sandboxes = true
+# sandbox_host_image_tag = "0.0.0"
+# smithbox_control_image_tag = "0.0.0"
+# sandbox_juicefs_csi_config_secret_name = "juicefs-csi-config"
+
 # ── ClickHouse (required when enable_insights = true) ────────────────────────
 
 # clickhouse_host     = "clickhouse.example.com"

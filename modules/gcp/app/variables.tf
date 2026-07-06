@@ -201,6 +201,37 @@ variable "enable_usage_telemetry" {
   default     = false
 }
 
+variable "enable_sandboxes" {
+  description = "Enable LangSmith Sandboxes in the Helm release. Requires infra enable_sandboxes=true and the sandbox service-auth secret."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_host_image_tag" {
+  description = "sandbox-host image tag. Required when enable_sandboxes = true."
+  type        = string
+  default     = ""
+}
+
+variable "smithbox_control_image_tag" {
+  description = "smithbox-control image tag. Required when enable_sandboxes = true."
+  type        = string
+  default     = ""
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  description = "Existing Kubernetes Secret containing JuiceFS CSI config, created by the infra module when enable_sandboxes = true."
+  type        = string
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_x_service_auth_jwt_secret" {
+  description = "Sandbox service-auth JWT secret. Required when enable_sandboxes = true."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 #------------------------------------------------------------------------------
 # ClickHouse (required when enable_insights = true)
 #------------------------------------------------------------------------------

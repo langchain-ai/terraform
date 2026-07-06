@@ -22,7 +22,7 @@ resource "google_redis_instance" "langsmith" {
 
   # Redis configuration
   redis_configs = {
-    maxmemory-policy       = "allkeys-lru"
+    maxmemory-policy       = var.maxmemory_policy
     notify-keyspace-events = "Ex"
   }
 
@@ -73,7 +73,7 @@ resource "google_redis_instance" "langsmith_protected" {
 
   # Redis configuration
   redis_configs = {
-    maxmemory-policy       = "allkeys-lru"
+    maxmemory-policy       = var.maxmemory_policy
     notify-keyspace-events = "Ex"
   }
 

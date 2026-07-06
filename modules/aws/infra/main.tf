@@ -51,6 +51,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !var.enable_sandboxes || var.redis_source == "external"
+      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can reuse ElastiCache with maxmemory-policy=noeviction."
+    }
+
+    precondition {
       condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != "" || var.langsmith_domain != ""
       error_message = "When tls_certificate_source = 'acm', either acm_certificate_arn (existing cert) or langsmith_domain (auto-provision via Route 53) is required."
     }
@@ -166,7 +171,7 @@ module "eks" {
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
-  eks_managed_node_groups         = var.eks_managed_node_groups
+  eks_managed_node_groups         = local.eks_managed_node_groups
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
@@ -192,13 +197,27 @@ module "redis" {
   source = "./modules/redis"
   count  = var.redis_source == "external" ? 1 : 0
 
-  name           = local.redis_name
-  vpc_id         = local.vpc_id
-  subnet_ids     = local.private_subnets
-  instance_type  = var.redis_instance_type
-  ingress_cidrs  = [local.vpc_cidr_block]
-  vpc_cidr_block = local.vpc_cidr_block
-  auth_token     = var.redis_auth_token
+  name                 = local.redis_name
+  vpc_id               = local.vpc_id
+  subnet_ids           = local.private_subnets
+  instance_type        = var.redis_instance_type
+  ingress_cidrs        = [local.vpc_cidr_block]
+  vpc_cidr_block       = local.vpc_cidr_block
+  auth_token           = var.redis_auth_token
+  parameter_group_name = var.enable_sandboxes && var.redis_source == "external" ? aws_elasticache_parameter_group.langsmith_redis[0].name : "default.redis7"
+}
+
+resource "aws_elasticache_parameter_group" "langsmith_redis" {
+  count = var.enable_sandboxes && var.redis_source == "external" ? 1 : 0
+
+  name        = "${local.redis_name}-redis7"
+  family      = "redis7"
+  description = "Redis 7 parameters for LangSmith and sandbox JuiceFS metadata."
+
+  parameter {
+    name  = "maxmemory-policy"
+    value = "noeviction"
+  }
 }
 
 module "storage" {
@@ -556,6 +575,28 @@ module "k8s_bootstrap" {
   cluster_name                = local.cluster_name
 
   depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = var.langsmith_namespace
+  }
+
+  type = "Opaque"
+
+  data_wo = sensitive({
+    name    = var.sandbox_juicefs_name
+    metaurl = "${trimsuffix(local.redis_connection_url, "/")}/1"
+    storage = "s3"
+    bucket  = local.sandbox_juicefs_bucket_url
+  })
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
+
+  depends_on = [module.k8s_bootstrap]
 }
 
 #------------------------------------------------------------------------------

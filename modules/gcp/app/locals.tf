@@ -47,7 +47,7 @@ locals {
   # Equivalent to what init-values.sh writes into values-overrides.yaml.
   overrides_values = merge(
     {
-      config = {
+      config = merge({
         hostname             = local.hostname
         initialOrgAdminEmail = var.admin_email
         deployment = {
@@ -57,7 +57,27 @@ locals {
           bucketName = local.bucket_name
           apiURL     = "https://storage.googleapis.com"
         }
-      }
+        }, {
+        for k, v in {
+          sandboxes = {
+            enabled               = true
+            clusterName           = local.cluster_name
+            xServiceAuthJwtSecret = var.sandbox_x_service_auth_jwt_secret
+            juicefs = {
+              csi = {
+                existingSecretName = var.sandbox_juicefs_csi_config_secret_name
+              }
+            }
+            sandboxHost = {
+              statefulSet = {
+                nodeSelector = {
+                  "sandbox.langsmith.com/host" = "true"
+                }
+              }
+            }
+          }
+        } : k => v if var.enable_sandboxes
+      })
       commonEnv = concat(
         [],
         var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
@@ -66,6 +86,25 @@ locals {
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
     var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
+    {
+      for k, v in {
+        images = {
+          sandboxHostImage = {
+            tag = var.sandbox_host_image_tag
+          }
+          smithboxControlImage = {
+            tag = var.smithbox_control_image_tag
+          }
+        }
+        "juicefs-csi-driver" = {
+          serviceAccount = {
+            node = {
+              annotations = local.wi_annotations
+            }
+          }
+        }
+      } : k => v if var.enable_sandboxes
+    },
     # Workload Identity annotations for each component
     length(local.wi_annotations) > 0 ? { for component in local.wi_components : component => {
       serviceAccount = {
@@ -147,8 +186,28 @@ resource "terraform_data" "validate_required" {
       error_message = "clickhouse_host is required when enable_insights = true"
     }
     precondition {
-      condition     = fileexists("${local.values_path}/langsmith-values.yaml")
-      error_message = "Helm values files not found at ${local.values_path}/langsmith-values.yaml. Run: make init-values"
+      condition     = !var.enable_sandboxes || var.redis_source == "external"
+      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
+      error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.smithbox_control_image_tag != ""
+      error_message = "smithbox_control_image_tag is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_x_service_auth_jwt_secret != ""
+      error_message = "sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || length(local.wi_annotations) > 0
+      error_message = "enable_sandboxes requires workload_identity_annotation so the JuiceFS CSI node service account can access GCS."
+    }
+    precondition {
+      condition     = fileexists("${local.values_path}/values.yaml")
+      error_message = "Helm values file not found at ${local.values_path}/values.yaml. Run: make init-values"
     }
   }
 }
