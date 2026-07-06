@@ -127,7 +127,7 @@ variable "sandbox_host_max_node_count" {
 }
 
 variable "sandbox_host_machine_type" {
-  description = "Machine type for sandbox-host nodes. Must support nested virtualization; N2 is the default."
+  description = "Machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). N2 is the default."
   type        = string
   default     = "n2-standard-8"
 }

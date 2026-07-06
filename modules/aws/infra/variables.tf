@@ -267,7 +267,7 @@ variable "redis_auth_token" {
 #------------------------------------------------------------------------------
 variable "enable_sandboxes" {
   type        = bool
-  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated bare-metal or nested-virtualization-capable nodes."
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated sandbox-host nodes with usable Linux KVM (/dev/kvm). On AWS, use x86_64 EC2 bare metal instance types."
   default     = false
 }
 
@@ -284,7 +284,7 @@ variable "sandbox_host_node_count" {
 
 variable "sandbox_host_instance_types" {
   type        = list(string)
-  description = "EC2 instance types for the sandbox-host node group. Defaults to bare-metal m5d.metal because sandbox-host runs Firecracker directly."
+  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal; other examples include m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, and i4i.metal."
   default     = ["m5d.metal"]
 }
 

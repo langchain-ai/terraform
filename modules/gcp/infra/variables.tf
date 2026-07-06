@@ -355,7 +355,7 @@ variable "redis_prevent_destroy" {
 # Sandboxes
 #------------------------------------------------------------------------------
 variable "enable_sandboxes" {
-  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires Standard GKE, external Redis, Workload Identity, and nested-virtualization-capable nodes."
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires Standard GKE, external Redis, Workload Identity, and sandbox-host nodes with usable Linux KVM (/dev/kvm)."
   type        = bool
   default     = false
 }
@@ -379,7 +379,7 @@ variable "sandbox_host_max_node_count" {
 }
 
 variable "sandbox_host_machine_type" {
-  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization; N2 is the default."
+  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). Defaults to n2-standard-8; other examples include n2-highmem-8, n1-standard-8, c3-standard-8, and c4-standard-8."
   type        = string
   default     = "n2-standard-8"
 }

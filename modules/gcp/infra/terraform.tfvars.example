@@ -158,6 +158,12 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 #     JuiceFS metadata and is configured with maxmemory-policy=noeviction.
 #   - enable_gcp_iam_module = true so the JuiceFS CSI node service account can
 #     access the shared GCS bucket via Workload Identity.
+#   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
+#     The default is n2-standard-8, which matches the tested live
+#     configuration. Other example machine types include n2-highmem-8,
+#     n1-standard-8, c3-standard-8, and c4-standard-8. GCP nested
+#     virtualization is not available on E2, memory-optimized, AMD-powered,
+#     Arm-powered, or H4D machine types.
 #
 # enable_sandboxes = true
 # sandbox_host_node_count = 1

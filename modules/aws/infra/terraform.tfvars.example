@@ -319,13 +319,20 @@ redis_instance_type = "cache.m6g.xlarge"
 # Requirements:
 #   - redis_source = "external". The shared Redis is used for JuiceFS metadata
 #     and is configured with maxmemory-policy=noeviction.
-#   - Dedicated bare-metal or nested-virtualization-capable nodes. The AWS
-#     default is m5d.metal and configures local NVMe instance store for swap
-#     and JuiceFS cache.
+#   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
+#     On AWS, use x86_64 EC2 bare metal instance types. The default is
+#     m5d.metal, which matches the tested live configuration and configures
+#     local NVMe instance store for swap and JuiceFS cache.
+#     Other example families include m6id.metal, m7i.metal-24xl, c6i.metal,
+#     c7i.metal-24xl, r6i.metal, and i4i.metal. If you choose an instance type
+#     without the same local instance-store layout, set
+#     sandbox_host_configure_instance_store = false or provide
+#     sandbox_host_node_group_overrides.
 #
 # enable_sandboxes = true
 # sandbox_host_node_count = 1
 # sandbox_host_instance_types = ["m5d.metal"]
+# sandbox_host_configure_instance_store = true
 #
 # Required by init-values.sh when enable_sandboxes = true. Use the same release
 # tag as the other LangSmith images.
