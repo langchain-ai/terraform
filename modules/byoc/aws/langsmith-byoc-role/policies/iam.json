@@ -121,5 +121,11 @@
         ]
       }
     }
+  },
+  {
+    "Sid": "IAMSimulateCustomerRolePolicy",
+    "Effect": "Allow",
+    "Action": ["iam:SimulatePrincipalPolicy"],
+    "Resource": "arn:aws:iam::${account_id}:role/${role_name}"
   }
 ]
