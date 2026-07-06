@@ -33,6 +33,18 @@ variable "engine_version" {
   default     = "14"
 }
 
+variable "allow_major_version_upgrade" {
+  type        = bool
+  description = "Whether to allow major version upgrades for the RDS instance"
+  default     = false
+}
+
+variable "apply_immediately" {
+  type        = bool
+  description = "Whether to apply RDS modifications immediately"
+  default     = false
+}
+
 variable "vpc_id" {
   type        = string
   description = "VPC ID"

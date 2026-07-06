@@ -115,6 +115,24 @@ variable "postgres_max_storage_gb" {
   default     = 100
 }
 
+variable "postgres_engine_version" {
+  type        = string
+  description = "Postgres engine version"
+  default     = "14"
+}
+
+variable "postgres_allow_major_version_upgrade" {
+  type        = bool
+  description = "Whether to allow major version upgrades for the postgres database"
+  default     = false
+}
+
+variable "postgres_apply_immediately" {
+  type        = bool
+  description = "Whether to apply postgres database modifications immediately"
+  default     = false
+}
+
 variable "postgres_username" {
   type        = string
   description = "Username for the postgres database"

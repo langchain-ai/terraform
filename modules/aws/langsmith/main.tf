@@ -71,6 +71,10 @@ module "postgres" {
   instance_type  = var.postgres_instance_type
   storage_gb     = var.postgres_storage_gb
   max_storage_gb = var.postgres_max_storage_gb
+  engine_version = var.postgres_engine_version
+
+  allow_major_version_upgrade = var.postgres_allow_major_version_upgrade
+  apply_immediately           = var.postgres_apply_immediately
 
   username = var.postgres_username
   password = var.postgres_password

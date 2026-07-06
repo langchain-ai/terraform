@@ -40,6 +40,9 @@ resource "aws_db_instance" "this" {
   publicly_accessible    = false
   deletion_protection    = true
 
+  allow_major_version_upgrade = var.allow_major_version_upgrade
+  apply_immediately           = var.apply_immediately
+
   iam_database_authentication_enabled = var.iam_database_authentication_enabled
 
   # Prevents terraform from trying to downsize a database that scaled up automatically.
