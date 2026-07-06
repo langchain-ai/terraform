@@ -494,12 +494,12 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   type = "Opaque"
 
-  data_wo = sensitive({
+  data_wo = {
     name    = var.sandbox_juicefs_name
     metaurl = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
     storage = "gs"
     bucket  = module.storage.bucket_url
-  })
+  }
 
   data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 

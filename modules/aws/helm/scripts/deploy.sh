@@ -33,7 +33,9 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 # Pin the chart *line* by default. Sandboxes require chart 0.16+, so the default
 # advances only when enable_sandboxes=true. Override CHART_VERSION for an exact patch.
-CHART_VERSION="${CHART_VERSION:-}"
+_chart_version_provided=false
+[[ -n "${CHART_VERSION:-}" ]] && _chart_version_provided=true
+CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
@@ -43,12 +45,8 @@ _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 
-if [[ -z "$CHART_VERSION" ]]; then
-  if [[ "$_enable_sandboxes" == "true" ]]; then
-    CHART_VERSION="~0.16.0"
-  else
-    CHART_VERSION="~0.15.1"
-  fi
+if [[ "$_enable_sandboxes" == "true" && "$_chart_version_provided" != "true" ]]; then
+  CHART_VERSION="~0.16.0"
 fi
 
 if [[ -z "$_environment" || -z "$_region" ]]; then
