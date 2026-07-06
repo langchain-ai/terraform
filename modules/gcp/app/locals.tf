@@ -63,6 +63,7 @@ locals {
             enabled               = true
             clusterName           = local.cluster_name
             xServiceAuthJwtSecret = var.sandbox_x_service_auth_jwt_secret
+            callbackSigningJwk    = var.sandbox_callback_signing_jwk
             juicefs = {
               csi = {
                 existingSecretName = var.sandbox_juicefs_csi_config_secret_name
@@ -204,6 +205,10 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_sandboxes || var.sandbox_x_service_auth_jwt_secret != ""
       error_message = "sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_callback_signing_jwk != ""
+      error_message = "sandbox_callback_signing_jwk is required when enable_sandboxes = true."
     }
     precondition {
       condition     = !var.enable_sandboxes || length(local.wi_annotations) > 0

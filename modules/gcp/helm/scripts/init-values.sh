@@ -164,7 +164,18 @@ echo ""
 # Prefer TF_VAR_* from setup-env.sh, then existing file values.
 _extract_yaml_value() {
   local key="$1"
-  awk -F': ' -v k="$key" '$1 ~ "^[[:space:]]*"k"$" { gsub(/"/, "", $2); gsub(/[[:space:]]+$/, "", $2); print $2; exit }' "$OUT_FILE" 2>/dev/null || true
+  awk -F': ' -v k="$key" '
+    $1 ~ "^[[:space:]]*"k"$" {
+      v = $2
+      gsub(/[[:space:]]+$/, "", v)
+      if ((substr(v, 1, 1) == "\"" && substr(v, length(v), 1) == "\"") ||
+          (substr(v, 1, 1) == "\047" && substr(v, length(v), 1) == "\047")) {
+        v = substr(v, 2, length(v) - 2)
+      }
+      print v
+      exit
+    }
+  ' "$OUT_FILE" 2>/dev/null || true
 }
 
 EXISTING_API_KEY_SALT=""
@@ -172,12 +183,14 @@ EXISTING_JWT_SECRET=""
 EXISTING_ADMIN_PASSWORD=""
 EXISTING_LICENSE_KEY=""
 EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET=""
+EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_API_KEY_SALT=$(_extract_yaml_value "apiKeySalt")
   EXISTING_JWT_SECRET=$(_extract_yaml_value "jwtSecret")
   EXISTING_ADMIN_PASSWORD=$(_extract_yaml_value "initialOrgAdminPassword")
   EXISTING_LICENSE_KEY=$(_extract_yaml_value "langsmithLicenseKey")
   EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET=$(_extract_yaml_value "xServiceAuthJwtSecret")
+  EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=$(_extract_yaml_value "callbackSigningJwk")
 fi
 
 API_KEY_SALT="${TF_VAR_langsmith_api_key_salt:-$EXISTING_API_KEY_SALT}"
@@ -267,6 +280,7 @@ _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;         
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _smithbox_control_image_tag=$(_parse_tfvar "smithbox_control_image_tag") || _smithbox_control_image_tag=""
 SANDBOX_X_SERVICE_AUTH_JWT_SECRET="${TF_VAR_sandbox_x_service_auth_jwt_secret:-$EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET}"
+SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ "$_redis_source" != "external" ]]; then
     echo "ERROR: enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction." >&2
@@ -278,6 +292,11 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
   if [[ -z "$SANDBOX_X_SERVICE_AUTH_JWT_SECRET" ]]; then
     echo "ERROR: TF_VAR_sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
+    echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -553,6 +572,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     enabled: true
     clusterName: \"${CLUSTER_NAME}\"
     xServiceAuthJwtSecret: \"${SANDBOX_X_SERVICE_AUTH_JWT_SECRET}\"
+    callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
     juicefs:
       csi:
         existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"

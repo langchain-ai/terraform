@@ -132,6 +132,9 @@ $(if [[ "$_enable_sandboxes" == "true" ]]; then cat <<SEOF
     - secretKey: sandbox_x_service_auth_jwt_secret
       remoteRef:
         key: ${_ssm_prefix}/sandbox-x-service-auth-jwt-secret
+    - secretKey: sandbox_callback_signing_jwk
+      remoteRef:
+        key: ${_ssm_prefix}/sandbox-callback-signing-jwk
 SEOF
 fi)
 $(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF

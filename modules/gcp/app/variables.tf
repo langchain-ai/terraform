@@ -232,6 +232,13 @@ variable "sandbox_x_service_auth_jwt_secret" {
   default     = ""
 }
 
+variable "sandbox_callback_signing_jwk" {
+  description = "Sandbox callback signing private JWK. Required when enable_sandboxes = true."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 #------------------------------------------------------------------------------
 # ClickHouse (required when enable_insights = true)
 #------------------------------------------------------------------------------

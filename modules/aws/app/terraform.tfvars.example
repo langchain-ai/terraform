@@ -33,6 +33,7 @@ admin_email = "admin@example.com"
 # ── Sandboxes ────────────────────────────────────────────────────────────────
 # Requires infra enable_sandboxes = true. The infra module creates the JuiceFS
 # CSI config Secret in the LangSmith namespace; pass the same Secret name here.
+# Run `source infra/scripts/setup-env.sh` so the sandbox SSM secrets exist before deploy.
 # Sandboxes require chart 0.16.0 or newer, and the chart version must be explicit.
 #
 # enable_sandboxes = true

@@ -48,12 +48,16 @@ OPTIONAL_PARAMS=(
   "insights-encryption-key"
   "deployments-encryption-key"
   "polly-encryption-key"
+  "sandbox-x-service-auth-jwt-secret"
+  "sandbox-callback-signing-jwk"
 )
 
 # Stable secrets that should never be changed after first deploy
 STABLE_PARAMS=(
   "langsmith-api-key-salt"
   "langsmith-jwt-secret"
+  "sandbox-x-service-auth-jwt-secret"
+  "sandbox-callback-signing-jwk"
 )
 
 # SSM key → K8s secret data key (parallel arrays for diff subcommand)
@@ -66,6 +70,8 @@ DIFF_SSM_KEYS=(
   "insights-encryption-key"
   "deployments-encryption-key"
   "polly-encryption-key"
+  "sandbox-x-service-auth-jwt-secret"
+  "sandbox-callback-signing-jwk"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -76,6 +82,8 @@ DIFF_K8S_KEYS=(
   "insights_encryption_key"
   "deployments_encryption_key"
   "polly_encryption_key"
+  "sandbox_x_service_auth_jwt_secret"
+  "sandbox_callback_signing_jwk"
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────

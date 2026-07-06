@@ -114,6 +114,11 @@ data "aws_ssm_parameter" "sandbox_x_service_auth_jwt_secret" {
   name  = "${local.ssm_prefix}/sandbox-x-service-auth-jwt-secret"
 }
 
+data "aws_ssm_parameter" "sandbox_callback_signing_jwk" {
+  count = var.enable_sandboxes ? 1 : 0
+  name  = "${local.ssm_prefix}/sandbox-callback-signing-jwk"
+}
+
 # ── ESO: ExternalSecret ──────────────────────────────────────────────────────
 # Syncs secrets from SSM → K8s Secret (langsmith-config).
 # deploy.sh does this with kubectl apply; here we manage it in Terraform.
@@ -191,6 +196,10 @@ resource "kubectl_manifest" "external_secret" {
           {
             secretKey = "sandbox_x_service_auth_jwt_secret"
             remoteRef = { key = "${local.ssm_prefix}/sandbox-x-service-auth-jwt-secret" }
+          },
+          {
+            secretKey = "sandbox_callback_signing_jwk"
+            remoteRef = { key = "${local.ssm_prefix}/sandbox-callback-signing-jwk" }
           },
         ] : [],
       )

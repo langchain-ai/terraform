@@ -41,6 +41,8 @@ _param_note() {
     langsmith-api-key-salt) echo " (auto-generated)" ;;
     langsmith-jwt-secret)   echo " (auto-generated)" ;;
     redis-auth-token)       echo " (auto-generated)" ;;
+    sandbox-x-service-auth-jwt-secret) echo " (auto-generated)" ;;
+    sandbox-callback-signing-jwk)      echo " (auto-generated)" ;;
     *)                      echo "" ;;
   esac
 }
@@ -73,6 +75,13 @@ fi
 
 _environment="${_environment:-dev}"
 SSM_PREFIX="/langsmith/${_name_prefix}-${_environment}"
+
+if _tfvar_is_true "enable_sandboxes"; then
+  REQUIRED_PARAMS+=(
+    "sandbox-x-service-auth-jwt-secret"
+    "sandbox-callback-signing-jwk"
+  )
+fi
 
 # ── SSM status table ──────────────────────────────────────────────────────────
 header "SSM Parameter Store"

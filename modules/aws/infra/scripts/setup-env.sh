@@ -212,6 +212,51 @@ _ssm_secret() {
   export "$varname"="$val"
 }
 
+_b64url_nopad() {
+  base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+_ed25519_private_jwk_gen() {
+  local _tmpdir _key _priv_der _pub_der _d _x _kid
+  _tmpdir="$(mktemp -d)" || return 1
+  _key="${_tmpdir}/ed25519.pem"
+  _priv_der="${_tmpdir}/private.der"
+  _pub_der="${_tmpdir}/public.der"
+
+  if ! openssl genpkey -algorithm ED25519 -out "$_key" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  chmod 600 "$_key"
+
+  if ! openssl pkey -in "$_key" -outform DER -out "$_priv_der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  if ! openssl pkey -in "$_key" -pubout -outform DER -out "$_pub_der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+
+  _d="$(tail -c 32 "$_priv_der" | _b64url_nopad)" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+  _x="$(tail -c 32 "$_pub_der" | _b64url_nopad)" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+  rm -rf "$_tmpdir"
+
+  if [[ -z "$_d" || -z "$_x" ]]; then
+    return 1
+  fi
+
+  _kid="sandbox-callback-$(openssl rand -hex 8)"
+  printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"%s","x":"%s","d":"%s"}\n' \
+    "$_kid" "$_x" "$_d"
+}
+
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 
@@ -234,6 +279,9 @@ _ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_j
 
 _ssm_secret "sandbox-x-service-auth-jwt-secret" "" "TF_VAR_sandbox_x_service_auth_jwt_secret" \
   "openssl rand -base64 32" "" "true"
+
+_ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
+  "_ed25519_private_jwk_gen" "" "true"
 
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
 _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
@@ -300,6 +348,7 @@ echo "  redis_auth_token  = (hidden — SSM: ${_ssm_prefix}/redis-auth-token)"
 echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-salt)"
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
 echo "  sandbox_auth      = (hidden — SSM: ${_ssm_prefix}/sandbox-x-service-auth-jwt-secret)"
+echo "  sandbox_cb_jwk    = (hidden — SSM: ${_ssm_prefix}/sandbox-callback-signing-jwk)"
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
 echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"

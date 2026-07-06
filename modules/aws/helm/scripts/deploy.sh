@@ -138,9 +138,18 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _require_env "LANGSMITH_ADMIN_EMAIL"
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_x_service_auth_jwt_secret"
+    _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+  _sandbox_secret_literals=()
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    _sandbox_secret_literals=(
+      --from-literal=sandbox_x_service_auth_jwt_secret="${TF_VAR_sandbox_x_service_auth_jwt_secret}"
+      --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
     --from-literal=langsmith_license_key="${LANGSMITH_LICENSE_KEY}" \
@@ -148,7 +157,7 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
-    $(if [[ "$_enable_sandboxes" == "true" ]]; then printf '%s' "--from-literal=sandbox_x_service_auth_jwt_secret=${TF_VAR_sandbox_x_service_auth_jwt_secret}"; fi) \
+    "${_sandbox_secret_literals[@]}" \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
