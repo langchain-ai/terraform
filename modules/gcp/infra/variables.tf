@@ -390,6 +390,17 @@ variable "sandbox_host_disk_size_gb" {
   default     = 200
 }
 
+variable "sandbox_host_ephemeral_local_ssd_count" {
+  description = "Number of local SSDs backing sandbox-host ephemeral storage, used by the JuiceFS host cache. 0 keeps ephemeral storage on the boot disk."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.sandbox_host_ephemeral_local_ssd_count >= 0 && floor(var.sandbox_host_ephemeral_local_ssd_count) == var.sandbox_host_ephemeral_local_ssd_count
+    error_message = "sandbox_host_ephemeral_local_ssd_count must be a non-negative integer."
+  }
+}
+
 variable "sandbox_juicefs_name" {
   description = "JuiceFS volume name used for sandbox snapshots and filesystem state."
   type        = string

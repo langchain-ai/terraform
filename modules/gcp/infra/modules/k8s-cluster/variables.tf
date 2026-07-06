@@ -138,6 +138,12 @@ variable "sandbox_host_disk_size_gb" {
   default     = 200
 }
 
+variable "sandbox_host_ephemeral_local_ssd_count" {
+  description = "Number of local SSDs backing sandbox-host ephemeral storage, used by the JuiceFS host cache. 0 keeps ephemeral storage on the boot disk."
+  type        = number
+  default     = 0
+}
+
 variable "release_channel" {
   description = "GKE release channel"
   type        = string

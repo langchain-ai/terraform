@@ -237,6 +237,14 @@ resource "google_container_node_pool" "sandbox_host" {
     disk_size_gb = var.sandbox_host_disk_size_gb
     disk_type    = "pd-ssd"
 
+    dynamic "ephemeral_storage_local_ssd_config" {
+      for_each = var.sandbox_host_ephemeral_local_ssd_count > 0 ? [var.sandbox_host_ephemeral_local_ssd_count] : []
+
+      content {
+        local_ssd_count = ephemeral_storage_local_ssd_config.value
+      }
+    }
+
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
     ]

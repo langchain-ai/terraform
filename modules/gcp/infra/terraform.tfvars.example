@@ -170,6 +170,10 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # sandbox_host_min_node_count = 1
 # sandbox_host_max_node_count = 5
 # sandbox_host_machine_type = "n2-standard-8"
+# Optional: larger host nodes can attach local SSDs for JuiceFS cache backed
+# ephemeral storage. Some machine types only allow specific local SSD counts;
+# confirm the selected machine type supports the requested count.
+# sandbox_host_ephemeral_local_ssd_count = 7
 #
 # Required by init-values.sh when enable_sandboxes = true. Use the same release
 # tag as the other LangSmith images.

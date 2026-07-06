@@ -249,12 +249,13 @@ module "gke_cluster" {
 
   # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
   # virtualization and are isolated from the default LangSmith workload pool.
-  enable_sandbox_host_node_pool = var.enable_sandboxes
-  sandbox_host_node_count       = var.sandbox_host_node_count
-  sandbox_host_min_node_count   = var.sandbox_host_min_node_count
-  sandbox_host_max_node_count   = var.sandbox_host_max_node_count
-  sandbox_host_machine_type     = var.sandbox_host_machine_type
-  sandbox_host_disk_size_gb     = var.sandbox_host_disk_size_gb
+  enable_sandbox_host_node_pool          = var.enable_sandboxes
+  sandbox_host_node_count                = var.sandbox_host_node_count
+  sandbox_host_min_node_count            = var.sandbox_host_min_node_count
+  sandbox_host_max_node_count            = var.sandbox_host_max_node_count
+  sandbox_host_machine_type              = var.sandbox_host_machine_type
+  sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb
+  sandbox_host_ephemeral_local_ssd_count = var.sandbox_host_ephemeral_local_ssd_count
 
   # Master authorized networks — empty list keeps the master publicly reachable
   # for Terraform-driven Helm/kubectl steps. Populate var.gke_master_authorized_cidrs
