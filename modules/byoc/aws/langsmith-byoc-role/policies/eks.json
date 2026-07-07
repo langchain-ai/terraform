@@ -143,5 +143,88 @@
         "aws:ResourceTag/managed_by": "langsmith"
       }
     }
+  },
+  {
+    "Sid": "EC2LaunchTemplateCreate",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateLaunchTemplate"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:launch-template/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2LaunchTemplateManage",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateLaunchTemplateVersion",
+      "ec2:ModifyLaunchTemplate",
+      "ec2:DeleteLaunchTemplate",
+      "ec2:DeleteLaunchTemplateVersions"
+    ],
+    "Resource": ["arn:aws:ec2:*:${account_id}:launch-template/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2LaunchTemplateCreateTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:launch-template/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "ec2:CreateAction": "CreateLaunchTemplate"
+      }
+    }
+  },
+  {
+    "Sid": "EC2LaunchTemplateManageTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:launch-template/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2RunInstancesManagedLaunchTemplate",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:launch-template/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2RunInstancesLaunchResources",
+    "Effect": "Allow",
+    "Action": ["ec2:RunInstances"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:instance/*",
+      "arn:aws:ec2:*:${account_id}:volume/*",
+      "arn:aws:ec2:*:${account_id}:network-interface/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:key-pair/*",
+      "arn:aws:ec2:*::image/*"
+    ],
+    "Condition": {
+      "ArnLike": {
+        "ec2:LaunchTemplate": "arn:aws:ec2:*:${account_id}:launch-template/*"
+      },
+      "StringLikeIfExists": {
+        "ec2:InstanceType": ["c8i*.*", "m8i*.*", "r8i*.*"]
+      }
+    }
   }
 ]

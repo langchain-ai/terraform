@@ -23,13 +23,16 @@
       "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
       "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
       "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-sandbox-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smithbox-control-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
-      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
     ],
     "Condition": {
       "StringEquals": {
@@ -52,13 +55,16 @@
       "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
       "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
       "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-sandbox-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smithbox-control-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
-      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
     ]
   },
   {
@@ -76,13 +82,16 @@
       "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
       "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
       "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-sandbox-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smithbox-control-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
-      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
     ],
     "Condition": {
       "StringEquals": {
@@ -99,7 +108,9 @@
       "arn:aws:iam::${account_id}:role/*-smith-eks-cluster-role",
       "arn:aws:iam::${account_id}:role/*-smith-ebs-csi-role",
       "arn:aws:iam::${account_id}:role/*-smith-eks-node-role",
+      "arn:aws:iam::${account_id}:role/*-smith-sandbox-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-workload-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smithbox-control-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-external-secrets-iam-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-node-role",
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
