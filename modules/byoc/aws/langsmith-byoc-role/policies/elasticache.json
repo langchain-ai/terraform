@@ -105,7 +105,17 @@
     "Action": ["elasticache:CreateUserGroup"],
     "Resource": [
       "arn:aws:elasticache:*:${account_id}:user:default",
-      "arn:aws:elasticache:*:${account_id}:user:*-smith-redis-user"
+      "arn:aws:elasticache:*:${account_id}:user:*-smith-redis-user",
+      "arn:aws:elasticache:*:${account_id}:user:*-smith-juicefs-redis-user"
+    ]
+  },
+  {
+    "Sid": "ElastiCacheUserGroupModifyOnReferencedUsers",
+    "Effect": "Allow",
+    "Action": ["elasticache:ModifyUserGroup"],
+    "Resource": [
+      "arn:aws:elasticache:*:${account_id}:user:default",
+      "arn:aws:elasticache:*:${account_id}:user:*-smith-*"
     ]
   },
   {
