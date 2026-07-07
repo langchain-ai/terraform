@@ -346,7 +346,7 @@ for dep in "${_core_deployments[@]}"; do
 done
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if ! kubectl rollout status statefulset/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
+  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
     echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
     _all_ready=false
   fi

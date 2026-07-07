@@ -235,6 +235,13 @@ acm_certificate_arn    = "arn:aws:acm:us-west-2:<account-id>:certificate/<cert-i
 langsmith_domain = "langsmith.<your-domain>"
 ```
 
+**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform configures
+the shared ElastiCache Redis instance with `maxmemory-policy=noeviction` because
+JuiceFS uses Redis for sandbox metadata. This is required for sandbox
+snapshot/filesystem correctness, but it changes Redis behavior: if Redis reaches
+max memory, writes fail instead of evicting keys. Ensure Redis has enough memory
+headroom before enabling sandboxes.
+
 ### Terraform state backend (recommended for production)
 
 Configure `terraform/aws/infra/backend.tf`:

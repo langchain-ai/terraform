@@ -678,7 +678,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       csi:
         existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
     sandboxHost:
-      statefulSet:
+      deployment:
         nodeSelector:
           sandbox.langsmith.com/host: \"true\""
   _sandbox_top_level_block="

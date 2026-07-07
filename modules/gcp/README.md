@@ -177,6 +177,13 @@ letsencrypt_email      = "<ops@your-domain>"
 enable_langsmith_deployment = true
 ```
 
+**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform configures
+the shared Memorystore Redis instance with `maxmemory-policy=noeviction` because
+JuiceFS uses Redis for sandbox metadata. This is required for sandbox
+snapshot/filesystem correctness, but it changes Redis behavior: if Redis reaches
+max memory, writes fail instead of evicting keys. Ensure Redis has enough memory
+headroom before enabling sandboxes.
+
 ### Terraform state backend (recommended for production)
 
 Copy `backend.tf.example` to `backend.tf` and fill in your bucket:

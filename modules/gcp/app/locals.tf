@@ -71,7 +71,7 @@ locals {
                 }
               }
               sandboxHost = {
-                statefulSet = {
+                deployment = {
                   nodeSelector = {
                     "sandbox.langsmith.com/host" = "true"
                   }
