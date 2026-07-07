@@ -85,6 +85,51 @@ variable "langsmith_domain" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB (chart 0.16+) — auto-populated from infra outputs by make init-app.
+#------------------------------------------------------------------------------
+variable "enable_smithdb" {
+  description = "Deploy the in-chart SmithDB component. Requires the SmithDB cloud dependencies from infra (enable_smithdb = true there) and the 0.16 chart line."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_object_store_bucket" {
+  description = "SmithDB object-store S3 bucket name (from infra output)."
+  type        = string
+  default     = null
+}
+
+variable "smithdb_irsa_role_arn" {
+  description = "IAM role ARN for the SmithDB service account, IRSA (from infra output)."
+  type        = string
+  default     = null
+}
+
+variable "smithdb_metastore_use_ssl" {
+  description = "Whether SmithDB connects to its metastore over SSL (from infra output)."
+  type        = bool
+  default     = true
+}
+
+variable "smithdb_metastore_port" {
+  description = "SmithDB metastore Postgres port."
+  type        = number
+  default     = 5432
+}
+
+variable "smithdb_image_pull_secret_name" {
+  description = "Image-pull secret name for private SmithDB images, or empty to use the chart's default images (from infra output)."
+  type        = string
+  default     = ""
+}
+
+variable "smithdb_use_smithdb_endpoints" {
+  description = "Serve LangSmith UI/API reads from SmithDB (frontend.useSmithDBEndpoints). Keep false until SmithDB pods are healthy and segments are flushing to S3, then flip to true and re-apply."
+  type        = bool
+  default     = false
+}
+
+#------------------------------------------------------------------------------
 # App configuration — set these in terraform.tfvars
 #------------------------------------------------------------------------------
 

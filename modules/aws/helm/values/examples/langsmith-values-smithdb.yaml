@@ -1,0 +1,203 @@
+# SmithDB overlay for LangSmith self-hosted on AWS (chart 0.16+).
+#
+# SmithDB is the in-chart columnar store/query engine. It shares the LangSmith
+# namespace and release; it cannot run in a separate namespace or cluster.
+#
+# init-values.sh copies this to ../langsmith-values-smithdb.yaml when
+# enable_smithdb = true, and generates ../langsmith-values-smithdb-overrides.yaml
+# with the environment-specific bits (object-store bucket, region, IRSA role ARN,
+# metastore host/secret mapping) from the infra outputs.
+#
+# Migration (SmithDB Customer Engineering docs):
+#   1) Deploy with dualIngest.enabled: true (LangSmith writes to both ClickHouse
+#      and SmithDB). Reads still come from ClickHouse.
+#   2) Once SmithDB pods are healthy and segments are flushing to S3, set
+#      smithdb.langsmith.frontend.useSmithDBEndpoints: true to serve reads from
+#      SmithDB. Do this in langsmith-values-smithdb-overrides.yaml (last wins).
+#   3) The historical ClickHouse -> SmithDB backfill is owned by EPD and is not
+#      performed by Terraform.
+#
+# SmithDB image tags. The chart defaults these to ":latest", which is NOT
+# published for the private early-access images (you get ImagePullBackOff /
+# "not found"), so pin real tags here. Confirm the tag exists for your account:
+#   curl -s -H "Authorization: JWT $TOKEN" \
+#     https://hub.docker.com/v2/repositories/langchain/smithdb-metastore-migrate/tags
+# The dockerhub-private image-pull secret (from smithdb_dockerhub_username) is
+# injected via the generated overrides file. Once the 0.16 chart consolidates to a
+# single image / publishes a stable tag, this block can be simplified/removed.
+images:
+  smithdbQueryImage:
+    repository: "docker.io/langchain/smithdb-query"
+    tag: "0.1.84-8b513cd"
+  smithdbIngestionImage:
+    repository: "docker.io/langchain/smithdb-ingestion"
+    tag: "0.1.84-8b513cd"
+  smithdbCompactionImage:
+    repository: "docker.io/langchain/smithdb-compaction"
+    tag: "0.1.84-8b513cd"
+  smithdbClusterManagerImage:
+    repository: "docker.io/langchain/smithdb-clustermanager"
+    tag: "0.1.84-8b513cd"
+  smithdbMetastoreMigrationImage:
+    repository: "docker.io/langchain/smithdb-metastore-migrate"
+    tag: "0.1.84-8b513cd"
+
+smithdb:
+  enabled: true
+
+  config:
+    # Object-store credential mode. "local" uses the pod's IRSA role for S3.
+    env: "local"
+    existingSecretName: "smithdb-local"
+    # objectStore and metastore connection details are injected by
+    # langsmith-values-smithdb-overrides.yaml (generated from infra outputs).
+
+  langsmith:
+    dualIngest:
+      # Required in chart 0.16: LangSmith dual-writes traces to SmithDB.
+      enabled: true
+    frontend:
+      # Serve UI/API reads from SmithDB. Flip to true (in the overrides file)
+      # only after SmithDB pods are healthy and data is flowing.
+      useSmithDBEndpoints: false
+
+  # The metastore-migration job is a transient Helm pre-install hook that only
+  # needs network to the metastore RDS + the SmithDB image - not a SmithDB
+  # NVMe/compute node. Leave it UNPINNED so it schedules on the untainted core
+  # node group, which already exists. Do NOT pin it to a tainted SmithDB pool:
+  # the hook runs before the SmithDB component pods exist, so Karpenter has
+  # nothing to trigger provisioning, and the job hits its deadline unscheduled.
+
+  # query, ingestion, and compactionWorker run on the instance-store node group
+  # (local NVMe). compaction and clusterManager run on the compute node group.
+  # nodeSelectors/tolerations match the labels/taints set by the SmithDB node
+  # groups in infra (smithdb-local/instance-store, smithdb-local/compute).
+  query:
+    deployment:
+      replicas: 1
+      extraEnv:
+        - name: SMITHDB_QUERY__EXECUTION_CONFIG__QUERY_TIMEOUT
+          value: "30s"
+        - name: SMITHDB_QUERY__VORTEX_CACHE__FILE_CACHE_SIZE
+          value: "500M"
+        - name: SMITHDB_QUERY__VORTEX_CACHE__SEGMENT_CACHE__MEMORY_CAPACITY
+          value: "2GB"
+        - name: SMITHDB_QUERY__VORTEX_CACHE__SEGMENT_CACHE__DISK_PATH
+          value: "/data/segment"
+        - name: SMITHDB_QUERY__VORTEX_CACHE__SEGMENT_CACHE__DISK_CAPACITY
+          value: "700GB"
+        - name: SMITHDB_QUERY__VORTEX_CACHE__FILTER_CACHE__DISK_PATH
+          value: "/data/filter"
+        - name: SMITHDB_QUERY__VORTEX_CACHE__FILTER_CACHE__DISK_CAPACITY
+          value: "100GB"
+      resources:
+        requests:
+          cpu: "3"
+          memory: "9Gi"
+          ephemeral-storage: "800Gi"
+        limits:
+          cpu: "6"
+          memory: "16Gi"
+          ephemeral-storage: "800Gi"
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: 800Gi
+      volumeMounts:
+        - name: local-ssd-storage
+          mountPath: /data
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  ingestion:
+    deployment:
+      replicas: 1
+      extraEnv:
+        - name: SMITHDB_INGESTION__PROCESSOR__FLUSH__DATA_DIR
+          value: "/data"
+        - name: SMITHDB_INGESTION__RUN_SEGMENT_MANAGER__FLUSH__DATA_DIR
+          value: "/data"
+      resources:
+        requests:
+          cpu: "9"
+          memory: "9Gi"
+          ephemeral-storage: "300Gi"
+        limits:
+          cpu: "16"
+          memory: "16Gi"
+          ephemeral-storage: "300Gi"
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: 300Gi
+      volumeMounts:
+        - name: local-ssd-storage
+          mountPath: /data
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  compaction:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "1"
+          memory: "2Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+      nodeSelector:
+        smithdb-local/compute: "true"
+      tolerations:
+        - key: smithdb-local/compute
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  compactionWorker:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: "6Gi"
+          ephemeral-storage: "300Gi"
+        limits:
+          cpu: "6"
+          memory: "8Gi"
+          ephemeral-storage: "300Gi"
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  clusterManager:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      nodeSelector:
+        smithdb-local/compute: "true"
+      tolerations:
+        - key: smithdb-local/compute
+          operator: Equal
+          value: "true"
+          effect: NoSchedule

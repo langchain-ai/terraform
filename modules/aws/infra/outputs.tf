@@ -137,6 +137,44 @@ output "langsmith_irsa_role_arn" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB (populated only when enable_smithdb = true)
+#------------------------------------------------------------------------------
+output "enable_smithdb" {
+  description = "Whether SmithDB cloud dependencies were provisioned"
+  value       = var.enable_smithdb
+}
+
+output "smithdb_object_store_bucket" {
+  description = "SmithDB object-store S3 bucket name (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
+}
+
+output "smithdb_irsa_role_arn" {
+  description = "IAM role ARN for the SmithDB service account, IRSA (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].irsa_role_arn : null
+}
+
+output "smithdb_metastore_host" {
+  description = "SmithDB metastore Postgres hostname (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_host : null
+}
+
+output "smithdb_metastore_port" {
+  description = "SmithDB metastore Postgres port (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_port : null
+}
+
+output "smithdb_metastore_use_ssl" {
+  description = "Whether the SmithDB metastore connection uses SSL"
+  value       = var.smithdb_metastore_use_ssl
+}
+
+output "smithdb_image_pull_secret_name" {
+  description = "Name of the SmithDB image-pull secret, or empty if the chart's default images are used"
+  value       = var.enable_smithdb && var.smithdb_dockerhub_username != "" ? "dockerhub-private" : ""
+}
+
+#------------------------------------------------------------------------------
 # ALB
 #------------------------------------------------------------------------------
 output "alb_arn" {
@@ -260,21 +298,22 @@ output "gateway_target_group_arn" {
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster            = module.eks.cluster_name
-    postgres_source    = var.postgres_source
-    postgres           = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
-    redis_source       = var.redis_source
-    redis              = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
-    storage_bucket     = local.bucket_name
-    namespace          = var.langsmith_namespace
-    tls                = var.tls_certificate_source
-    alb                = module.alb.alb_dns_name
-    bastion            = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall           = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
-    deployments        = var.enable_deployments
-    agent_builder      = var.enable_agent_builder
-    insights           = var.enable_insights
-    polly              = var.enable_polly
+    cluster         = module.eks.cluster_name
+    postgres_source = var.postgres_source
+    postgres        = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    redis_source    = var.redis_source
+    redis           = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
+    storage_bucket  = local.bucket_name
+    namespace       = var.langsmith_namespace
+    tls             = var.tls_certificate_source
+    alb             = module.alb.alb_dns_name
+    bastion         = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall        = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
+    deployments     = var.enable_deployments
+    agent_builder   = var.enable_agent_builder
+    insights        = var.enable_insights
+    polly           = var.enable_polly
+    smithdb         = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
   }
 }
 
@@ -283,7 +322,7 @@ output "resource_summary" {
 #------------------------------------------------------------------------------
 output "next_steps" {
   description = "Next steps after terraform apply"
-  value       = <<-EOT
+  value = <<-EOT
 
     ============================================
     LangSmith Infrastructure Provisioned (AWS)
@@ -327,7 +366,7 @@ ${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
        http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
 
 DNS
-: local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
+  : local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
 
     2. Deploy LangSmith (pick one):
 
@@ -347,7 +386,7 @@ DNS
        https://${var.langsmith_domain}
 
 ACMDONE
-: <<-NODNS
+  : <<-NODNS
 
     2. Run the Helm deployment:
        cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh
