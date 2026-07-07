@@ -703,12 +703,6 @@ variable "sandbox_host_image_tag" {
   default     = ""
 }
 
-variable "smithbox_control_image_tag" {
-  type        = string
-  description = "smithbox-control image tag. Required by init-values.sh when enable_sandboxes = true."
-  default     = ""
-}
-
 variable "enable_envoy_gateway" {
   type        = bool
   description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."

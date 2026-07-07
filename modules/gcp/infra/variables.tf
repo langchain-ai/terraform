@@ -425,12 +425,6 @@ variable "sandbox_host_image_tag" {
   default     = ""
 }
 
-variable "smithbox_control_image_tag" {
-  type        = string
-  description = "smithbox-control image tag. Required by init-values.sh when enable_sandboxes = true."
-  default     = ""
-}
-
 #------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------

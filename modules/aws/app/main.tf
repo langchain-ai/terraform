@@ -358,9 +358,6 @@ locals {
           sandboxHostImage = {
             tag = var.sandbox_host_image_tag
           }
-          smithboxControlImage = {
-            tag = var.smithbox_control_image_tag
-          }
         }
         "juicefs-csi-driver" = {
           serviceAccount = {

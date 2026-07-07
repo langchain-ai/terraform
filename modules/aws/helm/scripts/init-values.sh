@@ -233,10 +233,9 @@ if [[ "$_enable_sandboxes" == "true" && "$_redis_source" != "external" ]]; then
 fi
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
-_smithbox_control_image_tag=$(_parse_tfvar "smithbox_control_image_tag") || _smithbox_control_image_tag=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ -z "$_sandbox_host_image_tag" || -z "$_smithbox_control_image_tag" ]]; then
-    echo "ERROR: sandbox_host_image_tag and smithbox_control_image_tag are required when enable_sandboxes = true." >&2
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
     exit 1
   fi
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
@@ -424,7 +423,7 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (sandbox-host + smithbox-control; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
@@ -680,8 +679,6 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
 images:
   sandboxHostImage:
     tag: \"${_sandbox_host_image_tag}\"
-  smithboxControlImage:
-    tag: \"${_smithbox_control_image_tag}\"
 
 juicefs-csi-driver:
   serviceAccount:

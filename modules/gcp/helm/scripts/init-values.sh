@@ -278,7 +278,6 @@ _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=tru
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
-_smithbox_control_image_tag=$(_parse_tfvar "smithbox_control_image_tag") || _smithbox_control_image_tag=""
 SANDBOX_X_SERVICE_AUTH_JWT_SECRET="${TF_VAR_sandbox_x_service_auth_jwt_secret:-$EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET}"
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -286,8 +285,8 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     echo "ERROR: enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction." >&2
     exit 1
   fi
-  if [[ -z "$_sandbox_host_image_tag" || -z "$_smithbox_control_image_tag" ]]; then
-    echo "ERROR: sandbox_host_image_tag and smithbox_control_image_tag are required when enable_sandboxes = true." >&2
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
     exit 1
   fi
   if [[ -z "$SANDBOX_X_SERVICE_AUTH_JWT_SECRET" ]]; then
@@ -397,7 +396,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   fi
 
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host + smithbox-control; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -454,7 +453,7 @@ fi
 
 if [[ "$_tfvars_drive_addons" != "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host + smithbox-control; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -584,8 +583,6 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
 images:
   sandboxHostImage:
     tag: \"${_sandbox_host_image_tag}\"
-  smithboxControlImage:
-    tag: \"${_smithbox_control_image_tag}\"
 
 juicefs-csi-driver:
   serviceAccount:

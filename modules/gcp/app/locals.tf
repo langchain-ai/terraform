@@ -93,9 +93,6 @@ locals {
           sandboxHostImage = {
             tag = var.sandbox_host_image_tag
           }
-          smithboxControlImage = {
-            tag = var.smithbox_control_image_tag
-          }
         }
         "juicefs-csi-driver" = {
           serviceAccount = {
@@ -197,10 +194,6 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
       error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
-    }
-    precondition {
-      condition     = !var.enable_sandboxes || var.smithbox_control_image_tag != ""
-      error_message = "smithbox_control_image_tag is required when enable_sandboxes = true."
     }
     precondition {
       condition     = !var.enable_sandboxes || var.sandbox_x_service_auth_jwt_secret != ""

@@ -223,12 +223,6 @@ variable "sandbox_host_image_tag" {
   default     = ""
 }
 
-variable "smithbox_control_image_tag" {
-  description = "smithbox-control image tag. Required when enable_sandboxes = true."
-  type        = string
-  default     = ""
-}
-
 variable "sandbox_juicefs_csi_config_secret_name" {
   description = "Existing Kubernetes Secret containing JuiceFS CSI config, created by the infra module when enable_sandboxes = true."
   type        = string

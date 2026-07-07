@@ -139,10 +139,6 @@ resource "terraform_data" "validate_required" {
       error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
     }
     precondition {
-      condition     = !var.enable_sandboxes || var.smithbox_control_image_tag != ""
-      error_message = "smithbox_control_image_tag is required when enable_sandboxes = true."
-    }
-    precondition {
       condition     = fileexists("${local.values_path}/langsmith-values.yaml")
       error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (copies templates from helm/values/examples/)"
     }

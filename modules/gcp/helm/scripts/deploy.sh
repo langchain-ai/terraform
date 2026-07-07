@@ -54,8 +54,7 @@ _validate_sandbox_values_file() {
   if ! grep -Eq '^[[:space:]]{2}sandboxes:[[:space:]]*$' "$values_file" \
     || ! grep -Eq '^[[:space:]]{4}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
     || ! grep -Eq '^[[:space:]]{8}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}smithboxControlImage:[[:space:]]*$' "$values_file"; then
+    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: ./helm/scripts/init-values.sh after applying infra." >&2
     exit 1
@@ -337,7 +336,6 @@ fi
 [[ "$_enable_fleet" == "true" ]]              && _core_deployments+=("langsmith-standalone-fleet-api-server")
 [[ "$_enable_standalone_polly" == "true" ]]   && _core_deployments+=("langsmith-standalone-polly-api-server")
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("langsmith-standalone-insights-api-server")
-[[ "$_enable_sandboxes" == "true" ]]          && _core_deployments+=("smithbox-control")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do

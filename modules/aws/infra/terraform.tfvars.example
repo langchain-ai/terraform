@@ -337,7 +337,6 @@ redis_instance_type = "cache.m6g.xlarge"
 # Required by init-values.sh when enable_sandboxes = true. Use the same release
 # tag as the other LangSmith images.
 # sandbox_host_image_tag = "0.0.0"
-# smithbox_control_image_tag = "0.0.0"
 
 #------------------------------------------------------------------------------
 # CLICKHOUSE
