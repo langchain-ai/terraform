@@ -703,6 +703,12 @@ variable "sandbox_host_image_tag" {
   default     = ""
 }
 
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL used by init-values.sh to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  default     = ""
+}
+
 variable "enable_envoy_gateway" {
   type        = bool
   description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."

@@ -223,6 +223,12 @@ variable "sandbox_host_image_tag" {
   default     = ""
 }
 
+variable "sandbox_service_url_base_url" {
+  description = "Optional base URL used to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  type        = string
+  default     = ""
+}
+
 variable "sandbox_juicefs_csi_config_secret_name" {
   description = "Existing Kubernetes Secret containing JuiceFS CSI config, created by the infra module when enable_sandboxes = true."
   type        = string

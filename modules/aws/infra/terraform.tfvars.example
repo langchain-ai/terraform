@@ -337,6 +337,9 @@ redis_instance_type = "cache.m6g.xlarge"
 # Required by init-values.sh when enable_sandboxes = true. Use the same release
 # tag as the other LangSmith images.
 # sandbox_host_image_tag = "0.0.0"
+# Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
+# Requires wildcard DNS and TLS for *.<host>.
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
 
 #------------------------------------------------------------------------------
 # CLICKHOUSE

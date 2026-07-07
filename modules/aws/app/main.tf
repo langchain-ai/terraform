@@ -323,22 +323,25 @@ locals {
         }
         }, {
         for k, v in {
-          sandboxes = {
-            enabled     = true
-            clusterName = local.cluster_name
-            juicefs = {
-              csi = {
-                existingSecretName = var.sandbox_juicefs_csi_config_secret_name
-              }
-            }
-            sandboxHost = {
-              statefulSet = {
-                nodeSelector = {
-                  "sandbox.langsmith.com/host" = "true"
+          sandboxes = merge(
+            {
+              enabled     = true
+              clusterName = local.cluster_name
+              juicefs = {
+                csi = {
+                  existingSecretName = var.sandbox_juicefs_csi_config_secret_name
                 }
               }
-            }
-          }
+              sandboxHost = {
+                statefulSet = {
+                  nodeSelector = {
+                    "sandbox.langsmith.com/host" = "true"
+                  }
+                }
+              }
+            },
+            var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
+          )
         } : k => v if var.enable_sandboxes
       })
       commonEnv = concat(

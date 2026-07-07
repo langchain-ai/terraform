@@ -59,24 +59,27 @@ locals {
         }
         }, {
         for k, v in {
-          sandboxes = {
-            enabled               = true
-            clusterName           = local.cluster_name
-            xServiceAuthJwtSecret = var.sandbox_x_service_auth_jwt_secret
-            callbackSigningJwk    = var.sandbox_callback_signing_jwk
-            juicefs = {
-              csi = {
-                existingSecretName = var.sandbox_juicefs_csi_config_secret_name
-              }
-            }
-            sandboxHost = {
-              statefulSet = {
-                nodeSelector = {
-                  "sandbox.langsmith.com/host" = "true"
+          sandboxes = merge(
+            {
+              enabled               = true
+              clusterName           = local.cluster_name
+              xServiceAuthJwtSecret = var.sandbox_x_service_auth_jwt_secret
+              callbackSigningJwk    = var.sandbox_callback_signing_jwk
+              juicefs = {
+                csi = {
+                  existingSecretName = var.sandbox_juicefs_csi_config_secret_name
                 }
               }
-            }
-          }
+              sandboxHost = {
+                statefulSet = {
+                  nodeSelector = {
+                    "sandbox.langsmith.com/host" = "true"
+                  }
+                }
+              }
+            },
+            var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
+          )
         } : k => v if var.enable_sandboxes
       })
       commonEnv = concat(

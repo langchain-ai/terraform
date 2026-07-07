@@ -425,6 +425,12 @@ variable "sandbox_host_image_tag" {
   default     = ""
 }
 
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL used by init-values.sh to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  default     = ""
+}
+
 #------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------

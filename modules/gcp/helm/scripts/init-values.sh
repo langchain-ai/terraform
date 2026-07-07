@@ -278,6 +278,7 @@ _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=tru
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_X_SERVICE_AUTH_JWT_SECRET="${TF_VAR_sandbox_x_service_auth_jwt_secret:-$EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET}"
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -566,10 +567,15 @@ fi
 _sandbox_config_block=""
 _sandbox_top_level_block=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_service_url_block=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_block="
+    serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
   _sandbox_config_block="
   sandboxes:
     enabled: true
-    clusterName: \"${CLUSTER_NAME}\"
+    clusterName: \"${CLUSTER_NAME}\"${_sandbox_service_url_block}
     xServiceAuthJwtSecret: \"${SANDBOX_X_SERVICE_AUTH_JWT_SECRET}\"
     callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
     juicefs:

@@ -39,6 +39,7 @@ admin_email = "admin@example.com"
 # enable_sandboxes = true
 # chart_version = "~0.16.0"
 # sandbox_host_image_tag = "0.0.0"
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
 # sandbox_juicefs_csi_config_secret_name = "juicefs-csi-config"
 
 # ── ClickHouse (required when enable_insights = true) ────────────────────────

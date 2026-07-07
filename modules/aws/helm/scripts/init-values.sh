@@ -233,6 +233,7 @@ if [[ "$_enable_sandboxes" == "true" && "$_redis_source" != "external" ]]; then
 fi
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
@@ -664,10 +665,15 @@ fi
 _sandbox_config_block=""
 _sandbox_top_level_block=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_service_url_block=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_block="
+    serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
   _sandbox_config_block="
   sandboxes:
     enabled: true
-    clusterName: \"${CLUSTER_NAME}\"
+    clusterName: \"${CLUSTER_NAME}\"${_sandbox_service_url_block}
     juicefs:
       csi:
         existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
