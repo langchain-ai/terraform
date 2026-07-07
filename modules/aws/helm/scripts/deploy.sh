@@ -31,9 +31,11 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
-# Override with the CHART_VERSION env var for an exact patch if needed.
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+# Pin the chart *line*. SmithDB ships in-chart on the 0.16 line, so enabling it
+# selects ~0.16.x; otherwise stay on the latest 0.15.x. Any explicit CHART_VERSION
+# env var wins. The 0.16 vs 0.15 default is resolved once enable_smithdb is read
+# from terraform.tfvars (below).
+_chart_version_override="${CHART_VERSION:-}"
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
@@ -119,6 +121,7 @@ _enable_standalone_insights=false
 _enable_envoy_gateway=false
 _enable_istio_gateway=false
 _enable_nginx_ingress=false
+_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
@@ -129,6 +132,16 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 _tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
 _tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+
+# Resolve the chart line now that enable_smithdb is known (see note above).
+if [[ -n "$_chart_version_override" ]]; then
+  CHART_VERSION="$_chart_version_override"
+elif [[ "$_enable_smithdb" == "true" ]]; then
+  CHART_VERSION="~0.16.0"
+else
+  CHART_VERSION="~0.15.1"
+fi
 
 # Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB, so the
@@ -241,6 +254,20 @@ if [[ "$_sizing_profile" != "default" ]]; then
   fi
 else
   echo "  ○ sizing: chart defaults (sizing_profile = default)"
+fi
+
+# SmithDB overlay + env overrides — layered last so the object-store, IRSA, and
+# useSmithDBEndpoints leaves win over any base/sizing defaults.
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
+    VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+    echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"
+  else
+    echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
+    exit 1
+  fi
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
@@ -383,6 +410,16 @@ fi
 [[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
 [[ "$_enable_standalone_polly" == "true" ]]    && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
+# SmithDB components (chart 0.16+). They schedule onto the instance-store/compute
+# node groups, so first rollout can take longer while those nodes provision.
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _core_deployments+=(
+    "${RELEASE_NAME}-langsmith-smithdb-query"
+    "${RELEASE_NAME}-langsmith-smithdb-ingestion"
+    "${RELEASE_NAME}-langsmith-smithdb-compaction"
+    "${RELEASE_NAME}-langsmith-smithdb-cluster-manager"
+  )
+fi
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do

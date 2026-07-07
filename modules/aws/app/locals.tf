@@ -59,6 +59,10 @@ locals {
     "eks.amazonaws.com/role-arn" = local.langsmith_irsa_role_arn
   }
 
+  # Chart line: SmithDB ships in-chart on 0.16, so enabling it selects ~0.16.x.
+  # An explicit chart_version always wins.
+  chart_version_effective = var.chart_version != "" ? var.chart_version : (var.enable_smithdb ? "~0.16.0" : null)
+
   # Components that need IRSA service account annotations.
   # Addon components are only included when their feature is enabled —
   # avoids generating overrides for service accounts that don't exist.
@@ -129,6 +133,14 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = fileexists("${local.values_path}/langsmith-values.yaml")
       error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (copies templates from helm/values/examples/)"
+    }
+    precondition {
+      condition     = !var.enable_smithdb || (var.smithdb_object_store_bucket != null && var.smithdb_irsa_role_arn != null)
+      error_message = "enable_smithdb requires smithdb_object_store_bucket and smithdb_irsa_role_arn. Run: make init-app (pulls them from infra), and ensure infra was applied with enable_smithdb = true."
+    }
+    precondition {
+      condition     = !var.enable_smithdb || fileexists("${local.values_path}/langsmith-values-smithdb.yaml")
+      error_message = "enable_smithdb = true but langsmith-values-smithdb.yaml is missing. Run: make init-values."
     }
   }
 }

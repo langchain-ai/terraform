@@ -34,6 +34,21 @@ provider "helm" {
   }
 }
 
+# kubectl provider — used for the SmithDB Karpenter CRs (EC2NodeClass, NodePool).
+# kubectl_manifest defers schema validation to apply time, so terraform plan
+# succeeds on a fresh cluster before the Karpenter CRDs are installed (the
+# controller is deployed by the eks module's blueprints add-on).
+provider "kubectl" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  load_config_file       = false
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
+  }
+}
+
 # ── Input validation ──────────────────────────────────────────────────────────
 # Cross-variable checks that can't be expressed in variable validation blocks.
 # These fire at plan time with a clear error message.
@@ -125,6 +140,18 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.create_cert_manager_irsa || var.letsencrypt_email != ""
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
+
+    # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
+    # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
+    precondition {
+      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
+      error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
+    }
+
+    precondition {
+      condition     = !var.enable_smithdb || var.smithdb_dockerhub_username == "" || var.smithdb_dockerhub_pat != ""
+      error_message = "smithdb_dockerhub_pat is required when smithdb_dockerhub_username is set. Set TF_VAR_smithdb_dockerhub_pat."
+    }
   }
 }
 
@@ -138,6 +165,10 @@ module "vpc" {
 
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
+
+  # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
+  # over subnet IDs that are unknown until apply.
+  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
 }
 
 module "firewall" {
@@ -167,6 +198,8 @@ module "eks" {
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
   eks_managed_node_groups         = var.eks_managed_node_groups
+  enable_karpenter                = var.enable_smithdb
+  karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
@@ -745,4 +778,294 @@ resource "kubernetes_secret" "standalone_insights_redis" {
   }
   type       = "Opaque"
   depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.16+) — dedicated metastore, object store, IRSA, and the
+# Kubernetes secrets the chart consumes. Node groups are wired into module.eks
+# above. The Helm release (smithdb.enabled) is deployed in Pass 2.
+#------------------------------------------------------------------------------
+
+locals {
+  smithdb_name        = "${local.base_name}-smithdb"
+  smithdb_bucket_name = var.smithdb_bucket_name != "" ? var.smithdb_bucket_name : "${local.base_name}-smithdb-${random_id.bucket_suffix.hex}"
+
+  # Docker Hub image-pull secret for private SmithDB images (early access).
+  smithdb_dockerhub_config_json = var.enable_smithdb && var.smithdb_dockerhub_username != "" ? jsonencode({
+    auths = {
+      "https://index.docker.io/v1/" = {
+        username = var.smithdb_dockerhub_username
+        password = var.smithdb_dockerhub_pat
+        auth     = base64encode("${var.smithdb_dockerhub_username}:${var.smithdb_dockerhub_pat}")
+      }
+    }
+  }) : null
+}
+
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name         = local.smithdb_name
+  region       = var.region
+  tags         = local.common_tags
+  namespace    = var.langsmith_namespace
+  release_name = var.langsmith_release_name
+
+  vpc_id                     = local.vpc_id
+  private_subnet_ids         = local.private_subnets
+  eks_node_security_group_id = module.eks.node_security_group_id
+  eks_oidc_provider_arn      = module.eks.oidc_provider_arn
+  eks_oidc_provider_url      = module.eks.oidc_provider
+
+  # Metastore
+  metastore_source                  = var.smithdb_metastore_source
+  metastore_instance_class          = var.smithdb_metastore_instance_class
+  metastore_engine_version          = var.smithdb_metastore_engine_version
+  metastore_allocated_storage       = var.smithdb_metastore_allocated_storage
+  metastore_multi_az                = var.smithdb_metastore_multi_az
+  metastore_deletion_protection     = var.smithdb_metastore_deletion_protection
+  metastore_backup_retention_period = var.smithdb_metastore_backup_retention_period
+  metastore_skip_final_snapshot     = var.smithdb_metastore_skip_final_snapshot
+  metastore_master_username         = var.smithdb_metastore_master_username
+
+  external_metastore_host     = var.smithdb_external_metastore_host
+  external_metastore_port     = var.smithdb_external_metastore_port
+  external_metastore_database = var.smithdb_external_metastore_database
+  external_metastore_username = var.smithdb_external_metastore_username
+  external_metastore_password = var.smithdb_external_metastore_password
+
+  # Object store
+  bucket_name           = local.smithdb_bucket_name
+  s3_kms_key_arn        = var.s3_kms_key_arn
+  s3_versioning_enabled = var.smithdb_s3_versioning_enabled
+  s3_force_destroy      = var.smithdb_s3_force_destroy
+
+  depends_on = [module.eks]
+}
+
+# Metastore connection secret consumed by smithdb.config.existingSecretName.
+# S3 credentials are intentionally absent — SmithDB pods use IRSA instead.
+resource "kubernetes_secret" "smithdb_local" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-local"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    smithdb_metastore_db_host     = module.smithdb[0].metastore_host
+    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
+    smithdb_metastore_db_username = module.smithdb[0].metastore_username
+    smithdb_metastore_db_password = module.smithdb[0].metastore_password
+  }
+  type       = "Opaque"
+  depends_on = [module.k8s_bootstrap]
+}
+
+# Optional image-pull secret for private (early-access) SmithDB images.
+resource "kubernetes_secret" "smithdb_dockerhub" {
+  count = local.smithdb_dockerhub_config_json == null ? 0 : 1
+
+  metadata {
+    name      = "dockerhub-private"
+    namespace = var.langsmith_namespace
+  }
+  type = "kubernetes.io/dockerconfigjson"
+  data = {
+    ".dockerconfigjson" = local.smithdb_dockerhub_config_json
+  }
+  depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB Karpenter provisioning
+#
+# The Karpenter controller is installed by module.eks (blueprints add-on). Here
+# we tag the discovery targets and create the SmithDB NodePools/EC2NodeClasses:
+#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (instanceStorePolicy)
+#     for the SmithDB emptyDir caches. Hosts query / ingestion / compaction-worker.
+#   - compute: no local NVMe. Hosts compaction / cluster-manager and the transient
+#     metastore-migration job.
+# Labels/taints (smithdb-local/instance-store, smithdb-local/compute) match the
+# nodeSelectors/tolerations in langsmith-values-smithdb.yaml.
+#------------------------------------------------------------------------------
+
+locals {
+  # Subnets are discovered by the karpenter.sh/discovery tag (applied to the
+  # private subnets at creation via the vpc module's extra_private_subnet_tags).
+  smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
+
+  # Security groups are discovered by the EKS-managed cluster tag
+  # (kubernetes.io/cluster/<cluster> = owned), which is stable and always present
+  # on the cluster security group. We deliberately do NOT put karpenter.sh/discovery
+  # on the node SG ourselves: the EKS module reconciles node-SG tags and can drop
+  # an out-of-band tag, leaving the EC2NodeClass with SecurityGroupsReady=False.
+  smithdb_karpenter_sg_selector = { "kubernetes.io/cluster/${local.cluster_name}" = "owned" }
+}
+
+# EC2NodeClass subnet discovery for a bring-your-own VPC: tag the existing private
+# subnets here (a for_each is safe because their IDs are known statically). For a
+# Terraform-created VPC the tag is applied at creation via the vpc module's
+# extra_private_subnet_tags (above).
+resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
+  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+
+  resource_id = each.value
+  key         = "karpenter.sh/discovery"
+  value       = local.cluster_name
+}
+
+resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.k8s.aws/v1"
+    kind       = "EC2NodeClass"
+    metadata   = { name = "smithdb-instance-store" }
+    spec = {
+      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
+      role                       = module.eks.karpenter_node_iam_role_name
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
+      associatePublicIPAddress   = false
+      # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
+      instanceStorePolicy = "RAID0"
+      metadataOptions = {
+        httpEndpoint            = "enabled"
+        httpProtocolIPv6        = "disabled"
+        httpPutResponseHopLimit = 1
+        httpTokens              = "required"
+      }
+      blockDeviceMappings = [{
+        deviceName = "/dev/xvda"
+        ebs = {
+          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
+          volumeType = "gp3"
+          encrypted  = true
+        }
+      }]
+    }
+  })
+
+  depends_on = [module.eks]
+}
+
+resource "kubectl_manifest" "smithdb_ec2nc_compute" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.k8s.aws/v1"
+    kind       = "EC2NodeClass"
+    metadata   = { name = "smithdb-compute" }
+    spec = {
+      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
+      role                       = module.eks.karpenter_node_iam_role_name
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
+      associatePublicIPAddress   = false
+      metadataOptions = {
+        httpEndpoint            = "enabled"
+        httpProtocolIPv6        = "disabled"
+        httpPutResponseHopLimit = 1
+        httpTokens              = "required"
+      }
+      blockDeviceMappings = [{
+        deviceName = "/dev/xvda"
+        ebs = {
+          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
+          volumeType = "gp3"
+          encrypted  = true
+        }
+      }]
+    }
+  })
+
+  depends_on = [module.eks]
+}
+
+resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.sh/v1"
+    kind       = "NodePool"
+    metadata   = { name = "smithdb-instance-store" }
+    spec = {
+      template = {
+        metadata = { labels = { "smithdb-local/instance-store" = "true" } }
+        spec = {
+          taints = [{ key = "smithdb-local/instance-store", value = "true", effect = "NoSchedule" }]
+          requirements = [
+            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
+            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
+            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
+            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
+            { key = "karpenter.k8s.aws/instance-local-nvme", operator = "Gt", values = [tostring(var.smithdb_instance_store_min_local_nvme_gib - 1)] },
+            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_instance_store_sizes },
+          ]
+          nodeClassRef = {
+            group = "karpenter.k8s.aws"
+            kind  = "EC2NodeClass"
+            name  = "smithdb-instance-store"
+          }
+          expireAfter = "720h"
+        }
+      }
+      limits = {
+        cpu    = tostring(var.smithdb_instance_store_limits.cpu)
+        memory = var.smithdb_instance_store_limits.memory
+      }
+      # Avoid churn for nodes holding large local caches.
+      disruption = {
+        consolidationPolicy = "WhenEmpty"
+        consolidateAfter    = "2m"
+        budgets             = [{ nodes = "10%" }]
+      }
+    }
+  })
+
+  depends_on = [kubectl_manifest.smithdb_ec2nc_instance_store]
+}
+
+resource "kubectl_manifest" "smithdb_nodepool_compute" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.sh/v1"
+    kind       = "NodePool"
+    metadata   = { name = "smithdb-compute" }
+    spec = {
+      template = {
+        metadata = { labels = { "smithdb-local/compute" = "true" } }
+        spec = {
+          taints = [{ key = "smithdb-local/compute", value = "true", effect = "NoSchedule" }]
+          requirements = [
+            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
+            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
+            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
+            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
+            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_compute_sizes },
+          ]
+          nodeClassRef = {
+            group = "karpenter.k8s.aws"
+            kind  = "EC2NodeClass"
+            name  = "smithdb-compute"
+          }
+          expireAfter = "720h"
+        }
+      }
+      limits = {
+        cpu    = tostring(var.smithdb_compute_limits.cpu)
+        memory = var.smithdb_compute_limits.memory
+      }
+      disruption = {
+        consolidationPolicy = "WhenEmptyOrUnderutilized"
+        consolidateAfter    = "2m"
+        budgets             = [{ nodes = "10%" }]
+      }
+    }
+  })
+
+  depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
 }

@@ -55,6 +55,14 @@ postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/d
 redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
 langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace)
 
+# SmithDB (empty/false when enable_smithdb = false in infra)
+enable_smithdb=$(terraform -chdir="$INFRA_DIR" output -raw enable_smithdb 2>/dev/null || echo "false")
+smithdb_object_store_bucket=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null || echo "")
+smithdb_irsa_role_arn=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null || echo "")
+smithdb_metastore_use_ssl=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null || echo "true")
+smithdb_metastore_port=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_port 2>/dev/null || echo "5432")
+smithdb_image_pull_secret_name=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_image_pull_secret_name 2>/dev/null || echo "")
+
 # ── Read region and environment from terraform output ────────────────────────
 
 region=$(terraform -chdir="$INFRA_DIR" output -raw region 2>/dev/null) || region=""
@@ -89,7 +97,13 @@ cat > "$OUT_FILE" <<EOF
   "langsmith_domain": "$langsmith_domain",
   "postgres_source": "$postgres_source",
   "redis_source": "$redis_source",
-  "langsmith_namespace": "$langsmith_namespace"
+  "langsmith_namespace": "$langsmith_namespace",
+  "enable_smithdb": $enable_smithdb,
+  "smithdb_object_store_bucket": "$smithdb_object_store_bucket",
+  "smithdb_irsa_role_arn": "$smithdb_irsa_role_arn",
+  "smithdb_metastore_use_ssl": $smithdb_metastore_use_ssl,
+  "smithdb_metastore_port": $smithdb_metastore_port,
+  "smithdb_image_pull_secret_name": "$smithdb_image_pull_secret_name"
 }
 EOF
 
