@@ -196,9 +196,14 @@ fi
 # ── IAM permission checks ─────────────────────────────────────────────────────
 printf "\n"
 info "Checking IAM permissions..."
-info "(Uses gcloud projects test-iam-permissions — may not reflect organization policy constraints)"
+info "(Uses Cloud Resource Manager testIamPermissions REST API — may not reflect org policy constraints)"
 
-# Core permissions always required
+# Core permissions always required.
+# Note: bucket-level permissions (e.g. storage.buckets.setIamPolicy) are
+# intentionally omitted — testIamPermissions applies to the project resource,
+# not to individual buckets, so those permissions always appear absent here
+# even when the caller holds roles/storage.admin. storage.buckets.create is
+# testable at the project level and is sufficient as a proxy for storage access.
 CORE_PERMISSIONS=(
   "container.clusters.create"
   "container.clusters.delete"
@@ -208,7 +213,6 @@ CORE_PERMISSIONS=(
   "iam.serviceAccounts.create"
   "iam.serviceAccounts.setIamPolicy"
   "storage.buckets.create"
-  "storage.buckets.setIamPolicy"
   "resourcemanager.projects.getIamPolicy"
   "resourcemanager.projects.setIamPolicy"
   "serviceusage.services.enable"
@@ -239,42 +243,67 @@ fi
 
 ALL_PERMISSIONS=("${CORE_PERMISSIONS[@]}" "${CONDITIONAL_PERMISSIONS[@]}")
 
-# Test permissions in batches of 20 (API limit)
-DENIED=()
-i=0
-while [[ $i -lt ${#ALL_PERMISSIONS[@]} ]]; do
-  batch=("${ALL_PERMISSIONS[@]:$i:20}")
-  batch_args=$(printf '"%s" ' "${batch[@]}")
+# Obtain a bearer token — requires active gcloud auth (already verified above).
+_ACCESS_TOKEN=$(gcloud auth print-access-token 2>/dev/null || true)
 
-  result=$(gcloud projects test-iam-permissions "$PROJECT_ID" \
-    --permissions="${batch_args// /,}" \
-    --format="value(permissions)" 2>/dev/null || true)
-
-  for perm in "${batch[@]}"; do
-    if ! echo "$result" | grep -qF "$perm"; then
-      DENIED+=("$perm")
-    fi
-  done
-
-  i=$((i + 20))
-done
-
-if [[ ${#DENIED[@]} -eq 0 ]]; then
-  success "IAM permissions: all required permissions granted"
+if [[ -z "$_ACCESS_TOKEN" ]]; then
+  warning "Could not obtain an access token — skipping IAM permission check."
+  warning "Run: gcloud auth application-default login"
 else
-  error "Missing IAM permissions (${#DENIED[@]} total):"
-  for perm in "${DENIED[@]}"; do
-    error "  ✗ $perm"
+  # Test permissions in batches of 20 (API limit).
+  # Uses the Cloud Resource Manager v1 testIamPermissions REST endpoint directly
+  # rather than 'gcloud projects test-iam-permissions', which has a quoting bug
+  # when permissions are passed via shell variable expansion and requires the
+  # caller to already hold resourcemanager.projects.testIamPermissions.
+  DENIED=()
+  i=0
+  while [[ $i -lt ${#ALL_PERMISSIONS[@]} ]]; do
+    batch=("${ALL_PERMISSIONS[@]:$i:20}")
+
+    # Build a JSON array of permission strings: ["perm1","perm2",...]
+    json_perms=$(printf '"%s",' "${batch[@]}")
+    json_perms="[${json_perms%,}]"
+
+    result=$(curl -s -X POST \
+      "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" \
+      -H "Authorization: Bearer $_ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"permissions\": ${json_perms}}" 2>/dev/null \
+      | python3 -c "
+import sys, json
+try:
+    granted = set(json.load(sys.stdin).get('permissions', []))
+    print('\n'.join(granted))
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+    for perm in "${batch[@]}"; do
+      if ! echo "$result" | grep -qF "$perm"; then
+        DENIED+=("$perm")
+      fi
+    done
+
+    i=$((i + 20))
   done
-  info ""
-  info "Your account needs these permissions added via IAM before running terraform apply."
-  info "Common roles that grant them:"
-  info "  roles/owner                  — full access (not recommended for production)"
-  info "  roles/editor + roles/iam.serviceAccountAdmin + roles/iam.securityAdmin"
-  info "  Custom role with the specific permissions above"
+
+  if [[ ${#DENIED[@]} -eq 0 ]]; then
+    success "IAM permissions: all required permissions granted"
+  else
+    error "Missing IAM permissions (${#DENIED[@]} total):"
+    for perm in "${DENIED[@]}"; do
+      error "  ✗ $perm"
+    done
+    info ""
+    info "Your account needs these permissions added via IAM before running terraform apply."
+    info "Common roles that grant them:"
+    info "  roles/owner                  — full access (not recommended for production)"
+    info "  roles/editor + roles/iam.serviceAccountAdmin + roles/iam.securityAdmin"
+    info "  Custom role with the specific permissions above"
+  fi
 fi
 
-warning "test-iam-permissions does not check Organization Policy constraints (deny policies)."
+warning "testIamPermissions does not check Organization Policy constraints (deny policies)."
 warning "If terraform apply fails with 'constraint violated', check your org policies."
 
 # ── Quota check ───────────────────────────────────────────────────────────────
