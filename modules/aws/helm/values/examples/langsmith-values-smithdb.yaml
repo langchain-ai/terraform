@@ -17,30 +17,24 @@
 #   3) The historical ClickHouse -> SmithDB backfill is owned by EPD and is not
 #      performed by Terraform.
 #
-# SmithDB image tags. The chart defaults these to ":latest", which is NOT
-# published for the private early-access images (you get ImagePullBackOff /
-# "not found"), so pin real tags here. Confirm the tag exists for your account:
+# SmithDB image. Chart 0.16 (>= rc.8 and GA) consolidated the five per-component
+# images into ONE (docker.io/langchain/smithdb); the chart defaults its tag to
+# ":latest", which is NOT published for the private early-access images (you get
+# ImagePullBackOff / "not found"), so pin a real tag here. Confirm it exists for
+# your account:
 #   curl -s -H "Authorization: JWT $TOKEN" \
-#     https://hub.docker.com/v2/repositories/langchain/smithdb-metastore-migrate/tags
+#     https://hub.docker.com/v2/repositories/langchain/smithdb/tags
 # The dockerhub-private image-pull secret (from smithdb_dockerhub_username) is
-# injected via the generated overrides file. Once the 0.16 chart consolidates to a
-# single image / publishes a stable tag, this block can be simplified/removed.
+# injected via the generated overrides file.
+#
+# IMPORTANT: this single-image block requires a consolidated chart (0.16 rc.8+ or
+# GA). On rc.7 or earlier the chart uses five separate images
+# (smithdbQueryImage/smithdbIngestionImage/...); if you must run rc.7, pin those
+# five per-component images instead. Once 0.16.0 GA is published, drop the tag pin.
 images:
-  smithdbQueryImage:
-    repository: "docker.io/langchain/smithdb-query"
-    tag: "0.1.84-8b513cd"
-  smithdbIngestionImage:
-    repository: "docker.io/langchain/smithdb-ingestion"
-    tag: "0.1.84-8b513cd"
-  smithdbCompactionImage:
-    repository: "docker.io/langchain/smithdb-compaction"
-    tag: "0.1.84-8b513cd"
-  smithdbClusterManagerImage:
-    repository: "docker.io/langchain/smithdb-clustermanager"
-    tag: "0.1.84-8b513cd"
-  smithdbMetastoreMigrationImage:
-    repository: "docker.io/langchain/smithdb-metastore-migrate"
-    tag: "0.1.84-8b513cd"
+  smithdbImage:
+    repository: "docker.io/langchain/smithdb"
+    tag: "0.1.85-385cc1a"
 
 smithdb:
   enabled: true
