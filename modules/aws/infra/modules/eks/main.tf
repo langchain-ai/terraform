@@ -67,8 +67,22 @@ module "eks_blueprints_addons" {
   oidc_provider_arn = module.eks.oidc_provider_arn
 
   enable_aws_load_balancer_controller = true
-  enable_metrics_server               = true
-  enable_cluster_autoscaler           = true
+  # Disable the ALB controller's cluster-wide Service mutating webhook
+  # (mservice.elbv2.k8s.aws). This module uses ALB Ingress + TargetGroupBinding,
+  # not Service type=LoadBalancer, so the mutator is unnecessary. Leaving it on
+  # makes the controller intercept ALL Service creations, which races with other
+  # Helm releases on a fresh apply - notably Karpenter, whose Service fails with
+  # "no endpoints available for service aws-load-balancer-webhook-service" if the
+  # ALB controller pods aren't ready yet.
+  aws_load_balancer_controller = {
+    set = [{
+      name  = "enableServiceMutatorWebhook"
+      value = "false"
+    }]
+  }
+
+  enable_metrics_server     = true
+  enable_cluster_autoscaler = true
 
   # Karpenter provisions the SmithDB instance-store (local-NVMe, RAID0) and
   # compute pools. It coexists with cluster-autoscaler, which manages the core
