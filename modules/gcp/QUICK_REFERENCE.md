@@ -176,7 +176,7 @@ helm status langsmith -n langsmith
 kubectl get pods -n langsmith
 
 # Get Gateway IP for DNS
-kubectl get gateway -n langsmith \
+kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}'
 ```
 
@@ -370,7 +370,7 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
 
 # Gateway / HTTPRoute
-kubectl get gateway -n langsmith
+kubectl get gateway -n envoy-gateway-system
 kubectl get httproute -n langsmith
 kubectl get svc -n envoy-gateway-system
 

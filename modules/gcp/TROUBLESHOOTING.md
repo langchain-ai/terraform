@@ -228,7 +228,7 @@ kubectl get svc -n envoy-gateway-system \
 
 ```bash
 # Get the new IP
-kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.addresses[0].value}'
+kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
 
 # Update your DNS record (Cloud DNS example)
 gcloud dns record-sets update <your-domain>. \
@@ -438,7 +438,7 @@ kubectl get clusterissuer
 ### Gateway and load balancer
 
 ```bash
-kubectl get gateway -n langsmith
+kubectl get gateway -n envoy-gateway-system
 kubectl get httproute -n langsmith
 kubectl get svc -n envoy-gateway-system -o wide
 kubectl get pods -n envoy-gateway-system
@@ -512,7 +512,7 @@ echo "=== Context ===" && kubectl config current-context
 echo "=== Nodes ===" && kubectl get nodes
 echo "=== Pods ===" && kubectl get pods -n langsmith
 echo "=== Certificate ===" && kubectl get certificate -n langsmith
-echo "=== Gateway ===" && kubectl get gateway -n langsmith
+echo "=== Gateway ===" && kubectl get gateway -n envoy-gateway-system
 echo "=== Secrets ===" && kubectl get secrets -n langsmith | grep -E "langsmith-postgres|langsmith-redis"
 echo "=== Helm ===" && helm status langsmith -n langsmith 2>/dev/null | grep -E "STATUS|LAST DEPLOYED"
 ```
