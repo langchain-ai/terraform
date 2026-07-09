@@ -27,8 +27,8 @@ locals {
     "${var.langsmith_release_name}-ingest-queue",
     "${var.langsmith_release_name}-host-backend",
     "${var.langsmith_release_name}-listener",
-    "${var.langsmith_release_name}-agent-builder-tool-server",
-    "${var.langsmith_release_name}-agent-builder-trigger-server",
+    "${var.langsmith_release_name}-fleet-tool-server",
+    "${var.langsmith_release_name}-fleet-trigger-server",
   ]
 
   # AGIC add-on identity — extracted from the cluster resource after apply.
