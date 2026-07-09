@@ -112,10 +112,12 @@ resource "azurerm_private_dns_zone_virtual_network_link" "dns_zone_vnet_link" {
 #   PG_TRGM    — trigram-based fuzzy text search (run/trace name search)
 #   BTREE_GIST — GiST indexes for range queries
 #   CITEXT     — case-insensitive text type (email lookups)
+#   LTREE      — hierarchical label tree type (Fleet apiServer runs the full,
+#                non-lite LangGraph migration set, which requires ltree)
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.db.id
-  value     = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT"
+  value     = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT,LTREE"
 }
 
 # Increase max_connections from the default (which scales with RAM).
