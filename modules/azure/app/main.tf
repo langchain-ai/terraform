@@ -80,8 +80,10 @@ data "azurerm_key_vault_secret" "deployments_key" {
   key_vault_id = data.azurerm_key_vault.this.id
 }
 
+# Fleet reuses the SAME encryption key as the legacy Agent Builder (same KV
+# secret, same data), so read it when either feature is enabled.
 data "azurerm_key_vault_secret" "agent_builder_key" {
-  count        = var.enable_agent_builder ? 1 : 0
+  count        = var.enable_agent_builder || var.enable_fleet ? 1 : 0
   name         = "langsmith-agent-builder-encryption-key"
   key_vault_id = data.azurerm_key_vault.this.id
 }
@@ -111,15 +113,16 @@ resource "kubernetes_secret_v1" "langsmith_config" {
 
   data = merge(
     {
-      langsmith_license_key       = data.azurerm_key_vault_secret.license_key.value
-      initial_org_admin_password  = data.azurerm_key_vault_secret.admin_password.value
-      api_key_salt                = data.azurerm_key_vault_secret.api_key_salt.value
-      jwt_secret                  = data.azurerm_key_vault_secret.jwt_secret.value
+      langsmith_license_key      = data.azurerm_key_vault_secret.license_key.value
+      initial_org_admin_password = data.azurerm_key_vault_secret.admin_password.value
+      api_key_salt               = data.azurerm_key_vault_secret.api_key_salt.value
+      jwt_secret                 = data.azurerm_key_vault_secret.jwt_secret.value
     },
     var.enable_agent_deploys ? {
       deployments_encryption_key = data.azurerm_key_vault_secret.deployments_key[0].value
     } : {},
-    var.enable_agent_builder ? {
+    # Fleet reuses agent_builder_encryption_key — populate it for either feature.
+    var.enable_agent_builder || var.enable_fleet ? {
       agent_builder_encryption_key = data.azurerm_key_vault_secret.agent_builder_key[0].value
     } : {},
     var.enable_insights ? {
@@ -170,8 +173,8 @@ resource "kubernetes_service_account_v1" "langsmith_ksa" {
   count = var.enable_agent_deploys ? 1 : 0
 
   metadata {
-    name      = "langsmith-ksa"
-    namespace = local.namespace
+    name        = "langsmith-ksa"
+    namespace   = local.namespace
     annotations = local.wi_annotations
     labels = {
       "azure.workload.identity/use" = "true"
@@ -211,14 +214,15 @@ resource "helm_release" "langsmith" {
     # 2. Dynamic overrides (hostname, WI annotations, storage account)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
-    var.sizing == "production"       ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
+    var.sizing == "production" ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
     var.sizing == "production-large" ? [file("${local.values_path}/langsmith-values-sizing-production-large.yaml")] : [],
-    var.sizing == "dev"              ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
+    var.sizing == "dev" ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
     # 4. Product addons
     var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
-    var.enable_insights      ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
-    var.enable_polly         ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
+    var.enable_fleet ? [file("${local.values_path}/langsmith-values-fleet.yaml")] : [],
+    var.enable_insights ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
+    var.enable_polly ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
   )
 }
 
@@ -267,6 +271,18 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_agent_builder || var.enable_agent_deploys
       error_message = "enable_agent_builder requires enable_agent_deploys = true"
+    }
+    precondition {
+      condition     = !var.enable_fleet || var.enable_agent_deploys
+      error_message = "enable_fleet requires enable_agent_deploys = true (host-backend serves Fleet's OAuth endpoints)"
+    }
+    precondition {
+      condition     = !(var.enable_fleet && var.enable_agent_builder)
+      error_message = "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
+    }
+    precondition {
+      condition     = !var.enable_fleet || fileexists("${local.values_path}/langsmith-values-fleet.yaml")
+      error_message = "langsmith-values-fleet.yaml not found at ${local.values_path}/. Run: make init-values (copies it from helm/values/examples/ when enable_fleet = true)."
     }
     precondition {
       condition     = !var.enable_polly || var.enable_agent_deploys

@@ -39,9 +39,13 @@ locals {
   }
 
   # Components that need Workload Identity service account annotations.
+  # Fleet's tool/trigger servers get annotated too, matching the helm/scripts
+  # path (init-values.sh emits their WI blocks). Mirrors config.agentBuilder's
+  # supporting services under the standalone fleet path.
   wi_components = concat(
     ["platformBackend", "backend", "ingestQueue", "queue"],
     var.enable_agent_deploys ? ["hostBackend", "listener", "operator"] : [],
+    var.enable_fleet ? ["fleetToolServer", "fleetTriggerServer"] : [],
   )
 
   # Agent deploys override — only the dynamic tlsEnabled field.
@@ -77,10 +81,10 @@ locals {
           url = "${local.protocol}://${local.hostname}"
         }
         blobStorage = {
-          enabled        = true
-          bucketName     = local.storage_container_name
-          storageAccount = local.storage_account_name
-          connectionString = ""  # empty — Workload Identity handles auth, no key needed
+          enabled          = true
+          bucketName       = local.storage_container_name
+          storageAccount   = local.storage_account_name
+          connectionString = "" # empty — Workload Identity handles auth, no key needed
         }
       }
       commonEnv = concat(
@@ -89,7 +93,11 @@ locals {
         ],
         var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
       )
-      # Workload Identity annotations on each component's service account
+    },
+    # Workload Identity annotations on each component's service account.
+    # Separate merge() argument — a for-expression cannot share an object
+    # constructor with static attributes like config/commonEnv above.
+    {
       for component in local.wi_components : component => {
         serviceAccount = {
           annotations = local.wi_annotations

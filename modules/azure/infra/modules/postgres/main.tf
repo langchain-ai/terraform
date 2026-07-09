@@ -71,6 +71,18 @@ resource "azurerm_postgresql_flexible_server_database" "langsmith" {
   collation = "en_US.utf8"
 }
 
+# Standalone Fleet database (chart v0.15+). Fleet deploys as its own service with
+# a separate Postgres database rather than sharing the LangSmith application DB.
+# Created only when enable_fleet = true; the connection URL is exposed via the
+# fleet_connection_url output and wired into the langsmith-fleet-postgres secret.
+resource "azurerm_postgresql_flexible_server_database" "fleet" {
+  count     = var.enable_fleet ? 1 : 0
+  name      = "langsmith_fleet"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+}
+
 # Private DNS zone for PostgreSQL name resolution within the VNet.
 # Resolves: <server-name>.postgres.database.azure.com → private IP.
 # Without this zone, AKS pods cannot resolve the database hostname.

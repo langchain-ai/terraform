@@ -11,9 +11,10 @@
 #   2. values-overrides.yaml                     — env-specific: hostname, WI, blob (required)
 #   3. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
 #   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
-#   5. langsmith-values-agent-builder.yaml       — Agent Builder (if enable_agent_builder = true)
-#   6. langsmith-values-insights.yaml            — Insights/Clio (if enable_insights = true)
-#   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
+#   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
+#   7. langsmith-values-insights.yaml            — Insights/Clio (if enable_insights = true)
+#   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
@@ -295,14 +296,24 @@ _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
+_enable_fleet=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
 _tfvar_is_true "enable_polly"         && _enable_polly=true        || true
+_tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
   fail "enable_agent_builder = true requires enable_deployments = true in terraform.tfvars"
+  exit 1
+fi
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  fail "enable_fleet = true requires enable_deployments = true in terraform.tfvars"
+  exit 1
+fi
+if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+  fail "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
   exit 1
 fi
 
@@ -345,6 +356,7 @@ fi
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "agent-builder:agent_builder:$_enable_agent_builder"
+  "fleet:fleet:$_enable_fleet"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
 )

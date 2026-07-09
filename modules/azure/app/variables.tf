@@ -188,6 +188,12 @@ variable "enable_polly" {
   default     = false
 }
 
+variable "enable_fleet" {
+  description = "Enable standalone Fleet (chart v0.15+), the successor to Agent Builder. Requires enable_agent_deploys = true; mutually exclusive with enable_agent_builder (Fleet replaces the legacy path). Reuses the agent_builder encryption key. Requires enable_fleet = true in the infra pass too (creates the langsmith_fleet database and the langsmith-fleet-postgres secret)."
+  type        = bool
+  default     = false
+}
+
 variable "enable_usage_telemetry" {
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)"
   type        = bool

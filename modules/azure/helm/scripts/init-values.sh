@@ -211,14 +211,30 @@ fi
 _enable_deployments=$(_parse_tfvar "enable_deployments") || _enable_deployments="false"
 _enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_builder="false"
 _enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
+_enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
 
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
 info "enable_deployments   = $_enable_deployments"
 info "enable_agent_builder = $_enable_agent_builder"
 info "enable_insights      = $_enable_insights"
+info "enable_fleet         = $_enable_fleet"
 echo ""
-echo "  To change: set enable_deployments / enable_agent_builder / enable_insights in terraform.tfvars → make init-values"
+echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
+
+# ── Fleet dependency guards ────────────────────────────────────────────────
+# Fleet is the standalone successor to Agent Builder. It needs host-backend
+# (deployments) for its OAuth endpoints, and it must not run alongside the
+# legacy config.agentBuilder path — the two manage the same data with different
+# schemas.
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  fail "enable_fleet = true requires enable_deployments = true in terraform.tfvars"
+  exit 1
+fi
+if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+  fail "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
+  exit 1
+fi
 
 # ── Generate values-overrides.yaml ────────────────────────────────────────
 echo ""
@@ -461,6 +477,9 @@ open('${_dst}', 'w').write(content)
 
 [[ "$_enable_deployments"   == "true" ]] && _copy_addon "agent-deploys"
 [[ "$_enable_agent_builder" == "true" ]] && _copy_addon "agent-builder"
+# Fleet reuses the agent_builder encryption key already in langsmith-config-secret
+# (see infra/scripts/create-k8s-secrets.sh) — no key injection needed here.
+[[ "$_enable_fleet"         == "true" ]] && _copy_addon "fleet"
 
 # Insights: generate file based on clickhouse_source
 # For in-cluster ClickHouse, just enable insights — no external connection block needed.

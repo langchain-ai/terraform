@@ -549,6 +549,20 @@ variable "enable_polly" {
   default     = false
 }
 
+variable "enable_fleet" {
+  type        = bool
+  description = <<-EOT
+    Pass 4 — enable standalone Fleet (chart v0.15+), the re-architected successor to
+    Agent Builder. Unlike the other enable_* flags, this one BOTH drives Terraform
+    resources (a dedicated langsmith_fleet Postgres database and the langsmith-fleet-postgres
+    K8s secret) AND is read by deploy.sh/init-values.sh. Requires enable_deployments = true
+    (host-backend serves Fleet's OAuth provider/token endpoints) and postgres_source = "external".
+    Reuses langsmith_agent_builder_encryption_key. Mutually exclusive with enable_agent_builder
+    (the legacy config.agentBuilder path). Fleet's Redis is the chart's in-cluster bundled pod.
+  EOT
+  default     = false
+}
+
 variable "dns_label" {
   type        = string
   description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
