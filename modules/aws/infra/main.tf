@@ -204,7 +204,7 @@ module "redis" {
   ingress_cidrs        = [local.vpc_cidr_block]
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
-  parameter_group_name = var.enable_sandboxes && var.redis_source == "external" ? aws_elasticache_parameter_group.langsmith_redis[0].name : null
+  parameter_group_name = var.enable_sandboxes && var.redis_source == "external" ? aws_elasticache_parameter_group.langsmith_redis[0].name : "default.redis7"
 }
 
 resource "aws_elasticache_parameter_group" "langsmith_redis" {
