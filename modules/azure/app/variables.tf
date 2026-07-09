@@ -160,6 +160,12 @@ variable "redis_source" {
   }
 }
 
+variable "redis_cluster_safe_mode" {
+  description = "Set true for Azure Managed Redis (Enterprise engine) — forces the chart's standalone client. Leave false for classic Azure Cache. Populated from the infra redis_cluster_safe_mode output by make init-app."
+  type        = bool
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # Feature toggles
 #------------------------------------------------------------------------------

@@ -44,6 +44,78 @@ locals {
     var.enable_agent_deploys ? ["hostBackend", "listener", "operator"] : [],
   )
 
+  # Ingress class per controller — mirrors helm/scripts/init-values.sh.
+  # Empty for envoy-gateway (Gateway API) and none (bring your own).
+  ingress_class = lookup({
+    nginx         = "nginx"
+    istio         = "istio"
+    "istio-addon" = "istio"
+    agic          = "azure-application-gateway"
+  }, local.ingress_controller, "")
+
+  # Gateway-based controllers render a Gateway/istioGateway instead of an Ingress.
+  use_ingress_resource = !contains(["envoy-gateway", "istio-addon"], local.ingress_controller)
+
+  # Ingress / gateway values, matching init-values.sh per controller.
+  # NOTE: istio-addon and envoy-gateway also require the imperative Gateway /
+  # IngressClass / TLS-secret-sync that helm/scripts/deploy.sh performs — the
+  # Terraform app path does not create those. Use the shell path (make deploy)
+  # for those controllers, or for letsencrypt/dns01 TLS (ClusterIssuer setup).
+  # Built with merge() of single-key fragments so every conditional stays a
+  # map-unifiable "{ key = val } : {}" — Terraform rejects conditionals whose two
+  # branches are heterogeneous objects (an object with mixed value types cannot
+  # unify with the empty object {}).
+  ingress_values = merge(
+    {
+      ingress = merge(
+        { enabled = local.use_ingress_resource },
+        local.use_ingress_resource && local.ingress_class != "" ? { ingressClassName = local.ingress_class } : {},
+        # cert-manager wiring for the standard Ingress path (letsencrypt / dns01).
+        # Split into single-key fragments so each conditional collapses to a map.
+        contains(["letsencrypt", "dns01"], local.tls_certificate_source) ? { annotations = { "cert-manager.io/cluster-issuer" = "letsencrypt-prod" } } : {},
+        contains(["letsencrypt", "dns01"], local.tls_certificate_source) ? { tls = [{ secretName = "langsmith-tls", hosts = [local.hostname] }] } : {},
+      )
+    },
+    local.ingress_controller == "envoy-gateway" ? {
+      gateway = { enabled = true, name = "langsmith-gateway", namespace = local.namespace }
+    } : {},
+    local.ingress_controller == "istio-addon" ? {
+      istioGateway = { enabled = true, name = "langsmith-gateway", namespace = local.namespace }
+    } : {},
+  )
+
+  # External Postgres/Redis: point the chart at the Terraform-created K8s secrets
+  # (langsmith-postgres-secret / langsmith-redis-secret from the k8s-bootstrap module).
+  # In-cluster mode disables external so the chart provisions its own. Built as a
+  # single object with a merge()'d external block — no top-level conditional, so
+  # the branch-type unification rule never trips.
+  postgres_values = {
+    postgres = {
+      external = merge(
+        { enabled = var.postgres_source == "external" },
+        var.postgres_source == "external" ? {
+          existingSecretName     = "langsmith-postgres-secret"
+          connectionUrlSecretKey = "connection_url"
+        } : {},
+      )
+    }
+  }
+
+  redis_values = {
+    redis = {
+      external = merge(
+        { enabled = var.redis_source == "external" },
+        var.redis_source == "external" ? {
+          existingSecretName     = "langsmith-redis-secret"
+          connectionUrlSecretKey = "connection_url"
+        } : {},
+        # Azure Managed Redis (Enterprise) connects with a standalone client and
+        # requires cluster-safe operations; classic Azure Cache leaves this false.
+        var.redis_source == "external" && var.redis_cluster_safe_mode ? { clusterSafeMode = true } : {},
+      )
+    }
+  }
+
   # Agent deploys override — only the dynamic tlsEnabled field.
   agent_deploys_overrides = {
     config = {
@@ -67,7 +139,11 @@ locals {
     }
   }
 
-  # Full Helm overrides — equivalent to what init-values.sh writes into values-overrides.yaml.
+  # Dynamic Helm overrides layered on top of the Azure base (helm/values/values.yaml).
+  # Equivalent to the per-deploy values init-values.sh writes into values-overrides.yaml:
+  # hostname, admin email, storage account/container, Workload Identity, ingress/TLS,
+  # and the external Postgres/Redis toggles. Static Azure defaults (auth, blob engine,
+  # config secret name) live in the base file.
   overrides_values = merge(
     {
       config = {
@@ -77,27 +153,23 @@ locals {
           url = "${local.protocol}://${local.hostname}"
         }
         blobStorage = {
-          enabled        = true
-          bucketName     = local.storage_container_name
-          storageAccount = local.storage_account_name
-          connectionString = ""  # empty — Workload Identity handles auth, no key needed
-        }
-      }
-      commonEnv = concat(
-        [
-          { name = "AZURE_CLIENT_ID", value = local.workload_identity_client_id },
-        ],
-        var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
-      )
-      # Workload Identity annotations on each component's service account
-      for component in local.wi_components : component => {
-        serviceAccount = {
-          annotations = local.wi_annotations
+          azureStorageAccountName   = local.storage_account_name
+          azureStorageContainerName = local.storage_container_name
         }
       }
     },
-    # Postgres/Redis: disable external if using in-cluster
-    var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
-    var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
+    var.enable_usage_telemetry ? {
+      commonEnv = [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }]
+    } : {},
+    # Workload Identity per component: the pod label enables the mutating webhook,
+    # the service-account annotation binds the managed identity. The webhook injects
+    # AZURE_CLIENT_ID + the federated token — no static credentials needed.
+    { for component in local.wi_components : component => {
+      deployment     = { labels = { "azure.workload.identity/use" = "true" } }
+      serviceAccount = { annotations = local.wi_annotations }
+    } },
+    local.ingress_values,
+    local.postgres_values,
+    local.redis_values,
   )
 }

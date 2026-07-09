@@ -52,6 +52,9 @@ dns_label=$(terraform -chdir="$INFRA_DIR" output -raw dns_label 2>/dev/null || e
 # Service sources
 postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/dev/null || echo "external")
 redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
+# Azure Managed Redis (Enterprise) needs the chart's standalone client (clusterSafeMode);
+# classic Azure Cache leaves this false. Driven by the infra output.
+redis_cluster_safe_mode=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null || echo "false")
 
 # Subscription ID from Azure CLI (not always in terraform outputs)
 subscription_id=$(az account show --query id -o tsv 2>/dev/null) || {
@@ -76,7 +79,8 @@ cat > "$OUT_FILE" <<EOF
   "ingress_controller": "$ingress_controller",
   "dns_label": "$dns_label",
   "postgres_source": "$postgres_source",
-  "redis_source": "$redis_source"
+  "redis_source": "$redis_source",
+  "redis_cluster_safe_mode": $redis_cluster_safe_mode
 }
 EOF
 
