@@ -281,6 +281,10 @@ resource "terraform_data" "validate_required" {
       error_message = "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
     }
     precondition {
+      condition     = !var.enable_fleet || var.postgres_source == "external"
+      error_message = "enable_fleet requires postgres_source = external — Fleet's dedicated langsmith_fleet database and the langsmith-fleet-postgres secret are only created for external Postgres."
+    }
+    precondition {
       condition     = !var.enable_fleet || fileexists("${local.values_path}/langsmith-values-fleet.yaml")
       error_message = "langsmith-values-fleet.yaml not found at ${local.values_path}/. Run: make init-values (copies it from helm/values/examples/ when enable_fleet = true)."
     }

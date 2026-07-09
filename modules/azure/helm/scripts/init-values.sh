@@ -235,6 +235,14 @@ if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
   fail "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
   exit 1
 fi
+# Fleet needs the dedicated langsmith_fleet database, which infra only creates on
+# the external PostgreSQL server; the langsmith-fleet-postgres secret is likewise
+# only created for external Postgres. In-cluster Postgres has no fleet database, so
+# the deploy would fail later resolving the missing secret.
+if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
+  fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
+  exit 1
+fi
 
 # ── Generate values-overrides.yaml ────────────────────────────────────────
 echo ""

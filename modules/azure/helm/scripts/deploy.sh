@@ -292,6 +292,7 @@ fi
 
 # ── Read feature flags from terraform.tfvars ──────────────────────────────
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
+_postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
@@ -314,6 +315,13 @@ if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
 fi
 if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
   fail "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
+  exit 1
+fi
+# Fleet needs the dedicated langsmith_fleet database + langsmith-fleet-postgres
+# secret, which infra only creates for external Postgres. In-cluster Postgres has
+# no fleet database, so the deploy would fail later resolving the missing secret.
+if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
+  fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
   exit 1
 fi
 

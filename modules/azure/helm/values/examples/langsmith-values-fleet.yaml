@@ -64,19 +64,14 @@ fleet:
 fleetToolServer:
   enabled: true
   # Migration issue #13: the 0.15.x fleet-tool-server image CPU-pegs on startup
-  # (LANGGRAPH_DEPLOYMENT_URL sync/poll loop) and CrashLoopBackOffs on a 1-CPU
-  # limit because uvicorn can't bind port 1989 within the default probe window.
-  # Azure's langsmith-defaults LimitRange caps every container at cpu limit=1, so
-  # WITHOUT this override the fleet-tool-server hits #13 on Azure. Give it >= 2 CPU
-  # and relax the startup probe; CPU settles to < 20m afterward.
+  # (LANGGRAPH_DEPLOYMENT_URL sync/poll loop) and can't bind port 1989 within the
+  # chart's default startup-probe window (6 × 10s = 60s), so it CrashLoopBackOffs.
+  # Fix = a longer startup window (below: 30 × 5s = 150s); CPU settles to < 20m
+  # once it's up. No resources override: the chart already sizes this container at
+  # 2 CPU / 4Gi (limits), which is adequate, and the namespace langsmith-defaults
+  # LimitRange only sets `default`/`defaultRequest` (applied to containers that
+  # declare no limits) — it has no `max`, so it never reduces a chart-sized pod.
   deployment:
-    resources:
-      requests:
-        cpu: "1"
-        memory: 1Gi
-      limits:
-        cpu: "2500m"
-        memory: 3Gi
     startupProbe:
       httpGet:
         path: /health
