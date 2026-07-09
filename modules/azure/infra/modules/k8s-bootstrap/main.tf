@@ -188,7 +188,7 @@ resource "kubernetes_secret_v1" "postgres" {
   }
 
   data = {
-    connection_url    = var.postgres_connection_url
+    connection_url = var.postgres_connection_url
     # POSTGRES_URI and POSTGRES_PASSWORD are required by the listener's deploy_image
     # task (host.platforms.k8s_operator.database_k8s.add_postgres_uri_secret) to
     # provision per-deployment databases for LangSmith Deployments (Pass 3+).

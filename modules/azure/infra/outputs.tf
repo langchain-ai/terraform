@@ -77,7 +77,7 @@ output "langsmith_url" {
   description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.dns_label != ""  ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
+    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
     var.ingress_controller == "agic" && module.aks.agw_public_ip_fqdn != null && module.aks.agw_public_ip_fqdn != "" ? "https://${module.aks.agw_public_ip_fqdn}" :
     "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
   )

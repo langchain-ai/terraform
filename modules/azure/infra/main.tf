@@ -250,7 +250,7 @@ module "keyvault" {
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
   # on subsequent applies, eliminating local .secret files.
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password  = var.postgres_admin_password
   langsmith_admin_password = var.langsmith_admin_password
   langsmith_license_key    = var.langsmith_license_key
   langsmith_api_key_salt   = var.langsmith_api_key_salt
@@ -370,16 +370,16 @@ module "diagnostics" {
 # Enable with: create_bastion = true in terraform.tfvars
 
 module "bastion" {
-  count               = var.create_bastion ? 1 : 0
-  source              = "./modules/bastion"
-  name                = "langsmith-bastion${local.identifier}"
-  resource_group_name = azurerm_resource_group.resource_group.name
-  location            = var.location
-  subnet_id           = module.vnet.subnet_bastion_id
-  vm_size             = var.bastion_vm_size
+  count                = var.create_bastion ? 1 : 0
+  source               = "./modules/bastion"
+  name                 = "langsmith-bastion${local.identifier}"
+  resource_group_name  = azurerm_resource_group.resource_group.name
+  location             = var.location
+  subnet_id            = module.vnet.subnet_bastion_id
+  vm_size              = var.bastion_vm_size
   admin_ssh_public_key = var.bastion_admin_ssh_public_key
-  allowed_ssh_cidrs   = var.bastion_allowed_ssh_cidrs
-  tags                = local.common_tags
+  allowed_ssh_cidrs    = var.bastion_allowed_ssh_cidrs
+  tags                 = local.common_tags
 
   depends_on = [module.vnet]
 }
