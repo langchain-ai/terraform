@@ -40,15 +40,20 @@ locals {
   public_subnets  = var.create_vpc ? module.vpc[0].public_subnets : var.public_subnets
   vpc_cidr_block  = var.create_vpc ? module.vpc[0].vpc_cidr_block : var.vpc_cidr_block
 
-  sandbox_host_pre_nodeadm = var.sandbox_host_configure_instance_store ? [
+  sandbox_host_cache_dirs = var.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
+    for idx in range(var.sandbox_host_local_nvme_expected_device_count - 1) : "/mnt/juicefs-cache${idx}"
+  ] : []
+
+  sandbox_host_pre_nodeadm = var.sandbox_host_local_nvme_bootstrap_enabled ? [
     {
       content_type = "text/x-shellscript; charset=\"us-ascii\""
       content      = <<-EOT
         #!/bin/bash
         set -euo pipefail
+        expected_device_count=${var.sandbox_host_local_nvme_expected_device_count}
         mapfile -t SSD < <(lsblk -dno NAME,MODEL | awk '/Instance Storage/{print "/dev/"$1}' | sort)
-        if [ "$${#SSD[@]}" -lt 4 ]; then
-          echo "sandbox-host: expected >=4 instance-store NVMe devices, found $${#SSD[@]}" >&2
+        if [ "$${#SSD[@]}" -lt "$expected_device_count" ]; then
+          echo "sandbox-host: expected >=$expected_device_count instance-store NVMe devices, found $${#SSD[@]}" >&2
           exit 1
         fi
         swapdev="$${SSD[0]}"
@@ -56,7 +61,8 @@ locals {
         swapon "$swapdev"
         echo "$swapdev none swap sw,nofail 0 0" >> /etc/fstab
         idx=0
-        for dev in "$${SSD[@]:1:3}"; do
+        for ((device_idx = 1; device_idx < expected_device_count; device_idx++)); do
+          dev="$${SSD[$device_idx]}"
           mnt="/mnt/juicefs-cache$idx"
           mkfs.ext4 -F "$dev"
           mkdir -p "$mnt"

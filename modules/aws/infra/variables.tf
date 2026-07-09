@@ -288,10 +288,21 @@ variable "sandbox_host_instance_types" {
   default     = ["m5d.metal"]
 }
 
-variable "sandbox_host_configure_instance_store" {
+variable "sandbox_host_local_nvme_bootstrap_enabled" {
   type        = bool
-  description = "Configure local NVMe instance-store devices for sandbox-host swap and JuiceFS cache. Disable when using an instance type without local instance store."
+  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Disable when using an instance type without local NVMe instance store."
   default     = true
+}
+
+variable "sandbox_host_local_nvme_expected_device_count" {
+  type        = number
+  description = "Number of local NVMe instance-store devices expected on each sandbox-host node when sandbox_host_local_nvme_bootstrap_enabled = true. The first device is used for swap and the remaining devices are mounted as JuiceFS cache directories. This does not attach disks; it must match the selected EC2 instance type."
+  default     = 4
+
+  validation {
+    condition     = var.sandbox_host_local_nvme_expected_device_count >= 1
+    error_message = "sandbox_host_local_nvme_expected_device_count must be at least 1."
+  }
 }
 
 variable "sandbox_host_node_group_overrides" {

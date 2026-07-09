@@ -326,13 +326,19 @@ redis_instance_type = "cache.m6g.xlarge"
 #     Other example families include m6id.metal, m7i.metal-24xl, c6i.metal,
 #     c7i.metal-24xl, r6i.metal, and i4i.metal. If you choose an instance type
 #     without the same local instance-store layout, set
-#     sandbox_host_configure_instance_store = false or provide
+#     sandbox_host_local_nvme_bootstrap_enabled = false or provide
 #     sandbox_host_node_group_overrides.
+#   - sandbox_host_local_nvme_expected_device_count is the number of local NVMe
+#     instance-store devices the selected instance type already exposes.
+#     Terraform does not attach these devices. Device 0 is used for swap and
+#     devices 1..N are mounted as JuiceFS cache directories. The default is 4,
+#     matching m5d.metal.
 #
 # enable_sandboxes = true
 # sandbox_host_node_count = 1
 # sandbox_host_instance_types = ["m5d.metal"]
-# sandbox_host_configure_instance_store = true
+# sandbox_host_local_nvme_bootstrap_enabled = true
+# sandbox_host_local_nvme_expected_device_count = 4
 #
 # Required by init-values.sh when enable_sandboxes = true. Use the same release
 # tag as the other LangSmith images.

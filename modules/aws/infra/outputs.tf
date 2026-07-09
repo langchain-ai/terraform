@@ -89,6 +89,11 @@ output "sandbox_juicefs_bucket_url" {
   value       = var.enable_sandboxes ? local.sandbox_juicefs_bucket_url : null
 }
 
+output "sandbox_juicefs_host_cache_dirs" {
+  description = "Host paths mounted from sandbox-host instance-store devices for JuiceFS cache when configured"
+  value       = var.enable_sandboxes ? local.sandbox_host_cache_dirs : []
+}
+
 #------------------------------------------------------------------------------
 # Storage (S3)
 #------------------------------------------------------------------------------
