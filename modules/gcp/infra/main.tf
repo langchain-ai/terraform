@@ -381,7 +381,6 @@ module "sandbox_juicefs_redis" {
   high_availability   = var.sandbox_juicefs_redis_high_availability
   prevent_destroy     = var.sandbox_juicefs_redis_prevent_destroy
   maxmemory_policy    = "noeviction"
-  auth_enabled        = true
   rdb_snapshot_period = var.sandbox_juicefs_redis_rdb_snapshot_period
 
   # Network
@@ -558,7 +557,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "redis://:${urlencode(module.sandbox_juicefs_redis[0].auth_string)}@${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
+    metaurl = "redis://${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
     storage = "gs"
     bucket  = module.storage.bucket_url
   }

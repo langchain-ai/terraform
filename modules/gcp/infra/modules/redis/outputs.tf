@@ -15,12 +15,6 @@ output "port" {
   value       = var.prevent_destroy ? google_redis_instance.langsmith_protected[0].port : google_redis_instance.langsmith[0].port
 }
 
-output "auth_string" {
-  description = "Redis AUTH string when auth_enabled is true"
-  value       = var.prevent_destroy ? google_redis_instance.langsmith_protected[0].auth_string : google_redis_instance.langsmith[0].auth_string
-  sensitive   = true
-}
-
 output "current_location_id" {
   description = "Current location ID"
   value       = var.prevent_destroy ? google_redis_instance.langsmith_protected[0].current_location_id : google_redis_instance.langsmith[0].current_location_id

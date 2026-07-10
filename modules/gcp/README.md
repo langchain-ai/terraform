@@ -181,10 +181,13 @@ enable_langsmith_deployment = true
 dedicated Memorystore Redis instance for JuiceFS sandbox metadata and configures
 that dedicated instance with `maxmemory-policy=noeviction`. The main LangSmith
 Redis keeps its normal eviction policy. Terraform writes the JuiceFS Redis
-connection URL into the precreated Kubernetes CSI config Secret and the Helm
-values reference only that Secret name, so the JuiceFS Redis password is not
-placed in Helm values. The default JuiceFS Redis size is 5 GB; use 20 GB or
-higher for SaaS-like production scale.
+connection URL into the precreated Kubernetes CSI config Secret and Helm values
+reference only that Secret name. The dedicated JuiceFS Redis is private to the
+VPC and does not generate a separate Redis AUTH credential by default, avoiding
+an additional Terraform-state secret. The default JuiceFS Redis size is 5 GB;
+use 20 GB or higher for SaaS-like production scale. Set
+`sandbox_juicefs_redis_rdb_snapshot_period` when Redis metadata snapshots are
+required.
 
 **Sandbox node identity:** When `enable_sandboxes = true`, Terraform creates a
 restricted service account for the sandbox-host GKE node pool and grants only the

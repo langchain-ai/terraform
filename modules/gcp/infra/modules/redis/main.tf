@@ -15,7 +15,6 @@ resource "google_redis_instance" "langsmith" {
   tier           = var.high_availability ? "STANDARD_HA" : "BASIC"
   memory_size_gb = var.memory_size_gb
   redis_version  = var.redis_version
-  auth_enabled   = var.auth_enabled
 
   # Network
   authorized_network = var.network_id
@@ -76,7 +75,6 @@ resource "google_redis_instance" "langsmith_protected" {
   tier           = var.high_availability ? "STANDARD_HA" : "BASIC"
   memory_size_gb = var.memory_size_gb
   redis_version  = var.redis_version
-  auth_enabled   = var.auth_enabled
 
   # Network
   authorized_network = var.network_id

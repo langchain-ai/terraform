@@ -220,12 +220,6 @@ resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
   }
 }
 
-resource "random_password" "sandbox_juicefs_redis_auth_token" {
-  count   = var.enable_sandboxes ? 1 : 0
-  length  = 32
-  special = false
-}
-
 module "sandbox_juicefs_redis" {
   source = "./modules/redis"
   count  = var.enable_sandboxes ? 1 : 0
@@ -236,7 +230,6 @@ module "sandbox_juicefs_redis" {
   instance_type            = var.sandbox_juicefs_redis_instance_type
   ingress_cidrs            = [local.vpc_cidr_block]
   vpc_cidr_block           = local.vpc_cidr_block
-  auth_token               = random_password.sandbox_juicefs_redis_auth_token[0].result
   parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
   snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
 }
@@ -615,7 +608,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
+    metaurl = "rediss://${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
     storage = "s3"
     bucket  = local.sandbox_juicefs_bucket_url
   }

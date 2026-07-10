@@ -30,8 +30,9 @@ variable "vpc_cidr_block" {
 }
 
 variable "auth_token" {
-  description = "Auth token for Redis in-transit encryption. Must be hex string (no base64 special chars)."
+  description = "Optional auth token for Redis in-transit encryption. Must be a hex string when set."
   type        = string
+  default     = null
   sensitive   = true
 }
 

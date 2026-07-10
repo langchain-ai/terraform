@@ -38,12 +38,6 @@ variable "redis_version" {
   default     = "REDIS_7_2"
 }
 
-variable "auth_enabled" {
-  description = "Enable Redis AUTH."
-  type        = bool
-  default     = false
-}
-
 variable "rdb_snapshot_period" {
   description = "Optional RDB snapshot period for Redis persistence. Set to null to disable persistence."
   type        = string
