@@ -577,6 +577,10 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     juicefs:
       csi:
         existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+        node:
+          serviceAccount:
+            annotations:
+              iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
     sandboxHost:
       deployment:
         nodeSelector:
@@ -584,13 +588,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_top_level_block="
 images:
   sandboxHostImage:
-    tag: \"${_sandbox_host_image_tag}\"
-
-juicefs-csi-driver:
-  serviceAccount:
-    node:
-      annotations:
-        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\""
+    tag: \"${_sandbox_host_image_tag}\""
 fi
 
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────

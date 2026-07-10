@@ -672,6 +672,10 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     juicefs:
       csi:
         existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+        node:
+          serviceAccount:
+            annotations:
+              eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
     sandboxHost:
       deployment:
         nodeSelector:
@@ -679,13 +683,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_top_level_block="
 images:
   sandboxHostImage:
-    tag: \"${_sandbox_host_image_tag}\"
-
-juicefs-csi-driver:
-  serviceAccount:
-    node:
-      annotations:
-        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
+    tag: \"${_sandbox_host_image_tag}\""
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────

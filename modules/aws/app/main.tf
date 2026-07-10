@@ -330,6 +330,11 @@ locals {
               juicefs = {
                 csi = {
                   existingSecretName = var.sandbox_juicefs_csi_config_secret_name
+                  node = {
+                    serviceAccount = {
+                      annotations = local.irsa_annotations
+                    }
+                  }
                 }
               }
               sandboxHost = {
@@ -360,13 +365,6 @@ locals {
         images = {
           sandboxHostImage = {
             tag = var.sandbox_host_image_tag
-          }
-        }
-        "juicefs-csi-driver" = {
-          serviceAccount = {
-            node = {
-              annotations = local.irsa_annotations
-            }
           }
         }
       } : k => v if var.enable_sandboxes
