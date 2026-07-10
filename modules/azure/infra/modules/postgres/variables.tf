@@ -92,3 +92,9 @@ variable "geo_redundant_backup_enabled" {
   description = "Enable geo-redundant backups. Requires paired Azure region support."
   default     = false
 }
+
+variable "enable_fleet" {
+  type        = bool
+  description = "Create a dedicated 'langsmith_fleet' database for standalone Fleet (chart v0.15+)."
+  default     = false
+}

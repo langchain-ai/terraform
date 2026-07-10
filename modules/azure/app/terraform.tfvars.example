@@ -27,7 +27,8 @@ admin_email = "admin@example.com"
 # ── Feature toggles ──────────────────────────────────────────────────────────
 
 # enable_agent_deploys   = true    # Deployments feature (LangGraph Platform)
-# enable_agent_builder   = true    # Agent Builder (requires agent_deploys)
+# enable_agent_builder   = true    # Agent Builder — legacy (requires agent_deploys)
+# enable_fleet           = true    # Fleet, standalone successor to Agent Builder (requires agent_deploys; mutually exclusive with enable_agent_builder; also set enable_fleet in the infra pass)
 # enable_insights        = true    # Insights (requires ClickHouse below)
 # enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
 # enable_usage_telemetry = true    # Extended usage telemetry reporting

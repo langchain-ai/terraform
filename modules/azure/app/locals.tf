@@ -39,9 +39,13 @@ locals {
   }
 
   # Components that need Workload Identity service account annotations.
+  # Fleet's tool/trigger servers get annotated too, matching the helm/scripts
+  # path (init-values.sh emits their WI blocks). Mirrors config.agentBuilder's
+  # supporting services under the standalone fleet path.
   wi_components = concat(
     ["platformBackend", "backend", "ingestQueue", "queue"],
     var.enable_agent_deploys ? ["hostBackend", "listener", "operator"] : [],
+    var.enable_fleet ? ["fleetToolServer", "fleetTriggerServer"] : [],
   )
 
   # Agent deploys override — only the dynamic tlsEnabled field.

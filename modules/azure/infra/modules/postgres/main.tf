@@ -71,6 +71,18 @@ resource "azurerm_postgresql_flexible_server_database" "langsmith" {
   collation = "en_US.utf8"
 }
 
+# Standalone Fleet database (chart v0.15+). Fleet deploys as its own service with
+# a separate Postgres database rather than sharing the LangSmith application DB.
+# Created only when enable_fleet = true; the connection URL is exposed via the
+# fleet_connection_url output and wired into the langsmith-fleet-postgres secret.
+resource "azurerm_postgresql_flexible_server_database" "fleet" {
+  count     = var.enable_fleet ? 1 : 0
+  name      = "langsmith_fleet"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+}
+
 # Private DNS zone for PostgreSQL name resolution within the VNet.
 # Resolves: <server-name>.postgres.database.azure.com → private IP.
 # Without this zone, AKS pods cannot resolve the database hostname.
@@ -100,10 +112,12 @@ resource "azurerm_private_dns_zone_virtual_network_link" "dns_zone_vnet_link" {
 #   PG_TRGM    — trigram-based fuzzy text search (run/trace name search)
 #   BTREE_GIST — GiST indexes for range queries
 #   CITEXT     — case-insensitive text type (email lookups)
+#   LTREE      — hierarchical label tree type (Fleet apiServer runs the full,
+#                non-lite LangGraph migration set, which requires ltree)
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.db.id
-  value     = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT"
+  value     = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT,LTREE"
 }
 
 # Increase max_connections from the default (which scales with RAM).

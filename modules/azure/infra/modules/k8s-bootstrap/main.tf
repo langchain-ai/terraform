@@ -199,6 +199,27 @@ resource "kubernetes_secret_v1" "postgres" {
   type = "Opaque"
 }
 
+# Fleet Postgres connection URL — the dedicated langsmith_fleet database.
+# Referenced by the chart via fleet.postgres.external.existingSecretName. Only the
+# Postgres secret is created for Fleet: its Redis is the chart's in-cluster bundled
+# StatefulSet (Azure Managed Redis can't provide the logical-DB isolation the
+# AWS/GCP Fleet uses, and Fleet has no clusterSafeMode knob), so there is no
+# langsmith-fleet-redis secret.
+resource "kubernetes_secret_v1" "fleet_postgres" {
+  count = var.enable_fleet && var.use_external_postgres ? 1 : 0
+
+  metadata {
+    name      = "langsmith-fleet-postgres"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = {
+    postgres_connection_url = var.fleet_postgres_connection_url
+  }
+
+  type = "Opaque"
+}
+
 # Redis connection URL (rediss://...) injected the same way as the Postgres secret.
 # KEDA ScaledObjects also reference this secret to authenticate queue-depth queries.
 resource "kubernetes_secret_v1" "redis" {
