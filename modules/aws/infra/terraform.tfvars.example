@@ -654,3 +654,69 @@ enable_usage_telemetry = false
 # langsmith_deployments_encryption_key   = ""   # set via TF_VAR or setup-env.sh
 # langsmith_agent_builder_encryption_key = ""   # set via TF_VAR or setup-env.sh
 # langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh
+
+#------------------------------------------------------------------------------
+# SMITHDB (chart 0.16+)
+#------------------------------------------------------------------------------
+# SmithDB is the in-chart columnar store/query engine that replaces ClickHouse
+# over the 0.16 -> 0.18 line. It shares the LangSmith namespace and Helm release
+# (it cannot run in a separate namespace or cluster). Enabling it provisions:
+#   - a dedicated metastore Postgres (RDS) — separate from the LangSmith app DB
+#   - a dedicated object-store S3 bucket for .vortex segments
+#   - an IRSA role for the SmithDB service account (S3 access, no static keys)
+#   - the Karpenter controller + SmithDB instance-store + compute NodePools
+#     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
+#
+# Pass 2 must run on the 0.16 chart line — deploy.sh / the app module select
+# ~0.16.x automatically when enable_smithdb = true.
+#
+# Migration (SmithDB Customer Engineering docs): 0.16 deploys with dual-ingest
+# (LangSmith writes to both ClickHouse and SmithDB); flip reads to SmithDB with
+# useSmithDBEndpoints once healthy; 0.17 encourages deprovisioning ClickHouse;
+# 0.18 removes it. The historical ClickHouse -> SmithDB backfill is owned by EPD
+# and is not performed by Terraform. See reports/SMITHDB.md.
+
+# enable_smithdb = false
+
+# ── Metastore (dedicated RDS Postgres; set source = "external" to bring your own)
+# smithdb_metastore_source          = "create"
+# smithdb_metastore_instance_class  = "db.m6g.large"
+# smithdb_metastore_engine_version  = "16"
+# smithdb_metastore_allocated_storage = 50
+# smithdb_metastore_multi_az        = false
+# smithdb_metastore_deletion_protection = true
+# smithdb_metastore_use_ssl         = true
+# For an external metastore, set smithdb_metastore_source = "external" and:
+#   smithdb_external_metastore_host     = "my-pg.example.com"
+#   smithdb_external_metastore_username = "smithdb"
+#   export TF_VAR_smithdb_external_metastore_password="..."
+
+# ── Object store (S3) ─────────────────────────────────────────────────────────
+# Leave bucket_name empty to auto-generate {name_prefix}-{environment}-smithdb-{suffix}.
+# smithdb_bucket_name           = ""
+# smithdb_s3_versioning_enabled = false
+# smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
+
+# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
+# When enable_smithdb = true, the eks module installs the Karpenter controller
+# and this module creates two SmithDB pools:
+#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (no userdata needed)
+#   - compute: for compaction / cluster-manager / the metastore-migration job
+# Both amd64 and arm64 are supported; amd64 is the default so SmithDB matches
+# core LangSmith. For Graviton set smithdb_node_arch = "arm64".
+# Karpenter version MUST match eks_cluster_version (compatibility matrix:
+# https://karpenter.sh/docs/upgrading/compatibility/). K8s 1.33 -> >= 1.5,
+# 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13. Default below targets EKS 1.33.
+# smithdb_karpenter_chart_version           = "1.5.0"
+# smithdb_node_arch                         = "amd64"
+# smithdb_capacity_type                     = ["on-demand"]
+# smithdb_instance_store_sizes              = ["4xlarge", "8xlarge"]
+# smithdb_instance_store_min_local_nvme_gib = 800
+# smithdb_instance_store_limits             = { cpu = 512, memory = "4096Gi" }
+# smithdb_compute_sizes                     = ["2xlarge", "4xlarge", "8xlarge"]
+# smithdb_compute_limits                    = { cpu = 256, memory = "1024Gi" }
+
+# ── Private (early-access) SmithDB images ─────────────────────────────────────
+# Only needed if the SmithDB images are private. Creates a dockerhub-private
+# image-pull secret. Provide the PAT via TF_VAR_smithdb_dockerhub_pat.
+# smithdb_dockerhub_username = ""

@@ -62,6 +62,18 @@ variable "eks_managed_node_groups" {
   }
 }
 
+variable "enable_karpenter" {
+  type        = bool
+  description = "Install the Karpenter controller (via eks-blueprints-addons): controller IRSA, node IAM role, and the SQS interruption queue. Required for the SmithDB instance-store/compute pools. Coexists with cluster-autoscaler (disjoint nodes)."
+  default     = false
+}
+
+variable "karpenter_chart_version" {
+  type        = string
+  description = "Karpenter Helm chart version. MUST be compatible with cluster_version - see https://karpenter.sh/docs/upgrading/compatibility/. K8s 1.33 needs >= 1.5 (1.34 -> 1.6, 1.35 -> 1.9, 1.36 -> 1.13). Uses the karpenter.sh/v1 + karpenter.k8s.aws/v1 APIs (Karpenter >= 1.0). Default targets the module's default EKS 1.33."
+  default     = "1.5.0"
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags to apply to the resources"

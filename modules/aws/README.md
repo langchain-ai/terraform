@@ -993,6 +993,13 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
 | `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
+| `enable_smithdb` | `false` | no | Provision SmithDB (chart 0.16+): dedicated metastore RDS, object-store S3, IRSA role, and the Karpenter controller + SmithDB instance-store/compute NodePools. Selects the 0.16 chart line in Pass 2. See [reports/SMITHDB.md](reports/SMITHDB.md). |
+| `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
+| `smithdb_karpenter_chart_version` | `1.5.0` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) (K8s 1.33 → ≥ 1.5, 1.34 → 1.6, 1.35 → 1.9, 1.36 → 1.13) |
+| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
+| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
+| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
+| `smithdb_dockerhub_username` | `""` | no | Docker Hub username for private (early-access) SmithDB images. Creates a `dockerhub-private` image-pull secret when set |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

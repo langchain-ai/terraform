@@ -702,3 +702,243 @@ variable "langsmith_polly_encryption_key" {
   default     = ""
 }
 
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.16+)
+#
+# SmithDB is the columnar store/query engine shipped in-chart with LangSmith.
+# It shares the LangSmith namespace and release (it cannot run in a separate
+# namespace or cluster). Enabling it provisions a dedicated metastore Postgres,
+# a dedicated object-store S3 bucket, an IRSA role for the SmithDB service
+# account, and instance-store + compute node groups (SmithDB requires local
+# NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
+#
+# Migration path (SmithDB Customer Engineering docs): chart 0.16 opt-in with
+# dual-ingest -> 0.17 installs SmithDB, deprovision ClickHouse -> 0.18 removes
+# ClickHouse. The historical ClickHouse->SmithDB backfill is owned by EPD and is
+# not performed by Terraform.
+#------------------------------------------------------------------------------
+variable "enable_smithdb" {
+  type        = bool
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Requires the 0.16 chart line in Pass 2. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  default     = false
+}
+
+variable "langsmith_release_name" {
+  type        = string
+  description = "Helm release name for LangSmith (Pass 2). Used to scope the SmithDB IRSA trust to the <release>-langsmith-smithdb service account. Must match RELEASE_NAME / release_name used in helm/ or app/."
+  default     = "langsmith"
+}
+
+# ── Metastore (dedicated RDS Postgres) ────────────────────────────────────────
+variable "smithdb_metastore_source" {
+  type        = string
+  description = "SmithDB metastore Postgres: 'create' (dedicated RDS, default) or 'external' (bring-your-own). SmithDB requires a dedicated Postgres instance, separate from the LangSmith application database."
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "external"], var.smithdb_metastore_source)
+    error_message = "smithdb_metastore_source must be 'create' or 'external'."
+  }
+}
+
+variable "smithdb_metastore_instance_class" {
+  type        = string
+  description = "RDS instance class for the SmithDB metastore."
+  default     = "db.m6g.large"
+}
+
+variable "smithdb_metastore_engine_version" {
+  type        = string
+  description = "PostgreSQL engine version for the SmithDB metastore."
+  default     = "16"
+}
+
+variable "smithdb_metastore_allocated_storage" {
+  type        = number
+  description = "Allocated storage (GB) for the SmithDB metastore."
+  default     = 50
+}
+
+variable "smithdb_metastore_multi_az" {
+  type        = bool
+  description = "Run the SmithDB metastore RDS instance Multi-AZ."
+  default     = false
+}
+
+variable "smithdb_metastore_deletion_protection" {
+  type        = bool
+  description = "Prevent accidental deletion of the SmithDB metastore RDS instance."
+  default     = true
+}
+
+variable "smithdb_metastore_backup_retention_period" {
+  type        = number
+  description = "Days to retain automated backups of the SmithDB metastore. 0 disables backups."
+  default     = 7
+}
+
+variable "smithdb_metastore_skip_final_snapshot" {
+  type        = bool
+  description = "Skip the final snapshot when the SmithDB metastore is destroyed. Set false for production."
+  default     = true
+}
+
+variable "smithdb_metastore_use_ssl" {
+  type        = bool
+  description = "Connect to the SmithDB metastore over SSL. Written into the SmithDB Helm values."
+  default     = true
+}
+
+variable "smithdb_metastore_master_username" {
+  type        = string
+  description = "Master username for the SmithDB metastore."
+  default     = "smithdb"
+}
+
+# External metastore fields (used when smithdb_metastore_source = external).
+variable "smithdb_external_metastore_host" {
+  type        = string
+  description = "Hostname of an existing Postgres instance for the SmithDB metastore."
+  default     = null
+}
+
+variable "smithdb_external_metastore_port" {
+  type        = number
+  description = "Port of the existing SmithDB metastore Postgres instance."
+  default     = 5432
+}
+
+variable "smithdb_external_metastore_database" {
+  type        = string
+  description = "Database name on the existing SmithDB metastore Postgres instance."
+  default     = "smithdb"
+}
+
+variable "smithdb_external_metastore_username" {
+  type        = string
+  description = "Username for the existing SmithDB metastore Postgres instance."
+  default     = null
+}
+
+variable "smithdb_external_metastore_password" {
+  type        = string
+  description = "Password for the existing SmithDB metastore Postgres instance. Set via TF_VAR_smithdb_external_metastore_password."
+  default     = null
+  sensitive   = true
+}
+
+# ── Object store (S3) ─────────────────────────────────────────────────────────
+variable "smithdb_bucket_name" {
+  type        = string
+  description = "Name of the SmithDB object-store bucket. Empty auto-generates {name_prefix}-{environment}-smithdb-{suffix}."
+  default     = ""
+}
+
+variable "smithdb_s3_versioning_enabled" {
+  type        = bool
+  description = "Enable versioning on the SmithDB object-store bucket."
+  default     = false
+}
+
+variable "smithdb_s3_force_destroy" {
+  type        = bool
+  description = "Allow Terraform to delete a non-empty SmithDB object-store bucket on destroy. Set true only for test stacks."
+  default     = false
+}
+
+# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
+# Karpenter (installed by the eks module when enable_smithdb = true) provisions
+# the SmithDB pools on demand. The instance-store pool uses instanceStorePolicy
+# RAID0, so no launch-template userdata is needed. Both amd64 and arm64 work;
+# amd64 is the default to match core LangSmith and avoid multi-arch job issues.
+variable "smithdb_karpenter_chart_version" {
+  type        = string
+  description = "Karpenter Helm chart version. MUST match eks_cluster_version per the Karpenter compatibility matrix (https://karpenter.sh/docs/upgrading/compatibility/): K8s 1.33 -> >= 1.5, 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13. Default (1.5.0) targets the module's default EKS 1.33; bump it if you raise eks_cluster_version."
+  default     = "1.5.0"
+}
+
+variable "smithdb_karpenter_ami_alias" {
+  type        = string
+  description = "EC2NodeClass AMI alias for SmithDB nodes. 'al2023@latest' resolves to the arch selected by the NodePool requirement."
+  default     = "al2023@latest"
+}
+
+variable "smithdb_node_arch" {
+  type        = string
+  description = "CPU architecture for SmithDB nodes: 'amd64' (default, matches core LangSmith) or 'arm64' (Graviton)."
+  default     = "amd64"
+
+  validation {
+    condition     = contains(["amd64", "arm64"], var.smithdb_node_arch)
+    error_message = "smithdb_node_arch must be 'amd64' or 'arm64'."
+  }
+}
+
+variable "smithdb_capacity_type" {
+  type        = list(string)
+  description = "Karpenter capacity types for SmithDB nodes: [\"on-demand\"], [\"spot\"], or both. SmithDB holds local caches, so on-demand is recommended."
+  default     = ["on-demand"]
+}
+
+variable "smithdb_instance_store_sizes" {
+  type        = list(string)
+  description = "Allowed instance sizes for the SmithDB instance-store pool (karpenter.k8s.aws/instance-size). Combined with the local-NVMe requirement, this selects families like m6id/m5d/r6id at these sizes."
+  default     = ["4xlarge", "8xlarge"]
+}
+
+variable "smithdb_instance_store_min_local_nvme_gib" {
+  type        = number
+  description = "Minimum local NVMe per SmithDB instance-store node (GiB). Karpenter only selects instances with at least this much local NVMe."
+  default     = 800
+}
+
+variable "smithdb_instance_store_limits" {
+  type = object({
+    cpu    = number
+    memory = string
+  })
+  description = "Aggregate limits for the SmithDB instance-store NodePool (caps total provisioned capacity)."
+  default = {
+    cpu    = 512
+    memory = "4096Gi"
+  }
+}
+
+variable "smithdb_compute_sizes" {
+  type        = list(string)
+  description = "Allowed instance sizes for the SmithDB compute pool (compaction, cluster-manager, metastore-migration job)."
+  default     = ["2xlarge", "4xlarge", "8xlarge"]
+}
+
+variable "smithdb_compute_limits" {
+  type = object({
+    cpu    = number
+    memory = string
+  })
+  description = "Aggregate limits for the SmithDB compute NodePool."
+  default = {
+    cpu    = 256
+    memory = "1024Gi"
+  }
+}
+
+variable "smithdb_node_root_volume_size_gb" {
+  type        = number
+  description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
+  default     = 100
+}
+
+# ── Image pull (SmithDB early-access private images) ──────────────────────────
+variable "smithdb_dockerhub_username" {
+  type        = string
+  description = "Docker Hub username for pulling private SmithDB images. Leave empty if the chart's default (public) images are used. Creates a 'dockerhub-private' image-pull secret when set."
+  default     = ""
+}
+
+variable "smithdb_dockerhub_pat" {
+  type        = string
+  description = "Docker Hub PAT for private SmithDB images. Set via TF_VAR_smithdb_dockerhub_pat. Only used when smithdb_dockerhub_username is set."
+  default     = ""
+  sensitive   = true
+}
+

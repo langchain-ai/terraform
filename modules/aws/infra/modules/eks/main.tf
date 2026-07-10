@@ -67,9 +67,39 @@ module "eks_blueprints_addons" {
   oidc_provider_arn = module.eks.oidc_provider_arn
 
   enable_aws_load_balancer_controller = true
-  enable_karpenter                    = false
-  enable_metrics_server               = true
-  enable_cluster_autoscaler           = true
+  # Disable the ALB controller's cluster-wide Service mutating webhook
+  # (mservice.elbv2.k8s.aws). This module uses ALB Ingress + TargetGroupBinding,
+  # not Service type=LoadBalancer, so the mutator is unnecessary. Leaving it on
+  # makes the controller intercept ALL Service creations, which races with other
+  # Helm releases on a fresh apply - notably Karpenter, whose Service fails with
+  # "no endpoints available for service aws-load-balancer-webhook-service" if the
+  # ALB controller pods aren't ready yet.
+  aws_load_balancer_controller = {
+    set = [{
+      name  = "enableServiceMutatorWebhook"
+      value = "false"
+    }]
+  }
+
+  enable_metrics_server     = true
+  enable_cluster_autoscaler = true
+
+  # Karpenter provisions the SmithDB instance-store (local-NVMe, RAID0) and
+  # compute pools. It coexists with cluster-autoscaler, which manages the core
+  # managed node group; the two own disjoint nodes. When enabled, this installs
+  # the Karpenter controller, its IRSA role, the node IAM role, and the SQS
+  # interruption queue. The SmithDB NodePools/EC2NodeClasses are created in the
+  # infra root.
+  enable_karpenter = var.enable_karpenter
+  karpenter = {
+    chart_version = var.karpenter_chart_version
+  }
+  # Stable node IAM role name (referenced by the SmithDB EC2NodeClass). The
+  # controller itself runs on the core managed node group — SmithDB nodes are
+  # tainted, so it never lands there.
+  karpenter_node = {
+    iam_role_use_name_prefix = false
+  }
 
   # Use a newer cluster-autoscaler chart with correct RBAC for K8s 1.33+
   cluster_autoscaler = {
@@ -80,6 +110,21 @@ module "eks_blueprints_addons" {
   eks_addons = var.eks_addons
 
   depends_on = [module.eks]
+}
+
+# Karpenter node role access entry. The eks-blueprints add-on creates the
+# Karpenter node IAM role but NOT the EKS access entry, so Karpenter-launched
+# instances can't register as nodes (they hang at NodeClaim Ready=Unknown) on a
+# cluster using access-entry auth. EC2_LINUX maps the role to system:nodes; no
+# access-policy association is needed.
+resource "aws_eks_access_entry" "karpenter_node" {
+  count = var.enable_karpenter ? 1 : 0
+
+  cluster_name  = module.eks.cluster_name
+  principal_arn = module.eks_blueprints_addons.karpenter.node_iam_role_arn
+  type          = "EC2_LINUX"
+
+  depends_on = [module.eks_blueprints_addons]
 }
 
 # Create the gp3 storage class, make it the default storage class, and allow volume expansion.

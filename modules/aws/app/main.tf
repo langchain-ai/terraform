@@ -218,7 +218,7 @@ resource "helm_release" "langsmith" {
   create_namespace = true
   repository       = "https://langchain-ai.github.io/helm"
   chart            = "langsmith"
-  version          = var.chart_version != "" ? var.chart_version : null
+  version          = local.chart_version_effective
   timeout          = var.helm_timeout
 
   # Do NOT use wait = true. The chart's post-install bootstrap job deploys
@@ -237,14 +237,17 @@ resource "helm_release" "langsmith" {
     # 2. Dynamic overrides (hostname, IRSA annotations, S3 bucket, region)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
-    var.sizing == "production"       ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
+    var.sizing == "production" ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
     var.sizing == "production-large" ? [file("${local.values_path}/langsmith-values-sizing-production-large.yaml")] : [],
-    var.sizing == "dev"              ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
+    var.sizing == "dev" ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
     # 4. Product addons
     var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
-    var.enable_insights      ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
-    var.enable_polly         ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
+    var.enable_insights ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
+    var.enable_polly ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
+    # 5. SmithDB — overlay (from examples) + dynamic overrides. Layered last so
+    #    object-store/IRSA/useSmithDBEndpoints leaves win.
+    var.enable_smithdb ? [file("${local.values_path}/langsmith-values-smithdb.yaml"), yamlencode(local.smithdb_overrides)] : [],
   )
 }
 
@@ -258,8 +261,8 @@ resource "kubernetes_service_account_v1" "langsmith_ksa" {
   count = var.enable_agent_deploys ? 1 : 0
 
   metadata {
-    name      = "langsmith-ksa"
-    namespace = local.namespace
+    name        = "langsmith-ksa"
+    namespace   = local.namespace
     annotations = local.irsa_annotations
   }
 
@@ -345,4 +348,52 @@ locals {
       }
     }
   }
+
+  # SmithDB override — object store, IRSA, metastore secret mapping, and the
+  # read-cutover leaf. Mirrors what init-values.sh writes for the scripts path.
+  # The smithdb-local and dockerhub-private secrets are created by the infra
+  # module; here we only reference them.
+  smithdb_overrides = merge(
+    {
+      smithdb = {
+        serviceAccount = {
+          annotations = {
+            "eks.amazonaws.com/role-arn" = var.smithdb_irsa_role_arn
+          }
+        }
+        config = {
+          objectStore = {
+            type   = "s3"
+            bucket = var.smithdb_object_store_bucket
+            s3 = {
+              region                   = local.region
+              accessKeyIdSecretKey     = ""
+              secretAccessKeySecretKey = ""
+            }
+          }
+          metastore = {
+            hostSecretKey     = "smithdb_metastore_db_host"
+            databaseSecretKey = "smithdb_metastore_db_name"
+            usernameSecretKey = "smithdb_metastore_db_username"
+            passwordSecretKey = "smithdb_metastore_db_password"
+            port              = tostring(var.smithdb_metastore_port)
+            useSsl            = var.smithdb_metastore_use_ssl
+          }
+        }
+        metastoreMigration = {
+          useSsl = var.smithdb_metastore_use_ssl
+        }
+        langsmith = {
+          frontend = {
+            useSmithDBEndpoints = var.smithdb_use_smithdb_endpoints
+          }
+        }
+      }
+    },
+    var.smithdb_image_pull_secret_name != "" ? {
+      images = {
+        imagePullSecrets = [{ name = var.smithdb_image_pull_secret_name }]
+      }
+    } : {},
+  )
 }
