@@ -348,7 +348,12 @@ module "iam" {
     "langsmith-listener",
     # Chart 0.15 renamed these Deployments (agentBuilderToolServer/TriggerServer ->
     # fleetToolServer/fleetTriggerServer), which also renamed the ServiceAccount the
-    # chart creates for them. Must track the chart's SA name or WI binding silently no-ops.
+    # chart creates for them. Keep both old and new names — CHART_VERSION can still
+    # be pinned below 0.15 (see deploy.sh), where the chart creates the old-named SA
+    # instead. Harmless either way: WI binds only to whichever SA the chart actually
+    # creates for the pinned version.
+    "langsmith-agent-builder-tool-server",
+    "langsmith-agent-builder-trigger-server",
     "langsmith-fleet-tool-server",
     "langsmith-fleet-trigger-server",
     "langsmith-ace-backend",
