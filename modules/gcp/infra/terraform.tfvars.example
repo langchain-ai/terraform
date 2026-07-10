@@ -165,6 +165,11 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 #     virtualization is not available on E2, memory-optimized, AMD-powered,
 #     Arm-powered, or H4D machine types.
 #
+# When sandboxes are enabled, the module creates a restricted sandbox-host node
+# service account and assigns it only the standard GKE node/telemetry roles.
+# JuiceFS object-store access stays on the Workload Identity service account
+# used by the JuiceFS CSI node service account, not on the node identity.
+#
 # enable_sandboxes = true
 # sandbox_host_node_count = 1
 # sandbox_host_min_node_count = 1

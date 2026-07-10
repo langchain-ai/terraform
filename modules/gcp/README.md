@@ -184,6 +184,11 @@ snapshot/filesystem correctness, but it changes Redis behavior: if Redis reaches
 max memory, writes fail instead of evicting keys. Ensure Redis has enough memory
 headroom before enabling sandboxes.
 
+**Sandbox node identity:** When `enable_sandboxes = true`, Terraform creates a
+restricted service account for the sandbox-host GKE node pool and grants only the
+standard GKE node/telemetry roles. JuiceFS GCS access remains on the Workload
+Identity service account used by the JuiceFS CSI node service account.
+
 ### Terraform state backend (recommended for production)
 
 Copy `backend.tf.example` to `backend.tf` and fill in your bucket:

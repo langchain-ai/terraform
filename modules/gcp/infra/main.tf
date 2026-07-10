@@ -185,6 +185,28 @@ resource "google_project_service" "apis" {
 }
 
 #------------------------------------------------------------------------------
+# Sandbox-host Node Service Account
+#------------------------------------------------------------------------------
+resource "google_service_account" "sandbox_host_node" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  project      = var.project_id
+  account_id   = local.sandbox_host_node_sa_account_id
+  display_name = "LangSmith sandbox-host node service account"
+  description  = "Restricted GKE node identity for LangSmith sandbox-host nodes."
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "sandbox_host_node" {
+  for_each = var.enable_sandboxes ? local.sandbox_host_node_sa_project_roles : toset([])
+
+  project = var.project_id
+  role    = each.value
+  member  = google_service_account.sandbox_host_node[0].member
+}
+
+#------------------------------------------------------------------------------
 # Networking Module
 #------------------------------------------------------------------------------
 module "networking" {
@@ -256,6 +278,9 @@ module "gke_cluster" {
   sandbox_host_machine_type              = var.sandbox_host_machine_type
   sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb
   sandbox_host_ephemeral_local_ssd_count = var.sandbox_host_ephemeral_local_ssd_count
+  sandbox_host_node_service_account_email = (
+    var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+  )
 
   # Master authorized networks — empty list keeps the master publicly reachable
   # for Terraform-driven Helm/kubectl steps. Populate var.gke_master_authorized_cidrs
@@ -265,7 +290,10 @@ module "gke_cluster" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [module.networking]
+  depends_on = [
+    module.networking,
+    google_project_iam_member.sandbox_host_node,
+  ]
 }
 
 #------------------------------------------------------------------------------

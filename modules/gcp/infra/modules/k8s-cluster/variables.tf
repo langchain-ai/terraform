@@ -144,6 +144,12 @@ variable "sandbox_host_ephemeral_local_ssd_count" {
   default     = 0
 }
 
+variable "sandbox_host_node_service_account_email" {
+  description = "Service account email for sandbox-host GKE nodes. When null, GKE uses the project default Compute Engine service account."
+  type        = string
+  default     = null
+}
+
 variable "release_channel" {
   description = "GKE release channel"
   type        = string

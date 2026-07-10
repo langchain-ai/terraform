@@ -232,10 +232,11 @@ resource "google_container_node_pool" "sandbox_host" {
   }
 
   node_config {
-    machine_type = var.sandbox_host_machine_type
-    image_type   = "UBUNTU_CONTAINERD"
-    disk_size_gb = var.sandbox_host_disk_size_gb
-    disk_type    = "pd-ssd"
+    machine_type    = var.sandbox_host_machine_type
+    image_type      = "UBUNTU_CONTAINERD"
+    disk_size_gb    = var.sandbox_host_disk_size_gb
+    disk_type       = "pd-ssd"
+    service_account = var.sandbox_host_node_service_account_email
 
     dynamic "ephemeral_storage_local_ssd_config" {
       for_each = var.sandbox_host_ephemeral_local_ssd_count > 0 ? [var.sandbox_host_ephemeral_local_ssd_count] : []
