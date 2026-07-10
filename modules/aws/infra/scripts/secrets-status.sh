@@ -38,13 +38,13 @@ REQUIRED_PARAMS=(
 # Human-readable annotations for auto-generated params
 _param_note() {
   case "$1" in
-    langsmith-api-key-salt) echo " (auto-generated)" ;;
-    langsmith-jwt-secret)   echo " (auto-generated)" ;;
-    redis-auth-token)       echo " (auto-generated)" ;;
-    sandbox-juicefs-redis-auth-token) echo " (auto-generated)" ;;
+    langsmith-api-key-salt)            echo " (auto-generated)" ;;
+    langsmith-jwt-secret)              echo " (auto-generated)" ;;
+    redis-auth-token)                  echo " (auto-generated)" ;;
+    sandbox-juicefs-redis-auth-token)  echo " (auto-generated)" ;;
     sandbox-x-service-auth-jwt-secret) echo " (auto-generated)" ;;
     sandbox-callback-signing-jwk)      echo " (auto-generated)" ;;
-    *)                      echo "" ;;
+    *)                                 echo "" ;;
   esac
 }
 
