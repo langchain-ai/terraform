@@ -56,6 +56,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !var.enable_sandboxes || (var.sandbox_juicefs_redis_auth_token != "" && length(var.sandbox_juicefs_redis_auth_token) >= 16)
+      error_message = "sandbox_juicefs_redis_auth_token is required (min 16 chars) when enable_sandboxes = true. Run: source ./scripts/setup-env.sh, or set TF_VAR_sandbox_juicefs_redis_auth_token."
+    }
+
+    precondition {
       condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != "" || var.langsmith_domain != ""
       error_message = "When tls_certificate_source = 'acm', either acm_certificate_arn (existing cert) or langsmith_domain (auto-provision via Route 53) is required."
     }
@@ -230,6 +235,7 @@ module "sandbox_juicefs_redis" {
   instance_type            = var.sandbox_juicefs_redis_instance_type
   ingress_cidrs            = [local.vpc_cidr_block]
   vpc_cidr_block           = local.vpc_cidr_block
+  auth_token               = var.sandbox_juicefs_redis_auth_token
   parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
   snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
 }
@@ -608,7 +614,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "rediss://${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
     storage = "s3"
     bucket  = local.sandbox_juicefs_bucket_url
   }

@@ -268,6 +268,11 @@ _ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_pass
 _ssm_secret "redis-auth-token" "" "TF_VAR_redis_auth_token" \
   "openssl rand -hex 32" "" "true"
 
+# ── Sandbox JuiceFS Redis auth token ──────────────────────────────────────────
+# ElastiCache auth tokens must be printable ASCII — use hex, not base64.
+_ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
+  "openssl rand -hex 32" "" "true"
+
 # ── Stable auto-generated secrets (must never change after first deployment) ──
 # Changing api_key_salt invalidates ALL existing API keys.
 # Changing jwt_secret invalidates ALL active user sessions.
@@ -345,6 +350,7 @@ echo "  region            = $AWS_REGION"
 echo "  postgres_username = $TF_VAR_postgres_username"
 echo "  postgres_password = (hidden — SSM: ${_ssm_prefix}/postgres-password)"
 echo "  redis_auth_token  = (hidden — SSM: ${_ssm_prefix}/redis-auth-token)"
+echo "  juicefs_redis     = (hidden — SSM: ${_ssm_prefix}/sandbox-juicefs-redis-auth-token)"
 echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-salt)"
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
 echo "  sandbox_auth      = (hidden — SSM: ${_ssm_prefix}/sandbox-x-service-auth-jwt-secret)"

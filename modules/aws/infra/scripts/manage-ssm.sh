@@ -48,6 +48,7 @@ OPTIONAL_PARAMS=(
   "insights-encryption-key"
   "deployments-encryption-key"
   "polly-encryption-key"
+  "sandbox-juicefs-redis-auth-token"
   "sandbox-x-service-auth-jwt-secret"
   "sandbox-callback-signing-jwk"
 )
