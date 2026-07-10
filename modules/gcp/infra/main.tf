@@ -346,8 +346,11 @@ module "iam" {
     "langsmith-queue",
     "langsmith-ingest-queue",
     "langsmith-listener",
-    "langsmith-agent-builder-tool-server",
-    "langsmith-agent-builder-trigger-server",
+    # Chart 0.15 renamed these Deployments (agentBuilderToolServer/TriggerServer ->
+    # fleetToolServer/fleetTriggerServer), which also renamed the ServiceAccount the
+    # chart creates for them. Must track the chart's SA name or WI binding silently no-ops.
+    "langsmith-fleet-tool-server",
+    "langsmith-fleet-trigger-server",
     "langsmith-ace-backend",
     "langsmith-frontend",
     "langsmith-playground",
