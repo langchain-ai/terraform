@@ -245,7 +245,7 @@ resource "azurerm_user_assigned_identity" "cert_manager" {
 # Allows cert-manager pod to exchange its K8s OIDC token for an Azure AD token
 # so it can call the Azure DNS API without a static service principal secret.
 resource "azurerm_federated_identity_credential" "cert_manager" {
-  name      = "${var.cluster_name}-cert-manager-federated"
+  name                      = "${var.cluster_name}-cert-manager-federated"
   user_assigned_identity_id = azurerm_user_assigned_identity.cert_manager.id
 
   audience = ["api://AzureADTokenExchange"]
@@ -258,7 +258,7 @@ resource "azurerm_federated_identity_credential" "cert_manager" {
 resource "azurerm_federated_identity_credential" "k8s_app" {
   for_each = toset(local.service_accounts_for_workload_identity)
 
-  name      = "langsmith-federated-${each.value}"
+  name                      = "langsmith-federated-${each.value}"
   user_assigned_identity_id = azurerm_user_assigned_identity.k8s_app.id
 
   audience = ["api://AzureADTokenExchange"]

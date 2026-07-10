@@ -29,7 +29,7 @@ resource "kubernetes_manifest" "langsmith_route" {
         targetPort = "http"
       }
       tls = var.tls_enabled ? {
-        termination                = "edge"
+        termination                   = "edge"
         insecureEdgeTerminationPolicy = "Redirect"
       } : null
     }
