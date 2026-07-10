@@ -182,7 +182,10 @@ the shared Memorystore Redis instance with `maxmemory-policy=noeviction` because
 JuiceFS uses Redis for sandbox metadata. This is required for sandbox
 snapshot/filesystem correctness, but it changes Redis behavior: if Redis reaches
 max memory, writes fail instead of evicting keys. Ensure Redis has enough memory
-headroom before enabling sandboxes.
+headroom before enabling sandboxes. When Terraform-generated connection URLs
+share this Redis instance, logical DB 0 is reserved for the main LangSmith
+install, DB 1 for Fleet, DB 2 for Polly, DB 3 for Insights, and DB 4 for
+JuiceFS sandbox metadata.
 
 **Sandbox node identity:** When `enable_sandboxes = true`, Terraform creates a
 restricted service account for the sandbox-host GKE node pool and grants only the

@@ -82,6 +82,14 @@ locals {
   # Must match modules/iam account_id format.
   workload_identity_gsa_account_id = "${var.name_prefix}-langsmith"
   workload_identity_gsa_email      = "${local.workload_identity_gsa_account_id}@${var.project_id}.iam.gserviceaccount.com"
+
+  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+
+  # DB 0 is reserved for the main LangSmith install.
+  redis_db_fleet           = 1
+  redis_db_polly           = 2
+  redis_db_insights        = 3
+  redis_db_sandbox_juicefs = 4
 }
 
 #------------------------------------------------------------------------------
@@ -474,7 +482,7 @@ module "k8s_bootstrap" {
 
   # Redis connection - only when using external Redis
   use_managed_redis    = var.redis_source == "external"
-  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+  redis_connection_url = local.redis_connection_url
 
   # KEDA for LangSmith Deployment feature
   install_keda = var.enable_langsmith_deployment
@@ -525,7 +533,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
+    metaurl = "${local.redis_connection_url}/${local.redis_db_sandbox_juicefs}"
     storage = "gs"
     bucket  = module.storage.bucket_url
   }
@@ -562,6 +570,8 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 # Memorystore Cluster mode does not support logical DB numbers — see MIGRATION_NOTES_v15.md.
+# For non-cluster Redis, DB 0 is reserved for the main LangSmith install, DB 1
+# for Fleet, DB 2 for Polly, DB 3 for Insights, and DB 4 for JuiceFS sandbox metadata.
 resource "kubernetes_secret" "fleet_redis" {
   count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
   metadata {
@@ -569,7 +579,7 @@ resource "kubernetes_secret" "fleet_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_fleet}"
   }
   depends_on = [module.k8s_bootstrap]
 }
@@ -601,7 +611,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/2"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_polly}"
   }
   depends_on = [module.k8s_bootstrap]
 }
@@ -633,7 +643,7 @@ resource "kubernetes_secret" "standalone_insights_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/3"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_insights}"
   }
   depends_on = [module.k8s_bootstrap]
 }

@@ -538,6 +538,12 @@ locals {
   redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
     "redis://langsmith-redis:6379"
   )
+
+  # DB 0 is reserved for the main LangSmith install.
+  redis_db_fleet           = 1
+  redis_db_polly           = 2
+  redis_db_insights        = 3
+  redis_db_sandbox_juicefs = 4
 }
 
 module "k8s_bootstrap" {
@@ -589,7 +595,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "${trimsuffix(local.redis_connection_url, "/")}/1"
+    metaurl = "${trimsuffix(local.redis_connection_url, "/")}/${local.redis_db_sandbox_juicefs}"
     storage = "s3"
     bucket  = local.sandbox_juicefs_bucket_url
   }
@@ -609,8 +615,9 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 #   - RDS has no Terraform resource to create a logical database, so a one-shot
 #     in-cluster psql Job runs CREATE DATABASE (it has a network path to the
 #     private RDS instance; a local Terraform runner does not).
-#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes /1 /2 /3.
-#     DB index 0 is reserved for the main LangSmith install.
+#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes.
+#     DB 0 is reserved for the main LangSmith install, DB 1 for Fleet, DB 2
+#     for Polly, DB 3 for Insights, and DB 4 for JuiceFS sandbox metadata.
 # The K8s Secrets below feed the chart's fleet/polly/insights
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 
@@ -630,9 +637,9 @@ locals {
   # when it exists.
   standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
 
-  standalone_fleet_redis_url    = "${local.standalone_redis_base}/1"
-  standalone_polly_redis_url    = "${local.standalone_redis_base}/2"
-  standalone_insights_redis_url = "${local.standalone_redis_base}/3"
+  standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
+  standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
+  standalone_insights_redis_url = "${local.standalone_redis_base}/${local.redis_db_insights}"
 }
 
 # ── Per-feature logical database creation (in-cluster psql Job) ───────────────
