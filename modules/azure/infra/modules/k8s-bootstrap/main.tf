@@ -188,12 +188,33 @@ resource "kubernetes_secret_v1" "postgres" {
   }
 
   data = {
-    connection_url    = var.postgres_connection_url
+    connection_url = var.postgres_connection_url
     # POSTGRES_URI and POSTGRES_PASSWORD are required by the listener's deploy_image
     # task (host.platforms.k8s_operator.database_k8s.add_postgres_uri_secret) to
     # provision per-deployment databases for LangSmith Deployments (Pass 3+).
     POSTGRES_URI      = var.postgres_connection_url
     POSTGRES_PASSWORD = var.postgres_admin_password
+  }
+
+  type = "Opaque"
+}
+
+# Fleet Postgres connection URL — the dedicated langsmith_fleet database.
+# Referenced by the chart via fleet.postgres.external.existingSecretName. Only the
+# Postgres secret is created for Fleet: its Redis is the chart's in-cluster bundled
+# StatefulSet (Azure Managed Redis can't provide the logical-DB isolation the
+# AWS/GCP Fleet uses, and Fleet has no clusterSafeMode knob), so there is no
+# langsmith-fleet-redis secret.
+resource "kubernetes_secret_v1" "fleet_postgres" {
+  count = var.enable_fleet && var.use_external_postgres ? 1 : 0
+
+  metadata {
+    name      = "langsmith-fleet-postgres"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = {
+    postgres_connection_url = var.fleet_postgres_connection_url
   }
 
   type = "Opaque"

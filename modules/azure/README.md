@@ -17,7 +17,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 2** | LangSmith Helm chart (~25 pods production) — **Helm path** | `make init-values` → `make deploy` | ~10 min |
 | **Pass 2** | LangSmith Helm chart (~25 pods production) — **Terraform path** | `make init-app` → `make apply-app` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
-| **Pass 4** | Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` | ~5 min |
+| **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
@@ -158,7 +158,7 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 | **2 (Helm)** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
 | **2 (TF)** | LangSmith Helm via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
 | **3** | + LangSmith Deployments (`enable_deployments = true`) — bump `min_count` to 5 first | `make apply && make init-values && make deploy` |
-| **4** | + Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
+| **4** | + Fleet (`enable_fleet = true`) — or the deprecated Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
 | **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
 
 ---
@@ -462,7 +462,8 @@ Feature flags in `app/terraform.tfvars` (equivalent to shell path flags):
 ```hcl
 sizing              = "production"   # minimum | dev | production | production-large
 enable_agent_deploys  = true         # Pass 3 — LangGraph Platform
-enable_agent_builder  = true         # Pass 4 — Agent Builder (requires agent_deploys)
+enable_fleet          = true         # Pass 4 — Fleet, standalone (chart v0.15+; requires agent_deploys; also set enable_fleet in the infra pass)
+enable_agent_builder  = false        # Pass 4 — Agent Builder, LEGACY (superseded by enable_fleet; mutually exclusive)
 enable_insights       = true         # Pass 5 — Insights / ClickHouse
 enable_polly          = true         # Pass 5 — Polly (requires agent_deploys)
 ```
@@ -520,7 +521,8 @@ Addon passes (3–5) are controlled by flags in `infra/terraform.tfvars`:
 ```hcl
 sizing_profile       = "production"   # minimum | dev | production | production-large
 enable_deployments   = true           # Pass 3 — LangSmith Deployments (listener + operator + host-backend)
-enable_agent_builder = true           # Pass 4 — Agent Builder UI (requires enable_deployments)
+enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.15+; requires enable_deployments)
+enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
 enable_insights      = true           # Pass 5 — Insights / Clio (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 ```
@@ -592,11 +594,17 @@ Enables the LangGraph Platform: the Deployments nav item in the UI, the `listene
 
 > Without the correct `url` and `tlsEnabled`, agent deployments will get stuck in `DEPLOYING` state indefinitely.
 
-**`langsmith-values-agent-builder.yaml`** — Pass 4 (`enable_agent_builder = true`)
+**`langsmith-values-fleet.yaml`** — Pass 4 (`enable_fleet = true`)
+
+Enables standalone Fleet, the re-architected successor to Agent Builder (chart v0.15+). Deploys as its own service via the top-level `fleet.*` values with a dedicated `langsmith_fleet` Postgres database (created by the infra pass, wired via the `langsmith-fleet-postgres` secret) and the chart's in-cluster bundled Redis. Also enables `fleetToolServer` (tool registry) and `fleetTriggerServer` (execution triggers). The `fleetToolServer` gets a relaxed startup probe — its 0.15.x image CPU-pegs on startup and can't bind its port within the chart's default 60s probe window, so it CrashLoopBackOffs without a longer window. (No resources override: the chart's default 2 CPU / 4Gi is adequate, and the namespace LimitRange sets only defaults — not a `max` — so it never reduces a chart-sized container.) The encryption key is reused from `langsmith-config-secret` (`agent_builder_encryption_key`); it is never set inline.
+
+> Requires `enable_deployments = true`. Mutually exclusive with `enable_agent_builder`.
+
+**`langsmith-values-agent-builder.yaml`** — Pass 4 (`enable_agent_builder = true`) — **legacy, superseded by `enable_fleet`**
 
 Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Also enables `backend.agentBootstrap` — a post-install job that registers Agent Builder as an LGP deployment and creates the required ConfigMap. Without this job, the Agent Builder nav item does not appear in the UI. Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi.
 
-> Requires `enable_deployments = true`.
+> Requires `enable_deployments = true`. Prefer `enable_fleet` for new deployments.
 
 **`langsmith-values-insights.yaml`** — Pass 5 (`enable_insights = true`)
 
@@ -663,7 +671,8 @@ azure/
 │           ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
 │           ├── langsmith-values-sizing-production-large.yaml  # High-volume (~1000 traces/sec)
 │           ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
-│           ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder
+│           ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
+│           ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
 │           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights / Clio
 │           ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
 │           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)

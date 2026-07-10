@@ -151,7 +151,7 @@ Both must be non-null if `enable_gcp_iam_module = true` (default).
 
 ### Gateway
 ```bash
-kubectl get gateway -n langsmith
+kubectl get gateway -n envoy-gateway-system
 ```
 Expected: `PROGRAMMED = True`. External IP may show as `pending` until a `HTTPRoute` (Helm) is deployed.
 
@@ -255,7 +255,7 @@ terraform -chdir=infra output keda_installed   # true
 | Cloud SQL private IP allocation fails | `Error: servicenetworking.services.addPeering ... quota exceeded` | The project may have hit the default limit for VPC peering connections. Check in GCP Console → VPC Network → VPC Network Peering. |
 | GKE node pool not ready during apply | Pods `Pending`, StorageClass creation fails | Wait for node pool to become active — typically resolves on re-apply. |
 | `redis_prevent_destroy = true` blocks destroy | `Error: Instance is protected from destroy` | Set `redis_prevent_destroy = false` in terraform.tfvars and re-apply before destroying. |
-| Envoy Gateway `Gateway` stuck Pending | `kubectl get gateway -n langsmith` shows no address | No HTTPRoute deployed yet — install LangSmith via Helm (Pass 2) to trigger route creation and external IP assignment. |
+| Envoy Gateway `Gateway` stuck Pending | `kubectl get gateway -n envoy-gateway-system` shows no address | No HTTPRoute deployed yet — install LangSmith via Helm (Pass 2) to trigger route creation and external IP assignment. |
 | GKE cluster deletion protection | `Error: Cluster has deletion protection enabled` | Set `gke_deletion_protection = false` in terraform.tfvars and re-apply before destroying. |
 
 ---

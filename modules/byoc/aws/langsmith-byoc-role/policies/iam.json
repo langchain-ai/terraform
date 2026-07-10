@@ -29,7 +29,8 @@
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
-      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
     ],
     "Condition": {
       "StringEquals": {
@@ -58,7 +59,8 @@
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
-      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
     ]
   },
   {
@@ -82,7 +84,8 @@
       "arn:aws:iam::${account_id}:role/*-smith-karpenter-controller-role",
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
-      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role"
+      "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
     ],
     "Condition": {
       "StringEquals": {
@@ -121,5 +124,11 @@
         ]
       }
     }
+  },
+  {
+    "Sid": "IAMSimulateCustomerRolePolicy",
+    "Effect": "Allow",
+    "Action": ["iam:SimulatePrincipalPolicy"],
+    "Resource": "arn:aws:iam::${account_id}:role/${role_name}"
   }
 ]

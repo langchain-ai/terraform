@@ -620,13 +620,17 @@ if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
     exit 1
   fi
 
-  _addon_keys_block="
+  # Only write the legacy config.* keys when the old bundled-path flags are set.
+  # chart >= 0.15.1 blocks config.agentBuilder/insights/polly via validate.yaml.
+  if [[ "$_enable_agent_builder" == "true" || "$_enable_insights" == "true" || "$_enable_polly" == "true" ]]; then
+    _addon_keys_block="
   agentBuilder:
     encryptionKey: \"${_agent_builder_key}\"
   insights:
     encryptionKey: \"${_insights_key}\"
   polly:
     encryptionKey: \"${_polly_key}\""
+  fi
 
   if [[ "$_enable_fleet" == "true" ]]; then
     _fleet_key_block="
@@ -706,7 +710,7 @@ cat > "$OUT_FILE" << YAML
 
 config:
   # Envoy Gateway IP — required for OAuth and Deployments features.
-  # Find it with: kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.addresses[0].value}'
+  # Find it with: kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
   hostname: "${HOSTNAME}"
   langsmithLicenseKey: "${LANGSMITH_LICENSE_KEY}"
   apiKeySalt: "${API_KEY_SALT}"
@@ -746,7 +750,7 @@ echo "Written: $OUT_FILE"
 if [[ -z "$HOSTNAME" ]]; then
   echo ""
   echo "WARNING: hostname is empty. Run again after the Envoy Gateway has an external IP:"
-  echo "  kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.addresses[0].value}'"
+  echo "  kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'"
   echo "  Then set langsmith_domain in terraform.tfvars and re-run this script."
 fi
 echo ""

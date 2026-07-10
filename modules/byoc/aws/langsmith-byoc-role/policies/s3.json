@@ -6,7 +6,8 @@
     "Resource": [
       "arn:aws:s3:::*-smith-blob",
       "arn:aws:s3:::*-smith-clickhouse-backups",
-      "arn:aws:s3:::*-smith-vpc-flow-logs"
+      "arn:aws:s3:::*-smith-vpc-flow-logs",
+      "arn:aws:s3:::*-smith-sandbox-snapshots"
     ]
   },
   {
@@ -35,7 +36,8 @@
     "Resource": [
       "arn:aws:s3:::*-smith-blob",
       "arn:aws:s3:::*-smith-clickhouse-backups",
-      "arn:aws:s3:::*-smith-vpc-flow-logs"
+      "arn:aws:s3:::*-smith-vpc-flow-logs",
+      "arn:aws:s3:::*-smith-sandbox-snapshots"
     ]
   },
   {
@@ -45,7 +47,8 @@
     "Resource": [
       "arn:aws:s3:::*-smith-blob",
       "arn:aws:s3:::*-smith-clickhouse-backups",
-      "arn:aws:s3:::*-smith-vpc-flow-logs"
+      "arn:aws:s3:::*-smith-vpc-flow-logs",
+      "arn:aws:s3:::*-smith-sandbox-snapshots"
     ]
   },
   {
@@ -63,7 +66,8 @@
     "Resource": [
       "arn:aws:s3:::*-smith-blob",
       "arn:aws:s3:::*-smith-clickhouse-backups",
-      "arn:aws:s3:::*-smith-vpc-flow-logs"
+      "arn:aws:s3:::*-smith-vpc-flow-logs",
+      "arn:aws:s3:::*-smith-sandbox-snapshots"
     ]
   },
   {

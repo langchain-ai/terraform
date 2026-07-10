@@ -131,7 +131,7 @@ echo ""
 # If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
 # resource recreation), warn the operator and update values-overrides.yaml
 # to prevent the Deployments operator from hitting stale endpoints.
-_live_gateway_ip=$(kubectl get gateway -n "$NAMESPACE" \
+_live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
 if [[ -n "$_live_gateway_ip" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
@@ -389,7 +389,7 @@ fi
 # ── Post-deploy access info ───────────────────────────────────────────────────
 _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
-_gateway_ip=$(kubectl get gateway -n "$NAMESPACE" \
+_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
 
 echo "Access LangSmith:"

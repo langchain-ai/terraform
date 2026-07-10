@@ -2,6 +2,7 @@ locals {
   policy_template_vars = {
     account_id               = local.account_id
     control_plane_account_id = local.control_plane_account_id
+    role_name                = var.role_name
   }
 
   acm_statements                        = jsondecode(templatefile("${path.module}/policies/acm.json", local.policy_template_vars))

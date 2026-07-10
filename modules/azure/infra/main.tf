@@ -168,6 +168,9 @@ module "postgres" {
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
+  # Create the dedicated langsmith_fleet database when standalone Fleet is enabled.
+  enable_fleet = var.enable_fleet
+
   tags = local.common_tags
 }
 
@@ -250,7 +253,7 @@ module "keyvault" {
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
   # on subsequent applies, eliminating local .secret files.
-  postgres_admin_password = var.postgres_admin_password
+  postgres_admin_password  = var.postgres_admin_password
   langsmith_admin_password = var.langsmith_admin_password
   langsmith_license_key    = var.langsmith_license_key
   langsmith_api_key_salt   = var.langsmith_api_key_salt
@@ -307,6 +310,13 @@ module "k8s_bootstrap" {
   postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
   use_external_redis      = var.redis_source == "external"
   redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
+
+  # Standalone Fleet — creates the langsmith-fleet-postgres secret pointing at the
+  # dedicated langsmith_fleet database. No fleet Redis secret: Fleet uses the chart's
+  # in-cluster bundled Redis (Azure Managed Redis can't do the logical-DB isolation
+  # the AWS/GCP Fleet relies on).
+  enable_fleet                  = var.enable_fleet
+  fleet_postgres_connection_url = var.postgres_source == "external" && var.enable_fleet ? module.postgres[0].fleet_connection_url : ""
 
   # Blob storage — Workload Identity client ID is added as a pod annotation
   # so the OIDC token exchange can bind the pod to the Managed Identity.
@@ -370,16 +380,16 @@ module "diagnostics" {
 # Enable with: create_bastion = true in terraform.tfvars
 
 module "bastion" {
-  count               = var.create_bastion ? 1 : 0
-  source              = "./modules/bastion"
-  name                = "langsmith-bastion${local.identifier}"
-  resource_group_name = azurerm_resource_group.resource_group.name
-  location            = var.location
-  subnet_id           = module.vnet.subnet_bastion_id
-  vm_size             = var.bastion_vm_size
+  count                = var.create_bastion ? 1 : 0
+  source               = "./modules/bastion"
+  name                 = "langsmith-bastion${local.identifier}"
+  resource_group_name  = azurerm_resource_group.resource_group.name
+  location             = var.location
+  subnet_id            = module.vnet.subnet_bastion_id
+  vm_size              = var.bastion_vm_size
   admin_ssh_public_key = var.bastion_admin_ssh_public_key
-  allowed_ssh_cidrs   = var.bastion_allowed_ssh_cidrs
-  tags                = local.common_tags
+  allowed_ssh_cidrs    = var.bastion_allowed_ssh_cidrs
+  tags                 = local.common_tags
 
   depends_on = [module.vnet]
 }

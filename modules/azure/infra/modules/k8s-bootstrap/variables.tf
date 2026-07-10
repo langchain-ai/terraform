@@ -54,6 +54,19 @@ variable "postgres_admin_password" {
   default     = ""
 }
 
+variable "enable_fleet" {
+  type        = bool
+  description = "Create the langsmith-fleet-postgres secret for standalone Fleet (chart v0.15+)."
+  default     = false
+}
+
+variable "fleet_postgres_connection_url" {
+  type        = string
+  description = "Connection URL for the dedicated Fleet Postgres database (langsmith_fleet). Required when enable_fleet = true and use_external_postgres = true."
+  sensitive   = true
+  default     = ""
+}
+
 variable "use_external_redis" {
   type        = bool
   description = "Create a Kubernetes secret for the external Redis connection URL"
