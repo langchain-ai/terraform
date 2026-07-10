@@ -96,6 +96,11 @@ locals {
     iam_role_name            = "${local.base_name}-sandbox-host"
     iam_role_use_name_prefix = false
     cloudinit_pre_nodeadm    = local.sandbox_host_pre_nodeadm
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 1
+    }
     update_config = {
       max_unavailable = 1
       update_strategy = "DEFAULT"
