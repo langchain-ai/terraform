@@ -38,6 +38,23 @@ variable "redis_version" {
   default     = "REDIS_7_2"
 }
 
+variable "auth_enabled" {
+  description = "Enable Redis AUTH."
+  type        = bool
+  default     = false
+}
+
+variable "rdb_snapshot_period" {
+  description = "Optional RDB snapshot period for Redis persistence. Set to null to disable persistence."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.rdb_snapshot_period == null || contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.rdb_snapshot_period)
+    error_message = "rdb_snapshot_period must be null, ONE_HOUR, SIX_HOURS, TWELVE_HOURS, or TWENTY_FOUR_HOURS."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Network Configuration
 #------------------------------------------------------------------------------
@@ -62,7 +79,7 @@ variable "prevent_destroy" {
 }
 
 variable "maxmemory_policy" {
-  description = "Redis maxmemory-policy. Sandboxes require noeviction because JuiceFS uses Redis for metadata."
+  description = "Redis maxmemory-policy."
   type        = string
   default     = "allkeys-lru"
 

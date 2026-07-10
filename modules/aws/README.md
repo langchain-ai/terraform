@@ -235,15 +235,14 @@ acm_certificate_arn    = "arn:aws:acm:us-west-2:<account-id>:certificate/<cert-i
 langsmith_domain = "langsmith.<your-domain>"
 ```
 
-**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform configures
-the shared ElastiCache Redis instance with `maxmemory-policy=noeviction` because
-JuiceFS uses Redis for sandbox metadata. This is required for sandbox
-snapshot/filesystem correctness, but it changes Redis behavior: if Redis reaches
-max memory, writes fail instead of evicting keys. Ensure Redis has enough memory
-headroom before enabling sandboxes. When Terraform-generated connection URLs
-share this Redis instance, logical DB 0 is reserved for the main LangSmith
-install, DB 1 for Fleet, DB 2 for Polly, DB 3 for Insights, and DB 4 for
-JuiceFS sandbox metadata.
+**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform creates a
+dedicated ElastiCache Redis instance for JuiceFS sandbox metadata and configures
+that dedicated instance with `maxmemory-policy=noeviction`. The main LangSmith
+Redis keeps its normal eviction policy. Terraform writes the JuiceFS Redis
+connection URL into the precreated Kubernetes CSI config Secret and the Helm
+values reference only that Secret name, so the JuiceFS Redis password is not
+placed in Helm values. The default JuiceFS Redis node type is `cache.m6g.large`;
+use `cache.r7g.xlarge` or larger for SaaS-like production scale.
 
 ### Terraform state backend (recommended for production)
 
@@ -971,6 +970,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
+| `sandbox_juicefs_redis_instance_type` | `cache.m6g.large` | no | ElastiCache node type for dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_snapshot_retention_limit` | `7` | no | Days to retain automated snapshots for dedicated JuiceFS metadata Redis |
 | `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |

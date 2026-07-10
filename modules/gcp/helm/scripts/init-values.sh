@@ -282,10 +282,6 @@ _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || 
 SANDBOX_X_SERVICE_AUTH_JWT_SECRET="${TF_VAR_sandbox_x_service_auth_jwt_secret:-$EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET}"
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ "$_redis_source" != "external" ]]; then
-    echo "ERROR: enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction." >&2
-    exit 1
-  fi
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
     exit 1

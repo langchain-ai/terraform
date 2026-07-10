@@ -36,7 +36,13 @@ variable "auth_token" {
 }
 
 variable "parameter_group_name" {
-  description = "ElastiCache parameter group name. Sandboxes require maxmemory-policy=noeviction when Redis is reused for JuiceFS metadata."
+  description = "ElastiCache parameter group name."
   type        = string
   default     = "default.redis7"
+}
+
+variable "snapshot_retention_limit" {
+  description = "Number of days to retain automated Redis snapshots. 0 disables automated snapshots."
+  type        = number
+  default     = 0
 }

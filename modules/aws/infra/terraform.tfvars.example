@@ -317,8 +317,6 @@ redis_instance_type = "cache.m6g.xlarge"
 #   sandbox.langsmith.com/host=true
 #
 # Requirements:
-#   - redis_source = "external". The shared Redis is used for JuiceFS metadata
-#     and is configured with maxmemory-policy=noeviction.
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
 #     On AWS, use x86_64 EC2 bare metal instance types. The default is
 #     m5d.metal, which matches the tested live configuration and configures
@@ -335,6 +333,8 @@ redis_instance_type = "cache.m6g.xlarge"
 #     matching m5d.metal.
 #
 # enable_sandboxes = true
+# sandbox_juicefs_redis_instance_type = "cache.m6g.large"
+# sandbox_juicefs_redis_snapshot_retention_limit = 7
 # sandbox_host_node_count = 1
 # sandbox_host_instance_types = ["m5d.metal"]
 # sandbox_host_local_nvme_bootstrap_enabled = true

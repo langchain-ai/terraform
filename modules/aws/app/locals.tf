@@ -127,10 +127,6 @@ resource "terraform_data" "validate_required" {
       error_message = "clickhouse_host is required when enable_insights = true"
     }
     precondition {
-      condition     = !var.enable_sandboxes || var.redis_source == "external"
-      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction."
-    }
-    precondition {
       condition     = !var.enable_sandboxes || (var.chart_version != "" && can(regex("^(~>?)?v?(0\\.(1[6-9]|[2-9][0-9])\\.|[1-9][0-9]*\\.)", var.chart_version)))
       error_message = "enable_sandboxes requires chart_version to be explicitly set to chart 0.16.0 or newer, for example \"~0.16.0\"."
     }

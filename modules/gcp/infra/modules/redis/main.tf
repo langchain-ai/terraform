@@ -15,6 +15,7 @@ resource "google_redis_instance" "langsmith" {
   tier           = var.high_availability ? "STANDARD_HA" : "BASIC"
   memory_size_gb = var.memory_size_gb
   redis_version  = var.redis_version
+  auth_enabled   = var.auth_enabled
 
   # Network
   authorized_network = var.network_id
@@ -37,10 +38,19 @@ resource "google_redis_instance" "langsmith" {
     }
   }
 
+  dynamic "persistence_config" {
+    for_each = var.rdb_snapshot_period == null ? [] : [var.rdb_snapshot_period]
+
+    content {
+      persistence_mode    = "RDB"
+      rdb_snapshot_period = persistence_config.value
+    }
+  }
+
   # Labels
-  labels = merge(var.labels, {
+  labels = merge({
     "component" = "cache"
-  })
+  }, var.labels)
 
   lifecycle {
     prevent_destroy = false
@@ -66,6 +76,7 @@ resource "google_redis_instance" "langsmith_protected" {
   tier           = var.high_availability ? "STANDARD_HA" : "BASIC"
   memory_size_gb = var.memory_size_gb
   redis_version  = var.redis_version
+  auth_enabled   = var.auth_enabled
 
   # Network
   authorized_network = var.network_id
@@ -88,10 +99,19 @@ resource "google_redis_instance" "langsmith_protected" {
     }
   }
 
+  dynamic "persistence_config" {
+    for_each = var.rdb_snapshot_period == null ? [] : [var.rdb_snapshot_period]
+
+    content {
+      persistence_mode    = "RDB"
+      rdb_snapshot_period = persistence_config.value
+    }
+  }
+
   # Labels
-  labels = merge(var.labels, {
+  labels = merge({
     "component" = "cache"
-  })
+  }, var.labels)
 
   lifecycle {
     prevent_destroy = true

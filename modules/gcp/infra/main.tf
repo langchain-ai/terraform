@@ -86,10 +86,9 @@ locals {
   redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
 
   # DB 0 is reserved for the main LangSmith install.
-  redis_db_fleet           = 1
-  redis_db_polly           = 2
-  redis_db_insights        = 3
-  redis_db_sandbox_juicefs = 4
+  redis_db_fleet    = 1
+  redis_db_polly    = 2
+  redis_db_insights = 3
 }
 
 #------------------------------------------------------------------------------
@@ -144,11 +143,6 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = !var.enable_sandboxes || !var.gke_use_autopilot
       error_message = "enable_sandboxes requires Standard GKE because sandbox-host needs a dedicated nested-virtualization node pool."
-    }
-
-    precondition {
-      condition     = !var.enable_sandboxes || var.redis_source == "external"
-      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can reuse Memorystore with maxmemory-policy=noeviction."
     }
 
     precondition {
@@ -235,9 +229,9 @@ module "networking" {
   pods_cidr     = var.pods_cidr
   services_cidr = var.services_cidr
 
-  # Private service connection (requires servicenetworking.networksAdmin role)
-  # Always enable private service connection for external PostgreSQL and Redis
-  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external"
+  # Private service connection (requires servicenetworking.networksAdmin role).
+  # Memorystore also backs sandbox JuiceFS metadata when sandboxes are enabled.
+  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || var.enable_sandboxes
 
   # Labels
   labels = local.common_labels
@@ -359,13 +353,44 @@ module "redis" {
   redis_version     = var.redis_version
   high_availability = var.redis_high_availability
   prevent_destroy   = var.redis_prevent_destroy
-  maxmemory_policy  = var.enable_sandboxes ? "noeviction" : "allkeys-lru"
+  maxmemory_policy  = "allkeys-lru"
 
   # Network
   network_id = module.networking.vpc_id
 
   # Labels
   labels = local.common_labels
+
+  depends_on = [module.networking]
+}
+
+module "sandbox_juicefs_redis" {
+  source = "./modules/redis"
+  count  = var.enable_sandboxes ? 1 : 0
+
+  project_id  = var.project_id
+  region      = var.region
+  environment = var.environment
+
+  # Use centralized naming
+  instance_name = local.sandbox_juicefs_redis_instance_name
+
+  # Configuration
+  memory_size_gb      = var.sandbox_juicefs_redis_memory_size
+  redis_version       = var.redis_version
+  high_availability   = var.sandbox_juicefs_redis_high_availability
+  prevent_destroy     = var.sandbox_juicefs_redis_prevent_destroy
+  maxmemory_policy    = "noeviction"
+  auth_enabled        = true
+  rdb_snapshot_period = var.sandbox_juicefs_redis_rdb_snapshot_period
+
+  # Network
+  network_id = module.networking.vpc_id
+
+  # Labels
+  labels = merge(local.common_labels, {
+    "component" = "sandbox-juicefs-cache"
+  })
 
   depends_on = [module.networking]
 }
@@ -533,7 +558,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "${local.redis_connection_url}/${local.redis_db_sandbox_juicefs}"
+    metaurl = "redis://:${urlencode(module.sandbox_juicefs_redis[0].auth_string)}@${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
     storage = "gs"
     bucket  = module.storage.bucket_url
   }
@@ -570,8 +595,8 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 # Memorystore Cluster mode does not support logical DB numbers — see MIGRATION_NOTES_v15.md.
-# For non-cluster Redis, DB 0 is reserved for the main LangSmith install, DB 1
-# for Fleet, DB 2 for Polly, DB 3 for Insights, and DB 4 for JuiceFS sandbox metadata.
+# For non-cluster Redis, DB 0 is reserved for the main LangSmith install,
+# DB 1 for Fleet, DB 2 for Polly, and DB 3 for Insights.
 resource "kubernetes_secret" "fleet_redis" {
   count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
   metadata {

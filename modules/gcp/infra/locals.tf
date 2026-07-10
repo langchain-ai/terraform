@@ -40,7 +40,8 @@ locals {
   postgres_user_name     = "langsmith"
 
   # Redis
-  redis_instance_name = "${local.base_name}-redis${local.suffix}"
+  redis_instance_name                 = "${local.base_name}-redis${local.suffix}"
+  sandbox_juicefs_redis_instance_name = "${local.base_name}-jfs-redis${local.suffix}"
 
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"

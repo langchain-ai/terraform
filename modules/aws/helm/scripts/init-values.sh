@@ -227,11 +227,6 @@ _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
 
-if [[ "$_enable_sandboxes" == "true" && "$_redis_source" != "external" ]]; then
-  echo "ERROR: enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can use the shared Redis with noeviction." >&2
-  exit 1
-fi
-
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 if [[ "$_enable_sandboxes" == "true" ]]; then

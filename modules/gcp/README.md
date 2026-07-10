@@ -177,15 +177,14 @@ letsencrypt_email      = "<ops@your-domain>"
 enable_langsmith_deployment = true
 ```
 
-**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform configures
-the shared Memorystore Redis instance with `maxmemory-policy=noeviction` because
-JuiceFS uses Redis for sandbox metadata. This is required for sandbox
-snapshot/filesystem correctness, but it changes Redis behavior: if Redis reaches
-max memory, writes fail instead of evicting keys. Ensure Redis has enough memory
-headroom before enabling sandboxes. When Terraform-generated connection URLs
-share this Redis instance, logical DB 0 is reserved for the main LangSmith
-install, DB 1 for Fleet, DB 2 for Polly, DB 3 for Insights, and DB 4 for
-JuiceFS sandbox metadata.
+**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform creates a
+dedicated Memorystore Redis instance for JuiceFS sandbox metadata and configures
+that dedicated instance with `maxmemory-policy=noeviction`. The main LangSmith
+Redis keeps its normal eviction policy. Terraform writes the JuiceFS Redis
+connection URL into the precreated Kubernetes CSI config Secret and the Helm
+values reference only that Secret name, so the JuiceFS Redis password is not
+placed in Helm values. The default JuiceFS Redis size is 5 GB; use 20 GB or
+higher for SaaS-like production scale.
 
 **Sandbox node identity:** When `enable_sandboxes = true`, Terraform creates a
 restricted service account for the sandbox-host GKE node pool and grants only the
@@ -375,6 +374,10 @@ helm upgrade langsmith langchain/langsmith \
 | `redis_memory_size` | `5` | no | Memorystore Redis memory size in GB |
 | `redis_high_availability` | `true` | no | Enable Memorystore HA tier (Standard HA) |
 | `redis_prevent_destroy` | `false` | no | Prevent accidental Terraform destroy of Redis |
+| `sandbox_juicefs_redis_memory_size` | `5` | no | Memory size in GB for dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_high_availability` | `true` | no | Enable HA tier for dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_prevent_destroy` | `false` | no | Prevent accidental Terraform destroy of dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_rdb_snapshot_period` | `null` | no | Optional RDB snapshot period for dedicated JuiceFS metadata Redis |
 | `clickhouse_source` | `in-cluster` | no | `in-cluster`, `langsmith-managed`, or `external` |
 | `clickhouse_host` | `""` | when external | ClickHouse host (external/managed only) |
 | `clickhouse_port` | `9440` | no | ClickHouse native protocol port |

@@ -154,8 +154,6 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # Requirements:
 #   - gke_use_autopilot = false. Autopilot does not support the required
 #     dedicated nested-virtualization node pool.
-#   - redis_source = "external". The shared Memorystore instance is used for
-#     JuiceFS metadata and is configured with maxmemory-policy=noeviction.
 #   - enable_gcp_iam_module = true so the JuiceFS CSI node service account can
 #     access the shared GCS bucket via Workload Identity.
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
@@ -171,6 +169,11 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # used by the JuiceFS CSI node service account, not on the node identity.
 #
 # enable_sandboxes = true
+# sandbox_juicefs_redis_memory_size = 5
+# sandbox_juicefs_redis_high_availability = true
+# For SaaS-like production scale:
+# sandbox_juicefs_redis_memory_size = 20
+# sandbox_juicefs_redis_rdb_snapshot_period = "ONE_HOUR"
 # sandbox_host_node_count = 1
 # sandbox_host_min_node_count = 1
 # sandbox_host_max_node_count = 5

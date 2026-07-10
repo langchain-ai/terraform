@@ -407,6 +407,40 @@ variable "sandbox_juicefs_name" {
   default     = "sandbox-juicefs"
 }
 
+variable "sandbox_juicefs_redis_memory_size" {
+  description = "Memory size in GB for the dedicated JuiceFS metadata Redis created when enable_sandboxes = true. Use 20 GB or higher for SaaS-like production scale."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_memory_size >= 1 && var.sandbox_juicefs_redis_memory_size <= 300
+    error_message = "sandbox_juicefs_redis_memory_size must be between 1 and 300 GB."
+  }
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  description = "Enable Standard HA tier for the dedicated JuiceFS metadata Redis."
+  type        = bool
+  default     = true
+}
+
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  description = "Prevent accidental Terraform destroy of the dedicated JuiceFS metadata Redis."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_juicefs_redis_rdb_snapshot_period" {
+  description = "Optional RDB snapshot period for the dedicated JuiceFS metadata Redis. Use ONE_HOUR for SaaS-like production durability; null disables RDB persistence."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null || contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
+    error_message = "sandbox_juicefs_redis_rdb_snapshot_period must be null, ONE_HOUR, SIX_HOURS, TWELVE_HOURS, or TWENTY_FOUR_HOURS."
+  }
+}
+
 variable "sandbox_juicefs_csi_config_secret_name" {
   description = "Kubernetes Secret name containing JuiceFS CSI config. Created in the LangSmith namespace when enable_sandboxes = true."
   type        = string

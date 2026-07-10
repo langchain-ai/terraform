@@ -84,6 +84,11 @@ output "sandbox_juicefs_csi_config_secret_name" {
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
 }
 
+output "sandbox_juicefs_redis_name" {
+  description = "Dedicated ElastiCache Redis name for sandbox JuiceFS metadata"
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+}
+
 output "sandbox_juicefs_bucket_url" {
   description = "S3 endpoint URL passed to JuiceFS for sandbox object storage"
   value       = var.enable_sandboxes ? local.sandbox_juicefs_bucket_url : null

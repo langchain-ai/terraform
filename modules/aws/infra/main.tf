@@ -51,8 +51,8 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = !var.enable_sandboxes || var.redis_source == "external"
-      error_message = "enable_sandboxes requires redis_source = \"external\" so JuiceFS metadata can reuse ElastiCache with maxmemory-policy=noeviction."
+      condition     = !var.enable_sandboxes || var.sandbox_juicefs_redis_instance_type != ""
+      error_message = "sandbox_juicefs_redis_instance_type is required when enable_sandboxes = true."
     }
 
     precondition {
@@ -204,20 +204,41 @@ module "redis" {
   ingress_cidrs        = [local.vpc_cidr_block]
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
-  parameter_group_name = var.enable_sandboxes && var.redis_source == "external" ? aws_elasticache_parameter_group.langsmith_redis[0].name : "default.redis7"
+  parameter_group_name = "default.redis7"
 }
 
-resource "aws_elasticache_parameter_group" "langsmith_redis" {
-  count = var.enable_sandboxes && var.redis_source == "external" ? 1 : 0
+resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes ? 1 : 0
 
-  name        = "${local.redis_name}-redis7"
+  name        = "${local.sandbox_juicefs_redis_name}-redis7"
   family      = "redis7"
-  description = "Redis 7 parameters for LangSmith and sandbox JuiceFS metadata."
+  description = "Redis 7 parameters for sandbox JuiceFS metadata."
 
   parameter {
     name  = "maxmemory-policy"
     value = "noeviction"
   }
+}
+
+resource "random_password" "sandbox_juicefs_redis_auth_token" {
+  count   = var.enable_sandboxes ? 1 : 0
+  length  = 32
+  special = false
+}
+
+module "sandbox_juicefs_redis" {
+  source = "./modules/redis"
+  count  = var.enable_sandboxes ? 1 : 0
+
+  name                     = local.sandbox_juicefs_redis_name
+  vpc_id                   = local.vpc_id
+  subnet_ids               = local.private_subnets
+  instance_type            = var.sandbox_juicefs_redis_instance_type
+  ingress_cidrs            = [local.vpc_cidr_block]
+  vpc_cidr_block           = local.vpc_cidr_block
+  auth_token               = random_password.sandbox_juicefs_redis_auth_token[0].result
+  parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
+  snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
 }
 
 module "storage" {
@@ -540,10 +561,9 @@ locals {
   )
 
   # DB 0 is reserved for the main LangSmith install.
-  redis_db_fleet           = 1
-  redis_db_polly           = 2
-  redis_db_insights        = 3
-  redis_db_sandbox_juicefs = 4
+  redis_db_fleet    = 1
+  redis_db_polly    = 2
+  redis_db_insights = 3
 }
 
 module "k8s_bootstrap" {
@@ -595,7 +615,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
   data_wo = {
     name    = var.sandbox_juicefs_name
-    metaurl = "${trimsuffix(local.redis_connection_url, "/")}/${local.redis_db_sandbox_juicefs}"
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
     storage = "s3"
     bucket  = local.sandbox_juicefs_bucket_url
   }
@@ -617,7 +637,7 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 #     private RDS instance; a local Terraform runner does not).
 #   - ElastiCache (cluster-mode-disabled) supports logical DB indexes.
 #     DB 0 is reserved for the main LangSmith install, DB 1 for Fleet, DB 2
-#     for Polly, DB 3 for Insights, and DB 4 for JuiceFS sandbox metadata.
+#     for Polly, and DB 3 for Insights.
 # The K8s Secrets below feed the chart's fleet/polly/insights
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 

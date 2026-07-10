@@ -317,6 +317,23 @@ variable "sandbox_juicefs_name" {
   default     = "sandbox-juicefs"
 }
 
+variable "sandbox_juicefs_redis_instance_type" {
+  type        = string
+  description = "ElastiCache node type for the dedicated JuiceFS metadata Redis created when enable_sandboxes = true. The default is small production sizing; use cache.r7g.xlarge or larger for SaaS-like production scale."
+  default     = "cache.m6g.large"
+}
+
+variable "sandbox_juicefs_redis_snapshot_retention_limit" {
+  type        = number
+  description = "Number of days to retain automated snapshots for the dedicated JuiceFS metadata Redis."
+  default     = 7
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_snapshot_retention_limit >= 0 && var.sandbox_juicefs_redis_snapshot_retention_limit <= 35
+    error_message = "sandbox_juicefs_redis_snapshot_retention_limit must be between 0 and 35."
+  }
+}
+
 variable "sandbox_juicefs_csi_config_secret_name" {
   type        = string
   description = "Kubernetes Secret name containing JuiceFS CSI config. Created in the LangSmith namespace when enable_sandboxes = true."
