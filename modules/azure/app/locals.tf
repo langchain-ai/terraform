@@ -77,10 +77,10 @@ locals {
           url = "${local.protocol}://${local.hostname}"
         }
         blobStorage = {
-          enabled        = true
-          bucketName     = local.storage_container_name
-          storageAccount = local.storage_account_name
-          connectionString = ""  # empty — Workload Identity handles auth, no key needed
+          enabled          = true
+          bucketName       = local.storage_container_name
+          storageAccount   = local.storage_account_name
+          connectionString = "" # empty — Workload Identity handles auth, no key needed
         }
       }
       commonEnv = concat(
@@ -89,7 +89,11 @@ locals {
         ],
         var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
       )
-      # Workload Identity annotations on each component's service account
+    },
+    # Workload Identity annotations on each component's service account.
+    # Separate merge() argument — a for-expression cannot share an object
+    # constructor with static attributes like config/commonEnv above.
+    {
       for component in local.wi_components : component => {
         serviceAccount = {
           annotations = local.wi_annotations
