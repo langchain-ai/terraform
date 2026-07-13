@@ -1,0 +1,24 @@
+modules/gcp/infra/modules/networking/main.tf
+  s_395d8bafcd6588::t_ced23c66f9304c 109-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "67b0ede419c3927d0e787d1a848556b341b24286",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_395d8bafcd6588": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a90b1619-33b3-49f8-bc23-6344dcc00d63",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
