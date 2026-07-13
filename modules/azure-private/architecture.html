@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>azure-private — architecture &amp; deployment flow</title>
+<style>
+  :root {
+    --bg: #EEF2F6;
+    --surface: #FFFFFF;
+    --surface-2: #F6F8FA;
+    --ink: #16202B;
+    --muted: #566472;
+    --line: #D3DCE4;
+
+    --preq: #5B6875;        --preq-tint: #EAEEF2;
+    --infra: #0A63C9;       --infra-tint: #E6F0FB;
+    --boot: #0C857A;        --boot-tint: #E0F2EF;
+    --app: #B5451B;         --app-tint: #F7E9E1;
+
+    --internet: #7A8794;
+    --radius: 7px;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0D141B; --surface: #151E27; --surface-2: #1A2530;
+      --ink: #E7EDF3; --muted: #97A6B4; --line: #293845;
+      --preq: #8896A4; --preq-tint: #202C38;
+      --infra: #4C9BF5; --infra-tint: #10263F;
+      --boot: #2BC4B4; --boot-tint: #0C2E2C;
+      --app: #F08A5D; --app-tint: #331B12;
+      --internet: #8A97A4;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #EEF2F6; --surface: #FFFFFF; --surface-2: #F6F8FA;
+    --ink: #16202B; --muted: #566472; --line: #D3DCE4;
+    --preq: #5B6875; --preq-tint: #EAEEF2;
+    --infra: #0A63C9; --infra-tint: #E6F0FB;
+    --boot: #0C857A; --boot-tint: #E0F2EF;
+    --app: #B5451B; --app-tint: #F7E9E1;
+    --internet: #7A8794;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0D141B; --surface: #151E27; --surface-2: #1A2530;
+    --ink: #E7EDF3; --muted: #97A6B4; --line: #293845;
+    --preq: #8896A4; --preq-tint: #202C38;
+    --infra: #4C9BF5; --infra-tint: #10263F;
+    --boot: #2BC4B4; --boot-tint: #0C2E2C;
+    --app: #F08A5D; --app-tint: #331B12;
+    --internet: #8A97A4;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1240px; margin: 0 auto; padding: 34px 30px 48px; }
+
+  /* ── header ── */
+  header { margin-bottom: 22px; }
+  .kicker {
+    font-size: 11px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--infra); font-weight: 700; margin: 0 0 6px;
+  }
+  h1 {
+    font-size: 27px; line-height: 1.15; margin: 0 0 8px; letter-spacing: -.015em;
+    font-weight: 700; text-wrap: balance;
+  }
+  h1 code { font-family: var(--mono); font-size: .82em; background: var(--surface-2);
+    padding: 1px 7px; border-radius: 5px; border: 1px solid var(--line); }
+  .lede { margin: 0; color: var(--muted); font-size: 14px; max-width: 78ch; }
+
+  /* ── legend ── */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 18px 0 4px;
+    padding: 12px 16px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius);
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .legend-item b { font-weight: 600; }
+  .legend-item span { color: var(--muted); }
+  .sw { width: 15px; height: 15px; border-radius: 4px; flex: 0 0 auto; }
+  .sw.preq { background: var(--preq-tint); border: 1.5px dashed var(--preq); }
+  .sw.infra { background: var(--infra-tint); border: 1.5px solid var(--infra); }
+  .sw.boot { background: var(--boot-tint); border: 1.5px solid var(--boot); }
+  .sw.app { background: var(--app-tint); border: 1.5px solid var(--app); }
+
+  /* ── section scaffolding ── */
+  .section { margin-top: 26px; }
+  .section-label {
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 700; margin: 0 0 12px;
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  .section-label .num {
+    font-family: var(--mono); color: var(--infra); font-size: 12px;
+  }
+  .scroll { overflow-x: auto; }
+
+  /* ── generic card ── */
+  .card {
+    background: var(--surface); border: 1.5px solid var(--line);
+    border-radius: var(--radius); padding: 11px 13px;
+  }
+  .card-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+  .card-title { font-weight: 650; font-size: 13.5px; letter-spacing: -.005em; }
+  .card-meta { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+  .card-meta code, .chip code, .tl-desc code { font-family: var(--mono); font-size: 11px;
+    background: var(--surface-2); padding: 0 4px; border-radius: 4px; }
+
+  .tag {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    padding: 1.5px 6px; border-radius: 5px; letter-spacing: .01em; white-space: nowrap;
+  }
+  .tag-preq { background: var(--preq-tint); color: var(--preq); }
+  .tag-infra { background: var(--infra-tint); color: var(--infra); }
+  .tag-boot { background: var(--boot-tint); color: var(--boot); }
+  .tag-app { background: var(--app-tint); color: var(--app); }
+
+  .cat-preq { border-color: var(--preq); border-style: dashed; background: color-mix(in srgb, var(--preq-tint) 55%, var(--surface)); }
+  .cat-infra { border-color: var(--infra); }
+  .cat-boot { border-color: var(--boot); }
+  .cat-app { border-color: var(--app); }
+
+  /* ── topology ── */
+  .rg {
+    border: 1.5px dashed var(--preq); border-radius: 10px; padding: 14px;
+    background: color-mix(in srgb, var(--preq-tint) 40%, var(--surface));
+    min-width: 900px;
+  }
+  .container-label {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+    font-size: 12.5px; font-weight: 650;
+  }
+  .container-label .tag { font-size: 10px; }
+  .container-sub { color: var(--muted); font-weight: 400; font-size: 11.5px; }
+
+  .topo { display: flex; align-items: flex-start; gap: 0; }
+  .hub-col { flex: 0 0 210px; display: flex; flex-direction: column; gap: 10px; }
+  .peer { flex: 0 0 74px; display: flex; flex-direction: column;
+    align-items: center; justify-content: flex-start; gap: 6px; padding-top: 120px; }
+  .peer .line { height: 2px; width: 100%; background: var(--preq); }
+  .peer .lbl { font-size: 10px; color: var(--muted); text-align: center; line-height: 1.2;
+    text-transform: uppercase; letter-spacing: .04em; }
+  .spoke-col { flex: 1 1 auto; min-width: 0; }
+
+  .vnet {
+    border: 1.5px dashed var(--preq); border-radius: 9px; padding: 11px;
+    background: var(--surface);
+  }
+  .vnet-h { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; font-size: 12px; font-weight: 650; }
+
+  .internet {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    border: 1.5px solid var(--internet); border-radius: 40px; padding: 6px 12px;
+    color: var(--internet); font-weight: 650; font-size: 12.5px; background: var(--surface);
+  }
+  .egress-arrow { text-align: center; color: var(--internet); font-size: 11px; line-height: 1;
+    display: flex; flex-direction: column; align-items: center; gap: 1px; }
+  .egress-arrow .k { font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase; }
+
+  .subnet-lane { display: flex; flex-direction: column; gap: 9px; }
+  .subnet {
+    border: 1.5px dashed var(--preq); border-radius: 8px; padding: 9px 10px;
+    background: color-mix(in srgb, var(--preq-tint) 30%, var(--surface));
+  }
+  .subnet-h { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+  .subnet-h .name { font-weight: 650; font-size: 12px; }
+  .subnet-h .cidr { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+
+  .cluster { border: 1.5px solid var(--infra); border-radius: 7px; padding: 9px 10px;
+    background: var(--surface); }
+  .cluster > .card-h { margin-bottom: 6px; }
+  .layerbox { border-radius: 6px; padding: 7px 8px; margin-top: 7px; }
+  .layerbox.boot { border: 1.3px solid var(--boot); background: color-mix(in srgb, var(--boot-tint) 45%, var(--surface)); }
+  .layerbox.app { border: 1.3px solid var(--app); background: color-mix(in srgb, var(--app-tint) 45%, var(--surface)); }
+  .layerbox-h { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+  .layerbox-h .t { font-size: 11.5px; font-weight: 650; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip {
+    font-size: 11px; padding: 2.5px 8px; border-radius: 5px; background: var(--surface);
+    border: 1px solid var(--line); white-space: nowrap; color: var(--ink);
+  }
+  .chip.mono { font-family: var(--mono); font-size: 10.5px; }
+
+  .accessnote {
+    margin-top: 7px; font-size: 10.5px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .arrow { color: var(--infra); font-weight: 700; }
+
+  /* ── regional band ── */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; }
+  .grid.two { grid-template-columns: repeat(2, 1fr); }
+
+  /* ── deployment timeline ── */
+  .timeline { display: flex; flex-direction: column; gap: 0; }
+  .tl {
+    display: grid; grid-template-columns: 44px 1fr; gap: 14px; position: relative;
+    padding-bottom: 14px;
+  }
+  .tl:not(:last-child) .tl-badge::after {
+    content: ""; position: absolute; left: 21px; top: 34px; bottom: -1px; width: 2px;
+    background: var(--line);
+  }
+  .tl-badge { position: relative; }
+  .tl-badge .n {
+    width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-weight: 700; font-size: 13px; color: var(--bg);
+    background: var(--ink); font-family: var(--mono);
+  }
+  .tl-body { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 13px; }
+  .tl-h { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 3px; }
+  .tl-title { font-weight: 650; font-size: 13.5px; }
+  .tl-desc { color: var(--muted); font-size: 12px; }
+  .runpill {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+    padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line); color: var(--muted);
+    white-space: nowrap;
+  }
+  .runpill.vnet-only { color: var(--app); border-color: color-mix(in srgb, var(--app) 45%, var(--line)); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
+  .dot.infra { background: var(--infra); } .dot.boot { background: var(--boot); }
+  .dot.app { background: var(--app); } .dot.tool { background: var(--muted); }
+
+  /* ── footer ── */
+  .notes { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 16px;
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 26px; }
+  .note { font-size: 12px; color: var(--muted); display: flex; gap: 8px; }
+  .note b { color: var(--ink); font-weight: 650; }
+  .note::before { content: "▪"; color: var(--infra); }
+
+  @media (max-width: 720px) {
+    .grid, .grid.two, .notes { grid-template-columns: 1fr; }
+    .page { padding: 24px 16px 40px; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <p class="kicker">Terraform · modules/azure-private</p>
+    <h1>Private / Hub-Spoke AKS Landing Zone for LangSmith</h1>
+    <p class="lede">What this module builds, what you bring as prerequisites, and the order you
+      deploy it in. Two Terraform roots — <code>infra/</code> (Azure) and <code>bootstrap/</code>
+      (in-cluster) — plus a Helm install, bridged through Key Vault with no shared state.</p>
+  </header>
+
+  <div class="legend" role="list" aria-label="Legend">
+    <div class="legend-item" role="listitem"><span class="sw preq"></span><b>Pre-req</b><span>— you provide</span></div>
+    <div class="legend-item" role="listitem"><span class="sw infra"></span><b><code style="font-family:var(--mono)">infra/</code> root</b><span>— Azure resources</span></div>
+    <div class="legend-item" role="listitem"><span class="sw boot"></span><b><code style="font-family:var(--mono)">bootstrap/</code> root</b><span>— in-cluster</span></div>
+    <div class="legend-item" role="listitem"><span class="sw app"></span><b>Helm</b><span>— LangSmith app (not bundled)</span></div>
+  </div>
+
+  <!-- ── TOPOLOGY ── -->
+  <div class="section">
+    <p class="section-label"><span class="num">01</span> Network topology &amp; what runs where</p>
+    <div class="scroll">
+      <div class="rg">
+        <div class="container-label">
+          <span class="tag tag-preq">pre-req</span>
+          Resource group
+          <span class="container-sub">— existing; deployment region is inherited from it (no <code style="font-family:var(--mono);font-size:11px">location</code> variable)</span>
+        </div>
+
+        <div class="topo">
+          <!-- HUB -->
+          <div class="hub-col">
+            <div class="internet">☁ Internet</div>
+            <div class="egress-arrow"><span class="k">▲ allowed egress</span></div>
+            <div class="vnet">
+              <div class="vnet-h"><span class="tag tag-preq">pre-req</span> Hub VNet</div>
+              <div class="card cat-preq">
+                <div class="card-h"><span class="tag tag-preq">pre-req</span><span class="card-title">Azure Firewall</span></div>
+                <div class="card-meta">Egress allow-list for AKS control-plane FQDNs &amp; ports. Route table on the AKS subnet sends <code>0.0.0.0/0</code> here.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PEERING -->
+          <div class="peer">
+            <div class="line"></div>
+            <div class="lbl">VNet<br>peering</div>
+            <div class="line"></div>
+          </div>
+
+          <!-- SPOKE -->
+          <div class="spoke-col">
+            <div class="vnet">
+              <div class="vnet-h"><span class="tag tag-preq">pre-req</span> Spoke VNet <span class="container-sub">— you create the VNet &amp; subnets; the module joins them</span></div>
+              <div class="subnet-lane">
+
+                <!-- AKS subnet -->
+                <div class="subnet">
+                  <div class="subnet-h"><span class="tag tag-preq">pre-req</span><span class="name">AKS subnet</span><span class="cidr">+ route table (UDR → firewall) + service endpoints: Storage, KeyVault</span></div>
+                  <div class="cluster">
+                    <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Private AKS cluster</span></div>
+                    <div class="card-meta">Azure CNI Overlay + Cilium · <code>outbound_type=userDefinedRouting</code> · private API server · user-assigned control-plane identity · OIDC + Workload Identity · CSI Secrets Store. <span class="arrow">◀</span> egress leaves via UDR to the hub firewall.</div>
+
+                    <div class="layerbox boot">
+                      <div class="layerbox-h"><span class="tag tag-boot">bootstrap/</span><span class="t">In-cluster components</span></div>
+                      <div class="chips">
+                        <span class="chip">KEDA</span>
+                        <span class="chip">Internal NGINX ingress <span style="color:var(--muted)">(private LB IP)</span></span>
+                        <span class="chip mono">langsmith namespace</span>
+                        <span class="chip mono">langsmith-postgres-secret</span>
+                        <span class="chip mono">langsmith-redis-secret</span>
+                        <span class="chip">default-deny NetworkPolicies</span>
+                      </div>
+                      <div class="layerbox-h" style="margin-top:7px"><span class="tag tag-boot">scripts</span><span class="t">Config &amp; TLS secrets</span></div>
+                      <div class="chips">
+                        <span class="chip mono">langsmith-config-secret</span>
+                        <span class="chip mono">langsmith-tls <span style="color:var(--muted);font-family:var(--sans)">(self-signed / BYO)</span></span>
+                      </div>
+                    </div>
+
+                    <div class="layerbox app">
+                      <div class="layerbox-h"><span class="tag tag-app">Helm</span><span class="t">LangSmith application</span> <span style="color:var(--muted);font-size:11px">— installed separately, not bundled</span></div>
+                      <div class="chips">
+                        <span class="chip">backend</span><span class="chip">platform-backend</span>
+                        <span class="chip">queue</span><span class="chip">ingest-queue</span>
+                        <span class="chip">host-backend</span><span class="chip">listener</span>
+                        <span class="chip">fleet servers</span><span class="chip">frontend / playground</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- data PE subnets -->
+                <div class="grid two">
+                  <div class="subnet">
+                    <div class="subnet-h"><span class="tag tag-preq">pre-req</span><span class="name">postgres-pe subnet</span></div>
+                    <div class="card cat-infra">
+                      <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Postgres Private Endpoint</span></div>
+                      <div class="card-meta"><span class="arrow">▶</span> to PostgreSQL Flexible Server (below)</div>
+                    </div>
+                  </div>
+                  <div class="subnet">
+                    <div class="subnet-h"><span class="tag tag-preq">pre-req</span><span class="name">redis-pe subnet</span></div>
+                    <div class="card cat-infra">
+                      <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Redis Private Endpoint</span></div>
+                      <div class="card-meta"><span class="arrow">▶</span> to Azure Managed Redis (below)</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- jumpbox subnet -->
+                <div class="subnet">
+                  <div class="subnet-h"><span class="tag tag-preq">pre-req</span><span class="name">jumpbox subnet</span></div>
+                  <div class="card cat-infra">
+                    <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Bastion VM</span> <span style="color:var(--muted);font-size:11px">— day-2 access</span></div>
+                    <div class="card-meta">The in-VNet apply host for the <code>bootstrap/</code> root &amp; Helm install lives here (it can reach the private API server).</div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── REGIONAL SERVICES ── -->
+  <div class="section">
+    <p class="section-label"><span class="num">02</span> Azure managed &amp; regional services <span style="color:var(--infra);font-weight:600;text-transform:none;letter-spacing:0">· built by <code style="font-family:var(--mono);font-size:11px">infra/</code></span></p>
+    <div class="grid">
+      <div class="card cat-infra">
+        <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">PostgreSQL Flexible Server</span></div>
+        <div class="card-meta">Public access disabled · <code>privatelink.postgres</code> DNS zone · connection URL written to Key Vault. <br><span class="arrow">◀</span> reached via Private Endpoint in <b>postgres-pe</b>.</div>
+      </div>
+      <div class="card cat-infra">
+        <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Azure Managed Redis</span></div>
+        <div class="card-meta">redisEnterprise (Balanced) · TLS · public access disabled · <code>privatelink.redis</code> DNS zone · URL to Key Vault. <br><span class="arrow">◀</span> reached via Private Endpoint in <b>redis-pe</b>.</div>
+      </div>
+      <div class="card cat-infra">
+        <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Key Vault</span></div>
+        <div class="card-meta">RBAC mode + default-deny · holds connection URLs &amp; app secrets · the "bridge" the other root reads. <br><span class="arrow">◀</span> Service Endpoint from AKS subnet.</div>
+      </div>
+      <div class="card cat-infra">
+        <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Blob Storage</span></div>
+        <div class="card-meta">Default-deny · Blob Data Contributor to the workload identity · TTL lifecycle. <br><span class="arrow">◀</span> Service Endpoint from AKS subnet.</div>
+      </div>
+      <div class="card cat-infra">
+        <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Private DNS zones</span></div>
+        <div class="card-meta"><code>privatelink.postgres</code> &amp; <code>privatelink.redis</code>, linked to the spoke VNet. API-server DNS has System / None / custom modes.</div>
+      </div>
+      <div class="card cat-infra">
+        <div class="card-h"><span class="tag tag-infra">infra/</span><span class="card-title">Diagnostics + Workload Identity</span></div>
+        <div class="card-meta">Log Analytics diagnostics · 8 federated identity credentials mapping AKS service accounts to Entra identities for Blob/Key Vault access.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DEPLOYMENT ── -->
+  <div class="section">
+    <p class="section-label"><span class="num">03</span> Deployment sequence</p>
+    <div class="timeline">
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">0</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot tool"></span><span class="tl-title">Authenticate &amp; pre-flight</span><span class="runpill">runs anywhere</span></div>
+          <div class="tl-desc"><code>az login</code> → <code>scripts/preflight.sh</code> checks login, resource providers, RBAC, and <code>terraform.tfvars</code>.</div>
+        </div>
+      </div>
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">1</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot infra"></span><span class="tl-title">Deploy Azure infrastructure</span><span class="tag tag-infra">infra/</span><span class="runpill">runs anywhere</span></div>
+          <div class="tl-desc"><code>terraform apply</code> → private AKS, Postgres, Redis, Blob, Key Vault, bastion, private DNS. No Kubernetes provider, so the private API server never blocks it. ~15–20 min.</div>
+        </div>
+      </div>
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">2</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot infra"></span><span class="tl-title">Cluster access + verify</span><span class="tag tag-infra">infra/</span><span class="runpill">runs anywhere</span></div>
+          <div class="tl-desc"><code>az aks get-credentials</code> (works anywhere); <code>kubectl</code> API calls need VNet connectivity — run them from the jumpbox.</div>
+        </div>
+      </div>
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">3</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot boot"></span><span class="tl-title">In-cluster bootstrap</span><span class="tag tag-boot">bootstrap/</span><span class="runpill vnet-only">from jumpbox</span></div>
+          <div class="tl-desc"><code>terraform apply</code> (3 vars) → KEDA, internal NGINX, <code>langsmith</code> namespace, Postgres/Redis connection secrets. Discovers everything via Azure data sources + Key Vault.</div>
+        </div>
+      </div>
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">3.5</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot boot"></span><span class="tl-title">Config &amp; TLS secrets</span><span class="tag tag-boot">scripts</span><span class="runpill vnet-only">from jumpbox</span></div>
+          <div class="tl-desc"><code>create-k8s-secrets.sh</code> → <code>langsmith-config-secret</code> (from Key Vault); <code>create-tls-secret.sh</code> → <code>langsmith-tls</code> (self-signed for testing, or BYO cert).</div>
+        </div>
+      </div>
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">4</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot app"></span><span class="tl-title">Install LangSmith (Helm)</span><span class="tag tag-app">Helm</span><span class="runpill vnet-only">from jumpbox</span></div>
+          <div class="tl-desc"><code>helm upgrade --install</code> wiring external Postgres/Redis secrets, Blob via Workload Identity, the config secret, and ingress + TLS. Chart not bundled by this module.</div>
+        </div>
+      </div>
+
+      <div class="tl">
+        <div class="tl-badge"><div class="n">5</div></div>
+        <div class="tl-body">
+          <div class="tl-h"><span class="dot app"></span><span class="tl-title">Verify &amp; access</span><span class="tag tag-app">Helm</span><span class="runpill vnet-only">from jumpbox</span></div>
+          <div class="tl-desc"><code>status.sh</code> for health; map your <code>config.hostname</code> to the <b>private</b> ingress IP via internal DNS, then reach LangSmith from an in-VNet host.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="note"><span><b>No shared state.</b> <code>bootstrap/</code> reads nothing from <code>infra/</code>'s state — it rediscovers via Azure data sources + a Key Vault "secret bridge".</span></div>
+    <div class="note"><span><b>Private Endpoints, not VNet injection.</b> Postgres &amp; Redis use PEs so they stay compatible with user-defined-routing egress.</span></div>
+    <div class="note"><span><b>No cert-manager.</b> <code>langsmith-tls</code> is script-created — self-signed for testing, real cert for production.</span></div>
+    <div class="note"><span><b>ingress-nginx sunset.</b> The bundled open-source controller's upstream maintenance ends March 2026 — plan a successor for long-term use.</span></div>
+  </div>
+
+</div>
+</body>
+</html>
