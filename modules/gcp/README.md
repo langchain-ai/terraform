@@ -205,6 +205,19 @@ them; it deliberately does not inject limits. Before changing
 sandbox Helm workloads first so the strict limit quota is not restored while
 those workloads still require admission.
 
+**Sandbox network policy:** The `sandbox-host` pod runs host-networked, so its
+source is the node IP. How it is authorized to reach in-namespace services
+(platform-backend) depends on `gke_network_policy_provider`:
+
+1) `CALICO` - the `langsmith-default` default-deny ingress policy is kept, and an
+   additional policy admits the node subnet (Calico's `ipBlock` matches node IPs).
+2) `DATA_PLANE_V2` (Cilium, the default) - a standard NetworkPolicy cannot
+   authorize node-sourced traffic (an `ipBlock` does not match it and the
+   `CiliumNetworkPolicy` CRD is not exposed), so when `enable_sandboxes = true` the
+   module does not create the `langsmith-default` policy. Trade-off: the namespace
+   loses cross-namespace ingress isolation in that combination. Choose `CALICO` if
+   you need to retain the default-deny alongside sandboxes.
+
 ### Terraform state backend (recommended for production)
 
 Copy `backend.tf.example` to `backend.tf` and fill in your bucket:

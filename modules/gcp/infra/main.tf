@@ -508,6 +508,17 @@ module "k8s_bootstrap" {
     var.enable_sandboxes ? var.sandbox_default_container_requests : {}
   )
 
+  # Host-networked sandbox-host must reach platform-backend, and the CNI dictates how:
+  #  - CALICO: an ipBlock for the node subnet matches node-sourced traffic, so keep
+  #    the default-deny and admit the node subnet.
+  #  - DATA_PLANE_V2 (Cilium): node-sourced traffic can't be authorized by a standard
+  #    NetworkPolicy (ipBlock doesn't match it; the CiliumNetworkPolicy CRD isn't
+  #    exposed), so drop the default-deny for the sandbox case instead.
+  create_default_network_policy = !(var.enable_sandboxes && var.gke_network_policy_provider == "DATA_PLANE_V2")
+  sandbox_host_ingress_cidrs = (
+    var.enable_sandboxes && var.gke_network_policy_provider == "CALICO" ? [var.subnet_cidr] : []
+  )
+
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}?sslmode=require" : ""
