@@ -176,6 +176,24 @@ resource "kubernetes_secret" "tls_certificate" {
 #------------------------------------------------------------------------------
 # Resource Quotas
 #------------------------------------------------------------------------------
+locals {
+  langsmith_resource_quota_requests = {
+    "requests.cpu"    = "50"
+    "requests.memory" = "120Gi"
+    "pods"            = "100"
+  }
+
+  langsmith_resource_quota_limits = {
+    "limits.cpu"    = "100"
+    "limits.memory" = "200Gi"
+  }
+
+  langsmith_resource_quota_hard = merge(
+    local.langsmith_resource_quota_requests,
+    var.resource_quota_include_limits ? local.langsmith_resource_quota_limits : {},
+  )
+}
+
 resource "kubernetes_resource_quota" "langsmith" {
   metadata {
     name      = "langsmith-quota"
@@ -183,12 +201,26 @@ resource "kubernetes_resource_quota" "langsmith" {
   }
 
   spec {
-    hard = {
-      "requests.cpu"    = "50"
-      "requests.memory" = "120Gi"
-      "limits.cpu"      = "100"
-      "limits.memory"   = "200Gi"
-      "pods"            = "100"
+    hard = local.langsmith_resource_quota_hard
+  }
+}
+
+# ResourceQuota request tracking requires every admitted container to declare
+# requests. Supply conservative defaults for third-party sandbox containers that
+# omit them, but deliberately do not inject limits: sandbox-host creates per-VM
+# child cgroups beneath its pod cgroup and needs access to dedicated node capacity.
+resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
+  count = length(var.default_container_requests) > 0 ? 1 : 0
+
+  metadata {
+    name      = "langsmith-default-requests"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type            = "Container"
+      default_request = var.default_container_requests
     }
   }
 }

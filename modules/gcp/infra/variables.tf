@@ -401,6 +401,25 @@ variable "sandbox_host_ephemeral_local_ssd_count" {
   }
 }
 
+variable "sandbox_default_container_requests" {
+  description = "Default CPU and memory requests injected into sandbox namespace containers that omit them. This preserves ResourceQuota request accounting without imposing default limits on sandbox-host."
+  type        = map(string)
+  default = {
+    cpu    = "100m"
+    memory = "128Mi"
+  }
+
+  validation {
+    condition = (
+      length(var.sandbox_default_container_requests) == 2 &&
+      contains(keys(var.sandbox_default_container_requests), "cpu") &&
+      contains(keys(var.sandbox_default_container_requests), "memory") &&
+      alltrue([for value in values(var.sandbox_default_container_requests) : trimspace(value) != ""])
+    )
+    error_message = "sandbox_default_container_requests must contain exactly non-empty cpu and memory values."
+  }
+}
+
 variable "sandbox_juicefs_name" {
   description = "JuiceFS volume name used for sandbox snapshots and filesystem state."
   type        = string

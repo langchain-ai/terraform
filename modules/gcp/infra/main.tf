@@ -500,6 +500,14 @@ module "k8s_bootstrap" {
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
 
+  # sandbox-host manages Firecracker VMs in child cgroups and must not receive
+  # a namespace-injected parent limit. Keep request and pod-count governance,
+  # and inject requests only for third-party containers that omit them.
+  resource_quota_include_limits = !var.enable_sandboxes
+  default_container_requests = (
+    var.enable_sandboxes ? var.sandbox_default_container_requests : {}
+  )
+
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}?sslmode=require" : ""

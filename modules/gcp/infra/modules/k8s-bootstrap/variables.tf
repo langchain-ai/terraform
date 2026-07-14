@@ -25,6 +25,31 @@ variable "workload_identity_gsa_email" {
   default     = ""
 }
 
+variable "resource_quota_include_limits" {
+  description = "Include aggregate CPU and memory limits in the LangSmith namespace ResourceQuota. Disable for sandbox-host, whose Firecracker VMs use child cgroups beneath the pod cgroup."
+  type        = bool
+  default     = true
+}
+
+variable "default_container_requests" {
+  description = "Default CPU and memory requests injected by a LimitRange into containers that omit them. An empty map disables the LimitRange. No default limits are imposed."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = (
+      length(var.default_container_requests) == 0 ||
+      (
+        length(var.default_container_requests) == 2 &&
+        contains(keys(var.default_container_requests), "cpu") &&
+        contains(keys(var.default_container_requests), "memory") &&
+        alltrue([for value in values(var.default_container_requests) : trimspace(value) != ""])
+      )
+    )
+    error_message = "default_container_requests must be empty or contain exactly non-empty cpu and memory values."
+  }
+}
+
 #------------------------------------------------------------------------------
 # Database Credentials
 #------------------------------------------------------------------------------

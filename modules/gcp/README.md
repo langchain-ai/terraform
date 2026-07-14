@@ -194,6 +194,17 @@ restricted service account for the sandbox-host GKE node pool and grants only th
 standard GKE node/telemetry roles. JuiceFS GCS access remains on the Workload
 Identity service account used by the JuiceFS CSI node service account.
 
+**Sandbox resource governance:** The LangSmith namespace always retains aggregate
+CPU/memory request quotas and its pod-count quota. Non-sandbox deployments also
+enforce aggregate CPU/memory limits. Sandbox deployments omit only the aggregate
+limit quotas because sandbox-host manages Firecracker VMs in child cgroups beneath
+its pod cgroup and must not receive a namespace-injected parent limit. A LimitRange
+injects configurable CPU/memory requests into third-party containers that omit
+them; it deliberately does not inject limits. Before changing
+`enable_sandboxes` from `true` to `false` on a retained cluster, remove the
+sandbox Helm workloads first so the strict limit quota is not restored while
+those workloads still require admission.
+
 ### Terraform state backend (recommended for production)
 
 Copy `backend.tf.example` to `backend.tf` and fill in your bucket:
@@ -371,6 +382,7 @@ helm upgrade langsmith langchain/langsmith \
 | `redis_memory_size` | `5` | no | Memorystore Redis memory size in GB |
 | `redis_high_availability` | `true` | no | Enable Memorystore HA tier (Standard HA) |
 | `redis_prevent_destroy` | `false` | no | Prevent accidental Terraform destroy of Redis |
+| `sandbox_default_container_requests` | `{cpu = "100m", memory = "128Mi"}` | no | Requests injected into sandbox containers that omit them; no default limits are imposed |
 | `sandbox_juicefs_redis_memory_size` | `5` | no | Memory size in GB for dedicated JuiceFS metadata Redis |
 | `sandbox_juicefs_redis_high_availability` | `true` | no | Enable HA tier for dedicated JuiceFS metadata Redis |
 | `sandbox_juicefs_redis_prevent_destroy` | `false` | no | Prevent accidental Terraform destroy of dedicated JuiceFS metadata Redis |

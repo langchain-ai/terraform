@@ -178,6 +178,13 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # sandbox_host_min_node_count = 1
 # sandbox_host_max_node_count = 5
 # sandbox_host_machine_type = "n2-standard-8"
+# Optional: requests injected into sandbox containers that omit them. These
+# values preserve namespace request-quota accounting without imposing limits
+# on sandbox-host and its Firecracker VM child cgroups.
+# sandbox_default_container_requests = {
+#   cpu    = "100m"
+#   memory = "128Mi"
+# }
 # Optional: larger host nodes can attach local SSDs for JuiceFS cache backed
 # ephemeral storage. Some machine types only allow specific local SSD counts;
 # confirm the selected machine type supports the requested count.
