@@ -36,7 +36,6 @@
     "Sid": "LambdaFunctionManage",
     "Effect": "Allow",
     "Action": [
-      "lambda:DeleteFunction",
       "lambda:UpdateFunctionCode",
       "lambda:UpdateFunctionConfiguration",
       "lambda:PublishVersion",

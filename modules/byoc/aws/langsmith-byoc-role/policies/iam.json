@@ -67,11 +67,9 @@
     "Sid": "IAMRoleManage",
     "Effect": "Allow",
     "Action": [
-      "iam:DeleteRole",
       "iam:TagRole",
       "iam:UntagRole",
-      "iam:PutRolePolicy",
-      "iam:DeleteRolePolicy"
+      "iam:PutRolePolicy"
     ],
     "Resource": [
       "arn:aws:iam::${account_id}:role/*-smith-postgres-monitoring-role",

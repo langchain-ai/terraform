@@ -73,6 +73,8 @@ After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_a
 
 We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation.
 
+By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions.
+
 ### Enabling break-glass assume-role access
 
 `LangSmithBYOCBreakGlass` defaults to `Deny`. To allow an approved LangChain engineer to assume the role, set `allow_break_glass_access = true` and include that engineer's Identity Store user ID and SourceIdentity email (the engineer will provide it to you):
@@ -117,6 +119,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `langsmith_byoc_break_glass_principal_arn_patterns` | `list(string)` | no | BYOCBreakGlass SSO role patterns | IAM principal ARN patterns for LangSmith Identity Center BYOC break-glass sessions. |
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
+| `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
 
 ## Outputs
 
@@ -166,6 +169,7 @@ The break-glass role only carries an inline `eks:DescribeCluster` permission on 
 ## Operational notes
 
 - The Crossplane role's permissions are intentionally broad within the listed surfaces. Tightening them further breaks the control plane's ability to reconcile the data plane on upgrades. If you need tighter scope, discuss with LangChain first.
+- Delete permissions are disabled by default. Enable `allow_delete_permissions` only when tearing down LangSmith-managed resources, then disable it again after teardown.
 - `data.aws_caller_identity.current` is used at plan time to template account IDs into the policies. Run `terraform apply` from credentials in the **target** account, not the LangSmith control-plane account.
 - Removing this module will delete both roles and all attached policies. The LangSmith data plane will lose all control-plane reconciliation; do not apply destroys without coordinating with LangChain.
 
