@@ -20,7 +20,6 @@
     "Sid": "EKSClusterManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeleteCluster",
       "eks:UpdateClusterConfig",
       "eks:UpdateClusterVersion",
       "eks:AccessKubernetesApi",
@@ -49,7 +48,6 @@
     "Sid": "EKSNodegroupManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeleteNodegroup",
       "eks:UpdateNodegroupConfig",
       "eks:UpdateNodegroupVersion",
       "eks:TagResource",
@@ -76,12 +74,7 @@
   {
     "Sid": "EKSAddonManage",
     "Effect": "Allow",
-    "Action": [
-      "eks:DeleteAddon",
-      "eks:UpdateAddon",
-      "eks:TagResource",
-      "eks:UntagResource"
-    ],
+    "Action": ["eks:UpdateAddon", "eks:TagResource", "eks:UntagResource"],
     "Resource": "arn:aws:eks:*:${account_id}:addon/*-smith-eks/*/*",
     "Condition": {
       "StringEquals": {
@@ -104,7 +97,6 @@
     "Sid": "EKSAccessEntryManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeleteAccessEntry",
       "eks:AssociateAccessPolicy",
       "eks:DisassociateAccessPolicy",
       "eks:TagResource",
@@ -132,7 +124,6 @@
     "Sid": "EKSPodIdentityManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeletePodIdentityAssociation",
       "eks:UpdatePodIdentityAssociation",
       "eks:TagResource",
       "eks:UntagResource"
