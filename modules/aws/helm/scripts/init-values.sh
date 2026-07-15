@@ -113,6 +113,9 @@ ALB_ARN=$(terraform -chdir="$INFRA_DIR" output -raw alb_arn 2>/dev/null) || ALB_
 ALB_DNS_NAME=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || ALB_DNS_NAME=""
 ALB_SCHEME=$(terraform -chdir="$INFRA_DIR" output -raw alb_scheme 2>/dev/null) || ALB_SCHEME="$_alb_scheme"
 ACM_CERT_ARN=$(terraform -chdir="$INFRA_DIR" output -raw acm_certificate_arn 2>/dev/null) || ACM_CERT_ARN=""
+CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || {
+  echo "ERROR: Could not read cluster_name. Is 'terraform apply' complete?" >&2; exit 1
+}
 # Fallback to tfvars if the output isn't available (older infra module)
 if [[ -z "$ACM_CERT_ARN" && -n "$_acm_arn" ]]; then
   ACM_CERT_ARN="$_acm_arn"
