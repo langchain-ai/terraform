@@ -222,9 +222,10 @@ module "gke_cluster" {
   min_node_count          = var.gke_min_nodes
   max_node_count          = var.gke_max_nodes
   machine_type            = var.gke_machine_type
-  disk_size_gb            = var.gke_disk_size
-  release_channel         = var.gke_release_channel
-  deletion_protection     = var.gke_deletion_protection
+  disk_size_gb                = var.gke_disk_size
+  node_service_account_email  = var.gke_node_service_account_email
+  release_channel             = var.gke_release_channel
+  deletion_protection         = var.gke_deletion_protection
   network_policy_provider = var.gke_network_policy_provider
 
   # Master authorized networks — empty list keeps the master publicly reachable

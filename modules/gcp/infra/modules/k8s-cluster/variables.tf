@@ -96,6 +96,12 @@ variable "disk_size_gb" {
   default     = 100
 }
 
+variable "node_service_account_email" {
+  description = "Service account email to run standard-mode GKE nodes. Null keeps the GKE default; production deployments should pass a minimally privileged node service account. Pods use Workload Identity separately."
+  type        = string
+  default     = null
+}
+
 variable "release_channel" {
   description = "GKE release channel"
   type        = string
