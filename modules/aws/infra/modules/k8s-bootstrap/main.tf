@@ -528,7 +528,7 @@ MANIFEST
 # "envoy-<gateway-namespace>-<gateway-name>" in envoy-gateway-system.
 # For a Gateway named "langsmith-gateway" in the "langsmith" namespace:
 #   service: envoy-langsmith-langsmith-gateway (namespace: envoy-gateway-system)
-#   service port: 8080 (matches the Gateway resource's listener port)
+#   service port: 80 (matches the Gateway resource's listener port)
 #
 # The TargetGroupBinding is in envoy-gateway-system (same namespace as the service).
 # Cross-namespace TargetGroupBindings are not supported by the AWS LB controller.
@@ -588,7 +588,7 @@ metadata:
 spec:
   serviceRef:
     name: $_svc_name
-    port: 8080
+    port: 80
   targetGroupARN: ${var.gateway_target_group_arn}
   targetType: ip
 MANIFEST
