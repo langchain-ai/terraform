@@ -40,8 +40,8 @@ CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 _chart_version_supports_sandboxes() {
   local version
   version="$(printf '%s' "$1" | tr -d '[:space:]')"
-  version="${version#~>}"
-  version="${version#~}"
+  version="${version#\~>}"
+  version="${version#\~}"
   version="${version#v}"
 
   case "$version" in
