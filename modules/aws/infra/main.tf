@@ -413,8 +413,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
   # The cluster primary SG is on the control plane only — not on worker nodes.
   security_group_id            = module.eks.node_security_group_id
   referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 8080
-  to_port                      = 8080
+  from_port                    = module.alb.gateway_target_port
+  to_port                      = module.alb.gateway_target_port
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Envoy Gateway proxy pods on HTTP (target-type: ip)"
 
@@ -426,8 +426,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_istio" {
 
   security_group_id            = module.eks.node_security_group_id
   referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 80
-  to_port                      = 80
+  from_port                    = module.alb.gateway_target_port
+  to_port                      = module.alb.gateway_target_port
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Istio ingress gateway pods on HTTP (target-type: ip)"
 
@@ -439,8 +439,8 @@ resource "aws_vpc_security_group_ingress_rule" "alb_to_nginx" {
 
   security_group_id            = module.eks.node_security_group_id
   referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 80
-  to_port                      = 80
+  from_port                    = module.alb.gateway_target_port
+  to_port                      = module.alb.gateway_target_port
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach NGINX ingress controller pods on HTTP (target-type: ip)"
 

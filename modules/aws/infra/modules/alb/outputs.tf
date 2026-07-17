@@ -37,3 +37,8 @@ output "gateway_target_group_arn" {
   description = "ARN of the target group for gateway proxy (Envoy or Istio). Null when gateway mode is not enabled."
   value       = local.gateway_enabled ? aws_lb_target_group.gateway[0].arn : null
 }
+
+output "gateway_target_port" {
+  description = "Port on the gateway proxy pods that the ALB target group forwards to and health-checks (Envoy Gateway 10080, Istio/NGINX 80). Single source of truth for the matching node security-group ingress rule."
+  value       = local.gateway_target_port
+}
