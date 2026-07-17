@@ -189,21 +189,21 @@ MANIFEST
 #   2. Certificate   — triggers issuance; TLS secret lands in istio-system
 #   3. Istio Gateway — patched for HTTPS + HTTP redirect after secret is ready
 #
-# Context guard: when cluster_name is set, each provisioner verifies the active
-# kubeconfig context before applying manifests — protects against accidental
-# cross-cluster applies when managing multiple EKS clusters from one workstation.
+# Context guard: when cluster_name is set, each provisioner points kubectl at a
+# dedicated per-cluster kubeconfig file and unconditionally refreshes it before
+# applying manifests. This never touches the user's shared ~/.kube/config, and
+# never relies on matching the current context's *name* — a stale context can
+# share a name with a deleted-and-recreated cluster while pointing at a dead
+# endpoint, so name-matching alone doesn't guarantee the context is valid.
+# Mirrors the isolated-file pattern in aws/infra/scripts/set-kubeconfig.sh.
 
 locals {
   # Bash snippet injected at the top of each provisioner when cluster_name is set.
-  # Fails fast if the current context does not contain the cluster name.
   # Written with join() rather than a heredoc because HCL does not support
   # heredoc strings inside ternary conditional expressions.
   _ctx_check = var.cluster_name != "" ? join("\n", [
-    "_ctx=$(kubectl config current-context 2>/dev/null || echo \"\")",
-    "if ! echo \"$_ctx\" | grep -qF '${var.cluster_name}'; then",
-    "  echo \"INFO: kubectl context '$_ctx' does not match cluster '${var.cluster_name}' — auto-updating kubeconfig\"",
-    "  aws eks update-kubeconfig --name ${var.cluster_name} --region ${var.region}",
-    "fi",
+    "export KUBECONFIG=\"$HOME/.kube/langsmith-${var.cluster_name}\"",
+    "aws eks update-kubeconfig --name ${var.cluster_name} --region ${var.region} --alias ${var.cluster_name} --kubeconfig \"$KUBECONFIG\" > /dev/null",
   ]) : ""
 }
 
@@ -268,10 +268,8 @@ MANIFEST
     # Update kubeconfig before deleting — destroy provisioners cannot use
     # var.* so cluster_name and region are read from self.input.
     command = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete clusterissuer letsencrypt-prod --ignore-not-found=true 2>/dev/null || true
     EOT
   }
@@ -511,10 +509,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete gateway langsmith-gateway -n ${self.input.namespace} --ignore-not-found=true --wait=true --timeout=180s 2>/dev/null || true
       kubectl delete gatewayclass eg --ignore-not-found=true 2>/dev/null || true
     EOT
@@ -603,10 +599,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete targetgroupbinding langsmith-envoy-tgb -n envoy-gateway-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
@@ -764,10 +758,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete targetgroupbinding langsmith-istio-tgb -n istio-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
@@ -846,10 +838,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete targetgroupbinding langsmith-nginx-tgb -n ingress-nginx --ignore-not-found=true 2>/dev/null || true
     EOT
   }
