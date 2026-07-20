@@ -131,6 +131,14 @@ variable "database_flags" {
     {
       name  = "log_disconnections"
       value = "on"
+    },
+    {
+      name  = "log_lock_waits"
+      value = "on"
+    },
+    {
+      name  = "log_temp_files"
+      value = "0"
     }
   ]
 }
