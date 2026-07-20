@@ -42,7 +42,6 @@
       "elasticache:ModifyReplicationGroupShardConfiguration",
       "elasticache:IncreaseReplicaCount",
       "elasticache:DecreaseReplicaCount",
-      "elasticache:DeleteReplicationGroup",
       "elasticache:AddTagsToResource",
       "elasticache:RemoveTagsFromResource"
     ],
@@ -71,7 +70,6 @@
     "Sid": "ElastiCacheSubnetGroupManage",
     "Effect": "Allow",
     "Action": [
-      "elasticache:DeleteCacheSubnetGroup",
       "elasticache:AddTagsToResource",
       "elasticache:RemoveTagsFromResource"
     ],
@@ -124,8 +122,6 @@
     "Action": [
       "elasticache:ModifyUser",
       "elasticache:ModifyUserGroup",
-      "elasticache:DeleteUser",
-      "elasticache:DeleteUserGroup",
       "elasticache:AddTagsToResource",
       "elasticache:RemoveTagsFromResource"
     ],

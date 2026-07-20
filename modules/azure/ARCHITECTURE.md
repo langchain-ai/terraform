@@ -37,6 +37,8 @@ Adds to Pass 3 — 3 static + 4 dynamic pods:
 
 **[LangSmith Azure — Pass 3 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/6renzZO9DtNdvLuqO0Aa)**
 
+![LangSmith Azure Pass 3 Platform Containers](diagrams/lang_smith_deployment_pass_3.png)
+
 Adds 3 pods to the Pass 2 topology:
 - `langsmith-host-backend` — LangGraph control plane API (WI)
 - `langsmith-listener` — watches host-backend, creates LangGraphPlatform CRDs (WI)
@@ -46,6 +48,8 @@ Adds 3 pods to the Pass 2 topology:
 ### Pass 2 — Platform Containers (External Postgres + Redis, verified)
 
 **[LangSmith Azure — Pass 2 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/CTA7dtpxBysehdXeYOHu)**
+
+![LangSmith Azure Pass 2 Platform Containers](diagrams/lang_smith_deployment_pass_2.png)
 
 Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 deploy:
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)

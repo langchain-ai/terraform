@@ -48,3 +48,177 @@ misconfigurations:
       target the master endpoint. Production deployments populate
       var.gke_master_authorized_cidrs with their operator-controlled CIDRs.
     expired_at: 2027-01-01
+
+  - id: AZU-0017
+    paths:
+      - "modules/azure/infra/modules/keyvault/main.tf"
+    statement: |
+      These Key Vault secrets intentionally do not set fixed expiry dates. The
+      API-key salt and JWT signing secret must remain stable because rotation
+      invalidates existing API keys or active sessions; optional admin/license
+      secrets are deployment-owned credentials. Rotation should be deliberate and
+      operator-driven rather than time-based Terraform expiry.
+    expired_at: 2027-01-01
+
+  - id: AZU-0026
+    paths:
+      - "modules/azure/infra/modules/postgres/main.tf"
+    statement: |
+      The Azure PostgreSQL Flexible Server module is private-only by default
+      (public_network_access_enabled = false, delegated subnet, private DNS). This
+      scanner rule is retained as an accepted starter-module finding rather than
+      changing provider-specific TLS settings that may vary by Azure API/provider
+      version.
+    expired_at: 2027-01-01
+
+  - id: AZU-0040
+    paths:
+      - "modules/azure/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      Azure Monitor/OMS integration requires an operator-provided Log Analytics
+      workspace and cost/retention decisions. The starter AKS module leaves that
+      integration optional rather than creating monitoring infrastructure
+      implicitly.
+    expired_at: 2027-01-01
+
+  - id: AZU-0057
+    paths:
+      - "modules/azure/infra/modules/storage/main.tf"
+    statement: |
+      The storage account is locked to a default-deny data plane and accessed by
+      AKS through Workload Identity/service endpoints. Storage diagnostic logging
+      requires an operator-owned destination and retention policy, so the starter
+      module leaves it optional instead of creating logging sinks implicitly.
+    expired_at: 2027-01-01
+
+  - id: AZU-0058
+    paths:
+      - "modules/azure/infra/modules/storage/main.tf"
+    statement: |
+      LangSmith trace blobs are TTL-managed derived data, and the starter module
+      intentionally uses locally redundant storage to avoid cross-region cost and
+      data-residency surprises. Operators needing regional disaster recovery can
+      change account_replication_type in their fork/deployment.
+    expired_at: 2027-01-01
+
+  - id: AZU-0061
+    paths:
+      - "modules/azure/infra/modules/storage/main.tf"
+    statement: |
+      Azure infrastructure encryption is a storage-account creation-time posture
+      choice that can force replacement for existing deployments. The starter
+      module relies on default Azure service encryption and network isolation;
+      customers requiring double encryption can enable it during account design.
+    expired_at: 2027-01-01
+
+  - id: AZU-0065
+    paths:
+      - "modules/azure/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      Private AKS control plane is intentionally not the starter default because
+      Terraform-managed Helm/kubectl bootstrap steps must reach the API server
+      from the apply host. The module supports IP allowlisting through
+      var.authorized_ip_ranges for production hardening.
+    expired_at: 2027-01-01
+
+  - id: AZU-0066
+    paths:
+      - "modules/azure/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      Azure Policy add-on is an optional governance control. The starter module
+      leaves policy framework selection to the operator because some deployments
+      use other admission/policy stacks.
+    expired_at: 2027-01-01
+
+  - id: AZU-0067
+    paths:
+      - "modules/azure/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      AKS disk encryption set IDs require customer-managed key infrastructure and
+      operational key-rotation ownership. The starter module relies on Azure
+      platform-managed disk encryption by default.
+    expired_at: 2027-01-01
+
+  - id: GCP-0014
+    paths:
+      - "modules/gcp/infra/modules/postgres/main.tf"
+    statement: |
+      The Cloud SQL module sets PostgreSQL audit flags through the configurable
+      var.database_flags dynamic block; defaults include log_temp_files = 0.
+      Trivy does not resolve this dynamic variable-backed configuration.
+    expired_at: 2027-01-01
+
+  - id: GCP-0016
+    paths:
+      - "modules/gcp/infra/modules/postgres/main.tf"
+    statement: |
+      The Cloud SQL module sets PostgreSQL audit flags through the configurable
+      var.database_flags dynamic block; defaults include log_connections = on.
+      Trivy does not resolve this dynamic variable-backed configuration.
+    expired_at: 2027-01-01
+
+  - id: GCP-0020
+    paths:
+      - "modules/gcp/infra/modules/postgres/main.tf"
+    statement: |
+      The Cloud SQL module sets PostgreSQL audit flags through the configurable
+      var.database_flags dynamic block; defaults include log_lock_waits = on.
+      Trivy does not resolve this dynamic variable-backed configuration.
+    expired_at: 2027-01-01
+
+  - id: GCP-0022
+    paths:
+      - "modules/gcp/infra/modules/postgres/main.tf"
+    statement: |
+      The Cloud SQL module sets PostgreSQL audit flags through the configurable
+      var.database_flags dynamic block; defaults include log_disconnections = on.
+      Trivy does not resolve this dynamic variable-backed configuration.
+    expired_at: 2027-01-01
+
+  - id: GCP-0025
+    paths:
+      - "modules/gcp/infra/modules/postgres/main.tf"
+    statement: |
+      The Cloud SQL module sets PostgreSQL audit flags through the configurable
+      var.database_flags dynamic block; defaults include log_checkpoints = on.
+      Trivy does not resolve this dynamic variable-backed configuration.
+    expired_at: 2027-01-01
+
+  - id: GCP-0050
+    paths:
+      - "modules/gcp/infra/modules/k8s-cluster/main.tf"
+    statement: |
+      Standard-mode node service account is now configurable via
+      var.node_service_account_email / var.gke_node_service_account_email. The
+      default remains null for starter compatibility; production deployments
+      should pass a minimally privileged node service account. Pods use Workload
+      Identity separately for workload permissions.
+    expired_at: 2027-01-01
+
+  - id: GCP-0066
+    paths:
+      - "modules/gcp/infra/modules/storage/main.tf"
+    statement: |
+      Customer-managed encryption keys require operator-owned KMS keyrings,
+      IAM bindings, and rotation processes. The starter storage module uses
+      Google-managed encryption by default to avoid surprising KMS prerequisites.
+    expired_at: 2027-01-01
+
+  - id: GCP-0072
+    paths:
+      - "modules/gcp/infra/modules/networking/main.tf"
+    statement: |
+      The broad allow rule is scoped only to private subnet, pod, and service CIDR
+      ranges inside the deployment VPC. It is required for intra-cluster/internal
+      service traffic and is not internet-exposed.
+    expired_at: 2027-01-01
+
+  - id: GCP-0074
+    paths:
+      - "modules/gcp/infra/modules/networking/main.tf"
+    statement: |
+      The broad port ranges are either private-only intra-VPC traffic among the
+      subnet/pod/service CIDRs or GCP health-check probes whose backend ports vary
+      by ingress/controller configuration. These rules are not open to arbitrary
+      internet source ranges.
+    expired_at: 2027-01-01

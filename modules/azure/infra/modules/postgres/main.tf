@@ -128,3 +128,22 @@ resource "azurerm_postgresql_flexible_server_configuration" "max_connections" {
   server_id = azurerm_postgresql_flexible_server.db.id
   value     = var.max_connections
 }
+
+# Security/audit logging recommended by Trivy and Azure PostgreSQL guidance.
+resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
+  name      = "log_connections"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
+  name      = "log_checkpoints"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "connection_throttling" {
+  name      = "connection_throttling"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  value     = "on"
+}

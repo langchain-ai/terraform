@@ -57,3 +57,9 @@ variable "allow_public_ingress" {
   type        = bool
   default     = false
 }
+
+variable "allow_delete_permissions" {
+  description = "Grant the role permissions needed to delete LangSmith-managed resources."
+  type        = bool
+  default     = false
+}

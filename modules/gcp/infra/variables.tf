@@ -163,6 +163,12 @@ variable "gke_disk_size" {
   }
 }
 
+variable "gke_node_service_account_email" {
+  description = "Service account email to run standard-mode GKE nodes. Null keeps the GKE default; production deployments should pass a minimally privileged node service account. Pods use Workload Identity separately."
+  type        = string
+  default     = null
+}
+
 variable "gke_release_channel" {
   description = "GKE release channel: RAPID, REGULAR, or STABLE"
   type        = string
@@ -265,6 +271,14 @@ variable "postgres_database_flags" {
     {
       name  = "log_disconnections"
       value = "on"
+    },
+    {
+      name  = "log_lock_waits"
+      value = "on"
+    },
+    {
+      name  = "log_temp_files"
+      value = "0"
     }
   ]
 }
