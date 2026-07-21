@@ -34,7 +34,7 @@
 images:
   smithdbImage:
     repository: "docker.io/langchain/smithdb"
-    tag: "0.1.85-385cc1a"
+    tag: "0.1.95-502fb58"
 
 smithdb:
   enabled: true
