@@ -105,6 +105,7 @@
       "ec2:RevokeSecurityGroupIngress",
       "ec2:RevokeSecurityGroupEgress",
       "ec2:CreateNetworkAclEntry",
+      "ec2:DeleteNetworkAclEntry",
       "ec2:ReplaceNetworkAclEntry",
       "ec2:ReplaceNetworkAclAssociation"
     ],
