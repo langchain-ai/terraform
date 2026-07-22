@@ -14,8 +14,7 @@
         "ec2:DeleteVpcEndpoints",
         "ec2:DeleteVpcEndpointServiceConfigurations",
         "ec2:DeleteFlowLogs",
-        "ec2:DeleteRoute",
-        "ec2:DeleteNetworkAclEntry"
+        "ec2:DeleteRoute"
       ],
       "Resource": [
         "arn:aws:ec2:*:${account_id}:vpc/*",
