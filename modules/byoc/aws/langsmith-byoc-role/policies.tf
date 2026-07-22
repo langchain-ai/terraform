@@ -33,8 +33,6 @@ locals {
   role_policies = {
     # Keep optional delete permissions packed into smaller existing policies so
     # each managed policy stays under IAM's 6,144 character policy size limit.
-    # DeleteNetworkAclEntry is always required for network ACL reconciliation,
-    # so it stays in the base VPC policy rather than the optional delete policy.
     vpc                        = local.vpc_statements
     ec2-eni                    = concat(local.ec2_eni_statements, local.delete_statements_for_policy.vpc)
     iam                        = concat(local.iam_statements, local.delete_statements_for_policy.iam)
