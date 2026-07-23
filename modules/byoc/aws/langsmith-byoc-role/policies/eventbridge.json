@@ -30,7 +30,6 @@
     "Sid": "EventBridgeManageTaggedRule",
     "Effect": "Allow",
     "Action": [
-      "events:DeleteRule",
       "events:TagResource",
       "events:UntagResource"
     ],

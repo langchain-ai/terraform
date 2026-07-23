@@ -547,7 +547,7 @@ For each secret it follows this priority order:
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
 | `langsmith-license-key` | You enter it | From your LangChain account |
-| `langsmith-admin-password` | You enter it | Must contain `!#$%()+,-./:?@[\]^_{~}` |
+| `langsmith-admin-password` | You enter it | Min 12 chars; must include a lowercase letter, an uppercase letter, and a symbol (`!#$%()+,-./:?@[\]^_{~}`) |
 | `deployments-encryption-key` | Auto-generated (Fernet key) | For Deployments/LangGraph Platform feature |
 | `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Agent Builder feature |
 | `insights-encryption-key` | Auto-generated (Fernet key) | For Insights feature |

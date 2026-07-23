@@ -159,9 +159,11 @@ resource "google_container_node_pool" "primary_nodes" {
 
   # Node configuration
   node_config {
-    machine_type = var.machine_type
-    disk_size_gb = var.disk_size_gb
-    disk_type    = "pd-ssd"
+    machine_type    = var.machine_type
+    disk_size_gb    = var.disk_size_gb
+    disk_type       = "pd-ssd"
+    image_type      = "COS_CONTAINERD"
+    service_account = var.node_service_account_email
 
     # OAuth scopes
     oauth_scopes = [
