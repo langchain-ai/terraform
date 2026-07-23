@@ -47,7 +47,7 @@ locals {
   # Equivalent to what init-values.sh writes into values-overrides.yaml.
   overrides_values = merge(
     {
-      config = {
+      config = merge({
         hostname             = local.hostname
         initialOrgAdminEmail = var.admin_email
         deployment = {
@@ -57,7 +57,36 @@ locals {
           bucketName = local.bucket_name
           apiURL     = "https://storage.googleapis.com"
         }
-      }
+        }, {
+        for k, v in {
+          sandboxes = merge(
+            {
+              enabled               = true
+              clusterName           = local.cluster_name
+              xServiceAuthJwtSecret = var.sandbox_x_service_auth_jwt_secret
+              callbackSigningJwk    = var.sandbox_callback_signing_jwk
+              juicefs = {
+                csi = {
+                  existingSecretName = var.sandbox_juicefs_csi_config_secret_name
+                  node = {
+                    serviceAccount = {
+                      annotations = local.wi_annotations
+                    }
+                  }
+                }
+              }
+              sandboxHost = {
+                deployment = {
+                  nodeSelector = {
+                    "sandbox.langsmith.com/host" = "true"
+                  }
+                }
+              }
+            },
+            var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
+          )
+        } : k => v if var.enable_sandboxes
+      })
       commonEnv = concat(
         [],
         var.enable_usage_telemetry ? [{ name = "PHONE_HOME_USAGE_REPORTING_ENABLED", value = "true" }] : [],
@@ -66,6 +95,15 @@ locals {
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
     var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
+    {
+      for k, v in {
+        images = {
+          sandboxHostImage = {
+            tag = var.sandbox_host_image_tag
+          }
+        }
+      } : k => v if var.enable_sandboxes
+    },
     # Workload Identity annotations for each component
     length(local.wi_annotations) > 0 ? { for component in local.wi_components : component => {
       serviceAccount = {
@@ -147,8 +185,28 @@ resource "terraform_data" "validate_required" {
       error_message = "clickhouse_host is required when enable_insights = true"
     }
     precondition {
-      condition     = fileexists("${local.values_path}/langsmith-values.yaml")
-      error_message = "Helm values files not found at ${local.values_path}/langsmith-values.yaml. Run: make init-values"
+      condition     = !var.enable_sandboxes || (var.chart_version != "" && can(regex("^(~>?)?v?(0\\.(1[6-9]|[2-9][0-9])\\.|[1-9][0-9]*\\.)", var.chart_version)))
+      error_message = "enable_sandboxes requires chart_version to be explicitly set to chart 0.16.0 or newer, for example \"~0.16.0\"."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
+      error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_x_service_auth_jwt_secret != ""
+      error_message = "sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_callback_signing_jwk != ""
+      error_message = "sandbox_callback_signing_jwk is required when enable_sandboxes = true."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || length(local.wi_annotations) > 0
+      error_message = "enable_sandboxes requires workload_identity_annotation so the JuiceFS CSI node service account can access GCS."
+    }
+    precondition {
+      condition     = fileexists("${local.values_path}/values.yaml")
+      error_message = "Helm values file not found at ${local.values_path}/values.yaml. Run: make init-values"
     }
   }
 }

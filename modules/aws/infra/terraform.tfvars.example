@@ -307,6 +307,52 @@ redis_instance_type = "cache.m6g.xlarge"
 #   source ./setup-env.sh
 
 #------------------------------------------------------------------------------
+# SANDBOXES
+#------------------------------------------------------------------------------
+# Enables infrastructure prerequisites for LangSmith Sandboxes.
+#
+# Sandboxes use the sandbox-host architecture in the same EKS cluster and
+# namespace as LangSmith. This provisions a dedicated node group with the label
+# and taint expected by the Helm chart:
+#   sandbox.langsmith.com/host=true
+#
+# Requirements:
+#   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
+#     On AWS, use x86_64 EC2 bare metal instance types. The default is
+#     m5d.metal, which matches the tested live configuration and configures
+#     local NVMe instance store for swap and JuiceFS cache.
+#     Other example families include m6id.metal, m7i.metal-24xl, c6i.metal,
+#     c7i.metal-24xl, r6i.metal, and i4i.metal. If you choose an instance type
+#     without the same local instance-store layout, set
+#     sandbox_host_local_nvme_bootstrap_enabled = false or provide
+#     sandbox_host_node_group_overrides.
+#   - sandbox_host_local_nvme_expected_device_count is the number of local NVMe
+#     instance-store devices the selected instance type already exposes.
+#     Terraform does not attach these devices. Device 0 is used for swap and
+#     devices 1..N are mounted as JuiceFS cache directories. The default is 4,
+#     matching m5d.metal.
+#
+# enable_sandboxes = true
+# sandbox_juicefs_redis_instance_type = "cache.m6g.large"
+# sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
+# Do not put it in this file. Export it manually with:
+#   export TF_VAR_sandbox_juicefs_redis_auth_token="$(openssl rand -hex 32)"
+# Or let setup-env.sh auto-generate one and store it in SSM:
+#   source ./setup-env.sh
+# sandbox_juicefs_redis_snapshot_retention_limit = 7
+# sandbox_host_node_count = 1
+# sandbox_host_instance_types = ["m5d.metal"]
+# sandbox_host_local_nvme_bootstrap_enabled = true
+# sandbox_host_local_nvme_expected_device_count = 4
+#
+# Required by init-values.sh when enable_sandboxes = true. Use the same release
+# tag as the other LangSmith images.
+# sandbox_host_image_tag = "0.0.0"
+# Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
+# Requires wildcard DNS and TLS for *.<host>.
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
+
+#------------------------------------------------------------------------------
 # CLICKHOUSE
 #------------------------------------------------------------------------------
 # Controls where ClickHouse runs. ClickHouse is the analytics database for

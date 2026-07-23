@@ -41,6 +41,8 @@ config:
   #   langsmith-api-key-salt      → api_key_salt
   #   langsmith-jwt-secret        → jwt_secret
   #   langsmith-admin-password    → initial_org_admin_password
+  #   sandbox-x-service-auth-jwt-secret → sandbox_x_service_auth_jwt_secret (sandboxes)
+  #   sandbox-callback-signing-jwk      → sandbox_callback_signing_jwk      (sandboxes)
   #
   # Required manually before enabling addons (see each addon file for instructions):
   #   agent-builder-encryption-key  → agent_builder_encryption_key  (agent-builder addon)

@@ -142,6 +142,62 @@ redis_high_availability = true # Standard HA tier
 redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 
 #------------------------------------------------------------------------------
+# Optional: Sandboxes
+#------------------------------------------------------------------------------
+# Enables infrastructure prerequisites for LangSmith Sandboxes.
+#
+# Sandboxes use the sandbox-host architecture in the same GKE cluster and
+# namespace as LangSmith. This creates a dedicated Standard GKE node pool with
+# nested virtualization and the label/taint expected by the Helm chart:
+#   sandbox.langsmith.com/host=true
+#
+# Requirements:
+#   - gke_use_autopilot = false. Autopilot does not support the required
+#     dedicated nested-virtualization node pool.
+#   - enable_gcp_iam_module = true so the JuiceFS CSI node service account can
+#     access the shared GCS bucket via Workload Identity.
+#   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
+#     The default is n2-standard-8, which matches the tested live
+#     configuration. Other example machine types include n2-highmem-8,
+#     n1-standard-8, c3-standard-8, and c4-standard-8. GCP nested
+#     virtualization is not available on E2, memory-optimized, AMD-powered,
+#     Arm-powered, or H4D machine types.
+#
+# When sandboxes are enabled, the module creates a restricted sandbox-host node
+# service account and assigns it only the standard GKE node/telemetry roles.
+# JuiceFS object-store access stays on the Workload Identity service account
+# used by the JuiceFS CSI node service account, not on the node identity.
+#
+# enable_sandboxes = true
+# sandbox_juicefs_redis_memory_size = 5
+# sandbox_juicefs_redis_high_availability = true
+# For SaaS-like production scale:
+# sandbox_juicefs_redis_memory_size = 20
+# sandbox_juicefs_redis_rdb_snapshot_period = "ONE_HOUR"
+# sandbox_host_node_count = 1
+# sandbox_host_min_node_count = 1
+# sandbox_host_max_node_count = 5
+# sandbox_host_machine_type = "n2-standard-8"
+# Optional: requests injected into sandbox containers that omit them. These
+# values preserve namespace request-quota accounting without imposing limits
+# on sandbox-host and its Firecracker VM child cgroups.
+# sandbox_default_container_requests = {
+#   cpu    = "100m"
+#   memory = "128Mi"
+# }
+# Optional: larger host nodes can attach local SSDs for JuiceFS cache backed
+# ephemeral storage. Some machine types only allow specific local SSD counts;
+# confirm the selected machine type supports the requested count.
+# sandbox_host_ephemeral_local_ssd_count = 7
+#
+# Required by init-values.sh when enable_sandboxes = true. Use the same release
+# tag as the other LangSmith images.
+# sandbox_host_image_tag = "0.0.0"
+# Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
+# Requires wildcard DNS and TLS for *.<host>.
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
+
+#------------------------------------------------------------------------------
 # Optional: Storage Configuration
 #------------------------------------------------------------------------------
 storage_ttl_short_days = 14    # Short-lived trace TTL (ttl_s/ prefix, default: 14 days)

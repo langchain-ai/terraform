@@ -1,7 +1,8 @@
 # GKE Cluster Module - Kubernetes Cluster Infrastructure
 
 locals {
-  node_pool_name = var.node_pool_name != "" ? var.node_pool_name : "${var.cluster_name}-nodepool"
+  node_pool_name              = var.node_pool_name != "" ? var.node_pool_name : "${var.cluster_name}-nodepool"
+  sandbox_host_node_pool_name = var.sandbox_host_node_pool_name != "" ? var.sandbox_host_node_pool_name : "${var.cluster_name}-sandbox-host"
 }
 
 #------------------------------------------------------------------------------
@@ -191,6 +192,91 @@ resource "google_container_node_pool" "primary_nodes" {
     #   value  = "langsmith"
     #   effect = "NO_SCHEDULE"
     # }
+
+    metadata = {
+      disable-legacy-endpoints = "true"
+    }
+  }
+
+  lifecycle {
+    ignore_changes = [
+      node_count,
+    ]
+  }
+
+  timeouts {
+    create = "45m"
+    update = "45m"
+    delete = "45m"
+  }
+}
+
+#------------------------------------------------------------------------------
+# Sandbox Host Node Pool (Standard Mode)
+#------------------------------------------------------------------------------
+resource "google_container_node_pool" "sandbox_host" {
+  count = var.use_autopilot || !var.enable_sandbox_host_node_pool ? 0 : 1
+
+  name       = local.sandbox_host_node_pool_name
+  project    = var.project_id
+  location   = var.region
+  cluster    = google_container_cluster.primary[0].name
+  node_count = var.sandbox_host_node_count
+
+  autoscaling {
+    min_node_count = var.sandbox_host_min_node_count
+    max_node_count = var.sandbox_host_max_node_count
+  }
+
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
+  node_config {
+    machine_type    = var.sandbox_host_machine_type
+    image_type      = "UBUNTU_CONTAINERD"
+    disk_size_gb    = var.sandbox_host_disk_size_gb
+    disk_type       = "pd-ssd"
+    service_account = var.sandbox_host_node_service_account_email
+
+    dynamic "ephemeral_storage_local_ssd_config" {
+      for_each = var.sandbox_host_ephemeral_local_ssd_count > 0 ? [var.sandbox_host_ephemeral_local_ssd_count] : []
+
+      content {
+        local_ssd_count = ephemeral_storage_local_ssd_config.value
+      }
+    }
+
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/cloud-platform"
+    ]
+
+    workload_metadata_config {
+      mode = "GKE_METADATA"
+    }
+
+    advanced_machine_features {
+      threads_per_core             = 2
+      enable_nested_virtualization = true
+    }
+
+    shielded_instance_config {
+      enable_secure_boot          = true
+      enable_integrity_monitoring = true
+    }
+
+    labels = merge(var.labels, {
+      "node-pool"                       = local.sandbox_host_node_pool_name
+      "sandbox.langsmith.com/host"      = "true"
+      "sandbox.langsmith.com/node-pool" = "host"
+    })
+
+    taint {
+      key    = "sandbox.langsmith.com/host"
+      value  = "true"
+      effect = "NO_SCHEDULE"
+    }
 
     metadata = {
       disable-legacy-endpoints = "true"

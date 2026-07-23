@@ -47,11 +47,19 @@ variable "eks_managed_node_group_defaults" {
 
 variable "eks_managed_node_groups" {
   type = map(object({
-    name           = string
-    instance_types = list(string)
-    min_size       = optional(number, 1)
-    desired_size   = optional(number, null)
-    max_size       = optional(number, 10)
+    name                         = string
+    instance_types               = list(string)
+    min_size                     = optional(number, 1)
+    desired_size                 = optional(number, null)
+    max_size                     = optional(number, 10)
+    labels                       = optional(map(string), {})
+    taints                       = optional(any, {})
+    block_device_mappings        = optional(any, {})
+    update_config                = optional(any, {})
+    cloudinit_pre_nodeadm        = optional(any, [])
+    iam_role_name                = optional(string, null)
+    iam_role_use_name_prefix     = optional(bool, null)
+    iam_role_additional_policies = optional(map(string), {})
   }))
   description = "EKS managed node groups. desired_size defaults to min_size when omitted."
   default = {

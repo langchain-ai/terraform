@@ -114,6 +114,7 @@ CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/nul
 }
 WI_ANNOTATION=$(terraform -chdir="$INFRA_DIR" output -raw workload_identity_annotation 2>/dev/null) || WI_ANNOTATION=""
 INGRESS_IP=$(terraform -chdir="$INFRA_DIR" output -raw ingress_ip 2>/dev/null) || INGRESS_IP=""
+SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
 
 echo "  storage_bucket_name           = $BUCKET_NAME"
 echo "  cluster_name                  = $CLUSTER_NAME"
@@ -163,18 +164,33 @@ echo ""
 # Prefer TF_VAR_* from setup-env.sh, then existing file values.
 _extract_yaml_value() {
   local key="$1"
-  awk -F': ' -v k="$key" '$1 ~ "^[[:space:]]*"k"$" { gsub(/"/, "", $2); gsub(/[[:space:]]+$/, "", $2); print $2; exit }' "$OUT_FILE" 2>/dev/null || true
+  awk -F': ' -v k="$key" '
+    $1 ~ "^[[:space:]]*"k"$" {
+      v = $2
+      gsub(/[[:space:]]+$/, "", v)
+      if ((substr(v, 1, 1) == "\"" && substr(v, length(v), 1) == "\"") ||
+          (substr(v, 1, 1) == "\047" && substr(v, length(v), 1) == "\047")) {
+        v = substr(v, 2, length(v) - 2)
+      }
+      print v
+      exit
+    }
+  ' "$OUT_FILE" 2>/dev/null || true
 }
 
 EXISTING_API_KEY_SALT=""
 EXISTING_JWT_SECRET=""
 EXISTING_ADMIN_PASSWORD=""
 EXISTING_LICENSE_KEY=""
+EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET=""
+EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_API_KEY_SALT=$(_extract_yaml_value "apiKeySalt")
   EXISTING_JWT_SECRET=$(_extract_yaml_value "jwtSecret")
   EXISTING_ADMIN_PASSWORD=$(_extract_yaml_value "initialOrgAdminPassword")
   EXISTING_LICENSE_KEY=$(_extract_yaml_value "langsmithLicenseKey")
+  EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET=$(_extract_yaml_value "xServiceAuthJwtSecret")
+  EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=$(_extract_yaml_value "callbackSigningJwk")
 fi
 
 API_KEY_SALT="${TF_VAR_langsmith_api_key_salt:-$EXISTING_API_KEY_SALT}"
@@ -241,6 +257,7 @@ _enable_usage_telemetry=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
+_enable_sandboxes=false
 _tfvars_drive_addons=false
 
 # Resolve encryption keys up front so the standalone copy+inject blocks below
@@ -258,6 +275,32 @@ _tfvar_is_true "enable_usage_telemetry"    && { _enable_usage_telemetry=true;   
 _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;              _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
+
+_sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+SANDBOX_X_SERVICE_AUTH_JWT_SECRET="${TF_VAR_sandbox_x_service_auth_jwt_secret:-$EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET}"
+SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
+    exit 1
+  fi
+  if [[ -z "$SANDBOX_X_SERVICE_AUTH_JWT_SECRET" ]]; then
+    echo "ERROR: TF_VAR_sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
+    echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  if [[ -z "$WI_ANNOTATION" ]]; then
+    echo "ERROR: enable_sandboxes requires Workload Identity. Set enable_gcp_iam_module = true and re-run terraform apply." >&2
+    exit 1
+  fi
+fi
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -349,7 +392,13 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
     echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
   fi
 
-elif [[ "$_first_run" == "true" ]]; then
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  else
+    echo "  ✗ Sandboxes (enable_sandboxes = false)"
+  fi
+
+elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
   # No tfvars flags set — interactive fallback on first run
   echo "  (no enable_* flags in terraform.tfvars — prompting interactively)"
   echo ""
@@ -397,6 +446,14 @@ else
   [[ -f "$VALUES_DIR/langsmith-values-fleet.yaml" ]]               && echo "  ✔ Fleet (existing file)"               || echo "  ✗ Fleet"
   [[ -f "$VALUES_DIR/langsmith-values-standalone-polly.yaml" ]]    && echo "  ✔ Standalone Polly (existing file)"    || echo "  ✗ Standalone Polly"
   [[ -f "$VALUES_DIR/langsmith-values-standalone-insights.yaml" ]] && echo "  ✔ Standalone Insights (existing file)" || echo "  ✗ Standalone Insights"
+fi
+
+if [[ "$_tfvars_drive_addons" != "true" ]]; then
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  else
+    echo "  ✗ Sandboxes (enable_sandboxes = false)"
+  fi
 fi
 
 # Insights — create file based on clickhouse_source
@@ -501,6 +558,37 @@ if [[ "$_redis_source" == "in-cluster" ]]; then
 redis:
   external:
     enabled: false"
+fi
+
+_sandbox_config_block=""
+_sandbox_top_level_block=""
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_service_url_block=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_block="
+    serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
+  _sandbox_config_block="
+  sandboxes:
+    enabled: true
+    clusterName: \"${CLUSTER_NAME}\"${_sandbox_service_url_block}
+    xServiceAuthJwtSecret: \"${SANDBOX_X_SERVICE_AUTH_JWT_SECRET}\"
+    callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
+    juicefs:
+      csi:
+        existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+        node:
+          serviceAccount:
+            annotations:
+              iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+    sandboxHost:
+      deployment:
+        nodeSelector:
+          sandbox.langsmith.com/host: \"true\""
+  _sandbox_top_level_block="
+images:
+  sandboxHostImage:
+    tag: \"${_sandbox_host_image_tag}\""
 fi
 
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
@@ -643,6 +731,7 @@ ${_addon_keys_block}
     region: "${_region}"
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
+${_sandbox_config_block}
 
 gateway:
   name: "${_gateway_name}"
@@ -652,6 +741,7 @@ ${_external_services_block}
 ${_fleet_key_block}
 ${_standalone_polly_key_block}
 ${_standalone_insights_key_block}
+${_sandbox_top_level_block}
 YAML
 
 echo "Written: $OUT_FILE"

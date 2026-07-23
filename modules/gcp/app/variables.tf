@@ -111,7 +111,7 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version. Empty string = latest. Must be explicitly set to 0.16.0 or newer when enable_sandboxes = true."
   type        = string
   default     = ""
 }
@@ -199,6 +199,44 @@ variable "enable_usage_telemetry" {
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)"
   type        = bool
   default     = false
+}
+
+variable "enable_sandboxes" {
+  description = "Enable LangSmith Sandboxes in the Helm release. Requires infra enable_sandboxes=true and the sandbox service-auth secret."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_host_image_tag" {
+  description = "sandbox-host image tag. Required when enable_sandboxes = true."
+  type        = string
+  default     = ""
+}
+
+variable "sandbox_service_url_base_url" {
+  description = "Optional base URL used to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  type        = string
+  default     = ""
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  description = "Existing Kubernetes Secret containing JuiceFS CSI config, created by the infra module when enable_sandboxes = true."
+  type        = string
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_x_service_auth_jwt_secret" {
+  description = "Sandbox service-auth JWT secret. Required when enable_sandboxes = true."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "sandbox_callback_signing_jwk" {
+  description = "Sandbox callback signing private JWK. Required when enable_sandboxes = true."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 #------------------------------------------------------------------------------

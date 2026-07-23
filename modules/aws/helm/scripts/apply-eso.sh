@@ -41,6 +41,8 @@ _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
+_enable_sandboxes=false
+_tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: Could not read name_prefix from $INFRA_DIR/terraform.tfvars" >&2
@@ -125,6 +127,15 @@ $(if _ssm_key_exists "${_ssm_prefix}/polly-encryption-key"; then cat <<PEOF
       remoteRef:
         key: ${_ssm_prefix}/polly-encryption-key
 PEOF
+fi)
+$(if [[ "$_enable_sandboxes" == "true" ]]; then cat <<SEOF
+    - secretKey: sandbox_x_service_auth_jwt_secret
+      remoteRef:
+        key: ${_ssm_prefix}/sandbox-x-service-auth-jwt-secret
+    - secretKey: sandbox_callback_signing_jwk
+      remoteRef:
+        key: ${_ssm_prefix}/sandbox-callback-signing-jwk
+SEOF
 fi)
 $(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF
     - secretKey: oauth_client_secret

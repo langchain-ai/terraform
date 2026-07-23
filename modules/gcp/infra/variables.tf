@@ -366,6 +366,145 @@ variable "redis_prevent_destroy" {
 }
 
 #------------------------------------------------------------------------------
+# Sandboxes
+#------------------------------------------------------------------------------
+variable "enable_sandboxes" {
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires Standard GKE, external Redis, Workload Identity, and sandbox-host nodes with usable Linux KVM (/dev/kvm)."
+  type        = bool
+  default     = false
+}
+
+variable "platform_backend_component_label" {
+  description = "app.kubernetes.io/component label of the chart's platform-backend pods, excluded from the langsmith-default default-deny on GKE Dataplane V2 when sandboxes are enabled so the host-networked sandbox-host can reach it. The label is '<helm-release>-platform-backend'; the default matches the standard 'langsmith' release, so override this if your Helm release name differs."
+  type        = string
+  default     = "langsmith-platform-backend"
+}
+
+variable "sandbox_host_node_count" {
+  description = "Initial number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_min_node_count" {
+  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_max_node_count" {
+  description = "Maximum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 5
+}
+
+variable "sandbox_host_machine_type" {
+  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). Defaults to n2-standard-8; other examples include n2-highmem-8, n1-standard-8, c3-standard-8, and c4-standard-8."
+  type        = string
+  default     = "n2-standard-8"
+}
+
+variable "sandbox_host_disk_size_gb" {
+  description = "Boot disk size in GB for sandbox-host nodes."
+  type        = number
+  default     = 200
+}
+
+variable "sandbox_host_ephemeral_local_ssd_count" {
+  description = "Number of local SSDs backing sandbox-host ephemeral storage, used by the JuiceFS host cache. 0 keeps ephemeral storage on the boot disk."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.sandbox_host_ephemeral_local_ssd_count >= 0 && floor(var.sandbox_host_ephemeral_local_ssd_count) == var.sandbox_host_ephemeral_local_ssd_count
+    error_message = "sandbox_host_ephemeral_local_ssd_count must be a non-negative integer."
+  }
+}
+
+variable "sandbox_default_container_requests" {
+  description = "Default CPU and memory requests injected into sandbox namespace containers that omit them. This preserves ResourceQuota request accounting without imposing default limits on sandbox-host."
+  type        = map(string)
+  default = {
+    cpu    = "100m"
+    memory = "128Mi"
+  }
+
+  validation {
+    condition = (
+      length(var.sandbox_default_container_requests) == 2 &&
+      contains(keys(var.sandbox_default_container_requests), "cpu") &&
+      contains(keys(var.sandbox_default_container_requests), "memory") &&
+      alltrue([for value in values(var.sandbox_default_container_requests) : trimspace(value) != ""])
+    )
+    error_message = "sandbox_default_container_requests must contain exactly non-empty cpu and memory values."
+  }
+}
+
+variable "sandbox_juicefs_name" {
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state."
+  type        = string
+  default     = "sandbox-juicefs"
+}
+
+variable "sandbox_juicefs_redis_memory_size" {
+  description = "Memory size in GB for the dedicated JuiceFS metadata Redis created when enable_sandboxes = true. Use 20 GB or higher for SaaS-like production scale."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_memory_size >= 1 && var.sandbox_juicefs_redis_memory_size <= 300
+    error_message = "sandbox_juicefs_redis_memory_size must be between 1 and 300 GB."
+  }
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  description = "Enable Standard HA tier for the dedicated JuiceFS metadata Redis."
+  type        = bool
+  default     = true
+}
+
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  description = "Prevent accidental Terraform destroy of the dedicated JuiceFS metadata Redis."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_juicefs_redis_rdb_snapshot_period" {
+  description = "Optional RDB snapshot period for the dedicated JuiceFS metadata Redis. Use ONE_HOUR for SaaS-like production durability; null disables RDB persistence."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null || contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
+    error_message = "sandbox_juicefs_redis_rdb_snapshot_period must be null, ONE_HOUR, SIX_HOURS, TWELVE_HOURS, or TWENTY_FOUR_HOURS."
+  }
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name containing JuiceFS CSI config. Created in the LangSmith namespace when enable_sandboxes = true."
+  type        = string
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  description = "Revision for the write-only JuiceFS CSI config Secret. Increment to intentionally rewrite the secret."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_image_tag" {
+  type        = string
+  description = "sandbox-host image tag. Required by init-values.sh when enable_sandboxes = true."
+  default     = ""
+}
+
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL used by init-values.sh to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  default     = ""
+}
+
+#------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------
 variable "storage_ttl_short_days" {
@@ -689,6 +828,20 @@ variable "langsmith_insights_encryption_key" {
 variable "langsmith_polly_encryption_key" {
   type        = string
   description = "Fernet key for Polly. Generate once — changing breaks existing Polly data. Shared by enable_polly and enable_standalone_polly."
+  sensitive   = true
+  default     = ""
+}
+
+variable "sandbox_x_service_auth_jwt_secret" {
+  type        = string
+  description = "Sandbox service-auth JWT secret. Generate once and keep stable. Used by init-values.sh and the app module when sandboxes are enabled."
+  sensitive   = true
+  default     = ""
+}
+
+variable "sandbox_callback_signing_jwk" {
+  type        = string
+  description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh and the app module when sandboxes are enabled."
   sensitive   = true
   default     = ""
 }

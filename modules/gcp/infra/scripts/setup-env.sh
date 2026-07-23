@@ -190,6 +190,51 @@ _sm_secret() {
   export "$varname"="$val"
 }
 
+_b64url_nopad() {
+  base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+_ed25519_private_jwk_gen() {
+  local _tmpdir _key _priv_der _pub_der _d _x _kid
+  _tmpdir="$(mktemp -d)" || return 1
+  _key="${_tmpdir}/ed25519.pem"
+  _priv_der="${_tmpdir}/private.der"
+  _pub_der="${_tmpdir}/public.der"
+
+  if ! openssl genpkey -algorithm ED25519 -out "$_key" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  chmod 600 "$_key"
+
+  if ! openssl pkey -in "$_key" -outform DER -out "$_priv_der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  if ! openssl pkey -in "$_key" -pubout -outform DER -out "$_pub_der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+
+  _d="$(tail -c 32 "$_priv_der" | _b64url_nopad)" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+  _x="$(tail -c 32 "$_pub_der" | _b64url_nopad)" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+  rm -rf "$_tmpdir"
+
+  if [[ -z "$_d" || -z "$_x" ]]; then
+    return 1
+  fi
+
+  _kid="sandbox-callback-$(openssl rand -hex 8)"
+  printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"%s","x":"%s","d":"%s"}\n' \
+    "$_kid" "$_x" "$_d"
+}
+
 # ── Fernet key generator ──────────────────────────────────────────────────────
 # Fernet key = 32 random bytes, URL-safe base64-encoded.
 _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
@@ -208,6 +253,12 @@ _sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
 
 _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
+
+_sm_secret "sandbox-x-service-auth-jwt-secret" "TF_VAR_sandbox_x_service_auth_jwt_secret" \
+  "openssl rand -base64 32 | tr -d '\n'" "" "true"
+
+_sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
+  "_ed25519_private_jwk_gen" "" "true"
 
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
   "" "Initial LangSmith admin password" "true"
@@ -241,6 +292,8 @@ echo "  postgres_password = (hidden — SM: ${_sm_prefix}-postgres-password)"
 echo "  license_key       = (hidden — SM: ${_sm_prefix}-langsmith-license-key)"
 echo "  api_key_salt      = (hidden — SM: ${_sm_prefix}-api-key-salt)"
 echo "  jwt_secret        = (hidden — SM: ${_sm_prefix}-jwt-secret)"
+echo "  sandbox_auth      = (hidden — SM: ${_sm_prefix}-sandbox-x-service-auth-jwt-secret)"
+echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
 echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"

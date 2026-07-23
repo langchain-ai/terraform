@@ -31,15 +31,57 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
-# Override with the CHART_VERSION env var for an exact patch if needed.
+# Pin the chart *line* by default. Sandboxes require chart 0.16+, but the script
+# does not silently move chart lines; set CHART_VERSION explicitly when enabling them.
+_chart_version_provided=false
+[[ -n "${CHART_VERSION:-}" ]] && _chart_version_provided=true
 CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+
+_chart_version_supports_sandboxes() {
+  local version
+  version="$(printf '%s' "$1" | tr -d '[:space:]')"
+  version="${version#\~>}"
+  version="${version#\~}"
+  version="${version#v}"
+
+  case "$version" in
+    0.1[6-9].*|0.[2-9][0-9].*|[1-9].*|[1-9][0-9]*.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_validate_sandbox_values_file() {
+  local values_file="$1"
+
+  if ! grep -Eq '^[[:space:]]{2}sandboxes:[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{4}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{8}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
+    echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
+    echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
+    exit 1
+  fi
+}
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+_enable_sandboxes=false
+_tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if [[ "$_chart_version_provided" != "true" ]]; then
+    echo "ERROR: enable_sandboxes = true requires CHART_VERSION to be set explicitly to chart 0.16.0 or newer." >&2
+    echo "       Example: CHART_VERSION='~0.16.0' ./helm/scripts/deploy.sh" >&2
+    exit 1
+  fi
+  if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
+    echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
+fi
 
 if [[ -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -53,6 +95,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: $ENV_FILE not found." >&2
   echo "Run: make init-values  (or: ./helm/scripts/init-values.sh)" >&2
   exit 1
+fi
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _validate_sandbox_values_file "$ENV_FILE"
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────
@@ -89,8 +135,20 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _require_env "LANGSMITH_LICENSE_KEY"
   _require_env "LANGSMITH_ADMIN_PASSWORD"
   _require_env "LANGSMITH_ADMIN_EMAIL"
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    _require_env "TF_VAR_sandbox_x_service_auth_jwt_secret"
+    _require_env "TF_VAR_sandbox_callback_signing_jwk"
+  fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+  _sandbox_secret_literals=()
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    _sandbox_secret_literals=(
+      --from-literal=sandbox_x_service_auth_jwt_secret="${TF_VAR_sandbox_x_service_auth_jwt_secret}"
+      --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
     --from-literal=langsmith_license_key="${LANGSMITH_LICENSE_KEY}" \
@@ -98,6 +156,7 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
+    "${_sandbox_secret_literals[@]}" \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
@@ -119,6 +178,7 @@ _enable_standalone_insights=false
 _enable_envoy_gateway=false
 _enable_istio_gateway=false
 _enable_nginx_ingress=false
+_enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
@@ -129,6 +189,7 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 _tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
 _tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+_tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 
 # Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB, so the
@@ -391,6 +452,13 @@ for dep in "${_core_deployments[@]}"; do
     _all_ready=false
   fi
 done
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+    _all_ready=false
+  fi
+fi
 
 if [[ "$_all_ready" == "true" ]]; then
   echo "All core deployments ready."

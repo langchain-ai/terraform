@@ -125,6 +125,26 @@ output "redis_port" {
   value       = var.redis_source == "external" ? module.redis[0].port : null
 }
 
+output "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_redis_instance_name" {
+  description = "Dedicated Memorystore Redis instance name for sandbox JuiceFS metadata"
+  value       = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].instance_name : null
+}
+
+output "sandbox_juicefs_bucket_url" {
+  description = "GCS bucket URL passed to JuiceFS for sandbox object storage"
+  value       = var.enable_sandboxes ? module.storage.bucket_url : null
+}
+
+output "sandbox_host_node_service_account_email" {
+  description = "Restricted GCP service account email assigned to sandbox-host GKE nodes"
+  value       = var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+}
+
 #------------------------------------------------------------------------------
 # ClickHouse Outputs
 #------------------------------------------------------------------------------

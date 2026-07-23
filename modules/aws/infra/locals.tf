@@ -13,15 +13,16 @@ resource "random_id" "bucket_suffix" {
 }
 
 locals {
-  base_name     = "${var.name_prefix}-${var.environment}"
-  vpc_name      = "${local.base_name}-vpc"
-  cluster_name  = "${local.base_name}-eks"
-  redis_name    = "${local.base_name}-redis"
-  bucket_name   = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
-  postgres_name = "${local.base_name}-pg"
-  alb_name      = "${local.base_name}-alb"
-  bastion_name  = "${local.base_name}-bastion"
-  firewall_name = "${local.base_name}-fw"
+  base_name                  = "${var.name_prefix}-${var.environment}"
+  vpc_name                   = "${local.base_name}-vpc"
+  cluster_name               = "${local.base_name}-eks"
+  redis_name                 = "${local.base_name}-redis"
+  sandbox_juicefs_redis_name = "${local.base_name}-jfs-redis"
+  bucket_name                = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
+  postgres_name              = "${local.base_name}-pg"
+  alb_name                   = "${local.base_name}-alb"
+  bastion_name               = "${local.base_name}-bastion"
+  firewall_name              = "${local.base_name}-fw"
 
   common_tags = merge(
     {
@@ -39,4 +40,99 @@ locals {
   private_subnets = var.create_vpc ? module.vpc[0].private_subnets : var.private_subnets
   public_subnets  = var.create_vpc ? module.vpc[0].public_subnets : var.public_subnets
   vpc_cidr_block  = var.create_vpc ? module.vpc[0].vpc_cidr_block : var.vpc_cidr_block
+
+  sandbox_host_cache_dirs = var.sandbox_host_local_nvme_bootstrap_enabled && var.sandbox_host_local_nvme_expected_device_count > 1 ? [
+    for idx in range(var.sandbox_host_local_nvme_expected_device_count - 1) : "/mnt/juicefs-cache${idx}"
+  ] : []
+
+  sandbox_host_pre_nodeadm = var.sandbox_host_local_nvme_bootstrap_enabled ? [
+    {
+      content_type = "text/x-shellscript; charset=\"us-ascii\""
+      content      = <<-EOT
+        #!/bin/bash
+        set -euo pipefail
+        expected_device_count=${var.sandbox_host_local_nvme_expected_device_count}
+        mapfile -t SSD < <(lsblk -dno NAME,MODEL | awk '/Instance Storage/{print "/dev/"$1}' | sort)
+        if [ "$${#SSD[@]}" -lt "$expected_device_count" ]; then
+          echo "sandbox-host: expected >=$expected_device_count instance-store NVMe devices, found $${#SSD[@]}" >&2
+          exit 1
+        fi
+        swapdev="$${SSD[0]}"
+        mkswap "$swapdev"
+        swapon "$swapdev"
+        echo "$swapdev none swap sw,nofail 0 0" >> /etc/fstab
+        idx=0
+        for ((device_idx = 1; device_idx < expected_device_count; device_idx++)); do
+          dev="$${SSD[$device_idx]}"
+          mnt="/mnt/juicefs-cache$idx"
+          mkfs.ext4 -F "$dev"
+          mkdir -p "$mnt"
+          mount "$dev" "$mnt"
+          echo "$dev $mnt ext4 defaults,nofail 0 2" >> /etc/fstab
+          idx=$((idx + 1))
+        done
+      EOT
+    },
+    {
+      content_type = "application/node.eks.aws"
+      content      = <<-EOT
+        apiVersion: node.eks.aws/v1alpha1
+        kind: NodeConfig
+        spec:
+          kubelet:
+            config:
+              failSwapOn: false
+              memorySwap:
+                swapBehavior: LimitedSwap
+      EOT
+    },
+  ] : []
+
+  sandbox_host_node_group = merge({
+    name                     = "node-group-sandbox-host"
+    instance_types           = var.sandbox_host_instance_types
+    min_size                 = var.sandbox_host_node_count
+    desired_size             = var.sandbox_host_node_count
+    max_size                 = var.sandbox_host_node_count
+    iam_role_name            = "${local.base_name}-sandbox-host"
+    iam_role_use_name_prefix = false
+    cloudinit_pre_nodeadm    = local.sandbox_host_pre_nodeadm
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 1
+    }
+    update_config = {
+      max_unavailable = 1
+      update_strategy = "DEFAULT"
+    }
+    labels = {
+      "sandbox.langsmith.com/host"      = "true"
+      "sandbox.langsmith.com/node-pool" = "host"
+    }
+    taints = {
+      sandbox_host = {
+        key    = "sandbox.langsmith.com/host"
+        value  = "true"
+        effect = "NO_SCHEDULE"
+      }
+    }
+    block_device_mappings = {
+      xvda = {
+        device_name = "/dev/xvda"
+        ebs = {
+          volume_size           = 200
+          volume_type           = "gp3"
+          delete_on_termination = true
+        }
+      }
+    }
+  }, var.sandbox_host_node_group_overrides)
+
+  eks_managed_node_groups = merge(
+    var.eks_managed_node_groups,
+    var.enable_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {},
+  )
+
+  sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
 }

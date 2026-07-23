@@ -1,6 +1,23 @@
 # Local .terraform directories
 **/.terraform/*
 
+# Local environment and credential files
+.env
+.env.*
+*.pem
+*.key
+*.crt
+credentials.json
+token.json
+
+# Local development caches
+node_modules/
+__pycache__/
+.venv/
+
+# OS/editor transient files
+.DS_Store
+
 # .tfstate files
 *.tfstate
 *.tfstate.*

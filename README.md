@@ -59,7 +59,7 @@ A typical first deployment takes 20–30 minutes end-to-end.
 
 This repository is released as **global tags** `vMAJOR.MINOR.PATCH`. Always deploy from a tag — never from `main`.
 
-- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.15.1`, meaning the latest `0.15.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.16`). You always get the newest patch within the line.
+- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.15.1`, meaning the latest `0.15.x`), so a deployment never silently jumps across a breaking minor. Features with a higher minimum chart line fail fast unless you explicitly set a compatible chart version.
 - **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.15.4` does not mean chart `0.15.4`.
 
 Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.15.x` are not valid):
@@ -74,7 +74,7 @@ What this means for you:
 - Pin to a tag for reproducible infrastructure; re-run the command above to move to a newer patch within the line as fixes land.
 - Moving to a new chart line (e.g. `0.16` / SmithDB) is an explicit switch to a `v0.16.*` tag (`git tag -l 'v0.16.*'`).
 - Browse all releases in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
-- Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch.
+- Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch. Some features may require setting a compatible minimum chart version explicitly.
 
 The per-release history is published in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 

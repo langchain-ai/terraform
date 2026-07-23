@@ -176,6 +176,24 @@ resource "kubernetes_secret" "tls_certificate" {
 #------------------------------------------------------------------------------
 # Resource Quotas
 #------------------------------------------------------------------------------
+locals {
+  langsmith_resource_quota_requests = {
+    "requests.cpu"    = "50"
+    "requests.memory" = "120Gi"
+    "pods"            = "100"
+  }
+
+  langsmith_resource_quota_limits = {
+    "limits.cpu"    = "100"
+    "limits.memory" = "200Gi"
+  }
+
+  langsmith_resource_quota_hard = merge(
+    local.langsmith_resource_quota_requests,
+    var.resource_quota_include_limits ? local.langsmith_resource_quota_limits : {},
+  )
+}
+
 resource "kubernetes_resource_quota" "langsmith" {
   metadata {
     name      = "langsmith-quota"
@@ -183,12 +201,26 @@ resource "kubernetes_resource_quota" "langsmith" {
   }
 
   spec {
-    hard = {
-      "requests.cpu"    = "50"
-      "requests.memory" = "120Gi"
-      "limits.cpu"      = "100"
-      "limits.memory"   = "200Gi"
-      "pods"            = "100"
+    hard = local.langsmith_resource_quota_hard
+  }
+}
+
+# ResourceQuota request tracking requires every admitted container to declare
+# requests. Supply conservative defaults for third-party sandbox containers that
+# omit them, but deliberately do not inject limits: sandbox-host creates per-VM
+# child cgroups beneath its pod cgroup and needs access to dedicated node capacity.
+resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
+  count = length(var.default_container_requests) > 0 ? 1 : 0
+
+  metadata {
+    name      = "langsmith-default-requests"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type            = "Container"
+      default_request = var.default_container_requests
     }
   }
 }
@@ -196,6 +228,14 @@ resource "kubernetes_resource_quota" "langsmith" {
 #------------------------------------------------------------------------------
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
+# Default-deny-style ingress: only the langsmith and envoy-gateway namespaces may
+# reach LangSmith pods. Always created. When default_deny_excluded_component is set
+# (GKE Dataplane V2 + sandboxes), that one component (platform-backend) is excluded
+# from the selector so the host-networked, node-sourced sandbox-host can reach it —
+# a standard NetworkPolicy can't authorize node traffic on Cilium (an ipBlock does
+# not match it and the CiliumNetworkPolicy CRD is not exposed). Every other pod
+# keeps the default-deny. CALICO instead keeps the full default-deny and admits the
+# node subnet via kubernetes_network_policy.sandbox_host_ingress.
 resource "kubernetes_network_policy" "langsmith_default" {
   metadata {
     name      = "langsmith-default"
@@ -203,7 +243,16 @@ resource "kubernetes_network_policy" "langsmith_default" {
   }
 
   spec {
-    pod_selector {}
+    pod_selector {
+      dynamic "match_expressions" {
+        for_each = var.default_deny_excluded_component != "" ? [1] : []
+        content {
+          key      = "app.kubernetes.io/component"
+          operator = "NotIn"
+          values   = [var.default_deny_excluded_component]
+        }
+      }
+    }
 
     ingress {
       from {
@@ -223,6 +272,38 @@ resource "kubernetes_network_policy" "langsmith_default" {
     }
 
     egress {}
+
+    policy_types = ["Ingress"]
+  }
+}
+
+# CALICO only: admit the node subnet so the host-networked sandbox-host (source =
+# node IP) can reach platform-backend (default-blueprint-ensure,
+# host-observations/report). Calico's ipBlock matches node IPs. On Dataplane V2 an
+# ipBlock does NOT match node-sourced traffic, so there the root leaves
+# sandbox_host_ingress_cidrs empty and scopes langsmith-default to exclude
+# platform-backend instead. Created only when the list is non-empty (CALICO + sandboxes).
+resource "kubernetes_network_policy" "sandbox_host_ingress" {
+  count = length(var.sandbox_host_ingress_cidrs) > 0 ? 1 : 0
+
+  metadata {
+    name      = "langsmith-allow-sandbox-host"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    ingress {
+      dynamic "from" {
+        for_each = var.sandbox_host_ingress_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+    }
 
     policy_types = ["Ingress"]
   }

@@ -106,6 +106,20 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   }
 }
 
+# Let the private service access peering settle before any
+# PRIVATE_SERVICE_ACCESS consumer (Cloud SQL, main Redis, and the dedicated
+# sandbox JuiceFS Redis) is created. Creating multiple Memorystore instances in
+# parallel against a freshly-created peering can race it and fail with
+# "Invalid project resource name". Consumers wait on this through their
+# module-level depends_on = [module.networking].
+resource "time_sleep" "wait_for_private_service_connection" {
+  count = var.enable_private_service_connection ? 1 : 0
+
+  create_duration = "60s"
+
+  depends_on = [google_service_networking_connection.private_vpc_connection]
+}
+
 #------------------------------------------------------------------------------
 # Firewall Rules
 #------------------------------------------------------------------------------
