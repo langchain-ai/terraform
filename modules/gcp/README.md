@@ -214,9 +214,10 @@ source is the node IP. How it is authorized to reach in-namespace services
 2) `DATA_PLANE_V2` (Cilium, the default) - a standard NetworkPolicy cannot
    authorize node-sourced traffic (an `ipBlock` does not match it and the
    `CiliumNetworkPolicy` CRD is not exposed), so when `enable_sandboxes = true` the
-   module does not create the `langsmith-default` policy. Trade-off: the namespace
-   loses cross-namespace ingress isolation in that combination. Choose `CALICO` if
-   you need to retain the default-deny alongside sandboxes.
+   module keeps `langsmith-default` but excludes the `platform-backend` component
+   (`app.kubernetes.io/component` NotIn) - that one JWT-authed service stays
+   reachable while every other pod keeps the default-deny. Set
+   `platform_backend_component_label` if your Helm release is not named `langsmith`.
 
 ### Terraform state backend (recommended for production)
 

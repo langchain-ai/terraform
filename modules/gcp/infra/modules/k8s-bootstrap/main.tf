@@ -229,22 +229,30 @@ resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
 # Default-deny-style ingress: only the langsmith and envoy-gateway namespaces may
-# reach LangSmith pods. Skipped when create_default_network_policy = false — on
-# GKE Dataplane V2 the host-networked sandbox-host is node-sourced and cannot be
-# authorized by a standard NetworkPolicy (an ipBlock does not match node traffic
-# and the CiliumNetworkPolicy CRD is not exposed), so the root drops this
-# default-deny for the sandbox case. CALICO keeps it and admits the node subnet
-# via kubernetes_network_policy.sandbox_host_ingress instead.
+# reach LangSmith pods. Always created. When default_deny_excluded_component is set
+# (GKE Dataplane V2 + sandboxes), that one component (platform-backend) is excluded
+# from the selector so the host-networked, node-sourced sandbox-host can reach it —
+# a standard NetworkPolicy can't authorize node traffic on Cilium (an ipBlock does
+# not match it and the CiliumNetworkPolicy CRD is not exposed). Every other pod
+# keeps the default-deny. CALICO instead keeps the full default-deny and admits the
+# node subnet via kubernetes_network_policy.sandbox_host_ingress.
 resource "kubernetes_network_policy" "langsmith_default" {
-  count = var.create_default_network_policy ? 1 : 0
-
   metadata {
     name      = "langsmith-default"
     namespace = kubernetes_namespace.langsmith.metadata[0].name
   }
 
   spec {
-    pod_selector {}
+    pod_selector {
+      dynamic "match_expressions" {
+        for_each = var.default_deny_excluded_component != "" ? [1] : []
+        content {
+          key      = "app.kubernetes.io/component"
+          operator = "NotIn"
+          values   = [var.default_deny_excluded_component]
+        }
+      }
+    }
 
     ingress {
       from {
@@ -273,8 +281,8 @@ resource "kubernetes_network_policy" "langsmith_default" {
 # node IP) can reach platform-backend (default-blueprint-ensure,
 # host-observations/report). Calico's ipBlock matches node IPs. On Dataplane V2 an
 # ipBlock does NOT match node-sourced traffic, so there the root leaves
-# sandbox_host_ingress_cidrs empty and drops the langsmith-default default-deny
-# instead. Created only when the list is non-empty (CALICO + sandboxes).
+# sandbox_host_ingress_cidrs empty and scopes langsmith-default to exclude
+# platform-backend instead. Created only when the list is non-empty (CALICO + sandboxes).
 resource "kubernetes_network_policy" "sandbox_host_ingress" {
   count = length(var.sandbox_host_ingress_cidrs) > 0 ? 1 : 0
 

@@ -51,15 +51,15 @@ variable "default_container_requests" {
 }
 
 variable "sandbox_host_ingress_cidrs" {
-  description = "Node-network CIDRs admitted to LangSmith pods for the host-networked sandbox-host. Effective only on CALICO, where an ipBlock matches node IPs. On GKE Dataplane V2 an ipBlock does not match node-sourced traffic, so the root leaves this empty and disables the default-deny (create_default_network_policy) instead. Empty disables the policy."
+  description = "Node-network CIDRs admitted to LangSmith pods for the host-networked sandbox-host. Used on CALICO, where an ipBlock matches node IPs. On GKE Dataplane V2 an ipBlock does not match node-sourced traffic, so the root leaves this empty and scopes the default-deny (default_deny_excluded_component) instead. Empty disables the policy."
   type        = list(string)
   default     = []
 }
 
-variable "create_default_network_policy" {
-  description = "Create the langsmith-default default-deny ingress NetworkPolicy. The root sets this false on GKE Dataplane V2 when sandboxes are enabled: the host-networked sandbox-host is node-sourced and cannot be authorized by a standard NetworkPolicy there, so the default-deny must be dropped for the sandbox control plane to reach platform-backend. Trade-off: that combination loses cross-namespace ingress isolation for the namespace."
-  type        = bool
-  default     = true
+variable "default_deny_excluded_component" {
+  description = "app.kubernetes.io/component label value to EXCLUDE from the langsmith-default default-deny ingress policy, leaving that one pod reachable while every other pod stays denied. Used on GKE Dataplane V2 to let the host-networked sandbox-host reach platform-backend without dropping namespace isolation (an ipBlock cannot match node-sourced traffic on Cilium). Empty selects all pods (full default-deny)."
+  type        = string
+  default     = ""
 }
 
 #------------------------------------------------------------------------------

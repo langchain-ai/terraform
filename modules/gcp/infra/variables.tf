@@ -374,6 +374,12 @@ variable "enable_sandboxes" {
   default     = false
 }
 
+variable "platform_backend_component_label" {
+  description = "app.kubernetes.io/component label of the chart's platform-backend pods, excluded from the langsmith-default default-deny on GKE Dataplane V2 when sandboxes are enabled so the host-networked sandbox-host can reach it. The label is '<helm-release>-platform-backend'; the default matches the standard 'langsmith' release, so override this if your Helm release name differs."
+  type        = string
+  default     = "langsmith-platform-backend"
+}
+
 variable "sandbox_host_node_count" {
   description = "Initial number of sandbox-host nodes per zone when enable_sandboxes = true."
   type        = number
