@@ -1,0 +1,24 @@
+modules/azure/app/locals.tf
+  s_5f29d643b10fe8::t_31357d62d4cac2 183-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "6e0a4114a0866c399915325b63a17bec3082df9d",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_5f29d643b10fe8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "50833ef2-057e-4735-ab3b-dfdb6da48fb7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
