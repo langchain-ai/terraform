@@ -180,5 +180,11 @@ locals {
     local.ingress_values,
     local.postgres_values,
     local.redis_values,
+    # Chart 0.15.x defaults insights/polly ON. Make the enable_* flags authoritative:
+    # when false, disable them so the chart skips the standalone components and stops
+    # referencing their encryption keys in langsmith-config-secret. The insights/polly
+    # overlay files set enabled = true when the flags are on, keeping this consistent.
+    { insights = { enabled = var.enable_insights } },
+    { polly = { enabled = var.enable_polly } },
   )
 }
