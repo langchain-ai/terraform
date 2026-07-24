@@ -1,0 +1,26 @@
+modules/azure/.gitignore
+  s_5f29d643b10fe8::t_a42500f783ecb5 29-32
+modules/azure/helm/values/langsmith-values-sizing-dev.yaml
+  s_5f29d643b10fe8::t_f276aa2ae46c2e 1-188
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "da4023dab835caa9adbef82c007c3844430e3ef9",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_5f29d643b10fe8": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "50833ef2-057e-4735-ab3b-dfdb6da48fb7",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
