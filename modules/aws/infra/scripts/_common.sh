@@ -10,6 +10,7 @@
 #
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
+#   _quickstart_gateway_default — Resolve fresh/update gateway menu default
 #   _resolve_infra_dir        — Set INFRA_DIR relative to this script
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
@@ -47,6 +48,28 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Return the gateway menu choice for quickstart.
+# Fresh configurations recommend Envoy (1). Updates preserve the existing
+# controller; ALB is represented by all three controller flags being false (2).
+_quickstart_gateway_default() {
+  local update_mode="$1"
+  local envoy_enabled="$2"
+  local istio_enabled="$3"
+  local nginx_enabled="$4"
+
+  if [[ "$update_mode" != "true" ]]; then
+    echo "1"
+  elif [[ "$envoy_enabled" == "true" ]]; then
+    echo "1"
+  elif [[ "$nginx_enabled" == "true" ]]; then
+    echo "3"
+  elif [[ "$istio_enabled" == "true" ]]; then
+    echo "4"
+  else
+    echo "2"
+  fi
 }
 
 # ── AWS credential helpers ───────────────────────────────────────────────────

@@ -359,9 +359,9 @@ For "bring your own infra" — skip `make init-app` and set all variables manual
 
 ---
 
-## Envoy Gateway — Alternative Ingress (Gateway API)
+## Envoy Gateway (Gateway API)
 
-By default, LangSmith uses the AWS Load Balancer Controller (ALB) for ingress. Set `enable_envoy_gateway = true` in `terraform.tfvars` to install Envoy Gateway instead.
+Envoy Gateway is the default ingress mode, both in Terraform (`enable_envoy_gateway` defaults to `true`) and in `make quickstart` for new deployments. When rerun, quickstart keeps your existing ingress selection. Set `enable_envoy_gateway = false` to fall back to a standard ALB-backed Kubernetes Ingress.
 
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.

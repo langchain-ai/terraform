@@ -482,13 +482,13 @@ langsmith_namespace = "langsmith"
 #------------------------------------------------------------------------------
 # Three mutually exclusive options (only one should be true at a time):
 #
-#   ALB only (default)
+#   ALB only
 #     enable_envoy_gateway = false
 #     enable_istio_gateway = false
 #     → Chart creates a standard Kubernetes Ingress; the AWS LB Controller
 #       provisions an Application Load Balancer.
 #
-#   Envoy Gateway
+#   Envoy Gateway (default)
 #     enable_envoy_gateway = true
 #     enable_istio_gateway = false
 #     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
@@ -501,7 +501,7 @@ langsmith_namespace = "langsmith"
 #       Gateway resource already installed in the cluster.
 #       Also opens port 15017 on the node SG for the istiod webhook.
 #
-enable_envoy_gateway = false
+enable_envoy_gateway = true
 enable_istio_gateway = false
 
 #------------------------------------------------------------------------------

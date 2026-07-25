@@ -621,8 +621,8 @@ variable "enable_usage_telemetry" {
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."
-  default     = false
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. Default ingress mode; set to false (with ALB left as the fallback) to use a standard Kubernetes Ingress instead."
+  default     = true
 }
 
 variable "enable_istio_gateway" {

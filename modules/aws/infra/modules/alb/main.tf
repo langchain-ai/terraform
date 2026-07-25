@@ -20,10 +20,11 @@ data "aws_elb_service_account" "current" {}
 
 locals {
   gateway_enabled = var.enable_envoy_gateway || var.enable_istio_gateway || var.enable_nginx_ingress
-  # Envoy Gateway v1.0+: pods listen on port 8080 (matches the Gateway listener port; no offset).
+  # Envoy Gateway: pods listen on port 10080 (Gateway listener port 80 + 10000 offset,
+  # Envoy runs non-root and can't bind to privileged ports below 1024).
   # Istio ingress gateway: listens directly on port 80 (envoy with NET_BIND_SERVICE).
   # NGINX ingress controller: listens on port 80.
-  gateway_target_port = var.enable_envoy_gateway ? 8080 : 80
+  gateway_target_port = var.enable_envoy_gateway ? 10080 : 80
 }
 
 # ── Access Logs S3 Bucket ──────────────────────────────────────────────────────
