@@ -209,7 +209,7 @@ environment = "prod"
 region = "us-west-2"
 
 # EKS
-eks_cluster_version = "1.31"
+eks_cluster_version = "1.34"
 eks_managed_node_groups = {
   default = {
     name           = "node-group-default"
@@ -941,7 +941,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `vpc_cidr_block` | `null` | when !create_vpc | Existing VPC CIDR block |
 | `enable_public_eks_cluster` | `true` | no | Enable public EKS API endpoint |
 | `eks_public_access_cidrs` | `["0.0.0.0/0"]` | no | CIDRs allowed to reach the public EKS API endpoint |
-| `eks_cluster_version` | `1.31` | no | EKS Kubernetes version |
+| `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
 | `create_gp3_storage_class` | `true` | no | Create and set gp3 as default StorageClass |

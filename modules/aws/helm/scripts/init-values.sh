@@ -159,6 +159,10 @@ elif [[ -n "$ALB_DNS_NAME" ]]; then
 else
   HOSTNAME=""
 fi
+# Strip any scheme — it's re-added below via ${_protocol}, and reusing an
+# already-generated hostname verbatim (which includes one) would double it.
+HOSTNAME="${HOSTNAME#http://}"
+HOSTNAME="${HOSTNAME#https://}"
 
 # ── Admin email ───────────────────────────────────────────────────────────────
 EXISTING_EMAIL=""
