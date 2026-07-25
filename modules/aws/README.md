@@ -363,6 +363,8 @@ For "bring your own infra" — skip `make init-app` and set all variables manual
 
 Envoy Gateway is the default ingress mode, both in Terraform (`enable_envoy_gateway` defaults to `true`) and in `make quickstart` for new deployments. When rerun, quickstart keeps your existing ingress selection. Set `enable_envoy_gateway = false` to fall back to a standard ALB-backed Kubernetes Ingress.
 
+> **Upgrading an existing deployment?** If your `terraform.tfvars` doesn't set `enable_envoy_gateway`, your next `terraform apply` will switch you from ALB Ingress to Envoy Gateway. Set `enable_envoy_gateway = false` explicitly first if you want to stay on ALB. Always review `terraform plan` before applying.
+
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
 2. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
