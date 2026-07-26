@@ -410,7 +410,7 @@ _gw_default=$(_quickstart_gateway_default \
 _ask_choice --default "$_gw_default" "Ingress / Gateway mode:" \
   "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support (recommended for new configurations)" \
   "ALB (Application Load Balancer) — standard, TLS via ACM or Let's Encrypt HTTP-01" \
-  "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding" \
+  "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding (legacy, not recommended)" \
   "Istio Gateway — VirtualServices, split dataplane, TLS via Let's Encrypt DNS-01"
 
 GATEWAY_MODE="envoy"
