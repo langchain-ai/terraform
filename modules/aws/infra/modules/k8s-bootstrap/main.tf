@@ -451,6 +451,11 @@ resource "helm_release" "envoy_gateway" {
 # (which normally creates it) runs with a short TTL and may not re-run on
 # subsequent applies. Without a GatewayClass, the Gateway stays in "Waiting
 # for controller" state indefinitely.
+#
+# Istio and NGINX keep their proxy Service internal with a one-line Helm value.
+# Envoy cannot: its Service is created per Gateway at runtime, so the override
+# must be an EnvoyProxy on the GatewayClass. Without it the Service defaults to
+# LoadBalancer and AWS provisions an NLB that never receives traffic.
 resource "terraform_data" "envoy_gateway_resource" {
   count = var.enable_envoy_gateway ? 1 : 0
 
@@ -470,12 +475,29 @@ resource "terraform_data" "envoy_gateway_resource" {
       ${local._ctx_check}
       kubectl create namespace ${var.namespace} --dry-run=client -o yaml | kubectl apply -f -
       cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: langsmith-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: eg
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: langsmith-proxy
+    namespace: envoy-gateway-system
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
