@@ -456,7 +456,7 @@ infra/scripts/_common.sh: No such file or directory
 | `helm/scripts/preflight-check.sh` | Checks required tools, cluster connectivity, helm repo |
 | `helm/scripts/preflight-check.sh` | TLS check, NGINX DNS label annotation |
 | `helm/scripts/uninstall.sh` | Uninstalls Helm release, prompts for namespace deletion |
-| `infra/scripts/status.sh` | 9-section health check for the full deployment |
+| `infra/scripts/status.sh` | 10-section health check for the full deployment |
 | `infra/scripts/tf-run.sh` | Wrapper for `terraform init/plan/apply/destroy` |
 
 ---
@@ -853,7 +853,7 @@ make deploy
 
 **Symptom:** `langsmith-listener` pods repeatedly crash. `kubectl describe pod` shows `Reason: OOMKilled` / `Exit Code: 137`. Cluster memory looks fine overall.
 
-**Cause:** The `langsmith-values-sizing-dev.yaml` sets `listener.deployment.resources.limits.memory: 512Mi`. When Deployments (Pass 3) are enabled, the listener is heavier and exceeds this limit.
+**Cause:** The `langsmith-values-sizing-dev.yaml` sets `listener.deployment.resources.limits.memory: 2Gi`. When Deployments (Pass 3) are enabled, the listener is heavier and exceeds this limit.
 
 **Fix:** The `langsmith-values-agent-deploys.yaml` overlay (loaded after the sizing file) correctly sets `listener.deployment.resources.limits.memory: 4Gi`. Verify both files are in your values chain:
 

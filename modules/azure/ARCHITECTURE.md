@@ -53,9 +53,9 @@ Adds 3 pods to the Pass 2 topology:
 
 Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 deploy:
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
-- 1 StatefulSet: clickhouse (large node pool, 500Gi PVC)
+- 1 StatefulSet: clickhouse (large node pool)
 - 3 completed Jobs: backend-migrations, backend-ch-migrations, backend-auth-bootstrap
-- External: Azure DB for PostgreSQL (subnet-postgres), Azure Cache for Redis Premium (subnet-redis)
+- External: Azure DB for PostgreSQL (subnet-postgres), Azure Managed Redis (subnet-redis)
 - WI pods (4): backend, platform-backend, queue, ingest-queue
 
 ### Light Deploy (All In-Cluster)
@@ -126,7 +126,7 @@ AKS Cluster
 
 Azure Managed Services
 ├── Azure DB for PostgreSQL Flexible Server (private VNet)
-├── Azure Cache for Redis Premium (private VNet)
+├── Azure Managed Redis (private VNet)
 ├── Azure Blob Storage (Workload Identity — no static keys)
 └── Azure Key Vault
 ```
@@ -149,7 +149,7 @@ langsmith-vnet<identifier>
 langsmith-vnet<identifier>
 ├── subnet-0              (AKS nodes)
 ├── subnet-postgres       (Azure DB for PostgreSQL Flexible Server)
-└── subnet-redis          (Azure Cache for Redis Premium)
+└── subnet-redis          (Azure Managed Redis)
 ```
 
 All subnets are private. Postgres and Redis are accessible only from within the VNet via private DNS resolution. No public endpoints.
@@ -211,7 +211,7 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 | default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
 | large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
 
-> ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
+> ClickHouse (when in-cluster) requests 1–4 vCPU and 2–16 GiB RAM depending on sizing profile (see [SIZING.md](helm/values/examples/SIZING.md)). If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 
 ---
 
