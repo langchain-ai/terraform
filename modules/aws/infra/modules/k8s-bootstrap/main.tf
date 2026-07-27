@@ -539,6 +539,7 @@ MANIFEST
       fi
       kubectl delete gateway langsmith-gateway -n ${self.input.namespace} --ignore-not-found=true --wait=true --timeout=180s 2>/dev/null || true
       kubectl delete gatewayclass eg --ignore-not-found=true 2>/dev/null || true
+      kubectl delete envoyproxy langsmith-proxy -n envoy-gateway-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
 
