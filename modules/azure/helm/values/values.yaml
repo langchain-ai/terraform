@@ -1,0 +1,38 @@
+# Azure base Helm values for LangSmith.
+#
+# Applied on every deploy, by BOTH deploy paths:
+#   - helm/scripts/deploy.sh   (shell path)  loads this as the base values file
+#   - app/main.tf              (Terraform)   loads this as the base values file
+#
+# Holds the Azure-native defaults that do NOT vary per deployment: NGINX ingress,
+# the Azure Blob Storage engine, and auth/secret conventions. Everything that
+# varies per environment is layered on top:
+#   Hostname, admin email, storage account/container, Workload Identity client ID,
+#     ingress class + TLS  → values-overrides.yaml (shell) or app/locals.tf (Terraform)
+#   External Postgres/Redis secret references          → same overrides layer
+#   Feature addon config (agent-deploys, insights)     → addon overlay files
+#   Resource sizing                                    → langsmith-values-sizing-*.yaml
+#
+# Do NOT put secrets here. Secrets live in langsmith-config-secret (Key Vault →
+# Terraform or create-k8s-secrets.sh) and are referenced via config.existingSecretName.
+
+ingress:
+  enabled: true
+  # Default class. Overridden per ingress_controller in the overrides layer
+  # (istio, azure-application-gateway, or disabled for envoy-gateway/istio-addon).
+  ingressClassName: nginx
+
+istioGateway:
+  enabled: false
+
+config:
+  authType: "mixed"
+  # Tells the chart to read every LangSmith secret (license, jwt, salt, admin
+  # password, encryption keys) from this one K8s secret.
+  existingSecretName: "langsmith-config-secret"
+  basicAuth:
+    enabled: true
+  blobStorage:
+    enabled: true
+    engine: "Azure"
+    # azureStorageAccountName + azureStorageContainerName are set in the overrides layer.
