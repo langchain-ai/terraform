@@ -1,0 +1,29 @@
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_395d8bafcd6588::t_24583b162ef47b 232-238,246-255
+  s_395d8bafcd6588::t_b82809851b52c6 284-285
+modules/gcp/infra/main.tf
+  s_395d8bafcd6588::t_e4d3605e76cd1a 514,517,521-522
+  s_395d8bafcd6588::t_62fbff2d8533e7 523
+modules/gcp/infra/variables.tf
+  s_395d8bafcd6588::t_4b7435c074db0a 377-382
+modules/gcp/infra/modules/k8s-bootstrap/variables.tf
+  s_395d8bafcd6588::t_14ad1407b980c1 54,59-62
+modules/gcp/README.md
+  s_395d8bafcd6588::t_86291bef85f241 217-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "42e081fc9c985f99a09b4dfadc4ba4c812afb993",
+  "prompts": {},
+  "sessions": {
+    "s_395d8bafcd6588": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a90b1619-33b3-49f8-bc23-6344dcc00d63",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": null
+    }
+  }
+}

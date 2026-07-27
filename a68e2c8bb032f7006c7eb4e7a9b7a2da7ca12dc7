@@ -1,0 +1,29 @@
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_395d8bafcd6588::t_e3160041517a65 231-237,239-240
+  s_395d8bafcd6588::t_5db13a4c769edf 272-277
+  s_395d8bafcd6588::t_e6f47b56045c6b 278-303
+modules/gcp/README.md
+  s_395d8bafcd6588::t_05f2d23dec3300 208-220
+modules/gcp/infra/main.tf
+  s_395d8bafcd6588::t_70cdaf55b2bc5d 511-520
+  s_395d8bafcd6588::t_ea523517c9cffe 521
+modules/gcp/infra/modules/k8s-bootstrap/variables.tf
+  s_395d8bafcd6588::t_8df462405aebc0 54,57-62
+  s_395d8bafcd6588::t_56f2fb5a6306db 53,55-56,63-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "a68e2c8bb032f7006c7eb4e7a9b7a2da7ca12dc7",
+  "prompts": {},
+  "sessions": {
+    "s_395d8bafcd6588": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a90b1619-33b3-49f8-bc23-6344dcc00d63",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

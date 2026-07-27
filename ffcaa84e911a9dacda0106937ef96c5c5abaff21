@@ -1,0 +1,107 @@
+modules/aws/app/scripts/pull-infra-outputs.sh
+  s_7c7e7b65c9fe30::t_5c955b542060aa 100-106
+  s_7c7e7b65c9fe30::t_54207df196f731 58-65
+modules/aws/helm/values/examples/langsmith-values-smithdb.yaml
+  s_7c7e7b65c9fe30::t_21d697506a6526 1-19,44-63,71-203
+  s_7c7e7b65c9fe30::t_42671650ab1ce6 20-43
+  s_7c7e7b65c9fe30::t_46eec3b81e5df5 70
+  s_7c7e7b65c9fe30::t_9b2735cb84548c 64-69
+modules/aws/infra/modules/eks/main.tf
+  s_7c7e7b65c9fe30::t_b5e20099a24a60 101-115
+  s_7c7e7b65c9fe30::t_ff9867e66e310e 73-82,86-88
+  s_7c7e7b65c9fe30::t_b45f02b2f900c9 83-85
+  s_7c7e7b65c9fe30::t_2b3c983524012b 89
+modules/aws/infra/modules/smithdb/s3.tf
+  s_7c7e7b65c9fe30::t_34fe43ccfc51af 1-64
+modules/aws/infra/modules/smithdb/rds.tf
+  s_7c7e7b65c9fe30::t_2cc64f6abda2a5 1-75
+modules/aws/infra/main.tf
+  s_7c7e7b65c9fe30::t_a43537110c6da0 168-171
+  s_7c7e7b65c9fe30::t_9e241854bdcbfd 965
+  s_7c7e7b65c9fe30::t_3967919efc40bf 895-896,898-904,907-910
+  s_7c7e7b65c9fe30::t_25697375403b92 37-51
+  s_7c7e7b65c9fe30::t_8cffd34332f6f5 912
+  s_7c7e7b65c9fe30::t_195f718e84dd48 143-154
+  s_7c7e7b65c9fe30::t_d7e5b3dfea85a5 201-202
+  s_7c7e7b65c9fe30::t_039e654860d029 930
+  s_7c7e7b65c9fe30::t_5eaede4b107ed0 782-879
+  s_7c7e7b65c9fe30::t_7a11fada505fb1 880-894,897,905-906,911,913-929,931-964,966-1071
+modules/aws/app/locals.tf
+  s_7c7e7b65c9fe30::t_19cb0c5cd06a66 62-65
+  s_7c7e7b65c9fe30::t_6782264dd3aae9 137-144
+  s_7c7e7b65c9fe30::t_5859c89df9dabc 29-30
+modules/aws/infra/modules/eks/outputs.tf
+  s_7c7e7b65c9fe30::t_243e6bf6ff3d67 44-53
+modules/aws/infra/variables.tf
+  s_7c7e7b65c9fe30::t_c0520c4f06a941 856-857
+  s_7c7e7b65c9fe30::t_067bbfb5d2c6a5 849-855,860-863,866-874,877,879-880,883-886,889,891-892,895-922
+  s_7c7e7b65c9fe30::t_1f08ef0541c419 705-725,732-848,858-859,864-865,875-876,878,881-882,887-888,890,893-894,923-944
+  s_7c7e7b65c9fe30::t_a793844381dfd6 726-731
+modules/aws/infra/modules/smithdb/irsa.tf
+  s_7c7e7b65c9fe30::t_8475d248d4dded 1-70
+modules/aws/infra/modules/smithdb/outputs.tf
+  s_7c7e7b65c9fe30::t_b9fe67edd8d5cf 1-40
+modules/aws/infra/modules/smithdb/main.tf
+  s_7c7e7b65c9fe30::t_35bdad6cd5bb82 10-20
+  s_7c7e7b65c9fe30::t_7141d90a6df808 1-9,21-38
+modules/aws/infra/outputs.tf
+  s_7c7e7b65c9fe30::t_27da6138132b70 316
+  s_7c7e7b65c9fe30::t_e18d1dfd643fab 139-171
+  s_7c7e7b65c9fe30::t_92a8330c4fc660 172-176
+  s_7c7e7b65c9fe30::t_d4daa324112c2e 301-315,325,369,389
+modules/aws/helm/scripts/deploy.sh
+  s_7c7e7b65c9fe30::t_2ef8992f6cc858 34-38
+  s_7c7e7b65c9fe30::t_20d92a6b6fdd34 259-272
+  s_7c7e7b65c9fe30::t_65b01f9938a604 124,135-144
+  s_7c7e7b65c9fe30::t_68f8652c769299 413-422
+modules/aws/app/variables.tf
+  s_7c7e7b65c9fe30::t_d7ba717d355f19 87-131
+modules/aws/infra/modules/smithdb/variables.tf
+  s_7c7e7b65c9fe30::t_dd4f1d7ab6f997 1-197
+modules/aws/infra/modules/eks/variables.tf
+  s_7c7e7b65c9fe30::t_485edcfa7dd223 75-76
+  s_7c7e7b65c9fe30::t_c6c00fdc1b8f2c 65-72
+  s_7c7e7b65c9fe30::t_9140016d261242 73-74
+modules/aws/helm/scripts/init-values.sh
+  s_7c7e7b65c9fe30::t_59f342904cbc8b 739-812
+  s_7c7e7b65c9fe30::t_09c3f5de05fc7b 64-68
+modules/aws/app/main.tf
+  s_7c7e7b65c9fe30::t_80cfc4fcf4d6e9 351-398
+  s_7c7e7b65c9fe30::t_3573c7a61ba4aa 221
+  s_7c7e7b65c9fe30::t_33f369f1ca92be 248-250
+  s_7c7e7b65c9fe30::t_fe347e8cf02b22 240,242,246-247,264-265
+modules/aws/infra/terraform.tfvars.example
+  s_7c7e7b65c9fe30::t_4a6ca676caee9f 667-668
+  s_7c7e7b65c9fe30::t_d16baf82170abf 707-710
+  s_7c7e7b65c9fe30::t_0b6e8fe4b548c9 657-666,669-699,718-722
+  s_7c7e7b65c9fe30::t_57c2b2dbf21a1f 700-706,711-717
+modules/aws/README.md
+  s_7c7e7b65c9fe30::t_6e50b606831b2f 996,999-1001
+  s_7c7e7b65c9fe30::t_5a59bceb1f8ae0 998
+  s_7c7e7b65c9fe30::t_81af87b59f9641 997,1002
+modules/aws/infra/versions.tf
+  s_7c7e7b65c9fe30::t_dbcf4bf68fe8a0 17-23
+.gitignore
+  s_7c7e7b65c9fe30::t_9d52110c201da1 18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ffcaa84e911a9dacda0106937ef96c5c5abaff21",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_7c7e7b65c9fe30": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "588795b9-4a2f-4859-8971-1413d12942a5",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

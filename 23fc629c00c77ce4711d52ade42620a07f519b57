@@ -1,0 +1,24 @@
+modules/aws/helm/values/examples/langsmith-values-smithdb.yaml
+  s_7c7e7b65c9fe30::t_0211981c445632 20-24,26,28-33,35-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "23fc629c00c77ce4711d52ade42620a07f519b57",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_7c7e7b65c9fe30": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "588795b9-4a2f-4859-8971-1413d12942a5",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+modules/gcp/infra/modules/k8s-bootstrap/variables.tf
+  s_6d567205f3e0e1::t_02875de1e7d5a3 28-42,46-52
+  s_6d567205f3e0e1::t_766da89cf50ac5 43-45
+modules/gcp/infra/variables.tf
+  s_6d567205f3e0e1::t_cbcacce27d7c09 414-416
+  s_6d567205f3e0e1::t_2044aa92b741c4 404-413,417-422
+modules/gcp/README.md
+  s_6d567205f3e0e1::t_0fc761b09f6130 385
+  s_6d567205f3e0e1::t_17a52ccf839bfa 197-202,207
+  s_6d567205f3e0e1::t_37547337dc9d29 203-206
+modules/gcp/infra/main.tf
+  s_6d567205f3e0e1::t_4014928decede5 503-510
+modules/gcp/infra/terraform.tfvars.example
+  s_6d567205f3e0e1::t_e019f9d75564a0 181-187
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_6d567205f3e0e1::t_d3790863e472e6 179-196,204-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "e19b38cc3625a0b17b11f425a7a8d143a1aab439",
+  "prompts": {},
+  "sessions": {
+    "s_6d567205f3e0e1": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "edf565c5-eea5-4794-93ce-2947283e1c70",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

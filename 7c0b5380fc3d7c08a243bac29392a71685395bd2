@@ -1,0 +1,51 @@
+CHANGELOG.md
+  s_d0c86c800bcef9::t_a1fd90f6692c95 1-2,8,13,15
+  s_d0c86c800bcef9::t_8b8635b4640ee6 3-5
+  s_d0c86c800bcef9::t_a2e8a1dd3c326a 6-7,9-12,14,16-20
+modules/gcp/helm/scripts/deploy.sh
+  s_d0c86c800bcef9::t_968ffc22045833 32-34
+.github/workflows/chart-line-check.yml
+  s_d0c86c800bcef9::t_f3d140741a9b72 1-34
+README.md
+  s_d0c86c800bcef9::t_8606d48a5d29c1 50
+  s_d0c86c800bcef9::t_44bf6942719f88 65-71,74-76
+  s_d0c86c800bcef9::t_5ed6390f99d1b5 51-54,58-64,72-73,77-81
+modules/aws/helm/scripts/deploy.sh
+  s_d0c86c800bcef9::t_57444394bcac83 34-36
+modules/azure/README.md
+  s_d0c86c800bcef9::t_c5d4af3f35d48d 6
+  s_d0c86c800bcef9::t_86450170c8fe9f 5
+modules/azure/helm/scripts/deploy.sh
+  s_d0c86c800bcef9::t_56e0f014ea04d8 375-377,381
+modules/gcp/README.md
+  s_d0c86c800bcef9::t_b9ec109bf0eeaf 6
+  s_d0c86c800bcef9::t_3e6bd58a21ddfe 5
+modules/aws/README.md
+  s_d0c86c800bcef9::t_83819c1bb1a967 5
+  s_d0c86c800bcef9::t_70c948e26dc76f 6
+modules/ocp/README.md
+  s_d0c86c800bcef9::t_d2a0dc3bc20f17 7
+  s_d0c86c800bcef9::t_95b15965de645b 8
+.github/workflows/release.yml
+  s_d0c86c800bcef9::t_44b0b7fd63d2ab 1-148
+modules/ocp/helm/scripts/deploy.sh
+  s_d0c86c800bcef9::t_685976fb30f890 15-17
+.github/scripts/chart-line.sh
+  s_d0c86c800bcef9::t_5b6e440f5349e7 1-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "7c0b5380fc3d7c08a243bac29392a71685395bd2",
+  "prompts": {},
+  "sessions": {
+    "s_d0c86c800bcef9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6469a0b2-5be9-4a64-9940-ed84692606aa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
