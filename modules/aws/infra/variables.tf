@@ -88,11 +88,11 @@ variable "eks_public_access_cidrs" {
 variable "eks_cluster_version" {
   type        = string
   description = "The EKS version of the kubernetes cluster"
-  default     = "1.33"
+  default     = "1.34"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.eks_cluster_version))
-    error_message = "EKS cluster version must be in format X.Y (e.g., 1.31)."
+    error_message = "EKS cluster version must be in format X.Y (e.g., 1.34)."
   }
 }
 

@@ -14,7 +14,7 @@
 #
 # Required env vars (exported by orchestrator, inherited automatically):
 #   WORKER_REGION           — AWS region
-#   WORKER_EKS_VERSION      — Kubernetes version (default: 1.31)
+#   WORKER_EKS_VERSION      — Kubernetes version (default: 1.34)
 #   WORKER_PG_SOURCE        — postgres_source: external|in-cluster (default: external)
 #   WORKER_REDIS_SOURCE     — redis_source:    external|in-cluster (default: external)
 #   WORKER_DOMAIN           — langsmith_domain  (can be empty)
@@ -50,7 +50,7 @@ DRY_RUN_FLAG="${4:-}"
 # ── Required env vars ─────────────────────────────────────────────────────────
 
 REGION="${WORKER_REGION:?WORKER_REGION env var required (set by orchestrator or manually)}"
-EKS_VERSION="${WORKER_EKS_VERSION:-1.31}"
+EKS_VERSION="${WORKER_EKS_VERSION:-1.34}"
 # Workers always use in-cluster Postgres + Redis — test clusters are lightweight
 # and short-lived. RDS/ElastiCache per worker would be expensive and slow to spin up.
 # The gateway/TLS permutations don't test backend service provisioning.
