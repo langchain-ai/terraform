@@ -292,7 +292,7 @@ fi
 
 _section "4. EKS Cluster"
 
-_ask "EKS Kubernetes version" "$(_existing "eks_cluster_version" "1.31")"
+_ask "EKS Kubernetes version" "$(_existing "eks_cluster_version" "1.34")"
 EKS_VERSION="$_REPLY"
 
 EKS_PUBLIC="true"; EKS_PUBLIC_CIDRS=""; CREATE_BASTION="false"
