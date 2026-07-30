@@ -34,10 +34,14 @@ INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
 if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  # fallback: read identifier from terraform.tfvars
-  _identifier=$(grep -E '^\s*identifier\s*=' "$INFRA_DIR/terraform.tfvars" \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' | tr -d '[:space:]') || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+  # fallback: read name_prefix from terraform.tfvars (or the retired
+  # `identifier` key, for a tfvars that predates the rename)
+  _name_prefix=$(grep -E '^\s*(name_prefix|identifier)\s*=' "$INFRA_DIR/terraform.tfvars" \
+    | head -1 \
+    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
+  _suffix=""
+  [[ -n "$_name_prefix" ]] && _suffix="-${_name_prefix#-}"
+  KV_NAME="langsmith-kv${_suffix}"
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 

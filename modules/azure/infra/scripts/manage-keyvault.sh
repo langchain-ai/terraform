@@ -14,19 +14,19 @@
 #   ./infra/scripts/manage-keyvault.sh diff
 #   ./infra/scripts/manage-keyvault.sh delete <key>
 #
-# Reads identifier and location from terraform.tfvars to derive the Key Vault name.
+# Reads name_prefix and location from terraform.tfvars to derive the Key Vault name.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name ───────────────────────────────────────────────────
-# Priority: terraform output → derived from identifier in terraform.tfvars
+# Priority: terraform output → derived from name_prefix in terraform.tfvars
 if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
   : # got it from terraform output
 else
-  _identifier=$(_parse_tfvar "identifier") || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+  _suffix=$(_name_suffix) || _suffix=""
+  KV_NAME="langsmith-kv${_suffix}"
 fi
 
 NAMESPACE="${NAMESPACE:-langsmith}"

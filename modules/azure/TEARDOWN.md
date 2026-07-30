@@ -85,7 +85,7 @@ Does **not** remove `terraform.tfstate` — that stays in place for state tracki
 ## Key Vault Soft-Delete
 
 Key Vault enters **soft-delete** after `terraform destroy` — the name is globally reserved for
-**90 days**. A re-deploy with the same identifier will fail:
+**90 days**. A re-deploy with the same name_prefix will fail:
 
 ```
 A vault with the same name already exists in a deleted state.
@@ -94,7 +94,7 @@ A vault with the same name already exists in a deleted state.
 ### If purge protection is disabled (dev/test — default in terraform.tfvars)
 
 ```bash
-az keyvault purge --name "langsmith-kv-<identifier>" --location <region>
+az keyvault purge --name "langsmith-kv-<name_prefix>" --location <region>
 
 # Verify it's gone
 az keyvault list-deleted --query "[].name" -o table
@@ -102,10 +102,10 @@ az keyvault list-deleted --query "[].name" -o table
 
 ### If purge protection is enabled
 
-**Option A — Change the identifier:**
+**Option A — Change the name_prefix:**
 ```hcl
 # azure/infra/terraform.tfvars
-identifier = "-demo2"  # any unused suffix
+name_prefix = "demo2"  # any unused name
 ```
 
 **Option B — Disable purge protection before next teardown:**
@@ -113,7 +113,7 @@ identifier = "-demo2"  # any unused suffix
 cd azure/infra
 terraform apply -var="keyvault_purge_protection=false"
 make destroy
-az keyvault purge --name "langsmith-kv-<identifier>" --location <region>
+az keyvault purge --name "langsmith-kv-<name_prefix>" --location <region>
 ```
 
 **Option C — Wait 90 days** for the retention period to expire.
@@ -124,7 +124,7 @@ az keyvault purge --name "langsmith-kv-<identifier>" --location <region>
 
 ```bash
 # Resource group should be gone
-az group show --name "langsmith-rg-<identifier>"
+az group show --name "langsmith-rg-<name_prefix>"
 # Expected: ResourceGroupNotFound
 
 # Check for soft-deleted Key Vaults
