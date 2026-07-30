@@ -1,7 +1,12 @@
-# Each output is null when the resource was not created — either the operator
-# brought their own, or the service is in-cluster. The root module resolves
-# every one against its bring-your-own variable, so no downstream module ever
-# receives a null subnet ID.
+# The VNet and the three service subnets below are null when the resource was
+# not created — either the operator brought their own, or the service is
+# in-cluster. The root module resolves each against its bring-your-own variable,
+# so no downstream module ever receives a null subnet ID.
+#
+# subnet_bastion_id and subnet_agic_id return an empty string instead, and have
+# to: k8s-cluster gates AGIC on agic_subnet_id != "", which a null passes, and
+# the split that follows would then fail. Do not switch them to one() for
+# consistency with the four above.
 
 output "vnet_id" {
   value       = one(azurerm_virtual_network.vnet[*].id)

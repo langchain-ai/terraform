@@ -832,16 +832,20 @@ LangSmith one, and get the settings each service needs:
 
 The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
 builds, so they are a starting point rather than a default that fits your
-network. Each must sit inside your VNet's address space, must not overlap an
-existing subnet, and must not overlap `aks_service_cidr`. The AKS prefix also
-has to be large enough for the node pools, and plan checks that whether the
-subnet is one you supplied or one Terraform carves.
+network. Plan reads your VNet and rejects a prefix that falls outside its
+address space, and rejects an AKS prefix too small for the node pools whether
+the subnet is one you supplied or one Terraform carves. What it cannot check is
+whether a prefix collides with a subnet that already exists in the VNet, because
+Azure's VNet read returns subnet names and not their ranges — so pick ranges you
+know are free.
 
 `aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
 it, and AKS requires a range that nothing on or connected to your VNet uses. The
 `10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
 your own address space can be accepted when the cluster is created and break
-later, so plan makes you name one. `aks_dns_service_ip` follows from it
+later, so plan makes you name one and rejects one that lands inside your VNet.
+Peered and on-premises ranges are still yours to keep clear of, since plan only
+sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
 automatically as the eleventh address unless you set one.
 
 ### What a subnet you supply must already have
@@ -871,12 +875,20 @@ an apply:
   supplied it or Terraform creates it. Undersizing is the one mistake that
   survives apply: the cluster starts, and the autoscaler later stalls short of
   `max_count` once the subnet runs dry
-- `aks_service_cidr` is set
+- every prefix Terraform is about to carve sits inside your VNet's address
+  space. The defaults describe the VNet Terraform builds, so this is usually the
+  first thing to change on a network of your own
+- `aks_service_cidr` is set, and does not overlap your VNet's address space
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
 
-The checks that inspect a supplied subnet read it at plan time, so whoever runs
-`terraform plan` needs read access to whichever subnets you supply. They usually
-sit in the network team's resource group rather than the LangSmith one.
+Whoever runs Terraform needs two kinds of access to the VNet, which normally
+lives in the network team's resource group rather than the LangSmith one:
+
+- **read** on `vnet_id` and on whichever subnets you supply, at plan time, for
+  the checks above
+- **`Microsoft.Network/virtualNetworks/subnets/write`** on `vnet_id` for every
+  subnet you leave Terraform to create. This is the larger ask of a network
+  team, and it fails at apply rather than at plan, so settle it first
 
 ### Not supported with an existing VNet
 
