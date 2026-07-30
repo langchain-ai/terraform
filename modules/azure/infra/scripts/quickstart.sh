@@ -142,7 +142,7 @@ AKS_SERVICE_CIDR
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-PG_DELETION_PROTECTION KV_PURGE_PROTECTION SIZING_PROFILE
+PG_DELETION_PROTECTION AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -211,7 +211,7 @@ _load_tfvars() {
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
-           sizing_profile postgres_admin_username postgres_database_name; do
+           sizing_profile postgres_admin_username postgres_database_name amr_sku; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
@@ -234,6 +234,7 @@ _load_tfvars() {
       sizing_profile)            SIZING_PROFILE="$_TF_VAL" ;;
       postgres_admin_username)   PG_ADMIN_USER="$_TF_VAL" ;;
       postgres_database_name)    PG_DB_NAME="$_TF_VAL" ;;
+      amr_sku)                   AMR_SKU="$_TF_VAL" ;;
     esac
   done
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
@@ -787,6 +788,7 @@ CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
+AMR_SKU="Balanced_B0"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -816,7 +818,7 @@ _run_section_7() {
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Cache for Redis Premium P1 — 6 GB)?" "$redis_yn"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "$redis_yn"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
@@ -842,6 +844,16 @@ _run_section_7() {
   if [[ "$PG_SOURCE" == "external" ]]; then
     PG_DELETION_PROTECTION="false"
     [[ "$PROFILE" == "prod" ]] && PG_DELETION_PROTECTION="true"
+  fi
+
+  # Without this prompt every quickstart deployment silently took the Balanced_B0
+  # module default, which some regions cannot allocate.
+  if [[ "$REDIS_SOURCE" == "external" ]]; then
+    echo ""
+    _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
+    _hint "if the region reports AllocationFailed."
+    _ask "Azure Managed Redis SKU" "$AMR_SKU"
+    AMR_SKU="$_REPLY"
   fi
 
   echo ""
@@ -1225,6 +1237,14 @@ if [[ "$PG_SOURCE" == "external" ]]; then
 postgres_admin_username      = "${PG_ADMIN_USER}"
 postgres_database_name       = "${PG_DB_NAME}"
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
+TFVARS
+fi
+
+if [[ "$REDIS_SOURCE" == "external" ]]; then
+  cat >> "$OUTPUT" << TFVARS
+
+# Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
+amr_sku = "${AMR_SKU}"   # Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
 TFVARS
 fi
 
