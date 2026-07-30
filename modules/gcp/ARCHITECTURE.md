@@ -18,7 +18,7 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | 1 | GCP Infrastructure | VPC, GKE, Cloud SQL, Memorystore, GCS, K8s bootstrap, cert-manager, KEDA, Envoy Gateway |
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
-| 4 | Agent Builder | agent-builder-tool-server, agent-builder-trigger-server + deep-agent LGP |
+| 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
 | 5 | Insights + Polly | Clio analytics (ClickHouse-backed), Polly eval agent |
 
 ---
