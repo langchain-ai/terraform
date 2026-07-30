@@ -32,6 +32,39 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 >
 > **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
+### Deploying onto an existing AKS cluster
+
+Set `create_cluster = false` to attach to a cluster the customer already runs. Terraform still provisions Key Vault, Blob storage, Managed Identities, and the Workload Identity federated credentials — it reads the cluster instead of creating it, and never modifies or destroys it.
+
+```hcl
+create_cluster                       = false
+existing_cluster_name                = "customer-aks-cluster"
+existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
+
+# Point the supporting resources at the cluster's own network.
+create_vnet        = false
+aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
+postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
+redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
+```
+
+Cluster prerequisites — verify before applying:
+
+```bash
+az aks show --name <cluster> --resource-group <rg> \
+  --query "{oidc:oidcIssuerProfile.enabled, wi:securityProfile.workloadIdentity.enabled, localAccounts:disableLocalAccounts}"
+```
+
+| Requirement | Why | Fix |
+|---|---|---|
+| OIDC issuer + Workload Identity enabled | Federated credentials trust the cluster's OIDC issuer; without it pods can't reach Blob or Key Vault | `az aks update -n <cluster> -g <rg> --enable-oidc-issuer --enable-workload-identity` (in-place, no recreate) |
+| Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
+| API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
+
+`aks_subnet_id` must be the existing cluster's node subnet — it's what the Blob and Key Vault firewalls allowlist, so a mismatch leaves pods unable to read secrets or write traces. Terraform derives any additional node pools' subnet from the cluster itself; set `existing_cluster_node_pools_managed = false` if the customer's platform team owns all node pools (you must then confirm the cluster already has capacity for ClickHouse and LangGraph workloads).
+
+The `agic` and `istio-addon` ingress modes require `create_cluster = true` — both configure AKS-managed add-ons that only apply to a Terraform-owned cluster. Use `nginx`, `istio`, or `envoy-gateway` instead.
+
 ---
 
 ## Prerequisites
