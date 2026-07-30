@@ -165,11 +165,11 @@ _save_state() {
 # word-split, glob-expanded, or re-evaluated — so a hostile state file can at
 # worst set a whitelisted wizard variable to a literal string.
 _load_state() {
-  # shellcheck disable=SC2034  # val is read by the eval below
   local line key val k found
   while IFS= read -r line; do
     [[ "$line" == *=* ]] || continue
     key="${line%%=*}"
+    # shellcheck disable=SC2034  # val is read by the eval below
     val="${line#*=}"
     found=false
     for k in $_STATE_KEYS; do
