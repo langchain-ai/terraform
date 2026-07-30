@@ -201,7 +201,7 @@ variable "redis_subnet_id" {
 
 variable "aks_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so size it for max_nodes * max_pods_per_node. Must fit inside the VNet address space and not overlap aks_service_cidr."
+  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. Must also fit inside the VNet address space and not overlap aks_service_cidr."
   default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
@@ -326,16 +326,20 @@ variable "default_node_pool_max_pods" {
   default     = 60
 }
 
+# Both of these are empty by default rather than carrying the create-path value,
+# because 10.0.64.0/20 is only safe against the VNet Terraform builds. main.tf
+# fills them in for create_vnet = true and requires aks_service_cidr under
+# bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "The service CIDR of the AKS cluster"
-  default     = "10.0.64.0/20"
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later."
+  default     = ""
 }
 
 variable "aks_dns_service_ip" {
   type        = string
-  description = "The DNS service IP of the AKS cluster"
-  default     = "10.0.64.10"
+  description = "CoreDNS ClusterIP. Must sit inside aks_service_cidr. Defaults to the eleventh address of aks_service_cidr, which is the Azure convention (10.0.64.10 for the default range)."
+  default     = ""
 }
 
 variable "additional_node_pools" {

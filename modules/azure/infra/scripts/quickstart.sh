@@ -366,6 +366,7 @@ REDIS_SUBNET_ID=""
 AKS_SUBNET_CIDR_LINE=""
 POSTGRES_SUBNET_CIDR_LINE=""
 REDIS_SUBNET_CIDR_LINE=""
+AKS_SERVICE_CIDR=""
 
 # Ask for one subnet in bring-your-own-VNet mode. An empty answer means
 # "Terraform creates it", which then needs a CIDR to carve out of the VNet.
@@ -407,6 +408,7 @@ _run_section_3() {
     # Clear any BYO IDs and carved CIDRs from a previous pass — meaningless here.
     VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
     AKS_SUBNET_CIDR_LINE=""; POSTGRES_SUBNET_CIDR_LINE=""; REDIS_SUBNET_CIDR_LINE=""
+    AKS_SERVICE_CIDR=""
     return
   fi
 
@@ -457,9 +459,19 @@ _run_section_3() {
     "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint."
   REDIS_SUBNET_ID="$_SUBNET_ID"; REDIS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
+  # Kubernetes ClusterIPs are internal to the cluster, but AKS still requires the
+  # range to be unused by anything on or connected to the VNet. The default only
+  # dodges the VNet Terraform builds, so on this path the operator must name one.
+  echo ""
+  _hint "Kubernetes assigns ClusterIPs from a range that must not be used by anything"
+  _hint "in your VNet or any network peered to it. It is not carved from your VNet —"
+  _hint "pick a range that sits outside your VNet's address space entirely."
+  _ask "Kubernetes service CIDR" "10.0.64.0/20"
+  AKS_SERVICE_CIDR="$_REPLY"
+
   echo ""
   _hint "Any CIDR you entered must fit inside your VNet's address space, not overlap"
-  _hint "an existing subnet, and not overlap the Kubernetes service CIDR (10.0.64.0/20)."
+  _hint "an existing subnet, and not overlap the Kubernetes service CIDR above."
 }
 
 # -- 4. AKS ------------------------------------------------------------------
@@ -1039,6 +1051,7 @@ while true; do
     printf "  %-24s %s\n" "   AKS subnet:"        "$(_subnet_review "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE")"
     printf "  %-24s %s\n" "   PostgreSQL subnet:" "$(_subnet_review "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE")"
     printf "  %-24s %s\n" "   Redis subnet:"      "$(_subnet_review "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE")"
+    printf "  %-24s %s\n" "   Service CIDR:"      "$AKS_SERVICE_CIDR"
   fi
   printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
@@ -1133,6 +1146,9 @@ TFVARS
   [[ -n "$AKS_SUBNET_CIDR_LINE" ]]      && echo "$AKS_SUBNET_CIDR_LINE" >> "$OUTPUT"
   [[ -n "$POSTGRES_SUBNET_CIDR_LINE" ]] && echo "$POSTGRES_SUBNET_CIDR_LINE" >> "$OUTPUT"
   [[ -n "$REDIS_SUBNET_CIDR_LINE" ]]    && echo "$REDIS_SUBNET_CIDR_LINE" >> "$OUTPUT"
+  # Required on this path: the variable default is only safe against the VNet
+  # Terraform builds, so terraform plan rejects an empty value here.
+  printf '%-30s = "%s"\n' "aks_service_cidr" "$AKS_SERVICE_CIDR" >> "$OUTPUT"
 else
   echo "# Using auto-created VNet (default)" >> "$OUTPUT"
 fi
