@@ -141,7 +141,7 @@ AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-PG_DELETION_PROTECTION REDIS_CAPACITY KV_PURGE_PROTECTION SIZING_PROFILE
+PG_DELETION_PROTECTION KV_PURGE_PROTECTION SIZING_PROFILE
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -240,7 +240,6 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
-  _TF_VAL=$(_parse_tfvar redis_capacity)              && REDIS_CAPACITY="$_TF_VAL"
   # The add-ons are written only when true, so an absent key is genuinely false.
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
