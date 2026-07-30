@@ -5,9 +5,13 @@ variable "name_prefix" {
   description = "Name of this deployment, appended to every resource name and used as the default 'environment' tag (e.g. \"prod\", \"staging\", \"dev-dz\"). Write it without a hyphen — Terraform inserts the separator, so \"prod\" gives langsmith-rg-prod. Empty means no suffix. Set in terraform.tfvars."
   default     = ""
 
+  # Hyphens are allowed between alphanumerics only. A trailing or doubled hyphen
+  # would pass here and then fail mid-apply: Key Vault names must end in a
+  # letter or digit and reject consecutive hyphens, and AKS names must start and
+  # end alphanumeric. Cheaper to reject at plan than to read an Azure name error.
   validation {
-    condition     = var.name_prefix == "" || can(regex("^-?[a-z0-9][a-z0-9-]*$", var.name_prefix))
-    error_message = "name_prefix must be empty, or lowercase letters/numbers/hyphens (e.g. \"prod\", \"dev-dz\"). A leading hyphen is accepted and ignored."
+    condition     = var.name_prefix == "" || can(regex("^-?[a-z0-9](-?[a-z0-9])*$", var.name_prefix))
+    error_message = "name_prefix must be empty, or lowercase letters and numbers separated by single hyphens (e.g. \"prod\", \"dev-dz\"). No trailing or doubled hyphen — Azure rejects the resulting Key Vault and AKS names. A leading hyphen is accepted and ignored."
   }
 }
 
