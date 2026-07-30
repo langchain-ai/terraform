@@ -135,8 +135,10 @@ _hint() {
 
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
-_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID IDENTIFIER ENVIRONMENT LOCATION OWNER
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
 COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
+AKS_SERVICE_CIDR
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
@@ -182,6 +184,12 @@ _load_state() {
 # inside the value (_common.sh's _parse_tfvar strips them).
 _tfvar() {
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Read a list-valued tfvar back as its whole assignment line, which is the form
+# the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
+_tfvar_line() {
+  sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
 # Seed the wizard from a terraform.tfvars written by an earlier run, so a
@@ -242,6 +250,16 @@ _load_tfvars() {
     AKS_SUBNET_ID=$(_tfvar aks_subnet_id)
     POSTGRES_SUBNET_ID=$(_tfvar postgres_subnet_id)
     REDIS_SUBNET_ID=$(_tfvar redis_subnet_id)
+    # A subnet with no ID was carved by Terraform, so its prefix has to come
+    # back too. Dropping it would silently re-default the CIDR and move the
+    # subnet on the next apply.
+    AKS_SUBNET_CIDR_LINE=$(_tfvar_line aks_subnet_address_prefix)
+    POSTGRES_SUBNET_CIDR_LINE=$(_tfvar_line postgres_subnet_address_prefix)
+    REDIS_SUBNET_CIDR_LINE=$(_tfvar_line redis_subnet_address_prefix)
+    # Required on this path, and the variable default is only safe against the
+    # VNet Terraform builds. Dropping it on a re-run would put back the
+    # 10.0.64.0/20 that can sit inside the operator's own address space.
+    AKS_SERVICE_CIDR=$(_tfvar aks_service_cidr)
   }
   return 0
 }
@@ -326,8 +344,11 @@ _run_section_2() {
   fi
   SUBSCRIPTION_ID="$_REPLY"
 
-  local name_default="dev"
-  [[ "$PROFILE" == "prod" ]] && name_default="prod"
+  # A resumed no-suffix deployment carries NAME_PREFIX="", and _ask substitutes
+  # the default on a blank reply, so an empty default would make Enter fail the
+  # regex below and re-prompt forever. Offer the sentinel back instead.
+  local name_default="${NAME_PREFIX:-none}"
+  [[ "$PROFILE" == "prod" ]] && ! _answered 2 && name_default="prod"
   while true; do
     _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
     NAME_PREFIX="${_REPLY#-}" # tolerate a pasted leading hyphen from an older tfvars
