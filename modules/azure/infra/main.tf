@@ -56,13 +56,30 @@ locals {
   # Uses the user-supplied keyvault_name or derives from name_prefix.
   keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
 
-  # Subnet ID resolution: use newly-created VNet subnets OR bring-your-own
-  # existing ones (set create_vnet = false and supply the IDs via variables).
+  # ── Network resolution ──────────────────────────────────────────────────────
+  # create_vnet = true  → Terraform owns the whole network; BYO IDs are rejected
+  #                       by the preconditions below rather than silently ignored.
+  # create_vnet = false → vnet_id is reused, and each subnet is independently
+  #                       either brought (ID supplied) or carved by Terraform.
+  byo_aks_subnet      = !var.create_vnet && var.aks_subnet_id != ""
+  byo_postgres_subnet = !var.create_vnet && var.postgres_subnet_id != ""
+  byo_redis_subnet    = !var.create_vnet && var.redis_subnet_id != ""
+
+  # A subnet is created only when it is needed by an enabled service and the
+  # operator has not supplied one.
+  create_aks_subnet      = !local.byo_aks_subnet
+  create_postgres_subnet = var.postgres_source == "external" && !local.byo_postgres_subnet
+  create_redis_subnet    = var.redis_source == "external" && !local.byo_redis_subnet
+
   vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
-  aks_subnet_id      = var.create_vnet ? module.vnet.subnet_main_id : var.aks_subnet_id
-  postgres_subnet_id = var.create_vnet ? module.vnet.subnet_postgres_id : var.postgres_subnet_id
-  redis_subnet_id    = var.create_vnet ? module.vnet.subnet_redis_id : var.redis_subnet_id
-  agic_subnet_id     = var.create_vnet ? module.vnet.subnet_agic_id : ""
+  aks_subnet_id      = local.byo_aks_subnet ? var.aks_subnet_id : module.vnet.subnet_main_id
+  postgres_subnet_id = local.byo_postgres_subnet ? var.postgres_subnet_id : module.vnet.subnet_postgres_id
+  redis_subnet_id    = local.byo_redis_subnet ? var.redis_subnet_id : module.vnet.subnet_redis_id
+
+  # Bastion and AGIC have no bring-your-own input, so their subnets exist only
+  # on the create_vnet path. The preconditions below enforce that.
+  agic_subnet_id    = module.vnet.subnet_agic_id
+  bastion_subnet_id = module.vnet.subnet_bastion_id
 
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
@@ -111,8 +128,10 @@ resource "azurerm_resource_group" "resource_group" {
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
-# Creates VNet + three dedicated subnets (AKS, PostgreSQL, Redis).
-# Skip this block (create_vnet = false) to reuse an existing VNet.
+# Creates the VNet plus the dedicated subnets (AKS, PostgreSQL, Redis) that the
+# enabled services need. With create_vnet = false the VNet is reused and only
+# the subnets that were not supplied get created inside it — set every subnet ID
+# and this module creates nothing at all.
 
 module "vnet" {
   source              = "./modules/networking"
@@ -120,11 +139,16 @@ module "vnet" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
 
-  # Controls whether the Postgres/Redis subnets are created.
-  # Set false if using in-cluster Postgres/Redis (no dedicated subnets needed).
-  enable_external_postgres = var.postgres_source == "external"
-  enable_external_redis    = var.redis_source == "external"
+  create_vnet      = var.create_vnet
+  existing_vnet_id = var.vnet_id
 
+  # A subnet is skipped when the operator supplied one, or when the service it
+  # serves runs in-cluster and needs no dedicated subnet.
+  create_main_subnet     = local.create_aks_subnet
+  create_postgres_subnet = local.create_postgres_subnet
+  create_redis_subnet    = local.create_redis_subnet
+
+  main_subnet_address_prefix     = var.aks_subnet_address_prefix
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
@@ -136,6 +160,69 @@ module "vnet" {
   agic_subnet_address_prefix = var.agic_subnet_address_prefix
 
   tags = local.common_tags
+}
+
+# ── Input validation ──────────────────────────────────────────────────────────
+# Cross-variable network checks that a single variable's validation block cannot
+# express. These fire at plan time with an actionable message rather than
+# surfacing as an opaque Azure API error partway through an apply.
+
+# Reads an operator-supplied Postgres subnet to confirm the flexibleServers
+# delegation is present. The azurerm_subnet data source does not expose
+# delegations, so this goes through azapi.
+data "azapi_resource" "byo_postgres_subnet" {
+  count                  = local.byo_postgres_subnet && var.postgres_source == "external" ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.postgres_subnet_id
+  response_export_values = ["properties.delegations"]
+}
+
+resource "terraform_data" "validate_network" {
+  lifecycle {
+    precondition {
+      condition     = var.create_vnet || var.vnet_id != ""
+      error_message = "vnet_id is required when create_vnet = false. Supply the VNet that LangSmith should deploy into."
+    }
+
+    # BYO subnet IDs are meaningless on the create path — fail loudly instead of
+    # building a VNet the operator did not expect and ignoring what they set.
+    precondition {
+      condition     = !var.create_vnet || (var.aks_subnet_id == "" && var.postgres_subnet_id == "" && var.redis_subnet_id == "")
+      error_message = "aks_subnet_id, postgres_subnet_id and redis_subnet_id only apply when create_vnet = false. Set create_vnet = false to reuse existing subnets, or clear these to let Terraform create the network."
+    }
+
+    # Every supplied subnet must belong to vnet_id. A subnet in a different VNet
+    # would leave Postgres and Redis unreachable: the private DNS zones are
+    # linked to vnet_id, and AKS could not route to them.
+    precondition {
+      condition = var.create_vnet || alltrue([
+        for id in [var.aks_subnet_id, var.postgres_subnet_id, var.redis_subnet_id] :
+        id == "" || startswith(id, "${var.vnet_id}/subnets/")
+      ])
+      error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
+    }
+
+    # Both subnets are create-path only — neither has a bring-your-own input.
+    precondition {
+      condition     = !var.create_bastion || var.create_vnet
+      error_message = "create_bastion = true requires create_vnet = true. There is no bastion_subnet_id input, so the bastion subnet can only be carved out of a Terraform-managed VNet."
+    }
+
+    precondition {
+      condition     = var.ingress_controller != "agic" || var.create_vnet
+      error_message = "ingress_controller = 'agic' requires create_vnet = true. Application Gateway needs its own /24 subnet and there is no agic_subnet_id input."
+    }
+
+    # A Postgres Flexible Server can only be injected into a subnet delegated to
+    # it. Without this check the failure surfaces as a generic Azure API error.
+    precondition {
+      condition = length(data.azapi_resource.byo_postgres_subnet) == 0 || contains([
+        for d in try(data.azapi_resource.byo_postgres_subnet[0].output.properties.delegations, []) :
+        try(d.properties.serviceName, "")
+      ], "Microsoft.DBforPostgreSQL/flexibleServers")
+      error_message = "The subnet given as postgres_subnet_id is not delegated to Microsoft.DBforPostgreSQL/flexibleServers. Add that delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) to the subnet, or clear postgres_subnet_id and let Terraform create a correctly delegated subnet."
+    }
+  }
 }
 
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
@@ -429,7 +516,7 @@ module "bastion" {
   name                 = "langsmith-bastion${local.name_suffix}"
   resource_group_name  = azurerm_resource_group.resource_group.name
   location             = var.location
-  subnet_id            = module.vnet.subnet_bastion_id
+  subnet_id            = local.bastion_subnet_id
   vm_size              = var.bastion_vm_size
   admin_ssh_public_key = var.bastion_admin_ssh_public_key
   allowed_ssh_cidrs    = var.bastion_allowed_ssh_cidrs

@@ -725,7 +725,7 @@ azure/
 
 | Module | Required | Description |
 |--------|----------|-------------|
-| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. |
+| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
@@ -797,6 +797,58 @@ keyvault_name        = "langsmith-kv-dev"
 availability APIs before you apply. Redis is the exception: Azure exposes no
 working name-availability endpoint for Managed Redis, so a cross-tenant Redis
 collision only surfaces at apply time.
+
+---
+
+## Bring your own VNet
+
+By default Terraform creates the VNet and every subnet. To deploy into a VNet
+your network team already manages, set `create_vnet = false` and name it:
+
+```hcl
+create_vnet = false
+vnet_id     = "/subscriptions/<sub>/resourceGroups/net-rg/providers/Microsoft.Network/virtualNetworks/corp-vnet"
+```
+
+Each subnet is then independent. Supply an ID to reuse a subnet you already
+have, or leave it out and Terraform creates that subnet inside your VNet from
+the matching address prefix:
+
+```hcl
+# Reuse an existing Postgres subnet, let Terraform carve the other two.
+postgres_subnet_id             = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/pg"
+aks_subnet_address_prefix      = ["10.42.0.0/19"]
+redis_subnet_address_prefix    = ["10.42.32.0/20"]
+```
+
+Subnets Terraform creates land in the existing VNet's resource group, not the
+LangSmith one, and get the settings each service needs:
+
+| Subnet | What Terraform applies |
+|--------|------------------------|
+| AKS | `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, so the storage and Key Vault default-deny firewalls can allowlist the subnet |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers` — Flexible Server injects its NICs here, and no other resource may share the subnet |
+| Redis | No delegation. Azure Managed Redis is reached through a private endpoint placed in this subnet; a delegated subnet would reject it |
+
+Address prefixes must fit inside your VNet's address space, must not overlap an
+existing subnet, and must not overlap `aks_service_cidr` (default `10.0.64.0/20`).
+
+### What Terraform checks before applying
+
+These fail at plan time with an actionable message rather than partway through
+an apply:
+
+- `vnet_id` is present and is a well-formed VNet resource ID
+- every supplied subnet is a subnet of `vnet_id` — one in a different VNet would
+  be unreachable, since the private DNS zones are linked to `vnet_id`
+- a supplied Postgres subnet already carries the `flexibleServers` delegation
+- subnet IDs are not set while `create_vnet = true`, where they would be ignored
+
+### Not supported with an existing VNet
+
+`create_bastion = true` and `ingress_controller = "agic"` both need a dedicated
+subnet with no bring-your-own input, so they only work when Terraform manages
+the VNet. Plan rejects either combination.
 
 ---
 
