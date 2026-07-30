@@ -205,8 +205,9 @@ sizing_profile = "production"
 #
 # Or omit an ID above and set its prefix here to have Terraform carve it out.
 # These defaults are sized for the 10.0.0.0/17 VNet Terraform builds, so treat
-# them as a starting point. Each must fit inside your VNet address space, not
-# overlap an existing subnet, and not overlap aks_service_cidr.
+# them as a starting point. Plan reads your VNet and rejects a prefix outside its
+# address space, but cannot tell whether one collides with a subnet that already
+# exists there, so pick ranges you know are free.
 # aks_subnet_address_prefix      = ["10.0.0.0/19"]
 # postgres_subnet_address_prefix = ["10.0.32.0/20"]
 # redis_subnet_address_prefix    = ["10.0.48.0/20"]
@@ -215,7 +216,8 @@ sizing_profile = "production"
 # range, and AKS requires one that nothing on or connected to your VNet uses.
 # The 10.0.64.0/20 default only avoids the VNet Terraform builds, and an overlap
 # with your own space can be accepted at cluster creation and break later, so
-# pick a range outside your VNet entirely. aks_dns_service_ip is derived from it.
+# pick a range outside your VNet entirely — plan rejects one that overlaps it,
+# though peered networks are on you. aks_dns_service_ip is derived from it.
 # aks_service_cidr     = "10.100.0.0/20"
 #
 # create_bastion and ingress_controller = "agic" both need subnets that only

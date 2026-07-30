@@ -106,6 +106,57 @@ locals {
     pow(2, 32 - tonumber(split("/", prefix)[1]))
   ])) - 5
 
+  # ── Address space of a reused VNet ──────────────────────────────────────────
+  # A VNet ID is one segment shorter than a subnet ID, so the same positional
+  # read applies with the name at 8 instead of 10:
+  #   0:"" 1:subscriptions 2:<sub> 3:resourceGroups 4:<rg>
+  #   5:providers 6:Microsoft.Network 7:virtualNetworks 8:<name>
+  byo_vnet_parts     = split("/", var.vnet_id)
+  vnet_address_space = coalesce(one(data.azurerm_virtual_network.byo_vnet[*].address_space), [])
+
+  # Every prefix Terraform is about to carve, tagged with the variable that set
+  # it so a failure names what to change. A service running in-cluster carves
+  # nothing, so its prefix is left out rather than checked pointlessly.
+  carved_prefixes = flatten([
+    for entry in [
+      { name = "aks_subnet_address_prefix", carve = local.create_aks_subnet, prefixes = var.aks_subnet_address_prefix },
+      { name = "postgres_subnet_address_prefix", carve = local.create_postgres_subnet, prefixes = var.postgres_subnet_address_prefix },
+      { name = "redis_subnet_address_prefix", carve = local.create_redis_subnet, prefixes = var.redis_subnet_address_prefix },
+    ] : [for prefix in entry.prefixes : { name = entry.name, prefix = prefix }] if entry.carve
+  ])
+
+  # Terraform has no CIDR containment or overlap function, so reduce every range
+  # to its numeric bounds and compare those. cidrhost(x, 0) is the network
+  # address, and the last address is that plus the host count.
+  measured_cidrs = distinct(concat(
+    local.vnet_address_space,
+    [for entry in local.carved_prefixes : entry.prefix],
+    [local.aks_service_cidr],
+  ))
+  cidr_first = { for cidr in local.measured_cidrs : cidr => sum([
+    for i, octet in split(".", cidrhost(cidr, 0)) : tonumber(octet) * pow(256, 3 - i)
+  ]) }
+  cidr_last = { for cidr in local.measured_cidrs : cidr => local.cidr_first[cidr] + pow(2, 32 - tonumber(split("/", cidr)[1])) - 1 }
+
+  # A carved subnet has to fall inside one of the VNet's address prefixes. Azure
+  # will not split a subnet across two of them, so containment is per-prefix.
+  uncontained_prefixes = [
+    for entry in local.carved_prefixes : "${entry.prefix} (${entry.name})" if !anytrue([
+      for space in local.vnet_address_space :
+      local.cidr_first[entry.prefix] >= local.cidr_first[space] &&
+      local.cidr_last[entry.prefix] <= local.cidr_last[space]
+    ])
+  ]
+
+  # The ClusterIP range is the opposite case: it is not carved from the VNet and
+  # must stay clear of it. Two ranges overlap unless one ends before the other
+  # starts.
+  service_cidr_overlaps_vnet = anytrue([
+    for space in local.vnet_address_space :
+    local.cidr_first[local.aks_service_cidr] <= local.cidr_last[space] &&
+    local.cidr_last[local.aks_service_cidr] >= local.cidr_first[space]
+  ])
+
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
@@ -180,6 +231,16 @@ data "azapi_resource" "byo_postgres_subnet" {
   type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
   resource_id            = var.postgres_subnet_id
   response_export_values = ["properties.delegations"]
+}
+
+# Reads a reused VNet for its address space, so the prefixes Terraform is about
+# to carve inside it can be checked before apply. Gated on vnet_id being set as
+# well as create_vnet, so an empty vnet_id reaches its own precondition below
+# rather than failing on the positional read.
+data "azurerm_virtual_network" "byo_vnet" {
+  count               = !var.create_vnet && var.vnet_id != "" ? 1 : 0
+  name                = local.byo_vnet_parts[8]
+  resource_group_name = local.byo_vnet_parts[4]
 }
 
 # Reads an operator-supplied AKS subnet to confirm the service endpoints the
@@ -277,6 +338,24 @@ resource "terraform_data" "validate_network" {
     precondition {
       condition     = var.create_vnet || var.aks_service_cidr != ""
       error_message = "aks_service_cidr is required when create_vnet = false. The 10.0.64.0/20 default is chosen to sit outside the Terraform-managed 10.0.0.0/17 and can fall inside your VNet. AKS requires a ClusterIP range that nothing on or connected to your VNet uses, so set one outside your VNet's address space."
+    }
+
+    # Requiring aks_service_cidr does not make it correct, and a range picked out
+    # of the VNet's own space is the mistake the requirement exists to prevent.
+    # AKS accepts the overlap at cluster creation and the collision surfaces
+    # later, so it is worth the read.
+    precondition {
+      condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || !local.service_cidr_overlaps_vnet
+      error_message = "aks_service_cidr (${local.aks_service_cidr}) overlaps the address space of vnet_id (${join(", ", local.vnet_address_space)}). Kubernetes ClusterIPs are not carved from the VNet, and AKS requires a range nothing on or connected to it uses. This check only sees the VNet's own address space, so keep clear of peered and on-premises ranges too."
+    }
+
+    # The subnet prefix defaults describe the 10.0.0.0/17 VNet Terraform builds,
+    # so on someone else's network they are wrong more often than right. Azure
+    # rejects an out-of-range prefix partway through apply, once the resource
+    # group and Key Vault already exist.
+    precondition {
+      condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || length(local.uncontained_prefixes) == 0
+      error_message = "These subnet prefixes fall outside the address space of vnet_id (${join(", ", local.vnet_address_space)}): ${join(", ", local.uncontained_prefixes)}. Point each at a free range inside your VNet, or supply that subnet's ID to reuse a subnet that already exists."
     }
   }
 }

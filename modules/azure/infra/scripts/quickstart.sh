@@ -266,15 +266,23 @@ _run_section_3() {
   _hint "Each subnet below is optional. Paste a subnet resource ID to reuse an"
   _hint "existing subnet, or press Enter and Terraform creates it inside your VNet"
   _hint "with the settings that service needs."
+  _hint "The CIDRs offered as defaults below describe the VNet Terraform builds, not"
+  _hint "yours. Replace each with a free range inside your own address space."
   echo ""
 
   # Matched against the same shape the vnet_id variable validates, so a typo is
-  # caught here rather than at terraform plan.
-  local vnet_re='^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/virtualNetworks/[^/]+$'
+  # caught here rather than at terraform plan. That validation is
+  # case-insensitive because Azure hands back "resourcegroups" in some contexts
+  # and "resourceGroups" in others, so lowercase a copy before comparing — bash
+  # 3.2 has no ${var,,}. Only the comparison is lowered; Terraform gets what was
+  # pasted.
+  local vnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+$'
+  local vnet_lc
   while true; do
     _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" ""
     VNET_ID="$_REPLY"
-    [[ "$VNET_ID" =~ $vnet_re ]] && break
+    vnet_lc=$(printf '%s' "$VNET_ID" | tr '[:upper:]' '[:lower:]')
+    [[ "$vnet_lc" =~ $vnet_re ]] && break
     _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
     echo ""
   done

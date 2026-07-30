@@ -148,7 +148,7 @@ variable "redis_subnet_id" {
 
 variable "aks_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. Must also fit inside the VNet address space and not overlap aks_service_cidr."
+  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. The default is sized for the VNet Terraform builds; under create_vnet = false it must fall inside your VNet's address space, which plan also checks."
   default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
@@ -193,13 +193,13 @@ variable "clickhouse_source" {
 
 variable "redis_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the Redis subnet. Can be disjoint IP ranges."
+  description = "Prefix for the Redis subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
   default     = ["10.0.48.0/20"] # 4k IP addresses
 }
 
 variable "postgres_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the Postgres subnet. Can be disjoint IP ranges."
+  description = "Prefix for the Postgres subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
   default     = ["10.0.32.0/20"] # 4k IP addresses
 }
 
@@ -279,7 +279,7 @@ variable "default_node_pool_max_pods" {
 # bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later."
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks."
   default     = ""
 }
 
