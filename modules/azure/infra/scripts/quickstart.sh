@@ -201,7 +201,12 @@ _load_tfvars() {
   _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
   [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
 
-  for v in subscription_id name_prefix location owner cost_center \
+  # `identifier` is read before `name_prefix` so that a tfvars carrying both
+  # lets the current key win. Accepting the retired key matters more here than
+  # elsewhere: dropping it would leave NAME_PREFIX at its "dev" default and
+  # regenerate a tfvars naming a different set of resources than the one this
+  # deployment already owns. Same back-compat as _common.sh's _name_prefix.
+  for v in subscription_id identifier name_prefix location owner cost_center \
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
@@ -210,7 +215,7 @@ _load_tfvars() {
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
-      name_prefix)               NAME_PREFIX="${_TF_VAL#-}" ;;
+      identifier | name_prefix)  NAME_PREFIX="${_TF_VAL#-}" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       cost_center)               COST_CENTER="$_TF_VAL" ;;
