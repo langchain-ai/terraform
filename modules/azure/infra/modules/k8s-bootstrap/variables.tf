@@ -75,7 +75,7 @@ variable "use_external_redis" {
 
 variable "redis_connection_url" {
   type        = string
-  description = "Redis connection URL (rediss://:key@host:6380). Required when use_external_redis = true"
+  description = "Redis connection URL (rediss://:key@host:10000). Required when use_external_redis = true"
   sensitive   = true
   default     = ""
 }
