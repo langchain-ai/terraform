@@ -68,6 +68,12 @@ locals {
   agic_subnet_id    = module.vnet.subnet_agic_id
   bastion_subnet_id = module.vnet.subnet_bastion_id
 
+  # Subnet IDs are fixed-shape, and the variable validation anchors that shape
+  # before this runs, so index positionally:
+  #   0:"" 1:subscriptions 2:<sub> 3:resourceGroups 4:<rg>
+  #   5:providers 6:Microsoft.Network 7:virtualNetworks 8:<vnet> 9:subnets 10:<name>
+  byo_aks_subnet_parts = split("/", var.aks_subnet_id)
+
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
@@ -133,6 +139,9 @@ module "vnet" {
 # express. These fire at plan time with an actionable message rather than
 # surfacing as an opaque Azure API error partway through an apply.
 
+# Both reads run at plan time, so whoever runs plan needs read access to the
+# supplied subnets — they usually live in the network team's resource group.
+
 # Reads an operator-supplied Postgres subnet to confirm the flexibleServers
 # delegation is present. The azurerm_subnet data source does not expose
 # delegations, so this goes through azapi.
@@ -141,6 +150,16 @@ data "azapi_resource" "byo_postgres_subnet" {
   type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
   resource_id            = var.postgres_subnet_id
   response_export_values = ["properties.delegations"]
+}
+
+# Reads an operator-supplied AKS subnet to confirm the service endpoints the
+# storage and Key Vault firewalls depend on. azurerm_subnet does expose
+# service_endpoints, so this needs no azapi.
+data "azurerm_subnet" "byo_aks_subnet" {
+  count                = local.byo_aks_subnet ? 1 : 0
+  name                 = local.byo_aks_subnet_parts[10]
+  virtual_network_name = local.byo_aks_subnet_parts[8]
+  resource_group_name  = local.byo_aks_subnet_parts[4]
 }
 
 resource "terraform_data" "validate_network" {
@@ -160,10 +179,13 @@ resource "terraform_data" "validate_network" {
     # Every supplied subnet must belong to vnet_id. A subnet in a different VNet
     # would leave Postgres and Redis unreachable: the private DNS zones are
     # linked to vnet_id, and AKS could not route to them.
+    # Compared lowercased because Azure treats resource IDs as case-insensitive
+    # and will hand back "resourcegroups" in some contexts and "resourceGroups"
+    # in others. Only the comparison is lowered; Azure still gets the original.
     precondition {
       condition = var.create_vnet || alltrue([
         for id in [var.aks_subnet_id, var.postgres_subnet_id, var.redis_subnet_id] :
-        id == "" || startswith(id, "${var.vnet_id}/subnets/")
+        id == "" || startswith(lower(id), lower("${var.vnet_id}/subnets/"))
       ])
       error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
     }
@@ -187,6 +209,19 @@ resource "terraform_data" "validate_network" {
         try(d.properties.serviceName, "")
       ], "Microsoft.DBforPostgreSQL/flexibleServers")
       error_message = "The subnet given as postgres_subnet_id is not delegated to Microsoft.DBforPostgreSQL/flexibleServers. Add that delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) to the subnet, or clear postgres_subnet_id and let Terraform create a correctly delegated subnet."
+    }
+
+    # The AKS subnet is allowlisted by ID on both the blob storage firewall
+    # (hardcoded default-deny) and the Key Vault firewall. Azure rejects a subnet
+    # rule whose subnet lacks the matching service endpoint, and azurerm exposes
+    # no way to skip that check, so both endpoints are required regardless of
+    # keyvault_default_action.
+    precondition {
+      condition = length(data.azurerm_subnet.byo_aks_subnet) == 0 || alltrue([
+        for endpoint in ["Microsoft.Storage", "Microsoft.KeyVault"] :
+        contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
+      ])
+      error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, or clear aks_subnet_id and let Terraform create one."
     }
   }
 }

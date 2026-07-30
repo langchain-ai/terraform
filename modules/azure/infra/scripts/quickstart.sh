@@ -389,7 +389,19 @@ _ask_subnet() {
   _SUBNET_ID="$_REPLY"
   if [[ -z "$_SUBNET_ID" ]]; then
     _ask "CIDR for the new ${label} subnet" "$default_cidr"
-    _SUBNET_CIDR_LINE="${cidr_var} = [\"$_REPLY\"]"
+    # Padded so the three prefix lines line up with each other in the tfvars.
+    _SUBNET_CIDR_LINE="$(printf '%-30s = ["%s"]' "$cidr_var" "$_REPLY")"
+  fi
+}
+
+# One subnet's line on the review screen: the ID being reused, or the CIDR
+# Terraform will carve. Lets an operator catch a pasted ID before anything runs.
+_subnet_review() {
+  local id="$1" cidr_line="$2"
+  if [[ -n "$id" ]]; then
+    echo "reuse   $id"
+  else
+    echo "create  ${cidr_line#*= }"
   fi
 }
 
@@ -1021,6 +1033,12 @@ while true; do
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
+  if [[ "$CREATE_VNET" == "false" ]]; then
+    printf "  %-24s %s\n" "   VNet ID:"           "$VNET_ID"
+    printf "  %-24s %s\n" "   AKS subnet:"        "$(_subnet_review "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE")"
+    printf "  %-24s %s\n" "   PostgreSQL subnet:" "$(_subnet_review "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE")"
+    printf "  %-24s %s\n" "   Redis subnet:"      "$(_subnet_review "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE")"
+  fi
   printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
   [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"

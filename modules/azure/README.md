@@ -801,6 +801,14 @@ LangSmith one, and get the settings each service needs:
 Address prefixes must fit inside your VNet's address space, must not overlap an
 existing subnet, and must not overlap `aks_service_cidr` (default `10.0.64.0/20`).
 
+### What a subnet you supply must already have
+
+| Subnet | Requirement |
+|--------|-------------|
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet |
+| Redis | No delegation |
+
 ### What Terraform checks before applying
 
 These fail at plan time with an actionable message rather than partway through
@@ -810,7 +818,12 @@ an apply:
 - every supplied subnet is a subnet of `vnet_id` — one in a different VNet would
   be unreachable, since the private DNS zones are linked to `vnet_id`
 - a supplied Postgres subnet already carries the `flexibleServers` delegation
+- a supplied AKS subnet carries both service endpoints
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
+
+The last two checks read the subnets you supplied, so whoever runs `terraform
+plan` needs read access to them. They usually sit in the network team's resource
+group rather than the LangSmith one.
 
 ### Not supported with an existing VNet
 
