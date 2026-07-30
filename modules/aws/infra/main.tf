@@ -125,6 +125,18 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.create_cert_manager_irsa || var.letsencrypt_email != ""
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
+
+    # Two gateway controllers share one ALB target group (all three
+    # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
+    # gateway_target_port can only describe one of them, so a second controller
+    # leaves both permanently unhealthy. init-values.sh rejects this combination
+    # too, but only after apply — fail at plan time instead.
+    precondition {
+      condition = length([
+        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway, var.enable_nginx_ingress] : true if enabled
+      ]) <= 1
+      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
+    }
   }
 }
 
@@ -388,7 +400,7 @@ module "alb" {
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
   bucket_suffix          = random_id.bucket_suffix.hex
-  enable_envoy_gateway   = var.enable_envoy_gateway
+  enable_envoy_gateway   = local.enable_envoy_gateway
   enable_istio_gateway   = var.enable_istio_gateway
   enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
@@ -407,7 +419,7 @@ module "alb" {
 # NGINX Ingress:  port 80    (ingress-nginx-controller)
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
-  count = var.enable_envoy_gateway ? 1 : 0
+  count = local.enable_envoy_gateway ? 1 : 0
 
   # Target the NODE security group (attached to EC2 instances and pod ENIs via VPC-CNI).
   # The cluster primary SG is on the control plane only — not on worker nodes.
@@ -538,7 +550,7 @@ module "k8s_bootstrap" {
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
 
-  enable_envoy_gateway     = var.enable_envoy_gateway
+  enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
   enable_nginx_ingress     = var.enable_nginx_ingress
   gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
