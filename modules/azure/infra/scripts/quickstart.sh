@@ -194,6 +194,26 @@ VNET_ID=""
 AKS_SUBNET_ID=""
 POSTGRES_SUBNET_ID=""
 REDIS_SUBNET_ID=""
+AKS_SUBNET_CIDR_LINE=""
+POSTGRES_SUBNET_CIDR_LINE=""
+REDIS_SUBNET_CIDR_LINE=""
+
+# Ask for one subnet in bring-your-own-VNet mode. An empty answer means
+# "Terraform creates it", which then needs a CIDR to carve out of the VNet.
+# Sets _SUBNET_ID and _SUBNET_CIDR_LINE.
+_ask_subnet() {
+  local label="$1" cidr_var="$2" default_cidr="$3" note="$4"
+  _SUBNET_ID=""
+  _SUBNET_CIDR_LINE=""
+  echo ""
+  _hint "$note"
+  _ask "${label} subnet resource ID (Enter = let Terraform create it)" ""
+  _SUBNET_ID="$_REPLY"
+  if [[ -z "$_SUBNET_ID" ]]; then
+    _ask "CIDR for the new ${label} subnet" "$default_cidr"
+    _SUBNET_CIDR_LINE="${cidr_var} = [\"$_REPLY\"]"
+  fi
+}
 
 _run_section_3() {
   _section "3. Networking"
@@ -203,24 +223,63 @@ _run_section_3() {
 
   CREATE_VNET="true"
   VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
+  AKS_SUBNET_CIDR_LINE=""; POSTGRES_SUBNET_CIDR_LINE=""; REDIS_SUBNET_CIDR_LINE=""
 
   if _ask_yn "Create a new VNet? (recommended)" "y"; then
     CREATE_VNET="true"
-  else
-    CREATE_VNET="false"
+    return
+  fi
+
+  CREATE_VNET="false"
+
+  # This section can be re-run from the review menu, after AGIC or a bastion has
+  # already been chosen. Neither has a bring-your-own subnet input, so leaving
+  # them set would emit a tfvars that terraform plan rejects. Reset and say so.
+  if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
+    INGRESS_CONTROLLER="nginx"
+    AGW_SKU_TIER_LINE=""
+    _red "  AGIC needs a Terraform-managed VNet — ingress controller reset to nginx."
     echo ""
-    _hint "Bring Your Own VNet — you must provide existing subnet resource IDs."
-    _hint "The PostgreSQL subnet must have Microsoft.DBforPostgreSQL/flexibleServers delegation."
+  fi
+  if [[ "$CREATE_BASTION" == "true" ]]; then
+    CREATE_BASTION="false"
+    _red "  The bastion needs a Terraform-managed VNet — bastion disabled."
     echo ""
+  fi
+
+  echo ""
+  _hint "Bring Your Own VNet — LangSmith deploys into a VNet you already own."
+  _hint "Each subnet below is optional. Paste a subnet resource ID to reuse an"
+  _hint "existing subnet, or press Enter and Terraform creates it inside your VNet"
+  _hint "with the settings that service needs."
+  echo ""
+
+  # Matched against the same shape the vnet_id variable validates, so a typo is
+  # caught here rather than at terraform plan.
+  local vnet_re='^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/virtualNetworks/[^/]+$'
+  while true; do
     _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" ""
     VNET_ID="$_REPLY"
-    _ask "AKS subnet resource ID (/subscriptions/.../subnets/...)" ""
-    AKS_SUBNET_ID="$_REPLY"
-    _ask "PostgreSQL subnet resource ID (must have flexibleServers delegation)" ""
-    POSTGRES_SUBNET_ID="$_REPLY"
-    _ask "Redis subnet resource ID" ""
-    REDIS_SUBNET_ID="$_REPLY"
-  fi
+    [[ "$VNET_ID" =~ $vnet_re ]] && break
+    _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
+    echo ""
+  done
+
+  _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
+    "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+  AKS_SUBNET_ID="$_SUBNET_ID"; AKS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
+
+  _ask_subnet "PostgreSQL" "postgres_subnet_address_prefix" "10.0.32.0/20" \
+    "An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and contain nothing else. A new one gets that delegation automatically."
+  POSTGRES_SUBNET_ID="$_SUBNET_ID"; POSTGRES_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
+
+  _ask_subnet "Redis" "redis_subnet_address_prefix" "10.0.48.0/20" \
+    "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint."
+  REDIS_SUBNET_ID="$_SUBNET_ID"; REDIS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
+
+  echo ""
+  _hint "Any CIDR you entered must fit inside your VNet's address space, not overlap"
+  _hint "an existing subnet, and not overlap the Kubernetes service CIDR (10.0.64.0/20)."
 }
 
 # -- 4. AKS ------------------------------------------------------------------
@@ -273,29 +332,44 @@ _run_section_5() {
   _hint "istio-addon — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
   _hint "istio       — self-managed Istio via Helm; more control, more operational overhead."
   _hint "agic        — Azure Application Gateway; enterprise WAF built-in, but requires a"
-  _hint "              dedicated subnet at VNet creation time (cannot add to existing VNet)."
+  _hint "              dedicated /24 subnet in a Terraform-managed VNet."
   _hint "envoy-gateway — Gateway API native; useful if you're standardizing on Gateway API."
   _hint "Start with nginx unless you have a specific reason to use another."
 
   ISTIO_ADDON_REVISION_LINE=""
   AGW_SKU_TIER_LINE=""
 
-  _ask_choice "Which ingress controller?" \
-    "nginx         — NGINX via Helm (recommended default)" \
-    "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
-    "istio         — Istio via Helm (self-managed)" \
-    "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
-    "envoy-gateway — Envoy Gateway (Gateway API native)" \
-    "none          — skip (bring your own)"
+  while true; do
+    _ask_choice "Which ingress controller?" \
+      "nginx         — NGINX via Helm (recommended default)" \
+      "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
+      "istio         — Istio via Helm (self-managed)" \
+      "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
+      "envoy-gateway — Envoy Gateway (Gateway API native)" \
+      "none          — skip (bring your own)"
 
-  case "$_CHOICE" in
-    1) INGRESS_CONTROLLER="nginx" ;;
-    2) INGRESS_CONTROLLER="istio-addon" ;;
-    3) INGRESS_CONTROLLER="istio" ;;
-    4) INGRESS_CONTROLLER="agic" ;;
-    5) INGRESS_CONTROLLER="envoy-gateway" ;;
-    6) INGRESS_CONTROLLER="none" ;;
-  esac
+    case "$_CHOICE" in
+      1) INGRESS_CONTROLLER="nginx" ;;
+      2) INGRESS_CONTROLLER="istio-addon" ;;
+      3) INGRESS_CONTROLLER="istio" ;;
+      4) INGRESS_CONTROLLER="agic" ;;
+      5) INGRESS_CONTROLLER="envoy-gateway" ;;
+      6) INGRESS_CONTROLLER="none" ;;
+    esac
+
+    # There is no agic_subnet_id input, so the Application Gateway subnet can
+    # only be carved out of a VNet Terraform owns. Catch it here rather than
+    # letting terraform plan reject the generated tfvars.
+    if [[ "$INGRESS_CONTROLLER" == "agic" && "$CREATE_VNET" == "false" ]]; then
+      _red "  AGIC is not available with a bring-your-own VNet."
+      echo ""
+      _hint "Application Gateway needs a dedicated /24 subnet that Terraform can only"
+      _hint "create in a VNet it manages. Pick another controller, or re-run section 3"
+      _hint "and let Terraform create the VNet."
+      continue
+    fi
+    break
+  done
 
   echo ""
   printf "  Ingress: $(_cyan "$INGRESS_CONTROLLER")\n"
@@ -611,7 +685,11 @@ _run_section_10() {
     echo ""
     _hint "Bastion host    — jump VM for direct SSH to AKS nodes (private cluster debugging)."
     _hint "                  Not needed for most deployments unless nodes are on a private subnet."
-    if _ask_yn "Create bastion host? (for node-level troubleshooting)" "n"; then
+    if [[ "$CREATE_VNET" == "false" ]]; then
+      # No bastion_subnet_id input exists, so the bastion subnet can only be
+      # created in a Terraform-managed VNet.
+      _hint "                  Unavailable with a bring-your-own VNet — skipped."
+    elif _ask_yn "Create bastion host? (for node-level troubleshooting)" "n"; then
       CREATE_BASTION="true"
     fi
   else
@@ -732,10 +810,15 @@ if [[ "$CREATE_VNET" == "false" ]]; then
   cat >> "$OUTPUT" << TFVARS
 create_vnet        = false
 vnet_id            = "${VNET_ID}"
-aks_subnet_id      = "${AKS_SUBNET_ID}"
-postgres_subnet_id = "${POSTGRES_SUBNET_ID}"
-redis_subnet_id    = "${REDIS_SUBNET_ID}"
 TFVARS
+  # A subnet ID reuses an existing subnet; its absence plus a CIDR tells
+  # Terraform to create that subnet inside the VNet above.
+  [[ -n "$AKS_SUBNET_ID" ]]      && echo "aks_subnet_id      = \"${AKS_SUBNET_ID}\"" >> "$OUTPUT"
+  [[ -n "$POSTGRES_SUBNET_ID" ]] && echo "postgres_subnet_id = \"${POSTGRES_SUBNET_ID}\"" >> "$OUTPUT"
+  [[ -n "$REDIS_SUBNET_ID" ]]    && echo "redis_subnet_id    = \"${REDIS_SUBNET_ID}\"" >> "$OUTPUT"
+  [[ -n "$AKS_SUBNET_CIDR_LINE" ]]      && echo "$AKS_SUBNET_CIDR_LINE" >> "$OUTPUT"
+  [[ -n "$POSTGRES_SUBNET_CIDR_LINE" ]] && echo "$POSTGRES_SUBNET_CIDR_LINE" >> "$OUTPUT"
+  [[ -n "$REDIS_SUBNET_CIDR_LINE" ]]    && echo "$REDIS_SUBNET_CIDR_LINE" >> "$OUTPUT"
 else
   echo "# Using auto-created VNet (default)" >> "$OUTPUT"
 fi
