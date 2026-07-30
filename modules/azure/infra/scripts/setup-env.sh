@@ -107,7 +107,7 @@ except ImportError:
 echo ""
 echo "LangSmith — secret bootstrap"
 echo "  name_prefix : ${_name_prefix:-(empty)}"
-echo "  key_vault  : $_kv_name"
+echo "  key_vault   : $_kv_name"
 echo ""
 
 pg_password=$(_prompt "LANGSMITH_PG_PASSWORD"     "PostgreSQL admin password  ")
