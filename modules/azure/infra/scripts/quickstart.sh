@@ -449,12 +449,16 @@ _run_section_3() {
   echo ""
 
   # Matched against the same shape the vnet_id variable validates, so a typo is
-  # caught here rather than at terraform plan.
-  local vnet_re='^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/virtualNetworks/[^/]+$'
+  # caught here rather than at terraform plan. That validation is (?i), and Azure
+  # really does hand back both resourcegroups and resourceGroups, so compare
+  # lowercased — bash 3.2 has no ${var,,}.
+  local vnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+$'
+  local vnet_lc
   while true; do
     _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" "$VNET_ID"
     VNET_ID="$_REPLY"
-    [[ "$VNET_ID" =~ $vnet_re ]] && break
+    vnet_lc=$(printf '%s' "$VNET_ID" | tr '[:upper:]' '[:lower:]')
+    [[ "$vnet_lc" =~ $vnet_re ]] && break
     _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
     echo ""
   done

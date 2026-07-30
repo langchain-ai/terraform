@@ -159,7 +159,7 @@ All subnets are private. Postgres and Redis are accessible only from within the 
 ```
 <your existing VNet>
 ├── <existing subnet>            supplied via aks_subnet_id / postgres_subnet_id / redis_subnet_id
-└── langsmith-vnet<id>-subnet-*  created by Terraform for whichever IDs you left out
+└── langsmith-vnet-<name_prefix>-subnet-*  created by Terraform for whichever IDs you left out
 ```
 
 Each subnet is independently either supplied or created, so a VNet where the
