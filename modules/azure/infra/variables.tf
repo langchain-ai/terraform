@@ -152,7 +152,7 @@ variable "vnet_id" {
   default     = ""
 
   validation {
-    condition     = var.vnet_id == "" || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.vnet_id))
+    condition     = var.vnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.vnet_id))
     error_message = "vnet_id must be a full VNet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
   }
 }
@@ -161,26 +161,30 @@ variable "vnet_id" {
 # Each subnet is independent. Supply an ID to reuse an existing subnet; leave it
 # empty and Terraform creates that subnet inside vnet_id using the matching
 # *_subnet_address_prefix, with the correct delegation applied.
+#
+# The IDs are matched against the full 11-segment shape, case-insensitively.
+# Anchoring both ends is what lets main.tf index the segments positionally to
+# locate a supplied subnet, and Azure treats resource IDs as case-insensitive.
 
 variable "aks_subnet_id" {
   type        = string
-  description = "The id of an existing subnet to use for the AKS cluster. Leave empty to have Terraform create one in vnet_id using aks_subnet_address_prefix. Must have the Microsoft.Storage and Microsoft.KeyVault service endpoints if you enable the storage or Key Vault default-deny firewalls."
+  description = "The id of an existing subnet to use for the AKS cluster. Leave empty to have Terraform create one in vnet_id using aks_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage and Microsoft.KeyVault service endpoints: the blob storage firewall is always default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is absent. Terraform checks this at plan time."
   default     = ""
 
   validation {
-    condition     = var.aks_subnet_id == "" || can(regex("/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.aks_subnet_id))
-    error_message = "aks_subnet_id must be a full subnet resource ID ending in /virtualNetworks/<name>/subnets/<name>"
+    condition     = var.aks_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.aks_subnet_id))
+    error_message = "aks_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
   }
 }
 
 variable "postgres_subnet_id" {
   type        = string
-  description = "The id of an existing subnet to use for the Postgres server. Leave empty to have Terraform create one in vnet_id using postgres_subnet_address_prefix. An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and hold no other resources."
+  description = "The id of an existing subnet to use for the Postgres server. Leave empty to have Terraform create one in vnet_id using postgres_subnet_address_prefix. An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and hold no other resources. Terraform checks the delegation at plan time."
   default     = ""
 
   validation {
-    condition     = var.postgres_subnet_id == "" || can(regex("/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.postgres_subnet_id))
-    error_message = "postgres_subnet_id must be a full subnet resource ID ending in /virtualNetworks/<name>/subnets/<name>"
+    condition     = var.postgres_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.postgres_subnet_id))
+    error_message = "postgres_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
   }
 }
 
@@ -190,8 +194,8 @@ variable "redis_subnet_id" {
   default     = ""
 
   validation {
-    condition     = var.redis_subnet_id == "" || can(regex("/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.redis_subnet_id))
-    error_message = "redis_subnet_id must be a full subnet resource ID ending in /virtualNetworks/<name>/subnets/<name>"
+    condition     = var.redis_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.redis_subnet_id))
+    error_message = "redis_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
   }
 }
 
