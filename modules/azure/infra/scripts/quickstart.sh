@@ -763,7 +763,6 @@ CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
-REDIS_CAPACITY=1
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -1198,14 +1197,6 @@ if [[ "$PG_SOURCE" == "external" ]]; then
 postgres_admin_username      = "${PG_ADMIN_USER}"
 postgres_database_name       = "${PG_DB_NAME}"
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
-TFVARS
-fi
-
-if [[ "$REDIS_SOURCE" == "external" ]]; then
-  cat >> "$OUTPUT" << TFVARS
-
-# Azure Cache for Redis (P1 = 6 GB RAM — sufficient for most deployments)
-redis_capacity = ${REDIS_CAPACITY}
 TFVARS
 fi
 
