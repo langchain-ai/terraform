@@ -147,6 +147,14 @@ EXISTING_HOSTNAME=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_HOSTNAME=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_HOSTNAME=""
+  # HOSTNAME must stay bare: the output block writes "${_protocol}://${HOSTNAME}",
+  # so reusing the stored value verbatim prepends a second scheme on every re-run
+  # ("http://http://alb..."), which breaks OAuth redirects and deployment URLs.
+  # Loop rather than strip once so an already-corrupted file self-heals.
+  while [[ "$EXISTING_HOSTNAME" =~ ^https?:// ]]; do
+    EXISTING_HOSTNAME="${EXISTING_HOSTNAME#http://}"
+    EXISTING_HOSTNAME="${EXISTING_HOSTNAME#https://}"
+  done
 fi
 if [[ -n "$_langsmith_domain" ]]; then
   HOSTNAME="$_langsmith_domain"
