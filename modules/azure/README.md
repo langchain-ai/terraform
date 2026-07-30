@@ -735,16 +735,31 @@ LangSmith one, and get the settings each service needs:
 | Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers` — Flexible Server injects its NICs here, and no other resource may share the subnet |
 | Redis | No delegation. Azure Managed Redis is reached through a private endpoint placed in this subnet; a delegated subnet would reject it |
 
-Address prefixes must fit inside your VNet's address space, must not overlap an
-existing subnet, and must not overlap `aks_service_cidr` (default `10.0.64.0/20`).
+The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
+builds, so they are a starting point rather than a default that fits your
+network. Each must sit inside your VNet's address space, must not overlap an
+existing subnet, and must not overlap `aks_service_cidr`. The AKS prefix also
+has to be large enough for the node pools, and plan checks that whether the
+subnet is one you supplied or one Terraform carves.
+
+`aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
+it, and AKS requires a range that nothing on or connected to your VNet uses. The
+`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
+your own address space can be accepted when the cluster is created and break
+later, so plan makes you name one. `aks_dns_service_ip` follows from it
+automatically as the eleventh address unless you set one.
 
 ### What a subnet you supply must already have
 
 | Subnet | Requirement |
 |--------|-------------|
-| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to |
-| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet |
-| Redis | No delegation |
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
+| Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
+
+Supply three different subnets. Sharing one between services fails during apply,
+because the Postgres subnet is delegated and Azure permits nothing else inside a
+delegated subnet.
 
 ### What Terraform checks before applying
 
@@ -754,13 +769,19 @@ an apply:
 - `vnet_id` is present and is a well-formed VNet resource ID
 - every supplied subnet is a subnet of `vnet_id` — one in a different VNet would
   be unreachable, since the private DNS zones are linked to `vnet_id`
+- the supplied subnet IDs are three different subnets
 - a supplied Postgres subnet already carries the `flexibleServers` delegation
 - a supplied AKS subnet carries both service endpoints
+- the AKS subnet has enough addresses for the configured node pools, whether you
+  supplied it or Terraform creates it. Undersizing is the one mistake that
+  survives apply: the cluster starts, and the autoscaler later stalls short of
+  `max_count` once the subnet runs dry
+- `aks_service_cidr` is set
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
 
-The last two checks read the subnets you supplied, so whoever runs `terraform
-plan` needs read access to them. They usually sit in the network team's resource
-group rather than the LangSmith one.
+The checks that inspect a supplied subnet read it at plan time, so whoever runs
+`terraform plan` needs read access to whichever subnets you supply. They usually
+sit in the network team's resource group rather than the LangSmith one.
 
 ### Not supported with an existing VNet
 
