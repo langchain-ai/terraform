@@ -478,7 +478,7 @@ CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
-REDIS_CAPACITY=1
+AMR_SKU="Balanced_B0"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -500,7 +500,7 @@ _run_section_7() {
   PG_ADMIN_USER="langsmith"
   PG_DB_NAME="langsmith"
   PG_DELETION_PROTECTION="false"
-  REDIS_CAPACITY=1
+  AMR_SKU="Balanced_B0"
 
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
@@ -510,7 +510,7 @@ _run_section_7() {
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Cache for Redis Premium P1 — 6 GB)?" "y"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "y"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
@@ -528,6 +528,16 @@ _run_section_7() {
   if [[ "$PG_SOURCE" == "external" ]]; then
     PG_DELETION_PROTECTION="false"
     [[ "$PROFILE" == "prod" ]] && PG_DELETION_PROTECTION="true"
+  fi
+
+  # Without this prompt every quickstart deployment silently took the Balanced_B0
+  # module default, which some regions cannot allocate.
+  if [[ "$REDIS_SOURCE" == "external" ]]; then
+    echo ""
+    _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
+    _hint "if the region reports AllocationFailed."
+    _ask "Azure Managed Redis SKU" "Balanced_B0"
+    AMR_SKU="$_REPLY"
   fi
 
   echo ""
@@ -814,8 +824,8 @@ fi
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
-# Azure Cache for Redis (P1 = 6 GB RAM — sufficient for most deployments)
-redis_capacity = ${REDIS_CAPACITY}
+# Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
+amr_sku = "${AMR_SKU}"   # Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
 TFVARS
 fi
 
