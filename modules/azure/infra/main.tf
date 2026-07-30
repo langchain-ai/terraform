@@ -26,10 +26,13 @@ locals {
   # Derived resource names — all prefixed with "langsmith-<identifier>"
   resource_group_name = "langsmith-rg${local.identifier}"
   vnet_name           = "langsmith-vnet${local.identifier}"
-  aks_name            = "langsmith-aks${local.identifier}"
-  postgres_name       = "langsmith-postgres${local.identifier}"
-  redis_name          = "langsmith-redis${local.identifier}"
-  blob_name           = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
+
+  # Cluster name: derived for new clusters, or the customer's existing cluster
+  # name when attaching to one (create_cluster = false).
+  aks_name      = var.create_cluster || var.existing_cluster_name == "" ? "langsmith-aks${local.identifier}" : var.existing_cluster_name
+  postgres_name = "langsmith-postgres${local.identifier}"
+  redis_name    = "langsmith-redis${local.identifier}"
+  blob_name     = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
 
   # Key Vault name: max 24 chars, globally unique.
   # Uses the user-supplied keyvault_name or derives from identifier.
@@ -107,13 +110,19 @@ module "aks" {
   service_cidr        = var.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
 
+  # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
+  create_cluster                       = var.create_cluster
+  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name
+
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads)
-  additional_node_pools = var.additional_node_pools
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # On a pre-existing cluster whose node pools the customer owns, pass an empty
+  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
+  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller
