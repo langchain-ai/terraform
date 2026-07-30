@@ -46,8 +46,10 @@ locals {
   vnet_name           = "${local.name_base}-vnet${local.name_suffix}"
 
   # Cluster name: derived for new clusters, or the customer's existing cluster
-  # name when attaching to one (create_cluster = false).
-  aks_name = var.create_cluster || var.existing_cluster_name == "" ? "${local.name_base}-aks${local.name_suffix}" : var.existing_cluster_name
+  # name when attaching to one (create_cluster = false). No fallback in the
+  # attach case — an unset existing_cluster_name fails on the aks module's
+  # precondition instead of looking up a cluster that was never created.
+  aks_name = var.create_cluster ? "${local.name_base}-aks${local.name_suffix}" : var.existing_cluster_name
 
   # Globally-unique names — hashed, and each takes an explicit override so a
   # single colliding name can be pinned without renaming the whole deployment.

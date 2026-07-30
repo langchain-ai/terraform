@@ -61,7 +61,16 @@ az aks show --name <cluster> --resource-group <rg> \
 | Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
 | API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
 
-`aks_subnet_id` must be the existing cluster's node subnet — it's what the Blob and Key Vault firewalls allowlist, so a mismatch leaves pods unable to read secrets or write traces. Terraform derives any additional node pools' subnet from the cluster itself; set `existing_cluster_node_pools_managed = false` if the customer's platform team owns all node pools (you must then confirm the cluster already has capacity for ClickHouse and LangGraph workloads).
+`aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts. Set `existing_cluster_node_pools_managed = false` if the customer's platform team owns all node pools (you must then confirm the cluster already has capacity for ClickHouse and LangGraph workloads).
+
+Terraform also warns when `location` doesn't match the cluster's region, since Key Vault, Blob, PostgreSQL, and Redis are created in `location` and pod traffic to them would cross regions.
+
+These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
+
+- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
+- `aks_service_cidr`, `aks_dns_service_ip`
+- `aks_authorized_ip_ranges`
+- `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
 
 The `agic` and `istio-addon` ingress modes require `create_cluster = true` — both configure AKS-managed add-ons that only apply to a Terraform-owned cluster. Use `nginx`, `istio`, or `envoy-gateway` instead.
 
