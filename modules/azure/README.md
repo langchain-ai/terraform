@@ -165,6 +165,14 @@ unchanged, so `terraform plan` should report no changes to naming. Leaving
 `identifier` in `terraform.tfvars` fails the plan with a message pointing here
 rather than silently renaming your resources.
 
+The `environment` tag does change. It used to default to `dev` and accept only
+`dev`, `staging`, or `prod`; it now falls back to the deployment name and takes
+any value. A deployment that set `identifier = "-prod"` and never set
+`environment` re-tags from `dev` to `prod` on the next apply, and one named
+`myco` tags `environment = myco`. Terraform updates tags in place, so nothing is
+replaced, but cost allocation and Azure Policy rules keyed on the old value stop
+matching. Set `environment = "dev"` explicitly to keep the old tag.
+
 ---
 
 ## Deployment Passes
