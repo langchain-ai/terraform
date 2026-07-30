@@ -173,7 +173,7 @@ variable "create_cluster" {
 
 variable "existing_cluster_name" {
   type        = string
-  description = "Name of the pre-existing AKS cluster to attach to. Required when create_cluster = false. When empty, the derived name 'langsmith-aks<identifier>' is used."
+  description = "Name of the pre-existing AKS cluster to attach to. Required when create_cluster = false, leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
 }
 
