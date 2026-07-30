@@ -52,21 +52,21 @@ _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-_enable_envoy_gateway=false
-_tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
-
-_enable_istio_gateway=false
-_tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
-
-_enable_nginx_ingress=false
-_tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+# Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
+# is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
+# Envoy still deploys it. Reading the applied state keeps this script in agreement with
+# what Terraform actually built.
+_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
+_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
+_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
 
 _gateway_modes=0
 [[ "$_enable_envoy_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 [[ "$_enable_istio_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 [[ "$_enable_nginx_ingress" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 if (( _gateway_modes > 1 )); then
-  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true in terraform.tfvars." >&2
+  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true." >&2
+  echo "       Envoy Gateway is the default when enable_envoy_gateway is unset — set it to false explicitly in terraform.tfvars to run Istio or NGINX, then re-apply." >&2
   exit 1
 fi
 
