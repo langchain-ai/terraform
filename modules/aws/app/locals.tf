@@ -59,9 +59,10 @@ locals {
     "eks.amazonaws.com/role-arn" = local.langsmith_irsa_role_arn
   }
 
-  # Chart line: SmithDB ships in-chart on 0.16, so enabling it selects ~0.16.x.
-  # An explicit chart_version always wins.
-  chart_version_effective = var.chart_version != "" ? var.chart_version : (var.enable_smithdb ? "~0.16.0" : null)
+  # SmithDB never changes the chart line implicitly. Operators must explicitly
+  # select a stable 0.16 or newer release when enabling it.
+  chart_version_effective         = var.chart_version != "" ? var.chart_version : null
+  smithdb_chart_version_supported = can(regex("^~?0\\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\\.[0-9]+)?$", var.chart_version))
 
   # Components that need IRSA service account annotations.
   # Addon components are only included when their feature is enabled —
@@ -141,6 +142,22 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_smithdb || fileexists("${local.values_path}/langsmith-values-smithdb.yaml")
       error_message = "enable_smithdb = true but langsmith-values-smithdb.yaml is missing. Run: make init-values."
+    }
+    precondition {
+      condition     = !var.enable_smithdb || local.smithdb_chart_version_supported
+      error_message = "enable_smithdb requires an explicit stable chart_version of 0.16 or newer."
+    }
+    precondition {
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
   }
 }

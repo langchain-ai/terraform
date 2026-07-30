@@ -61,7 +61,6 @@ smithdb_object_store_bucket=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_
 smithdb_irsa_role_arn=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null || echo "")
 smithdb_metastore_use_ssl=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null || echo "true")
 smithdb_metastore_port=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_port 2>/dev/null || echo "5432")
-smithdb_image_pull_secret_name=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_image_pull_secret_name 2>/dev/null || echo "")
 
 # ── Read region and environment from terraform output ────────────────────────
 
@@ -102,8 +101,7 @@ cat > "$OUT_FILE" <<EOF
   "smithdb_object_store_bucket": "$smithdb_object_store_bucket",
   "smithdb_irsa_role_arn": "$smithdb_irsa_role_arn",
   "smithdb_metastore_use_ssl": $smithdb_metastore_use_ssl,
-  "smithdb_metastore_port": $smithdb_metastore_port,
-  "smithdb_image_pull_secret_name": "$smithdb_image_pull_secret_name"
+  "smithdb_metastore_port": $smithdb_metastore_port
 }
 EOF
 

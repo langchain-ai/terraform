@@ -149,8 +149,18 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = !var.enable_smithdb || var.smithdb_dockerhub_username == "" || var.smithdb_dockerhub_pat != ""
-      error_message = "smithdb_dockerhub_pat is required when smithdb_dockerhub_username is set. Set TF_VAR_smithdb_dockerhub_pat."
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
   }
 }
@@ -789,17 +799,6 @@ resource "kubernetes_secret" "standalone_insights_redis" {
 locals {
   smithdb_name        = "${local.base_name}-smithdb"
   smithdb_bucket_name = var.smithdb_bucket_name != "" ? var.smithdb_bucket_name : "${local.base_name}-smithdb-${random_id.bucket_suffix.hex}"
-
-  # Docker Hub image-pull secret for private SmithDB images (early access).
-  smithdb_dockerhub_config_json = var.enable_smithdb && var.smithdb_dockerhub_username != "" ? jsonencode({
-    auths = {
-      "https://index.docker.io/v1/" = {
-        username = var.smithdb_dockerhub_username
-        password = var.smithdb_dockerhub_pat
-        auth     = base64encode("${var.smithdb_dockerhub_username}:${var.smithdb_dockerhub_pat}")
-      }
-    }
-  }) : null
 }
 
 module "smithdb" {
@@ -860,21 +859,6 @@ resource "kubernetes_secret" "smithdb_local" {
     smithdb_metastore_db_password = module.smithdb[0].metastore_password
   }
   type       = "Opaque"
-  depends_on = [module.k8s_bootstrap]
-}
-
-# Optional image-pull secret for private (early-access) SmithDB images.
-resource "kubernetes_secret" "smithdb_dockerhub" {
-  count = local.smithdb_dockerhub_config_json == null ? 0 : 1
-
-  metadata {
-    name      = "dockerhub-private"
-    namespace = var.langsmith_namespace
-  }
-  type = "kubernetes.io/dockerconfigjson"
-  data = {
-    ".dockerconfigjson" = local.smithdb_dockerhub_config_json
-  }
   depends_on = [module.k8s_bootstrap]
 }
 

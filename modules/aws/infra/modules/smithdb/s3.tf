@@ -48,7 +48,7 @@ data "aws_iam_policy_document" "object_store" {
     }
 
     actions   = ["s3:*"]
-    resources = [aws_s3_bucket.object_store.arn, "${aws_s3_bucket.object_store.arn}/*"]
+    resources = [local.bucket_arn, "${local.bucket_arn}/*"]
 
     condition {
       test     = "Bool"
@@ -56,6 +56,7 @@ data "aws_iam_policy_document" "object_store" {
       values   = ["false"]
     }
   }
+
 }
 
 resource "aws_s3_bucket_policy" "object_store" {

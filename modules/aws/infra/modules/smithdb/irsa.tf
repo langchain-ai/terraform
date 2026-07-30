@@ -51,6 +51,19 @@ data "aws_iam_policy_document" "s3_access" {
     ]
     resources = ["${local.bucket_arn}/*"]
   }
+
+  dynamic "statement" {
+    for_each = var.s3_kms_key_arn != "" ? [var.s3_kms_key_arn] : []
+    content {
+      sid    = "ObjectStoreKms"
+      effect = "Allow"
+      actions = [
+        "kms:Decrypt",
+        "kms:GenerateDataKey",
+      ]
+      resources = [statement.value]
+    }
+  }
 }
 
 resource "aws_iam_role" "smithdb" {

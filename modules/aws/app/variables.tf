@@ -88,7 +88,7 @@ variable "langsmith_domain" {
 # SmithDB (chart 0.16+) — auto-populated from infra outputs by make init-app.
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
-  description = "Deploy the in-chart SmithDB component. Requires the SmithDB cloud dependencies from infra (enable_smithdb = true there) and the 0.16 chart line."
+  description = "Deploy the in-chart SmithDB component. Requires the SmithDB cloud dependencies from infra (enable_smithdb = true there) and an explicit chart version of 0.16 or newer."
   type        = bool
   default     = false
 }
@@ -117,14 +117,20 @@ variable "smithdb_metastore_port" {
   default     = 5432
 }
 
-variable "smithdb_image_pull_secret_name" {
-  description = "Image-pull secret name for private SmithDB images, or empty to use the chart's default images (from infra output)."
-  type        = string
-  default     = ""
+variable "smithdb_ingestion_enabled" {
+  description = "Route new LangSmith writes to SmithDB as well as ClickHouse. Enable only after SmithDB services pass readiness checks."
+  type        = bool
+  default     = false
 }
 
-variable "smithdb_use_smithdb_endpoints" {
-  description = "Serve LangSmith UI/API reads from SmithDB (frontend.useSmithDBEndpoints). Keep false until SmithDB pods are healthy and segments are flushing to S3, then flip to true and re-apply."
+variable "smithdb_migration_enabled" {
+  description = "Enable historical ClickHouse-to-SmithDB migration integration after dual ingestion is healthy."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  description = "Serve LangSmith queries from SmithDB after ingestion and any required historical migration are validated."
   type        = bool
   default     = false
 }
@@ -152,7 +158,7 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version. Empty string = latest. SmithDB requires an explicit stable version of 0.16 or newer."
   type        = string
   default     = ""
 }

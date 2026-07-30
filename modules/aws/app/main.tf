@@ -246,7 +246,7 @@ resource "helm_release" "langsmith" {
     var.enable_insights ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
     var.enable_polly ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
     # 5. SmithDB — overlay (from examples) + dynamic overrides. Layered last so
-    #    object-store/IRSA/useSmithDBEndpoints leaves win.
+    #    object-store, IRSA, and staged integration gates win.
     var.enable_smithdb ? [file("${local.values_path}/langsmith-values-smithdb.yaml"), yamlencode(local.smithdb_overrides)] : [],
   )
 }
@@ -349,51 +349,49 @@ locals {
     }
   }
 
-  # SmithDB override — object store, IRSA, metastore secret mapping, and the
-  # read-cutover leaf. Mirrors what init-values.sh writes for the scripts path.
-  # The smithdb-local and dockerhub-private secrets are created by the infra
-  # module; here we only reference them.
-  smithdb_overrides = merge(
-    {
-      smithdb = {
-        serviceAccount = {
-          annotations = {
-            "eks.amazonaws.com/role-arn" = var.smithdb_irsa_role_arn
-          }
-        }
-        config = {
-          objectStore = {
-            type   = "s3"
-            bucket = var.smithdb_object_store_bucket
-            s3 = {
-              region                   = local.region
-              accessKeyIdSecretKey     = ""
-              secretAccessKeySecretKey = ""
-            }
-          }
-          metastore = {
-            hostSecretKey     = "smithdb_metastore_db_host"
-            databaseSecretKey = "smithdb_metastore_db_name"
-            usernameSecretKey = "smithdb_metastore_db_username"
-            passwordSecretKey = "smithdb_metastore_db_password"
-            port              = tostring(var.smithdb_metastore_port)
-            useSsl            = var.smithdb_metastore_use_ssl
-          }
-        }
-        metastoreMigration = {
-          useSsl = var.smithdb_metastore_use_ssl
-        }
-        langsmith = {
-          frontend = {
-            useSmithDBEndpoints = var.smithdb_use_smithdb_endpoints
-          }
+  # SmithDB override — object store, IRSA, metastore secret mapping, and staged
+  # LangSmith integration gates. Mirrors the scripts path.
+  # The smithdb-local secret is created by the infra module.
+  smithdb_overrides = {
+    smithdb = {
+      serviceAccount = {
+        annotations = {
+          "eks.amazonaws.com/role-arn" = var.smithdb_irsa_role_arn
         }
       }
-    },
-    var.smithdb_image_pull_secret_name != "" ? {
-      images = {
-        imagePullSecrets = [{ name = var.smithdb_image_pull_secret_name }]
+      config = {
+        objectStore = {
+          type   = "s3"
+          bucket = var.smithdb_object_store_bucket
+          s3 = {
+            region                   = local.region
+            accessKeyIdSecretKey     = ""
+            secretAccessKeySecretKey = ""
+          }
+        }
+        metastore = {
+          hostSecretKey     = "smithdb_metastore_db_host"
+          databaseSecretKey = "smithdb_metastore_db_name"
+          usernameSecretKey = "smithdb_metastore_db_username"
+          passwordSecretKey = "smithdb_metastore_db_password"
+          port              = tostring(var.smithdb_metastore_port)
+          useSsl            = var.smithdb_metastore_use_ssl
+        }
       }
-    } : {},
-  )
+      metastoreMigration = {
+        useSsl = var.smithdb_metastore_use_ssl
+      }
+      langsmith = {
+        ingestion = {
+          enabled = var.smithdb_ingestion_enabled
+        }
+        migration = {
+          enabled = var.smithdb_migration_enabled
+        }
+        query = {
+          enabled = var.smithdb_query_enabled
+        }
+      }
+    }
+  }
 }

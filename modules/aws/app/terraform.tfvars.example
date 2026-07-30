@@ -11,8 +11,15 @@ admin_email = "admin@example.com"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # hostname = "langsmith.example.com"   # Defaults to ALB DNS name
-# chart_version = "0.7.0"              # Empty = latest
+# chart_version = "0.15.1"             # SmithDB requires an explicit 0.16 or newer version
 # release_name  = "langsmith"
+
+# ── SmithDB staged rollout ────────────────────────────────────────────────────
+# enable_smithdb              = true
+# chart_version               = "0.16.21"
+# smithdb_ingestion_enabled   = false
+# smithdb_migration_enabled   = false
+# smithdb_query_enabled       = false
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
 # "production"       = multi-replica with HPA (~20 users, ~100 traces/sec)

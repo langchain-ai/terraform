@@ -83,7 +83,7 @@ variable "metastore_instance_class" {
 variable "metastore_engine_version" {
   type        = string
   description = "PostgreSQL engine version for the SmithDB metastore."
-  default     = "16"
+  default     = "18"
 }
 
 variable "metastore_allocated_storage" {
@@ -113,7 +113,7 @@ variable "metastore_backup_retention_period" {
 variable "metastore_skip_final_snapshot" {
   type        = bool
   description = "Skip the final snapshot when the SmithDB metastore RDS instance is destroyed. Set false for production."
-  default     = true
+  default     = false
 }
 
 variable "metastore_master_username" {
@@ -166,7 +166,7 @@ variable "external_metastore_password" {
 #------------------------------------------------------------------------------
 variable "bucket_name" {
   type        = string
-  description = "Name of the SmithDB object-store bucket. Must be globally unique."
+  description = "Name of the dedicated SmithDB object-store bucket. Must be globally unique."
 }
 
 variable "s3_kms_key_arn" {

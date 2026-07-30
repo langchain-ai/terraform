@@ -712,14 +712,28 @@ variable "langsmith_polly_encryption_key" {
 # account, and instance-store + compute node groups (SmithDB requires local
 # NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
 #
-# Migration path (SmithDB Customer Engineering docs): chart 0.16 opt-in with
-# dual-ingest -> 0.17 installs SmithDB, deprovision ClickHouse -> 0.18 removes
-# ClickHouse. The historical ClickHouse->SmithDB backfill is owned by EPD and is
-# not performed by Terraform.
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Requires the 0.16 chart line in Pass 2. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Requires an explicit chart version of 0.16 or newer in Pass 2. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  default     = false
+}
+
+variable "smithdb_ingestion_enabled" {
+  type        = bool
+  description = "Route new LangSmith writes to SmithDB after service validation."
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  type        = bool
+  description = "Enable historical ClickHouse-to-SmithDB migration integration."
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  type        = bool
+  description = "Serve LangSmith queries from SmithDB after ingestion and migration validation."
   default     = false
 }
 
@@ -750,7 +764,7 @@ variable "smithdb_metastore_instance_class" {
 variable "smithdb_metastore_engine_version" {
   type        = string
   description = "PostgreSQL engine version for the SmithDB metastore."
-  default     = "16"
+  default     = "18"
 }
 
 variable "smithdb_metastore_allocated_storage" {
@@ -780,7 +794,7 @@ variable "smithdb_metastore_backup_retention_period" {
 variable "smithdb_metastore_skip_final_snapshot" {
   type        = bool
   description = "Skip the final snapshot when the SmithDB metastore is destroyed. Set false for production."
-  default     = true
+  default     = false
 }
 
 variable "smithdb_metastore_use_ssl" {
@@ -853,8 +867,8 @@ variable "smithdb_s3_force_destroy" {
 # amd64 is the default to match core LangSmith and avoid multi-arch job issues.
 variable "smithdb_karpenter_chart_version" {
   type        = string
-  description = "Karpenter Helm chart version. MUST match eks_cluster_version per the Karpenter compatibility matrix (https://karpenter.sh/docs/upgrading/compatibility/): K8s 1.33 -> >= 1.5, 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13. Default (1.5.0) targets the module's default EKS 1.33; bump it if you raise eks_cluster_version."
-  default     = "1.5.0"
+  description = "Karpenter Helm chart version. MUST match eks_cluster_version per the Karpenter compatibility matrix (https://karpenter.sh/docs/upgrading/compatibility/): K8s 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13."
+  default     = "1.6.3"
 }
 
 variable "smithdb_karpenter_ami_alias" {
@@ -926,19 +940,5 @@ variable "smithdb_node_root_volume_size_gb" {
   type        = number
   description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
   default     = 100
-}
-
-# ── Image pull (SmithDB early-access private images) ──────────────────────────
-variable "smithdb_dockerhub_username" {
-  type        = string
-  description = "Docker Hub username for pulling private SmithDB images. Leave empty if the chart's default (public) images are used. Creates a 'dockerhub-private' image-pull secret when set."
-  default     = ""
-}
-
-variable "smithdb_dockerhub_pat" {
-  type        = string
-  description = "Docker Hub PAT for private SmithDB images. Set via TF_VAR_smithdb_dockerhub_pat. Only used when smithdb_dockerhub_username is set."
-  default     = ""
-  sensitive   = true
 }
 

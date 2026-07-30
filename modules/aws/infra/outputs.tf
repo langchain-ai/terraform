@@ -149,6 +149,11 @@ output "smithdb_object_store_bucket" {
   value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
 }
 
+output "smithdb_s3_vpc_endpoint_id" {
+  description = "S3 Gateway VPC endpoint used by SmithDB object-store traffic"
+  value       = var.enable_smithdb ? module.storage.s3_vpc_endpoint_id : null
+}
+
 output "smithdb_irsa_role_arn" {
   description = "IAM role ARN for the SmithDB service account, IRSA (null when enable_smithdb = false)"
   value       = var.enable_smithdb ? module.smithdb[0].irsa_role_arn : null
@@ -167,11 +172,6 @@ output "smithdb_metastore_port" {
 output "smithdb_metastore_use_ssl" {
   description = "Whether the SmithDB metastore connection uses SSL"
   value       = var.smithdb_metastore_use_ssl
-}
-
-output "smithdb_image_pull_secret_name" {
-  description = "Name of the SmithDB image-pull secret, or empty if the chart's default images are used"
-  value       = var.enable_smithdb && var.smithdb_dockerhub_username != "" ? "dockerhub-private" : ""
 }
 
 #------------------------------------------------------------------------------
