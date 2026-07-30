@@ -140,7 +140,7 @@ variable "existing_cluster_name" {
 
 variable "existing_cluster_resource_group_name" {
   type        = string
-  description = "Resource group containing the pre-existing AKS cluster, when it differs from the resource group this module creates (langsmith-rg<identifier>). Only used when create_cluster = false."
+  description = "Resource group containing the pre-existing AKS cluster, when it differs from the resource group this module creates (langsmith-rg-<name_prefix>). Only used when create_cluster = false."
   default     = ""
 }
 
