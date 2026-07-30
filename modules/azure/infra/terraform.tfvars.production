@@ -39,9 +39,9 @@ postgres_database_name       = "langsmith"
 postgres_deletion_protection = true   # must set false before terraform destroy
 
 #------------------------------------------------------------------------------
-# Redis
+# Redis (Azure Managed Redis / AMR)
 #------------------------------------------------------------------------------
-redis_capacity = 1   # P1 = 6 GB RAM; increase to P2 (13 GB) for high write load
+amr_sku = "Balanced_B0"   # smallest. Bump (Balanced_B1/B3/...) if the region reports AllocationFailed or under high write load.
 
 #------------------------------------------------------------------------------
 # AKS — Standard_D8s_v3 (8 vCPU, 32 GiB), 3 nodes minimum
