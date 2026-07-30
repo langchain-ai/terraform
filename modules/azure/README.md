@@ -71,6 +71,17 @@ az aks show --name <cluster> --resource-group <rg> \
 
 `aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts. Set `existing_cluster_node_pools_managed = false` if the customer's platform team owns all node pools (you must then confirm the cluster already has capacity for ClickHouse and LangGraph workloads).
 
+That subnet also needs the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The Blob and Key Vault firewalls allowlist it by subnet ID, which only matches when a service endpoint keeps the traffic on the Azure backbone instead of NATing it out to a public IP. Without them Azure rejects the firewall rule and the apply fails naming the subnet. Terraform enables both on the subnets it creates, so this applies to any `create_vnet = false` deployment, not only an existing cluster:
+
+```bash
+# The update replaces the endpoint list rather than appending, so check first
+# and repeat anything already there.
+az network vnet subnet show --ids <aks-subnet-id> --query "serviceEndpoints[].service"
+
+az network vnet subnet update --ids <aks-subnet-id> \
+  --service-endpoints Microsoft.Storage Microsoft.KeyVault
+```
+
 Terraform also warns when `location` doesn't match the cluster's region, since Key Vault, Blob, PostgreSQL, and Redis are created in `location` and pod traffic to them would cross regions.
 
 These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
