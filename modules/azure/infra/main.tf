@@ -74,6 +74,46 @@ locals {
   #   5:providers 6:Microsoft.Network 7:virtualNetworks 8:<vnet> 9:subnets 10:<name>
   byo_aks_subnet_parts = split("/", var.aks_subnet_id)
 
+  # Every supplied subnet ID, lowercased for comparison since Azure treats
+  # resource IDs case-insensitively. Used to reject the same subnet twice.
+  supplied_subnet_ids = [
+    for id in [var.aks_subnet_id, var.postgres_subnet_id, var.redis_subnet_id] :
+    lower(id) if id != ""
+  ]
+
+  # ── AKS ClusterIP range ─────────────────────────────────────────────────────
+  # The create path gets the default here rather than on the variable, so that
+  # the variable can be required under bring-your-own without breaking it.
+  # dns_service_ip has to sit inside the service CIDR, so derive it from
+  # whichever range is in play instead of letting a stale default outlive it.
+  aks_service_cidr   = var.aks_service_cidr != "" ? var.aks_service_cidr : "10.0.64.0/20"
+  aks_dns_service_ip = var.aks_dns_service_ip != "" ? var.aks_dns_service_ip : cidrhost(local.aks_service_cidr, 10)
+
+  # ── AKS subnet capacity ─────────────────────────────────────────────────────
+  # Azure CNI is a flat network here (network_plugin = "azure", no overlay mode),
+  # so nodes and pods both draw IPs from this subnet. Azure's formula is
+  # (nodes + surge) + ((nodes + surge) * max_pods), which factors to
+  # (nodes + surge) * (max_pods + 1). One surge node per pool covers upgrades.
+  # Additional pools do not set max_pods, so they get the Azure CNI default.
+  aks_default_pool_max_pods = 30
+  aks_required_ips = sum(concat(
+    [(var.default_node_pool_max_count + 1) * (var.default_node_pool_max_pods + 1)],
+    [for pool in var.additional_node_pools : (pool.max_count + 1) * (local.aks_default_pool_max_pods + 1)]
+  ))
+
+  # Whichever prefixes the AKS subnet ends up with: read back from a supplied
+  # subnet, or the ones Terraform is about to carve. Both paths are checked,
+  # since a hand-picked aks_subnet_address_prefix can be just as undersized.
+  # one() returns null at count = 0, so neither branch needs a data source guard.
+  aks_subnet_prefixes = local.byo_aks_subnet ? coalesce(one(data.azurerm_subnet.byo_aks_subnet[*].address_prefixes), []) : var.aks_subnet_address_prefix
+
+  # Azure reserves five addresses per subnet. concat([0], ...) keeps sum() off an
+  # empty list. Prefixes may be disjoint, so capacity is their total.
+  aks_usable_ips = sum(concat([0], [
+    for prefix in local.aks_subnet_prefixes :
+    pow(2, 32 - tonumber(split("/", prefix)[1]))
+  ])) - 5
+
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
@@ -223,6 +263,31 @@ resource "terraform_data" "validate_network" {
       ])
       error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, or clear aks_subnet_id and let Terraform create one."
     }
+
+    # Each service needs its own subnet. Postgres is the reason this is fatal
+    # rather than untidy: its subnet is delegated, and Azure documents that no
+    # other resource type may sit in a delegated subnet. Sharing passes the
+    # delegation check above and then fails partway through a long apply.
+    precondition {
+      condition     = length(local.supplied_subnet_ids) == length(distinct(local.supplied_subnet_ids))
+      error_message = "aks_subnet_id, postgres_subnet_id and redis_subnet_id must be three different subnets. The Postgres subnet is delegated to Microsoft.DBforPostgreSQL/flexibleServers and Azure allows no other resource type inside a delegated subnet, so a shared subnet fails during apply."
+    }
+
+    # Undersizing is the one network mistake that survives apply: the cluster
+    # comes up, and the autoscaler later stalls partway to max_count once the
+    # subnet runs out of addresses. Check it here instead.
+    precondition {
+      condition     = local.aks_usable_ips >= local.aks_required_ips
+      error_message = "The AKS subnet holds ${local.aks_usable_ips} usable addresses, short of the ${local.aks_required_ips} that Azure CNI needs for the configured node pools. Nodes and pods both draw IPs from this subnet, so the autoscaler would stall before reaching max_count. Widen the subnet (a /22 or larger covers the defaults), or lower default_node_pool_max_count and default_node_pool_max_pods."
+    }
+
+    # 10.0.64.0/20 only avoids the VNet that Terraform builds. Inside someone
+    # else's address space AKS can accept an overlapping ClusterIP range and
+    # break later, so make the operator name one.
+    precondition {
+      condition     = var.create_vnet || var.aks_service_cidr != ""
+      error_message = "aks_service_cidr is required when create_vnet = false. The 10.0.64.0/20 default is chosen to sit outside the Terraform-managed 10.0.0.0/17 and can fall inside your VNet. AKS requires a ClusterIP range that nothing on or connected to your VNet uses, so set one outside your VNet's address space."
+    }
   }
 }
 
@@ -236,8 +301,8 @@ module "aks" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
   subnet_id           = local.aks_subnet_id
-  service_cidr        = var.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
-  dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
+  service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
+  dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster                       = var.create_cluster
