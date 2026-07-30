@@ -20,10 +20,11 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$SCRIPT_DIR/quickstart.sh"
 
-# The wizard variable and tfvars key holding the deployment name. These are the
-# only two lines to change when the name_prefix rename lands.
-NAME_VAR="IDENTIFIER"
-NAME_TFKEY="identifier"
+# The wizard variable and tfvars key holding the deployment name. The rename has
+# landed, so the sample values below also dropped their leading hyphen: name_prefix
+# carries no hyphen of its own, and _load_tfvars strips a pasted one for back-compat.
+NAME_VAR="NAME_PREFIX"
+NAME_TFKEY="name_prefix"
 
 PASS=0; FAIL=0
 ok()  { PASS=$((PASS+1)); echo "  PASS  $1"; }
@@ -57,7 +58,7 @@ echo "1. _save_state / _load_state round-trip"
 SECTION=4
 ANSWERED="1 2 3"
 PROFILE="prod"
-eval "$NAME_VAR=-acme-eu"
+eval "$NAME_VAR=acme-eu"
 LOCATION="centralus"
 OWNER="platform team"          # inner space
 COST_CENTER="CC-9 / dept 4"    # space and slash
@@ -72,7 +73,7 @@ _load_state
 eq "SECTION survives"          "$SECTION"       "4"
 eq "ANSWERED survives"         "$ANSWERED"      "1 2 3"
 eq "PROFILE survives"          "$PROFILE"       "prod"
-eq "$NAME_VAR survives"        "${!NAME_VAR}"   "-acme-eu"
+eq "$NAME_VAR survives"        "${!NAME_VAR}"   "acme-eu"
 eq "LOCATION survives"         "$LOCATION"      "centralus"
 eq "OWNER keeps its space"     "$OWNER"         "platform team"
 eq "COST_CENTER keeps space"   "$COST_CENTER"   "CC-9 / dept 4"
@@ -132,14 +133,14 @@ echo "5. _load_tfvars seeds the wizard from an existing terraform.tfvars"
 cat > "$OUTPUT" << EOF
 # Profile: prod
 subscription_id = "sub-1"
-$NAME_TFKEY = "-acme"
+$NAME_TFKEY = "acme"
 location        = "westus2"
 owner           = "platform team"
 create_waf      = true
 EOF
 PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; eval "$NAME_VAR="
 _load_tfvars
-eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "-acme"
+eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "acme"
 eq "PROFILE read from the header"    "$PROFILE"     "prod"
 eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
@@ -149,7 +150,7 @@ echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state
 eval "$NAME_VAR="; PROFILE=""
 _load_state
-eq "name survives the full trip"    "${!NAME_VAR}" "-acme"
+eq "name survives the full trip"    "${!NAME_VAR}" "acme"
 eq "profile survives the full trip" "$PROFILE"     "prod"
 
 echo ""
