@@ -16,6 +16,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
+# Normalise so the paths shown to the user are plain, not infra/scripts/../...
+INFRA_DIR="$(cd "$INFRA_DIR" && pwd)"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -55,6 +57,11 @@ _ask_yn() {
 }
 
 _ask_choice() {
+  # Usage: _ask_choice [--default N] "prompt" "opt1" "opt2" ...
+  local default=""
+  if [[ "${1:-}" == "--default" ]]; then
+    default="$2"; shift 2
+  fi
   local prompt="$1"
   shift
   local options=("$@")
@@ -62,15 +69,42 @@ _ask_choice() {
   printf "  ${BOLD}%s${RESET}\n" "$prompt"
   local i=1
   for opt in "${options[@]}"; do
-    printf "    %d) %s\n" "$i" "$opt"
+    if [[ -n "$default" && "$i" == "$default" ]]; then
+      printf "    %d) %s ${DIM}(current)${RESET}\n" "$i" "$opt"
+    else
+      printf "    %d) %s\n" "$i" "$opt"
+    fi
     ((i++))
   done
-  printf "  Choice: "
-  read -r _CHOICE
-  if ! [[ "$_CHOICE" =~ ^[0-9]+$ ]] || (( _CHOICE < 1 || _CHOICE > ${#options[@]} )); then
-    _red "Invalid selection."; echo ""
-    exit 1
-  fi
+  while true; do
+    if [[ -n "$default" ]]; then
+      printf "  Choice ${DIM}[%s]${RESET}: " "$default"
+    else
+      printf "  Choice: "
+    fi
+    read -r _CHOICE
+    _CHOICE="${_CHOICE:-$default}"
+    if [[ "$_CHOICE" =~ ^[0-9]+$ ]] && (( _CHOICE >= 1 && _CHOICE <= ${#options[@]} )); then
+      break
+    fi
+    _red "  ERROR: enter a number between 1 and ${#options[@]}. Try again."
+  done
+}
+
+# Echo the 1-based index of $1 among the remaining args (empty if absent).
+# Used to pre-select the current answer when a section is re-entered.
+_index_of() {
+  local needle="$1"; shift
+  local i=1 x
+  for x in "$@"; do
+    [[ "$x" == "$needle" ]] && { echo "$i"; return 0; }
+    i=$((i + 1))
+  done
+}
+
+# Echo "y" or "n" for use as an _ask_yn default.
+_yn_default() {
+  [[ "$1" == "true" ]] && echo "y" || echo "n"
 }
 
 _ask_int() {
@@ -94,16 +128,133 @@ _hint() {
   printf "  ${DIM}%s${RESET}\n" "$1"
 }
 
-# ── Guard ─────────────────────────────────────────────────────────────────────
+# ── Resume state ──────────────────────────────────────────────────────────────
+# Answers are checkpointed after every completed section so an exit (Ctrl-C,
+# `q`, a dropped SSH session) never costs more than the section in progress.
+# Contains configuration only — secrets are handled by setup-env.sh.
 
-if [[ -f "$OUTPUT" ]]; then
+STATE_FILE="$INFRA_DIR/.quickstart-state"
+
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID IDENTIFIER ENVIRONMENT LOCATION OWNER
+COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
+ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
+CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
+PG_DELETION_PROTECTION REDIS_CAPACITY KV_PURGE_PROTECTION SIZING_PROFILE
+CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
+
+# Sections the user has actually been through. Profile-driven defaults apply
+# only to sections still unanswered, so going back to switch dev→prod never
+# overwrites a value you chose yourself.
+ANSWERED=""
+_answered()      { [[ " $ANSWERED " == *" $1 "* ]]; }
+_mark_answered() { _answered "$1" || ANSWERED="${ANSWERED}${ANSWERED:+ }$1"; }
+
+_save_state() {
+  local k
+  ( umask 077; : > "$STATE_FILE" )
+  for k in $_STATE_KEYS; do
+    printf '%s=%s\n' "$k" "${!k-}"
+  done >> "$STATE_FILE"
+}
+
+# Read the state file back WITHOUT sourcing it: split each line on the first
+# '=', accept the key only if it is on the whitelist above, then assign the
+# value by reference. eval never parses the value — an assignment RHS is not
+# word-split, glob-expanded, or re-evaluated — so a hostile state file can at
+# worst set a whitelisted wizard variable to a literal string.
+_load_state() {
+  # shellcheck disable=SC2034  # val is read by the eval below
+  local line key val k found
+  while IFS= read -r line; do
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    found=false
+    for k in $_STATE_KEYS; do
+      [[ "$k" == "$key" ]] && { found=true; break; }
+    done
+    [[ "$found" == "true" ]] && eval "$key=\$val"
+  done < "$STATE_FILE"
+}
+
+# Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
+# inside the value (_common.sh's _parse_tfvar strips them).
+_tfvar() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Seed the wizard from a terraform.tfvars written by an earlier run, so a
+# re-run edits the existing config instead of retyping it from scratch.
+_load_tfvars() {
+  local v _TF_VAL
+  # The profile is not a tfvar — it is stamped in the header comment. Without it
+  # everything derived from the profile (deletion protection, Key Vault purge
+  # protection, the security add-ons) silently resets to dev values on save.
+  _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
+  [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
+
+  for v in subscription_id identifier environment location owner cost_center \
+           default_node_pool_vm_size ingress_controller istio_addon_revision \
+           agw_sku_tier tls_certificate_source dns_label langsmith_domain \
+           letsencrypt_email postgres_source redis_source clickhouse_source \
+           sizing_profile postgres_admin_username postgres_database_name; do
+    _TF_VAL=$(_tfvar "$v")
+    [[ -z "$_TF_VAL" ]] && continue
+    case "$v" in
+      subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
+      identifier)                IDENTIFIER="$_TF_VAL" ;;
+      environment)               ENVIRONMENT="$_TF_VAL" ;;
+      location)                  LOCATION="$_TF_VAL" ;;
+      owner)                     OWNER="$_TF_VAL" ;;
+      cost_center)               COST_CENTER="$_TF_VAL" ;;
+      default_node_pool_vm_size) NODE_VM_SIZE="$_TF_VAL" ;;
+      ingress_controller)        INGRESS_CONTROLLER="$_TF_VAL" ;;
+      istio_addon_revision)      ISTIO_ADDON_REVISION="$_TF_VAL" ;;
+      agw_sku_tier)              AGW_SKU_TIER="$_TF_VAL" ;;
+      tls_certificate_source)    TLS_SOURCE="$_TF_VAL" ;;
+      dns_label)                 DNS_LABEL="$_TF_VAL" ;;
+      langsmith_domain)          LANGSMITH_DOMAIN="$_TF_VAL" ;;
+      letsencrypt_email)         LE_EMAIL="$_TF_VAL" ;;
+      postgres_source)           PG_SOURCE="$_TF_VAL" ;;
+      redis_source)              REDIS_SOURCE="$_TF_VAL" ;;
+      clickhouse_source)         CH_SOURCE="$_TF_VAL" ;;
+      sizing_profile)            SIZING_PROFILE="$_TF_VAL" ;;
+      postgres_admin_username)   PG_ADMIN_USER="$_TF_VAL" ;;
+      postgres_database_name)    PG_DB_NAME="$_TF_VAL" ;;
+    esac
+  done
+  # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
+  _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar redis_capacity)              && REDIS_CAPACITY="$_TF_VAL"
+  # The add-ons are written only when true, so an absent key is genuinely false.
+  _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_bastion)              && CREATE_BASTION="$_TF_VAL"
+  [[ "$CREATE_VNET" == "false" ]] && {
+    VNET_ID=$(_tfvar vnet_id)
+    AKS_SUBNET_ID=$(_tfvar aks_subnet_id)
+    POSTGRES_SUBNET_ID=$(_tfvar postgres_subnet_id)
+    REDIS_SUBNET_ID=$(_tfvar redis_subnet_id)
+  }
+  return 0
+}
+
+# Any exit that still leaves a checkpoint behind — Ctrl-C, `q`, a closed
+# terminal, an aborted command — tells the user how to pick it back up. A
+# completed run deletes the checkpoint first, so this stays silent on success.
+_on_exit() {
+  [[ -f "$STATE_FILE" ]] || return 0
   echo ""
-  _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
-  if ! _ask_yn "Overwrite it?" "n"; then
-    echo "Aborted."
-    exit 0
-  fi
-fi
+  printf "  Answers through the last completed section were saved to\n"
+  printf "  $(_bold "$STATE_FILE")\n"
+  printf "  Resume where you left off: ${CYAN}make quickstart${RESET}\n"
+  echo ""
+}
+trap _on_exit EXIT
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 
@@ -125,7 +276,13 @@ _run_section_1() {
   _hint "Dev/POC:    smaller nodes, in-cluster services OK, no deletion protection."
   _hint "Production: D8s_v3 nodes, external Postgres + Redis, deletion protection on."
 
-  _ask_choice "What kind of deployment is this?" \
+  _hint "Changing this later leaves answers you have already given untouched —"
+  _hint "it only affects the defaults of sections you have not filled in yet."
+
+  local profile_choice=""
+  _answered 1 && profile_choice="$(_index_of "$PROFILE" dev prod)"
+  _ask_choice --default "$profile_choice" \
+    "What kind of deployment is this?" \
     "Dev / POC  — minimal resources, in-cluster services OK" \
     "Production — HA resources, external managed services"
 
@@ -151,8 +308,11 @@ _run_section_2() {
   _hint "so those four get a hash of your subscription appended. Keep it under ~12 chars."
   _hint "Changing it later creates entirely new resources — choose something stable."
 
-  AUTO_SUB=""
-  if command -v az &>/dev/null; then
+  # Defaults come from the current values, so a resumed or re-entered section
+  # prefills what you answered before. Profile-driven defaults apply only when
+  # the field is still untouched, so switching profiles never eats an edit.
+  AUTO_SUB="$SUBSCRIPTION_ID"
+  if [[ -z "$AUTO_SUB" ]] && command -v az &>/dev/null; then
     AUTO_SUB=$(az account show --query id --output tsv 2>/dev/null) || AUTO_SUB=""
   fi
 
@@ -185,13 +345,13 @@ _run_section_2() {
     _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
   done
 
-  _ask "Azure region" "eastus"
+  _ask "Azure region" "$LOCATION"
   LOCATION="$_REPLY"
 
-  _ask "Owner tag (team or person, for cost attribution)" "platform-team"
+  _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
   OWNER="$_REPLY"
 
-  _ask "Cost center tag (leave blank to skip)" ""
+  _ask "Cost center tag (leave blank to skip)" "$COST_CENTER"
   COST_CENTER="$_REPLY"
 
   echo ""
@@ -211,24 +371,23 @@ _run_section_3() {
   _hint "Choose 'existing VNet' only if you're integrating into a corporate network"
   _hint "where network teams manage VNets centrally."
 
-  CREATE_VNET="true"
-  VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
-
-  if _ask_yn "Create a new VNet? (recommended)" "y"; then
+  if _ask_yn "Create a new VNet? (recommended)" "$(_yn_default "$CREATE_VNET")"; then
     CREATE_VNET="true"
+    # Clear any BYO IDs from a previous pass — they are meaningless here.
+    VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
   else
     CREATE_VNET="false"
     echo ""
     _hint "Bring Your Own VNet — you must provide existing subnet resource IDs."
     _hint "The PostgreSQL subnet must have Microsoft.DBforPostgreSQL/flexibleServers delegation."
     echo ""
-    _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" ""
+    _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" "$VNET_ID"
     VNET_ID="$_REPLY"
-    _ask "AKS subnet resource ID (/subscriptions/.../subnets/...)" ""
+    _ask "AKS subnet resource ID (/subscriptions/.../subnets/...)" "$AKS_SUBNET_ID"
     AKS_SUBNET_ID="$_REPLY"
-    _ask "PostgreSQL subnet resource ID (must have flexibleServers delegation)" ""
+    _ask "PostgreSQL subnet resource ID (must have flexibleServers delegation)" "$POSTGRES_SUBNET_ID"
     POSTGRES_SUBNET_ID="$_REPLY"
-    _ask "Redis subnet resource ID" ""
+    _ask "Redis subnet resource ID" "$REDIS_SUBNET_ID"
     REDIS_SUBNET_ID="$_REPLY"
   fi
 }
@@ -247,13 +406,15 @@ _run_section_4() {
   _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
   _hint "The autoscaler handles bursts — min_count is the always-on floor."
 
-  local vm_default="Standard_D4s_v3"
-  local min_default=2
-  local max_default=5
+  local vm_default="$NODE_VM_SIZE"
+  local min_default="$NODE_MIN"
+  local max_default="$NODE_MAX"
   if [[ "$PROFILE" == "prod" ]]; then
-    vm_default="Standard_D8s_v3"
-    min_default=3
-    max_default=10
+    if ! _answered 4; then
+      vm_default="Standard_D8s_v3"
+      min_default=3
+      max_default=10
+    fi
     _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
   fi
 
@@ -273,8 +434,8 @@ _run_section_4() {
 
 # -- 5. Ingress Controller ---------------------------------------------------
 INGRESS_CONTROLLER="nginx"
-ISTIO_ADDON_REVISION_LINE=""
-AGW_SKU_TIER_LINE=""
+ISTIO_ADDON_REVISION=""
+AGW_SKU_TIER=""
 
 _run_section_5() {
   _section "5. Ingress Controller"
@@ -287,10 +448,10 @@ _run_section_5() {
   _hint "envoy-gateway — Gateway API native; useful if you're standardizing on Gateway API."
   _hint "Start with nginx unless you have a specific reason to use another."
 
-  ISTIO_ADDON_REVISION_LINE=""
-  AGW_SKU_TIER_LINE=""
-
-  _ask_choice "Which ingress controller?" \
+  local ingress_choice=""
+  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" nginx istio-addon istio agic envoy-gateway none)"
+  _ask_choice --default "$ingress_choice" \
+    "Which ingress controller?" \
     "nginx         — NGINX via Helm (recommended default)" \
     "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
     "istio         — Istio via Helm (self-managed)" \
@@ -310,13 +471,17 @@ _run_section_5() {
   echo ""
   printf "  Ingress: $(_cyan "$INGRESS_CONTROLLER")\n"
 
+  # Clear settings that belong to a controller no longer selected.
+  [[ "$INGRESS_CONTROLLER" != "istio-addon" ]] && ISTIO_ADDON_REVISION=""
+  [[ "$INGRESS_CONTROLLER" != "agic" ]]        && AGW_SKU_TIER=""
+
   if [[ "$INGRESS_CONTROLLER" == "istio-addon" ]]; then
     echo ""
     _hint "The Istio addon revision must match what AKS supports in your region."
     _hint "Check available revisions after cluster creation:"
     _hint "  az aks mesh get-upgrades -g <rg> -n <cluster>"
-    _ask "Istio addon revision" "asm-1-22"
-    ISTIO_ADDON_REVISION_LINE="istio_addon_revision = \"$_REPLY\""
+    _ask "Istio addon revision" "${ISTIO_ADDON_REVISION:-asm-1-22}"
+    ISTIO_ADDON_REVISION="$_REPLY"
   fi
 
   if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
@@ -325,13 +490,14 @@ _run_section_5() {
     _hint "WAF_v2 adds OWASP 3.2 rules + bot protection — no separate WAF module needed."
     _hint "Note: AGIC requires a full cluster rebuild to enable (AGW subnet is provisioned"
     _hint "at VNet creation time and cannot be added to an existing VNet)."
-    _ask_choice "Application Gateway SKU tier:" \
+    _ask_choice --default "$(_index_of "$AGW_SKU_TIER" Standard_v2 WAF_v2)" \
+      "Application Gateway SKU tier:" \
       "Standard_v2 — standard routing (no WAF)" \
       "WAF_v2      — with integrated WAF (OWASP 3.2 + bot protection)"
     if [[ "$_CHOICE" == "2" ]]; then
-      AGW_SKU_TIER_LINE="agw_sku_tier = \"WAF_v2\""
+      AGW_SKU_TIER="WAF_v2"
     else
-      AGW_SKU_TIER_LINE="agw_sku_tier = \"Standard_v2\""
+      AGW_SKU_TIER="Standard_v2"
     fi
   fi
 }
@@ -373,13 +539,10 @@ _run_section_6() {
   _hint ""
   _hint "Existing      — Bring a pre-issued K8s TLS secret (manual cert management)."
 
-  TLS_SOURCE="none"
-  DNS_LABEL=""
-  LANGSMITH_DOMAIN=""
-  LE_EMAIL=""
-  CREATE_DNS_ZONE="false"
-
-  _ask_choice "TLS certificate source:" \
+  local tls_choice=""
+  _answered 6 && tls_choice="$(_index_of "$TLS_SOURCE" none letsencrypt dns01 existing)"
+  _ask_choice --default "$tls_choice" \
+    "TLS certificate source:" \
     "None          — HTTP only (quickstart default, zero setup)" \
     "Let's Encrypt — HTTPS via HTTP-01 (nginx, istio, envoy-gateway only)" \
     "DNS-01        — HTTPS via DNS-01 (all controllers, requires custom domain)" \
@@ -440,29 +603,39 @@ _run_section_6() {
     _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
     echo ""
 
-    _ask_choice "DNS approach:" \
+    local dns_choice=""
+    _answered 6 && { [[ -n "$LANGSMITH_DOMAIN" ]] && dns_choice=2 || dns_choice=1; }
+    _ask_choice --default "$dns_choice" \
+      "DNS approach:" \
       "Azure public IP DNS label — simplest, free subdomain" \
       "Custom domain — your own domain (required for DNS-01)"
 
     if [[ "$_CHOICE" == "1" ]]; then
+      LANGSMITH_DOMAIN=""
       _ask_dns_label
     else
+      DNS_LABEL=""
       _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
-      _ask "Custom domain" ""
+      _ask "Custom domain" "$LANGSMITH_DOMAIN"
       LANGSMITH_DOMAIN="$_REPLY"
     fi
 
     _hint "Let's Encrypt requires an email for your ACME account (cert expiry notifications)."
-    _ask "Email for Let's Encrypt / ACME registration" ""
+    _ask "Email for Let's Encrypt / ACME registration" "$LE_EMAIL"
     LE_EMAIL="$_REPLY"
 
   elif [[ "$TLS_SOURCE" == "none" ]]; then
+    LANGSMITH_DOMAIN=""; LE_EMAIL=""
     echo ""
     _hint "Azure assigns a free DNS label to your load balancer public IP."
     _hint "Format: <label>.<region>.cloudapp.azure.com"
     _ask_dns_label
+  else
+    # existing — no hostname prompts apply
+    DNS_LABEL=""; LANGSMITH_DOMAIN=""; LE_EMAIL=""
   fi
 
+  CREATE_DNS_ZONE="false"
   if [[ "$TLS_SOURCE" == "dns01" ]]; then
     CREATE_DNS_ZONE="true"
     echo ""
@@ -496,34 +669,40 @@ _run_section_7() {
   _hint "ClickHouse  — always in-cluster for self-hosted (single StatefulSet, no backups)."
   _hint "              For production traces, use LangChain Managed ClickHouse instead."
 
-  PG_SOURCE="in-cluster"
-  REDIS_SOURCE="in-cluster"
-  CH_SOURCE="in-cluster"
-  PG_ADMIN_USER="langsmith"
-  PG_DB_NAME="langsmith"
-  PG_DELETION_PROTECTION="false"
-  AMR_SKU="Balanced_B0"
-
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
     _hint "Production: external Postgres and Redis are strongly recommended."
-    if ! _ask_yn "Use external PostgreSQL (Azure DB for PostgreSQL Flexible Server)?" "y"; then
+    # Prod fresh-run default is external; on re-entry, whatever you picked.
+    local pg_yn="y" redis_yn="y"
+    if _answered 7; then
+      [[ "$PG_SOURCE"    == "in-cluster" ]] && pg_yn="n"
+      [[ "$REDIS_SOURCE" == "in-cluster" ]] && redis_yn="n"
+    fi
+    if ! _ask_yn "Use external PostgreSQL (Azure DB for PostgreSQL Flexible Server)?" "$pg_yn"; then
       PG_SOURCE="in-cluster"
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "y"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "$redis_yn"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
     fi
   else
-    _ask_choice "Postgres + Redis:" \
+    # No default until the section has been answered once — a fresh run still
+    # forces an explicit choice rather than quietly picking one.
+    local pg_choice=""
+    _answered 7 && { [[ "$PG_SOURCE" == "external" ]] && pg_choice=1 || pg_choice=2; }
+    _ask_choice --default "$pg_choice" \
+      "Postgres + Redis:" \
       "External — Azure managed services (recommended even for dev — keeps data on destroy)" \
       "In-cluster — all services run as pods (fastest setup, data lost on destroy)"
     if [[ "$_CHOICE" == "1" ]]; then
       PG_SOURCE="external"
       REDIS_SOURCE="external"
+    else
+      PG_SOURCE="in-cluster"
+      REDIS_SOURCE="in-cluster"
     fi
   fi
 
@@ -543,7 +722,9 @@ _run_section_7() {
   fi
 
   echo ""
-  _ask_choice "ClickHouse:" \
+  local ch_choice=""
+  _answered 7 && { [[ "$CH_SOURCE" == "external" ]] && ch_choice=2 || ch_choice=1; }
+  _ask_choice --default "$ch_choice" "ClickHouse:" \
     "In-cluster — single pod, dev/POC only (data lost on pod restart without PV backup)" \
     "External   — LangChain Managed ClickHouse (production-grade, contact LangChain)"
 
@@ -570,13 +751,17 @@ _run_section_8() {
   _hint "Purge protection = false → KV is immediately purged on destroy."
   _hint "                           Good for dev/POC where you want to reuse the deployment name."
 
-  KV_PURGE_PROTECTION="false"
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
-    if _ask_yn "Enable Key Vault purge protection? (recommended for production)" "y"; then
+    local kv_yn="y"
+    _answered 8 && kv_yn="$(_yn_default "$KV_PURGE_PROTECTION")"
+    if _ask_yn "Enable Key Vault purge protection? (recommended for production)" "$kv_yn"; then
       KV_PURGE_PROTECTION="true"
+    else
+      KV_PURGE_PROTECTION="false"
     fi
   else
+    KV_PURGE_PROTECTION="false"
     _hint "Dev profile: keyvault_purge_protection = false (name reusable immediately after destroy)."
   fi
 }
@@ -596,7 +781,9 @@ _run_section_9() {
   _hint "production-large — high-volume (~50 concurrent users, ~1000 traces/sec)."
   _hint "                 Use with Standard_D8s_v3 × 5+ nodes."
 
-  _ask_choice "Sizing profile:" \
+  local sizing_choice=""
+  _answered 9 && sizing_choice="$(_index_of "$SIZING_PROFILE" minimum dev production production-large)"
+  _ask_choice --default "$sizing_choice" "Sizing profile:" \
     "minimum        — absolute minimum (demos, very constrained clusters)" \
     "dev            — single-replica, minimal resources (dev / CI / demos)" \
     "production     — multi-replica with HPA (recommended for all real workloads)" \
@@ -618,51 +805,129 @@ CREATE_BASTION="false"
 _run_section_10() {
   _section "10. Optional Security Add-ons"
 
-  CREATE_WAF="false"
-  CREATE_DIAGNOSTICS="false"
-  CREATE_BASTION="false"
-
   if [[ "$PROFILE" == "prod" ]]; then
+    local waf_yn="n" diag_yn="y" bastion_yn="n"
+    if _answered 10; then
+      waf_yn="$(_yn_default "$CREATE_WAF")"
+      diag_yn="$(_yn_default "$CREATE_DIAGNOSTICS")"
+      bastion_yn="$(_yn_default "$CREATE_BASTION")"
+    fi
+
     echo ""
     _hint "WAF policy      — Azure WAF with OWASP 3.2 rules + bot protection on the LB."
     _hint "                  Only applies when ingress_controller = agic (WAF_v2 SKU)."
     _hint "                  For nginx/istio, use Azure Front Door or DDoS Protection instead."
-    if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "n"; then
+    if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then
       CREATE_WAF="true"
+    else
+      CREATE_WAF="false"
     fi
 
     echo ""
     _hint "Log Analytics   — sends AKS control plane logs + metrics to Log Analytics workspace."
     _hint "                  Required for audit trails, compliance, and live troubleshooting."
-    if _ask_yn "Enable Log Analytics + diagnostics? (recommended for production)" "y"; then
+    if _ask_yn "Enable Log Analytics + diagnostics? (recommended for production)" "$diag_yn"; then
       CREATE_DIAGNOSTICS="true"
+    else
+      CREATE_DIAGNOSTICS="false"
     fi
 
     echo ""
     _hint "Bastion host    — jump VM for direct SSH to AKS nodes (private cluster debugging)."
     _hint "                  Not needed for most deployments unless nodes are on a private subnet."
-    if _ask_yn "Create bastion host? (for node-level troubleshooting)" "n"; then
+    if _ask_yn "Create bastion host? (for node-level troubleshooting)" "$bastion_yn"; then
       CREATE_BASTION="true"
+    else
+      CREATE_BASTION="false"
     fi
   else
+    CREATE_WAF="false"
+    CREATE_DIAGNOSTICS="false"
+    CREATE_BASTION="false"
     _hint "Dev profile: security add-ons skipped. Edit terraform.tfvars to enable after deploy."
   fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Run all sections in order
+# Startup — resume an interrupted run, or seed from an existing tfvars
+# ═══════════════════════════════════════════════════════════════════════════
+# Runs here, after every section default has been initialised above, so loaded
+# answers are not overwritten by the initialisers.
+
+TOTAL_SECTIONS=10
+SECTION=1
+
+if [[ -f "$STATE_FILE" ]]; then
+  echo ""
+  _cyan "Found an unfinished run"; printf ": %s\n" "$STATE_FILE"
+  if _ask_yn "Resume it? (answering 'n' discards those answers)" "y"; then
+    # SECTION in the file is the last one completed; pick up at the next one.
+    # A run interrupted mid-section therefore replays only that section.
+    _load_state
+    # Arithmetic evaluation expands its operands recursively, so a truncated or
+    # hand-edited checkpoint must never reach it as anything but a number.
+    [[ "$SECTION" =~ ^[0-9]+$ ]] || SECTION=0
+    SECTION=$((SECTION + 1))
+    if (( SECTION > TOTAL_SECTIONS )); then
+      printf "  All sections answered — going straight to review.\n"
+    else
+      printf "  Resuming at section $(_bold "$SECTION") of ${TOTAL_SECTIONS}.\n"
+    fi
+  else
+    rm -f "$STATE_FILE"
+    ANSWERED=""
+    SECTION=1
+  fi
+fi
+
+if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
+  echo ""
+  _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
+  _ask_choice "What would you like to do?" \
+    "Edit it     — load its values as answers, change what you need" \
+    "Start fresh — ignore it and answer every question again (overwrites on save)" \
+    "Quit        — leave it untouched"
+  case "$_CHOICE" in
+    1) _load_tfvars
+       ANSWERED="1 2 3 4 5 6 7 8 9 10"
+       printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
+    2) : ;;
+    3) echo "Aborted."; exit 0 ;;
+  esac
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Run sections — Enter advances, b goes back, r jumps to review, q saves & quits
 # ═══════════════════════════════════════════════════════════════════════════
 
-_run_section_1
-_run_section_2
-_run_section_3
-_run_section_4
-_run_section_5
-_run_section_6
-_run_section_7
-_run_section_8
-_run_section_9
-_run_section_10
+while (( SECTION <= TOTAL_SECTIONS )); do
+  "_run_section_$SECTION"
+  _mark_answered "$SECTION"
+  _save_state
+
+  echo ""
+  printf "  ${DIM}[Enter] next · [b] back · [r] jump to review · [q] save & quit${RESET}\n"
+  while true; do
+    printf "  Section %d/%d: " "$SECTION" "$TOTAL_SECTIONS"
+    read -r _NAV
+    case "$_NAV" in
+      "")
+        SECTION=$((SECTION + 1)); break ;;
+      b|B)
+        if (( SECTION > 1 )); then
+          SECTION=$((SECTION - 1)); break
+        fi
+        _red "  Already at the first section." ;;
+      r|R)
+        SECTION=$((TOTAL_SECTIONS + 1)); break ;;
+      q|Q)
+        _save_state
+        exit 0 ;;
+      *)
+        _red "  Press Enter, or type b, r, or q." ;;
+    esac
+  done
+done
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Review loop — show summary, let user redo any section
@@ -681,8 +946,8 @@ while true; do
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
   printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
-  [[ -n "$ISTIO_ADDON_REVISION_LINE" ]] && printf "  %-24s %s\n" "   Istio revision:"  "${ISTIO_ADDON_REVISION_LINE#*= }"
-  [[ -n "$AGW_SKU_TIER_LINE" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "${AGW_SKU_TIER_LINE#*= }"
+  [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
+  [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
   printf "  %-24s %s\n" "6. TLS:"             "$TLS_SOURCE"
   [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
@@ -698,7 +963,8 @@ while true; do
     printf "  %-24s %s\n" "    Bastion:"        "$CREATE_BASTION"
   fi
   echo ""
-  printf "  ${DIM}Press Enter to write terraform.tfvars, or enter a section number (1-10) to change it.${RESET}\n"
+  printf "  ${DIM}Press Enter to write terraform.tfvars, a section number (1-10) to change it,${RESET}\n"
+  printf "  ${DIM}or q to save your answers and quit without writing.${RESET}\n"
   printf "  Choice [Enter to confirm]: "
   read -r _REDO
 
@@ -707,25 +973,21 @@ while true; do
     break
   fi
 
+  if [[ "$_REDO" == "q" || "$_REDO" == "Q" ]]; then
+    _save_state
+    exit 0
+  fi
+
   # Validate input is a number 1-10
   if ! [[ "$_REDO" =~ ^([1-9]|10)$ ]]; then
-    _red "  Enter a section number (1-10) or press Enter to confirm."
+    _red "  Enter a section number (1-10), q to quit, or press Enter to confirm."
     continue
   fi
 
   # Re-run the chosen section
-  case "$_REDO" in
-    1)  _run_section_1 ;;
-    2)  _run_section_2 ;;
-    3)  _run_section_3 ;;
-    4)  _run_section_4 ;;
-    5)  _run_section_5 ;;
-    6)  _run_section_6 ;;
-    7)  _run_section_7 ;;
-    8)  _run_section_8 ;;
-    9)  _run_section_9 ;;
-    10) _run_section_10 ;;
-  esac
+  "_run_section_$_REDO"
+  _mark_answered "$_REDO"
+  _save_state
 done
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -791,8 +1053,8 @@ aks_deletion_protection     = ${AKS_DELETION_PROTECTION}
 ingress_controller = "${INGRESS_CONTROLLER}"
 TFVARS
 
-[[ -n "$ISTIO_ADDON_REVISION_LINE" ]] && echo "$ISTIO_ADDON_REVISION_LINE" >> "$OUTPUT"
-[[ -n "$AGW_SKU_TIER_LINE" ]]         && echo "$AGW_SKU_TIER_LINE"         >> "$OUTPUT"
+[[ -n "$ISTIO_ADDON_REVISION" ]] && echo "istio_addon_revision = \"${ISTIO_ADDON_REVISION}\"" >> "$OUTPUT"
+[[ -n "$AGW_SKU_TIER" ]]         && echo "agw_sku_tier = \"${AGW_SKU_TIER}\""                 >> "$OUTPUT"
 
 cat >> "$OUTPUT" << TFVARS
 
@@ -893,6 +1155,10 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 # Done
 # ═══════════════════════════════════════════════════════════════════════════
+
+# terraform.tfvars is now the source of truth — drop the resume checkpoint so a
+# later run offers to edit the real file instead of replaying stale answers.
+rm -f "$STATE_FILE"
 
 echo ""
 printf "  $(_green "✔")  Written to: $(_bold "$OUTPUT")\n"
