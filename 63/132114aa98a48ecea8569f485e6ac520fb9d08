@@ -1,0 +1,21 @@
+modules/aws/infra/terraform.tfvars.example
+  s_97bacea139cafe::t_6a56721e1427fb 483-485,506-509
+modules/aws/README.md
+  s_97bacea139cafe::t_12b9d71ffdd3d6 364,366-376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "63132114aa98a48ecea8569f485e6ac520fb9d08",
+  "prompts": {},
+  "sessions": {
+    "s_97bacea139cafe": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e32204f9-a43c-4bab-988c-f5ea7d7c1d02",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
