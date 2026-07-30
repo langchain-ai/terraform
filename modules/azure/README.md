@@ -236,7 +236,10 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 
 - Sections: profile → subscription/naming → networking → AKS sizing → ingress controller → DNS/TLS → backend services → Key Vault → sizing profile → security add-ons
 - Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
+- Between sections: `Enter` continues, `b` goes back a section, `r` jumps to the review summary, `q` saves and quits
 - After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
+- Answers are checkpointed to `infra/.quickstart-state` after every section, so quitting or losing the terminal costs at most the section you were on. The next run offers to resume, and every prompt is prefilled with your previous answer. The checkpoint is deleted once `terraform.tfvars` is written
+- Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
 - Validates identifier format (`-prod`, `-staging`, `-myco`)
 - Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
