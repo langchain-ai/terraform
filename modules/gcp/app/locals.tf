@@ -72,6 +72,16 @@ locals {
         annotations = local.wi_annotations
       }
     } } : {},
+    # Chart defaults insights/polly/operator ON. Make the enable_* flags
+    # authoritative so a flag left off doesn't deploy a component that then
+    # references encryption keys absent from langsmith-config-secret. insights
+    # and polly aren't in wi_components, so toggle them directly. operator is
+    # (when agent deploys are on), so only inject a disable when off — adding an
+    # operator key while on would clobber its WI annotations via merge()'s
+    # shallow merge.
+    { insights = { enabled = var.enable_insights } },
+    { polly = { enabled = var.enable_polly } },
+    var.enable_agent_deploys ? {} : { operator = { enabled = false } },
   )
 
   # Agent deploys override — TLS flag only (dynamic per environment).
