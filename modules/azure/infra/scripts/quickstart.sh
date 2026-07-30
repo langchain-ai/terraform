@@ -347,15 +347,23 @@ _run_section_2() {
   local name_default="$NAME_PREFIX"
   [[ "$PROFILE" == "prod" ]] && ! _answered 2 && name_default="prod"
   while true; do
-    _ask "Deployment name (lowercase, no leading hyphen, e.g. prod, staging, myco)" "$name_default"
+    _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
     NAME_PREFIX="${_REPLY#-}" # tolerate a pasted leading hyphen from an older tfvars
-    # Same rule as the name_prefix validation in variables.tf: hyphens only
-    # between alphanumerics, since a trailing or doubled hyphen produces a
-    # Key Vault and AKS name Azure rejects at apply.
-    if [[ "$NAME_PREFIX" =~ ^[a-z](-?[a-z0-9])*$ ]]; then
+    # "none" is the only route to the empty name_prefix variables.tf allows,
+    # since _ask substitutes the default on a blank reply.
+    if [[ "$NAME_PREFIX" == "none" ]]; then
+      NAME_PREFIX=""
       break
     fi
-    _red "  ERROR: must start with a lowercase letter, then lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz). No trailing or doubled hyphen."
+    # Same rule as the name_prefix validation in variables.tf: hyphens only
+    # between alphanumerics, since a trailing or doubled hyphen produces a
+    # Key Vault and AKS name Azure rejects at apply. A leading digit is fine,
+    # because the prefix always lands on the end of "langsmith-<resource>" and
+    # the composed name still starts with a letter.
+    if [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
+      break
+    fi
+    _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
   done
 
   _ask "Azure region" "$LOCATION"
@@ -368,7 +376,7 @@ _run_section_2() {
   COST_CENTER="$_REPLY"
 
   echo ""
-  printf "  Resources: langsmith-{resource}$(_cyan "-$NAME_PREFIX")  in  $(_cyan "$LOCATION")\n"
+  printf "  Resources: langsmith-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
 }
 
 # -- 3. Networking -----------------------------------------------------------
@@ -620,7 +628,7 @@ CREATE_DNS_ZONE="false"
 # DnsRecordCreateConflict at apply.
 _ask_dns_label() {
   _ask "DNS label — must be unique across the whole $LOCATION region (e.g. langsmith-prod)" \
-    "${DNS_LABEL:-langsmith-${NAME_PREFIX}}"
+    "${DNS_LABEL:-langsmith${NAME_PREFIX:+-$NAME_PREFIX}}"
   DNS_LABEL="$_REPLY"
 }
 
@@ -1038,7 +1046,7 @@ while true; do
   printf "${BOLD}══════════════════════════════════════════════════════${RESET}\n"
   echo ""
   printf "  %-24s %s\n" "1. Profile:"         "$PROFILE"
-  printf "  %-24s %s\n" "2. Deployment name:" "$NAME_PREFIX"
+  printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
