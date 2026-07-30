@@ -10,7 +10,7 @@
 # Manage secrets:          make keyvault
 # Where am I?              make status
 
-.PHONY: help quickstart setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart setup-env preflight keyvault status status-quick \
         init plan apply destroy \
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -27,6 +27,9 @@ help: ## Show available targets
 
 quickstart: ## Interactive setup wizard — generates terraform.tfvars
 	$(INFRA_DIR)/scripts/quickstart.sh
+
+test-quickstart: ## Unit-test the quickstart wizard's resume layer (no Azure, no prompts)
+	$(INFRA_DIR)/scripts/test-quickstart-state.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh

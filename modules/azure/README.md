@@ -277,6 +277,15 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 
 ---
 
+### `make test-quickstart` — Unit tests for the wizard's resume layer
+**Script:** `infra/scripts/test-quickstart-state.sh`
+
+Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, and seeding the wizard from an existing `terraform.tfvars`. Runs in a temp directory with no Azure calls and no prompts, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
+
+One check is worth knowing about when you rename a wizard variable: `_load_state` silently drops any key missing from `_STATE_KEYS`, so a rename that lands in `_load_tfvars` but not in the whitelist loses that answer on resume with no error. The test scrapes every variable `_load_tfvars` assigns and fails if one is not whitelisted.
+
+---
+
 ### `make keyvault` — Key Vault secret manager
 **Script:** `infra/scripts/manage-keyvault.sh`
 
