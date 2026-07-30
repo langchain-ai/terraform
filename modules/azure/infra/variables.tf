@@ -111,7 +111,7 @@ variable "subscription_id" {
 
 variable "create_vnet" {
   type        = bool
-  description = "Whether to create a new VNet. If false, you will need to provide a vnet id and subnet ids."
+  description = "Whether to create a new VNet. If false, vnet_id is required and each subnet is either supplied via its *_subnet_id variable or carved out of that VNet by Terraform."
   default     = true
 }
 
@@ -152,26 +152,57 @@ variable "existing_cluster_node_pools_managed" {
 
 variable "vnet_id" {
   type        = string
-  description = "The id of the existing VNet to use. If create_vnet is false, this is required."
+  description = "The id of the existing VNet to use. Required when create_vnet is false. Any subnet Terraform creates is placed in this VNet's resource group."
   default     = ""
+
+  validation {
+    condition     = var.vnet_id == "" || can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.vnet_id))
+    error_message = "vnet_id must be a full VNet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
+  }
 }
+
+# ── Bring-your-own subnets (optional, only when create_vnet = false) ──────────
+# Each subnet is independent. Supply an ID to reuse an existing subnet; leave it
+# empty and Terraform creates that subnet inside vnet_id using the matching
+# *_subnet_address_prefix, with the correct delegation applied.
 
 variable "aks_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the AKS cluster. If create_vnet is false, this is required."
+  description = "The id of an existing subnet to use for the AKS cluster. Leave empty to have Terraform create one in vnet_id using aks_subnet_address_prefix. Must have the Microsoft.Storage and Microsoft.KeyVault service endpoints if you enable the storage or Key Vault default-deny firewalls."
   default     = ""
+
+  validation {
+    condition     = var.aks_subnet_id == "" || can(regex("/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.aks_subnet_id))
+    error_message = "aks_subnet_id must be a full subnet resource ID ending in /virtualNetworks/<name>/subnets/<name>"
+  }
 }
 
 variable "postgres_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the Postgres server. If create_vnet is false, this is required."
+  description = "The id of an existing subnet to use for the Postgres server. Leave empty to have Terraform create one in vnet_id using postgres_subnet_address_prefix. An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and hold no other resources."
   default     = ""
+
+  validation {
+    condition     = var.postgres_subnet_id == "" || can(regex("/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.postgres_subnet_id))
+    error_message = "postgres_subnet_id must be a full subnet resource ID ending in /virtualNetworks/<name>/subnets/<name>"
+  }
 }
 
 variable "redis_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the Redis server. If create_vnet is false, this is required."
+  description = "The id of an existing subnet to use for the Redis private endpoint. Leave empty to have Terraform create one in vnet_id using redis_subnet_address_prefix. This subnet must NOT be delegated — Azure Managed Redis is reached through a private endpoint, and a delegated subnet would reject it."
   default     = ""
+
+  validation {
+    condition     = var.redis_subnet_id == "" || can(regex("/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.redis_subnet_id))
+    error_message = "redis_subnet_id must be a full subnet resource ID ending in /virtualNetworks/<name>/subnets/<name>"
+  }
+}
+
+variable "aks_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so size it for max_nodes * max_pods_per_node. Must fit inside the VNet address space and not overlap aks_service_cidr."
+  default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
 variable "postgres_database_name" {
@@ -343,7 +374,7 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'agic' = Application Gateway Ingress Controller. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
+  description = "Ingress controller to install. 'nginx' = NGINX via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
   default     = "nginx"
 
   validation {

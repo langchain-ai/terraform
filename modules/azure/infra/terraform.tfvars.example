@@ -177,11 +177,35 @@ sizing_profile = "production"
 # postgres_geo_redundant_backup        = true             # geo-redundant backups
 
 # ── Networking (optional — override only if reusing existing VNet) ─────────────
+# Set create_vnet = false and give the VNet you want LangSmith to deploy into.
+# Each subnet is then independent: supply an ID to reuse a subnet you already
+# have, or leave it out and Terraform creates that subnet inside your VNet from
+# the matching address prefix. Terraform applies the settings each service
+# needs — the Postgres subnet gets the Microsoft.DBforPostgreSQL/flexibleServers
+# delegation, the AKS subnet gets the Storage and Key Vault service endpoints,
+# and the Redis subnet gets no delegation (it holds a private endpoint, and a
+# delegated subnet would reject it).
+#
 # create_vnet          = false
-# vnet_id              = "/subscriptions/.../virtualNetworks/my-vnet"
-# aks_subnet_id        = "/subscriptions/.../subnets/aks"
-# postgres_subnet_id   = "/subscriptions/.../subnets/postgres"
-# redis_subnet_id      = "/subscriptions/.../subnets/redis"
+# vnet_id              = "/subscriptions/.../resourceGroups/net-rg/providers/Microsoft.Network/virtualNetworks/my-vnet"
+#
+# Reuse subnets you already have. Each must be a subnet of vnet_id above.
+# An existing Postgres subnet must already carry the flexibleServers delegation
+# and hold nothing else — Terraform checks this at plan time.
+# aks_subnet_id        = "/subscriptions/.../virtualNetworks/my-vnet/subnets/aks"
+# postgres_subnet_id   = "/subscriptions/.../virtualNetworks/my-vnet/subnets/postgres"
+# redis_subnet_id      = "/subscriptions/.../virtualNetworks/my-vnet/subnets/redis"
+#
+# Or omit an ID above and set its prefix here to have Terraform carve it out.
+# Each must fit inside the VNet address space, not overlap an existing subnet,
+# and not overlap aks_service_cidr (default 10.0.64.0/20).
+# aks_subnet_address_prefix      = ["10.0.0.0/19"]
+# postgres_subnet_address_prefix = ["10.0.32.0/20"]
+# redis_subnet_address_prefix    = ["10.0.48.0/20"]
+#
+# create_bastion and ingress_controller = "agic" both need subnets that only
+# exist on the create_vnet = true path, so they cannot be combined with the
+# above. Terraform rejects that combination at plan time.
 
 # ── Network hardening (production) ────────────────────────────────────────────
 # Storage / Key Vault / AKS default-deny firewalls. AKS pods are allowlisted
