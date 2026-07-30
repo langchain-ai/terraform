@@ -1,0 +1,19 @@
+modules/aws/helm/scripts/init-values.sh
+  s_97bacea139cafe::t_400806f97186d0 150-157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "9574235dadd96d979601d9b6700260a2482bb1e9",
+  "prompts": {},
+  "sessions": {
+    "s_97bacea139cafe": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e32204f9-a43c-4bab-988c-f5ea7d7c1d02",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
