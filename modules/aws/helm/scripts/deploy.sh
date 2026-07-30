@@ -141,7 +141,7 @@ if [[ "$_enable_smithdb" == "true" && "$_chart_version_was_set" != "x" ]]; then
   echo "       Example: CHART_VERSION=0.16.21 make deploy" >&2
   exit 1
 fi
-if [[ "$_enable_smithdb" == "true" && ! "$CHART_VERSION" =~ ^~?0\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\.[0-9]+)?$ ]]; then
+if [[ "$_enable_smithdb" == "true" && ! "$CHART_VERSION" =~ ^~?0\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\.[0-9]+)?(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
   echo "ERROR: SmithDB requires a chart version of 0.16 or newer; got '$CHART_VERSION'." >&2
   exit 1
 fi
