@@ -11,6 +11,7 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _name_suffix              — Resource-name suffix derived from name_prefix
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -42,6 +43,18 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Resource-name suffix, mirroring local.name_suffix in main.tf.
+# name_prefix carries no hyphen ("prod") but every derived name needs one
+# ("langsmith-kv-prod"), so the separator is added here. Falls back to the
+# retired `identifier` key, hyphen and all, so these scripts can still resolve
+# names for a deployment whose tfvars predates the rename.
+# Returns 1 when neither key is set — callers treat that as "no suffix".
+_name_suffix() {
+  local val
+  val=$(_parse_tfvar "name_prefix") || val=$(_parse_tfvar "identifier") || return 1
+  printf -- '-%s' "${val#-}"
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────

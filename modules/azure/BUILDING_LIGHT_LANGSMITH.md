@@ -145,14 +145,14 @@ cp infra/terraform.tfvars.example infra/terraform.tfvars
 ```hcl
 # ── Required ───────────────────────────────────────────────────────────────────
 subscription_id = ""              # FILL IN: az account show --query id -o tsv
-identifier      = "-demo"         # FILL IN: suffix appended to every resource name
-                                  # e.g. "-demo", "-poc", "-dev", "-acme"
-                                  # Must start with hyphen, lowercase letters/numbers only
-                                  # Key Vault name = "langsmith-kv<identifier>" (max 24 chars)
+name_prefix     = "demo"          # FILL IN: appended to every resource name (no leading hyphen)
+                                  # e.g. "demo", "poc", "dev", "acme"
+                                  # Lowercase letters, numbers and hyphens only
+                                  # Also becomes the 'environment' tag
+                                  # Key Vault name = "langsmith-kv-<name_prefix>" (max 24 chars)
 
 # ── Region & tags ──────────────────────────────────────────────────────────────
 location    = "eastus"            # Azure region — eastus is cheapest for demos
-environment = "dev"               # dev | staging | prod (used for resource tags)
 owner       = "your@email.com"    # your email — shows up in resource tags
 cost_center = "engineering"       # any string — for resource tagging
 
@@ -208,8 +208,8 @@ langsmith_release_name = "langsmith"
 sizing_profile = "minimum"   # absolute minimum resources for demo/POC
 ```
 
-**Why is `identifier` important?**
-Every Azure resource name is derived from it: `langsmith-rg-demo`, `langsmith-aks-demo`, `langsmith-kv-demo`, etc. Key Vault names must be globally unique across all of Azure (not just your subscription) — if the name is taken, Terraform will fail at the Key Vault step. If that happens, use a more unique identifier (e.g. your initials + a number: `-dz01`).
+**Why is `name_prefix` important?**
+Every Azure resource name is derived from it: `langsmith-rg-demo`, `langsmith-aks-demo`, `langsmith-kv-demo`, etc. Key Vault names must be globally unique across all of Azure (not just your subscription) — if the name is taken, Terraform will fail at the Key Vault step. If that happens, use a more unique name_prefix (e.g. your initials + a number: `dz01`).
 
 ---
 
@@ -234,7 +234,7 @@ make setup-env
 
 ```
 LangSmith — secret bootstrap
-  identifier : -demo
+  name_prefix : demo
   key_vault  : langsmith-kv-demo
 
 PostgreSQL admin password  : ****
@@ -313,7 +313,7 @@ storage_account_k8s_managed_identity_client_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxx
 
 | Error | Cause | Fix |
 |---|---|---|
-| `KeyVault name 'langsmith-kv-demo' is already in use` | Name taken by another subscription (KV names are globally unique) | Change `identifier` or set `keyvault_name = "my-unique-kv-name"` in tfvars |
+| `KeyVault name 'langsmith-kv-demo' is already in use` | Name taken by another subscription (KV names are globally unique) | Change `name_prefix` or set `keyvault_name = "my-unique-kv-name"` in tfvars |
 | `AuthorizationFailed` on role assignment | Missing User Access Administrator role | Get Owner or User Access Admin on the subscription |
 | `QuotaExceeded` for Standard_DS4_v2 | vCPU quota too low | File a quota increase in the Azure portal for the region |
 | `InvalidResourceReference` on VNet/subnet | Race condition | Re-run `terraform apply` — Terraform usually resolves on retry |
@@ -456,18 +456,18 @@ Read the actual secret names that the chart created and create aliases under the
 
 ```bash
 # Step 1 — see what secrets exist in the namespace
-kubectl --context langsmith-<identifier-suffix> get secrets -n langsmith
+kubectl --context langsmith-aks-<name_prefix> get secrets -n langsmith
 
 # You should see:
 # langsmith-postgres   (created by Helm, holds the in-cluster PG connection URL)
 # langsmith-redis      (created by Helm, holds the in-cluster Redis connection URL)
 
 # Step 2 — extract the connection URLs from the chart-created secrets
-PG_CONN_URL=$(kubectl --context langsmith-<identifier-suffix> \
+PG_CONN_URL=$(kubectl --context langsmith-aks-<name_prefix> \
   get secret langsmith-postgres -n langsmith \
   -o jsonpath='{.data.connection_url}' | base64 -d)
 
-REDIS_CONN_URL=$(kubectl --context langsmith-<identifier-suffix> \
+REDIS_CONN_URL=$(kubectl --context langsmith-aks-<name_prefix> \
   get secret langsmith-redis -n langsmith \
   -o jsonpath='{.data.connection_url}' | base64 -d)
 
@@ -477,22 +477,22 @@ echo "Redis: $REDIS_CONN_URL"
 
 # Step 3 — create alias secrets with the names the job expects
 # --dry-run=client -o yaml | kubectl apply  makes this idempotent (safe to re-run)
-kubectl --context langsmith-<identifier-suffix> create secret generic langsmith-postgres-secret \
+kubectl --context langsmith-aks-<name_prefix> create secret generic langsmith-postgres-secret \
   --namespace langsmith \
   --from-literal=connection_url="$PG_CONN_URL" \
-  --dry-run=client -o yaml | kubectl --context langsmith-<identifier-suffix> apply -f -
+  --dry-run=client -o yaml | kubectl --context langsmith-aks-<name_prefix> apply -f -
 
-kubectl --context langsmith-<identifier-suffix> create secret generic langsmith-redis-secret \
+kubectl --context langsmith-aks-<name_prefix> create secret generic langsmith-redis-secret \
   --namespace langsmith \
   --from-literal=connection_url="$REDIS_CONN_URL" \
-  --dry-run=client -o yaml | kubectl --context langsmith-<identifier-suffix> apply -f -
+  --dry-run=client -o yaml | kubectl --context langsmith-aks-<name_prefix> apply -f -
 
 # Step 4 — delete the stuck/failed pod so the job controller creates a new one
-kubectl --context langsmith-<identifier-suffix> \
+kubectl --context langsmith-aks-<name_prefix> \
   delete pod -n langsmith -l job-name=langsmith-backend-ch-migrations
 
 # Step 5 — watch the job complete (takes ~30 seconds)
-kubectl --context langsmith-<identifier-suffix> \
+kubectl --context langsmith-aks-<name_prefix> \
   get pods -n langsmith -w | grep ch-migrations
 # Expected: pod transitions from Pending → Running → Completed
 ```
@@ -555,7 +555,7 @@ kubectl get certificate -n langsmith
 ```
 URL:      https://<dns_label>.<region>.cloudapp.azure.com
 Login:    the initialOrgAdminEmail you set in setup-env.sh
-Password: az keyvault secret show --vault-name langsmith-kv<identifier> \
+Password: az keyvault secret show --vault-name langsmith-kv-<name_prefix> \
             --name langsmith-admin-password --query value -o tsv
 ```
 
@@ -568,7 +568,7 @@ Open the URL in a browser. Accept the EULA and you will land on the LangSmith da
 ### Pods stuck in Pending
 
 ```bash
-kubectl --context langsmith-<identifier-suffix> describe pod <pod-name> -n langsmith
+kubectl --context langsmith-aks-<name_prefix> describe pod <pod-name> -n langsmith
 # Look for "Events" at the bottom
 ```
 
@@ -580,19 +580,19 @@ Common causes:
 
 This is normal. `platform-backend` connects to Postgres at startup and may restart 1-2 times before the in-cluster Postgres pod fully initializes. If restarts exceed 5, check its logs:
 ```bash
-kubectl --context langsmith-<identifier-suffix> logs -n langsmith deploy/langsmith-platform-backend --previous
+kubectl --context langsmith-aks-<name_prefix> logs -n langsmith deploy/langsmith-platform-backend --previous
 ```
 
 ### TLS certificate not issuing
 
 ```bash
 # Check the ACME challenge — cert-manager creates a temporary Ingress for HTTP-01
-kubectl --context langsmith-<identifier-suffix> get challenges -n langsmith
-kubectl --context langsmith-<identifier-suffix> describe challenge -n langsmith
+kubectl --context langsmith-aks-<name_prefix> get challenges -n langsmith
+kubectl --context langsmith-aks-<name_prefix> describe challenge -n langsmith
 
 # Common issue: NGINX is not responding to HTTP on port 80
 # Verify the ingress has an address:
-kubectl --context langsmith-<identifier-suffix> get ingress -n langsmith
+kubectl --context langsmith-aks-<name_prefix> get ingress -n langsmith
 # If ADDRESS is empty, NGINX hasn't received the IP yet — wait longer
 ```
 
@@ -632,12 +632,12 @@ make clean
 
 # 4. Remove the kubeconfig context (optional cleanup)
 #    Without this, the dead cluster context stays in your kubeconfig permanently.
-kubectl config delete-context langsmith-<identifier-suffix>
-kubectl config delete-cluster langsmith-aks<identifier>
-kubectl config delete-user clusterUser_langsmith-rg<identifier>_langsmith-aks<identifier>
+kubectl config delete-context langsmith-aks-<name_prefix>
+kubectl config delete-cluster langsmith-aks-<name_prefix>
+kubectl config delete-user clusterUser_langsmith-rg-<name_prefix>_langsmith-aks-<name_prefix>
 ```
 
-> **Key Vault soft-delete:** Even with `purge_protection = false`, Azure applies a 7-day soft-delete retention on Key Vault. If `terraform destroy` fails on the Key Vault resource, wait a minute and retry. If you need to immediately reuse the same Key Vault name, purge it manually: `az keyvault purge --name langsmith-kv<identifier>`.
+> **Key Vault soft-delete:** Even with `purge_protection = false`, Azure applies a 7-day soft-delete retention on Key Vault. If `terraform destroy` fails on the Key Vault resource, wait a minute and retry. If you need to immediately reuse the same Key Vault name, purge it manually: `az keyvault purge --name langsmith-kv-<name_prefix>`.
 
 > **Data loss:** All in-cluster DB data (Postgres, Redis, ClickHouse) is deleted with the PVCs in step 1. There is no recovery path — this is expected for demo/POC deployments.
 
@@ -645,7 +645,7 @@ kubectl config delete-user clusterUser_langsmith-rg<identifier>_langsmith-aks<id
 
 ## Verified Working Output (2026-03-29)
 
-Deployment: identifier `-dzlight`, chart 0.13.35, AKS 1.32.11, eastus, Standard_DS4_v2 × 2 nodes (autoscaled to 3), `dns_label = "langsmith-dzlight"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
+Deployment: name_prefix `dzlight`, chart 0.13.35, AKS 1.32.11, eastus, Standard_DS4_v2 × 2 nodes (autoscaled to 3), `dns_label = "langsmith-dzlight"`, Let's Encrypt HTTP-01 prod TLS. All in-cluster DBs.
 
 **Apply output:**
 ```

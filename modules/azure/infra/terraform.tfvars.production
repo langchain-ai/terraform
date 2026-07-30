@@ -21,8 +21,7 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 #------------------------------------------------------------------------------
 # Naming
 #------------------------------------------------------------------------------
-identifier  = "-prod"
-environment = "prod"
+name_prefix = "prod"
 location    = "eastus"   # pick the region closest to your users
 
 #------------------------------------------------------------------------------

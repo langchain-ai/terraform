@@ -147,6 +147,24 @@ make deploy-all-tf   # apply → init-values → init-app → apply-app
 For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
 For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
+### Naming your deployment
+
+One variable names the deployment. `name_prefix` is appended to every resource
+name and doubles as the `environment` tag, so `name_prefix = "prod"` gives
+`langsmith-rg-prod`, `langsmith-aks-prod`, `langsmith-kv-prod` and tags
+everything `environment = prod`. Terraform inserts the separating hyphen, so
+write `prod`, not `-prod`.
+
+Set `environment` explicitly only when the tag needs to differ from the
+deployment name, e.g. `name_prefix = "prod-eastus"` with `environment = "prod"`.
+
+**Upgrading from a release that used `identifier`:** rename the variable and keep
+the value. `identifier = "-prod"` becomes `name_prefix = "prod"`; the leading
+hyphen is now optional, so `"-prod"` also works. Every resource name is
+unchanged, so `terraform plan` should report no changes to naming. Leaving
+`identifier` in `terraform.tfvars` fails the plan with a message pointing here
+rather than silently renaming your resources.
+
 ---
 
 ## Deployment Passes
@@ -238,7 +256,7 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 - Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
 - After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
 - Auto-detects Azure subscription ID from `az account show`
-- Validates identifier format (`-prod`, `-staging`, `-myco`)
+- Validates deployment name format (`prod`, `staging`, `myco`)
 - Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
@@ -265,7 +283,7 @@ make keyvault delete langsmith-deployments-encryption-key   # soft-delete (recov
 ```
 
 Key behaviors:
-- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `langsmith-kv{identifier}`
+- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `langsmith-kv-{name_prefix}`
 - `validate` — checks all 4 required secrets exist and are non-empty; validates admin password symbol requirement
 - `diff` — compares Key Vault values vs `langsmith-config-secret` K8s secret key-by-key
 - Warns on `langsmith-api-key-salt` and `langsmith-jwt-secret` (stable secrets — changing them invalidates all API keys / sessions)
@@ -279,7 +297,7 @@ Key behaviors:
 
 Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name from `identifier` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
+- Derives the Key Vault name from `name_prefix` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
 - **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
 - **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
 - Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists
@@ -389,7 +407,7 @@ Bridges Key Vault (Terraform's output) to Kubernetes (Helm's input). Safe to re-
 
 Translates Terraform outputs and `terraform.tfvars` flags into Helm values files. Re-running is safe — outputs are refreshed, existing hostname is preserved unless overridden.
 
-- Reads from `terraform.tfvars`: `identifier`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
+- Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
 - Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure/application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
