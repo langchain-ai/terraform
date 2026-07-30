@@ -11,13 +11,14 @@
 subscription_id = "your-azure-subscription-id"   # az account show --query id -o tsv
 
 # ── Naming ────────────────────────────────────────────────────────────────────
-# Suffix appended to every resource name to distinguish deployments.
-# Must start with a hyphen or be empty. Examples: "-prod", "-staging", "-dz"
-identifier  = "-prod"
-environment = "dev"    # dev | staging | prod
+# Name of this deployment. Appended to every resource name and used as the
+# 'environment' tag. No leading hyphen — Terraform adds the separator, so
+# "prod" gives langsmith-rg-prod. Examples: "prod", "staging", "dz"
+name_prefix = "prod"
 location    = "eastus"
 
 # Optional tags for cost allocation and compliance
+# environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"
 # cost_center = "engineering"
 

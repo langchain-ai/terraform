@@ -26,8 +26,7 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 #------------------------------------------------------------------------------
 # Naming
 #------------------------------------------------------------------------------
-identifier  = "-demo"      # suffix appended to every resource name
-environment = "dev"
+name_prefix = "demo"       # appended to every resource name; no leading hyphen
 location    = "eastus"
 
 #------------------------------------------------------------------------------
