@@ -1,0 +1,98 @@
+modules/aws/infra/main.tf
+  s_d592e458ade8f6::t_74b84cf37096c6 152-163
+modules/aws/app/main.tf
+  s_d592e458ade8f6::t_cea57d4c6a32d3 249,352-353
+  s_d592e458ade8f6::t_167a74afa66d44 354-359,361-369,372-378,381-382,384-396
+modules/aws/infra/modules/smithdb/s3.tf
+  s_d592e458ade8f6::t_ca6a22e57c9917 51,59
+modules/aws/infra/outputs.tf
+  s_d592e458ade8f6::t_79712b48256d61 152-153,155-156
+  s_d592e458ade8f6::t_f65f6646fca4be 154
+modules/aws/TEST_CYCLE.md
+  s_d592e458ade8f6::t_31f63e5a4ce8f7 316
+  s_d592e458ade8f6::t_cbc1be851d1d47 314-315,317-328
+modules/aws/infra/modules/storage/outputs.tf
+  s_d592e458ade8f6::t_c3ea08be02fafb 12-16
+modules/aws/helm/scripts/deploy.sh
+  s_d592e458ade8f6::t_0275ce6fcd9344 144-146
+  s_d592e458ade8f6::t_3ed9168464be55 34,37-38,137-139,141-143,262-263
+  s_d592e458ade8f6::t_df62f18b39854f 35-36,140
+modules/aws/SMITHDB.md
+  s_d592e458ade8f6::t_90fcf9a3a1322e 77-78
+  s_d592e458ade8f6::t_567543a9997376 68-71
+  s_d592e458ade8f6::t_747e2195661018 11,22
+  s_d592e458ade8f6::t_593615f65fe1bb 3,65-67
+  s_d592e458ade8f6::t_6967d21b8e6b4b 16-17
+  s_d592e458ade8f6::t_dd4296519b5908 1-2,4-10,12-15,18-21,23-40,43-47,50-64,72-76,79-81
+  s_d592e458ade8f6::t_2ac459aa7acb77 41-42,48-49
+modules/aws/infra/variables.tf
+  s_d592e458ade8f6::t_09e4fb1cdb81ed 870
+  s_d592e458ade8f6::t_16f3e09f511040 720,722-736
+  s_d592e458ade8f6::t_d62a638e079ed3 718
+  s_d592e458ade8f6::t_d455856b19ba79 719,797,871
+  s_d592e458ade8f6::t_c985b99417e0c6 767
+  s_d592e458ade8f6::t_305f03c092666e 721
+modules/aws/infra/modules/smithdb/variables.tf
+  s_d592e458ade8f6::t_a5cf29fa352895 169
+  s_d592e458ade8f6::t_36af442c7fec3f 86
+  s_d592e458ade8f6::t_714974273bd25e 116
+modules/aws/README.md
+  s_d592e458ade8f6::t_cbc6842498a1f8 998
+  s_d592e458ade8f6::t_8fc90d4e1a82e4 996
+  s_d592e458ade8f6::t_a8010b4110651c 999
+modules/aws/infra/modules/smithdb/irsa.tf
+  s_d592e458ade8f6::t_94bd9e07b7d291 54-66
+modules/aws/app/terraform.tfvars.example
+  s_d592e458ade8f6::t_ec4fdbdacde1f3 17-22
+  s_d592e458ade8f6::t_27c7fd8237c8a6 14
+  s_d592e458ade8f6::t_5fd618857f85a6 23
+modules/aws/SERVICES.md
+  s_d592e458ade8f6::t_03c3338a28f9ba 146-149,151-152,161
+  s_d592e458ade8f6::t_82a5ec780713b9 150
+modules/aws/helm/values/examples/langsmith-values-smithdb.yaml
+  s_d592e458ade8f6::t_77ae3ade61f44c 79
+  s_d592e458ade8f6::t_fe43e5dfd64b7c 61,64,66
+  s_d592e458ade8f6::t_168b257dcc29c0 11-12,22,24,30
+  s_d592e458ade8f6::t_b11485253fbeec 60
+  s_d592e458ade8f6::t_069708382884d1 50,53,55
+modules/aws/helm/scripts/init-values.sh
+  s_d592e458ade8f6::t_56e99a8e6b4e4d 761-762,788-789,812,814,816
+  s_d592e458ade8f6::t_a560f55d6c188c 74-81
+  s_d592e458ade8f6::t_69edbe7015f286 66-71,813,815,817
+  s_d592e458ade8f6::t_8c1876de827154 73
+modules/aws/app/locals.tf
+  s_d592e458ade8f6::t_647f4bd19085d9 64-65
+  s_d592e458ade8f6::t_6959a433979e9d 146
+  s_d592e458ade8f6::t_c0cef05efdafb1 62-63,147-148
+  s_d592e458ade8f6::t_f238b986dd9277 149-150,155-161
+  s_d592e458ade8f6::t_af78044f9e56b1 151-154
+modules/aws/ARCHITECTURE.md
+  s_d592e458ade8f6::t_7df5b2bce5ca13 359-360
+  s_d592e458ade8f6::t_3e4e605f35c572 354-358,361-362
+modules/aws/app/scripts/pull-infra-outputs.sh
+  s_d592e458ade8f6::t_797100719042de 104
+modules/aws/app/variables.tf
+  s_d592e458ade8f6::t_0a379f04f55d4e 120-129,132-133
+  s_d592e458ade8f6::t_6bdb980ecb012d 91,161
+modules/aws/infra/terraform.tfvars.example
+  s_d592e458ade8f6::t_894ff421d37a23 678-680
+  s_d592e458ade8f6::t_ea4f23ee43a24c 661-663,673-675,685
+  s_d592e458ade8f6::t_691c9b92c9c3d3 670-671
+  s_d592e458ade8f6::t_187e8d77c59c93 696,709-711
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "083e6ad4123715dbca7f373621ec1edce1a1d19b",
+  "prompts": {},
+  "sessions": {
+    "s_d592e458ade8f6": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1412607c-7b99-4e9e-a8a2-73e3655b10af",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "ben11211 <nagengast@langchain.dev>"
+    }
+  }
+}
