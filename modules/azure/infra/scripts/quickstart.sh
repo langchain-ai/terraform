@@ -166,10 +166,13 @@ _run_section_2() {
   while true; do
     _ask "Deployment name (lowercase, no leading hyphen, e.g. prod, staging, myco)" "$name_default"
     NAME_PREFIX="${_REPLY#-}" # tolerate a pasted leading hyphen from an older tfvars
-    if [[ "$NAME_PREFIX" =~ ^[a-z][a-z0-9-]*$ ]]; then
+    # Same rule as the name_prefix validation in variables.tf: hyphens only
+    # between alphanumerics, since a trailing or doubled hyphen produces a
+    # Key Vault and AKS name Azure rejects at apply.
+    if [[ "$NAME_PREFIX" =~ ^[a-z](-?[a-z0-9])*$ ]]; then
       break
     fi
-    _red "  ERROR: must start with a lowercase letter, then lowercase alphanumerics or hyphens (e.g. prod, myco)."
+    _red "  ERROR: must start with a lowercase letter, then lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz). No trailing or doubled hyphen."
   done
 
   _ask "Azure region" "eastus"
