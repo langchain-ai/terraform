@@ -28,8 +28,10 @@ locals {
   vnet_name           = "langsmith-vnet${local.identifier}"
 
   # Cluster name: derived for new clusters, or the customer's existing cluster
-  # name when attaching to one (create_cluster = false).
-  aks_name      = var.create_cluster || var.existing_cluster_name == "" ? "langsmith-aks${local.identifier}" : var.existing_cluster_name
+  # name when attaching to one (create_cluster = false). No fallback in the
+  # attach case — an unset existing_cluster_name fails on the aks module's
+  # precondition instead of looking up a cluster that was never created.
+  aks_name      = var.create_cluster ? "langsmith-aks${local.identifier}" : var.existing_cluster_name
   postgres_name = "langsmith-postgres${local.identifier}"
   redis_name    = "langsmith-redis${local.identifier}"
   blob_name     = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"

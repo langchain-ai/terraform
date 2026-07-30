@@ -66,13 +66,9 @@ locals {
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
 
-  # A node pool can only join the VNet its cluster already runs in. For a
-  # pre-existing cluster that's the cluster's own node subnet — var.subnet_id may
-  # point at a subnet this module created, which would be a different VNet.
-  node_pool_subnet_id = var.create_cluster ? var.subnet_id : try(
-    data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[0].vnet_subnet_id,
-    var.subnet_id
-  )
+  # var.location for a cluster created here, so the location check below is
+  # trivially satisfied and only has something to say under create_cluster = false.
+  cluster_location = var.create_cluster ? var.location : data.azurerm_kubernetes_cluster.existing[0].location
 }
 
 # Read-only lookup of a pre-existing AKS cluster (BYOC). Never creates, modifies,
@@ -84,6 +80,14 @@ data "azurerm_kubernetes_cluster" "existing" {
   resource_group_name = local.existing_cluster_resource_group_name
 
   lifecycle {
+    precondition {
+      # Without this the lookup falls back to the derived "langsmith-aks<id>"
+      # name and Azure reports a missing cluster, which reads like a permissions
+      # or region problem rather than an unset variable.
+      condition     = var.cluster_name != ""
+      error_message = "create_cluster = false requires existing_cluster_name to be set to the name of the AKS cluster to attach to."
+    }
+
     precondition {
       # 'agic' (Application Gateway add-on) and 'istio-addon' (Azure Service Mesh
       # add-on) are configured via arguments on the azurerm_kubernetes_cluster
@@ -102,6 +106,48 @@ data "azurerm_kubernetes_cluster" "existing" {
       condition     = self.oidc_issuer_enabled
       error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${local.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
     }
+
+    postcondition {
+      # The root module feeds this same subnet to the default-deny Blob firewall
+      # and the Key Vault network ACLs, so it has to be a subnet the cluster's
+      # nodes actually run in. Point it anywhere else and apply succeeds, pods
+      # schedule, and every Blob write and Key Vault read 403s at runtime. It's
+      # also the only subnet an added node pool can join, since a node pool can
+      # only live in its cluster's VNet.
+      condition     = contains(compact(self.agent_pool_profile[*].vnet_subnet_id), var.subnet_id)
+      error_message = "aks_subnet_id must be one of the subnets cluster '${var.cluster_name}' already runs nodes in, because it also drives the Blob and Key Vault firewall allowlists. Set create_vnet = false and aks_subnet_id to one of: [${join(", ", compact(self.agent_pool_profile[*].vnet_subnet_id))}]"
+    }
+  }
+}
+
+# Workload Identity has to be enabled on top of the OIDC issuer — they're
+# separate AKS flags, so "issuer on, Workload Identity off" is a reachable state
+# that passes the check above, applies cleanly, and then leaves pods without a
+# projected service account token. The azurerm data source doesn't expose the
+# flag, so read the cluster's ARM properties directly. Read-only GET, no writes.
+data "azapi_resource" "existing_security_profile" {
+  count                  = var.create_cluster ? 0 : 1
+  type                   = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  resource_id            = data.azurerm_kubernetes_cluster.existing[0].id
+  response_export_values = ["properties.securityProfile.workloadIdentity.enabled"]
+
+  lifecycle {
+    postcondition {
+      condition     = try(self.output.properties.securityProfile.workloadIdentity.enabled, false)
+      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${local.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+    }
+  }
+}
+
+# Key Vault, Blob, PostgreSQL, and Redis are all created in var.location, which
+# nothing ties to the region the existing cluster runs in. A mismatch works, at
+# the cost of cross-region latency and egress on every trace write, so warn
+# rather than fail — a deliberate split-region deployment stays possible.
+check "existing_cluster_location" {
+  assert {
+    # Azure accepts both "East US" and "eastus" for the same region.
+    condition     = lower(replace(local.cluster_location, " ", "")) == lower(replace(var.location, " ", ""))
+    error_message = "Cluster '${var.cluster_name}' runs in ${local.cluster_location} but location is set to ${var.location}. Key Vault, Blob, PostgreSQL, and Redis will be created in ${var.location}, so pod traffic to them crosses regions."
   }
 }
 
@@ -263,7 +309,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   kubernetes_cluster_id = local.cluster_id
   vm_size               = each.value.vm_size
   auto_scaling_enabled  = true
-  vnet_subnet_id        = local.node_pool_subnet_id
+  vnet_subnet_id        = var.subnet_id
   min_count             = each.value.min_count
   max_count             = each.value.max_count
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
