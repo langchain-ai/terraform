@@ -957,6 +957,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
+| `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |

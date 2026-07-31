@@ -34,6 +34,11 @@ checklist below.
 ```hcl
 tls_certificate_source       = "none"   # HTTP:80 only — no ACM/cert-manager needed
 postgres_deletion_protection = false    # Required for clean terraform destroy after test
+postgres_skip_final_snapshot = true     # Avoid fixed-name snapshots between test cycles
+
+# Required when testing a Terraform-created SmithDB metastore
+smithdb_metastore_deletion_protection = false
+smithdb_metastore_skip_final_snapshot = true
 ```
 
 All other defaults are fine for testing. The current dev config uses:
@@ -341,7 +346,8 @@ terraform -chdir=infra destroy
 ```
 
 **Before destroy, verify:**
-- `postgres_deletion_protection = false` is set in `terraform.tfvars`
+- `postgres_deletion_protection = false` and `postgres_skip_final_snapshot = true`
+- For a Terraform-created SmithDB metastore, protection is `false` and snapshot skipping is `true`
 - No custom DNS records pointing at the ALB (they will break permanently — a new hostname is
   issued on the next deploy)
 

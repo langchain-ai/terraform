@@ -360,7 +360,16 @@ fi
 PG_INSTANCE="$(_existing "postgres_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "db.r6g.xlarge" || echo "db.t3.large")")"
 PG_STORAGE="$(_existing "postgres_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "50" || echo "20")")"
 PG_MAX_STORAGE="$(_existing "postgres_max_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "500" || echo "100")")"
-PG_DELETION_PROTECTION="$([[ "$PROFILE" == "prod" ]] && echo "true" || echo "false")"
+if [[ "$PROFILE" == "prod" ]]; then
+  PG_DELETION_PROTECTION="true"
+  PG_SKIP_FINAL_SNAPSHOT="false"
+elif [[ "$UPDATE_MODE" == "true" ]]; then
+  PG_DELETION_PROTECTION="$(_existing "postgres_deletion_protection" "false")"
+  PG_SKIP_FINAL_SNAPSHOT="$(_existing "postgres_skip_final_snapshot" "true")"
+else
+  PG_DELETION_PROTECTION="false"
+  PG_SKIP_FINAL_SNAPSHOT="true"
+fi
 
 if [[ "$PG_SOURCE" == "external" ]]; then
   echo ""
@@ -651,6 +660,16 @@ ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
 ENABLE_SMITHDB="false"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+if [[ "$PROFILE" == "prod" ]]; then
+  SMITHDB_DELETION_PROTECTION="true"
+  SMITHDB_SKIP_FINAL_SNAPSHOT="false"
+elif [[ "$UPDATE_MODE" == "true" ]]; then
+  SMITHDB_DELETION_PROTECTION="$(_existing "smithdb_metastore_deletion_protection" "false")"
+  SMITHDB_SKIP_FINAL_SNAPSHOT="$(_existing "smithdb_metastore_skip_final_snapshot" "true")"
+else
+  SMITHDB_DELETION_PROTECTION="false"
+  SMITHDB_SKIP_FINAL_SNAPSHOT="true"
+fi
 
 _ask_yn "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
@@ -800,6 +819,7 @@ postgres_instance_type       = "${PG_INSTANCE}"
 postgres_storage_gb          = ${PG_STORAGE}
 postgres_max_storage_gb      = ${PG_MAX_STORAGE}
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
+postgres_skip_final_snapshot = ${PG_SKIP_FINAL_SNAPSHOT}
 TFVARS
 fi
 
@@ -893,6 +913,8 @@ enable_smithdb              = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled   = ${SMITHDB_INGESTION}
 smithdb_migration_enabled   = ${SMITHDB_MIGRATION}
 smithdb_query_enabled       = ${SMITHDB_QUERY}
+smithdb_metastore_deletion_protection = ${SMITHDB_DELETION_PROTECTION}
+smithdb_metastore_skip_final_snapshot = ${SMITHDB_SKIP_FINAL_SNAPSHOT}
 TFVARS
 
 # Security add-ons

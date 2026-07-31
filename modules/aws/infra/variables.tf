@@ -221,6 +221,12 @@ variable "postgres_deletion_protection" {
   default     = true
 }
 
+variable "postgres_skip_final_snapshot" {
+  type        = bool
+  description = "Skip the final snapshot when the LangSmith postgres instance is destroyed. Set true for dev/test environments that are rebuilt under the same name."
+  default     = false
+}
+
 variable "postgres_backup_retention_period" {
   type        = number
   description = "Days to retain automated RDS backups. 7 is the recommended baseline. 0 disables backups entirely."
@@ -793,7 +799,7 @@ variable "smithdb_metastore_backup_retention_period" {
 
 variable "smithdb_metastore_skip_final_snapshot" {
   type        = bool
-  description = "Skip the final snapshot when the SmithDB metastore is destroyed. Set false for production."
+  description = "Skip the final snapshot when the SmithDB metastore is destroyed. Set true for dev/test environments that are rebuilt under the same name."
   default     = false
 }
 

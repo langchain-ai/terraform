@@ -279,6 +279,7 @@ module "postgres" {
   iam_database_user                   = var.postgres_iam_database_user
   iam_auth_role_name                  = module.eks.langsmith_irsa_role_name
   deletion_protection                 = var.postgres_deletion_protection
+  skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
 
   depends_on = [module.eks]

@@ -275,6 +275,9 @@ postgres_iam_database_authentication_enabled = true
 # otherwise the destroy will fail on the RDS instance.
 postgres_deletion_protection = true
 
+# Keep false to create a final snapshot; use true for disposable dev/test environments.
+postgres_skip_final_snapshot = false
+
 # Backup retention — days to keep automated snapshots. 0 disables backups.
 # postgres_backup_retention_period = 7
 
@@ -686,6 +689,7 @@ enable_usage_telemetry = false
 # smithdb_metastore_allocated_storage = 50
 # smithdb_metastore_multi_az        = false
 # smithdb_metastore_deletion_protection = true
+# smithdb_metastore_skip_final_snapshot = false
 # smithdb_metastore_use_ssl         = true
 # For an external metastore, set smithdb_metastore_source = "external" and:
 #   smithdb_external_metastore_host     = "my-pg.example.com"
