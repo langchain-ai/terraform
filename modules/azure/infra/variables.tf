@@ -146,6 +146,28 @@ variable "redis_subnet_id" {
   }
 }
 
+variable "agic_subnet_id" {
+  type        = string
+  description = "The id of an existing subnet for the Application Gateway, required when ingress_controller = \"agic\" and create_vnet = false. Unlike the three above there is no carve path: Terraform will not create an Application Gateway subnet inside a VNet it does not own. Application Gateway v2 needs the subnet to itself, and Azure recommends a /24."
+  default     = ""
+
+  validation {
+    condition     = var.agic_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.agic_subnet_id))
+    error_message = "agic_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "bastion_subnet_id" {
+  type        = string
+  description = "The id of an existing subnet for Azure Bastion, required when create_bastion = true and create_vnet = false. Azure requires the subnet be named exactly AzureBastionSubnet and be /26 or larger; Terraform checks the name at plan time. There is no carve path, for the same reason as agic_subnet_id."
+  default     = ""
+
+  validation {
+    condition     = var.bastion_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.bastion_subnet_id))
+    error_message = "bastion_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
 variable "aks_subnet_address_prefix" {
   type        = list(string)
   description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. The default is sized for the VNet Terraform builds; under create_vnet = false it must fall inside your VNet's address space, which plan also checks."

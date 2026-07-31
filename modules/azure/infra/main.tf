@@ -43,6 +43,8 @@ locals {
   byo_aks_subnet      = !var.create_vnet && var.aks_subnet_id != ""
   byo_postgres_subnet = !var.create_vnet && var.postgres_subnet_id != ""
   byo_redis_subnet    = !var.create_vnet && var.redis_subnet_id != ""
+  byo_agic_subnet     = !var.create_vnet && var.agic_subnet_id != ""
+  byo_bastion_subnet  = !var.create_vnet && var.bastion_subnet_id != ""
 
   # A subnet is created only when it is needed by an enabled service and the
   # operator has not supplied one.
@@ -55,10 +57,12 @@ locals {
   postgres_subnet_id = local.byo_postgres_subnet ? var.postgres_subnet_id : module.vnet.subnet_postgres_id
   redis_subnet_id    = local.byo_redis_subnet ? var.redis_subnet_id : module.vnet.subnet_redis_id
 
-  # Bastion and AGIC have no bring-your-own input, so their subnets exist only
-  # on the create_vnet path. The preconditions below enforce that.
-  agic_subnet_id    = module.vnet.subnet_agic_id
-  bastion_subnet_id = module.vnet.subnet_bastion_id
+  # Bastion and AGIC are supply-only under bring-your-own: Terraform carves their
+  # subnets out of a VNet it owns, and reuses a supplied one otherwise. There is
+  # no carve path inside someone else's VNet, so the preconditions below require
+  # an ID whenever create_vnet = false.
+  agic_subnet_id    = local.byo_agic_subnet ? var.agic_subnet_id : module.vnet.subnet_agic_id
+  bastion_subnet_id = local.byo_bastion_subnet ? var.bastion_subnet_id : module.vnet.subnet_bastion_id
 
   # Subnet IDs are fixed-shape, and the variable validation anchors that shape
   # before this runs, so index positionally:
@@ -69,8 +73,17 @@ locals {
   # Every supplied subnet ID, lowercased for comparison since Azure treats
   # resource IDs case-insensitively. Used to reject the same subnet twice.
   supplied_subnet_ids = [
-    for id in [var.aks_subnet_id, var.postgres_subnet_id, var.redis_subnet_id] :
-    lower(id) if id != ""
+    for id in local.byo_subnet_ids : lower(id) if id != ""
+  ]
+
+  # Every bring-your-own subnet input, in one list so the shape checks below do
+  # not have to be extended each time another is added.
+  byo_subnet_ids = [
+    var.aks_subnet_id,
+    var.postgres_subnet_id,
+    var.redis_subnet_id,
+    var.agic_subnet_id,
+    var.bastion_subnet_id,
   ]
 
   # ── AKS ClusterIP range ─────────────────────────────────────────────────────
@@ -88,10 +101,35 @@ locals {
   # (nodes + surge) * (max_pods + 1). One surge node per pool covers upgrades.
   # Additional pools do not set max_pods, so they get the Azure CNI default.
   aks_default_pool_max_pods = 30
-  aks_required_ips = sum(concat(
-    [(var.default_node_pool_max_count + 1) * (var.default_node_pool_max_pods + 1)],
-    [for pool in var.additional_node_pools : (pool.max_count + 1) * (local.aks_default_pool_max_pods + 1)]
-  ))
+
+  # Held per pool rather than as a single total, so the number and the error
+  # message that has to justify it are built from the same place.
+  aks_pool_sizing = merge(
+    {
+      default = {
+        nodes              = var.default_node_pool_max_count + 1
+        addresses_per_node = var.default_node_pool_max_pods + 1
+      }
+    },
+    {
+      for name, pool in var.additional_node_pools : name => {
+        nodes              = pool.max_count + 1
+        addresses_per_node = local.aks_default_pool_max_pods + 1
+      }
+    }
+  )
+  aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+
+  # One row per pool, so an operator can see which pool dominates the total
+  # instead of being handed a number and two variable names.
+  aks_demand_rows = [
+    for name, pool in local.aks_pool_sizing :
+    format("  %-14s %4d x %3d = %5d", "${name}:", pool.nodes, pool.addresses_per_node, pool.nodes * pool.addresses_per_node)
+  ]
+
+  # Smallest prefix that holds the requirement plus Azure's five reserved
+  # addresses. ceil(log(n, 2)) is the host-bit count that covers n.
+  aks_smallest_prefix = 32 - ceil(log(local.aks_required_ips + 5, 2))
 
   # Whichever prefixes the AKS subnet ends up with: read back from a supplied
   # subnet, or the ones Terraform is about to carve. Both paths are checked,
@@ -205,11 +243,13 @@ module "vnet" {
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
-  enable_bastion     = var.create_bastion
+  # Both are carved only out of a VNet Terraform owns. Under bring-your-own the
+  # operator supplies the subnet instead, and local.*_subnet_id selects it.
+  enable_bastion     = var.create_bastion && var.create_vnet
   availability_zones = var.availability_zones
 
   # AGIC subnet: provisioned only when ingress_controller = "agic"
-  enable_agic                = var.ingress_controller == "agic"
+  enable_agic                = var.ingress_controller == "agic" && var.create_vnet
   agic_subnet_address_prefix = var.agic_subnet_address_prefix
 
   tags = local.common_tags
@@ -263,8 +303,8 @@ resource "terraform_data" "validate_network" {
     # BYO subnet IDs are meaningless on the create path — fail loudly instead of
     # building a VNet the operator did not expect and ignoring what they set.
     precondition {
-      condition     = !var.create_vnet || (var.aks_subnet_id == "" && var.postgres_subnet_id == "" && var.redis_subnet_id == "")
-      error_message = "aks_subnet_id, postgres_subnet_id and redis_subnet_id only apply when create_vnet = false. Set create_vnet = false to reuse existing subnets, or clear these to let Terraform create the network."
+      condition     = !var.create_vnet || alltrue([for id in local.byo_subnet_ids : id == ""])
+      error_message = "The aks, postgres, redis, agic and bastion subnet ID inputs only apply when create_vnet = false. Set create_vnet = false to reuse existing subnets, or clear these to let Terraform create the network."
     }
 
     # Every supplied subnet must belong to vnet_id. A subnet in a different VNet
@@ -275,21 +315,29 @@ resource "terraform_data" "validate_network" {
     # in others. Only the comparison is lowered; Azure still gets the original.
     precondition {
       condition = var.create_vnet || alltrue([
-        for id in [var.aks_subnet_id, var.postgres_subnet_id, var.redis_subnet_id] :
+        for id in local.byo_subnet_ids :
         id == "" || startswith(lower(id), lower("${var.vnet_id}/subnets/"))
       ])
       error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
     }
 
-    # Both subnets are create-path only — neither has a bring-your-own input.
+    # Both subnets are carved only out of a VNet Terraform owns, so under
+    # bring-your-own the operator has to name one that already exists.
     precondition {
-      condition     = !var.create_bastion || var.create_vnet
-      error_message = "create_bastion = true requires create_vnet = true. There is no bastion_subnet_id input, so the bastion subnet can only be carved out of a Terraform-managed VNet."
+      condition     = !var.create_bastion || var.create_vnet || var.bastion_subnet_id != ""
+      error_message = "create_bastion = true with create_vnet = false requires bastion_subnet_id. Terraform will not carve a bastion subnet inside a VNet it does not own, so supply one that already exists, named AzureBastionSubnet and /26 or larger."
+    }
+
+    # Azure rejects any other name outright, and it is the one bastion mistake
+    # that a well-formed resource ID still lets through.
+    precondition {
+      condition     = !local.byo_bastion_subnet || lower(element(split("/", var.bastion_subnet_id), 10)) == "azurebastionsubnet"
+      error_message = "bastion_subnet_id must point at a subnet named AzureBastionSubnet, and names '${element(split("/", var.bastion_subnet_id), 10)}'. Azure Bastion requires that exact name and will not deploy into a subnet called anything else."
     }
 
     precondition {
-      condition     = var.ingress_controller != "agic" || var.create_vnet
-      error_message = "ingress_controller = 'agic' requires create_vnet = true. Application Gateway needs its own /24 subnet and there is no agic_subnet_id input."
+      condition     = var.ingress_controller != "agic" || var.create_vnet || var.agic_subnet_id != ""
+      error_message = "ingress_controller = 'agic' with create_vnet = false requires agic_subnet_id. Application Gateway v2 needs a subnet to itself, Azure recommends a /24, and Terraform will not carve one inside a VNet it does not own."
     }
 
     # A Postgres Flexible Server can only be injected into a subnet delegated to
@@ -321,15 +369,25 @@ resource "terraform_data" "validate_network" {
     # delegation check above and then fails partway through a long apply.
     precondition {
       condition     = length(local.supplied_subnet_ids) == length(distinct(local.supplied_subnet_ids))
-      error_message = "aks_subnet_id, postgres_subnet_id and redis_subnet_id must be three different subnets. The Postgres subnet is delegated to Microsoft.DBforPostgreSQL/flexibleServers and Azure allows no other resource type inside a delegated subnet, so a shared subnet fails during apply."
+      error_message = "Every supplied subnet ID must name a different subnet. Postgres is the reason this is fatal rather than untidy: its subnet is delegated to Microsoft.DBforPostgreSQL/flexibleServers and Azure allows no other resource type inside a delegated subnet, so a shared subnet fails during apply. Application Gateway v2 and Azure Bastion each need a subnet to themselves as well."
     }
 
     # Undersizing is the one network mistake that survives apply: the cluster
     # comes up, and the autoscaler later stalls partway to max_count once the
     # subnet runs out of addresses. Check it here instead.
     precondition {
-      condition     = local.aks_usable_ips >= local.aks_required_ips
-      error_message = "The AKS subnet holds ${local.aks_usable_ips} usable addresses, short of the ${local.aks_required_ips} that Azure CNI needs for the configured node pools. Nodes and pods both draw IPs from this subnet, so the autoscaler would stall before reaching max_count. Widen the subnet (a /22 or larger covers the defaults), or lower default_node_pool_max_count and default_node_pool_max_pods."
+      condition = local.aks_usable_ips >= local.aks_required_ips
+      error_message = join("\n", concat(
+        [
+          "The AKS subnet holds ${local.aks_usable_ips} usable addresses, short of the ${local.aks_required_ips} that Azure CNI needs for the configured node pools. Nodes and pods both draw IPs from this subnet, at (max_count + 1) nodes x (max_pods + 1) addresses per pool:",
+          "",
+        ],
+        local.aks_demand_rows,
+        [
+          "",
+          "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
+        ]
+      ))
     }
 
     # 10.0.64.0/20 only avoids the VNet that Terraform builds. Inside someone

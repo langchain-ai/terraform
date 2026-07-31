@@ -760,10 +760,13 @@ automatically as the eleventh address unless you set one.
 | AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
 | Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
 | Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
+| AGIC | The subnet to itself. Application Gateway v2 shares with nothing, and Azure recommends a `/24`. Only needed when `ingress_controller = "agic"` |
+| Bastion | The name `AzureBastionSubnet`, exactly, and `/26` or larger. Azure refuses any other name. Only needed when `create_bastion = true` |
 
-Supply three different subnets. Sharing one between services fails during apply,
-because the Postgres subnet is delegated and Azure permits nothing else inside a
-delegated subnet.
+Every subnet you supply must be a different subnet. Sharing one fails during
+apply, because the Postgres subnet is delegated and Azure permits nothing else
+inside a delegated subnet, and because Application Gateway and Bastion each
+require a subnet of their own.
 
 ### What Terraform checks before applying
 
@@ -773,9 +776,13 @@ an apply:
 - `vnet_id` is present and is a well-formed VNet resource ID
 - every supplied subnet is a subnet of `vnet_id` — one in a different VNet would
   be unreachable, since the private DNS zones are linked to `vnet_id`
-- the supplied subnet IDs are three different subnets
+- every supplied subnet ID names a different subnet
 - a supplied Postgres subnet already carries the `flexibleServers` delegation
 - a supplied AKS subnet carries both service endpoints
+- a supplied bastion subnet is named `AzureBastionSubnet`, which Azure requires
+  and a well-formed resource ID does not guarantee
+- `agic_subnet_id` is set when AGIC is on, and `bastion_subnet_id` when the
+  bastion is, since neither is carved inside a VNet you own
 - the AKS subnet has enough addresses for the configured node pools, whether you
   supplied it or Terraform creates it. Undersizing is the one mistake that
   survives apply: the cluster starts, and the autoscaler later stalls short of
@@ -795,11 +802,22 @@ lives in the network team's resource group rather than the LangSmith one:
   subnet you leave Terraform to create. This is the larger ask of a network
   team, and it fails at apply rather than at plan, so settle it first
 
-### Not supported with an existing VNet
+### AGIC and the bastion are supply-only here
 
-`create_bastion = true` and `ingress_controller = "agic"` both need a dedicated
-subnet with no bring-your-own input, so they only work when Terraform manages
-the VNet. Plan rejects either combination.
+`create_bastion = true` and `ingress_controller = "agic"` each need a subnet to
+themselves. Terraform carves those two only out of a VNet it owns, so on this
+path you name subnets that already exist:
+
+```hcl
+agic_subnet_id    = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/appgw"
+bastion_subnet_id = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/AzureBastionSubnet"
+```
+
+Unlike the other three there is no carve fallback, so plan rejects either
+feature when `create_vnet = false` and its subnet ID is empty. Application
+Gateway v2 wants the subnet to itself and Azure recommends a `/24`. Azure Bastion
+requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger;
+plan checks the name, and Azure enforces the size at apply.
 
 ---
 

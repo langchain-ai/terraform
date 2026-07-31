@@ -220,9 +220,12 @@ sizing_profile = "production"
 # though peered networks are on you. aks_dns_service_ip is derived from it.
 # aks_service_cidr     = "10.100.0.0/20"
 #
-# create_bastion and ingress_controller = "agic" both need subnets that only
-# exist on the create_vnet = true path, so they cannot be combined with the
-# above. Terraform rejects that combination at plan time.
+# create_bastion and ingress_controller = "agic" each need a subnet to
+# themselves. Terraform carves those only out of a VNet it owns, so on this path
+# you supply them; there is no prefix to carve from. Plan rejects either feature
+# with create_vnet = false and no subnet named here.
+# agic_subnet_id    = "/subscriptions/.../virtualNetworks/my-vnet/subnets/appgw"
+# bastion_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/AzureBastionSubnet"
 
 # ── Network hardening (production) ────────────────────────────────────────────
 # Storage / Key Vault / AKS default-deny firewalls. AKS pods are allowlisted
