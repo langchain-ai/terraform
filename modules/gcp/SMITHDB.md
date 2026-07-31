@@ -41,6 +41,38 @@ Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file. The
 Postgres database and the GCS bucket must both be dedicated to SmithDB - do not
 point them at the LangSmith application database or blob-storage bucket.
 
+## Metastore TLS on GCP
+
+SmithDB 0.16 cannot verify a Cloud SQL certificate, so TLS has to come off the
+metastore hop:
+
+```hcl
+smithdb_metastore_ssl_mode = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+smithdb_metastore_use_ssl  = false
+```
+
+Without this, the query, ingestion, and compaction pods crashloop on
+`InvalidCertificate(UnknownIssuer)`. Cloud SQL presents a per-instance self-signed
+CA and the services verify the chain against the public trust store, so validation
+cannot succeed. The service config exposes a single `use_ssl` boolean with no CA
+path and no encrypt-without-verify mode, and injecting the CA would not help
+because the server certificate carries no IP SAN while SmithDB connects to the
+private IP - verification would fail on the hostname instead.
+
+The metastore migration hook is the one component unaffected, because it connects
+through libpq with `sslmode=require`, which encrypts without verifying. Expect the
+hook to succeed while every service fails against the same database; that
+asymmetry is diagnostic, not a clue that the database is misconfigured.
+
+Traffic stays on a private IP inside the VPC. That is acceptable for test and
+staging, not for production. For production, run a Cloud SQL Auth Proxy sidecar
+and keep `ssl_mode = "ENCRYPTED_ONLY"` on the instance: the proxy authenticates
+with IAM, terminates TLS itself, and exposes plaintext on the pod loopback, so the
+metastore host becomes `127.0.0.1` and `smithdb_metastore_use_ssl` stays `false`.
+The chart accepts sidecars at `smithdb.<service>.deployment.sidecars`, and the
+SmithDB GSA needs `roles/cloudsql.client`. Revisit once SmithDB accepts a CA
+bundle or a non-verifying SSL mode, at which point TLS can go back on directly.
+
 ## Deploy SmithDB services
 
 Apply infrastructure, then generate values:
