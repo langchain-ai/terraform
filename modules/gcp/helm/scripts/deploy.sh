@@ -307,10 +307,23 @@ case "$_release_status" in
     echo ""
     ;;
   failed)
-    echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
-    echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
-    echo "         Proceeding with upgrade..."
-    echo ""
+    # `helm upgrade --install` aborts with "has no deployed releases" when the
+    # history holds no revision in deployed status, which is what a failed first
+    # install leaves behind. A release with a good revision behind it can upgrade
+    # in place, so only clear the record when there is nothing to upgrade from.
+    if helm history "$RELEASE_NAME" -n "$NAMESPACE" --output json 2>/dev/null \
+      | grep -q '"status":"deployed"'; then
+      echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
+      echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
+      echo "         An earlier revision did deploy, so upgrading in place..."
+      echo ""
+    else
+      echo "WARNING: Helm release '${RELEASE_NAME}' failed on its first install, so no"
+      echo "         deployed revision exists to upgrade from. Removing the dead release"
+      echo "         record so this run can install cleanly..."
+      helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait
+      echo ""
+    fi
     ;;
 esac
 
