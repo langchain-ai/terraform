@@ -86,7 +86,10 @@ _timeout_bin=""
 for _t in timeout gtimeout; do
   if command -v "$_t" >/dev/null 2>&1; then _timeout_bin="$_t"; break; fi
 done
-_gcloud() {
+# Named _gcloud_bounded, not _gcloud: this script is sourced, and _gcloud is the
+# zsh completion function name for the gcloud command — defining it here would
+# replace the completion for the rest of the caller's shell session.
+_gcloud_bounded() {
   if [[ -n "$_timeout_bin" ]]; then
     "$_timeout_bin" 30 gcloud "$@"
   else
@@ -102,8 +105,8 @@ _sm_put() {
   local _secret_id="${_sm_prefix}-${_name}"
 
   # Create the secret resource if it doesn't exist
-  if ! _gcloud secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
-    _gcloud secrets create "$_secret_id" \
+  if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
+    _gcloud_bounded secrets create "$_secret_id" \
       --project="$_project_id" \
       --replication-policy="automatic" \
       --labels="managed-by=setup-env,langsmith-env=${_environment}" \
@@ -111,7 +114,7 @@ _sm_put() {
   fi
 
   # Add a new version with the value
-  printf '%s' "$_val" | _gcloud secrets versions add "$_secret_id" \
+  printf '%s' "$_val" | _gcloud_bounded secrets versions add "$_secret_id" \
     --project="$_project_id" \
     --data-file=- \
     --quiet &>/dev/null
@@ -121,7 +124,7 @@ _sm_put() {
 _sm_get() {
   local _name="$1"
   local _secret_id="${_sm_prefix}-${_name}"
-  _gcloud secrets versions access latest \
+  _gcloud_bounded secrets versions access latest \
     --secret="$_secret_id" \
     --project="$_project_id" \
     --quiet 2>/dev/null || true
@@ -149,7 +152,7 @@ _sm_secret() {
 
   # 0. Already exported in the environment — use as-is, backfill SM if missing.
   if [[ -n "$(printenv "$varname")" ]]; then
-    if ! _gcloud secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
+    if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
       echo "  $varname is set in env but missing from Secret Manager — backfilling → ${_secret_id}"
       if ! _sm_put "$sm_name" "$(printenv "$varname")"; then
         echo "  WARNING: Secret Manager write failed for ${_secret_id}"
@@ -265,8 +268,11 @@ if [[ -n "$_missing_vars" ]]; then
   echo "       Missing:$_missing_vars"
   echo ""
   echo "       Run it from a real terminal, or pre-set the values:"
-  for _v in $_missing_vars; do
-    echo "         export $_v='<value>'"
+  # Split on spaces with tr rather than an unquoted expansion: this script is
+  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
+  # print every name on a single bogus export line.
+  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
+    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
   done
   echo ""
   echo "       Then re-run: source infra/scripts/setup-env.sh"

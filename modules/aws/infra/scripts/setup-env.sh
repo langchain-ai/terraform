@@ -86,7 +86,10 @@ _timeout_bin=""
 for _t in timeout gtimeout; do
   if command -v "$_t" >/dev/null 2>&1; then _timeout_bin="$_t"; break; fi
 done
-_aws() {
+# Named _aws_bounded, not _aws: this script is sourced, and _aws is the zsh
+# completion function for the aws command — defining it here would replace the
+# completion for the rest of the caller's shell session.
+_aws_bounded() {
   if [[ -n "$_timeout_bin" ]]; then
     "$_timeout_bin" 30 aws "$@"
   else
@@ -117,7 +120,7 @@ _ssm_put_safe() {
   fi
 
   local _rc=0
-  _aws ssm put-parameter \
+  _aws_bounded ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${_tmpjson}" \
     --output text >/dev/null 2>&1 || _rc=$?
@@ -153,7 +156,7 @@ _ssm_secret() {
   #    Without this backfill, pre-exported vars silently skip the SSM write, leaving
   #    ESO unable to sync the secret into the K8s langsmith-config secret.
   if [[ -n "$(printenv "$varname")" ]]; then
-    if ! _aws ssm get-parameter --region "$AWS_REGION" --name "$_path" \
+    if ! _aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
         --query Parameter.Name --output text &>/dev/null; then
       echo "  $varname is set in env but missing from SSM — backfilling → $_path"
       if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
@@ -165,7 +168,7 @@ _ssm_secret() {
   fi
 
   # 1. Try SSM Parameter Store
-  val=$(_aws ssm get-parameter \
+  val=$(_aws_bounded ssm get-parameter \
     --region "$AWS_REGION" \
     --name "$_path" \
     --with-decryption \
@@ -320,8 +323,11 @@ if [[ -n "$_missing_vars" ]]; then
   echo "       Missing:$_missing_vars"
   echo ""
   echo "       Run it from a real terminal, or pre-set the values:"
-  for _v in $_missing_vars; do
-    echo "         export $_v='<value>'"
+  # Split on spaces with tr rather than an unquoted expansion: this script is
+  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
+  # print every name on a single bogus export line.
+  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
+    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
   done
   echo ""
   echo "       Then re-run: source infra/scripts/setup-env.sh"
