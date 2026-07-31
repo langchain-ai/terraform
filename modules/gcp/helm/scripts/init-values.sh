@@ -31,6 +31,20 @@
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
+# This script has to run in its own process. Sourced directly, the `set -euo
+# pipefail` below would leak into the caller's shell and stay armed after the
+# script finishes, so that shell would then die on the next non-zero command or
+# unset variable; and any `exit` here would exit the caller instead, closing an
+# interactive terminal outright. Both are silent and easy to misread as a crash.
+#
+# So when sourced, hand off to a child process and return its status - `source`
+# behaves exactly like running it, with the options and exits contained. Keep
+# this above `set`, so nothing has changed the caller's shell by this point.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

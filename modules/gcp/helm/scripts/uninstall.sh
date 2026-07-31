@@ -9,6 +9,16 @@
 # Resolves cluster name and region from terraform.tfvars + terraform output,
 # updates kubeconfig to target the right cluster, then removes the Helm release
 # and operator-managed resources.
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
