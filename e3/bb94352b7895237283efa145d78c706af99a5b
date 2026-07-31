@@ -1,0 +1,21 @@
+modules/gcp/infra/modules/postgres/variables.tf
+  s_ad44067f5211a2::t_0e5b0a751c2838 104
+modules/gcp/infra/modules/postgres/main.tf
+  s_ad44067f5211a2::t_2a7a037ec4d75d 20-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "e3bb94352b7895237283efa145d78c706af99a5b",
+  "prompts": {},
+  "sessions": {
+    "s_ad44067f5211a2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0c33f93-28a3-4b22-85c4-5e0baa2ef557",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
