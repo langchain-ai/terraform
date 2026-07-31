@@ -529,6 +529,10 @@ module "k8s_bootstrap" {
   project_id  = var.project_id
   environment = var.environment
 
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
+
   # Namespace configuration
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
@@ -729,6 +733,11 @@ resource "kubernetes_secret" "smithdb_taskdb" {
 module "ingress" {
   source = "./modules/ingress"
   count  = var.install_ingress ? 1 : 0
+
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
   langsmith_domain    = var.langsmith_domain

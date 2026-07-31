@@ -5,6 +5,18 @@ variable "project_id" {
   type        = string
 }
 
+# Needed so the kubectl provisioners can fetch credentials for this specific
+# cluster rather than relying on the ambient kubeconfig context.
+variable "region" {
+  description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name of the GKE cluster being bootstrapped. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
 variable "environment" {
   description = "Environment name"
   type        = string
