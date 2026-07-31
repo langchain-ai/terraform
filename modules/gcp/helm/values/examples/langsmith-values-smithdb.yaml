@@ -28,13 +28,21 @@ smithdb:
       # credential fields, so no HMAC keys are needed or possible here.
       type: "gcs"
 
-  # The metastore-migration job is a transient Helm pre-install hook that only
-  # needs network to the metastore and the SmithDB image — not a Local SSD or
-  # compute node. Leave it UNPINNED so it schedules on the core node pool, which
-  # already has running nodes. Do NOT pin it to a tainted SmithDB pool: the hook
-  # runs before any SmithDB component pod exists, so the cluster autoscaler has
-  # no pending pod to trigger scale-up from zero, and the job sits unscheduled
-  # until it hits its deadline.
+  # Two different migration workloads exist and they need opposite treatment.
+  #
+  # smithdb.metastoreMigration is a transient Helm pre-install hook with no
+  # resource requests. It is NOT pinned below, deliberately: the hook runs before
+  # any SmithDB component pod exists, so the cluster autoscaler has no pending pod
+  # to trigger scale-up from zero, and pinning it to a tainted pool would leave it
+  # unscheduled until it hits its deadline. The core pool always has running nodes,
+  # so it belongs there.
+  #
+  # smithdb.migration is the one-shot ClickHouse backfill Job, gated behind
+  # smithdb_migration_enabled. It is a normal resource rather than a hook, and it
+  # only runs once ingestion is live, so the autoscaler reasoning above does not
+  # apply. It IS pinned, below, because it requests 8 CPU / 16Gi / 100Gi ephemeral
+  # storage — more than a core node can offer, and exactly what the Local SSD pool
+  # is built for.
 
   # query, ingestion, and compactionWorker run on the Local SSD pool.
   # compaction and clusterManager run on the compute pool. The nodeSelectors and
@@ -72,6 +80,21 @@ smithdb:
           effect: NoSchedule
 
   compactionWorker:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  # The backfill Job requests 8 CPU, and the three cache workloads above already
+  # request 12 of an n2-standard-16's ~15.9 allocatable, so the autoscaler adds a
+  # second Local SSD node for the Job rather than co-locating it. That node drains
+  # back to zero once the Job completes, so keep instance_store_max_nodes at 2 or
+  # more while the migration gate is on.
+  migration:
     deployment:
       nodeSelector:
         smithdb-local/instance-store: "true"
