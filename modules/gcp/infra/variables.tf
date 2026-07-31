@@ -925,8 +925,13 @@ variable "smithdb_instance_store_machine_type" {
 
 variable "smithdb_instance_store_local_ssd_count" {
   type        = number
-  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), so a node holding all of them needs roughly 430 GB allocatable; the default 3 disks (~1125 GB raw) covers that with headroom. Raise it if you override the resource requests upward."
-  default     = 3
+  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Compute Engine accepts only specific counts per machine type: N2 types with 12-20 vCPU, including the default n2-standard-16, take 2, 4, 8, 16 or 24. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), so a node holding all of them needs roughly 430 GB allocatable, which the default 2 disks (750 GB raw) covers with headroom. Step up to 4 if you raise the resource requests."
+  default     = 2
+
+  validation {
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.smithdb_instance_store_local_ssd_count)
+    error_message = "smithdb_instance_store_local_ssd_count must be one of 0, 1, 2, 4, 8, 16, 24. Counts in between (3, 5, 6, ...) are rejected by Compute Engine at node pool creation. For n2-standard-16, use 2, 4, 8, 16 or 24."
+  }
 }
 
 variable "smithdb_instance_store_disk_size" {

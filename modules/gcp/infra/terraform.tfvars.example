@@ -402,10 +402,14 @@ enable_smithdb = false
 # At chart defaults the three cache workloads request 4 CPU each and 200Gi
 # (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage,
 # so all three fit on one n2-standard-16 (~15.9 allocatable vCPU). The default
-# 3 x 375 GB = 1125 GB raw covers that with headroom. Raise the disk count if
-# you override the resource requests upward in the values overlay.
+# 2 x 375 GB = 750 GB raw covers that with headroom.
+#
+# The disk count is not free-form: Compute Engine accepts only specific values
+# per machine type, and n2-standard-16 (an N2 with 12-20 vCPU) takes 2, 4, 8, 16
+# or 24. A value like 3 is rejected when the node pool is created. Step up to 4
+# if you override the resource requests upward in the values overlay.
 # smithdb_instance_store_machine_type    = "n2-standard-16"
-# smithdb_instance_store_local_ssd_count = 3
+# smithdb_instance_store_local_ssd_count = 2
 # smithdb_instance_store_min_nodes       = 0   # scale to zero when SmithDB is idle
 # smithdb_instance_store_max_nodes       = 3
 # smithdb_compute_machine_type           = "n2-standard-8"

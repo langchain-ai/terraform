@@ -54,13 +54,18 @@ variable "instance_store_machine_type" {
 }
 
 variable "instance_store_local_ssd_count" {
-  description = "Number of 375 GB Local SSD disks per node, combined into one ephemeral-storage filesystem. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), so a node holding all of them needs roughly 430 GB of allocatable ephemeral storage; the default 3 disks (~1125 GB raw) covers that with headroom for kubelet reservations, the image cache, and a replica of one component scaling out. Raise it if you override the resource requests upward. Set 0 for -lssd machine types that bundle their own disks."
+  description = "Number of 375 GB Local SSD disks per node, combined into one ephemeral-storage filesystem. Compute Engine only accepts specific counts per machine type, so this is not a free-form number: N2 types with 12-20 vCPU (which includes the default n2-standard-16) take 2, 4, 8, 16 or 24. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), needing roughly 430 GB of allocatable ephemeral storage, which the default 2 disks (750 GB raw) covers with headroom for kubelet reservations and the image cache. Step up to 4 if you raise the resource requests or expect several replicas per node. Set 0 for -lssd machine types that bundle their own disks."
   type        = number
-  default     = 3
+  default     = 2
 
   validation {
-    condition     = var.instance_store_local_ssd_count >= 0 && var.instance_store_local_ssd_count <= 24
-    error_message = "instance_store_local_ssd_count must be between 0 and 24."
+    # Compute Engine rejects any other count, and the API only reports it at
+    # create time - a full apply in, which is expensive to discover. The exact
+    # allowed subset narrows further with vCPU count (n2-standard-16 excludes 1),
+    # so this catches the common typos rather than every invalid combination.
+    # https://cloud.google.com/compute/docs/disks/local-ssd#choose_a_valid_number_of_local_ssd_disks
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.instance_store_local_ssd_count)
+    error_message = "instance_store_local_ssd_count must be one of 0, 1, 2, 4, 8, 16, 24. Counts in between (3, 5, 6, ...) are rejected by Compute Engine. For N2 types with 12-20 vCPU such as n2-standard-16, use 2, 4, 8, 16 or 24."
   }
 }
 
