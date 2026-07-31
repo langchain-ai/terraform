@@ -30,12 +30,27 @@ smithdb:
 
   # Two different migration workloads exist and they need opposite treatment.
   #
-  # smithdb.metastoreMigration is a transient Helm pre-install hook with no
-  # resource requests. It is NOT pinned below, deliberately: the hook runs before
-  # any SmithDB component pod exists, so the cluster autoscaler has no pending pod
-  # to trigger scale-up from zero, and pinning it to a tainted pool would leave it
-  # unscheduled until it hits its deadline. The core pool always has running nodes,
-  # so it belongs there.
+  # smithdb.metastoreMigration is a transient Helm pre-install hook. It is NOT
+  # pinned below, deliberately: the hook runs before any SmithDB component pod
+  # exists, so the cluster autoscaler has no pending pod to trigger scale-up from
+  # zero, and pinning it to a tainted pool would leave it unscheduled until it hits
+  # its deadline. The core pool always has running nodes, so it belongs there.
+  #
+  # Its resources are set explicitly because the chart defaults them to {}, and the
+  # namespace ResourceQuota from modules/k8s-bootstrap constrains requests and
+  # limits for cpu and memory. Once a quota covers those dimensions, Kubernetes
+  # rejects any pod that omits them, so the Job would fail admission with no pod
+  # ever created. The values are modest - this only runs Alembic against the
+  # metastore.
+  metastoreMigration:
+    job:
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: 1000m
+          memory: 1Gi
   #
   # smithdb.migration is the one-shot ClickHouse backfill Job, gated behind
   # smithdb_migration_enabled. It is a normal resource rather than a hook, and it

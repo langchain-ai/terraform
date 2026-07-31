@@ -210,6 +210,39 @@ resource "kubernetes_resource_quota" "langsmith" {
 }
 
 #------------------------------------------------------------------------------
+# Limit Range
+#------------------------------------------------------------------------------
+# Companion to the quota above, and required rather than optional: once a
+# ResourceQuota constrains requests/limits for a resource, Kubernetes rejects any
+# pod whose containers omit them. Chart workloads that leave resources unset would
+# fail admission with no pod created and only a FailedCreate event to show for it -
+# the SmithDB metastore-migration hook Job did exactly that. These defaults are
+# applied at admission only to containers that omit a value; anything with explicit
+# requests or limits is untouched.
+resource "kubernetes_limit_range" "langsmith" {
+  metadata {
+    name      = "langsmith-defaults"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type = "Container"
+
+      default_request = {
+        cpu    = "100m"
+        memory = "256Mi"
+      }
+
+      default = {
+        cpu    = "1"
+        memory = "1Gi"
+      }
+    }
+  }
+}
+
+#------------------------------------------------------------------------------
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
 resource "kubernetes_network_policy" "langsmith_default" {
