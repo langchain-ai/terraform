@@ -112,7 +112,9 @@ gcp/
 │       ├── ingress/        ← Envoy Gateway (Gateway API), GatewayClass, HTTPRoute
 │       ├── iam/            ← Workload Identity service accounts and bindings (wired by default)
 │       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
-│       └── secrets/        ← Secret Manager secrets for credentials (optional via flags)
+│       ├── secrets/        ← Secret Manager secrets for credentials (optional via flags)
+│       ├── smithdb/        ← SmithDB metastore, object-store bucket, Workload Identity SA (optional)
+│       └── smithdb-nodes/  ← SmithDB Local SSD + compute GKE node pools (optional)
 │   └── scripts/
 │       ├── _common.sh          ← Shared helpers (tfvar parser, color/status helpers)
 │       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
@@ -347,7 +349,7 @@ helm upgrade langsmith langchain/langsmith \
 | `postgres_tier` | `db-custom-2-8192` | no | Cloud SQL machine tier |
 | `postgres_disk_size` | `50` | no | Cloud SQL disk size in GB |
 | `postgres_high_availability` | `true` | no | Enable Cloud SQL HA (regional standby) |
-| `postgres_deletion_protection` | `true` | no | Enable deletion protection on Cloud SQL |
+| `postgres_deletion_protection` | `true` | no | Block deletion of the Cloud SQL instance from both Terraform and the Cloud SQL API; set `false` and apply before a destroy |
 | `postgres_password` | `""` | when external | PostgreSQL password — use `TF_VAR_postgres_password` |
 | `redis_source` | `external` | no | `external` (Memorystore) or `in-cluster` (Helm) |
 | `redis_version` | `REDIS_7_0` | no | Redis version for Memorystore |
@@ -394,6 +396,70 @@ helm upgrade langsmith langchain/langsmith \
 | `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
 | `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |
 | `dns_create_certificate` | `true` | Create a Google-managed cert when DNS module is enabled |
+| `enable_smithdb` | `false` | Wires `modules/smithdb` + `modules/smithdb-nodes` — see [SmithDB](#smithdb-chart-016) and [SMITHDB.md](SMITHDB.md) |
+
+---
+
+## SmithDB (chart 0.16+)
+
+SmithDB is the in-chart columnar store and query engine that runs alongside ClickHouse in the LangSmith v16 release. It runs in the LangSmith namespace as part of the same Helm release - it cannot be split into its own namespace or cluster.
+
+See [SMITHDB.md](SMITHDB.md) for the full deployment and staged-rollout guide. The rest of this section covers the GCP-specific design decisions.
+
+Setting `enable_smithdb = true` provisions four things:
+
+| Resource | Module | Notes |
+|---|---|---|
+| Cloud SQL Postgres metastore | `modules/smithdb` | Dedicated instance on a private IP, `POSTGRES_18` by default |
+| GCS object-store bucket | `modules/smithdb` | Single-region, uniform access, no lifecycle deletes |
+| Workload Identity service account | `modules/smithdb` | `roles/storage.objectAdmin` on that bucket only |
+| Two GKE node pools | `modules/smithdb-nodes` | One Local SSD-backed for the cache, one for compute |
+
+### Requirements and constraints
+
+1) **Postgres 17 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own - for AlloyDB, run the Auth Proxy as a sidecar through `smithdb.commonInitContainers`, point the host at `127.0.0.1`, and set `smithdb_metastore_use_ssl = false` since the proxy terminates TLS on the pod loopback.
+
+2) **A dedicated object-storage bucket, single-region, in the cluster's region.** Multi-region and dual-region buckets add replication cost and unpredictable tail latency on segment reads. The module deliberately creates no object-expiry lifecycle rules and no versioning: SmithDB owns the lifecycle of its own segments, and expiring them independently makes data unavailable. Compaction already reclaims dead segments.
+
+3) **GKE Standard, not Autopilot.** Autopilot manages its own node pools, so the dedicated Local SSD pools do not exist there and SmithDB pods would sit Pending against a `nodeSelector` that never matches. The module fails at plan time rather than letting that happen.
+
+4) **Local SSD-backed ephemeral storage, not raw block.** The cache pool uses `ephemeral_storage_local_ssd_config`, which is the mode that makes the disks part of the filesystem kubelet reports as allocatable `ephemeral-storage` and that backs `emptyDir`. Raw block Local SSD does not, and a disk mounted at an arbitrary host path does not back `emptyDir` at all - the cache would silently fall back to the boot disk.
+
+5) **Machine type generation changes the disk count semantics.** N2/N2D take an explicit `smithdb_instance_store_local_ssd_count` (375 GB per disk). C3/C4/Z3 `-lssd` types have a fixed count implied by the machine type and require `smithdb_instance_store_local_ssd_count = 0`.
+
+6) **Pin the pool zones.** The cluster is regional, so an unpinned pool tries every zone in the region and fails if the machine type or disk count is unavailable in any of them. Check availability, then set `smithdb_node_locations`.
+
+Both pools are tainted and default to `min_node_count = 0`, so the cluster autoscaler holds them empty until SmithDB pods with matching tolerations appear. That is the closest native analogue to consolidation-style provisioning.
+
+### Networking
+
+The metastore is private-IP only, so `enable_smithdb` with `smithdb_metastore_source = "create"` turns on the VPC private service connection automatically, the same way `postgres_source = "external"` does.
+
+Segment traffic to GCS stays on Google's network. The subnet already sets `private_ip_google_access = true` (see `infra/modules/networking/main.tf`), so nodes without external IPs reach `storage.googleapis.com` directly rather than egressing through Cloud NAT. This is the GCP analogue of the S3 Gateway VPC endpoint on the AWS module, and it needs no additional resources.
+
+Adding a private `googleapis.com` DNS zone would pin resolution to `private.googleapis.com` as well, but a VPC-wide DNS zone affects every workload in the network, so treat it as a deliberate follow-up rather than part of enabling SmithDB.
+
+### Chart version
+
+Enabling the infrastructure does not move the repository's chart line. Pass 2 requires an explicit version of 0.16 or newer, because upgrading the whole application is a separate decision from provisioning SmithDB's dependencies:
+
+```bash
+CHART_VERSION=0.16.0-rc.22 make deploy
+```
+
+The 0.16 line has so far published release candidates only, so an exact prerelease tag is required. Helm's semver ranges never match a prerelease, so `~0.16.0` resolves to no chart at all and range syntax is rejected up front. List what exists with `helm search repo langchain/langsmith --versions --devel`. On the Terraform `app/` path, set the same value as `chart_version`.
+
+### Staged rollout
+
+The services deploy with every LangSmith integration gate off. Advance them one at a time through `smithdb_ingestion_enabled`, then `smithdb_migration_enabled`, then `smithdb_query_enabled` in `infra/terraform.tfvars`, applying and validating each stage separately. Terraform enforces that migration and query both require ingestion. ClickHouse stays enabled throughout v16.
+
+The historical ClickHouse to SmithDB backfill is owned by LangChain Product/Engineering; this module only wires the gate and the credentials it needs. Enabling it renders the migration Job plus an in-chart taskdb Postgres StatefulSet for migration task state, backed by the Terraform-created `smithdb-taskdb` secret. The Job requests 8 CPU and is deliberately left unpinned, so it lands on the core node pool - make sure that pool has room.
+
+See [SMITHDB.md](SMITHDB.md) for the per-stage validation steps.
+
+### Sizing
+
+At chart defaults the three cache workloads request 4 CPU each and 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage, so one `n2-standard-16` with 3 Local SSDs holds all three with headroom. The values overlay in `helm/values/examples/` carries scheduling only and leaves sizing to the chart; if you override the resource requests upward, raise `smithdb_instance_store_local_ssd_count` to match or replicas will sit Pending.
 
 ---
 
@@ -415,3 +481,7 @@ terraform destroy
 ```
 
 > Set `gke_deletion_protection = false` and `postgres_deletion_protection = false` in `terraform.tfvars` before running `terraform destroy` in production.
+
+When SmithDB is enabled, also set `smithdb_metastore_deletion_protection = false`, and either empty the object-store bucket first or set `smithdb_bucket_force_destroy = true`. Only do the latter on disposable stacks - it deletes live trace segments.
+
+Deletion protection is enforced by Cloud SQL itself, not just by Terraform, so editing the tfvars is not enough - apply the change before running the destroy. Cloud SQL also deletes an instance's backups and PITR logs along with the instance, so export anything you need to keep to GCS first. [TEARDOWN.md](TEARDOWN.md) has the commands for both databases.

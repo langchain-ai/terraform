@@ -128,14 +128,54 @@ for obj in $(kubectl get scaledobjects -n langsmith -o name 2>/dev/null); do
 done
 ```
 
-## A5 — Pre-Destroy: Disable Deletion Protection
+## A5 — Pre-Destroy: Export Data, Then Disable Deletion Protection
 
-Two tfvars must be set to `false` before `terraform destroy` will succeed on GKE and Cloud SQL:
+### 5a — Export anything you need to keep
+
+Cloud SQL has no final-snapshot-on-delete. Automated backups, on-demand backups,
+and PITR logs are all deleted along with the instance, so an export to GCS is the
+only copy that survives teardown. Skip this step for a disposable dev/test stack.
+
+```bash
+PROJECT_ID=your-project
+BACKUP_BUCKET=gs://your-export-bucket
+PG=$(terraform -chdir=infra output -raw postgres_instance_name)
+
+# Cloud SQL exports run as the instance's own service agent, which needs write
+# access to the target bucket first.
+SA=$(gcloud sql instances describe "$PG" --project "$PROJECT_ID" \
+  --format="value(serviceAccountEmailAddress)")
+gcloud storage buckets add-iam-policy-binding "$BACKUP_BUCKET" \
+  --member="serviceAccount:$SA" --role=roles/storage.objectAdmin
+
+gcloud sql export sql "$PG" "$BACKUP_BUCKET/${PG}-final.sql.gz" \
+  --database=langsmith --project "$PROJECT_ID"
+```
+
+Repeat for the SmithDB metastore when `enable_smithdb = true` and
+`smithdb_metastore_source = "create"`. Its trace segments live in the SmithDB GCS
+bucket, which is separate from the metastore and survives unless
+`smithdb_bucket_force_destroy = true`.
+
+```bash
+META=$(terraform -chdir=infra output -raw smithdb_metastore_instance_name)
+gcloud sql export sql "$META" "$BACKUP_BUCKET/${META}-final.sql.gz" \
+  --database=smithdb --project "$PROJECT_ID"
+```
+
+### 5b — Disable deletion protection
+
+Protection covers both Terraform and the Cloud SQL API, so flipping the tfvars is
+not enough on its own — the change has to be applied before the destroy.
 
 ```hcl
 # terraform.tfvars
 gke_deletion_protection      = false
 postgres_deletion_protection = false
+
+# Only when enable_smithdb = true and smithdb_metastore_source = "create"
+smithdb_metastore_deletion_protection = false
+smithdb_bucket_force_destroy          = true   # skip if you want to keep the segments
 ```
 
 Apply the change first (targeted — avoids reconciling in-cluster addons like KEDA/cert-manager/ingress):
@@ -144,8 +184,13 @@ Apply the change first (targeted — avoids reconciling in-cluster addons like K
 cd terraform/gcp
 terraform -chdir=infra apply \
   -target=module.gke_cluster \
-  -target=module.cloudsql
+  -target=module.cloudsql \
+  -target=module.smithdb
 ```
+
+Drop the `module.smithdb` target when SmithDB was never enabled. Do not rerun the
+production quickstart profile after this edit — it regenerates the tfvars with
+protection back on.
 
 > Why not `make apply` here? A full infra apply can re-run Kubernetes/Helm bootstrap paths and recreate components you just removed.
 
@@ -160,10 +205,11 @@ make destroy
 Terraform destroys in dependency order:
 - k8s-bootstrap (KEDA, cert-manager Helm releases)
 - Cloud SQL PostgreSQL instance
+- SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
-- Workload Identity service account + IAM bindings
-- GKE cluster and node pools
+- Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
+- GKE cluster and node pools, including the SmithDB Local SSD and compute pools
 - VPC, subnet, Cloud Router, Cloud NAT
 
 > **Note on `source infra/scripts/setup-env.sh`:** Terraform needs `TF_VAR_postgres_password` even during destroy for provider validation. If the Secret Manager secret no longer exists, set it manually: `export TF_VAR_postgres_password="any-placeholder"`
@@ -296,7 +342,10 @@ gcloud container clusters delete "$PREFIX-gke-<suffix>" \
 
 > GKE cluster deletion takes ~5 minutes. It automatically releases the external IP used by the Envoy Gateway.
 
-## B3 — Delete Cloud SQL Instance
+## B3 — Delete Cloud SQL Instances
+
+Export anything you need first (see A5a) — deleting the instance deletes its
+backups and PITR logs with it.
 
 ```bash
 # Check deletion protection
@@ -311,6 +360,17 @@ gcloud sql instances patch "$PREFIX-pg-<suffix>" \
 gcloud sql instances delete "$PREFIX-pg-<suffix>" \
   --project "$PROJECT_ID" --quiet
 ```
+
+Repeat all three commands for `$PREFIX-smithdb-pg-<suffix>` when SmithDB was
+enabled with a Terraform-created metastore. List both with:
+
+```bash
+gcloud sql instances list --project "$PROJECT_ID" --filter="name~$PREFIX"
+```
+
+Cloud SQL reserves a deleted instance name for about a week, so a rebuild under
+the identical name will fail. The module sidesteps this with `unique_suffix`,
+which appends a random suffix to instance names.
 
 ## B4 — Delete Memorystore Redis Instance
 
