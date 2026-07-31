@@ -1,0 +1,97 @@
+modules/gcp/infra/modules/smithdb/main.tf
+  s_ad44067f5211a2::t_d4476be35be391 1-6,8-36
+  s_ad44067f5211a2::t_232026de873b8e 7
+modules/gcp/infra/scripts/quickstart.sh
+  s_ad44067f5211a2::t_b3bc8d5025fdc7 545-555
+  s_ad44067f5211a2::t_385e3bf5479cab 587
+  s_ad44067f5211a2::t_55c87c23a86471 397,603-607,609-614
+  s_ad44067f5211a2::t_06b298b8b7f490 608
+  s_ad44067f5211a2::t_65367f848f7295 361-370
+  s_ad44067f5211a2::t_32849a36761a8b 359,387-396
+  s_ad44067f5211a2::t_32dd597d48977d 556-560
+  s_ad44067f5211a2::t_536901a16797b4 360
+  s_ad44067f5211a2::t_32ab2d3bfc931c 398
+modules/gcp/infra/outputs.tf
+  s_ad44067f5211a2::t_757fbebc1d8b9d 388,391,393
+  s_ad44067f5211a2::t_9ee443d27dc14c 389-390,392
+  s_ad44067f5211a2::t_867a44d67b95fe 342-354
+  s_ad44067f5211a2::t_636cf82fcdfd64 317-321
+  s_ad44067f5211a2::t_075535a474d24a 286,288-316,322-336,355-369
+  s_ad44067f5211a2::t_8af8f0634110aa 337-341
+  s_ad44067f5211a2::t_796aba54966d71 287
+modules/gcp/infra/terraform.tfvars.example
+  s_ad44067f5211a2::t_98f7d0e3cc984d 299,301-312,320-321,340-358,366-380,385-401,407,409-414
+  s_ad44067f5211a2::t_5e796fb2558e08 315-316
+  s_ad44067f5211a2::t_d873ba14900e85 381-384
+  s_ad44067f5211a2::t_eb173366eab443 402-406,408
+  s_ad44067f5211a2::t_eae3a2238a361f 359-365
+  s_ad44067f5211a2::t_2f68550092e821 300
+  s_ad44067f5211a2::t_adf1f560bf45a6 112
+  s_ad44067f5211a2::t_9be67342397983 317-318
+  s_ad44067f5211a2::t_8a3e53fab7d7ba 313-314,319,322-339
+modules/gcp/infra/modules/smithdb-nodes/main.tf
+  s_ad44067f5211a2::t_f2b3ddbbfb22b7 1-75,77-174
+  s_ad44067f5211a2::t_0f38e1699698f7 76
+modules/gcp/infra/locals.tf
+  s_ad44067f5211a2::t_fa4303a416f129 42-46
+modules/gcp/infra/modules/smithdb-nodes/variables.tf
+  s_ad44067f5211a2::t_c309b68d6b7bfb 51,59
+  s_ad44067f5211a2::t_07095719eaffc4 1-50,52-56,58,60-116
+  s_ad44067f5211a2::t_e7fa5709e1ed40 57
+modules/gcp/infra/modules/smithdb/gcs.tf
+  s_ad44067f5211a2::t_be030eb404a23b 1-57,60
+  s_ad44067f5211a2::t_4abe36219aedb2 58-59
+modules/gcp/infra/modules/smithdb/cloudsql.tf
+  s_ad44067f5211a2::t_ae9789711723c3 19-34
+  s_ad44067f5211a2::t_88dec8d92623b8 1-18,35-50,55-114
+  s_ad44067f5211a2::t_c181bd552a57f4 51-54
+modules/gcp/infra/modules/smithdb/iam.tf
+  s_ad44067f5211a2::t_74620d31c7fc21 1-14,22-47
+  s_ad44067f5211a2::t_c36ecbe8b5840f 15-21
+modules/gcp/infra/main.tf
+  s_ad44067f5211a2::t_58c7eeb73ac2e4 360-361,363-444
+  s_ad44067f5211a2::t_c819dd704c56fa 135-141,154-163
+  s_ad44067f5211a2::t_af74c711e7fe38 218-220
+  s_ad44067f5211a2::t_411c9a80955b43 142-153
+  s_ad44067f5211a2::t_ac8acdcd78a2f1 700-717
+  s_ad44067f5211a2::t_f6ff13d110943b 359,676,681-699
+  s_ad44067f5211a2::t_9f5e207a49d3bc 677-680
+  s_ad44067f5211a2::t_75c02b3c994c76 362
+modules/gcp/infra/terraform.tfvars.minimum
+  s_ad44067f5211a2::t_c8181921156f35 48-53
+modules/gcp/infra/variables.tf
+  s_ad44067f5211a2::t_50a9a5f842a2f1 828
+  s_ad44067f5211a2::t_794df5ec69160a 247
+  s_ad44067f5211a2::t_e912ad30984778 748-749,760-762,787-827,829-921,923-927,930-972
+  s_ad44067f5211a2::t_6cbed2eeab1c60 750-759
+  s_ad44067f5211a2::t_f10fef414108be 928
+  s_ad44067f5211a2::t_fe126d8cd873fd 432-437
+  s_ad44067f5211a2::t_68f10aecf4270f 922,929
+  s_ad44067f5211a2::t_0788b2b81eb20f 763-786
+modules/gcp/infra/modules/smithdb/variables.tf
+  s_ad44067f5211a2::t_4598f7804b498e 111
+  s_ad44067f5211a2::t_0b06e339b20e8d 37-39,42-49
+  s_ad44067f5211a2::t_6bc906feff235e 2
+  s_ad44067f5211a2::t_2b5a7cd4af8d60 1,3-36,40-41,50-110,112-198
+modules/gcp/infra/modules/smithdb-nodes/outputs.tf
+  s_ad44067f5211a2::t_3ca6ac5470a4a8 1-24
+modules/gcp/infra/modules/smithdb/outputs.tf
+  s_ad44067f5211a2::t_262c2179f99522 1-26,33-56
+  s_ad44067f5211a2::t_76c0dc9963083e 27-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "72c49e3c718fd42a05ddb1985b46f0640039cac8",
+  "prompts": {},
+  "sessions": {
+    "s_ad44067f5211a2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0c33f93-28a3-4b22-85c4-5e0baa2ef557",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
