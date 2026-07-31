@@ -228,7 +228,7 @@ resource "terraform_data" "validate_required" {
     }
     precondition {
       condition     = !var.enable_smithdb || local.smithdb_chart_version_supported
-      error_message = "enable_smithdb requires an exact chart_version of 0.16 or newer, for example \"0.16.0-rc.22\". Ranges such as \"~0.16.0\" never match the prerelease-only 0.16 line, and enabling SmithDB does not move the chart line on its own."
+      error_message = "enable_smithdb requires an exact chart_version of 0.16 or newer, for example \"0.16.0\". Ranges such as \"~0.16.0\" never match the prerelease-only 0.16 line, and enabling SmithDB does not move the chart line on its own. List what is published with: helm search repo langchain/langsmith --versions --devel"
     }
     precondition {
       condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)

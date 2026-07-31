@@ -287,7 +287,7 @@ historical migration, or the query cutover.
 Render checks worth running before any apply, one per gate state:
 
 ```bash
-helm template langsmith langchain/langsmith --version 0.16.0-rc.22 -n langsmith \
+helm template langsmith langchain/langsmith --version "$CHART_VERSION" --devel -n langsmith \
   -f helm/values/langsmith-values.yaml \
   -f helm/values/langsmith-values-smithdb.yaml \
   -f helm/values/langsmith-values-smithdb-overrides.yaml >/dev/null

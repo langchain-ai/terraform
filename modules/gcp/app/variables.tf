@@ -111,7 +111,7 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest. SmithDB requires an explicit version of 0.16 or newer, for example \"0.16.0-rc.22\"."
+  description = "LangSmith Helm chart version. Empty string = latest. SmithDB requires an explicit version of 0.16 or newer, for example \"0.16.0\". While the 0.16 line is prerelease-only, pass the exact release candidate tag; ranges never match a prerelease."
   type        = string
   default     = ""
 }

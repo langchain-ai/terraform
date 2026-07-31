@@ -312,7 +312,7 @@ enable_usage_telemetry = false
 #
 # Enabling the infrastructure does NOT move the chart line. Pass 2 needs an
 # explicit chart version of 0.16 or newer:
-#   CHART_VERSION=0.16.0-rc.22 make deploy
+#   CHART_VERSION=0.16.0 make deploy
 # The 0.16 line has published release candidates only, so an exact prerelease
 # tag is required; ranges like "~0.16.0" match no chart and are rejected.
 # List what exists with:

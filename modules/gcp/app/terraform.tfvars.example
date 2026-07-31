@@ -20,7 +20,7 @@ admin_email = "admin@example.com"
 # move the chart line on its own. Ranges like "~0.16.0" never match the
 # prerelease-only 0.16 line and are rejected. Advance one gate at a time,
 # applying and validating each stage. Migration and query both require ingestion.
-# chart_version             = "0.16.0-rc.22"
+# chart_version             = "0.16.0"
 # smithdb_ingestion_enabled = false
 # smithdb_migration_enabled = false
 # smithdb_query_enabled     = false

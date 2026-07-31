@@ -605,7 +605,7 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
   printf "  ${DIM}SmithDB requires an explicit chart version of 0.16 or newer — enabling the${RESET}\n"
   printf "  ${DIM}infrastructure does not move the chart line on its own:${RESET}\n"
-  printf "     ${CYAN}CHART_VERSION=0.16.0-rc.22 make deploy${RESET}\n"
+  printf "     ${CYAN}CHART_VERSION=0.16.0 make deploy${RESET}\n"
   echo ""
   printf "  ${DIM}List what is published:${RESET}\n"
   printf "     ${CYAN}helm search repo langchain/langsmith --versions --devel${RESET}\n"

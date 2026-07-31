@@ -73,7 +73,7 @@ _tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
 if [[ "$_smithdb_enabled" == "true" ]]; then
   if [[ "$_chart_version_was_set" != "x" ]]; then
     echo "ERROR: enable_smithdb = true requires an explicit CHART_VERSION of 0.16 or newer." >&2
-    echo "       Example: CHART_VERSION=0.16.0-rc.22 make deploy" >&2
+    echo "       Example: CHART_VERSION=0.16.0 make deploy" >&2
     echo "       List what is published: helm search repo langchain/langsmith --versions --devel" >&2
     exit 1
   fi
@@ -81,11 +81,11 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     echo "ERROR: SmithDB requires an exact chart version, not the range '$CHART_VERSION'." >&2
     echo "       Helm semver ranges never match prereleases, and the 0.16 line is" >&2
     echo "       prerelease-only, so the range would resolve to no chart at all." >&2
-    echo "       Example: CHART_VERSION=0.16.0-rc.22 make deploy" >&2
+    echo "       Example: CHART_VERSION=0.16.0 make deploy" >&2
     exit 1
   fi
   # The prerelease and build-metadata groups follow semver: hyphens are legal
-  # inside a prerelease identifier (0.16.0-rc-1), and +build suffixes appear on
+  # inside a prerelease identifier (0.16.0-rc-N), and +build suffixes appear on
   # internally published charts. The character classes stay restricted to
   # [0-9A-Za-z.-] because this is the only gate on an operator-supplied value
   # that is later interpolated into the helm command line.
@@ -308,8 +308,8 @@ echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
-# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14 or
-# 0.16.0-rc.22). Helm silently skips any version carrying a semver prerelease
+# --devel is required for pre-release chart versions (any 0.15.x or 0.16.x
+# release candidate). Helm silently skips any version carrying a semver prerelease
 # component without it. Keyed off the prerelease component itself rather than a
 # list of known tags, so forms like -rc22 or -alpha-3 are not missed; the part
 # after a + is build metadata and never makes a version a prerelease.

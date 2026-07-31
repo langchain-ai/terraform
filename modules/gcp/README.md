@@ -444,7 +444,7 @@ Adding a private `googleapis.com` DNS zone would pin resolution to `private.goog
 Enabling the infrastructure does not move the repository's chart line. Pass 2 requires an explicit version of 0.16 or newer, because upgrading the whole application is a separate decision from provisioning SmithDB's dependencies:
 
 ```bash
-CHART_VERSION=0.16.0-rc.22 make deploy
+CHART_VERSION=0.16.0 make deploy
 ```
 
 The 0.16 line has so far published release candidates only, so an exact prerelease tag is required. Helm's semver ranges never match a prerelease, so `~0.16.0` resolves to no chart at all and range syntax is rejected up front. List what exists with `helm search repo langchain/langsmith --versions --devel`. On the Terraform `app/` path, set the same value as `chart_version`.

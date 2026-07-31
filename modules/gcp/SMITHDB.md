@@ -54,7 +54,7 @@ infrastructure does not move the repository's chart line on its own, because
 upgrading the whole application is a separate decision:
 
 ```sh
-CHART_VERSION=0.16.0-rc.22 make deploy
+CHART_VERSION=0.16.0 make deploy
 ```
 
 The 0.16 line has so far published release candidates only, so an exact
@@ -101,14 +101,23 @@ well as ClickHouse. Reads still come from ClickHouse.
 
 3) `smithdb_migration_enabled = true`, if you need historical data. This renders
 the migration Job plus an in-chart taskdb Postgres StatefulSet for migration task
-state. The Job requests 8 CPU, 16Gi, and 100Gi of ephemeral storage, so the values
-overlay pins it to the Local SSD pool; a core node can satisfy neither the CPU nor
-the ephemeral storage. Since the three cache workloads already request 12 of an
+state, and is the most node-hungry gate of the three.
+
+The Job requests 8 CPU, 16Gi, and 100Gi of ephemeral storage, so the values overlay
+pins it to the Local SSD pool; a core node can satisfy neither the CPU nor the
+ephemeral storage. Since the three cache workloads already request 12 of an
 n2-standard-16's ~15.9 allocatable CPU, the autoscaler adds a second Local SSD node
 for the Job, so keep `smithdb_instance_store_max_nodes` at 2 or more while this gate
-is on. The separate `metastore-migration` Helm hook stays unpinned on the core pool
-by design - it runs before any SmithDB pod exists, so nothing would trigger a
-scale-up from zero.
+is on.
+
+The taskdb StatefulSet requests 2 CPU and 4Gi as of chart 0.16.0-rc.26 (earlier
+release candidates left it unconstrained) and is not pinned, so it lands on the core
+pool and may push that pool to scale up too. Check `gke_max_nodes` has room before
+enabling this gate.
+
+The separate `metastore-migration` Helm hook stays unpinned on the core pool by
+design - it runs before any SmithDB pod exists, so nothing would trigger a scale-up
+from zero.
 
 4) `smithdb_query_enabled = true`. Reads move to SmithDB.
 
