@@ -26,6 +26,8 @@
 #   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
 #   - values/langsmith-values-agent-*.yaml      (based on product tier)
 #   - values/langsmith-values-insights.yaml     (if Insights tier chosen)
+#   - values/langsmith-values-smithdb.yaml           (if enable_smithdb)
+#   - values/langsmith-values-smithdb-overrides.yaml (if enable_smithdb)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -73,6 +75,25 @@ _clickhouse_source="${_clickhouse_source:-in-cluster}"
 _sizing_profile=$(_parse_tfvar "sizing_profile")
 _sizing_profile="${_sizing_profile:-default}"
 _gateway_name="${_name_prefix}-${_environment}-gateway"
+_enable_smithdb=false
+_tfvar_is_true "enable_smithdb" && _enable_smithdb=true
+_smithdb_ingestion_enabled=false
+_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
+_smithdb_migration_enabled=false
+_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+_smithdb_query_enabled=false
+_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+
+if [[ "$_enable_smithdb" != "true" ]] && \
+   [[ "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
+  echo "ERROR: SmithDB integration gates require enable_smithdb = true." >&2
+  exit 1
+fi
+if [[ "$_smithdb_ingestion_enabled" != "true" ]] && \
+   [[ "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
+  echo "ERROR: smithdb_migration_enabled and smithdb_query_enabled both require smithdb_ingestion_enabled = true." >&2
+  exit 1
+fi
 
 if [[ -z "$_project_id" || -z "$_name_prefix" || -z "$_environment" ]]; then
   echo "ERROR: Could not read project_id, name_prefix, and/or environment from $INFRA_DIR/terraform.tfvars." >&2
@@ -101,6 +122,7 @@ echo "  postgres_source        = $_postgres_source"
 echo "  redis_source           = $_redis_source"
 echo "  clickhouse_source      = $_clickhouse_source"
 echo "  sizing_profile         = $_sizing_profile"
+echo "  enable_smithdb         = $_enable_smithdb"
 echo ""
 
 # ── Terraform outputs ─────────────────────────────────────────────────────────
@@ -119,6 +141,33 @@ echo "  storage_bucket_name           = $BUCKET_NAME"
 echo "  cluster_name                  = $CLUSTER_NAME"
 echo "  workload_identity_annotation  = ${WI_ANNOTATION:-(not available — enable_gcp_iam_module=false?)}"
 echo "  ingress_ip                    = ${INGRESS_IP:-(pending — deploy Helm first to get external IP)}"
+
+# SmithDB outputs — only present when enable_smithdb = true.
+SMITHDB_BUCKET=""
+SMITHDB_GSA=""
+SMITHDB_METASTORE_PORT="5432"
+SMITHDB_METASTORE_USE_SSL="true"
+SMITHDB_SECRET_NAME="smithdb-metastore"
+SMITHDB_TASKDB_SECRET_NAME="smithdb-taskdb"
+if [[ "$_enable_smithdb" == "true" ]]; then
+  SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
+  SMITHDB_GSA=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_gsa_email 2>/dev/null) || SMITHDB_GSA=""
+  SMITHDB_METASTORE_PORT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_port 2>/dev/null) || SMITHDB_METASTORE_PORT="5432"
+  SMITHDB_METASTORE_USE_SSL=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null) || SMITHDB_METASTORE_USE_SSL="true"
+  SMITHDB_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_secret_name 2>/dev/null) || SMITHDB_SECRET_NAME="smithdb-metastore"
+  SMITHDB_TASKDB_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_taskdb_secret_name 2>/dev/null) || SMITHDB_TASKDB_SECRET_NAME="smithdb-taskdb"
+
+  echo "  smithdb_object_store_bucket   = ${SMITHDB_BUCKET:-(not available)}"
+  echo "  smithdb_gsa_email             = ${SMITHDB_GSA:-(not available)}"
+  echo "  smithdb_metastore_port        = $SMITHDB_METASTORE_PORT (useSsl: $SMITHDB_METASTORE_USE_SSL)"
+  echo "  smithdb gates                 = ingestion:$_smithdb_ingestion_enabled migration:$_smithdb_migration_enabled query:$_smithdb_query_enabled"
+
+  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_GSA" ]]; then
+    echo "ERROR: enable_smithdb = true but the SmithDB Terraform outputs are missing." >&2
+    echo "       Run 'terraform apply' in infra/ before init-values.sh." >&2
+    exit 1
+  fi
+fi
 echo ""
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
@@ -487,6 +536,86 @@ if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
   fi
 fi
 echo ""
+
+# ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
+# Two files: the overlay (copied once from examples/, safe to hand-edit for
+# scheduling and sizing) and the overrides file (regenerated every run from
+# Terraform outputs). deploy.sh loads them in that order, so the overrides win.
+_smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
+_smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+
+if [[ "$_enable_smithdb" == "true" ]]; then
+  echo "SmithDB (enable_smithdb = true):"
+
+  if [[ ! -f "$_smithdb_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
+    echo "  ✔ Created langsmith-values-smithdb.yaml (from examples/)"
+  else
+    echo "  ○ langsmith-values-smithdb.yaml already exists — left as-is"
+  fi
+
+  cat > "$_smithdb_overrides_file" << SMITHDBYAML
+# Auto-generated by init-values.sh — do not edit manually.
+# Re-run init-values.sh to refresh from Terraform outputs.
+#
+# Loaded after langsmith-values-smithdb.yaml, so anything here wins.
+#
+# The integration gates below come from infra/terraform.tfvars. Advance them one
+# stage at a time (ingestion, then any historical migration, then query), and
+# keep ClickHouse enabled throughout.
+
+smithdb:
+  serviceAccount:
+    annotations:
+      # Workload Identity — binds the chart's SmithDB service account to the
+      # dedicated GCP service account that holds objectAdmin on the bucket below.
+      iam.gke.io/gcp-service-account: "${SMITHDB_GSA}"
+
+  config:
+    existingSecretName: "${SMITHDB_SECRET_NAME}"
+    objectStore:
+      type: "gcs"
+      bucket: "${SMITHDB_BUCKET}"
+    metastore:
+      # Field-to-key mapping for the Terraform-created Kubernetes secret.
+      hostSecretKey: "smithdb_metastore_db_host"
+      databaseSecretKey: "smithdb_metastore_db_name"
+      usernameSecretKey: "smithdb_metastore_db_username"
+      passwordSecretKey: "smithdb_metastore_db_password"
+      port: "${SMITHDB_METASTORE_PORT}"
+      useSsl: ${SMITHDB_METASTORE_USE_SSL}
+
+  # The migration Job reads its own useSsl leaf, which the chart defaults to
+  # false. Cloud SQL is created with ssl_mode = ENCRYPTED_ONLY, so leaving this
+  # unset makes the pre-install hook fail on connect.
+  metastoreMigration:
+    useSsl: ${SMITHDB_METASTORE_USE_SSL}
+
+  # The chart refuses to render with the migration gate on unless taskdb has a
+  # credential, so always point it at the Terraform-created secret.
+  migration:
+    taskdb:
+      postgres:
+        auth:
+          existingSecretName: "${SMITHDB_TASKDB_SECRET_NAME}"
+
+  langsmith:
+    ingestion:
+      enabled: ${_smithdb_ingestion_enabled}
+    migration:
+      enabled: ${_smithdb_migration_enabled}
+    query:
+      enabled: ${_smithdb_query_enabled}
+SMITHDBYAML
+
+  echo "  ✔ Written langsmith-values-smithdb-overrides.yaml"
+  echo ""
+else
+  if [[ -f "$_smithdb_file" ]]; then
+    echo "NOTE: langsmith-values-smithdb.yaml exists but enable_smithdb = false — deploy.sh will skip it."
+    echo ""
+  fi
+fi
 
 # ── In-cluster postgres/redis overrides ───────────────────────────────────────
 _external_services_block=""

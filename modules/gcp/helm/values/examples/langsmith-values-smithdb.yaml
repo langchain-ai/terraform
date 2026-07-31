@@ -1,0 +1,102 @@
+# SmithDB overlay for LangSmith self-hosted on GCP (chart 0.16+).
+#
+# SmithDB is the in-chart columnar store/query engine that runs alongside
+# ClickHouse. It shares the LangSmith namespace and release; it cannot run in a
+# separate namespace or cluster.
+#
+# init-values.sh copies this to ../langsmith-values-smithdb.yaml when
+# enable_smithdb = true, and generates ../langsmith-values-smithdb-overrides.yaml
+# with the environment-specific bits (bucket name, Workload Identity service
+# account annotation, metastore host/secret mapping) and the staged rollout gates
+# from the infra outputs.
+#
+# This file only carries scheduling that differs from the chart defaults. Sizing
+# comes from the chart; override resources here only if a specific environment
+# needs it, and re-check the Local SSD pool has room for the new totals.
+
+smithdb:
+  enabled: true
+
+  config:
+    # Metastore credentials come from the Terraform-created Kubernetes secret.
+    # The per-field key mapping and the object-store bucket are injected by
+    # langsmith-values-smithdb-overrides.yaml (generated from infra outputs).
+    existingSecretName: "smithdb-metastore"
+    objectStore:
+      # GCS access is via Workload Identity only. The chart's GCS path renders
+      # just __OBJECT_STORE__GCS__BUCKET and __ROOT_FOLDER — there are no
+      # credential fields, so no HMAC keys are needed or possible here.
+      type: "gcs"
+
+  # The metastore-migration job is a transient Helm pre-install hook that only
+  # needs network to the metastore and the SmithDB image — not a Local SSD or
+  # compute node. Leave it UNPINNED so it schedules on the core node pool, which
+  # already has running nodes. Do NOT pin it to a tainted SmithDB pool: the hook
+  # runs before any SmithDB component pod exists, so the cluster autoscaler has
+  # no pending pod to trigger scale-up from zero, and the job sits unscheduled
+  # until it hits its deadline.
+
+  # query, ingestion, and compactionWorker run on the Local SSD pool.
+  # compaction and clusterManager run on the compute pool. The nodeSelectors and
+  # tolerations match the labels/taints set by modules/smithdb-nodes, and use the
+  # same keys as the AWS Karpenter NodePools so this overlay stays portable.
+  query:
+    deployment:
+      # This emptyDir is what consumes Local SSD capacity. It only lands on SSD
+      # because the node pool uses GKE's Local SSD-backed *ephemeral storage*
+      # mode; with raw block Local SSD it would silently fall back to the boot
+      # disk and cache I/O would be slow.
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: 200Gi
+      volumeMounts:
+        - name: local-ssd-storage
+          mountPath: /data
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  ingestion:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  compactionWorker:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  compaction:
+    deployment:
+      nodeSelector:
+        smithdb-local/compute: "true"
+      tolerations:
+        - key: smithdb-local/compute
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  clusterManager:
+    deployment:
+      nodeSelector:
+        smithdb-local/compute: "true"
+      tolerations:
+        - key: smithdb-local/compute
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
