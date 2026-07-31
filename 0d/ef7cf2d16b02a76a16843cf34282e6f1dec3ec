@@ -1,0 +1,22 @@
+modules/gcp/SMITHDB.md
+  s_ad44067f5211a2::t_0a3d7de15484f3 104-111
+modules/gcp/helm/values/examples/langsmith-values-smithdb.yaml
+  s_ad44067f5211a2::t_16aae51b5f29dd 92-106
+  s_ad44067f5211a2::t_6d6e9f923c2c73 31-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "0def7cf2d16b02a76a16843cf34282e6f1dec3ec",
+  "prompts": {},
+  "sessions": {
+    "s_ad44067f5211a2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0c33f93-28a3-4b22-85c4-5e0baa2ef557",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
