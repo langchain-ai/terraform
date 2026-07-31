@@ -136,7 +136,9 @@ _hint() {
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
 _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
-COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+COST_CENTER CREATE_CLUSTER EXISTING_CLUSTER_NAME EXISTING_CLUSTER_RG
+EXISTING_CLUSTER_POOLS_MANAGED
+CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
@@ -195,7 +197,7 @@ _tfvar_line() {
 # Seed the wizard from a terraform.tfvars written by an earlier run, so a
 # re-run edits the existing config instead of retyping it from scratch.
 _load_tfvars() {
-  local v _TF_VAL
+  local v _TF_VAL _v
   # The profile is not a tfvar — it is stamped in the header comment. Without it
   # everything derived from the profile (deletion protection, Key Vault purge
   # protection, the security add-ons) silently resets to dev values on save.
@@ -241,6 +243,17 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_cluster)              && CREATE_CLUSTER="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar existing_cluster_node_pools_managed) && EXISTING_CLUSTER_POOLS_MANAGED="$_TF_VAL"
+  # Re-validated on the way in, not just at the prompt. This file may have been
+  # hand-edited between runs, and an invalid value would otherwise flow straight
+  # back into the writer. A rejected value is dropped so section 3 re-asks.
+  [[ "$CREATE_CLUSTER" == "false" ]] && {
+    EXISTING_CLUSTER_NAME=$(_tfvar existing_cluster_name)
+    EXISTING_CLUSTER_RG=$(_tfvar existing_cluster_resource_group_name)
+    _valid_cluster_name "$EXISTING_CLUSTER_NAME" || EXISTING_CLUSTER_NAME=""
+    _valid_rg_name      "$EXISTING_CLUSTER_RG"   || EXISTING_CLUSTER_RG=""
+  }
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
   # The add-ons are written only when true, so an absent key is genuinely false.
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
@@ -261,6 +274,15 @@ _load_tfvars() {
     # VNet Terraform builds. Dropping it on a re-run would put back the
     # 10.0.64.0/20 that can sit inside the operator's own address space.
     AKS_SERVICE_CIDR=$(_tfvar aks_service_cidr)
+    # Same re-validation as the two cluster fields above, for the same reason:
+    # these reach the writer without passing a prompt. A dropped ID re-asks in
+    # section 3, or fails at terraform plan — either beats emitting it unchecked.
+    for _v in AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID; do
+      if [[ -n "${!_v}" ]] && ! _valid_subnet_id "${!_v}"; then
+        _red "  Ignoring malformed $_v in terraform.tfvars."
+        eval "$_v="
+      fi
+    done
   }
   return 0
 }
@@ -387,7 +409,13 @@ _run_section_2() {
   printf "  Resources: langsmith-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
 }
 
-# -- 3. Networking -----------------------------------------------------------
+# -- 3. Cluster & Networking -------------------------------------------------
+# Both cluster defaults match the Terraform variable defaults, so an unanswered
+# section 3 generates the same config the module would assume on its own.
+CREATE_CLUSTER="true"
+EXISTING_CLUSTER_NAME=""
+EXISTING_CLUSTER_RG=""
+EXISTING_CLUSTER_POOLS_MANAGED="true"
 CREATE_VNET="true"
 VNET_ID=""
 AKS_SUBNET_ID=""
@@ -401,14 +429,52 @@ AKS_SERVICE_CIDR=""
 # Ask for one subnet in bring-your-own-VNet mode. An empty answer means
 # "Terraform creates it", which then needs a CIDR to carve out of the VNet.
 # Sets _SUBNET_ID and _SUBNET_CIDR_LINE.
+# Azure's documented name shapes for the bring-your-own cluster inputs. Both
+# values are interpolated into double-quoted HCL by the writer, so a value
+# carrying a quote, a newline, or an HCL ${...} sequence could close the string
+# early and append Terraform configuration that then applies with the deploying
+# identity's credentials. Whitelisting the character set removes that, and it
+# catches a typo at the prompt instead of at terraform plan.
+#
+# Both are applied twice: once where the operator types, and again in
+# _load_tfvars, because a terraform.tfvars from an earlier run is read back with
+# sed and would otherwise reach the writer having never seen a prompt.
+_valid_cluster_name() { [[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?$ ]]; }
+_valid_rg_name()      { [[ "$1" =~ ^[a-zA-Z0-9._()-]{0,89}[a-zA-Z0-9_()-]$ ]]; }
+
+# A subnet resource ID, same shape and same case-insensitive comparison as the
+# VNet ID below. Azure returns "resourcegroups" in some contexts and
+# "resourceGroups" in others, and bash 3.2 has no ${var,,}, so lowercase a copy.
+_valid_subnet_id() {
+  local lc
+  lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ "$lc" =~ ^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$ ]]
+}
+
+# required = "required" makes the ID mandatory and drops the carve-a-CIDR branch.
+# Used for the AKS subnet when attaching to an existing cluster, where Terraform
+# cannot carve the subnet: it has to be one the cluster already runs nodes in.
 _ask_subnet() {
-  local label="$1" cidr_var="$2" default_cidr="$3" note="$4"
+  local label="$1" cidr_var="$2" default_cidr="$3" note="$4" required="${5:-}"
   _SUBNET_ID=""
   _SUBNET_CIDR_LINE=""
   echo ""
   _hint "$note"
-  _ask "${label} subnet resource ID (Enter = let Terraform create it)" ""
-  _SUBNET_ID="$_REPLY"
+  local prompt="${label} subnet resource ID (Enter = let Terraform create it)"
+  [[ "$required" == "required" ]] && prompt="${label} subnet resource ID"
+  while true; do
+    _ask "$prompt" ""
+    _SUBNET_ID="$_REPLY"
+    if [[ -z "$_SUBNET_ID" ]]; then
+      [[ "$required" != "required" ]] && break
+      _red "  ERROR: required on this path — Terraform cannot create this subnet."
+      echo ""
+      continue
+    fi
+    _valid_subnet_id "$_SUBNET_ID" && break
+    _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+    echo ""
+  done
   if [[ -z "$_SUBNET_ID" ]]; then
     _ask "CIDR for the new ${label} subnet" "$default_cidr"
     # Padded so the three prefix lines line up with each other in the tfvars.
@@ -428,12 +494,71 @@ _subnet_review() {
 }
 
 _run_section_3() {
-  _section "3. Networking"
+  _section "3. Cluster & Networking"
+
+  # Asked before the VNet question because the answer constrains it. Attaching to
+  # an existing cluster forces an existing VNet: aks_subnet_id has to be a subnet
+  # that cluster already runs nodes in, and a subnet Terraform is about to carve
+  # never is.
+  _hint "LangSmith can create its own AKS cluster, or deploy onto one you already run."
+  _hint "Attaching leaves your cluster's lifecycle with your platform team — Terraform"
+  _hint "reads it and never creates, modifies, or destroys it."
+  echo ""
+
+  if _ask_yn "Create a new AKS cluster? (recommended)" "$(_yn_default "$CREATE_CLUSTER")"; then
+    CREATE_CLUSTER="true"
+    EXISTING_CLUSTER_NAME=""
+    EXISTING_CLUSTER_RG=""
+    EXISTING_CLUSTER_POOLS_MANAGED="true"
+  else
+    CREATE_CLUSTER="false"
+    echo ""
+    _hint "Your cluster needs, before you continue: the OIDC issuer and Workload"
+    _hint "Identity both enabled, local accounts NOT disabled, a network policy"
+    _hint "engine, and an API server reachable from this host."
+    _hint "  az aks update --name <cluster> --resource-group <rg> \\"
+    _hint "    --enable-oidc-issuer --enable-workload-identity"
+    echo ""
+
+    while true; do
+      _ask "Existing AKS cluster name" "$EXISTING_CLUSTER_NAME"
+      EXISTING_CLUSTER_NAME="$_REPLY"
+      _valid_cluster_name "$EXISTING_CLUSTER_NAME" && break
+      _red "  ERROR: 1-63 characters, letters/numbers/hyphens/underscores, starting and ending alphanumeric."
+      echo ""
+    done
+
+    while true; do
+      _ask "Resource group holding that cluster" "$EXISTING_CLUSTER_RG"
+      EXISTING_CLUSTER_RG="$_REPLY"
+      _valid_rg_name "$EXISTING_CLUSTER_RG" && break
+      _red "  ERROR: 1-90 characters, letters/numbers/period/underscore/hyphen/parentheses, not ending in a period."
+      echo ""
+    done
+
+    # 'istio-addon' is configured through arguments on the azurerm_kubernetes_cluster
+    # resource, which does not exist in state on this path, so it would silently
+    # never apply. Reset it here as section 5 does for AGIC.
+    if [[ "$INGRESS_CONTROLLER" == "istio-addon" ]]; then
+      INGRESS_CONTROLLER="nginx"
+      ISTIO_ADDON_REVISION=""
+      echo ""
+      _red "  The Istio add-on needs a Terraform-created cluster — ingress controller reset to nginx."
+    fi
+  fi
+
+  echo ""
   _hint "Most deployments use a new VNet — Terraform manages address space and subnets."
   _hint "Choose 'existing VNet' only if you're integrating into a corporate network"
   _hint "where network teams manage VNets centrally."
 
-  if _ask_yn "Create a new VNet? (recommended)" "$(_yn_default "$CREATE_VNET")"; then
+  # Only a real question when Terraform owns the cluster. Attaching pins it.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    CREATE_VNET="false"
+    echo ""
+    _hint "Attaching to an existing cluster means using its VNet, so the questions"
+    _hint "below cover the network your cluster already runs in."
+  elif _ask_yn "Create a new VNet? (recommended)" "$(_yn_default "$CREATE_VNET")"; then
     CREATE_VNET="true"
     # Clear any BYO IDs and carved CIDRs from a previous pass — meaningless here.
     VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
@@ -485,8 +610,17 @@ _run_section_3() {
     echo ""
   done
 
-  _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
-    "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+  # Terraform can carve this one only when it owns the cluster. Attached to an
+  # existing cluster it has to be a subnet that cluster already runs nodes in,
+  # because the same ID drives the Blob and Key Vault firewall allowlists.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    _ask_subnet "AKS node" "aks_subnet_address_prefix" "" \
+      "The subnet your cluster's nodes already run in. It needs the Microsoft.Storage and Microsoft.KeyVault service endpoints, and room for (max_count + 1) x (max_pods + 1) addresses." \
+      required
+  else
+    _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
+      "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+  fi
   AKS_SUBNET_ID="$_SUBNET_ID"; AKS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   _ask_subnet "PostgreSQL" "postgres_subnet_address_prefix" "10.0.32.0/20" \
@@ -520,11 +654,33 @@ AKS_DELETION_PROTECTION="false"
 
 _run_section_4() {
   _section "4. AKS Cluster"
-  _hint "Node sizing determines how many LangSmith services fit per node."
-  _hint "Standard_D4s_v3 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
-  _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
-  _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
-  _hint "The autoscaler handles bursts — min_count is the always-on floor."
+
+  # On an attached cluster the pool questions below configure nothing: the
+  # cluster's own pools are whatever its owner set. They are still asked because
+  # terraform plan sizes the AKS subnet against them, so they have to describe
+  # the pools the cluster really runs or the capacity check measures nothing.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    _hint "Attached to ${EXISTING_CLUSTER_NAME}. Terraform does not create or resize its"
+    _hint "node pools, so the numbers below only feed the AKS subnet capacity check."
+    _hint "Enter what the cluster actually runs, so the check measures the real thing."
+    echo ""
+    _hint "Terraform can also add a 'large' pool (Standard_D16s_v3) for ClickHouse and"
+    _hint "LangGraph. Declining leaves every pool with your platform team, and the"
+    _hint "cluster then needs that capacity already."
+    if _ask_yn "Let Terraform manage node pools on this cluster?" \
+               "$(_yn_default "$EXISTING_CLUSTER_POOLS_MANAGED")"; then
+      EXISTING_CLUSTER_POOLS_MANAGED="true"
+    else
+      EXISTING_CLUSTER_POOLS_MANAGED="false"
+    fi
+    echo ""
+  else
+    _hint "Node sizing determines how many LangSmith services fit per node."
+    _hint "Standard_D4s_v3 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
+    _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
+    _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
+    _hint "The autoscaler handles bursts — min_count is the always-on floor."
+  fi
 
   local vm_default="$NODE_VM_SIZE"
   local min_default="$NODE_MIN"
@@ -598,6 +754,18 @@ _run_section_5() {
       _hint "Application Gateway needs a dedicated /24 subnet that Terraform can only"
       _hint "create in a VNet it manages. Pick another controller, or re-run section 3"
       _hint "and let Terraform create the VNet."
+      continue
+    fi
+
+    # Both add-ons are set through arguments on the azurerm_kubernetes_cluster
+    # resource, which is absent from state when attaching, so they would apply to
+    # nothing at all rather than erroring.
+    if [[ "$INGRESS_CONTROLLER" == "istio-addon" && "$CREATE_CLUSTER" == "false" ]]; then
+      _red "  The Istio add-on is not available on a cluster Terraform did not create."
+      echo ""
+      _hint "It is an AKS-managed add-on, settable only through a cluster resource"
+      _hint "Terraform owns. Pick 'istio' to install it with Helm instead, or nginx"
+      _hint "or envoy-gateway."
       continue
     fi
     break
@@ -1083,7 +1251,13 @@ while true; do
   printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
-  printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
+  printf "  %-24s %s\n" "3. AKS cluster:"     "$( [[ "$CREATE_CLUSTER" == "true" ]] && echo "new (Terraform-created)" || echo "existing (attach)" )"
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    printf "  %-24s %s\n" "   Cluster name:"      "$EXISTING_CLUSTER_NAME"
+    printf "  %-24s %s\n" "   Its resource group:" "$EXISTING_CLUSTER_RG"
+    printf "  %-24s %s\n" "   Terraform-managed pools:" "$EXISTING_CLUSTER_POOLS_MANAGED"
+  fi
+  printf "  %-24s %s\n" "   VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
   if [[ "$CREATE_VNET" == "false" ]]; then
     printf "  %-24s %s\n" "   VNet ID:"           "$VNET_ID"
     printf "  %-24s %s\n" "   AKS subnet:"        "$(_subnet_review "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE")"
@@ -1192,6 +1366,22 @@ cat >> "$OUTPUT" << TFVARS
 #------------------------------------------------------------------------------
 # AKS
 #------------------------------------------------------------------------------
+TFVARS
+
+if [[ "$CREATE_CLUSTER" == "false" ]]; then
+  cat >> "$OUTPUT" << TFVARS
+# Attached to a cluster this deployment does not own. Terraform reads it and
+# creates the Managed Identities and federated credentials against it.
+create_cluster                       = false
+existing_cluster_name                = "${EXISTING_CLUSTER_NAME}"
+existing_cluster_resource_group_name = "${EXISTING_CLUSTER_RG}"
+existing_cluster_node_pools_managed  = ${EXISTING_CLUSTER_POOLS_MANAGED}
+# The node pool settings below do not configure the attached cluster. They are
+# still read, to size the AKS subnet check against the pools it actually runs.
+TFVARS
+fi
+
+cat >> "$OUTPUT" << TFVARS
 default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
