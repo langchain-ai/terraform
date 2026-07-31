@@ -386,6 +386,34 @@ _ask_subnet() {
   fi
 }
 
+# A subnet that has to already exist. AGIC and the bastion have no carve path
+# inside a VNet Terraform does not own, so an ID is required rather than optional.
+# Lowercased before matching for the same reason as vnet_re below, and the
+# optional third argument enforces a name Azure demands.
+_ask_required_subnet() {
+  local label="$1" note="$2" want_name="$3" id_lc want_lc
+  local subnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$'
+  want_lc=$(printf '%s' "$want_name" | tr '[:upper:]' '[:lower:]')
+  echo ""
+  _hint "$note"
+  while true; do
+    _ask "${label} subnet resource ID" ""
+    _REQUIRED_SUBNET_ID="$_REPLY"
+    id_lc=$(printf '%s' "$_REQUIRED_SUBNET_ID" | tr '[:upper:]' '[:lower:]')
+    if [[ ! "$id_lc" =~ $subnet_re ]]; then
+      _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+      echo ""
+      continue
+    fi
+    if [[ -n "$want_lc" && "${id_lc##*/}" != "$want_lc" ]]; then
+      _red "  ERROR: Azure requires this subnet be named ${want_name}."
+      echo ""
+      continue
+    fi
+    break
+  done
+}
+
 # One subnet's line on the review screen: the ID being reused, or the CIDR
 # Terraform will carve. Lets an operator catch a pasted ID before anything runs.
 _subnet_review() {
@@ -409,25 +437,11 @@ _run_section_3() {
     VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
     AKS_SUBNET_CIDR_LINE=""; POSTGRES_SUBNET_CIDR_LINE=""; REDIS_SUBNET_CIDR_LINE=""
     AKS_SERVICE_CIDR=""
+    AGIC_SUBNET_ID=""; BASTION_SUBNET_ID=""
     return
   fi
 
   CREATE_VNET="false"
-
-  # This section can be re-run from the review menu, after AGIC or a bastion has
-  # already been chosen. Neither has a bring-your-own subnet input, so leaving
-  # them set would emit a tfvars that terraform plan rejects. Reset and say so.
-  if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
-    INGRESS_CONTROLLER="nginx"
-    AGW_SKU_TIER=""
-    _red "  AGIC needs a Terraform-managed VNet — ingress controller reset to nginx."
-    echo ""
-  fi
-  if [[ "$CREATE_BASTION" == "true" ]]; then
-    CREATE_BASTION="false"
-    _red "  The bastion needs a Terraform-managed VNet — bastion disabled."
-    echo ""
-  fi
 
   echo ""
   _hint "Bring Your Own VNet — LangSmith deploys into a VNet you already own."
@@ -477,6 +491,21 @@ _run_section_3() {
   _ask "Kubernetes service CIDR" "10.0.64.0/20"
   AKS_SERVICE_CIDR="$_REPLY"
 
+  # This section can be re-run from the review menu, after AGIC or a bastion has
+  # already been chosen. Neither is carved inside a VNet Terraform does not own,
+  # so collect the subnet each one needs. On a first pass through the wizard both
+  # are still at their defaults and the prompts below ask at the point of choice.
+  if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
+    _ask_required_subnet "Application Gateway" \
+      "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." ""
+    AGIC_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+  fi
+  if [[ "$CREATE_BASTION" == "true" ]]; then
+    _ask_required_subnet "Azure Bastion" \
+      "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet"
+    BASTION_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+  fi
+
   echo ""
   _hint "Any CIDR you entered must fit inside your VNet's address space, not overlap"
   _hint "an existing subnet, and not overlap the Kubernetes service CIDR above."
@@ -486,6 +515,7 @@ _run_section_3() {
 NODE_VM_SIZE="Standard_D4s_v3"
 NODE_MIN=2
 NODE_MAX=5
+NODE_MAX_PODS=60
 AKS_DELETION_PROTECTION="false"
 
 _run_section_4() {
@@ -514,6 +544,16 @@ _run_section_4() {
   NODE_MIN="$_REPLY"
   _ask_int "Node pool max count (autoscaler ceiling)" "$max_default"
   NODE_MAX="$_REPLY"
+
+  # Azure CNI draws pod IPs from the AKS subnet, so this multiplies the subnet
+  # size: the cluster needs (max_count + 1) x (max_pods + 1) addresses. It is one
+  # of the two knobs the capacity check tells operators to lower, so it needs to
+  # be reachable from here.
+  _hint "Max pods per node multiplies the AKS subnet requirement, at"
+  _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
+  _hint "lower it if your subnet is fixed and tight."
+  _ask_int "Max pods per node" "60"
+  NODE_MAX_PODS="$_REPLY"
 
   AKS_DELETION_PROTECTION="false"
   if [[ "$PROFILE" == "prod" ]]; then
@@ -560,16 +600,12 @@ _run_section_5() {
       6) INGRESS_CONTROLLER="none" ;;
     esac
 
-    # There is no agic_subnet_id input, so the Application Gateway subnet can
-    # only be carved out of a VNet Terraform owns. Catch it here rather than
-    # letting terraform plan reject the generated tfvars.
+    # Terraform will not carve an Application Gateway subnet inside a VNet it
+    # does not own, so on that path the operator names one that already exists.
     if [[ "$INGRESS_CONTROLLER" == "agic" && "$CREATE_VNET" == "false" ]]; then
-      _red "  AGIC is not available with a bring-your-own VNet."
-      echo ""
-      _hint "Application Gateway needs a dedicated /24 subnet that Terraform can only"
-      _hint "create in a VNet it manages. Pick another controller, or re-run section 3"
-      _hint "and let Terraform create the VNet."
-      continue
+      _ask_required_subnet "Application Gateway" \
+        "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." ""
+      AGIC_SUBNET_ID="$_REQUIRED_SUBNET_ID"
     fi
     break
   done
@@ -594,8 +630,8 @@ _run_section_5() {
     echo ""
     _hint "AGIC provisions an Azure Application Gateway v2 with a dedicated /24 subnet."
     _hint "WAF_v2 adds OWASP 3.2 rules + bot protection — no separate WAF module needed."
-    _hint "Note: AGIC requires a full cluster rebuild to enable (AGW subnet is provisioned"
-    _hint "at VNet creation time and cannot be added to an existing VNet)."
+    _hint "Note: AGIC requires a full cluster rebuild to enable (the add-on is part of the"
+    _hint "cluster resource). With a VNet you own, supply the Application Gateway subnet."
     _ask_choice --default "$(_index_of "$AGW_SKU_TIER" Standard_v2 WAF_v2)" \
       "Application Gateway SKU tier:" \
       "Standard_v2 — standard routing (no WAF)" \
@@ -941,12 +977,15 @@ _run_section_10() {
     echo ""
     _hint "Bastion host    — jump VM for direct SSH to AKS nodes (private cluster debugging)."
     _hint "                  Not needed for most deployments unless nodes are on a private subnet."
-    if [[ "$CREATE_VNET" == "false" ]]; then
-      # No bastion_subnet_id input exists, so the bastion subnet can only be
-      # created in a Terraform-managed VNet.
-      _hint "                  Unavailable with a bring-your-own VNet — skipped."
-    elif _ask_yn "Create bastion host? (for node-level troubleshooting)" "$bastion_yn"; then
+    if _ask_yn "Create bastion host? (for node-level troubleshooting)" "$bastion_yn"; then
       CREATE_BASTION="true"
+      # Terraform carves the bastion subnet only out of a VNet it owns, so on the
+      # bring-your-own path the operator names an existing one.
+      if [[ "$CREATE_VNET" == "false" ]]; then
+        _ask_required_subnet "Azure Bastion" \
+          "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet"
+        BASTION_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+      fi
     else
       CREATE_BASTION="false"
     fi
@@ -1060,8 +1099,10 @@ while true; do
     printf "  %-24s %s\n" "   PostgreSQL subnet:" "$(_subnet_review "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE")"
     printf "  %-24s %s\n" "   Redis subnet:"      "$(_subnet_review "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE")"
     printf "  %-24s %s\n" "   Service CIDR:"      "$AKS_SERVICE_CIDR"
+    [[ -n "$AGIC_SUBNET_ID" ]]    && printf "  %-24s %s\n" "   AGIC subnet:"    "reuse   $AGIC_SUBNET_ID"
+    [[ -n "$BASTION_SUBNET_ID" ]] && printf "  %-24s %s\n" "   Bastion subnet:" "reuse   $BASTION_SUBNET_ID"
   fi
-  printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX"
+  printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX  max_pods=$NODE_MAX_PODS"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
   [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
   [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
@@ -1157,6 +1198,9 @@ TFVARS
   # Required on this path: the variable default is only safe against the VNet
   # Terraform builds, so terraform plan rejects an empty value here.
   printf '%-30s = "%s"\n' "aks_service_cidr" "$AKS_SERVICE_CIDR" >> "$OUTPUT"
+  # Also required on this path, whenever the feature that needs them is on.
+  [[ -n "$AGIC_SUBNET_ID" ]]    && printf '%-30s = "%s"\n' "agic_subnet_id" "$AGIC_SUBNET_ID" >> "$OUTPUT"
+  [[ -n "$BASTION_SUBNET_ID" ]] && printf '%-30s = "%s"\n' "bastion_subnet_id" "$BASTION_SUBNET_ID" >> "$OUTPUT"
 else
   echo "# Using auto-created VNet (default)" >> "$OUTPUT"
 fi
@@ -1169,7 +1213,7 @@ cat >> "$OUTPUT" << TFVARS
 default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
-default_node_pool_max_pods  = 60
+default_node_pool_max_pods  = ${NODE_MAX_PODS}
 aks_deletion_protection     = ${AKS_DELETION_PROTECTION}
 
 #------------------------------------------------------------------------------
