@@ -19,10 +19,17 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 
 # ── tfvars parser ─────────────────────────────────────────────────────────────
+# Values are cut at the closing quote, or at an inline # for bare booleans and
+# numbers. Keep identical to the other copies of this function.
 _parse_tfvar() {
-  local key="$1"
-  awk -F= "/^[[:space:]]*${key}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" \
-    "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
 }
 
 # ── Resolve config from terraform.tfvars ──────────────────────────────────────

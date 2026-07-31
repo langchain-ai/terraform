@@ -40,10 +40,18 @@ VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 
 # ── tfvars parser ─────────────────────────────────────────────────────────────
+# Values are cut at the closing quote, or at an inline # for bare booleans and
+# numbers. Without that, `enable_smithdb = true  # step 9` reads as "true#step9"
+# and every gate below silently stays off. Keep identical to the other copies.
 _parse_tfvar() {
-  local key="$1"
-  awk -F= "/^[[:space:]]*${key}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" \
-    "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
 }
 _tfvar_is_true() {
   local val

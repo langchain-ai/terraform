@@ -33,10 +33,18 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 
 # ── tfvars helpers ────────────────────────────────────────────────────────────
+# Values are cut at the closing quote, or at an inline # for bare booleans and
+# numbers, so a commented flag line still reads as a flag. Keep identical to the
+# other copies of this function.
 _parse_tfvar() {
-  local key="$1"
-  awk -F= "/^[[:space:]]*${key}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" \
-    "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
 }
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 
@@ -377,12 +385,16 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
-for dep in "${_smithdb_deployments[@]}"; do
-  if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=10m 2>/dev/null; then
-    echo "  ⏳ $dep not ready within 10m (Local SSD nodes may still be provisioning)"
-    _all_ready=false
-  fi
-done
+# Guarded on length because bash 3.2 (macOS /bin/bash) aborts under `set -u` when
+# an empty array is expanded, and this array is empty whenever SmithDB is off.
+if [[ ${#_smithdb_deployments[@]} -gt 0 ]]; then
+  for dep in "${_smithdb_deployments[@]}"; do
+    if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=10m 2>/dev/null; then
+      echo "  ⏳ $dep not ready within 10m (Local SSD nodes may still be provisioning)"
+      _all_ready=false
+    fi
+  done
+fi
 
 if [[ "$_all_ready" == "true" ]]; then
   echo "All core deployments ready."
