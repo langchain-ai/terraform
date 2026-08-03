@@ -16,6 +16,13 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 identifier  = "-prod"
 environment = "dev"    # dev | staging | prod
 location    = "eastus"
+# Redis, Postgres, Storage, and Key Vault names live in a global Azure namespace
+# shared by every Azure tenant, so the plain "langsmith-<resource>-dev" defaults
+# collide between deployments. This switches to "ls-<resource><identifier>-<hash>",
+# where the hash is derived from your subscription. Keep it true for a new
+# deployment. On an EXISTING deployment leave it false — flipping it renames every
+# resource, which Terraform executes as destroy-and-recreate.
+unique_resource_names = true
 
 # Optional tags for cost allocation and compliance
 # owner       = "platform-team"

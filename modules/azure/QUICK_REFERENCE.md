@@ -246,6 +246,7 @@ Then re-run `make init-values && make deploy`.
 subscription_id = ""              # az account show --query id -o tsv
 identifier      = "-prod"         # suffix appended to every resource name
 location        = "eastus"        # Azure region
+unique_resource_names = true      # hash globally-unique names; see README → Resource naming
 
 # ── Data sources ──────────────────────────────────────────────────────────────
 postgres_source   = "external"    # Azure DB for PostgreSQL Flexible Server

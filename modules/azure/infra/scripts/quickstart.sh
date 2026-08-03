@@ -146,7 +146,7 @@ COST_CENTER=""
 _run_section_2() {
   _section "2. Subscription & Naming"
   _hint "The identifier is appended to every Azure resource name (RG, AKS, KV, blob...)."
-  _hint "Example: -prod → langsmith-rg-prod, langsmith-aks-prod, langsmith-kv-prod"
+  _hint "Example: -prod → ls-rg-prod, ls-aks-prod, ls-kv-prod-<hash>"
   _hint "Changing it later creates entirely new resources — choose something stable."
 
   AUTO_SUB=""
@@ -716,6 +716,11 @@ subscription_id = "${SUBSCRIPTION_ID}"
 identifier      = "${IDENTIFIER}"
 environment     = "${ENVIRONMENT}"
 location        = "${LOCATION}"
+
+# Redis, Postgres, Storage, and Key Vault names live in a global Azure namespace
+# shared by every tenant, so unqualified names collide between deployments.
+# This appends a hash derived from your subscription. Leave it true.
+unique_resource_names = true
 TFVARS
 
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"

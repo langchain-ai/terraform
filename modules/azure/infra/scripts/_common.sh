@@ -44,6 +44,37 @@ _tfvar_is_true() {
   [[ "$val" == "true" ]]
 }
 
+# ── Derived Key Vault name ───────────────────────────────────────────────────
+# Mirrors local.keyvault_name in infra/main.tf. Terraform is the source of
+# truth, so callers should always try `terraform output -raw keyvault_name`
+# first and fall back to this only when no state exists yet (before the first
+# apply, or from a directory without the state file).
+#
+# Keep in sync with local.name_prefix / local.name_suffix in infra/main.tf.
+_derive_kv_name() {
+  local explicit ident prefix suffix sub hash
+  explicit=$(_parse_tfvar keyvault_name || true)
+  if [[ -n "$explicit" ]]; then
+    echo "$explicit"
+    return 0
+  fi
+  ident=$(_parse_tfvar identifier || true)
+  if _tfvar_is_true unique_resource_names; then
+    prefix="ls"
+    sub=$(_parse_tfvar subscription_id || true)
+    if command -v shasum &>/dev/null; then
+      hash=$(printf '%s' "${sub}${ident}" | shasum -a 256 | cut -c1-6)
+    else
+      hash=$(printf '%s' "${sub}${ident}" | sha256sum | cut -c1-6)
+    fi
+    suffix="-${hash}"
+  else
+    prefix="langsmith"
+    suffix=""
+  fi
+  echo "${prefix}-kv${ident}${suffix}"
+}
+
 # ── Color helpers ────────────────────────────────────────────────────────────
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }

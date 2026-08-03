@@ -31,13 +31,12 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
 if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  # fallback: read identifier from terraform.tfvars
-  _identifier=$(grep -E '^\s*identifier\s*=' "$INFRA_DIR/terraform.tfvars" \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' | tr -d '[:space:]') || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+  # fallback: derive it the same way infra/main.tf does
+  KV_NAME=$(_derive_kv_name)
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 

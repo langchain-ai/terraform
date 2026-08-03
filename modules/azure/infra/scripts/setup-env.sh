@@ -20,6 +20,9 @@ set -euo pipefail
 # setup-env.sh is READ-ONLY against Key Vault — it never writes to KV directly.
 # Terraform is the sole writer. This prevents state conflicts on terraform apply.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_common.sh"
+
 SECRETS_FILE="secrets.auto.tfvars"
 
 # ── Read identifier from terraform.tfvars ─────────────────────────────────────
@@ -29,7 +32,7 @@ if [[ -f "terraform.tfvars" ]]; then
     | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' \
     | tr -d '[:space:]') || _identifier=""
 fi
-_kv_name="langsmith-kv${_identifier}"
+_kv_name=$(_derive_kv_name)
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # If stdin is not a tty and the env var is not set, exit with a clear error

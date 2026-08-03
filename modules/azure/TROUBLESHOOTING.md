@@ -13,6 +13,62 @@ Issues, gotchas, and fixes. Updated as deployments are validated.
 
 ## Pass 1 — Infrastructure
 
+### Resource name is already taken globally
+
+**Symptom — Redis:**
+```
+Error: Failed to create/update resource
+  with module.redis[0].azapi_resource.amr,
+RESPONSE 400: 400 Bad Request
+"code": "BadRequest",
+"message": "The name langsmith-redis-dev is not available."
+```
+
+**Symptom — Storage or Key Vault:** `StorageAccountAlreadyTaken`, or `VaultAlreadyExists`
+referring to a vault you cannot see in your own subscription.
+
+**Cause:** PostgreSQL, Redis, Storage, and Key Vault names live in a namespace
+shared by every Azure tenant — they become public DNS names like
+`<name>.<region>.redisenterprise.cache.azure.net`. With
+`unique_resource_names = false`, every deployment of this module asks for the same
+`langsmith-<resource><identifier>`, so any two deployments using `identifier = "-dev"`
+collide anywhere in the world. The name may also be a leftover from a failed apply
+in your own subscription, or a soft-deleted Key Vault pending purge.
+
+**Fix — new deployment:** set `unique_resource_names = true` in `terraform.tfvars`.
+Names become `ls-<resource><identifier>-<hash>`, unique per subscription. See
+[README → Resource naming](README.md#resource-naming).
+
+**Fix — existing deployment** (do *not* flip `unique_resource_names`, it renames and
+therefore recreates everything): pin the one colliding name instead.
+
+```hcl
+redis_name = "langsmith-redis-mycorp-dev"
+```
+
+Then check it before applying:
+
+```bash
+make preflight   # checks Postgres, Storage, Key Vault, and dns_label availability
+```
+
+**If the leftover is in your own subscription**, import or delete it rather than
+renaming:
+
+```bash
+az redisenterprise list -o table
+az keyvault list-deleted -o table          # soft-deleted vaults still hold the name
+az keyvault purge --name <name>            # frees it permanently
+```
+
+> **Redis has no pre-check.** Azure exposes no working `CheckNameAvailability` for
+> `Microsoft.Cache/redisEnterprise` — the subscription-scoped endpoint rejects the
+> type and the location-scoped one rejects every valid region. `make preflight` can
+> only detect a Redis name already present in *your* subscription; a cross-tenant
+> collision still surfaces at apply time. The hashed name is what makes it unlikely.
+
+---
+
 ### K8sVersionNotSupported — version is LTS-only
 
 **Symptom:**

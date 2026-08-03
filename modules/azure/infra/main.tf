@@ -23,17 +23,35 @@ locals {
   # Examples: "-prod", "-staging", "" (no suffix for single-environment setups).
   identifier = var.identifier
 
-  # Derived resource names — all prefixed with "langsmith-<identifier>"
-  resource_group_name = "langsmith-rg${local.identifier}"
-  vnet_name           = "langsmith-vnet${local.identifier}"
-  aks_name            = "langsmith-aks${local.identifier}"
-  postgres_name       = "langsmith-postgres${local.identifier}"
-  redis_name          = "langsmith-redis${local.identifier}"
-  blob_name           = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
+  # ── Resource naming ─────────────────────────────────────────────────────────
+  # Two schemes, selected by var.unique_resource_names (see variables.tf):
+  #
+  #   false — legacy "langsmith-<resource><identifier>". Still the default so an
+  #           existing deployment moving to a newer tag sees a no-op plan.
+  #   true  — "ls-<resource><identifier>", plus a per-subscription hash on the
+  #           four names that live in a global Azure namespace.
+  #
+  # The hash is deterministic: same subscription + identifier always yields the
+  # same name, so repeat applies are stable and no random provider is involved.
+  # Hashing the identifier too keeps two environments in one subscription apart.
+  # 6 hex chars is what fits alongside "-production" inside Key Vault's 24-char
+  # limit, which is the tightest of the four.
+  name_prefix = var.unique_resource_names ? "ls" : "langsmith"
+  name_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.identifier}"), 0, 6)}" : ""
 
-  # Key Vault name: max 24 chars, globally unique.
-  # Uses the user-supplied keyvault_name or derives from identifier.
-  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "langsmith-kv${local.identifier}"
+  # Regional names — no global namespace, so no hash needed.
+  resource_group_name = "${local.name_prefix}-rg${local.identifier}"
+  vnet_name           = "${local.name_prefix}-vnet${local.identifier}"
+  aks_name            = "${local.name_prefix}-aks${local.identifier}"
+
+  # Globally-unique names — hashed, and each accepts an explicit override so an
+  # existing deployment can pin its current name (or dodge a collision without
+  # renaming everything else). Length limits: Postgres 63, Redis 60, Storage 24
+  # (hyphens stripped by the blob module), Key Vault 24. Asserted below.
+  postgres_name = var.postgres_name != "" ? var.postgres_name : "${local.name_prefix}-postgres${local.identifier}${local.name_suffix}"
+  redis_name    = var.redis_name != "" ? var.redis_name : "${local.name_prefix}-redis${local.identifier}${local.name_suffix}"
+  blob_name     = var.storage_account_name != "" ? var.storage_account_name : "${local.name_prefix}-blob${local.identifier}${local.name_suffix}"
+  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "${local.name_prefix}-kv${local.identifier}${local.name_suffix}"
 
   # Subnet ID resolution: use newly-created VNet subnets OR bring-your-own
   # existing ones (set create_vnet = false and supply the IDs via variables).
@@ -64,6 +82,26 @@ resource "azurerm_resource_group" "resource_group" {
   name     = local.resource_group_name
   location = var.location
   tags     = local.common_tags
+
+  # Assert the derived names fit Azure's limits before anything is created.
+  # Without this, an over-long identifier surfaces as an Azure 400 partway
+  # through the apply, after the resource group, VNet, and AKS already exist.
+  # Storage and Key Vault cap at 24 chars, so they bind first — a ~12-char
+  # identifier is the practical ceiling under unique_resource_names.
+  lifecycle {
+    precondition {
+      condition     = length(replace(local.blob_name, "-", "")) >= 3 && length(replace(local.blob_name, "-", "")) <= 24
+      error_message = "Storage account name '${replace(local.blob_name, "-", "")}' is ${length(replace(local.blob_name, "-", ""))} chars; Azure allows 3-24. Shorten var.identifier or set var.storage_account_name explicitly."
+    }
+    precondition {
+      condition     = length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24
+      error_message = "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.identifier or set var.keyvault_name explicitly."
+    }
+    precondition {
+      condition     = length(local.postgres_name) <= 63 && length(local.redis_name) <= 60
+      error_message = "Postgres name '${local.postgres_name}' must be <= 63 chars and Redis name '${local.redis_name}' <= 60. Shorten var.identifier or set var.postgres_name / var.redis_name explicitly."
+    }
+  }
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
