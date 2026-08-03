@@ -11,6 +11,7 @@ set -euo pipefail
 #   make clean
 #
 # Removes:
+#   SSM Parameter Store secrets       — under /langsmith/{name_prefix}-{environment}/
 #   infra/terraform.tfvars              — live deployment config
 #   infra/terraform.tfstate             — local state (when not using remote backend)
 #   infra/terraform.tfstate*.backup     — state backup files
@@ -72,6 +73,32 @@ _rm() {
     _removed=$((_removed + 1))
   fi
 }
+
+# ── SSM secrets ───────────────────────────────────────────────────────────────
+# Delete before tfvars since we need name_prefix, environment, and region from it.
+header "SSM secrets"
+_name_prefix=$(_parse_tfvar "name_prefix" 2>/dev/null) || _name_prefix=""
+_environment=$(_parse_tfvar "environment" 2>/dev/null) || _environment=""
+_region=$(_parse_tfvar "region" 2>/dev/null) || _region="${AWS_REGION:-us-east-1}"
+if [[ -n "$_name_prefix" && -n "$_environment" ]]; then
+  _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
+  _ssm_params=$(_aws ssm describe-parameters --region "$_region" --query "Parameters[?starts_with(Name, '${_ssm_prefix}/')].Name" --output text 2>/dev/null) || true
+  if [[ -n "$_ssm_params" ]]; then
+    _ssm_count=$(echo "$_ssm_params" | wc -w | tr -d ' ')
+    # delete-parameters accepts max 10 per call; batch if needed.
+    _ssm_array=($_ssm_params)
+    for (( _i=0; _i<_ssm_count; _i+=10 )); do
+      _batch=("${_ssm_array[@]:_i:10}")
+      _aws ssm delete-parameters --region "$_region" --names "${_batch[@]}"
+    done
+    pass "Deleted $_ssm_count SSM parameter(s) under ${_ssm_prefix}/"
+    _removed=$((_removed + 1))
+  else
+    skip "No SSM parameters found under ${_ssm_prefix}/"
+  fi
+else
+  skip "Could not read name_prefix/environment from tfvars"
+fi
 
 # ── Terraform live config ──────────────────────────────────────────────────────
 header "Terraform"
