@@ -726,6 +726,11 @@ inside the 24-character Storage and Key Vault limits:
 | Storage | `langsmithblobdev` | `lsblobdev9532ea` |
 | Key Vault | `langsmith-kv-dev` | `ls-kv-dev-9532ea` |
 
+The Storage row is the only one that looks different, and the hyphens are the
+reason. Azure Storage account names accept only lowercase letters and digits, so
+the module strips the hyphens from `ls-blob-dev-9532ea` before creating it. Every
+other name, including the blob container, keeps them.
+
 The hash is deterministic — the same subscription and `identifier` always produce
 the same name, so repeat applies are stable and no random values are stored.
 
