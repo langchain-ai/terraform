@@ -62,13 +62,14 @@ resource "azurerm_virtual_network" "customer" {
 }
 
 // AKS nodes and pods. Azure CNI is flat here, so both draw IPs from this subnet:
-// infra/main.tf computes (max_count + 1) * (max_pods + 1) and the precondition at
-// infra/main.tf:340 rejects anything under that. A /22 gives 1019 usable, which
-// covers the 764 the module's bare defaults ask for.
+// infra/main.tf computes (max_count + 1) * (max_pods + 1) as local.aks_required_ips
+// and terraform_data.validate_network rejects anything under it. A /22 gives 1019
+// usable, which covers the 764 the module's bare defaults ask for.
 //
 // The two service endpoints are mandatory. The blob storage firewall is hardcoded
-// default-deny and allowlists this subnet by ID (storage/main.tf:37), and Azure
-// rejects a subnet rule whose matching endpoint is absent.
+// default-deny and allowlists this subnet by ID (the network_rules block in
+// storage/main.tf), and Azure rejects a subnet rule whose matching endpoint is
+// absent.
 resource "azurerm_subnet" "aks" {
   name                 = "aks-nodes"
   resource_group_name  = azurerm_resource_group.prereq.name
@@ -77,9 +78,10 @@ resource "azurerm_subnet" "aks" {
   service_endpoints    = ["Microsoft.Storage", "Microsoft.KeyVault"]
 }
 
-// Postgres Flexible Server is subnet-injected and needs the delegation. Checked
-// through azapi at infra/main.tf:239 because the azurerm subnet data source does
-// not expose delegations, then enforced at infra/main.tf:307.
+// Postgres Flexible Server is subnet-injected and needs the delegation. Read
+// through data.azapi_resource.byo_postgres_subnet because the azurerm subnet data
+// source does not expose delegations, then enforced by a precondition on
+// terraform_data.validate_network.
 resource "azurerm_subnet" "postgres" {
   name                 = "postgres"
   resource_group_name  = azurerm_resource_group.prereq.name
@@ -120,14 +122,16 @@ resource "azurerm_kubernetes_cluster" "customer" {
   tags                = local.tags
 
   // Federated identity credentials for the LangSmith service accounts are built
-  // on the OIDC issuer, and the postcondition at k8s-cluster/main.tf:135 reads
-  // both flags off the live cluster.
+  // on the OIDC issuer, and postconditions on data.azurerm_kubernetes_cluster.existing
+  // and data.azapi_resource.existing_security_profile read both flags off the live
+  // cluster.
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
 
-  // The kubernetes and helm providers authenticate with the cluster's kube_config
-  // (k8s-bootstrap/main.tf:5). Azure returns that empty for an AAD-only cluster and
-  // there is no kubelogin exec path, so disabling local accounts is a hard blocker.
+  // The kubernetes and helm providers authenticate with the cluster's kube_config,
+  // passed into k8s-bootstrap as variables. Azure returns that empty for an
+  // AAD-only cluster and there is no kubelogin exec path, so disabling local
+  // accounts is a hard blocker.
   local_account_disabled = false
 
   default_node_pool {

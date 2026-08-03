@@ -52,8 +52,9 @@ output "langsmith_tfvars" {
 
     # ── Use the existing VNet ────────────────────────────────────────────────────
     # create_vnet must be false whenever create_cluster is false: the postcondition
-    # at k8s-cluster/main.tf:117 requires aks_subnet_id to be one of the existing
-    # cluster's node subnets, and a subnet Terraform is about to carve can never be.
+    # on data.azurerm_kubernetes_cluster.existing requires aks_subnet_id to be one of
+    # the existing cluster's node subnets, and a subnet Terraform is about to carve
+    # can never be.
     create_vnet        = false
     vnet_id            = "${azurerm_virtual_network.customer.id}"
     aks_subnet_id      = "${azurerm_subnet.aks.id}"
