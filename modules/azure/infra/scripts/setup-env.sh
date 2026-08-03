@@ -22,20 +22,15 @@ set -euo pipefail
 
 SECRETS_FILE="secrets.auto.tfvars"
 
-# ── Read name_prefix from terraform.tfvars ────────────────────────────────────
-# Accepts the retired `identifier` key too, so a tfvars that predates the
-# rename still resolves the right Key Vault. The separator hyphen is added
-# here (name_prefix = "prod" → langsmith-kv-prod), mirroring main.tf.
-_name_prefix=""
-if [[ -f "terraform.tfvars" ]]; then
-  _name_prefix=$(grep -E '^\s*(name_prefix|identifier)\s*=' terraform.tfvars \
-    | head -1 \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' \
-    | tr -d '[:space:]') || _name_prefix=""
-fi
-_suffix=""
-[[ -n "$_name_prefix" ]] && _suffix="-${_name_prefix#-}"
-_kv_name="langsmith-kv${_suffix}"
+# ── Resolve the Key Vault name ────────────────────────────────────────────────
+# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix,
+# an explicit keyvault_name, and the unique_resource_names hash. Deriving it here
+# by hand is how this script and three others drifted apart.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_common.sh"
+
+_name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
+_kv_name=$(_derive_kv_name)
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # If stdin is not a tty and the env var is not set, exit with a clear error

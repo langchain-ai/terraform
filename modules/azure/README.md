@@ -151,9 +151,10 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 
 One variable names the deployment. `name_prefix` is appended to every resource
 name and doubles as the `environment` tag, so `name_prefix = "prod"` gives
-`langsmith-rg-prod`, `langsmith-aks-prod`, `langsmith-kv-prod` and tags
-everything `environment = prod`. Terraform inserts the separating hyphen, so
-write `prod`, not `-prod`.
+`ls-rg-prod`, `ls-aks-prod`, `ls-kv-prod-<hash>` and tags everything
+`environment = prod`. Terraform inserts the separating hyphen, so write `prod`,
+not `-prod`. Keep it under about 12 characters; [Resource naming](#resource-naming)
+explains the ceiling and where the hash comes from.
 
 Set `environment` explicitly only when the tag needs to differ from the
 deployment name, e.g. `name_prefix = "prod-eastus"` with `environment = "prod"`.
@@ -291,7 +292,7 @@ make keyvault delete langsmith-deployments-encryption-key   # soft-delete (recov
 ```
 
 Key behaviors:
-- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `langsmith-kv-{name_prefix}`
+- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `_derive_kv_name` in `infra/scripts/_common.sh`, which mirrors the naming scheme
 - `validate` — checks all 4 required secrets exist and are non-empty; validates admin password symbol requirement
 - `diff` — compares Key Vault values vs `langsmith-config-secret` K8s secret key-by-key
 - Warns on `langsmith-api-key-salt` and `langsmith-jwt-secret` (stable secrets — changing them invalidates all API keys / sessions)
@@ -305,7 +306,7 @@ Key behaviors:
 
 Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name from `name_prefix` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
+- Derives the Key Vault name via `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without
 - **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
 - **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
 - Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists
@@ -727,6 +728,63 @@ azure/
 > **Workload Identity** is centralized in `k8s-cluster`. Federated credentials for blob-accessing pods (backend, platform-backend, queue, ingest-queue, host-backend, listener, agent-builder-tool-server, agent-builder-trigger-server) are registered there. Adding a new pod that needs Blob access requires updating `service_accounts_for_workload_identity` in `k8s-cluster` and running `terraform apply -target=module.aks`.
 >
 > **AGIC Workload Identity** uses a separate managed identity (`<cluster>-agic-identity`) with Contributor on the App Gateway and Reader on the resource group. The federated credential binds to `system:serviceaccount:ingress-basic:ingress-azure`.
+
+---
+
+## Resource naming
+
+Most Azure resource names only need to be unique inside your resource group. Four
+do not: **PostgreSQL**, **Redis**, **Storage**, and **Key Vault** names live in a
+namespace shared by every Azure tenant, as does the public-IP `dns_label`. Two
+deployments that ask for the same name collide, and the second one fails partway
+through `terraform apply`.
+
+`unique_resource_names = true` (set in every `terraform.tfvars` template and by
+`quickstart.sh`) appends a 6-character hash derived from your subscription ID and
+`name_prefix`, and shortens the base from `langsmith-` to `ls-` to make room
+inside the 24-character Storage and Key Vault limits:
+
+| | `unique_resource_names = false` | `unique_resource_names = true` |
+|---|---|---|
+| Resource group | `langsmith-rg-dev` | `ls-rg-dev` |
+| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-a1b2c3` |
+| Redis | `langsmith-redis-dev` | `ls-redis-dev-a1b2c3` |
+| Storage | `langsmithblobdev` | `lsblobdeva1b2c3` |
+| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-a1b2c3` |
+
+The Storage row is the only one that looks different, and the hyphens are the
+reason. Azure Storage account names accept only lowercase letters and digits, so
+the module strips the hyphens from `ls-blob-dev-a1b2c3` before creating it. Every
+other name, including the blob container, keeps them.
+
+The hash is deterministic — the same subscription and `name_prefix` always produce
+the same name, so repeat applies are stable and no random values are stored.
+`a1b2c3` above stands in for it; yours differs.
+
+Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
+hyphens inside the same 24-character limit Storage has, so it runs out of room
+first. `terraform plan` reports the exact overage rather than letting Azure
+reject the name mid-apply.
+
+> **On an existing deployment, leave `unique_resource_names = false`.** Turning it
+> on renames every resource, which Terraform carries out as destroy-and-recreate:
+> Postgres and Storage would lose their data. It defaults to `false` so bumping to
+> a newer tag is a no-op.
+
+To pin one name, either to keep an existing resource or to dodge a collision
+without renaming the whole deployment, set it explicitly:
+
+```hcl
+postgres_name        = "langsmith-postgres-dev"
+redis_name           = "langsmith-redis-mycorp-dev"
+storage_account_name = "langsmithblobdev"
+keyvault_name        = "langsmith-kv-dev"
+```
+
+`make preflight` checks these four names plus `dns_label` against Azure's
+availability APIs before you apply. Redis is the exception: Azure exposes no
+working name-availability endpoint for Managed Redis, so a cross-tenant Redis
+collision only surfaces at apply time.
 
 ---
 
