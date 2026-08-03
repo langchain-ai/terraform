@@ -123,6 +123,17 @@ variable "keyvault_allowed_ips" {
   default     = []
 }
 
+variable "terraform_principal_type" {
+  type        = string
+  description = "Principal type of the identity running `terraform apply`, applied to its \"Key Vault Secrets Officer\" grant. Null (default) omits the field and lets Azure infer it, which is correct everywhere except subscriptions that delegate Microsoft.Authorization/roleAssignments/write through an ABAC condition on principalType — those reject requests that omit it with a generic 403. Set \"User\" for an interactive `az login` or \"ServicePrincipal\" for a CI pipeline. Managed-identity grants elsewhere in this module hardcode \"ServicePrincipal\" and need no toggle."
+  default     = null
+
+  validation {
+    condition     = var.terraform_principal_type == null || contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
+    error_message = "terraform_principal_type must be 'User', 'Group', or 'ServicePrincipal'. Omit it entirely (or set null) to let Azure infer the type — an empty string is not a valid opt-out."
+  }
+}
+
 variable "aks_authorized_ip_ranges" {
   type        = list(string)
   description = "External CIDRs permitted to reach the AKS API server. Empty list (default) omits the api_server_access_profile block, leaving the master publicly reachable so Terraform-driven Helm/kubectl steps work from any apply host. Production deployments populate this with operator/CI egress CIDRs."
