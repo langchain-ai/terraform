@@ -145,7 +145,7 @@ NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INSTALL_KEDA INSTALL_CERT_MANAGER
 INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE
+AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -244,6 +244,7 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_pods)  && NODE_MAX_PODS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar redis_high_availability)     && REDIS_HA="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_cluster)              && CREATE_CLUSTER="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar existing_cluster_node_pools_managed) && EXISTING_CLUSTER_POOLS_MANAGED="$_TF_VAL"
@@ -1328,8 +1329,13 @@ _run_section_7() {
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
-      AMR_SKU="Balanced_B3"
-      REDIS_HA="true"
+      # Profile defaults apply only on a first pass, same rule as the pg_yn and
+      # redis_yn defaults above. Re-entering the section keeps what the last run
+      # wrote, so a resume does not walk an operator's Balanced_B5 back to B3.
+      if ! _answered 7; then
+        AMR_SKU="Balanced_B3"
+        REDIS_HA="true"
+      fi
     fi
   else
     # No default until the section has been answered once — a fresh run still
