@@ -113,8 +113,19 @@ module "aks" {
   dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
-  create_cluster                       = var.create_cluster
+  create_cluster = var.create_cluster
+  create_vnet    = var.create_vnet
+
+  # Both of these are passed straight from variables, never derived from another
+  # resource. azurerm_resource_group.resource_group is pending creation on a first
+  # apply, and local.aks_subnet_id reads module.vnet.subnet_main_id, whose module
+  # has no count and so is pending too. A reference to either draws a dependency
+  # edge that defers the cluster lookup to apply, taking the OIDC issuer, Workload
+  # Identity, node subnet, and region guards with it, silent on exactly the run
+  # where a misconfiguration is most likely. var.aks_subnet_id is the right value
+  # to use because create_cluster = false requires create_vnet = false.
   existing_cluster_resource_group_name = var.existing_cluster_resource_group_name
+  existing_cluster_subnet_id           = var.aks_subnet_id
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count

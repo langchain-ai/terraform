@@ -49,7 +49,8 @@ create_cluster                       = false
 existing_cluster_name                = "customer-aks-cluster"
 existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
 
-# Point the supporting resources at the cluster's own network.
+# Required, not optional: the cluster's nodes already run in an existing subnet,
+# and a subnet Terraform carves could never be one of them.
 create_vnet        = false
 aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
 postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
@@ -69,7 +70,9 @@ az aks show --name <cluster> --resource-group <rg> \
 | Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
 | API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
 
-`aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts. Set `existing_cluster_node_pools_managed = false` if the customer's platform team owns all node pools (you must then confirm the cluster already has capacity for ClickHouse and LangGraph workloads).
+`aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts.
+
+Attaching adds no node pools by default, so the cluster's own pools run every workload and you must confirm they have capacity for ClickHouse and LangGraph. Set `existing_cluster_node_pools_managed = true` to have Terraform add the `large` pool for ClickHouse alongside the customer's pools. Terraform never adopts existing pools, only adds new ones.
 
 That subnet also needs the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The Blob and Key Vault firewalls allowlist it by subnet ID, which only matches when a service endpoint keeps the traffic on the Azure backbone instead of NATing it out to a public IP. Without them Azure rejects the firewall rule and the apply fails naming the subnet. Terraform enables both on the subnets it creates, so this applies to any `create_vnet = false` deployment, not only an existing cluster:
 

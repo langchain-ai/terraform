@@ -14,9 +14,21 @@ variable "create_cluster" {
   default     = true
 }
 
+variable "create_vnet" {
+  type        = bool
+  description = "Whether the root module is creating the VNet. Only read to reject create_cluster = false with create_vnet = true: an attached cluster's nodes already run in an existing subnet, so a subnet Terraform carves could never be one of them."
+  default     = true
+}
+
+variable "existing_cluster_subnet_id" {
+  type        = string
+  description = "The subnet the pre-existing cluster's nodes run in. Only used when create_cluster = false, where it equals subnet_id because that path requires create_vnet = false. Exists as its own input so the guards below never reference a subnet id derived from the VNet module, whose outputs are pending on a first apply and would defer the cluster lookup to apply time."
+  default     = ""
+}
+
 variable "existing_cluster_resource_group_name" {
   type        = string
-  description = "Resource group of the pre-existing cluster, when it differs from resource_group_name (e.g. the customer's platform team owns the AKS cluster in a separate resource group from the one this module creates for Key Vault/Storage/identities). Only used when create_cluster = false. Defaults to resource_group_name when empty."
+  description = "Resource group of the pre-existing cluster. Only used when create_cluster = false. Resolved by the caller, which must pass a value that does not reference a resource pending creation — reading it from azurerm_resource_group would make Terraform defer the cluster lookup, and every existing-cluster guard in this module with it."
   default     = ""
 }
 

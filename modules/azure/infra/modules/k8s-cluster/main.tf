@@ -52,11 +52,6 @@ locals {
     join("/subnets/", slice(split("/subnets/", var.agic_subnet_id), 0, 1))
   ) : ""
 
-  # Resource group to look up the existing cluster in, when create_cluster = false.
-  # Falls back to resource_group_name (the RG this module creates identities/etc. in)
-  # when the existing cluster lives in the same RG.
-  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name != "" ? var.existing_cluster_resource_group_name : var.resource_group_name
-
   # Unified accessors so the rest of this module doesn't care whether the cluster
   # was created here or already existed — resolves to the resource when
   # create_cluster = true, or the read-only data source when false.
@@ -77,7 +72,7 @@ locals {
 data "azurerm_kubernetes_cluster" "existing" {
   count               = var.create_cluster ? 0 : 1
   name                = var.cluster_name
-  resource_group_name = local.existing_cluster_resource_group_name
+  resource_group_name = var.existing_cluster_resource_group_name
 
   lifecycle {
     precondition {
@@ -86,6 +81,15 @@ data "azurerm_kubernetes_cluster" "existing" {
       # or region problem rather than an unset variable.
       condition     = var.cluster_name != ""
       error_message = "create_cluster = false requires existing_cluster_name to be set to the name of the AKS cluster to attach to."
+    }
+
+    precondition {
+      # Not derived from resource_group_name. That is the resource group this
+      # module creates for Key Vault and Storage, which is not where a cluster
+      # the customer's platform team owns lives, so guessing it produces a
+      # "cluster not found" naming a resource group the operator never mentioned.
+      condition     = var.existing_cluster_resource_group_name != ""
+      error_message = "create_cluster = false requires existing_cluster_resource_group_name to be set to the resource group holding cluster '${var.cluster_name}'. Find it with: az aks list --query \"[?name=='${var.cluster_name}'].resourceGroup\" -o tsv"
     }
 
     precondition {
@@ -98,13 +102,31 @@ data "azurerm_kubernetes_cluster" "existing" {
       error_message = "ingress_controller = '${var.ingress_controller}' requires create_cluster = true — it configures an AKS-managed add-on that only applies through a Terraform-owned cluster resource. Use 'nginx', 'istio', or 'envoy-gateway' when attaching to an existing cluster."
     }
 
+    precondition {
+      # A subnet Terraform is about to carve can never be one the cluster's nodes
+      # already run in, so the postcondition below could never pass. Catching the
+      # combination here names the real problem; left to the postcondition it
+      # reads as a subnet mismatch instead of an impossible configuration.
+      condition     = !var.create_vnet
+      error_message = "create_cluster = false requires create_vnet = false. An attached cluster's nodes already run in an existing subnet, and Terraform cannot carve a new one they belong to. Set create_vnet = false and supply vnet_id plus the subnet ids."
+    }
+
+    precondition {
+      # Under create_cluster = false there is nothing to derive this from, and the
+      # postcondition that would catch a blank value compares it against the
+      # cluster's agent pools — a comparison that reports a mismatch rather than
+      # an unset variable.
+      condition     = var.existing_cluster_subnet_id != ""
+      error_message = "create_cluster = false requires aks_subnet_id to be set to a subnet cluster '${var.cluster_name}' already runs nodes in. It also drives the Blob and Key Vault firewall allowlists, so it cannot be left for Terraform to derive."
+    }
+
     postcondition {
       # Federated credentials below use the cluster's OIDC issuer URL as their
       # trust anchor. Without the issuer the URL is empty and every credential is
       # created pointing at nothing — pods then fail to authenticate to Blob
       # Storage/Key Vault at runtime, long after a "successful" apply.
       condition     = self.oidc_issuer_enabled
-      error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${local.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+      error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
     }
 
     postcondition {
@@ -114,8 +136,8 @@ data "azurerm_kubernetes_cluster" "existing" {
       # schedule, and every Blob write and Key Vault read 403s at runtime. It's
       # also the only subnet an added node pool can join, since a node pool can
       # only live in its cluster's VNet.
-      condition     = contains(compact(self.agent_pool_profile[*].vnet_subnet_id), var.subnet_id)
-      error_message = "aks_subnet_id must be one of the subnets cluster '${var.cluster_name}' already runs nodes in, because it also drives the Blob and Key Vault firewall allowlists. Set create_vnet = false and aks_subnet_id to one of: [${join(", ", compact(self.agent_pool_profile[*].vnet_subnet_id))}]"
+      condition     = contains(compact(self.agent_pool_profile[*].vnet_subnet_id), var.existing_cluster_subnet_id)
+      error_message = "aks_subnet_id must be one of the subnets cluster '${var.cluster_name}' already runs nodes in, because it also drives the Blob and Key Vault firewall allowlists. Set aks_subnet_id to one of: [${join(", ", compact(self.agent_pool_profile[*].vnet_subnet_id))}]"
     }
   }
 }
@@ -134,7 +156,7 @@ data "azapi_resource" "existing_security_profile" {
   lifecycle {
     postcondition {
       condition     = try(self.output.properties.securityProfile.workloadIdentity.enabled, false)
-      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${local.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
     }
   }
 }
