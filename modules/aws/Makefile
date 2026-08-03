@@ -11,11 +11,12 @@
 # Full deploy:       make deploy-all
 # Teardown:          make uninstall → make destroy → make clean
 # Where am I?        make status
+# Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart status status-quick setup-env init plan apply destroy \
+.PHONY: help quickstart status status-quick setup-env init plan apply destroy tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso uninstall clean deploy-all deploy-all-tf \
-        init-app plan-app apply-app destroy-app \
+        init-app plan-app apply-app destroy-app tf-app \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
@@ -24,8 +25,26 @@ HELM_DIR  := helm
 APP_DIR   := app
 
 help: ## Show available targets
+	@echo ""
+	@echo "  \033[1mUsage:\033[0m make <target> [ARGS=\"<extra terraform flags>\"]"
+	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  \033[1mARGS is appended to the terraform command:\033[0m"
+	@echo "    make init    ARGS=\"-upgrade\"                 # re-resolve provider versions"
+	@echo "    make plan    ARGS=\"-target=module.eks\"       # plan one module"
+	@echo "    make plan    ARGS=\"-out=tfplan\"              # save a plan file"
+	@echo "    make apply   ARGS=\"tfplan\"                   # apply that saved plan"
+	@echo "    make apply   ARGS=\"-auto-approve\"            # skip the approval prompt"
+	@echo "    make destroy ARGS=\"-target=module.redis\"     # destroy one module"
+	@echo ""
+	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
+	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
+	@echo "    make tf      ARGS=\"output -raw cluster_name\""
+	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
+	@echo "    make tf-app  ARGS=\"state list\"               # same, against app/"
+	@echo ""
 
 status: ## Check deployment state and show what to run next
 	$(INFRA_DIR)/scripts/status.sh
@@ -54,16 +73,19 @@ setup-env: ## Set up secrets in SSM (prints the source command you need to run)
 	@echo ""
 
 init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init
+	terraform -chdir=$(INFRA_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra)
-	terraform -chdir=$(INFRA_DIR) plan
+	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra)
-	terraform -chdir=$(INFRA_DIR) apply
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
-	terraform -chdir=$(INFRA_DIR) destroy
+	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+
+tf: ## Any terraform command in infra/ (make tf ARGS="state list")
+	terraform -chdir=$(INFRA_DIR) $(ARGS)
 
 preflight: ## Run infra preflight checks
 	$(INFRA_DIR)/scripts/preflight.sh
@@ -134,13 +156,16 @@ init-app: ## Pull infra outputs into app/infra.auto.tfvars.json
 
 plan-app: init-app ## terraform plan (app) — auto-pulls infra outputs first
 	terraform -chdir=$(APP_DIR) init -input=false
-	terraform -chdir=$(APP_DIR) plan
+	terraform -chdir=$(APP_DIR) plan $(ARGS)
 
 apply-app: ## terraform apply (app)
-	terraform -chdir=$(APP_DIR) apply
+	terraform -chdir=$(APP_DIR) apply $(ARGS)
 
 destroy-app: ## terraform destroy (app)
-	terraform -chdir=$(APP_DIR) destroy
+	terraform -chdir=$(APP_DIR) destroy $(ARGS)
+
+tf-app: ## Any terraform command in app/ (make tf-app ARGS="output -json")
+	terraform -chdir=$(APP_DIR) $(ARGS)
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
@@ -148,7 +173,7 @@ deploy-all: apply kubeconfig init-values deploy ## Full deploy: infra apply → 
 
 deploy-all-tf: apply init-values init-app ## Full deploy via Terraform: infra apply → init-values → app init+apply
 	terraform -chdir=$(APP_DIR) init -input=false
-	terraform -chdir=$(APP_DIR) apply
+	terraform -chdir=$(APP_DIR) apply $(ARGS)
 
 quickdeploy: ## Full deploy in one command (must have run: source setup-env.sh + make quickstart)
 	$(INFRA_DIR)/scripts/quickdeploy.sh
