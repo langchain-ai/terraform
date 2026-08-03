@@ -29,6 +29,12 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | **Helm path** (`make deploy`) | Default. Shell script with interactive output, kubeconfig refresh, pre-flight checks, and post-deploy status. Best for first-time deploys and day-2 re-deploys. |
 | **Terraform path** (`make apply-app`) | Declarative. Helm release + K8s secrets + Workload Identity SA managed in Terraform state. Best for GitOps workflows, CI/CD pipelines, and teams that want Helm in state. |
 
+> Which path you take limits the ingress and TLS combinations available, because some of that setup is imperative and only `deploy.sh` performs it. The Terraform path is complete for `nginx` and `agic`, and for `tls_certificate_source` of `none`, `existing`, or `dns01`. Use `make deploy` for:
+>
+> - `istio`: needs its `IngressClass` created
+> - `istio-addon` and `envoy-gateway`: need the `GatewayClass` and `Gateway`, plus, for `envoy-gateway`, the Azure DNS label annotation on the load balancer that Envoy Gateway generates per Gateway. Without them the chart renders `HTTPRoute`s pointing at a Gateway that does not exist, and no public IP is ever created
+> - `letsencrypt` (HTTP-01): needs the `letsencrypt-prod` `ClusterIssuer`
+
 ### Two deployment tiers
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
@@ -95,7 +101,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_authorized_ip_ranges`
 - `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
 
-The `agic` and `istio-addon` ingress modes require `create_cluster = true` — both configure AKS-managed add-ons that only apply to a Terraform-owned cluster. Use `nginx`, `istio`, or `envoy-gateway` instead.
+The `agic` and `istio-addon` ingress modes require `create_cluster = true`: both are arguments on the `azurerm_kubernetes_cluster` resource, which this path does not create. `agic_subnet_id` answers the network half of AGIC, not this one. That leaves `nginx`, `istio`, and `envoy-gateway`, and of those only `nginx` deploys end to end through Terraform Pass 2. See [Two Pass 2 paths](#two-pass-2-paths).
 
 Pass 1 installs cert-manager and KEDA. Helm will not adopt a release it does not own, so on a cluster already running either one the install fails on CRDs that are already registered, partway through an apply that has already built Azure resources. Turn off whichever the cluster provides:
 

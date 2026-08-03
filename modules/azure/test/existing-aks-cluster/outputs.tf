@@ -63,11 +63,21 @@ output "langsmith_tfvars" {
     # aks_service_cidr is deliberately absent. The cluster's ClusterIP range is
     # fixed when Azure creates it, so attaching neither requires nor uses one.
 
-    # ── Rejected on this path, listed so nobody re-adds them ────────────────────
-    # ingress_controller = "agic"          — needs a Terraform-managed VNet
-    # ingress_controller = "istio-addon"    — rejected under create_cluster = false
-    # create_bastion     = true             — needs a Terraform-managed VNet
+    # ── Ingress and bastion ─────────────────────────────────────────────────────
+    # agic and istio-addon are arguments on the azurerm_kubernetes_cluster resource,
+    # which does not exist under create_cluster = false, so a precondition on
+    # data.azurerm_kubernetes_cluster.existing rejects both. agic_subnet_id answers
+    # the VNet half of AGIC, not this one.
+    #
+    # Of the three that remain, nginx is the only one the Terraform Pass 2 module
+    # deploys end to end: istio needs its IngressClass, and envoy-gateway needs a
+    # GatewayClass, a Gateway, and the Azure DNS label annotation on the LB service
+    # it generates per Gateway. Only helm/scripts/deploy.sh creates those.
     ingress_controller = "nginx"
-    create_bastion     = false
+
+    # create_bastion = true does work here, given a bastion_subnet_id naming a
+    # subnet called AzureBastionSubnet that already exists. Off because the test
+    # reaches the cluster through the public API server.
+    create_bastion = false
   EOT
 }
