@@ -45,8 +45,7 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _sizing=$(_read_tfvar sizing_profile)
-  _suffix=$(_name_suffix) || _suffix=""
-  _kv_name="langsmith-kv${_suffix}"
+  _kv_name=$(_derive_kv_name)
 
   if [[ -n "$_subscription" ]]; then
     pass "Required fields: subscription_id set  name_prefix=${_name_prefix:-'(empty)'}  environment=${_environment:-${_name_prefix:-dev}}"

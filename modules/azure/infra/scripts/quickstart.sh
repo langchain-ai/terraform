@@ -360,7 +360,9 @@ _run_section_2() {
   _section "2. Subscription & Naming"
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
   _hint "and becomes the 'environment' tag. Write it without a hyphen — we add the separator."
-  _hint "Example: prod → langsmith-rg-prod, langsmith-aks-prod, langsmith-kv-prod"
+  _hint "Example: prod → ls-rg-prod, ls-aks-prod, ls-kv-prod-<hash>"
+  _hint "Postgres, Redis, Storage and Key Vault names must be unique across all of Azure,"
+  _hint "so those four get a hash of your subscription appended. Keep it under ~12 chars."
   _hint "Changing it later creates entirely new resources — choose something stable."
 
   # Defaults come from the current values, so a resumed or re-entered section
@@ -401,8 +403,8 @@ _run_section_2() {
     # Same rule as the name_prefix validation in variables.tf: hyphens only
     # between alphanumerics, since a trailing or doubled hyphen produces a
     # Key Vault and AKS name Azure rejects at apply. A leading digit is fine,
-    # because the prefix always lands on the end of "langsmith-<resource>" and
-    # the composed name still starts with a letter.
+    # because the prefix always lands on the end of "ls-<resource>" and the
+    # composed name still starts with a letter.
     if [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
       break
     fi
@@ -429,7 +431,7 @@ _run_section_2() {
   COST_CENTER="$_REPLY"
 
   echo ""
-  printf "  Resources: langsmith-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
+  printf "  Resources: ls-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
 }
 
 # -- 3. Cluster & Networking -------------------------------------------------
@@ -1680,6 +1682,10 @@ name_prefix     = "${NAME_PREFIX}"
 location        = "${LOCATION}"
 # environment tag defaults to name_prefix. Uncomment to tag it differently:
 # environment   = "${NAME_PREFIX}"
+
+# Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
+# Key Vault) so they cannot collide with another LangSmith deployment.
+unique_resource_names = true
 TFVARS
 
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"

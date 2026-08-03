@@ -66,7 +66,7 @@ status-quick: ## Quick status check (skip Key Vault and K8s queries)
 setup-env: ## Bootstrap secrets → secrets.auto.tfvars (prompts on first run, reads KV on repeat)
 	cd $(INFRA_DIR) && bash scripts/setup-env.sh
 
-preflight: ## Run Azure pre-flight checks (login, providers, RBAC, terraform.tfvars)
+preflight: ## Run Azure pre-flight checks (login, providers, RBAC, terraform.tfvars, global name availability)
 	cd $(INFRA_DIR) && bash scripts/preflight.sh
 
 test-preflight: ## Run the pre-flight RBAC tests (stubbed az, no Azure account needed)

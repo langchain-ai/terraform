@@ -14,8 +14,9 @@
 #   4. The identity Terraform will use can write role assignments
 #   5. Subscription offer type is not blocked from provisioning Postgres
 #   6. terraform.tfvars exists with required fields populated
-#   7. terraform, kubectl and helm are installed
-#   8. On the attach path, the existing cluster's nodes can hold ClickHouse
+#   7. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#   8. terraform, kubectl and helm are installed
+#   9. On the attach path, the existing cluster's nodes can hold ClickHouse
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -515,7 +516,139 @@ else
   fi
 fi
 
-# ── 7. Other tooling ──────────────────────────────────────────────────────────
+# ── 7. Globally-unique resource names ────────────────────────────────────────
+# Postgres, Redis, Storage, and Key Vault names live in a namespace shared by
+# every Azure tenant, as does the public-IP DNS label. A collision surfaces as a
+# raw Azure 400 partway through the apply, after the resource group, VNet, and
+# AKS already exist — so check up front instead.
+echo ""
+echo "── Global Name Availability ──────────────────────────"
+
+if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
+  warn "Skipping name checks (need terraform.tfvars and an active az login)"
+else
+  # Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
+  # preflight.sh deliberately has no external sourcing.
+  _tfvar() {
+    local raw val
+    raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
+    [ -n "$raw" ] || return 1
+    val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+    [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
+    [ -n "$val" ] || return 1
+    echo "$val"
+  }
+
+  NAME_PREFIX=$(_tfvar name_prefix || _tfvar identifier || echo "")
+  LOCATION=$(_tfvar location || echo "")
+  DNS_LABEL=$(_tfvar dns_label || echo "")
+  UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+
+  # Recompute exactly what main.tf's locals derive, so the check covers the names
+  # Terraform will actually request. name_prefix may carry a leading hyphen or
+  # not; normalize the same way local.name_suffix does. Keep in sync with
+  # local.name_base / local.name_suffix / local.uniq_suffix in infra/main.tf.
+  NAME_SUFFIX=""
+  [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
+
+  if [ "$UNIQUE_NAMES" = "true" ]; then
+    NAME_BASE="ls"
+    if command -v shasum &>/dev/null; then
+      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | shasum -a 256 | cut -c1-6)
+    else
+      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | sha256sum | cut -c1-6)
+    fi
+    UNIQ_SUFFIX="-${HASH}"
+  else
+    NAME_BASE="langsmith"
+    UNIQ_SUFFIX=""
+    warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
+  fi
+
+  PG_NAME=$(_tfvar postgres_name || echo "${NAME_BASE}-postgres${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  REDIS_NAME=$(_tfvar redis_name || echo "${NAME_BASE}-redis${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  KV_NAME=$(_tfvar keyvault_name || echo "${NAME_BASE}-kv${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  BLOB_RAW=$(_tfvar storage_account_name || echo "${NAME_BASE}-blob${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  BLOB_NAME=$(echo "$BLOB_RAW" | tr -d '-') # the blob module strips hyphens
+
+  # Reject anything that isn't a plain Azure resource name before it reaches a
+  # URL or a JSON body — terraform.tfvars is user-authored input.
+  _name_is_safe() {
+    echo "$1" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$'
+  }
+
+  # _check_name <label> <name> <url> <json-body> <availability-field>
+  # A definitive "taken" fails the run. Anything else (auth blip, api-version
+  # drift, unparseable body) only warns — preflight must never block a deploy
+  # because Azure rotated an API version.
+  _check_name() {
+    local label="$1" name="$2" url="$3" body="$4" field="$5" resp avail msg
+    if ! _name_is_safe "$name"; then
+      warn "${label}: '${name}' is not a valid Azure resource name — check skipped"
+      return 0
+    fi
+    if [ -n "$body" ]; then
+      resp=$(az rest --method post --url "$url" --body "$body" -o json 2>/dev/null || true)
+    else
+      resp=$(az rest --method get --url "$url" -o json 2>/dev/null || true)
+    fi
+    if [ -z "$resp" ]; then
+      warn "${label}: '${name}' — could not verify (Azure API error); collision would surface during apply"
+      return 0
+    fi
+    avail=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('${field}',''))" 2>/dev/null || echo "")
+    # Azure's Key Vault message runs several hundred chars of soft-delete prose;
+    # keep the first sentence so one failure doesn't bury the rest of the report.
+    msg=$(echo "$resp" | python3 -c "
+import sys, json
+m = (json.load(sys.stdin).get('message', '') or '').strip()
+print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null || echo "")
+    case "$avail" in
+      True)  pass "${label}: '${name}' is available" ;;
+      False) fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+      *)     warn "${label}: '${name}' — unexpected API response; collision would surface during apply" ;;
+    esac
+  }
+
+  _check_name "Postgres" "$PG_NAME" \
+    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
+    "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable"
+
+  _check_name "Storage account" "$BLOB_NAME" \
+    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
+    "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable"
+
+  _check_name "Key Vault" "$KV_NAME" \
+    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+
+  if [ -n "$DNS_LABEL" ]; then
+    _check_name "Public IP DNS label" "$DNS_LABEL" \
+      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
+      "" "available"
+  else
+    warn "dns_label not set — skipping DNS label check"
+  fi
+
+  # Azure Managed Redis (Microsoft.Cache/redisEnterprise) exposes no working
+  # CheckNameAvailability endpoint: the subscription-scoped one rejects the
+  # redisEnterprise type, and the location-scoped one returns "The requested
+  # location is invalid" for every valid region and api-version. So only the
+  # in-subscription case can be pre-checked — a leftover from a failed apply.
+  # A cross-tenant Redis collision still surfaces at apply time; the hashed name
+  # under unique_resource_names is what makes that unlikely.
+  if _name_is_safe "$REDIS_NAME"; then
+    REDIS_HIT=$(az redisenterprise list --query "length([?name=='${REDIS_NAME}'])" -o tsv 2>/dev/null || echo "0")
+    echo "$REDIS_HIT" | grep -qE '^[0-9]+$' || REDIS_HIT=0
+    if [ "$REDIS_HIT" -gt "0" ]; then
+      fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+    else
+      warn "Redis: '${REDIS_NAME}' not present in this subscription (Azure exposes no global name check for Managed Redis)"
+    fi
+  fi
+fi
+
+# ── 8. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do
@@ -527,7 +660,7 @@ for TOOL in terraform kubectl helm; do
   fi
 done
 
-# ── 8. Existing-cluster node capacity ─────────────────────────────────────────
+# ── 9. Existing-cluster node capacity ─────────────────────────────────────────
 # Attach path only. Terraform validates subnet space and Kubernetes version on an
 # existing cluster, but nothing checks whether a node in it is big enough to hold
 # the largest pod LangSmith schedules. ClickHouse is that pod, it is a single

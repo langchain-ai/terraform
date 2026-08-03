@@ -17,6 +17,12 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 name_prefix = "prod"
 location    = "eastus"
 
+# Give the globally-unique names (Postgres, Redis, Storage, Key Vault) a
+# per-subscription hash so they cannot collide with another LangSmith deployment.
+# On an EXISTING deployment leave this false — flipping it renames every resource,
+# which Terraform executes as destroy-and-recreate.
+unique_resource_names = true
+
 # Optional tags for cost allocation and compliance
 # environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"

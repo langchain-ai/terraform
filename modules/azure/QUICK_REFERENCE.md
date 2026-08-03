@@ -25,7 +25,8 @@ make quickstart
 #    reads silently from Key Vault on every subsequent run
 make setup-env
 
-# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC, quotas)
+# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC,
+#    quotas, and that the globally-unique resource names are still free)
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
