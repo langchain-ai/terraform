@@ -242,6 +242,10 @@ module "keyvault" {
   # all secrets so future CSI-driver integration requires no RBAC changes.
   managed_identity_principal_id = module.blob.k8s_managed_identity_principal_id
 
+  # Principal type of the apply identity for its Secrets Officer grant. Only
+  # needed where the subscription gates roleAssignments/write on principalType.
+  terraform_principal_type = var.terraform_principal_type
+
   # Network ACLs — default Allow keeps first-apply secret creation working.
   # Production deployments override keyvault_default_action = "Deny" and
   # populate keyvault_allowed_ips. The AKS subnet is always allowlisted so
