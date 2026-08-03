@@ -189,6 +189,8 @@ locals {
     local.vnet_address_space,
     [for entry in local.carved_prefixes : entry.prefix],
     [local.aks_service_cidr],
+    # A single address, measured as a /32 so the bounds below cover it too.
+    ["${local.aks_dns_service_ip}/32"],
   ))
   cidr_first = { for cidr in local.measured_cidrs : cidr => sum([
     for i, octet in split(".", cidrhost(cidr, 0)) : tonumber(octet) * pow(256, 3 - i)
@@ -213,6 +215,14 @@ locals {
     local.cidr_first[local.aks_service_cidr] <= local.cidr_last[space] &&
     local.cidr_last[local.aks_service_cidr] >= local.cidr_first[space]
   ])
+
+  # AKS takes the CoreDNS address out of the service range and rejects one that
+  # sits outside it. A /32 starts and ends at the same number, so its first
+  # bound is the address.
+  dns_service_ip_outside_service_cidr = (
+    local.cidr_first["${local.aks_dns_service_ip}/32"] < local.cidr_first[local.aks_service_cidr] ||
+    local.cidr_first["${local.aks_dns_service_ip}/32"] > local.cidr_last[local.aks_service_cidr]
+  )
 
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
@@ -466,6 +476,18 @@ resource "terraform_data" "validate_network" {
     precondition {
       condition     = !var.create_cluster || length(data.azurerm_virtual_network.byo_vnet) == 0 || !local.service_cidr_overlaps_vnet
       error_message = "aks_service_cidr (${local.aks_service_cidr}) overlaps the address space of vnet_id (${join(", ", local.vnet_address_space)}). Kubernetes ClusterIPs are not carved from the VNet, and AKS requires a range nothing on or connected to it uses. This check only sees the VNet's own address space, so keep clear of peered and on-premises ranges too."
+    }
+
+    # Left empty the address is derived from the range and is always inside it.
+    # Set explicitly it is a second place the range is written down, and a change
+    # to aks_service_cidr strands it — the pair is exactly what an operator edits
+    # while working out a range their VNet does not already use. Azure rejects
+    # the mismatch partway through apply, once the resource group and Key Vault
+    # exist. Gated on create_cluster because both values land on the cluster
+    # resource and nowhere else.
+    precondition {
+      condition     = !var.create_cluster || !local.dns_service_ip_outside_service_cidr
+      error_message = "aks_dns_service_ip (${local.aks_dns_service_ip}) is outside aks_service_cidr (${local.aks_service_cidr}). AKS takes the CoreDNS ClusterIP out of the service range. Leave aks_dns_service_ip empty to get ${cidrhost(local.aks_service_cidr, 10)}, the eleventh address, which is the Azure convention."
     }
 
     # The subnet prefix defaults describe the 10.0.0.0/17 VNet Terraform builds,
