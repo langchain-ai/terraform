@@ -1,13 +1,32 @@
-# ── Deployment identifier ─────────────────────────────────────────────────────
+# ── Deployment name ───────────────────────────────────────────────────────────
 
+variable "name_prefix" {
+  type        = string
+  description = "Name of this deployment, appended to every resource name and used as the default 'environment' tag (e.g. \"prod\", \"staging\", \"dev-dz\"). Write it without a hyphen — Terraform inserts the separator, so \"prod\" gives langsmith-rg-prod. Empty means no suffix. Set in terraform.tfvars."
+  default     = ""
+
+  # Hyphens are allowed between alphanumerics only. A trailing or doubled hyphen
+  # would pass here and then fail mid-apply: Key Vault names must end in a
+  # letter or digit and reject consecutive hyphens, and AKS names must start and
+  # end alphanumeric. Cheaper to reject at plan than to read an Azure name error.
+  validation {
+    condition     = var.name_prefix == "" || can(regex("^-?[a-z0-9](-?[a-z0-9])*$", var.name_prefix))
+    error_message = "name_prefix must be empty, or lowercase letters and numbers separated by single hyphens (e.g. \"prod\", \"dev-dz\"). No trailing or doubled hyphen — Azure rejects the resulting Key Vault and AKS names. A leading hyphen is accepted and ignored."
+  }
+}
+
+# Replaced by name_prefix. Kept declared purely so an un-migrated
+# terraform.tfvars fails the plan with an explanation, rather than being
+# ignored as an undeclared variable — which would drop name_prefix to its
+# empty default and rename (destroy and recreate) every resource.
 variable "identifier" {
   type        = string
-  description = "Short suffix appended to every resource name to distinguish environments (e.g. \"-prod\", \"-staging\"). Must start with a hyphen or be empty. Set in terraform.tfvars."
+  description = "Removed — use name_prefix instead."
   default     = ""
 
   validation {
-    condition     = var.identifier == "" || can(regex("^-[a-z0-9][a-z0-9-]*$", var.identifier))
-    error_message = "identifier must be empty or a hyphen followed by lowercase letters/numbers/hyphens (e.g. \"-prod\", \"-dev-dz\")."
+    condition     = var.identifier == ""
+    error_message = "identifier has been replaced by name_prefix — rename the variable and keep the value: identifier = \"-prod\" becomes name_prefix = \"prod\" (the leading hyphen is now optional, so \"-prod\" also works). Resource names are unchanged by this migration."
   }
 }
 
@@ -17,13 +36,8 @@ variable "identifier" {
 
 variable "environment" {
   type        = string
-  description = "Deployment environment. Used as the 'environment' tag on all resources."
-  default     = "dev"
-
-  validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be 'dev', 'staging', or 'prod'."
-  }
+  description = "Value of the 'environment' tag on all resources. Defaults to name_prefix — set this only when the tag needs to differ from the deployment name (e.g. name_prefix = \"prod-eastus\", environment = \"prod\")."
+  default     = ""
 }
 
 variable "owner" {
@@ -42,9 +56,9 @@ variable "cost_center" {
 
 variable "keyvault_name" {
   type        = string
-  description = "Name for the Azure Key Vault. Must be globally unique, 3-24 chars. Defaults to 'langsmith-kv<identifier>' which you may need to customize to avoid naming conflicts."
+  description = "Name for the Azure Key Vault. Must be globally unique, 3-24 chars. Defaults to 'langsmith-kv-<name_prefix>' which you may need to customize to avoid naming conflicts."
   default     = ""
-  # When empty, main.tf computes: "langsmith-kv${local.identifier}"
+  # When empty, main.tf computes: "langsmith-kv${local.name_suffix}"
 }
 
 variable "keyvault_purge_protection" {

@@ -186,13 +186,13 @@ Re-run `make apply` — no more diff.
 terraform -chdir=infra state rm module.keyvault.azurerm_key_vault.langsmith
 
 # 2. Permanently purge the soft-deleted KV (irreversible!)
-az keyvault purge --name langsmith-kv<identifier> --location eastus
+az keyvault purge --name langsmith-kv-<name_prefix> --location eastus
 
 # 3. Re-apply — Terraform creates a fresh KV with purge_protection = false
 make apply
 ```
 
-**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `identifier` suffix for a fresh clean deploy.
+**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `name_prefix` for a fresh clean deploy.
 
 ---
 
@@ -212,15 +212,15 @@ This error only occurs if you are using an older copy of `setup-env.sh` or manua
 ```bash
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.deployments_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-deployments-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-deployments-encryption-key --query id -o tsv)"
 
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.agent_builder_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
 
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.insights_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-insights-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-insights-encryption-key --query id -o tsv)"
 
 terraform apply
 ```
@@ -790,16 +790,16 @@ All Azure resources (AKS, VNet, Key Vault, Storage, etc.) are still running but 
 **Recovery when tfstate is gone:**
 ```bash
 # Delete the entire resource group directly — removes everything in one shot
-az group delete --name langsmith-rg<identifier> --yes --no-wait
+az group delete --name langsmith-rg-<name_prefix> --yes --no-wait
 
 # Watch until deletion completes
-az group show --name langsmith-rg<identifier> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
+az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
 # Once you see "ResourceGroupNotFound", all resources are deleted
 ```
 
-> **Key Vault soft-delete after forced deletion:** If you reuse the same `identifier`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
+> **Key Vault soft-delete after forced deletion:** If you reuse the same `name_prefix`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
 > ```bash
-> az keyvault purge --name langsmith-kv<identifier> --location <region>
+> az keyvault purge --name langsmith-kv-<name_prefix> --location <region>
 > ```
 
 ---

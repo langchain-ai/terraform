@@ -21,8 +21,7 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 #------------------------------------------------------------------------------
 # Naming
 #------------------------------------------------------------------------------
-identifier  = "-dev"
-environment = "dev"
+name_prefix = "dev"
 location    = "eastus"
 
 #------------------------------------------------------------------------------
@@ -40,9 +39,9 @@ postgres_database_name       = "langsmith"
 postgres_deletion_protection = false
 
 #------------------------------------------------------------------------------
-# Redis
+# Redis (Azure Managed Redis / AMR)
 #------------------------------------------------------------------------------
-redis_capacity = 1   # P1 = 6 GB RAM
+amr_sku = "Balanced_B0"   # smallest. Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
 
 #------------------------------------------------------------------------------
 # AKS — Standard_D8s_v3 (8 vCPU, 32 GiB), 3 nodes minimum

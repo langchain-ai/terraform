@@ -19,26 +19,29 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 locals {
-  # Identifier comes from var.identifier (set in terraform.tfvars).
-  # Examples: "-prod", "-staging", "" (no suffix for single-environment setups).
-  identifier = var.identifier
+  # name_prefix may be written with or without the separator hyphen — normalize
+  # once, then derive both the resource-name suffix and the environment tag from
+  # it. So "prod" and "-prod" both give "langsmith-<resource>-prod", and an
+  # empty name_prefix means no suffix at all, for single-deployment subscriptions.
+  deployment_name = trimprefix(var.name_prefix, "-")
+  name_suffix     = local.deployment_name == "" ? "" : "-${local.deployment_name}"
 
-  # Derived resource names — all prefixed with "langsmith-<identifier>"
-  resource_group_name = "langsmith-rg${local.identifier}"
-  vnet_name           = "langsmith-vnet${local.identifier}"
+  # Derived resource names — all "langsmith-<resource><name_suffix>"
+  resource_group_name = "langsmith-rg${local.name_suffix}"
+  vnet_name           = "langsmith-vnet${local.name_suffix}"
 
   # Cluster name: derived for new clusters, or the customer's existing cluster
   # name when attaching to one (create_cluster = false). No fallback in the
   # attach case — an unset existing_cluster_name fails on the aks module's
   # precondition instead of looking up a cluster that was never created.
-  aks_name      = var.create_cluster ? "langsmith-aks${local.identifier}" : var.existing_cluster_name
-  postgres_name = "langsmith-postgres${local.identifier}"
-  redis_name    = "langsmith-redis${local.identifier}"
-  blob_name     = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
+  aks_name      = var.create_cluster ? "langsmith-aks${local.name_suffix}" : var.existing_cluster_name
+  postgres_name = "langsmith-postgres${local.name_suffix}"
+  redis_name    = "langsmith-redis${local.name_suffix}"
+  blob_name     = "langsmith-blob${local.name_suffix}" # blob module strips hyphens → "langsmithblobdz"
 
   # Key Vault name: max 24 chars, globally unique.
-  # Uses the user-supplied keyvault_name or derives from identifier.
-  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "langsmith-kv${local.identifier}"
+  # Uses the user-supplied keyvault_name or derives from name_prefix.
+  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "langsmith-kv${local.name_suffix}"
 
   # Subnet ID resolution: use newly-created VNet subnets OR bring-your-own
   # existing ones (set create_vnet = false and supply the IDs via variables).
@@ -52,9 +55,11 @@ locals {
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
   # Customize via the environment/owner/cost_center variables.
+  # environment falls back to name_prefix so the deployment name and the tag
+  # stay in sync without the operator setting both.
   common_tags = merge(
     {
-      environment = var.environment
+      environment = coalesce(var.environment, local.deployment_name, "dev")
       project     = "langsmith"
       managed_by  = "terraform"
     },
@@ -355,7 +360,7 @@ module "k8s_bootstrap" {
 module "waf" {
   count               = var.create_waf ? 1 : 0
   source              = "./modules/waf"
-  name                = "langsmith-waf${local.identifier}"
+  name                = "langsmith-waf${local.name_suffix}"
   resource_group_name = azurerm_resource_group.resource_group.name
   location            = var.location
   waf_mode            = var.waf_mode
@@ -369,7 +374,7 @@ module "waf" {
 module "diagnostics" {
   count               = var.create_diagnostics ? 1 : 0
   source              = "./modules/diagnostics"
-  name                = "langsmith-logs${local.identifier}"
+  name                = "langsmith-logs${local.name_suffix}"
   resource_group_name = azurerm_resource_group.resource_group.name
   location            = var.location
   retention_days      = var.log_retention_days
@@ -393,7 +398,7 @@ module "diagnostics" {
 module "bastion" {
   count                = var.create_bastion ? 1 : 0
   source               = "./modules/bastion"
-  name                 = "langsmith-bastion${local.identifier}"
+  name                 = "langsmith-bastion${local.name_suffix}"
   resource_group_name  = azurerm_resource_group.resource_group.name
   location             = var.location
   subnet_id            = module.vnet.subnet_bastion_id

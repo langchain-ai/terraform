@@ -138,7 +138,7 @@ Azure Managed Services
 ### Light deploy (`postgres_source = "in-cluster"`, `redis_source = "in-cluster"`)
 
 ```
-langsmith-vnet<identifier>
+langsmith-vnet-<name_prefix>
 └── subnet-0    (AKS nodes only)
     ↳ No Postgres/Redis subnets created — chart-managed pods handle both
 ```
@@ -146,7 +146,7 @@ langsmith-vnet<identifier>
 ### Production (`postgres_source = "external"`, `redis_source = "external"`)
 
 ```
-langsmith-vnet<identifier>
+langsmith-vnet-<name_prefix>
 ├── subnet-0              (AKS nodes)
 ├── subnet-postgres       (Azure DB for PostgreSQL Flexible Server)
 └── subnet-redis          (Azure Cache for Redis Premium)

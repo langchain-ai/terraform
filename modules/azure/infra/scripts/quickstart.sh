@@ -137,16 +137,16 @@ _run_section_1() {
 
 # -- 2. Subscription & Naming ------------------------------------------------
 SUBSCRIPTION_ID=""
-IDENTIFIER="-dev"
-ENVIRONMENT="dev"
+NAME_PREFIX="dev"
 LOCATION="eastus"
 OWNER="platform-team"
 COST_CENTER=""
 
 _run_section_2() {
   _section "2. Subscription & Naming"
-  _hint "The identifier is appended to every Azure resource name (RG, AKS, KV, blob...)."
-  _hint "Example: -prod → langsmith-rg-prod, langsmith-aks-prod, langsmith-kv-prod"
+  _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
+  _hint "and becomes the 'environment' tag. Write it without a hyphen — we add the separator."
+  _hint "Example: prod → langsmith-rg-prod, langsmith-aks-prod, langsmith-kv-prod"
   _hint "Changing it later creates entirely new resources — choose something stable."
 
   AUTO_SUB=""
@@ -167,19 +167,27 @@ _run_section_2() {
     _red "  ERROR: must be a GUID, not a subscription name or a row number from 'az account list -o table'."
   done
 
+  local name_default="dev"
+  [[ "$PROFILE" == "prod" ]] && name_default="prod"
   while true; do
-    _ask "Identifier suffix (lowercase, starts with hyphen, e.g. -prod, -staging, -myco)" "-dev"
-    IDENTIFIER="$_REPLY"
-    if [[ "$IDENTIFIER" =~ ^-[a-z][a-z0-9-]*$ ]]; then
+    _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
+    NAME_PREFIX="${_REPLY#-}" # tolerate a pasted leading hyphen from an older tfvars
+    # "none" is the only route to the empty name_prefix variables.tf allows,
+    # since _ask substitutes the default on a blank reply.
+    if [[ "$NAME_PREFIX" == "none" ]]; then
+      NAME_PREFIX=""
       break
     fi
-    _red "  ERROR: must start with a hyphen followed by lowercase alphanumeric chars (e.g. -prod, -myco)."
+    # Same rule as the name_prefix validation in variables.tf: hyphens only
+    # between alphanumerics, since a trailing or doubled hyphen produces a
+    # Key Vault and AKS name Azure rejects at apply. A leading digit is fine,
+    # because the prefix always lands on the end of "langsmith-<resource>" and
+    # the composed name still starts with a letter.
+    if [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
+      break
+    fi
+    _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
   done
-
-  local env_default="dev"
-  [[ "$PROFILE" == "prod" ]] && env_default="prod"
-  _ask "Environment label (for tagging)" "$env_default"
-  ENVIRONMENT="$_REPLY"
 
   _ask "Azure region" "eastus"
   LOCATION="$_REPLY"
@@ -191,7 +199,7 @@ _run_section_2() {
   COST_CENTER="$_REPLY"
 
   echo ""
-  printf "  Resources: langsmith-{resource}$(_cyan "$IDENTIFIER")  in  $(_cyan "$LOCATION")\n"
+  printf "  Resources: langsmith-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
 }
 
 # -- 3. Networking -----------------------------------------------------------
@@ -339,6 +347,18 @@ LANGSMITH_DOMAIN=""
 LE_EMAIL=""
 CREATE_DNS_ZONE="false"
 
+# Suggests langsmith-<name_prefix> but still asks, because the DNS label lives in
+# a namespace shared with every other Azure tenant in the region: the FQDN
+# <label>.<region>.cloudapp.azure.com must be unique region-wide, so a derived
+# name can be taken by someone else. Same class of collision as the Key Vault
+# name. Asking here means the operator picks a free one instead of hitting
+# DnsRecordCreateConflict at apply.
+_ask_dns_label() {
+  _ask "DNS label — must be unique across the whole $LOCATION region (e.g. langsmith-prod)" \
+    "langsmith${NAME_PREFIX:+-$NAME_PREFIX}"
+  DNS_LABEL="$_REPLY"
+}
+
 _run_section_6() {
   _section "6. DNS + TLS"
   _hint "Determines how LangSmith is accessed and whether traffic is encrypted."
@@ -429,8 +449,7 @@ _run_section_6() {
       "Custom domain — your own domain (required for DNS-01)"
 
     if [[ "$_CHOICE" == "1" ]]; then
-      _ask "DNS label (e.g. langsmith-prod)" "langsmith${IDENTIFIER}"
-      DNS_LABEL="$_REPLY"
+      _ask_dns_label
     else
       _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
       _ask "Custom domain" ""
@@ -445,8 +464,7 @@ _run_section_6() {
     echo ""
     _hint "Azure assigns a free DNS label to your load balancer public IP."
     _hint "Format: <label>.<region>.cloudapp.azure.com"
-    _ask "DNS label (e.g. langsmith-prod)" "langsmith${IDENTIFIER}"
-    DNS_LABEL="$_REPLY"
+    _ask_dns_label
   fi
 
   if [[ "$TLS_SOURCE" == "dns01" ]]; then
@@ -466,7 +484,7 @@ CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
-REDIS_CAPACITY=1
+AMR_SKU="Balanced_B0"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -488,7 +506,7 @@ _run_section_7() {
   PG_ADMIN_USER="langsmith"
   PG_DB_NAME="langsmith"
   PG_DELETION_PROTECTION="false"
-  REDIS_CAPACITY=1
+  AMR_SKU="Balanced_B0"
 
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
@@ -498,7 +516,7 @@ _run_section_7() {
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Cache for Redis Premium P1 — 6 GB)?" "y"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "y"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
@@ -516,6 +534,16 @@ _run_section_7() {
   if [[ "$PG_SOURCE" == "external" ]]; then
     PG_DELETION_PROTECTION="false"
     [[ "$PROFILE" == "prod" ]] && PG_DELETION_PROTECTION="true"
+  fi
+
+  # Without this prompt every quickstart deployment silently took the Balanced_B0
+  # module default, which some regions cannot allocate.
+  if [[ "$REDIS_SOURCE" == "external" ]]; then
+    echo ""
+    _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
+    _hint "if the region reports AllocationFailed."
+    _ask "Azure Managed Redis SKU" "Balanced_B0"
+    AMR_SKU="$_REPLY"
   fi
 
   echo ""
@@ -541,10 +569,10 @@ _run_section_8() {
   _hint ""
   _hint "Purge protection = true  → KV is retained for 90 days after destroy (soft-delete)."
   _hint "                           Prevents data loss from accidental deletion. Production must."
-  _hint "                           Downside: cannot reuse the same identifier for 90 days."
+  _hint "                           Downside: cannot reuse the same deployment name for 90 days."
   _hint ""
   _hint "Purge protection = false → KV is immediately purged on destroy."
-  _hint "                           Good for dev/POC where you want to reuse the identifier."
+  _hint "                           Good for dev/POC where you want to reuse the deployment name."
 
   KV_PURGE_PROTECTION="false"
   if [[ "$PROFILE" == "prod" ]]; then
@@ -553,7 +581,7 @@ _run_section_8() {
       KV_PURGE_PROTECTION="true"
     fi
   else
-    _hint "Dev profile: keyvault_purge_protection = false (identifier reusable immediately after destroy)."
+    _hint "Dev profile: keyvault_purge_protection = false (name reusable immediately after destroy)."
   fi
 }
 
@@ -651,10 +679,9 @@ while true; do
   printf "${BOLD}══════════════════════════════════════════════════════${RESET}\n"
   echo ""
   printf "  %-24s %s\n" "1. Profile:"         "$PROFILE"
-  printf "  %-24s %s\n" "2. Identifier:"      "$IDENTIFIER"
+  printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
-  printf "  %-24s %s\n" "   Environment:"     "$ENVIRONMENT"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
   printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
@@ -719,9 +746,10 @@ cat > "$OUTPUT" << TFVARS
 # Subscription & Identity
 #------------------------------------------------------------------------------
 subscription_id = "${SUBSCRIPTION_ID}"
-identifier      = "${IDENTIFIER}"
-environment     = "${ENVIRONMENT}"
+name_prefix     = "${NAME_PREFIX}"
 location        = "${LOCATION}"
+# environment tag defaults to name_prefix. Uncomment to tag it differently:
+# environment   = "${NAME_PREFIX}"
 TFVARS
 
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
@@ -802,8 +830,8 @@ fi
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
-# Azure Cache for Redis (P1 = 6 GB RAM — sufficient for most deployments)
-redis_capacity = ${REDIS_CAPACITY}
+# Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
+amr_sku = "${AMR_SKU}"   # Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
 TFVARS
 fi
 
