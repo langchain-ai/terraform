@@ -7,19 +7,39 @@
 # Full deploy (helm):      make deploy-all
 # Manage secrets:          make keyvault
 # Where am I?              make status
+# Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
 .PHONY: help quickstart test-quickstart setup-env preflight keyvault status status-quick \
-        init plan apply destroy \
+        init plan apply destroy destroy-force tf \
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
-        clean
+        clean clean-force
 
 INFRA_DIR := infra
 HELM_DIR  := helm
 
 help: ## Show available targets
+	@echo ""
+	@echo "  \033[1mUsage:\033[0m make <target> [ARGS=\"<extra terraform flags>\"]"
+	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  \033[1mARGS is appended to the terraform command:\033[0m"
+	@echo "    make init    ARGS=\"-upgrade\"                 # re-resolve provider versions"
+	@echo "    make plan    ARGS=\"-target=module.aks\"       # plan one module"
+	@echo "    make plan    ARGS=\"-out=tfplan\"              # save a plan file"
+	@echo "    make destroy ARGS=\"-target=module.redis\"     # destroy one module"
+	@echo ""
+	@echo "    Note: make apply runs three targeted stages. ARGS is passed to each"
+	@echo "    stage, so it suits flags like -var / -parallelism / -refresh=false."
+	@echo "    To apply a saved plan or one module, use: make tf ARGS=\"apply tfplan\""
+	@echo ""
+	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
+	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
+	@echo "    make tf      ARGS=\"output keyvault_name\""
+	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
+	@echo ""
 
 quickstart: ## Interactive setup wizard — generates terraform.tfvars
 	$(INFRA_DIR)/scripts/quickstart.sh
@@ -48,16 +68,16 @@ test-preflight: ## Run the pre-flight RBAC tests (stubbed az, no Azure account n
 	python3 $(INFRA_DIR)/scripts/test-preflight-rbac.py
 
 init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init
+	terraform -chdir=$(INFRA_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
-	terraform -chdir=$(INFRA_DIR) plan
+	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra) — two-stage: Azure infra first, then k8s bootstrap + ClusterIssuer
+apply: ## terraform apply (infra) — 3 stages: Azure infra → k8s bootstrap → ClusterIssuer (ARGS passed to each)
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve \
+	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
@@ -66,7 +86,7 @@ apply: ## terraform apply (infra) — two-stage: Azure infra first, then k8s boo
 		-target=module.blob \
 		-target=module.keyvault
 	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve \
+	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
@@ -78,13 +98,16 @@ apply: ## terraform apply (infra) — two-stage: Azure infra first, then k8s boo
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
 	@echo "→ Stage 3: ClusterIssuer + remaining resources (cert-manager CRDs now ready)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve
+	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation
-	terraform -chdir=$(INFRA_DIR) destroy
+	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
 
 destroy-force: ## terraform destroy without confirmation prompt (use after make uninstall)
-	terraform -chdir=$(INFRA_DIR) destroy -auto-approve
+	terraform -chdir=$(INFRA_DIR) destroy -auto-approve $(ARGS)
+
+tf: ## Any terraform command in infra/ (make tf ARGS="state list")
+	terraform -chdir=$(INFRA_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)
 	$(INFRA_DIR)/scripts/clean.sh
