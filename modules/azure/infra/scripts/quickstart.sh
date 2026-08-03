@@ -403,8 +403,18 @@ _run_section_2() {
     _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
   done
 
-  _ask "Azure region" "$LOCATION"
-  LOCATION="$_REPLY"
+  # Section 3 reads the region off an attached cluster, and it is not a choice
+  # once it has: LangSmith's private endpoints have to sit in the region of the
+  # subnet holding them. Re-entering this section from the review menu would
+  # otherwise be a way to set a region that fails at apply. Empty on a first
+  # pass, since section 3 has not run yet.
+  if [[ -n "$_AKS_LOCATION" ]]; then
+    LOCATION="$_AKS_LOCATION"
+    _hint "Azure region: ${LOCATION} — fixed by ${EXISTING_CLUSTER_NAME}, the cluster you are attaching to."
+  else
+    _ask "Azure region" "$LOCATION"
+    LOCATION="$_REPLY"
+  fi
 
   _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
   OWNER="$_REPLY"
@@ -433,9 +443,6 @@ POSTGRES_SUBNET_CIDR_LINE=""
 REDIS_SUBNET_CIDR_LINE=""
 AKS_SERVICE_CIDR=""
 
-# Ask for one subnet in bring-your-own-VNet mode. An empty answer means
-# "Terraform creates it", which then needs a CIDR to carve out of the VNet.
-# Sets _SUBNET_ID and _SUBNET_CIDR_LINE.
 # Azure's documented name shapes for the bring-your-own cluster inputs. Both
 # values are interpolated into double-quoted HCL by the writer, so a value
 # carrying a quote, a newline, or an HCL ${...} sequence could close the string
@@ -458,11 +465,23 @@ _valid_subnet_id() {
   [[ "$lc" =~ ^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$ ]]
 }
 
+# An IPv4 CIDR, the only form the three *_subnet_address_prefix variables are
+# ever written with. Shape only: an out-of-range octet still fails at plan, where
+# Terraform's own message is clear. Checked here for the reason the IDs are —
+# it lands in double-quoted HCL, and none of the three variables carries a
+# validation block, so an empty or typo'd answer otherwise surfaces as a cidr
+# function error several steps later.
+_valid_cidr() {
+  [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]
+}
+
 # required = "required" makes the ID mandatory and drops the carve-a-CIDR branch.
 # Used for the AKS subnet when attaching to an existing cluster, where Terraform
 # cannot carve the subnet: it has to be one the cluster already runs nodes in.
+# prefill offers an ID read off that cluster as the answer, so the operator
+# confirms it instead of pasting it.
 _ask_subnet() {
-  local label="$1" cidr_var="$2" default_cidr="$3" note="$4" required="${5:-}"
+  local label="$1" cidr_var="$2" default_cidr="$3" note="$4" required="${5:-}" prefill="${6:-}"
   _SUBNET_ID=""
   _SUBNET_CIDR_LINE=""
   echo ""
@@ -470,7 +489,7 @@ _ask_subnet() {
   local prompt="${label} subnet resource ID (Enter = let Terraform create it)"
   [[ "$required" == "required" ]] && prompt="${label} subnet resource ID"
   while true; do
-    _ask "$prompt" ""
+    _ask "$prompt" "$prefill"
     _SUBNET_ID="$_REPLY"
     if [[ -z "$_SUBNET_ID" ]]; then
       [[ "$required" != "required" ]] && break
@@ -489,10 +508,6 @@ _ask_subnet() {
   fi
 }
 
-# A subnet that has to already exist. AGIC and the bastion have no carve path
-# inside a VNet Terraform does not own, so an ID is required rather than optional.
-# Lowercased before matching for the same reason as vnet_re below, and the
-# optional third argument enforces a name Azure demands.
 _ask_required_subnet() {
   local label="$1" note="$2" want_name="$3" id_lc want_lc
   local subnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$'
@@ -528,6 +543,74 @@ _subnet_review() {
   fi
 }
 
+# Read off the attached cluster in section 3, then used by sections 2 and 3.
+# Never checkpointed: they describe the cluster, not a decision the operator
+# made, so a resumed run reads them again rather than trusting a stale copy.
+_AKS_LOCATION=""
+_AKS_SUBNET_IDS=()
+_AKS_PREFILL_SUBNET=""
+
+# Reads the cluster the operator just named and keeps what Azure already knows:
+# the region it runs in and the subnet each of its node pools sits in. Leaves
+# both empty when az or python3 is missing, the login has expired, or the
+# cluster is not there, so every caller falls back to asking.
+#
+# Every value Azure hands back goes through the validator a typed value gets.
+# These end up interpolated into double-quoted HCL in terraform.tfvars, and a
+# remote API is a remote input channel — the fact that it is not the keyboard
+# earns it nothing. A value that fails is dropped rather than repaired, which
+# leaves the operator at the prompt they would have seen anyway.
+_lookup_existing_cluster() {
+  _AKS_LOCATION=""
+  _AKS_SUBNET_IDS=()
+  local json parsed line first=1
+
+  command -v az &>/dev/null || return 0
+  json=$(az aks show --name "$EXISTING_CLUSTER_NAME" \
+                     --resource-group "$EXISTING_CLUSTER_RG" \
+                     --output json 2>/dev/null) || return 0
+  [[ -n "$json" ]] || return 0
+
+  # Region on the first line, then one subnet ID per pool, deduplicated. Pools
+  # on an AKS-managed VNet carry no vnetSubnetId at all and contribute nothing.
+  parsed=$(printf '%s' "$json" | python3 -c '
+import json, sys
+
+try:
+    c = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if not isinstance(c, dict):
+    sys.exit(0)
+
+subnets = []
+for p in c.get("agentPoolProfiles") or []:
+    s = p.get("vnetSubnetId")
+    if s and s not in subnets:
+        subnets.append(s)
+print("\n".join([c.get("location") or ""] + subnets))
+' 2>/dev/null) || return 0
+
+  while IFS= read -r line; do
+    if [[ "$first" == 1 ]]; then
+      first=0
+      # Azure region names are lowercase alphanumeric, "eastus2".
+      [[ "$line" =~ ^[a-z0-9]+$ ]] && _AKS_LOCATION="$line"
+      continue
+    fi
+    # An ID offered as a prompt default has to be one _ask would accept. The
+    # subnet-ID shape allows these four characters inside a segment and _ask
+    # refuses them, which would leave Enter re-erroring on its own default.
+    [[ "$line" =~ [\`\$\!\\] ]] && continue
+    # An `if` rather than `&&`: a failing test as the last command in the loop
+    # body would trip errexit and take the wizard down over a subnet ID it is
+    # supposed to be discarding.
+    if _valid_subnet_id "$line"; then
+      _AKS_SUBNET_IDS+=("$line")
+    fi
+  done <<<"$parsed"
+}
+
 _run_section_3() {
   _section "3. Cluster & Networking"
 
@@ -545,6 +628,11 @@ _run_section_3() {
     EXISTING_CLUSTER_NAME=""
     EXISTING_CLUSTER_RG=""
     EXISTING_CLUSTER_POOLS_MANAGED="false"
+    # Drop anything read off a cluster on an earlier pass. Left set, section 2
+    # would still call the region fixed by a cluster no longer being attached.
+    _AKS_LOCATION=""
+    _AKS_SUBNET_IDS=()
+    _AKS_PREFILL_SUBNET=""
   else
     CREATE_CLUSTER="false"
     echo ""
@@ -571,6 +659,51 @@ _run_section_3() {
       echo ""
     done
 
+    # Azure already holds the answers to the next few questions: the region the
+    # cluster runs in, its VNet, and the subnet its nodes sit in. Read them
+    # rather than ask for a paste. A subnet ID naming the wrong network still
+    # matches the regex, and this one ID drives the Blob and Key Vault firewall
+    # allowlists, so that typo opens both to a network LangSmith never runs in.
+    _AKS_PREFILL_SUBNET=""
+    _lookup_existing_cluster
+
+    if [[ -z "$_AKS_LOCATION" && ${#_AKS_SUBNET_IDS[@]} -eq 0 ]]; then
+      echo ""
+      _hint "Could not read ${EXISTING_CLUSTER_NAME} from Azure. Check 'az login' and the"
+      _hint "two names above — the network questions below then have to be answered by hand."
+    fi
+
+    # The cluster's region wins over the answer in section 2. Every private
+    # endpoint LangSmith creates has to sit in the region of the subnet holding
+    # it, so a mismatch here is an apply failure several minutes in.
+    if [[ -n "$_AKS_LOCATION" && "$_AKS_LOCATION" != "$LOCATION" ]]; then
+      echo ""
+      _hint "Region changed from ${LOCATION} to ${_AKS_LOCATION}, where ${EXISTING_CLUSTER_NAME} runs."
+      _hint "LangSmith's private endpoints have to sit in the same region as the subnet"
+      _hint "holding them, so ${LOCATION} would have failed at apply."
+      LOCATION="$_AKS_LOCATION"
+    fi
+
+    if [[ ${#_AKS_SUBNET_IDS[@]} -eq 1 ]]; then
+      _AKS_PREFILL_SUBNET="${_AKS_SUBNET_IDS[0]}"
+    elif [[ ${#_AKS_SUBNET_IDS[@]} -gt 1 ]]; then
+      # Pools spread across subnets is normal on a cluster a platform team runs.
+      # One ID goes into tfvars and it sets the storage and Key Vault
+      # allowlists, so it has to be the subnet LangSmith's own pods land in.
+      echo ""
+      _hint "This cluster's node pools span several subnets. Pick the one LangSmith's pods"
+      _hint "will run in — that choice sets the Blob and Key Vault firewall allowlists."
+      # Pre-selects the subnet already in tfvars when this section is re-entered.
+      # Empty when there is none, which _ask_choice reads as no default.
+      _ask_choice --default "$(_index_of "$AKS_SUBNET_ID" "${_AKS_SUBNET_IDS[@]}")" \
+        "Which subnet do LangSmith's pods run in?" "${_AKS_SUBNET_IDS[@]}"
+      _AKS_PREFILL_SUBNET="${_AKS_SUBNET_IDS[$((_CHOICE - 1))]}"
+    fi
+
+    # The VNet is the subnet ID minus its /subnets/<name> tail. Deriving it beats
+    # a second lookup: it cannot end up naming a VNet the chosen subnet is not in.
+    [[ -n "$_AKS_PREFILL_SUBNET" ]] && VNET_ID="${_AKS_PREFILL_SUBNET%/subnets/*}"
+
     # 'istio-addon' is configured through arguments on the azurerm_kubernetes_cluster
     # resource, which does not exist in state on this path, so it would silently
     # never apply. Reset it here as section 5 does for AGIC.
@@ -593,6 +726,8 @@ _run_section_3() {
     echo ""
     _hint "Attaching to an existing cluster means using its VNet, so the questions"
     _hint "below cover the network your cluster already runs in."
+    [[ -n "$_AKS_PREFILL_SUBNET" ]] && \
+      _hint "The VNet and node subnet were read off ${EXISTING_CLUSTER_NAME} — press Enter to accept."
   elif _ask_yn "Create a new VNet? (recommended)" "$(_yn_default "$CREATE_VNET")"; then
     CREATE_VNET="true"
     # Clear any BYO IDs and carved CIDRs from a previous pass — meaningless here.
@@ -607,9 +742,9 @@ _run_section_3() {
 
   echo ""
   _hint "Bring Your Own VNet — LangSmith deploys into a VNet you already own."
-  _hint "Each subnet below is optional. Paste a subnet resource ID to reuse an"
-  _hint "existing subnet, or press Enter and Terraform creates it inside your VNet"
-  _hint "with the settings that service needs."
+  _hint "For each subnet below, choose whether to reuse one that already exists or"
+  _hint "have Terraform create it inside your VNet with the settings that service"
+  _hint "needs. Reusing takes the subnet's resource ID; creating takes a CIDR."
   _hint "The CIDRs offered as defaults below describe the VNet Terraform builds, not"
   _hint "yours. Replace each with a free range inside your own address space."
   echo ""
@@ -637,7 +772,7 @@ _run_section_3() {
   if [[ "$CREATE_CLUSTER" == "false" ]]; then
     _ask_subnet "AKS node" "aks_subnet_address_prefix" "" \
       "The subnet your cluster's nodes already run in. It needs the Microsoft.Storage and Microsoft.KeyVault service endpoints, and room for (max_count + 1) x (max_pods + 1) addresses." \
-      required
+      required "$_AKS_PREFILL_SUBNET"
   else
     _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
       "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
