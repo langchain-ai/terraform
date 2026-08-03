@@ -536,7 +536,7 @@ resource "azurerm_role_assignment" "agic_rg_reader" {
   count                = var.ingress_controller == "agic" ? 1 : 0
   scope                = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
   role_definition_name = "Reader"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
   principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
@@ -545,7 +545,7 @@ resource "azurerm_role_assignment" "agic_agw_contributor" {
   count                = var.ingress_controller == "agic" ? 1 : 0
   scope                = azurerm_application_gateway.agw[0].id
   role_definition_name = "Contributor"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
   principal_type       = "ServicePrincipal"
   depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
@@ -564,7 +564,7 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
   count                = var.ingress_controller == "agic" && var.agic_network_contributor_scope != "none" ? 1 : 0
   scope                = var.agic_network_contributor_scope == "subnet" ? var.agic_subnet_id : local.agic_vnet_id
   role_definition_name = "Network Contributor"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
   principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
