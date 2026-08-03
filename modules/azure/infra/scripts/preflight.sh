@@ -12,8 +12,10 @@
 #   2. Correct subscription is selected
 #   3. Required resource providers are registered
 #   4. The identity Terraform will use can write role assignments
-#   5. terraform.tfvars exists with required fields populated
-#   6. On the attach path, the existing cluster's nodes can hold ClickHouse
+#   5. Subscription offer type is not blocked from provisioning Postgres
+#   6. terraform.tfvars exists with required fields populated
+#   7. terraform, kubectl and helm are installed
+#   8. On the attach path, the existing cluster's nodes can hold ClickHouse
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -111,13 +113,20 @@ fi
 # directory read, which plenty of deployers are not granted. Without an object
 # ID there is no assignee to query, so the RBAC block below degrades to a
 # warning rather than reporting a verdict it cannot support.
+# PRINCIPAL_IS_CALLER records whether the resolved principal is the identity
+# running this script. Only that identity's PIM eligibilities are readable, so
+# without the flag an eligible-but-inactive role held by the operator would be
+# reported as if it belonged to the service principal Terraform will use.
 PRINCIPAL_ID=""
+PRINCIPAL_IS_CALLER=1
 if [ -n "${ARM_CLIENT_ID:-}" ]; then
   PRINCIPAL_KIND="service principal from ARM_CLIENT_ID"
   PRINCIPAL_ID=$(az ad sp show --id "$ARM_CLIENT_ID" --query id -o tsv 2>/dev/null || echo "")
+  PRINCIPAL_IS_CALLER=0
   warn "ARM_CLIENT_ID is set — Terraform authenticates as that service principal, not as your az login"
 elif [ "${ARM_USE_MSI:-}" = "true" ] || [ "${ARM_USE_OIDC:-}" = "true" ]; then
   PRINCIPAL_KIND="managed identity or OIDC federation"
+  PRINCIPAL_IS_CALLER=0
   warn "ARM_USE_MSI or ARM_USE_OIDC is set — Terraform authenticates as a workload identity this script cannot resolve"
 elif [ "$(az account show --query user.type -o tsv 2>/dev/null || echo "")" = "servicePrincipal" ]; then
   PRINCIPAL_KIND="service principal from az login"
@@ -138,13 +147,19 @@ fi
 # Eight resources across the Azure modules create role assignments (storage,
 # keyvault ×2, dns, bastion, k8s-cluster ×3), so
 # Microsoft.Authorization/roleAssignments/write decides whether apply finishes.
-# Looking for the role names "Owner" and "User Access Administrator" does not
-# decide it, in either direction: a custom role can carry the action, an ABAC
+# Reconstructing that answer from role definitions cannot get it right: an ABAC
 # condition can restrict which roles a delegate may assign, a deny assignment
-# overrides every grant including Owner, PIM-eligible roles grant nothing until
-# activated, and a grant inherited from a management group or held through a
-# group carries the same weight as a direct one. So read the role definitions
-# behind the assignments and the deny assignments that override them.
+# overrides every grant including Owner, a PIM-eligible role grants nothing until
+# activated, and a custom role can carry the action under any name. So ask ARM
+# for the decision it will actually make, per action and per scope.
+#
+# checkAccess is the call the portal makes to decide which buttons to grey out.
+# It is also undocumented: nothing in azure-rest-api-specs, no az command, and
+# 2018-09-01-preview is the only api-version ever registered. What it does that
+# nothing documented can: evaluate a named principal (not just the caller) at a
+# scope that does not exist yet, with deny assignments and conditions already
+# applied. A missing or reshaped response is therefore treated as unavailable and
+# degrades to a role-name check, never as a verdict.
 echo ""
 echo "── RBAC Roles ────────────────────────────────────────"
 
@@ -154,157 +169,126 @@ trap 'rm -rf "$RBAC_TMP"' EXIT
 if [ -z "$PRINCIPAL_ID" ] || [ -z "$SUB_ID_CHECK" ]; then
   warn "Skipping RBAC check — no principal object ID to query"
 else
-  # Two queries, because neither direction is a superset of the other. ARM's
-  # atScope() filter returns assignments at and above a scope, so the first call
-  # is the only one that reports a grant inherited from a management group; --all
-  # drops the scope filter entirely, so it is the only one that reports a grant
-  # made below the subscription on a resource group. --include-inherited is what
-  # keeps the above-subscription results in the first call, and has no effect on
-  # the second (--all sends no scope for anything to be inherited from).
-  # --include-groups makes the server filter transitive through group membership,
-  # and --assignee-object-id skips the Graph lookup --assignee would need.
-  ASSIGNMENTS_READ=1
-  az role assignment list \
-    --scope "/subscriptions/${SUB_ID_CHECK}" \
-    --include-inherited \
-    --assignee-object-id "$PRINCIPAL_ID" \
-    --include-groups \
-    -o json > "${RBAC_TMP}/at-and-above.json" 2>/dev/null || ASSIGNMENTS_READ=0
-  az role assignment list \
-    --all \
-    --assignee-object-id "$PRINCIPAL_ID" \
-    --include-groups \
-    -o json > "${RBAC_TMP}/at-and-below.json" 2>/dev/null || ASSIGNMENTS_READ=0
+  # Every scope the deployment writes a role assignment at is knowable before
+  # apply. The subscription covers everything created beneath it by inheritance.
+  # The resource group is where every LangSmith resource lands, and one of the
+  # AGIC assignments names it literally. A bring-your-own VNet can sit in a
+  # platform-managed resource group, which is where a landing zone puts its deny
+  # assignments, so it gets checked on its own when one is configured.
+  #
+  # Both values come out of terraform.tfvars and end up in a request URL, so each
+  # is held to the pattern its Terraform variable already validates and dropped
+  # if it does not fit. An unchecked value here could aim the request elsewhere.
+  TFVARS_FILE="${INFRA_DIR}/terraform.tfvars"
 
-  # Merged into one list so the evaluation below reads a single file. The
-  # subscription scope itself answers both queries, hence the dedupe.
-  python3 - "${RBAC_TMP}/at-and-above.json" "${RBAC_TMP}/at-and-below.json" \
-    > "${RBAC_TMP}/assignments.json" <<'PY' || ASSIGNMENTS_READ=0
-import json, sys
+  # An absent key is a valid answer (every variable read here has a default), so
+  # the trailing || true keeps a no-match grep from tripping set -e.
+  tfvar() {
+    [ -f "$TFVARS_FILE" ] || return 0
+    grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || true
+  }
 
-seen, merged = set(), []
-for path in sys.argv[1:]:
-    try:
-        with open(path) as fh:
-            entries = json.load(fh) or []
-    except (OSError, ValueError):
-        continue
-    for entry in entries:
-        key = entry.get("id") or json.dumps(entry, sort_keys=True)
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(entry)
-print(json.dumps(merged))
-PY
+  SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # Eligible-but-inactive PIM roles are absent from the list above, which is why
-  # a deployer who "has Owner" can still be denied. Fetching them here turns the
-  # failure message from "you lack the role" into "activate the role you hold".
-  # asTarget() reports eligibilities for the calling identity only, so this is
-  # empty (harmlessly) when Terraform runs as a service principal.
-  az rest --method get \
-    --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
-    -o json > "${RBAC_TMP}/eligibilities.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/eligibilities.json"
-
-  # atScope() returns deny assignments at or above the subscription, which is
-  # where landing-zone blueprints and managed applications put them. Two kinds
-  # stay invisible and surface as a 403 at apply: one created directly on a
-  # resource group that does not exist yet, and one that names a group this
-  # principal belongs to rather than the principal itself (the matching below
-  # reads principal IDs, and resolving group membership needs a directory read
-  # this account may not have).
-  az rest --method get \
-    --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/denyAssignments?api-version=2022-04-01&\$filter=atScope()" \
-    -o json > "${RBAC_TMP}/deny.json" 2>/dev/null || DENY_READ=0
-
-  # A failed read is not an empty result. Reporting "no roles found" when the
-  # query itself was refused would send the operator to their tenant admin for
-  # a grant they may already hold, so say which read failed and stop instead.
-  if [ "$ASSIGNMENTS_READ" -eq 0 ]; then
-    warn "Could not list role assignments for this principal — skipping the RBAC verdict rather than reading a failed query as \"no access\""
-  fi
-  if [ "${DENY_READ:-1}" -eq 0 ]; then
-    echo "{}" > "${RBAC_TMP}/deny.json"
-    warn "Could not read deny assignments (needs Microsoft.Authorization/denyAssignments/read). One that blocks roleAssignments/write would be invisible here and would override every role grant below."
+  # printf adds the newline grep needs to see an empty identifier as a line to
+  # match rather than as no input at all. Empty is valid: it means no suffix.
+  IDENTIFIER=$(tfvar identifier)
+  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
+    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
+  else
+    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
   fi
 
-  # Resolve every role behind those assignments and eligibilities to its actual
-  # permission set. One JSON object per line so each az call can append without
-  # the shell having to assemble an array.
-  ROLE_NAMES=$(python3 - "${RBAC_TMP}/assignments.json" "${RBAC_TMP}/eligibilities.json" <<'PY' || echo ""
+  EXISTING_VNET=$(tfvar vnet_id)
+  if [ -n "$EXISTING_VNET" ]; then
+    if printf '%s\n' "$EXISTING_VNET" \
+      | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+$'; then
+      SCOPES+=("$EXISTING_VNET")
+    else
+      warn "terraform.tfvars: vnet_id is not a VNet resource ID, so that scope was not checked"
+    fi
+  fi
+
+  # roleAssignments/write is the action that decides; the rest are what a
+  # principal without broad resource access trips over first. checkAccess batches,
+  # so all of them cost one request per scope. The object ID goes through
+  # json.dumps into a file rather than onto a command line.
+  python3 - "$PRINCIPAL_ID" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
-names = set()
-try:
-    with open(sys.argv[1]) as fh:
-        for a in json.load(fh) or []:
-            if a.get("roleDefinitionName"):
-                names.add(a["roleDefinitionName"])
-except (OSError, ValueError, AttributeError):
-    pass
-try:
-    with open(sys.argv[2]) as fh:
-        for e in (json.load(fh) or {}).get("value") or []:
-            expanded = (e.get("properties") or {}).get("expandedProperties") or {}
-            name = (expanded.get("roleDefinition") or {}).get("displayName")
-            if name:
-                names.add(name)
-except (OSError, ValueError, AttributeError):
-    pass
-print("\n".join(sorted(names)))
+ACTIONS = [
+    "Microsoft.Authorization/roleAssignments/write",
+    "Microsoft.Authorization/roleAssignments/delete",
+    "Microsoft.Resources/subscriptions/resourceGroups/write",
+    "Microsoft.ContainerService/managedClusters/write",
+    "Microsoft.KeyVault/vaults/write",
+    "Microsoft.Storage/storageAccounts/write",
+    "Microsoft.Network/virtualNetworks/write",
+    "Microsoft.DBforPostgreSQL/flexibleServers/write",
+    "Microsoft.Cache/redis/write",
+]
+
+print(json.dumps({
+    "Subject": {"Attributes": {"ObjectId": sys.argv[1]}},
+    "Actions": [{"Id": action, "IsDataAction": False} for action in ACTIONS],
+}))
 PY
-  )
 
-  : > "${RBAC_TMP}/roledefs.jsonl"
-  while IFS= read -r ROLE_NAME; do
-    [ -n "$ROLE_NAME" ] || continue
-    { az role definition list --name "$ROLE_NAME" \
-        --query "[0].{roleName:roleName,permissions:permissions}" -o json 2>/dev/null | tr -d '\n'; } \
-      >> "${RBAC_TMP}/roledefs.jsonl" || true
-    echo "" >> "${RBAC_TMP}/roledefs.jsonl"
-  done <<EOF
-$ROLE_NAMES
-EOF
+  : > "${RBAC_TMP}/scopes.txt"
+  SCOPE_COUNT=0
+  for SCOPE in "${SCOPES[@]}"; do
+    SCOPE_COUNT=$((SCOPE_COUNT + 1))
+    printf '%s\n' "$SCOPE" >> "${RBAC_TMP}/scopes.txt"
+    az rest --method post \
+      --url "https://management.azure.com${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
+      --headers "Content-Type=application/json" \
+      --body "@${RBAC_TMP}/body.json" \
+      -o json > "${RBAC_TMP}/response-${SCOPE_COUNT}.json" 2>/dev/null || true
+  done
 
-  # The evaluation is one pass over four files so that the shell only renders
-  # verdicts. Each line it prints is "<severity> <message>".
+  # Eligible-but-inactive PIM roles are why a deployer who "has Owner" is still
+  # denied: checkAccess reports what is active now. asTarget() only reports the
+  # calling identity's eligibilities, so this is skipped when Terraform will
+  # authenticate as somebody else rather than mislabelled as that principal's.
+  echo "{}" > "${RBAC_TMP}/eligibilities.json"
+  if [ "$PRINCIPAL_IS_CALLER" -eq 1 ]; then
+    az rest --method get \
+      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      -o json > "${RBAC_TMP}/eligibilities.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/eligibilities.json"
+  fi
+
+  # One pass over the responses so the shell only renders verdicts. Each line it
+  # prints is "<severity> <message>"; the single word "unavailable" means no scope
+  # answered and the fallback below should run instead.
   RBAC_VERDICT=$(python3 - \
-    "${RBAC_TMP}/assignments.json" \
+    "$RBAC_TMP" \
     "${RBAC_TMP}/eligibilities.json" \
-    "${RBAC_TMP}/deny.json" \
-    "${RBAC_TMP}/roledefs.jsonl" \
-    "$PRINCIPAL_ID" \
-    "$SUB_ID_CHECK" \
-    "$ASSIGNMENTS_READ" <<'PY' || echo "warn RBAC evaluation failed to run — falling back to no verdict"
-import fnmatch, json, sys
+    "$PRINCIPAL_IS_CALLER" <<'PY' || echo "unavailable"
+import json, os, sys
 
-assign_path, elig_path, deny_path, defs_path, principal_id, sub_id, read_ok = sys.argv[1:8]
+tmp, elig_path, is_caller = sys.argv[1:4]
 
-# The assignment list could not be read, so there is nothing to render. The
-# shell has already warned; anything printed here would be a verdict built on
-# an empty file.
-if read_ok != "1":
-    sys.exit(0)
-
-# Microsoft.Authorization/roleAssignments/write is the action the modules need
-# and the one the 403 names. The storage write is a proxy for ordinary resource
-# creation: every deployment path builds a storage account.
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
-RES_WRITE = "microsoft.storage/storageaccounts/write"
+ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
+
+# checkAccess names the granting role by bare GUID. These four are the built-ins
+# that carry roleAssignments/write, verified against az role definition list;
+# anything else prints its GUID rather than a guess.
+ROLE_NAMES = {
+    "8e3af657a8ff443ca75c2fe8c4bcb635": "Owner",
+    "b24988ac618042a0ab8820f7382dd24c": "Contributor",
+    "18d7d88dd35e4fb5a5c37773c20a72d9": "User Access Administrator",
+    "f58310d9a9f6439a9e8df62e7b41a168": "Role Based Access Control Administrator",
+}
 
 # Assigned to the modules by name, so an ABAC condition that omits any of them
-# breaks apply even though roleAssignments/write is granted.
+# breaks apply even where roleAssignments/write is permitted.
 ASSIGNED_ROLES = (
     "Storage Blob Data Contributor, Key Vault Secrets Officer, "
     "Key Vault Secrets User, DNS Zone Contributor, "
     "Virtual Machine Administrator Login, Reader, Contributor, "
     "Network Contributor"
 )
-
-ALL_PRINCIPALS = "00000000-0000-0000-0000-000000000000"
-MG_PREFIX = "/providers/microsoft.management/managementgroups/"
-principal_id = principal_id.lower()
 
 
 def load(path, default):
@@ -321,156 +305,179 @@ def load(path, default):
         return default
 
 
-role_perms = {}
+def role_label(assignment):
+    guid = (assignment.get("roleDefinitionId") or "").replace("-", "").lower()
+    name = ROLE_NAMES.get(guid)
+    if name:
+        return name
+    if assignment.get("assignedToCustomRole"):
+        return "custom role %s" % (guid or "?")
+    return "role %s" % (guid or "?")
+
+
 try:
-    with open(defs_path) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line == "null":
-                continue
-            try:
-                definition = json.loads(line)
-            except ValueError:
-                continue
-            if definition and definition.get("roleName"):
-                role_perms[definition["roleName"]] = definition.get("permissions") or []
+    with open(os.path.join(tmp, "scopes.txt")) as fh:
+        scopes = [line.strip() for line in fh if line.strip()]
 except OSError:
-    pass
+    scopes = []
 
-assignments = load(assign_path, []) or []
-eligibilities = (load(elig_path, {}) or {}).get("value") or []
-deny_assignments = (load(deny_path, {}) or {}).get("value") or []
+# A 200 carrying anything but the non-empty array this API is observed to return
+# means the preview contract moved. Refuse the scope rather than guess at it.
+answered, unanswered = [], []
+for index, scope in enumerate(scopes, start=1):
+    data = load(os.path.join(tmp, "response-%d.json" % index), None)
+    if isinstance(data, list) and data:
+        answered.append((scope, data))
+    else:
+        unanswered.append(scope)
 
-
-def matches(action, patterns):
-    # Azure action patterns wildcard with *, which fnmatch spans across / — the
-    # same way ARM reads Microsoft.Authorization/* as covering a nested action.
-    return any(fnmatch.fnmatch(action, (p or "").lower()) for p in patterns or [])
-
-
-def grants(role_name, action):
-    for perm in role_perms.get(role_name, []):
-        if matches(action, perm.get("actions")) and not matches(action, perm.get("notActions")):
-            return True
-    return False
-
-
-def covers_deployment(scope):
-    scope = (scope or "").lower()
-    # --include-inherited only returns management groups above this
-    # subscription, so a management group scope here is always an ancestor.
-    return scope in ("/", "/subscriptions/%s" % sub_id.lower()) or scope.startswith(MG_PREFIX)
-
+if not answered:
+    print("unavailable")
+    raise SystemExit(0)
 
 out = []
-qualifying = [a for a in assignments if grants(a.get("roleDefinitionName"), ROLE_WRITE)]
-broad = [a for a in qualifying if covers_deployment(a.get("scope"))]
-narrow = [a for a in qualifying if not covers_deployment(a.get("scope"))]
+if unanswered:
+    out.append("warn checkAccess did not answer at %s, so nothing here speaks to what the "
+               "deployment can do there." % ", ".join(unanswered))
 
-if broad:
-    winner = broad[0]
-    out.append("pass roleAssignments/write granted by %s at %s"
-               % (winner.get("roleDefinitionName"), winner.get("scope")))
-elif narrow:
-    scopes = ", ".join(sorted({a.get("scope") or "?" for a in narrow}))
-    out.append("warn roleAssignments/write is granted only below the subscription (%s). "
-               "Anything the deployment creates outside that scope will 403 — confirm every "
-               "resource lands inside it." % scopes)
-else:
-    eligible = []
-    for instance in eligibilities:
-        props = instance.get("properties") or {}
-        expanded = (props.get("expandedProperties") or {}).get("roleDefinition") or {}
-        name = expanded.get("displayName")
-        if name and grants(name, ROLE_WRITE):
-            eligible.append("%s at %s" % (name, props.get("scope") or "?"))
-    if eligible:
-        out.append("fail roleAssignments/write is not active, but PIM holds it as eligible: %s. "
-                   "Activate it (portal: PIM -> My roles -> Activate), then re-run this script. "
-                   "Activation is time-bound, so activate for longer than the apply will take."
-                   % "; ".join(sorted(set(eligible))))
-    elif not assignments:
-        out.append("fail No role assignments found for this principal at any scope in the "
-                   "subscription. Either it holds nothing here, or the grant is PIM-eligible and "
-                   "this account cannot read its own eligibilities.")
+denied_write = False
+for scope, decisions in answered:
+    for decision in decisions:
+        if (decision.get("actionId") or "").lower() != ROLE_WRITE:
+            continue
+        assignment = decision.get("roleAssignment") or {}
+        deny = decision.get("denyAssignment") or {}
+        if decision.get("accessDecision") == "Allowed":
+            out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
+                       % (scope, role_label(assignment), assignment.get("scope") or "?"))
+            if assignment.get("condition"):
+                out.append("warn That grant carries an ABAC condition, so it permits only the roles "
+                           "the condition allows. The modules assign: %s. Condition: %s"
+                           % (ASSIGNED_ROLES, " ".join(assignment["condition"].split())[:240]))
+        else:
+            denied_write = True
+            if deny:
+                # The roleAssignment shape here was read off live responses; a
+                # populated denyAssignment was never one of them, because you
+                # cannot create a deny assignment to test with. Try the key names
+                # the RBAC APIs use elsewhere and stay useful if it is none of
+                # them: that a deny assignment exists at all is the finding.
+                name = (deny.get("displayName") or deny.get("denyAssignmentName")
+                        or deny.get("name") or deny.get("id") or "unnamed")
+                out.append("fail roleAssignments/write is denied at %s by deny assignment \"%s\". "
+                           "Deny assignments override every role assignment including Owner, so no "
+                           "role grant will fix this: it has to be removed, or this principal added "
+                           "to its exclusion list." % (scope, name))
+            else:
+                out.append("fail roleAssignments/write is not permitted at %s. All eight role "
+                           "assignments in the Azure modules need it." % scope)
+
+for scope, decisions in answered:
+    refused = sorted({decision.get("actionId") or "?" for decision in decisions
+                      if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)
+                      and decision.get("accessDecision") != "Allowed"})
+    if refused:
+        out.append("fail Not permitted at %s: %s. The deployment creates all of these."
+                   % (scope, ", ".join(refused)))
     else:
-        held = ", ".join(sorted({a.get("roleDefinitionName") or "?" for a in assignments}))
-        out.append("fail No role held by this principal grants "
-                   "Microsoft.Authorization/roleAssignments/write, which all eight role "
-                   "assignments in the Azure modules need. Roles found: %s." % held)
+        out.append("pass Every resource type the deployment creates is writable at %s" % scope)
 
-# A role whose definition could not be read carries no permissions here, which
-# reads exactly like a role that grants nothing. Say which ones, so a verdict
-# resting on an unreadable custom role is not mistaken for a settled one.
-if not broad:
-    unresolved = sorted({a.get("roleDefinitionName") or "(unnamed role)"
-                         for a in assignments
-                         if (a.get("roleDefinitionName") or "") not in role_perms})
-    if unresolved:
-        out.append("warn Could not read the permissions behind these roles held by this "
-                   "principal: %s. They count as granting nothing above, so if one of them is a "
-                   "custom role carrying roleAssignments/write, the verdict is wrong."
-                   % ", ".join(unresolved))
+    for decision in decisions:
+        if ((decision.get("actionId") or "").lower() == ROLE_DELETE
+                and decision.get("accessDecision") != "Allowed"):
+            out.append("warn roleAssignments/delete is not permitted at %s. Apply can create the "
+                       "eight assignments, but terraform destroy and any change that replaces one "
+                       "will fail." % scope)
 
-for assignment in broad + narrow:
-    if assignment.get("condition"):
-        out.append("warn %s at %s carries an ABAC condition, so roleAssignments/write is "
-                   "restricted to the roles that condition allows. The modules assign: %s. "
-                   "Condition: %s"
-                   % (assignment.get("roleDefinitionName"), assignment.get("scope"),
-                      ASSIGNED_ROLES, " ".join(assignment["condition"].split())[:240]))
-
-for entry in deny_assignments:
-    props = entry.get("properties") or {}
-    principals = [(p.get("id") or "").lower() for p in props.get("principals") or []]
-    excluded = [(p.get("id") or "").lower() for p in props.get("excludePrincipals") or []]
-    if principal_id not in principals and ALL_PRINCIPALS not in principals:
-        continue
-    if principal_id in excluded:
-        continue
-    blocked = any(
-        matches(ROLE_WRITE, perm.get("actions")) and not matches(ROLE_WRITE, perm.get("notActions"))
-        for perm in props.get("permissions") or []
-    )
-    if not blocked:
-        continue
-    name = props.get("denyAssignmentName") or entry.get("name") or "?"
-    if excluded:
-        out.append("warn Deny assignment \"%s\" at %s denies roleAssignments/write. Its exclusion "
-                   "list may exempt this principal through a group this script cannot read — if "
-                   "not, apply will 403 no matter which roles are held."
-                   % (name, props.get("scope") or "?"))
+# Only reached when the decisive action was refused, which is the one case where
+# an inactive PIM role is the likely explanation and the fix is a click, not a
+# ticket. Whether an eligible role carries the action is not knowable here, so
+# they are all listed rather than filtered on a guess.
+if denied_write:
+    if is_caller == "1":
+        eligible = []
+        for instance in (load(elig_path, {}) or {}).get("value") or []:
+            props = instance.get("properties") or {}
+            expanded = (props.get("expandedProperties") or {}).get("roleDefinition") or {}
+            if expanded.get("displayName"):
+                eligible.append("%s at %s" % (expanded["displayName"], props.get("scope") or "?"))
+        if eligible:
+            out.append("fail PIM holds these roles for this identity as eligible but not active: %s. "
+                       "checkAccess reports what is active now, so if one of them carries "
+                       "roleAssignments/write, activating it (portal: PIM -> My roles -> Activate) "
+                       "fixes this. Activation is time-bound, so activate for longer than the apply "
+                       "will take." % "; ".join(sorted(set(eligible))))
     else:
-        out.append("fail Deny assignment \"%s\" at %s denies roleAssignments/write. Deny "
-                   "assignments override every role assignment including Owner, so no role grant "
-                   "will fix this: it has to be removed or this principal added to its exclusion "
-                   "list." % (name, props.get("scope") or "?"))
-
-if any(grants(a.get("roleDefinitionName"), RES_WRITE) and covers_deployment(a.get("scope"))
-       for a in assignments):
-    out.append("pass Resource creation granted at subscription scope")
-else:
-    out.append("warn No subscription-scope grant for creating resources (checked against "
-               "Microsoft.Storage/storageAccounts/write). A resource-group-scoped grant is fine "
-               "if the resource group already exists and the deployment stays inside it.")
+        out.append("warn Terraform will authenticate as a principal other than the one running this "
+                   "script, so its PIM eligibilities cannot be read here. A role that is held but "
+                   "not activated looks exactly like a role that is not held.")
 
 print("\n".join(out))
 PY
   )
 
-  while IFS= read -r LINE; do
-    case "$LINE" in
-      pass\ *) pass "${LINE#pass }" ;;
-      warn\ *) warn "${LINE#warn }" ;;
-      fail\ *) fail "${LINE#fail }" ;;
-      *) [ -z "$LINE" ] || warn "$LINE" ;;
+  if [ "$RBAC_VERDICT" = "unavailable" ]; then
+    warn "checkAccess (Microsoft.Authorization/checkAccess, 2018-09-01-preview) did not answer at any scope. It is an unversioned preview API, so it may have changed or this tenant may refuse it. Falling back to a role-name check, which cannot see deny assignments, ABAC conditions, or custom roles."
+    HELD=$(az role assignment list \
+      --scope "/subscriptions/${SUB_ID_CHECK}" \
+      --include-inherited \
+      --assignee-object-id "$PRINCIPAL_ID" \
+      --include-groups \
+      --query "[].roleDefinitionName" -o tsv 2>/dev/null || echo "")
+    HELD_FLAT=$(printf '%s' "$HELD" | tr '\n' ',' | sed 's/,$//')
+    case ",${HELD_FLAT}," in
+      *,Owner,*|*,"User Access Administrator",*|*,"Role Based Access Control Administrator",*)
+        pass "Holds ${HELD_FLAT} at or above the subscription, which carries roleAssignments/write" ;;
+      ,,)
+        fail "No role assignments could be read for this principal, and checkAccess did not answer. Nothing here can tell you whether apply will succeed — check the identity by hand before applying." ;;
+      *)
+        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
-  done <<EOF
+  else
+    while IFS= read -r LINE; do
+      case "$LINE" in
+        pass\ *) pass "${LINE#pass }" ;;
+        warn\ *) warn "${LINE#warn }" ;;
+        fail\ *) fail "${LINE#fail }" ;;
+        *) [ -z "$LINE" ] || warn "$LINE" ;;
+      esac
+    done <<EOF
 $RBAC_VERDICT
 EOF
+  fi
 fi
 
-# ── 5. terraform.tfvars ───────────────────────────────────────────────────────
+# ── 5. Subscription offer type ────────────────────────────────────────────────
+# Azure blocks some subscription offer types from provisioning PostgreSQL
+# Flexible Server in high-demand regions, surfacing as LocationIsOfferRestricted
+# well into the apply, after AKS has already been built. The restriction is a
+# property of how the subscription was bought, not of regional capacity, so no
+# amount of retrying or resizing clears it. quotaId is the only field that
+# reports the offer type, and it is a prefix match: the suffix is a signup date.
+echo ""
+echo "── Subscription Offer Type ───────────────────────────"
+QUOTA_ID=$(az rest --method get \
+  --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
+  --query "subscriptionPolicies.quotaId" -o tsv 2>/dev/null || echo "")
+
+if [ -z "$QUOTA_ID" ]; then
+  warn "Could not read the subscription offer type — skipping offer restriction check"
+else
+  case "$QUOTA_ID" in
+    FreeTrial_*|MSDN_*|MSDNDevTest_*|VisualStudio_*|AzurePass_*|MPN_*|SponsoredMS_*)
+      warn "Subscription offer type is ${QUOTA_ID}."
+      warn "Offer types like this are commonly blocked from provisioning PostgreSQL"
+      warn "Flexible Server in high-demand regions (LocationIsOfferRestricted)."
+      warn "Request an exemption at https://aka.ms/postgres-request-quota-increase,"
+      warn "or set postgres_source = \"in-cluster\" for a dev deployment."
+      ;;
+    *)
+      pass "Subscription offer type: ${QUOTA_ID}"
+      ;;
+  esac
+fi
+
+# ── 6. terraform.tfvars ───────────────────────────────────────────────────────
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
 TFVARS="${INFRA_DIR}/terraform.tfvars"
@@ -508,7 +515,7 @@ else
   fi
 fi
 
-# ── 6. Other tooling ──────────────────────────────────────────────────────────
+# ── 7. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do
@@ -520,7 +527,7 @@ for TOOL in terraform kubectl helm; do
   fi
 done
 
-# ── 7. Existing-cluster node capacity ─────────────────────────────────────────
+# ── 8. Existing-cluster node capacity ─────────────────────────────────────────
 # Attach path only. Terraform validates subnet space and Kubernetes version on an
 # existing cluster, but nothing checks whether a node in it is big enough to hold
 # the largest pod LangSmith schedules. ClickHouse is that pod, it is a single

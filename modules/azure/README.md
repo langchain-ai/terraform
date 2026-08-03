@@ -146,11 +146,13 @@ The identity running Terraform needs the following roles on the subscription:
 | Role | Purpose |
 |------|---------|
 | `Contributor` | Create and manage all Azure resources |
-| `User Access Administrator` | Create role assignments for Key Vault, Blob, cert-manager managed identities |
+| `Role Based Access Control Administrator` | Create role assignments for Key Vault, Blob, and cert-manager managed identities |
 
-Owner includes both. Contributor alone is insufficient (role assignments require UAA).
+`Owner` covers both. `User Access Administrator` works in place of `Role Based Access Control Administrator` but grants more than the deployment needs. Contributor alone is insufficient: the deployment creates eight role assignments and fails partway through without one of the role-assignment roles.
 
 Holding the role is not the same as being able to use it. A PIM-eligible role grants nothing until it is activated, an ABAC condition on the grant can restrict which roles you may assign, and a deny assignment from a landing zone or managed application overrides every grant including Owner. `make preflight` reports all three, so run it rather than reasoning from the role list in the portal.
+
+For the full permission inventory, the role assignments the deployment creates, and how to restrict which roles the deployer may assign, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
 ### Authenticate
 
@@ -413,12 +415,15 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
 - Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
-- Checks RBAC by permission rather than by role name: resolves every role that identity holds (including grants inherited from a management group or held through a group) and confirms one of them grants `Microsoft.Authorization/roleAssignments/write`, which the eight role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Also reports PIM-eligible-but-inactive roles, ABAC conditions that narrow which roles you may assign, and deny assignments that override every grant
+- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write` and eight resource-creation actions are permitted. `roleAssignments/write` is what the eight role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
+- Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
 - Verifies `terraform.tfvars` exists with `location` and `subscription_id` set
 - Verifies `secrets.auto.tfvars` exists and has a non-empty `langsmith_license_key`
 - Checks that `terraform`, `kubectl`, and `helm` binaries are on PATH
 
 > Safe to run at any time with no side effects.
+
+The RBAC verdict comes from `Microsoft.Authorization/checkAccess`, the call the portal's Access control blade makes. It is a preview API with no published specification, so if it stops answering, preflight says so and drops back to checking for Owner or User Access Administrator by name. That fallback cannot see deny assignments, ABAC conditions, or custom roles, so a clean result on it is weaker than a clean result on the primary path. The script tells you which one you got.
 
 ---
 

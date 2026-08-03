@@ -264,6 +264,12 @@ variable "postgres_source" {
   }
 }
 
+variable "postgres_sku_name" {
+  type        = string
+  description = "SKU for the PostgreSQL Flexible Server. Exposed because LocationIsOfferRestricted is sometimes scoped to a SKU family, so switching tiers can clear it without changing region."
+  default     = "GP_Standard_D2ds_v4"
+}
+
 variable "redis_source" {
   type        = string
   description = "Redis deployment type. 'external' provisions Azure Cache for Redis (private VNet). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
