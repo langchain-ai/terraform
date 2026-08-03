@@ -809,13 +809,13 @@ azure/
 
 | Module | Required | Description |
 |--------|----------|-------------|
-| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
+| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Not zonal — an Azure subnet spans every zone in its region. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete) + all application secrets. |
 | `postgres` | optional | Azure DB for PostgreSQL Flexible Server. Enabled when `postgres_source = "external"`. Multi-AZ standby supported. |
-| `redis` | optional | Azure Cache for Redis Premium. Enabled when `redis_source = "external"`. |
+| `redis` | optional | Azure Managed Redis (`Microsoft.Cache/redisEnterprise`) + private endpoint. Enabled when `redis_source = "external"`. Zone pinning via `redis_availability_zones`. |
 | `dns` | optional | Azure DNS zone + A record. Required for DNS-01 cert issuance (`tls_certificate_source = "dns01"`). |
 | `waf` | optional | Azure WAF policy (OWASP 3.2 + bot protection). Use `agw_sku_tier = "WAF_v2"` with AGIC for integrated WAF — no separate module needed. |
 | `diagnostics` | optional | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. |
@@ -954,14 +954,67 @@ plan checks the name, and Azure enforces the size at apply.
 ## Multi-AZ Support
 
 ```hcl
-# Spread AKS nodes across zones 1, 2, 3
+# AKS node pools + Postgres primary
 availability_zones = ["1", "2", "3"]
+
+# Azure Managed Redis — pinned independently of the cluster
+redis_availability_zones = ["2"]
 
 # PostgreSQL HA standby in a different zone
 postgres_high_availability_mode = "ZoneRedundant"
 ```
 
 Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+`redis_availability_zones` is separate from `availability_zones` and defaults to
+`[]`, which lets Azure place the cluster. Pin it when a specific zone is required —
+for example when zone 1 in your region is capacity-constrained and AMR provisioning
+returns `AllocationFailed`.
+
+### Zones apply at creation only
+
+Neither an AKS node pool nor an AMR cluster can be re-zoned in place. `availability_zones`
+is guarded by a postcondition that fails the plan rather than returning a clean no-op,
+so a zone change that cannot be applied is never mistaken for one that was. To move an
+existing deployment across zones, recreate the resource.
+
+### Regions that publish AMR zones
+
+Zone support is a property of the **region**, not the SKU. Across all 1023
+`Microsoft.Cache/skus` entries there is no region where `IsZonalDeploymentAllowed` or
+the published zone list differs between SKUs, so a region either offers zones to every
+AMR tier or to none.
+
+| Region | Zones | Notes |
+|--------|-------|-------|
+| `australiacentral`, `northcentralus`, `westus` | none | No availability zones. Leave `redis_availability_zones = []`. |
+| `eastus3` | none published | Reports zonal support but returns an empty zone list. Verify before pinning. |
+| All 39 others below | `1`, `2`, `3` | Any single zone or combination is accepted. |
+
+The 39 regions offering zones 1/2/3: `australiaeast`, `austriaeast`, `belgiumcentral`,
+`brazilsouth`, `canadacentral`, `centralindia`, `centralus`, `chilecentral`,
+`denmarkeast`, `eastasia`, `eastus`, `eastus2`, `eastus2euap`, `francecentral`,
+`germanywestcentral`, `indiasouthcentral`, `indonesiacentral`, `israelcentral`,
+`italynorth`, `japaneast`, `japanwest`, `koreacentral`, `malaysiawest`,
+`mexicocentral`, `newzealandnorth`, `northeurope`, `norwayeast`, `polandcentral`,
+`southafricanorth`, `southcentralus`, `southeastasia`, `spaincentral`, `swedencentral`,
+`switzerlandnorth`, `uaenorth`, `uksouth`, `westeurope`, `westus2`, `westus3`.
+
+Regions absent from this list have no Azure Managed Redis availability at all.
+
+To re-check for your own region and subscription:
+
+```bash
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/providers/Microsoft.Cache/skus?api-version=2025-07-01" \
+  | jq -r '[.value[] | select(.locationInfo[].location == "eastus")][0].locationInfo[0].zones'
+```
+
+> **Unverified:** whether the smallest SKU (`Balanced_B0`) accepts a pinned zone.
+> The SKU API reports zone support per region, not per tier, so it cannot answer this.
+> `schema_validation_enabled = false` on the azapi resource means Terraform will not
+> catch a rejection locally — ARM would reject it at apply. Confirm with a scratch
+> deployment before relying on `redis_availability_zones` with `Balanced_B0`.
 
 ---
 

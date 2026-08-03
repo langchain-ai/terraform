@@ -125,6 +125,10 @@ sizing_profile = "production"
 #------------------------------------------------------------------------------
 # Multi-AZ — for zone-redundant HA (optional)
 #------------------------------------------------------------------------------
-# availability_zones                 = ["1", "2", "3"]
+# Zones apply at CREATION only — AKS node pools and AMR cannot be re-zoned in
+# place. Changing these on a live deployment fails the plan; recreate instead.
+# See README "Multi-AZ Support" for which regions publish zones.
+# availability_zones                 = ["1", "2", "3"]   # AKS nodes + Postgres primary
+# redis_availability_zones           = ["2"]             # AMR — separate from the above
 # postgres_standby_availability_zone = "2"
 # postgres_geo_redundant_backup      = true
