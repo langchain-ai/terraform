@@ -811,7 +811,9 @@ vnet_id     = "/subscriptions/<sub>/resourceGroups/net-rg/providers/Microsoft.Ne
 
 Each subnet is then independent. Supply an ID to reuse a subnet you already
 have, or leave it out and Terraform creates that subnet inside your VNet from
-the matching address prefix:
+the matching address prefix. `infra/scripts/quickstart.sh` asks which of the two
+you want per subnet, and going back to that section offers back whichever you
+picked:
 
 ```hcl
 # Reuse an existing Postgres subnet, let Terraform carve the other two.

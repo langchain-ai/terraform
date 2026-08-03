@@ -475,39 +475,103 @@ _valid_cidr() {
   [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]
 }
 
-# required = "required" makes the ID mandatory and drops the carve-a-CIDR branch.
+# Ask for one subnet in bring-your-own-VNet mode, either reusing one that exists
+# or having Terraform carve it out of the VNet. Sets _SUBNET_ID (reuse) or
+# _SUBNET_CIDR_LINE (carve), and never both — the writer reads the pair that way.
+#
+# required = "required" makes the ID mandatory and drops the carve branch.
 # Used for the AKS subnet when attaching to an existing cluster, where Terraform
 # cannot carve the subnet: it has to be one the cluster already runs nodes in.
-# prefill offers an ID read off that cluster as the answer, so the operator
-# confirms it instead of pasting it.
+#
+# cur_id and cur_cidr_line are this subnet's current answers. Both are offered
+# back, so re-entering the section from the review menu confirms what is already
+# configured rather than starting the question over. Passing them is not optional
+# polish: without cur_id, Enter on a re-entered section used to read as "I have
+# no subnet", which silently moved the subnet from one Terraform reuses to one it
+# creates. cur_id doubles as the prefill for an ID read off an attached cluster.
 _ask_subnet() {
-  local label="$1" cidr_var="$2" default_cidr="$3" note="$4" required="${5:-}" prefill="${6:-}"
+  local label="$1" cidr_var="$2" default_cidr="$3" note="$4" required="${5:-}" \
+        cur_id="${6:-}" cur_cidr_line="${7:-}"
   _SUBNET_ID=""
   _SUBNET_CIDR_LINE=""
   echo ""
   _hint "$note"
-  local prompt="${label} subnet resource ID (Enter = let Terraform create it)"
-  [[ "$required" == "required" ]] && prompt="${label} subnet resource ID"
-  while true; do
-    _ask "$prompt" "$prefill"
-    _SUBNET_ID="$_REPLY"
-    if [[ -z "$_SUBNET_ID" ]]; then
-      [[ "$required" != "required" ]] && break
-      _red "  ERROR: required on this path — Terraform cannot create this subnet."
-      echo ""
-      continue
-    fi
-    _valid_subnet_id "$_SUBNET_ID" && break
-    _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
-    echo ""
-  done
-  if [[ -z "$_SUBNET_ID" ]]; then
-    _ask "CIDR for the new ${label} subnet" "$default_cidr"
-    # Padded so the three prefix lines line up with each other in the tfvars.
-    _SUBNET_CIDR_LINE="$(printf '%-30s = ["%s"]' "$cidr_var" "$_REPLY")"
+
+  # Which of the two this is used to be a blank Enter on the ID prompt, with the
+  # carve branch named only in a parenthetical. That hid it both ways: an
+  # operator without an ID to hand pressed Enter and Terraform began carving a
+  # subnet inside a VNet a network team may own, and an operator who did have
+  # subnets provisioned had no sign they could be reused. Ask it outright.
+  # No default on a first pass, deliberately: carving a subnet inside a VNet a
+  # network team owns and reusing one they already provisioned are not equally
+  # safe guesses, and section 1 already requires an explicit answer the same way.
+  # A re-entered section pre-selects whichever is configured.
+  local choice_default=""
+  if [[ -n "$cur_id" ]]; then
+    choice_default="1"
+  elif [[ -n "$cur_cidr_line" ]]; then
+    choice_default="2"
   fi
+
+  # The carve branch returns from inside the loop; a reuse answer with no ID
+  # comes back here to re-ask, since a blank is no longer a way to pick carve.
+  local mode="1"
+  while true; do
+    if [[ "$required" != "required" ]]; then
+      _ask_choice --default "$choice_default" \
+        "The ${label} subnet — reuse an existing one, or have Terraform create it?" \
+        "Reuse a subnet that already exists in your VNet (you paste its resource ID)" \
+        "Terraform creates it inside your VNet (you pick a CIDR)"
+      mode="$_CHOICE"
+    fi
+
+    if [[ "$mode" == "2" ]]; then
+      # Offered back on a re-entered section for the same reason the ID is: a
+      # re-defaulted prefix would move the subnet on the next apply. The stored
+      # form is the whole assignment line, so unwrap it back to the CIDR.
+      local cidr_default="$default_cidr" cur=""
+      if [[ -n "$cur_cidr_line" ]]; then
+        # aks_subnet_address_prefix = ["10.0.0.0/19"] -> 10.0.0.0/19. Cut on the
+        # quotes, not the bracket, which would open a pattern character class.
+        cur="${cur_cidr_line#*\"}"
+        cur="${cur%%\"*}"
+        if _valid_cidr "$cur"; then cidr_default="$cur"; fi
+      fi
+      while true; do
+        _ask "CIDR for the new ${label} subnet" "$cidr_default"
+        if _valid_cidr "$_REPLY"; then break; fi
+        _red "  ERROR: expected an IPv4 CIDR, e.g. ${default_cidr:-10.0.32.0/20}."
+        echo ""
+      done
+      # Padded so the three prefix lines line up with each other in the tfvars.
+      _SUBNET_CIDR_LINE="$(printf '%-30s = ["%s"]' "$cidr_var" "$_REPLY")"
+      return
+    fi
+
+    while true; do
+      _ask "${label} subnet resource ID" "$cur_id"
+      _SUBNET_ID="$_REPLY"
+      if [[ -z "$_SUBNET_ID" ]]; then
+        if [[ "$required" == "required" ]]; then
+          _red "  ERROR: required on this path — Terraform cannot create this subnet."
+          echo ""
+          continue
+        fi
+        _red "  ERROR: no ID given. Answer 2 above to have Terraform create this subnet."
+        echo ""
+        break
+      fi
+      _valid_subnet_id "$_SUBNET_ID" && return
+      _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+      echo ""
+    done
+  done
 }
 
+# A subnet that has to already exist. AGIC and the bastion have no carve path
+# inside a VNet Terraform does not own, so an ID is required rather than optional.
+# Lowercased before matching for the same reason as vnet_re below, and the
+# optional third argument enforces a name Azure demands.
 _ask_required_subnet() {
   local label="$1" note="$2" want_name="$3" id_lc want_lc
   local subnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$'
@@ -770,21 +834,28 @@ _run_section_3() {
   # existing cluster it has to be a subnet that cluster already runs nodes in,
   # because the same ID drives the Blob and Key Vault firewall allowlists.
   if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    # The ID read off the cluster when the lookup worked, otherwise whatever is
+    # already configured. Falling back matters on a re-entered section: a lookup
+    # that failed this time (expired login) would otherwise blank an ID that a
+    # successful lookup, or the operator, had already established.
     _ask_subnet "AKS node" "aks_subnet_address_prefix" "" \
       "The subnet your cluster's nodes already run in. It needs the Microsoft.Storage and Microsoft.KeyVault service endpoints, and room for (max_count + 1) x (max_pods + 1) addresses." \
-      required "$_AKS_PREFILL_SUBNET"
+      required "${_AKS_PREFILL_SUBNET:-$AKS_SUBNET_ID}"
   else
     _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
-      "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+      "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints." \
+      "" "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE"
   fi
   AKS_SUBNET_ID="$_SUBNET_ID"; AKS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   _ask_subnet "PostgreSQL" "postgres_subnet_address_prefix" "10.0.32.0/20" \
-    "An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and contain nothing else. A new one gets that delegation automatically."
+    "An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and contain nothing else. A new one gets that delegation automatically." \
+    "" "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE"
   POSTGRES_SUBNET_ID="$_SUBNET_ID"; POSTGRES_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   _ask_subnet "Redis" "redis_subnet_address_prefix" "10.0.48.0/20" \
-    "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint."
+    "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint." \
+    "" "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE"
   REDIS_SUBNET_ID="$_SUBNET_ID"; REDIS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   # Kubernetes ClusterIPs are internal to the cluster, but AKS still requires the
