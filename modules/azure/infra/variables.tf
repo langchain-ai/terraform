@@ -389,8 +389,21 @@ variable "aks_service_cidr" {
 
 variable "aks_dns_service_ip" {
   type        = string
-  description = "CoreDNS ClusterIP. Must sit inside aks_service_cidr. Defaults to the eleventh address of aks_service_cidr, which is the Azure convention (10.0.64.10 for the default range). Ignored when create_cluster = false, for the same reason aks_service_cidr is."
+  description = "CoreDNS ClusterIP. Must sit inside aks_service_cidr, which plan checks. Defaults to the eleventh address of aks_service_cidr, which is the Azure convention (10.0.64.10 for the default range). Ignored when create_cluster = false, for the same reason aks_service_cidr is."
   default     = ""
+
+  # Shape only, for the ordering reason aks_service_cidr is checked here: the
+  # containment precondition reduces this to a number in the locals, locals
+  # evaluate first, and anything that is not four dotted octets fails there as a
+  # tonumber() error naming neither the variable nor the fix. Appending /32 is
+  # what makes cidrnetmask() a bare-address check — a value that already carries
+  # a prefix produces two and fails to parse. Containment itself needs
+  # aks_service_cidr, which a validation block cannot reach under this module's
+  # >= 1.5 floor, so it lives on validate_network instead.
+  validation {
+    condition     = var.aks_dns_service_ip == "" || can(cidrnetmask("${var.aks_dns_service_ip}/32"))
+    error_message = "aks_dns_service_ip must be a bare IPv4 address such as 10.128.0.10, with no prefix length. It is one ClusterIP taken out of aks_service_cidr, not a range."
+  }
 }
 
 variable "additional_node_pools" {
