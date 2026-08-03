@@ -16,7 +16,13 @@ variable "create_cluster" {
 
 variable "existing_cluster_resource_group_name" {
   type        = string
-  description = "Resource group of the pre-existing cluster, when it differs from resource_group_name (e.g. the customer's platform team owns the AKS cluster in a separate resource group from the one this module creates for Key Vault/Storage/identities). Only used when create_cluster = false. Defaults to resource_group_name when empty."
+  description = "Resource group of the pre-existing cluster (e.g. the customer's platform team owns the AKS cluster in a separate resource group from the one this module creates for Key Vault/Storage/identities). Only used when create_cluster = false. The root module resolves the fallback to its own resource group before passing this, deliberately: resolving it here against resource_group_name would tie the cluster lookup to an attribute of a resource being created, and that unknown defers the read past every guard on it."
+  default     = ""
+}
+
+variable "existing_cluster_subnet_id" {
+  type        = string
+  description = "The subnet the pre-existing cluster is expected to run nodes in, checked against its agent pools. Only used when create_cluster = false. Separate from subnet_id for the same reason as existing_cluster_resource_group_name: subnet_id can resolve to an output of the VNet module, and that unknown would defer the cluster read. The root passes aks_subnet_id straight through, which the attach path requires anyway."
   default     = ""
 }
 

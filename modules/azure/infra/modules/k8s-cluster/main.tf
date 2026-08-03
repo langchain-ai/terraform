@@ -52,11 +52,6 @@ locals {
     join("/subnets/", slice(split("/subnets/", var.agic_subnet_id), 0, 1))
   ) : ""
 
-  # Resource group to look up the existing cluster in, when create_cluster = false.
-  # Falls back to resource_group_name (the RG this module creates identities/etc. in)
-  # when the existing cluster lives in the same RG.
-  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name != "" ? var.existing_cluster_resource_group_name : var.resource_group_name
-
   # Unified accessors so the rest of this module doesn't care whether the cluster
   # was created here or already existed — resolves to the resource when
   # create_cluster = true, or the read-only data source when false.
@@ -77,7 +72,7 @@ locals {
 data "azurerm_kubernetes_cluster" "existing" {
   count               = var.create_cluster ? 0 : 1
   name                = var.cluster_name
-  resource_group_name = local.existing_cluster_resource_group_name
+  resource_group_name = var.existing_cluster_resource_group_name
 
   lifecycle {
     precondition {
@@ -104,7 +99,7 @@ data "azurerm_kubernetes_cluster" "existing" {
       # created pointing at nothing — pods then fail to authenticate to Blob
       # Storage/Key Vault at runtime, long after a "successful" apply.
       condition     = self.oidc_issuer_enabled
-      error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${local.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+      error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
     }
 
     postcondition {
@@ -114,7 +109,14 @@ data "azurerm_kubernetes_cluster" "existing" {
       # schedule, and every Blob write and Key Vault read 403s at runtime. It's
       # also the only subnet an added node pool can join, since a node pool can
       # only live in its cluster's VNet.
-      condition     = contains(compact(self.agent_pool_profile[*].vnet_subnet_id), var.subnet_id)
+      # Compared lowercased, as the root's subnet checks are: Azure hands back
+      # "resourcegroups" in some contexts and "resourceGroups" in others, and an
+      # exact compare would reject an ID over casing alone while listing subnets
+      # that look identical to the one supplied.
+      condition = contains(
+        [for id in compact(self.agent_pool_profile[*].vnet_subnet_id) : lower(id)],
+        lower(var.existing_cluster_subnet_id)
+      )
       error_message = "aks_subnet_id must be one of the subnets cluster '${var.cluster_name}' already runs nodes in, because it also drives the Blob and Key Vault firewall allowlists. Set create_vnet = false and aks_subnet_id to one of: [${join(", ", compact(self.agent_pool_profile[*].vnet_subnet_id))}]"
     }
   }
@@ -134,7 +136,7 @@ data "azapi_resource" "existing_security_profile" {
   lifecycle {
     postcondition {
       condition     = try(self.output.properties.securityProfile.workloadIdentity.enabled, false)
-      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${local.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
     }
   }
 }

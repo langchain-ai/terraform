@@ -110,23 +110,34 @@ locals {
   # Additional pools do not set max_pods, so they get the Azure CNI default.
   aks_default_pool_max_pods = 30
 
+  # The additional pools Terraform will actually create. Attaching to a cluster
+  # whose pools the customer owns creates none, so this is the map the aks module
+  # is given and the map the capacity check below counts — one definition, so the
+  # requirement can never describe pools that will not exist.
+  aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
+
   # Held per pool rather than as a single total, so the number and the error
   # message that has to justify it are built from the same place.
   aks_pool_sizing = merge(
-    {
+    # Only a cluster Terraform creates gets a default pool. Attaching never adds
+    # one, so counting it demands addresses nothing will draw.
+    var.create_cluster ? {
       default = {
         nodes              = var.default_node_pool_max_count + 1
         addresses_per_node = var.default_node_pool_max_pods + 1
       }
-    },
+    } : {},
     {
-      for name, pool in var.additional_node_pools : name => {
+      for name, pool in local.aks_managed_node_pools : name => {
         nodes              = pool.max_count + 1
         addresses_per_node = local.aks_default_pool_max_pods + 1
       }
     }
   )
-  aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+
+  # concat([0], ...) keeps sum() off an empty list, which is what attaching to a
+  # cluster with customer-owned pools leaves behind.
+  aks_required_ips = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node]))
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -310,6 +321,24 @@ resource "terraform_data" "validate_network" {
       error_message = "vnet_id is required when create_vnet = false. Supply the VNet that LangSmith should deploy into."
     }
 
+    # Attaching to a cluster pins the network too. The postcondition on the cluster
+    # read requires aks_subnet_id to be a subnet the cluster already runs nodes in,
+    # and a subnet Terraform is about to carve never is. So the combination has no
+    # working configuration; say that here rather than failing later on a
+    # postcondition that reads as a subnet mismatch.
+    precondition {
+      condition     = var.create_cluster || !var.create_vnet
+      error_message = "create_cluster = false requires create_vnet = false. aks_subnet_id has to name a subnet the existing cluster already runs nodes in, and a freshly carved subnet never is, so attaching to a cluster while building a new VNet cannot succeed. Supply vnet_id and the subnet IDs of the network that cluster already uses."
+    }
+
+    # An empty aks_subnet_id otherwise falls through to the VNet module's output,
+    # which is unknown until apply. That defers the cluster read and silences every
+    # guard on it, on the first run — the run where the config is most likely wrong.
+    precondition {
+      condition     = var.create_cluster || var.aks_subnet_id != ""
+      error_message = "create_cluster = false requires aks_subnet_id, set to a subnet the existing cluster already runs nodes in. Terraform checks it against the cluster's agent pools and fails with the list it accepts. It also drives the Blob and Key Vault firewall allowlists, so it is not something Terraform can pick for you."
+    }
+
     # BYO subnet IDs are meaningless on the create path — fail loudly instead of
     # building a VNet the operator did not expect and ignoring what they set.
     precondition {
@@ -395,7 +424,10 @@ resource "terraform_data" "validate_network" {
         local.aks_demand_rows,
         [
           "",
-          "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
+          "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves.",
+          # Which knobs move the number depends on which pools are counted, so the
+          # advice follows the same gate the sizing does.
+          var.create_cluster ? "Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}." : "Or lower max_count on the pools listed above. The default pool is absent because attaching to an existing cluster never creates one, and setting existing_cluster_node_pools_managed = false drops the requirement to zero, leaving pool capacity to whoever owns the cluster.",
         ]
       ))
     }
@@ -453,8 +485,18 @@ module "aks" {
   dns_service_ip = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
-  create_cluster                       = var.create_cluster
-  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name
+  create_cluster = var.create_cluster
+
+  # Both values are resolved here, to plain strings, rather than inside the module
+  # against azurerm_resource_group.resource_group.name and local.aks_subnet_id.
+  # Either of those reaches the cluster data source as a value unknown until apply,
+  # and one unknown argument defers the whole read — which silences all four guards
+  # on it during the first plan, the run where a config is most likely wrong.
+  # create_cluster = false requires create_vnet = false and a non-empty
+  # aks_subnet_id, so on that path this is exactly what local.aks_subnet_id
+  # resolves to, without the graph edge to the VNet module.
+  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name != "" ? var.existing_cluster_resource_group_name : local.resource_group_name
+  existing_cluster_subnet_id           = var.aks_subnet_id
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count
@@ -462,9 +504,10 @@ module "aks" {
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
-  # On a pre-existing cluster whose node pools the customer owns, pass an empty
-  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
-  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
+  # On a pre-existing cluster whose node pools the customer owns this is empty,
+  # so Terraform doesn't attach pools to a cluster it doesn't manage. The subnet
+  # capacity check counts this same map.
+  additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller

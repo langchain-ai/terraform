@@ -117,9 +117,13 @@ variable "create_vnet" {
 
 # ── Bring-your-own AKS cluster ────────────────────────────────────────────────
 # Set create_cluster = false to deploy onto a cluster the customer already runs.
-# Terraform still provisions Key Vault, Storage, Managed Identities, federated
-# credentials, and (when create_vnet = true) networking — it just reads the
-# cluster instead of creating it. Prerequisites on the existing cluster:
+# Terraform still provisions Key Vault, Storage, Managed Identities, and federated
+# credentials — it just reads the cluster instead of creating it.
+#
+# This path also requires create_vnet = false. aks_subnet_id has to name a subnet
+# the cluster already runs nodes in, which a subnet Terraform carves never is, so
+# attaching while building a VNet has no working configuration and the plan rejects
+# the combination outright. Prerequisites on the existing cluster:
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
@@ -146,8 +150,8 @@ variable "existing_cluster_resource_group_name" {
 
 variable "existing_cluster_node_pools_managed" {
   type        = bool
-  description = "Whether Terraform should manage the additional node pools (e.g. the 'large' pool for ClickHouse) on a pre-existing cluster. Set false when the customer's platform team owns all node pools — you must then ensure the cluster already has capacity for ClickHouse and LangGraph workloads. Only used when create_cluster = false."
-  default     = true
+  description = "Whether Terraform should add and manage the additional node pools (e.g. the 'large' pool for ClickHouse) on a pre-existing cluster. Defaults to false: adding a Standard_D16s_v3 pool to a cluster someone else owns is a change worth opting into, and it is the surprising half of a module documented as one that never modifies an existing cluster. Set true to have Terraform add them, and the cluster must then have subnet capacity for the pools — the AKS subnet check counts them. Left false, ensure the cluster already has capacity for ClickHouse (3.5 vCPU / 15 GiB) and LangGraph workloads. Terraform never adopts pools that already exist either way; it only ever adds new ones. Only used when create_cluster = false."
+  default     = false
 }
 
 variable "vnet_id" {
