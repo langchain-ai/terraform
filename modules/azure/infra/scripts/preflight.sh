@@ -13,6 +13,7 @@
 #   3. Required resource providers are registered
 #   4. Deployer has required RBAC roles (Contributor + User Access Admin)
 #   5. terraform.tfvars exists with required fields populated
+#   6. On the attach path, the existing cluster's nodes can hold ClickHouse
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -180,6 +181,144 @@ for TOOL in terraform kubectl helm; do
     warn "${TOOL} not found — needed for later passes"
   fi
 done
+
+# ── 7. Existing-cluster node capacity ─────────────────────────────────────────
+# Attach path only. Terraform validates subnet space and Kubernetes version on an
+# existing cluster, but nothing checks whether a node in it is big enough to hold
+# the largest pod LangSmith schedules. ClickHouse is that pod, it is a single
+# replica, and Kubernetes schedules a pod onto one node — so cluster-wide totals
+# do not answer the question and neither does `az vm list-sizes`, which reports
+# capacity. Allocatable is capacity minus kube-reserved, system-reserved, and the
+# eviction threshold, and only the live node object carries it: a Standard_D4s_v3
+# advertises 4 vCPU / 16 GiB and allocates 3860m / 14.3 GiB.
+#
+# This tests whether the pod can ever fit, not whether it fits right now. A node
+# large enough but currently full is the autoscaler's problem; a node too small
+# is unfixable without adding a pool, which is the failure worth catching early.
+echo ""
+echo "── Existing Cluster Capacity ─────────────────────────"
+
+# terraform.tfvars carries quoted strings and bare booleans, so read the raw
+# right-hand side rather than assuming either form.
+_tfvar() {
+  local raw
+  [ -f "${TFVARS:-}" ] || return 0
+  raw=$(grep -E "^[[:space:]]*${1}[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || return 0
+  raw=${raw#*=}
+  raw=${raw%%#*}
+  printf '%s' "$raw" | tr -d '"' | tr -d '[:space:]'
+}
+
+# Every value below comes from a file the operator edits by hand, so each one is
+# matched against an expected literal or charset before it is used. A value that
+# does not match skips the check instead of being passed along.
+CREATE_CLUSTER=$(_tfvar create_cluster)
+POOLS_MANAGED=$(_tfvar existing_cluster_node_pools_managed)
+CH_SOURCE=$(_tfvar clickhouse_source)
+SIZING=$(_tfvar sizing_profile)
+CLUSTER_NAME=$(_tfvar existing_cluster_name)
+
+# The ClickHouse request per sizing overlay, read off the files in
+# helm/values/examples/. With no overlay the chart's own default applies.
+case "$SIZING" in
+  minimum)          REQ_CPU_M=1000; REQ_MEM_MI=2048;  REQ_LABEL="minimum" ;;
+  dev)              REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="dev" ;;
+  production)       REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="production" ;;
+  production-large) REQ_CPU_M=4000; REQ_MEM_MI=16384; REQ_LABEL="production-large" ;;
+  *)                REQ_CPU_M=3500; REQ_MEM_MI=12288; REQ_LABEL="chart default (no sizing_profile set)" ;;
+esac
+
+if [ "$CREATE_CLUSTER" != "false" ]; then
+  echo "  ○ Skipped: create_cluster is not false, so Terraform builds the pools itself"
+elif [ "$CH_SOURCE" = "external" ]; then
+  echo "  ○ Skipped: clickhouse_source = external, nothing to schedule in-cluster"
+elif [ "$POOLS_MANAGED" = "true" ]; then
+  echo "  ○ Skipped: existing_cluster_node_pools_managed = true, Terraform adds the large pool"
+elif ! command -v kubectl &>/dev/null; then
+  warn "kubectl not found — cannot read node allocatable, skipping capacity check"
+elif ! [[ "$CLUSTER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$ ]]; then
+  warn "existing_cluster_name is empty or not a valid AKS name — skipping capacity check"
+else
+  # Read the target before reading the cluster. A kubeconfig pointed somewhere
+  # else would return another cluster's nodes and a confidently wrong verdict.
+  KUBE_CTX=$(kubectl config current-context 2>/dev/null || echo "")
+  if [ -z "$KUBE_CTX" ]; then
+    warn "No kubectl context set — skipping capacity check. Run: az aks get-credentials --resource-group <rg> --name ${CLUSTER_NAME}"
+  elif [ "$KUBE_CTX" != "$CLUSTER_NAME" ]; then
+    warn "kubectl context is \"${KUBE_CTX}\" but existing_cluster_name is \"${CLUSTER_NAME}\" — skipping rather than measuring the wrong cluster"
+  else
+    NODES_JSON=$(kubectl get nodes -o json --request-timeout=10s 2>/dev/null || echo "")
+    if [ -z "$NODES_JSON" ]; then
+      warn "Could not read nodes from \"${KUBE_CTX}\" — skipping capacity check"
+    else
+      VERDICT=$(printf '%s' "$NODES_JSON" | python3 -c '
+import json, sys
+
+req_cpu, req_mem = int(sys.argv[1]), int(sys.argv[2])
+
+def cpu_m(v):
+    return int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
+
+# Suffixes kubelet emits for allocatable memory. Anything else is a parse
+# failure, not a value to guess at.
+UNITS = {"Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1024 * 1024}
+
+def mem_mi(v):
+    for suffix, factor in UNITS.items():
+        if v.endswith(suffix):
+            return int(float(v[: -len(suffix)]) * factor)
+    return int(v) // (1024 * 1024)
+
+try:
+    nodes = json.load(sys.stdin).get("items", [])
+except (ValueError, AttributeError):
+    print("ERR unreadable node JSON")
+    sys.exit(0)
+
+best = None
+for n in nodes:
+    if n.get("spec", {}).get("unschedulable"):
+        continue
+    ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                for c in n.get("status", {}).get("conditions", []))
+    if not ready:
+        continue
+    alloc = n.get("status", {}).get("allocatable", {})
+    try:
+        c, m = cpu_m(alloc["cpu"]), mem_mi(alloc["memory"])
+    except (KeyError, ValueError):
+        continue
+    # Rank by the tighter of the two dimensions so the reported node is the one
+    # that comes closest to holding the pod, not the widest on one axis.
+    score = min(c / req_cpu, m / req_mem)
+    if best is None or score > best[0]:
+        best = (score, c, m)
+
+if best is None:
+    print("ERR no schedulable Ready nodes found")
+else:
+    _, c, m = best
+    print("%s %d %d" % ("FIT" if c >= req_cpu and m >= req_mem else "NOFIT", c, m))
+' "$REQ_CPU_M" "$REQ_MEM_MI")
+
+      read -r VERDICT_KIND BEST_CPU_M BEST_MEM_MI <<<"$VERDICT"
+      case "${VERDICT_KIND:-ERR}" in
+        FIT)
+          pass "ClickHouse (${REQ_LABEL}: ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi) fits — largest node allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi"
+          ;;
+        NOFIT)
+          fail "No node can hold ClickHouse. Largest allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi; the ${REQ_LABEL} profile requests ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi.
+      Add a pool that fits it (az aks nodepool add --node-vm-size Standard_D16s_v3), or set
+      existing_cluster_node_pools_managed = true to let Terraform add one, or drop sizing_profile
+      to a smaller overlay. Autoscaling does not help: no count of nodes this size holds one pod."
+          ;;
+        *)
+          warn "Capacity check inconclusive: ${VERDICT#ERR }"
+          ;;
+      esac
+    fi
+  fi
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

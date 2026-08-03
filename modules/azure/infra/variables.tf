@@ -150,7 +150,7 @@ variable "existing_cluster_resource_group_name" {
 
 variable "existing_cluster_node_pools_managed" {
   type        = bool
-  description = "Whether Terraform should add and manage the additional node pools (e.g. the 'large' pool for ClickHouse) on a pre-existing cluster. Defaults to false: adding a Standard_D16s_v3 pool to a cluster someone else owns is a change worth opting into, and it is the surprising half of a module documented as one that never modifies an existing cluster. Set true to have Terraform add them, and the cluster must then have subnet capacity for the pools — the AKS subnet check counts them. Left false, ensure the cluster already has capacity for ClickHouse (3.5 vCPU / 15 GiB) and LangGraph workloads. Terraform never adopts pools that already exist either way; it only ever adds new ones. Only used when create_cluster = false."
+  description = "Whether Terraform should add and manage the additional node pools (e.g. the 'large' pool for ClickHouse) on a pre-existing cluster. Defaults to false: adding a Standard_D16s_v3 pool to a cluster someone else owns is a change worth opting into, and it is the surprising half of a module documented as one that never modifies an existing cluster. Set true to have Terraform add them, and the cluster must then have subnet capacity for the pools — the AKS subnet check counts them. Left false, the cluster needs a node that can hold ClickHouse on its own — 2 vCPU / 8 GiB under the default production sizing profile, 4 vCPU / 16 GiB under production-large — plus room for LangGraph workloads. infra/scripts/preflight.sh checks that against the live nodes before you apply. Terraform never adopts pools that already exist either way; it only ever adds new ones. Only used when create_cluster = false."
   default     = false
 }
 
@@ -325,8 +325,13 @@ variable "storage_allowed_ips" {
 # Pass 3–5 (LangGraph Platform, Agent Builder, Insights): add ~3 vCPU / 5 GiB.
 #   Total with autoscale headroom: max_count = 12 (Standard_D8s_v3).
 #
-# ClickHouse: 3.5 vCPU / 15 GiB request — always scheduled to the large pool
-#   (Standard_D16s_v3, 16 vCPU / 64 GiB) via node affinity set in the chart.
+# ClickHouse: one pod, and its request comes from the sizing overlay in
+#   helm/values/examples/ — 1 vCPU / 2 GiB (minimum), 2 vCPU / 8 GiB (dev and
+#   production), 4 vCPU / 16 GiB (production-large). With no overlay the chart's
+#   own default applies: 3.5 vCPU / 12 GiB.
+#   Nothing pins it to the large pool: the chart emits nodeSelector and affinity
+#   only when they are set, and this module sets neither. It lands on whichever
+#   node has room, so a single node must hold the whole request.
 #   Production recommendation from upstream: 8 vCPU / 32 GiB for heavy tracing load.
 #
 # Official LangSmith minimum: 16 vCPU / 64 GiB cluster-wide.
@@ -378,10 +383,10 @@ variable "additional_node_pools" {
     min_count = number
     max_count = number
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) carries ClickHouse (2 vCPU / 8 GiB at the default production sizing profile) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
+      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (2 vCPU/8Gi at production sizing) + dataplane agent pods
       min_count = 0
       max_count = 2
     }

@@ -232,7 +232,7 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 | default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
 | large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
 
-> ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
+> ClickHouse (when in-cluster) requests 1–4 CPU and 2–16 GiB RAM depending on the sizing profile, and 3.5 CPU / 12 GiB when no sizing overlay is applied. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 
 ---
 
