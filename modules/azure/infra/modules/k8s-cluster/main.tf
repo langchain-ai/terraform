@@ -608,11 +608,15 @@ resource "time_sleep" "agic_identity_propagation" {
   depends_on      = [azurerm_kubernetes_cluster.main]
 }
 
+# principal_type is set explicitly on the three assignments below: subscriptions that
+# delegate roleAssignments/write with an ABAC condition on principalType return 403
+# when the request omits it.
 resource "azurerm_role_assignment" "agic_rg_reader" {
   count                = var.ingress_controller == "agic" ? 1 : 0
   scope                = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
   role_definition_name = "Reader"
   principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
 
@@ -621,6 +625,7 @@ resource "azurerm_role_assignment" "agic_agw_contributor" {
   scope                = azurerm_application_gateway.agw[0].id
   role_definition_name = "Contributor"
   principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
 
@@ -629,6 +634,7 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
   scope                = local.agic_vnet_id
   role_definition_name = "Network Contributor"
   principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
 

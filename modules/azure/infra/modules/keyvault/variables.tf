@@ -20,6 +20,17 @@ variable "managed_identity_principal_id" {
   description = "Principal ID of the user-assigned managed identity used by LangSmith K8s pods. Gets 'Key Vault Secrets User' role to read secrets at runtime."
 }
 
+variable "terraform_principal_type" {
+  type        = string
+  description = "Principal type of the identity running `terraform apply`, applied to its 'Key Vault Secrets Officer' grant. Null (default) omits the field and lets Azure infer it. Set \"User\" or \"ServicePrincipal\" only when the subscription delegates roleAssignments/write through an ABAC condition on principalType, which rejects requests that omit it."
+  default     = null
+
+  validation {
+    condition     = var.terraform_principal_type == null || contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
+    error_message = "terraform_principal_type must be 'User', 'Group', or 'ServicePrincipal'. Omit it entirely (or set null) to let Azure infer the type — an empty string is not a valid opt-out."
+  }
+}
+
 # ── Vault configuration ───────────────────────────────────────────────────────
 
 variable "soft_delete_retention_days" {

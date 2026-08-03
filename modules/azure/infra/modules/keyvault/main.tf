@@ -71,11 +71,17 @@ resource "azurerm_key_vault" "langsmith" {
 # "Key Vault Secrets Officer" allows: create, read, update, delete, list secrets.
 # This grants the person running `terraform apply` full secret management rights.
 # For CI/CD pipelines, replace the object_id with a dedicated service principal.
+#
+# principal_type is a variable here, unlike the managed-identity grants below:
+# this principal is a user for an interactive `az login` and a service principal
+# in CI, so no literal is correct for both. Null (the default) omits the field
+# and lets Azure infer it — see var.terraform_principal_type.
 
 resource "azurerm_role_assignment" "terraform_kv_admin" {
   scope                = azurerm_key_vault.langsmith.id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
+  principal_type       = var.terraform_principal_type
 }
 
 # ── RBAC: Pod managed identity ─────────────────────────────────────────────────
@@ -83,11 +89,15 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
 # LangSmith pods use Workload Identity to assume this managed identity and
 # read secrets at runtime — currently used by setup-env.sh, and ready for
 # the CSI Secrets Store driver in Phase 2.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 
 resource "azurerm_role_assignment" "managed_identity_kv_reader" {
   scope                = azurerm_key_vault.langsmith.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.managed_identity_principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 # ── Wait for RBAC propagation ──────────────────────────────────────────────────

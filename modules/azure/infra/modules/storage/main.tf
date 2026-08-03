@@ -55,8 +55,12 @@ resource "azurerm_storage_container" "container" {
 # "Storage Blob Data Contributor" allows: read, write, delete blobs.
 # Scoped to the storage account (not the container) for flexibility.
 # The identity is created in the k8s-cluster module and passed in via variable.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 resource "azurerm_role_assignment" "blob_data_contributor" {
   principal_id         = var.workload_identity_principal_id
+  principal_type       = "ServicePrincipal"
   role_definition_name = "Storage Blob Data Contributor"
   scope                = azurerm_storage_account.storage_account.id
 }
