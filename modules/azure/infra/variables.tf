@@ -303,6 +303,12 @@ variable "amr_sku" {
   default     = "Balanced_B0"
 }
 
+variable "redis_availability_zones" {
+  type        = list(string)
+  description = "Availability zones for Azure Managed Redis. Independent of var.availability_zones so Redis can be placed separately from AKS/Postgres. Empty (default) lets Azure choose."
+  default     = []
+}
+
 variable "blob_ttl_enabled" {
   type        = bool
   description = "Enable TTL for the blob container"

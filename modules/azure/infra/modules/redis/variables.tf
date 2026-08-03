@@ -46,6 +46,12 @@ variable "high_availability" {
   default     = false
 }
 
+variable "availability_zones" {
+  type        = list(string)
+  description = "Availability zones to pin the AMR cluster to. Empty (default) lets Azure place it. Most regions offer [\"1\",\"2\",\"3\"]; australiacentral, northcentralus and westus have no zones."
+  default     = []
+}
+
 variable "tags" {
   type        = map(string)
   description = "Common Azure resource tags to apply to all resources in this module"
