@@ -86,7 +86,7 @@ az network vnet subnet update --ids <aks-subnet-id> \
   --service-endpoints Microsoft.Storage Microsoft.KeyVault
 ```
 
-Terraform also warns when `location` doesn't match the cluster's region, since Key Vault, Blob, PostgreSQL, and Redis are created in `location` and pod traffic to them would cross regions.
+`location` has to be the region `vnet_id` is in, and Terraform rejects anything else at plan. Azure refuses a PostgreSQL flexible server whose delegated subnet is in another region and a private endpoint whose subnet is in another region, so Postgres and Redis would fail several minutes into the apply, and the Blob and Key Vault firewalls allowlist the AKS subnet through regional service endpoints that don't reach across regions. The wizard reads the region off the cluster, so this only comes up in a hand-written `terraform.tfvars`.
 
 These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
 

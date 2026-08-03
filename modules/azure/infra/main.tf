@@ -360,6 +360,16 @@ resource "terraform_data" "validate_network" {
       error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
     }
 
+    # Every resource is created in var.location while the subnets come from the
+    # reused VNet, and Azure will not attach a resource in one region to a network
+    # in another. Compared with spaces stripped and lowercased because Azure
+    # accepts both "East US" and "eastus" for the same region; only the comparison
+    # is normalized, Azure still gets the original string.
+    precondition {
+      condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || lower(replace(data.azurerm_virtual_network.byo_vnet[0].location, " ", "")) == lower(replace(var.location, " ", ""))
+      error_message = "location is set to ${var.location}, but vnet_id names a VNet in ${try(data.azurerm_virtual_network.byo_vnet[0].location, "another region")}. Azure rejects a Postgres flexible server whose delegated subnet is in another region and a private endpoint whose subnet is in another region, so Postgres and Redis would fail partway through the apply. The Blob and Key Vault firewalls allowlist the AKS subnet through the regional Microsoft.Storage and Microsoft.KeyVault service endpoints, which do not reach across regions either. Set location to ${try(data.azurerm_virtual_network.byo_vnet[0].location, "the VNet's region")}."
+    }
+
     # Both subnets are carved only out of a VNet Terraform owns, so under
     # bring-your-own the operator has to name one that already exists.
     precondition {

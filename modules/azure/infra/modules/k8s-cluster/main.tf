@@ -60,10 +60,6 @@ locals {
   cluster_oidc_issuer_url = var.create_cluster ? azurerm_kubernetes_cluster.main[0].oidc_issuer_url : data.azurerm_kubernetes_cluster.existing[0].oidc_issuer_url
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
-
-  # var.location for a cluster created here, so the location check below is
-  # trivially satisfied and only has something to say under create_cluster = false.
-  cluster_location = var.create_cluster ? var.location : data.azurerm_kubernetes_cluster.existing[0].location
 }
 
 # Read-only lookup of a pre-existing AKS cluster (BYOC). Never creates, modifies,
@@ -141,17 +137,9 @@ data "azapi_resource" "existing_security_profile" {
   }
 }
 
-# Key Vault, Blob, PostgreSQL, and Redis are all created in var.location, which
-# nothing ties to the region the existing cluster runs in. A mismatch works, at
-# the cost of cross-region latency and egress on every trace write, so warn
-# rather than fail — a deliberate split-region deployment stays possible.
-check "existing_cluster_location" {
-  assert {
-    # Azure accepts both "East US" and "eastus" for the same region.
-    condition     = lower(replace(local.cluster_location, " ", "")) == lower(replace(var.location, " ", ""))
-    error_message = "Cluster '${var.cluster_name}' runs in ${local.cluster_location} but location is set to ${var.location}. Key Vault, Blob, PostgreSQL, and Redis will be created in ${var.location}, so pod traffic to them crosses regions."
-  }
-}
+# The third guard on an attached cluster, its region, lives in the root module:
+# terraform_data.validate_network rejects a var.location that is not the reused
+# VNet's region, and that VNet is this cluster's own.
 
 # Helm provider uses the AKS cluster credentials to deploy charts
 # (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
