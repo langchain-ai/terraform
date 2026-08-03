@@ -133,13 +133,13 @@ variable "helm_values_path" {
 #------------------------------------------------------------------------------
 
 variable "sizing" {
-  description = "Resource sizing profile: production, production-large, dev, or none (chart defaults). See SIZING.md."
+  description = "Resource sizing profile: production, production-large, dev, minimum (absolute floor, not for production), or none (chart defaults). See SIZING.md."
   type        = string
   default     = "production"
 
   validation {
-    condition     = contains(["production", "production-large", "dev", "none"], var.sizing)
-    error_message = "sizing must be one of: production, production-large, dev, none"
+    condition     = contains(["production", "production-large", "dev", "minimum", "none"], var.sizing)
+    error_message = "sizing must be one of: production, production-large, dev, minimum, none"
   }
 }
 

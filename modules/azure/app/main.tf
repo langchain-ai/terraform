@@ -217,6 +217,7 @@ resource "helm_release" "langsmith" {
     var.sizing == "production" ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
     var.sizing == "production-large" ? [file("${local.values_path}/langsmith-values-sizing-production-large.yaml")] : [],
     var.sizing == "dev" ? [file("${local.values_path}/langsmith-values-sizing-dev.yaml")] : [],
+    var.sizing == "minimum" ? [file("${local.values_path}/langsmith-values-sizing-minimum.yaml")] : [],
     # 4. Product addons
     var.enable_agent_deploys ? [file("${local.values_path}/langsmith-values-agent-deploys.yaml"), yamlencode(local.agent_deploys_overrides)] : [],
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],

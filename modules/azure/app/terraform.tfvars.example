@@ -19,6 +19,7 @@ admin_email = "admin@example.com"
 # "production"       = multi-replica with HPA (~20 users, ~100 traces/sec)
 # "production-large" = high-volume (~50 users, ~1000 traces/sec)
 # "dev"              = single-replica, minimal resources (dev/CI/demos)
+# "minimum"          = absolute floor; NOT for production
 # "none"             = chart defaults
 # See: helm/values/examples/SIZING.md
 
