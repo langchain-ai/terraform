@@ -1293,7 +1293,8 @@ REDIS_SOURCE="in-cluster"
 CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
-AMR_SKU="Balanced_B0"
+AMR_SKU="Balanced_B1"
+REDIS_HA="false"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -1302,7 +1303,7 @@ _run_section_7() {
   _hint "In-cluster  — runs as pods. Simple to deploy, but no backups, limited HA."
   _hint "              OK for dev/POC. Do NOT use for production workloads."
   _hint ""
-  _hint "External    — Azure managed services (Postgres Flexible Server, Cache for Redis)."
+  _hint "External    — Azure managed services (Postgres Flexible Server, Managed Redis)."
   _hint "              Automated backups, geo-redundancy, independent scaling."
   _hint "              Recommended for production and long-running POCs."
   _hint ""
@@ -1323,10 +1324,12 @@ _run_section_7() {
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "$redis_yn"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis Balanced_B3 — 3 GB, HA)?" "$redis_yn"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
+      AMR_SKU="Balanced_B3"
+      REDIS_HA="true"
     fi
   else
     # No default until the section has been answered once — a fresh run still
@@ -1800,7 +1803,9 @@ if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
 # Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
-amr_sku = "${AMR_SKU}"   # Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
+# B1 = 1 GB, B3 = 3 GB — bump if the region reports AllocationFailed.
+amr_sku                 = "${AMR_SKU}"
+redis_high_availability = ${REDIS_HA}
 TFVARS
 fi
 

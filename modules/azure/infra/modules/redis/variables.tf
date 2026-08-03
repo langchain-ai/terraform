@@ -30,8 +30,7 @@ variable "vnet_id" {
 
 variable "amr_sku" {
   type        = string
-  description = "Azure Managed Redis SKU. Balanced_B0 is the smallest. See `az redisenterprise create -h` for the list."
-  default     = "Balanced_B0"
+  description = "Azure Managed Redis SKU. See `az redisenterprise create -h` for the list. No default — the caller owns the size so it can't drift from the root default."
 }
 
 variable "clustering_policy" {
@@ -42,7 +41,7 @@ variable "clustering_policy" {
 
 variable "high_availability" {
   type        = bool
-  description = "Zone-redundant HA. NOT supported on the smallest (B0) SKU — keep false there."
+  description = "Zone-redundant HA (primary + replica across nodes). Required for the AMR SLA. NOT supported on the smallest (B0) SKU — keep false there."
   default     = false
 }
 

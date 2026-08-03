@@ -618,6 +618,7 @@ module "redis" {
   vnet_id             = local.vnet_id                            # private DNS zone link
   amr_sku             = var.amr_sku
   availability_zones  = var.redis_availability_zones
+  high_availability   = var.redis_high_availability
 
   tags = local.common_tags
 }
