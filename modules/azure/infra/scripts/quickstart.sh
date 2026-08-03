@@ -138,7 +138,7 @@ STATE_FILE="$INFRA_DIR/.quickstart-state"
 _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
 COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
-AKS_SERVICE_CIDR
+AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
@@ -260,6 +260,11 @@ _load_tfvars() {
     # VNet Terraform builds. Dropping it on a re-run would put back the
     # 10.0.64.0/20 that can sit inside the operator's own address space.
     AKS_SERVICE_CIDR=$(_tfvar aks_service_cidr)
+    # AGIC and the bastion have no carve path inside a VNet Terraform does not
+    # own, so their IDs are required rather than optional here. Dropping either
+    # on a re-run writes a tfvars that fails its own precondition at plan.
+    AGIC_SUBNET_ID=$(_tfvar agic_subnet_id)
+    BASTION_SUBNET_ID=$(_tfvar bastion_subnet_id)
   }
   return 0
 }
@@ -638,9 +643,11 @@ _run_section_5() {
   echo ""
   printf "  Ingress: $(_cyan "$INGRESS_CONTROLLER")\n"
 
-  # Clear settings that belong to a controller no longer selected.
+  # Clear settings that belong to a controller no longer selected. The subnet ID
+  # goes with them: it is written whenever non-empty, so leaving it behind after
+  # a switch away from AGIC emits an agic_subnet_id for a gateway never created.
   [[ "$INGRESS_CONTROLLER" != "istio-addon" ]] && ISTIO_ADDON_REVISION=""
-  [[ "$INGRESS_CONTROLLER" != "agic" ]]        && AGW_SKU_TIER=""
+  [[ "$INGRESS_CONTROLLER" != "agic" ]]        && { AGW_SKU_TIER=""; AGIC_SUBNET_ID=""; }
 
   if [[ "$INGRESS_CONTROLLER" == "istio-addon" ]]; then
     echo ""
@@ -1013,11 +1020,13 @@ _run_section_10() {
       fi
     else
       CREATE_BASTION="false"
+      BASTION_SUBNET_ID=""
     fi
   else
     CREATE_WAF="false"
     CREATE_DIAGNOSTICS="false"
     CREATE_BASTION="false"
+    BASTION_SUBNET_ID=""
     _hint "Dev profile: security add-ons skipped. Edit terraform.tfvars to enable after deploy."
   fi
 }
