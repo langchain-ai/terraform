@@ -105,9 +105,9 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version constraint. Defaults to the pinned ~0.15.1 line (latest 0.15.x, never 0.16), matching the deploy scripts. Empty string = newest published chart."
   type        = string
-  default     = ""
+  default     = "~0.15.1"
 }
 
 variable "helm_timeout" {

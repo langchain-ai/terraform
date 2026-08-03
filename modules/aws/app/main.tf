@@ -318,6 +318,16 @@ locals {
         annotations = local.irsa_annotations
       }
     } },
+    # Chart defaults insights/polly/operator ON. Make the enable_* flags
+    # authoritative so a flag left off doesn't deploy a component that then
+    # references encryption keys absent from langsmith-config-secret. insights
+    # and polly aren't in irsa_components, so toggle them directly. operator is
+    # (when agent deploys are on), so only inject a disable when off — adding an
+    # operator key while on would clobber its IRSA annotations via merge()'s
+    # shallow merge.
+    { insights = { enabled = var.enable_insights } },
+    { polly = { enabled = var.enable_polly } },
+    var.enable_agent_deploys ? {} : { operator = { enabled = false } },
   )
 
   # Agent deploys override — only the dynamic tlsEnabled field.
