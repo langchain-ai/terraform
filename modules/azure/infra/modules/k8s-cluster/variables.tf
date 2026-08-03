@@ -8,6 +8,18 @@ variable "cluster_name" {
   description = "Name of the cluster"
 }
 
+variable "create_cluster" {
+  type        = bool
+  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster (BYOC) — Terraform reads it via a data source instead of managing it, while still creating the Managed Identities, federated credentials, and (optionally) additional node pools in this module. 'agic' and 'istio-addon' ingress modes require create_cluster = true (they configure AKS-managed add-ons only settable on a Terraform-owned cluster resource)."
+  default     = true
+}
+
+variable "existing_cluster_resource_group_name" {
+  type        = string
+  description = "Resource group of the pre-existing cluster, when it differs from resource_group_name (e.g. the customer's platform team owns the AKS cluster in a separate resource group from the one this module creates for Key Vault/Storage/identities). Only used when create_cluster = false. Defaults to resource_group_name when empty."
+  default     = ""
+}
+
 variable "location" {
   type        = string
   description = "Location of the cluster"
