@@ -451,6 +451,22 @@ variable "tls_certificate_source" {
   }
 }
 
+# Both default true, which is what this module did before the flags existed. Set
+# them false when attaching to a cluster (create_cluster = false) that already
+# runs either component: Helm will not adopt a release it does not own, so the
+# install fails on the CRDs that are already there.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager into the cluster. Set false when the cluster already runs it. tls_certificate_source = 'dns01' requires this to be true — the DNS-01 solver needs a workload-identity annotation Terraform only adds to a cert-manager it installs itself."
+  default     = true
+}
+
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  default     = true
+}
+
 variable "postgres_admin_username" {
   type        = string
   description = "The username of the Postgres administrator"

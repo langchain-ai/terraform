@@ -141,7 +141,8 @@ EXISTING_CLUSTER_POOLS_MANAGED
 CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
-NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INGRESS_CONTROLLER
+NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INSTALL_KEDA INSTALL_CERT_MANAGER
+INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
 AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE
@@ -246,6 +247,10 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_cluster)              && CREATE_CLUSTER="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar existing_cluster_node_pools_managed) && EXISTING_CLUSTER_POOLS_MANAGED="$_TF_VAL"
+  # Written only when false, since true is both the Terraform default and what
+  # every create-path deploy wants, so an absent key genuinely means true.
+  _TF_VAL=$(_parse_tfvar install_cert_manager)        && INSTALL_CERT_MANAGER="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar install_keda)                && INSTALL_KEDA="$_TF_VAL"
   # Re-validated on the way in, not just at the prompt. This file may have been
   # hand-edited between runs, and an invalid value would otherwise flow straight
   # back into the writer. A rejected value is dropped so section 3 re-asks.
@@ -692,6 +697,11 @@ _run_section_3() {
     EXISTING_CLUSTER_NAME=""
     EXISTING_CLUSTER_RG=""
     EXISTING_CLUSTER_POOLS_MANAGED="false"
+    # A cluster Terraform is about to create runs neither component yet, and
+    # sections 4 and 6 stop asking, so restore both rather than carry an answer
+    # about a cluster no longer being attached into the new one's config.
+    INSTALL_KEDA="true"
+    INSTALL_CERT_MANAGER="true"
     # Drop anything read off a cluster on an earlier pass. Left set, section 2
     # would still call the region fixed by a cluster no longer being attached.
     _AKS_LOCATION=""
@@ -902,6 +912,9 @@ NODE_VM_SIZE="Standard_D4s_v3"
 NODE_MIN=2
 NODE_MAX=5
 NODE_MAX_PODS=60
+# Matches the Terraform default. Only ever turned off on the attach path, where
+# the cluster may already run KEDA.
+INSTALL_KEDA="true"
 
 _run_section_4() {
   _section "4. AKS Cluster"
@@ -923,6 +936,23 @@ _run_section_4() {
       EXISTING_CLUSTER_POOLS_MANAGED="true"
     else
       EXISTING_CLUSTER_POOLS_MANAGED="false"
+    fi
+    echo ""
+
+    # Asked only on this path. Helm will not adopt a release it does not own, so
+    # installing over one that is already there fails on the CRDs already
+    # registered, partway through an apply that has built Azure resources.
+    # The question is phrased about their cluster, not about the flag, so the
+    # default reads as "no" for the common case of a cluster without it.
+    _hint "KEDA scales the LangSmith queue workers on Redis queue depth. Terraform"
+    _hint "installs it, and something has to provide it, so answer yes only if it is"
+    _hint "already running — a second install fails on KEDA's existing CRDs."
+    local keda_default="n"
+    [[ "$INSTALL_KEDA" == "false" ]] && keda_default="y"
+    if _ask_yn "Does this cluster already run KEDA?" "$keda_default"; then
+      INSTALL_KEDA="false"
+    else
+      INSTALL_KEDA="true"
     fi
     echo ""
   else
@@ -1065,6 +1095,11 @@ DNS_LABEL=""
 LANGSMITH_DOMAIN=""
 LE_EMAIL=""
 CREATE_DNS_ZONE="false"
+# Asked here rather than with the cluster, because cert-manager is what issues
+# the certificate on both ACME paths. Answering it in the same section as the TLS
+# source keeps the one pair Terraform refuses (dns01 without it) from being
+# assembled by visiting two sections in the wrong order.
+INSTALL_CERT_MANAGER="true"
 
 # Suggests langsmith-<name_prefix> but still asks, because the DNS label lives in
 # a namespace shared with every other Azure tenant in the region: the FQDN
@@ -1096,6 +1131,22 @@ _run_section_6() {
   _hint ""
   _hint "Existing      — Bring a pre-issued K8s TLS secret (manual cert management)."
 
+  # Asked before the TLS source, because the answer rules one of the four out.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    echo ""
+    _hint "cert-manager issues the certificates on the Let's Encrypt and DNS-01 paths."
+    _hint "Terraform installs it, and Helm will not adopt a release it does not own, so"
+    _hint "a second install fails on cert-manager's existing CRDs."
+    local cm_default="n"
+    [[ "$INSTALL_CERT_MANAGER" == "false" ]] && cm_default="y"
+    if _ask_yn "Does this cluster already run cert-manager?" "$cm_default"; then
+      INSTALL_CERT_MANAGER="false"
+    else
+      INSTALL_CERT_MANAGER="true"
+    fi
+    echo ""
+  fi
+
   local tls_choice=""
   _answered 6 && tls_choice="$(_index_of "$TLS_SOURCE" none letsencrypt dns01 existing)"
   _ask_choice --default "$tls_choice" \
@@ -1113,6 +1164,27 @@ _run_section_6() {
   esac
 
   # Incompatibility warnings
+  #
+  # This first one has no "continue anyway", unlike the two below it: Terraform
+  # rejects the pair at plan, so there is no apply to continue to. TLS_SOURCE is
+  # cleared before re-asking so that Enter cannot re-pick the value just refused —
+  # with no default, section 6 requires an explicit answer.
+  if [[ "$TLS_SOURCE" == "dns01" && "$INSTALL_CERT_MANAGER" == "false" ]]; then
+    echo ""
+    _yellow "⚠  DNS-01 requires the cert-manager Terraform installs."
+    printf "   The DNS-01 solver authenticates to the Azure DNS API as a Managed Identity,\n"
+    printf "   bound to the cert-manager pod by an annotation Terraform adds to the service\n"
+    printf "   account of the release it creates. The cert-manager already in your cluster\n"
+    printf "   has no such annotation, so every ACME challenge fails on an Azure auth error.\n"
+    printf "   Options for a cluster that already runs cert-manager: none, letsencrypt, existing\n"
+    printf "   (letsencrypt uses HTTP-01, which needs no Azure credential and works through\n"
+    printf "   any cert-manager.)\n"
+    echo ""
+    TLS_SOURCE=""
+    _run_section_6
+    return
+  fi
+
   if [[ "$TLS_SOURCE" == "letsencrypt" && "$INGRESS_CONTROLLER" == "istio-addon" ]]; then
     echo ""
     _yellow "⚠  WARNING: istio-addon + letsencrypt is NOT supported."
@@ -1520,10 +1592,14 @@ while true; do
     [[ -n "$BASTION_SUBNET_ID" ]] && printf "  %-24s %s\n" "   Bastion subnet:" "reuse   $BASTION_SUBNET_ID"
   fi
   printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX  max_pods=$NODE_MAX_PODS"
+  # Shown only when off, which is the answer worth re-reading before an apply:
+  # something other than Terraform has to be providing the component.
+  [[ "$INSTALL_KEDA" == "false" ]] && printf "  %-24s %s\n" "   KEDA:" "already in the cluster, not installed"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
   [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
   [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
   printf "  %-24s %s\n" "6. TLS:"             "$TLS_SOURCE"
+  [[ "$INSTALL_CERT_MANAGER" == "false" ]] && printf "  %-24s %s\n" "   cert-manager:" "already in the cluster, not installed"
   [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
   [[ -n "$LE_EMAIL" ]]         && printf "  %-24s %s\n" "   ACME email:"   "$LE_EMAIL"
@@ -1644,6 +1720,17 @@ default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
 default_node_pool_max_pods  = ${NODE_MAX_PODS}
+TFVARS
+
+if [[ "$INSTALL_KEDA" == "false" ]]; then
+  cat >> "$OUTPUT" << 'TFVARS'
+# Your cluster already runs KEDA, so Terraform does not install it. The LangSmith
+# queue workers scale through that KEDA, and stop scaling if it is removed.
+install_keda                = false
+TFVARS
+fi
+
+cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
 # Ingress
@@ -1666,6 +1753,17 @@ TFVARS
 [[ -n "$LANGSMITH_DOMAIN" ]] && echo "langsmith_domain       = \"${LANGSMITH_DOMAIN}\"" >> "$OUTPUT"
 [[ -n "$LE_EMAIL" ]]         && echo "letsencrypt_email      = \"${LE_EMAIL}\""         >> "$OUTPUT"
 [[ "$CREATE_DNS_ZONE" == "true" ]] && echo "create_dns_zone        = true"               >> "$OUTPUT"
+# Written only when false, matching the add-ons above: true is the Terraform
+# default, so an omitted key means Terraform installs the component.
+if [[ "$INSTALL_CERT_MANAGER" == "false" ]]; then
+  cat >> "$OUTPUT" << 'TFVARS'
+# Your cluster already runs cert-manager, so Terraform does not install it. On
+# the letsencrypt path the ClusterIssuer is applied by helm/scripts/deploy.sh
+# and reconciled by that cert-manager, so nothing renews LangSmith's certificate
+# if it is ever removed.
+install_cert_manager   = false
+TFVARS
+fi
 
 cat >> "$OUTPUT" << TFVARS
 

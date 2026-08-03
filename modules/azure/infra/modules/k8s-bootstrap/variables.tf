@@ -101,6 +101,15 @@ variable "langsmith_license_key" {
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
 
+# Defaults true, unlike the GCP module's matching flag: this module installed
+# cert-manager unconditionally before the flag existed, so false as a default
+# would stop renewing certificates for anyone already deployed.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager. Set false when attaching to a cluster that already runs it — Helm cannot adopt a release it does not own, so a second install fails on the existing CRDs."
+  default     = true
+}
+
 variable "cert_manager_version" {
   type        = string
   description = "cert-manager Helm chart version"
@@ -155,6 +164,13 @@ variable "subscription_id" {
 }
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────
+
+# Defaults true for the same reason install_cert_manager does.
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  default     = true
+}
 
 variable "keda_version" {
   type        = string

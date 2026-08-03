@@ -4,13 +4,13 @@ output "langsmith_namespace" {
 }
 
 output "cert_manager_namespace" {
-  description = "Kubernetes namespace where cert-manager is deployed"
-  value       = helm_release.cert_manager.namespace
+  description = "Kubernetes namespace where cert-manager is deployed, or null when this module did not install it"
+  value       = var.install_cert_manager ? one(helm_release.cert_manager[*].namespace) : null
 }
 
 output "keda_namespace" {
-  description = "Kubernetes namespace where KEDA is deployed"
-  value       = helm_release.keda.namespace
+  description = "Kubernetes namespace where KEDA is deployed, or null when this module did not install it"
+  value       = var.install_keda ? one(helm_release.keda[*].namespace) : null
 }
 
 output "postgres_secret_name" {

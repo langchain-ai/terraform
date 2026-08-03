@@ -260,6 +260,8 @@ resource "kubernetes_secret_v1" "license" {
 #   bash helm/scripts/apply-cluster-issuers.sh
 
 resource "helm_release" "cert_manager" {
+  count = var.install_cert_manager ? 1 : 0
+
   name             = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
@@ -323,6 +325,18 @@ resource "helm_release" "cert_manager" {
 resource "kubernetes_manifest" "cluster_issuer_dns01" {
   count = var.tls_certificate_source == "dns01" ? 1 : 0
 
+  # DNS-01 needs the controller to hold a token for the Azure DNS API, which it
+  # gets from the workload-identity annotation the release above puts on its
+  # service account. A cert-manager this module did not install has no such
+  # annotation, so the ClusterIssuer would apply cleanly and then fail every ACME
+  # challenge with an Azure auth error. Reject the pair at plan instead.
+  lifecycle {
+    precondition {
+      condition     = var.install_cert_manager
+      error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
+    }
+  }
+
   manifest = {
     apiVersion = "cert-manager.io/v1"
     kind       = "ClusterIssuer"
@@ -361,6 +375,8 @@ resource "kubernetes_manifest" "cluster_issuer_dns01" {
 # based on Redis queue depth.
 
 resource "helm_release" "keda" {
+  count = var.install_keda ? 1 : 0
+
   name             = "keda"
   namespace        = "keda"
   create_namespace = true
