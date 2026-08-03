@@ -75,6 +75,8 @@ The identity running Terraform needs the following roles on the subscription:
 
 Owner includes both. Contributor alone is insufficient (role assignments require UAA).
 
+Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present, and the fix is to set `terraform_principal_type` rather than to request more access. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ### Authenticate
 
 ```bash
@@ -297,7 +299,7 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Checks `az` CLI version and confirms you are logged in
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
-- Checks RBAC: requires **Contributor** + **User Access Administrator** (or **Owner**) at subscription scope — needed for role assignments in the Key Vault, storage, and WAF modules
+- Checks RBAC: requires **Contributor** + **User Access Administrator** (or **Owner**) at subscription scope — needed for role assignments in the Key Vault, storage, DNS, bastion, and AKS/AGIC modules
 - Verifies `terraform.tfvars` exists with `location` and `subscription_id` set
 - Verifies `secrets.auto.tfvars` exists and has a non-empty `langsmith_license_key`
 - Checks that `terraform`, `kubectl`, and `helm` binaries are on PATH
