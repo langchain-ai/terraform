@@ -460,7 +460,8 @@ CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
-REDIS_CAPACITY=1
+AMR_SKU="Balanced_B1"
+REDIS_HA="false"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -469,7 +470,7 @@ _run_section_7() {
   _hint "In-cluster  — runs as pods. Simple to deploy, but no backups, limited HA."
   _hint "              OK for dev/POC. Do NOT use for production workloads."
   _hint ""
-  _hint "External    — Azure managed services (Postgres Flexible Server, Cache for Redis)."
+  _hint "External    — Azure managed services (Postgres Flexible Server, Managed Redis)."
   _hint "              Automated backups, geo-redundancy, independent scaling."
   _hint "              Recommended for production and long-running POCs."
   _hint ""
@@ -482,7 +483,8 @@ _run_section_7() {
   PG_ADMIN_USER="langsmith"
   PG_DB_NAME="langsmith"
   PG_DELETION_PROTECTION="false"
-  REDIS_CAPACITY=1
+  AMR_SKU="Balanced_B1"
+  REDIS_HA="false"
 
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
@@ -492,10 +494,12 @@ _run_section_7() {
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Cache for Redis Premium P1 — 6 GB)?" "y"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis Balanced_B3 — 3 GB, HA)?" "y"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
+      AMR_SKU="Balanced_B3"
+      REDIS_HA="true"
     fi
   else
     _ask_choice "Postgres + Redis:" \
@@ -796,8 +800,9 @@ fi
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
-# Azure Cache for Redis (P1 = 6 GB RAM — sufficient for most deployments)
-redis_capacity = ${REDIS_CAPACITY}
+# Azure Managed Redis (B1 = 1 GB, B3 = 3 GB — bump if the region reports AllocationFailed)
+amr_sku                 = "${AMR_SKU}"
+redis_high_availability = ${REDIS_HA}
 TFVARS
 fi
 

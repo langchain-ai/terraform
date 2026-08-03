@@ -136,7 +136,7 @@ variable "postgres_source" {
 
 variable "redis_source" {
   type        = string
-  description = "Redis deployment type. 'external' provisions Azure Cache for Redis (private VNet). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
+  description = "Redis deployment type. 'external' provisions Azure Managed Redis (private endpoint). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
   default     = "external"
 
   validation {
@@ -170,8 +170,14 @@ variable "postgres_subnet_address_prefix" {
 
 variable "amr_sku" {
   type        = string
-  description = "Azure Managed Redis SKU. Balanced_B0 is the smallest. Bump (Balanced_B1/B3/...) if the region reports AllocationFailed. (Replaces the classic redis_capacity.)"
-  default     = "Balanced_B0"
+  description = "Azure Managed Redis SKU. Balanced_B1 (1 GB) is the default — Balanced_B0 (0.5 GB) exists but sits on the most capacity-constrained pool and intermittently fails to allocate, and it can't run high availability. Bump (Balanced_B3/B5/...) for more memory. (Replaces the classic redis_capacity.)"
+  default     = "Balanced_B1"
+}
+
+variable "redis_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for Azure Managed Redis (primary + replica across nodes). Required for the AMR SLA, so set true for production. Unsupported on Balanced_B0 — that combination passes plan and fails at apply."
+  default     = false
 }
 
 variable "blob_ttl_enabled" {
