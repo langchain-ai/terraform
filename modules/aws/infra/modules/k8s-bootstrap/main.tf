@@ -657,6 +657,32 @@ resource "helm_release" "istio_base" {
   version          = "1.23.0"
 }
 
+# Istio GatewayClasses are not removed by Helm. Use terraform_data so the
+# destroy provisioner can reference self.input (helm_release cannot use
+# var.* in destroy-time provisioners).
+resource "terraform_data" "istio_gatewayclass_cleanup" {
+  count = var.enable_istio_gateway ? 1 : 0
+
+  input = {
+    cluster_name = var.cluster_name
+    region       = var.region
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
+      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
+        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
+      fi
+      kubectl delete gatewayclass istio istio-remote --ignore-not-found=true 2>/dev/null || true
+    EOT
+  }
+
+  depends_on = [helm_release.istio_base]
+}
+
 resource "helm_release" "istiod" {
   count = var.enable_istio_gateway ? 1 : 0
 
