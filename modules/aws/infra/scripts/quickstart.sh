@@ -360,7 +360,16 @@ fi
 PG_INSTANCE="$(_existing "postgres_instance_type" "$([[ "$PROFILE" == "prod" ]] && echo "db.r6g.xlarge" || echo "db.t3.large")")"
 PG_STORAGE="$(_existing "postgres_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "50" || echo "20")")"
 PG_MAX_STORAGE="$(_existing "postgres_max_storage_gb" "$([[ "$PROFILE" == "prod" ]] && echo "500" || echo "100")")"
-PG_DELETION_PROTECTION="$([[ "$PROFILE" == "prod" ]] && echo "true" || echo "false")"
+if [[ "$PROFILE" == "prod" ]]; then
+  PG_DELETION_PROTECTION="true"
+  PG_SKIP_FINAL_SNAPSHOT="false"
+elif [[ "$UPDATE_MODE" == "true" ]]; then
+  PG_DELETION_PROTECTION="$(_existing "postgres_deletion_protection" "false")"
+  PG_SKIP_FINAL_SNAPSHOT="$(_existing "postgres_skip_final_snapshot" "true")"
+else
+  PG_DELETION_PROTECTION="false"
+  PG_SKIP_FINAL_SNAPSHOT="true"
+fi
 
 if [[ "$PG_SOURCE" == "external" ]]; then
   echo ""
@@ -630,7 +639,7 @@ case "$_CHOICE" in
 esac
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 11. LangGraph Platform Features
+# 11. Product Features
 # ═══════════════════════════════════════════════════════════════════════════
 
 _section "11. Product Features"
@@ -642,9 +651,25 @@ _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_ab=$(_existing "enable_agent_builder" "false")
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
+_ex_smithdb=$(_existing "enable_smithdb" "false")
+_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
+_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
+_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
+ENABLE_SMITHDB="false"
+SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+if [[ "$PROFILE" == "prod" ]]; then
+  SMITHDB_DELETION_PROTECTION="true"
+  SMITHDB_SKIP_FINAL_SNAPSHOT="false"
+elif [[ "$UPDATE_MODE" == "true" ]]; then
+  SMITHDB_DELETION_PROTECTION="$(_existing "smithdb_metastore_deletion_protection" "false")"
+  SMITHDB_SKIP_FINAL_SNAPSHOT="$(_existing "smithdb_metastore_skip_final_snapshot" "true")"
+else
+  SMITHDB_DELETION_PROTECTION="false"
+  SMITHDB_SKIP_FINAL_SNAPSHOT="true"
+fi
 
 _ask_yn "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
@@ -662,6 +687,14 @@ fi
 _ask_yn "Enable Insights (ClickHouse analytics dashboard)?" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
+
+if _ask_yn "Enable SmithDB Deployment? (requires LangSmith Helm chart 0.16 or newer)" \
+  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
+  ENABLE_SMITHDB="true"
+  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
+  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
+  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Write terraform.tfvars
@@ -786,6 +819,7 @@ postgres_instance_type       = "${PG_INSTANCE}"
 postgres_storage_gb          = ${PG_STORAGE}
 postgres_max_storage_gb      = ${PG_MAX_STORAGE}
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
+postgres_skip_final_snapshot = ${PG_SKIP_FINAL_SNAPSHOT}
 TFVARS
 fi
 
@@ -874,6 +908,13 @@ enable_deployments   = ${ENABLE_DEPLOYMENTS}
 enable_agent_builder = ${ENABLE_AGENT_BUILDER}
 enable_insights      = ${ENABLE_INSIGHTS}
 enable_polly         = ${ENABLE_POLLY}
+
+enable_smithdb              = ${ENABLE_SMITHDB}
+smithdb_ingestion_enabled   = ${SMITHDB_INGESTION}
+smithdb_migration_enabled   = ${SMITHDB_MIGRATION}
+smithdb_query_enabled       = ${SMITHDB_QUERY}
+smithdb_metastore_deletion_protection = ${SMITHDB_DELETION_PROTECTION}
+smithdb_metastore_skip_final_snapshot = ${SMITHDB_SKIP_FINAL_SNAPSHOT}
 TFVARS
 
 # Security add-ons
@@ -920,6 +961,7 @@ printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
 [[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
 [[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
+printf "  %-26s %s\n" "SmithDB:"      "$ENABLE_SMITHDB"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
@@ -977,6 +1019,12 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
 else
   printf "  4. Deploy LangSmith:\n"
   printf "     ${CYAN}make init-values && make deploy${RESET}\n"
+fi
+
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  echo ""
+  printf "  ${DIM}SmithDB requires an explicit stable chart version of 0.16 or newer:${RESET}\n"
+  printf "     ${CYAN}make init-values && CHART_VERSION=0.16.21 make deploy${RESET}\n"
 fi
 
 echo ""

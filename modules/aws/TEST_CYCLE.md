@@ -34,6 +34,11 @@ checklist below.
 ```hcl
 tls_certificate_source       = "none"   # HTTP:80 only — no ACM/cert-manager needed
 postgres_deletion_protection = false    # Required for clean terraform destroy after test
+postgres_skip_final_snapshot = true     # Avoid fixed-name snapshots between test cycles
+
+# Required when testing a Terraform-created SmithDB metastore
+smithdb_metastore_deletion_protection = false
+smithdb_metastore_skip_final_snapshot = true
 ```
 
 All other defaults are fine for testing. The current dev config uses:
@@ -311,6 +316,21 @@ Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tf
 | Node group `minSize > desiredSize` | `InvalidParameterException: minSize can't be greater than desiredSize` | **Fixed**: `desired_size` now defaults to `min_size` when omitted from `eks_managed_node_groups`. If using an older version, add `desired_size` to your tfvars node group config. |
 | `setup-env.sh` hangs in non-interactive shell | Script blocks on `read` when stdin is not a terminal (CI, piped, redirected) | **Fixed**: script now detects non-interactive shell via `[[ -t 0 ]]` and fails fast with instructions to pre-export env vars or populate SSM directly |
 
+### SmithDB checks
+
+Test `enable_smithdb = false`, managed RDS/S3, and BYO PostgreSQL plans.
+For an applied environment, verify:
+
+```bash
+terraform -chdir=infra output smithdb_s3_vpc_endpoint_id
+kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
+kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+```
+
+Render the v16 chart with all integration gates disabled first. Confirm the
+metastore migration succeeds and SmithDB can write to S3 through the endpoint
+before testing ingestion, historical migration, or query cutover.
+
 ---
 
 ## Teardown
@@ -326,7 +346,8 @@ terraform -chdir=infra destroy
 ```
 
 **Before destroy, verify:**
-- `postgres_deletion_protection = false` is set in `terraform.tfvars`
+- `postgres_deletion_protection = false` and `postgres_skip_final_snapshot = true`
+- For a Terraform-created SmithDB metastore, protection is `false` and snapshot skipping is `true`
 - No custom DNS records pointing at the ALB (they will break permanently — a new hostname is
   issued on the next deploy)
 

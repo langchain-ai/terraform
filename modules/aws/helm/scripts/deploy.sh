@@ -31,8 +31,10 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
-# Override with the CHART_VERSION env var for an exact patch if needed.
+# Keep the repository-wide default chart line. SmithDB callers must explicitly
+# choose a stable 0.16 or newer chart so enabling infrastructure never upgrades
+# the app.
+_chart_version_was_set="${CHART_VERSION+x}"
 CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
@@ -119,6 +121,7 @@ _enable_standalone_insights=false
 _enable_envoy_gateway=false
 _enable_istio_gateway=false
 _enable_nginx_ingress=false
+_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
@@ -129,6 +132,19 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
 _tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
 _tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+
+# SmithDB is intentionally not allowed to change the repository's global chart
+# line. Require an explicit compatible version from the operator.
+if [[ "$_enable_smithdb" == "true" && "$_chart_version_was_set" != "x" ]]; then
+  echo "ERROR: enable_smithdb = true requires an explicit CHART_VERSION of 0.16 or newer." >&2
+  echo "       Example: CHART_VERSION=0.16.21 make deploy" >&2
+  exit 1
+fi
+if [[ "$_enable_smithdb" == "true" && ! "$CHART_VERSION" =~ ^~?0\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\.[0-9]+)?(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+  echo "ERROR: SmithDB requires a chart version of 0.16 or newer; got '$CHART_VERSION'." >&2
+  exit 1
+fi
 
 # Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB, so the
@@ -241,6 +257,20 @@ if [[ "$_sizing_profile" != "default" ]]; then
   fi
 else
   echo "  ○ sizing: chart defaults (sizing_profile = default)"
+fi
+
+# SmithDB overlay + env overrides — layered last so object-store, identity, and
+# staged LangSmith integration gates win over base/sizing defaults.
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
+    VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+    echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"
+  else
+    echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
+    exit 1
+  fi
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
@@ -383,7 +413,6 @@ fi
 [[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
 [[ "$_enable_standalone_polly" == "true" ]]    && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
-
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do
   if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
