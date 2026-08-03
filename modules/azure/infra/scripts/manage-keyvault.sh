@@ -21,12 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name ───────────────────────────────────────────────────
-# Priority: terraform output → derived from name_prefix in terraform.tfvars
+# Priority: terraform output → derived from terraform.tfvars
 if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
   : # got it from terraform output
 else
-  _suffix=$(_name_suffix) || _suffix=""
-  KV_NAME="langsmith-kv${_suffix}"
+  KV_NAME=$(_derive_kv_name)
 fi
 
 NAMESPACE="${NAMESPACE:-langsmith}"

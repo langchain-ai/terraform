@@ -30,6 +30,45 @@ variable "identifier" {
   }
 }
 
+# ── Resource naming scheme ────────────────────────────────────────────────────
+# Redis, Postgres, Storage, and Key Vault names live in a GLOBAL Azure namespace
+# shared by every tenant. The legacy scheme ("langsmith-<resource><name_suffix>")
+# produces the same name for every deployment of this module, so two customers
+# both running name_prefix = "dev" collide and the second one fails mid-apply.
+#
+# unique_resource_names switches to "ls-<resource><name_suffix>-<hash>", where the
+# hash is derived from subscription + name_suffix: deterministic (stable across
+# applies, no random provider) and unique per subscription. The shorter "ls"
+# base is what buys back the characters the hash needs inside the 24-char
+# Storage and Key Vault limits.
+variable "unique_resource_names" {
+  type        = bool
+  description = "Use the collision-resistant naming scheme (ls- base + per-subscription hash on globally-unique names). Enabled in every terraform.tfvars template. Leave false on an existing deployment: turning it on renames every resource, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. Pin current names via postgres_name/redis_name/storage_account_name/keyvault_name instead."
+  default     = false
+}
+
+# ── Explicit name overrides ───────────────────────────────────────────────────
+# Each defaults to "" meaning "derive it". Set one to pin an existing resource's
+# name, or to work around a collision without renaming the whole deployment.
+
+variable "postgres_name" {
+  type        = string
+  description = "Name for the PostgreSQL Flexible Server. Globally unique (becomes <name>.postgres.database.azure.com), 3-63 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "redis_name" {
+  type        = string
+  description = "Name for the Azure Managed Redis cluster. Globally unique (becomes <name>.<region>.redisenterprise.cache.azure.net), 1-60 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "storage_account_name" {
+  type        = string
+  description = "Name for the blob Storage Account. Globally unique, 3-24 chars, lowercase alphanumeric only — hyphens are stripped before use. Empty derives from the naming scheme."
+  default     = ""
+}
+
 # ── Resource tagging ──────────────────────────────────────────────────────────
 # Tags are applied to every Azure resource for cost allocation, compliance,
 # and incident response. Required by most enterprise Azure policies.
@@ -56,9 +95,9 @@ variable "cost_center" {
 
 variable "keyvault_name" {
   type        = string
-  description = "Name for the Azure Key Vault. Must be globally unique, 3-24 chars. Defaults to 'langsmith-kv-<name_prefix>' which you may need to customize to avoid naming conflicts."
+  description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme."
   default     = ""
-  # When empty, main.tf computes: "langsmith-kv${local.name_suffix}"
+  # When empty, main.tf computes: "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
 }
 
 variable "keyvault_purge_protection" {
