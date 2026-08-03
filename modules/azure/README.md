@@ -75,6 +75,8 @@ The identity running Terraform needs the following roles on the subscription:
 
 Owner includes both. Contributor alone is insufficient (role assignments require UAA).
 
+Holding the role is not the same as being able to use it. A PIM-eligible role grants nothing until it is activated, an ABAC condition on the grant can restrict which roles you may assign, and a deny assignment from a landing zone or managed application overrides every grant including Owner. `make preflight` reports all three, so run it rather than reasoning from the role list in the portal.
+
 ### Authenticate
 
 ```bash
@@ -297,7 +299,8 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Checks `az` CLI version and confirms you are logged in
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
-- Checks RBAC: requires **Contributor** + **User Access Administrator** (or **Owner**) at subscription scope — needed for role assignments in the Key Vault, storage, and WAF modules
+- Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
+- Checks RBAC by permission rather than by role name: resolves every role that identity holds (including grants inherited from a management group or held through a group) and confirms one of them grants `Microsoft.Authorization/roleAssignments/write`, which the eight role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Also reports PIM-eligible-but-inactive roles, ABAC conditions that narrow which roles you may assign, and deny assignments that override every grant
 - Verifies `terraform.tfvars` exists with `location` and `subscription_id` set
 - Verifies `secrets.auto.tfvars` exists and has a non-empty `langsmith_license_key`
 - Checks that `terraform`, `kubectl`, and `helm` binaries are on PATH
