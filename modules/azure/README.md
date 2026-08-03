@@ -279,7 +279,7 @@ Key behaviors:
 
 Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name via `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-9532ea` with `unique_resource_names = true`, or `langsmith-kv-demo` without
+- Derives the Key Vault name via `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without
 - **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
 - **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
 - Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists
@@ -721,14 +721,14 @@ inside the 24-character Storage and Key Vault limits:
 | | `unique_resource_names = false` | `unique_resource_names = true` |
 |---|---|---|
 | Resource group | `langsmith-rg-dev` | `ls-rg-dev` |
-| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-9532ea` |
-| Redis | `langsmith-redis-dev` | `ls-redis-dev-9532ea` |
-| Storage | `langsmithblobdev` | `lsblobdev9532ea` |
-| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-9532ea` |
+| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-a1b2c3` |
+| Redis | `langsmith-redis-dev` | `ls-redis-dev-a1b2c3` |
+| Storage | `langsmithblobdev` | `lsblobdeva1b2c3` |
+| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-a1b2c3` |
 
 The Storage row is the only one that looks different, and the hyphens are the
 reason. Azure Storage account names accept only lowercase letters and digits, so
-the module strips the hyphens from `ls-blob-dev-9532ea` before creating it. Every
+the module strips the hyphens from `ls-blob-dev-a1b2c3` before creating it. Every
 other name, including the blob container, keeps them.
 
 The hash is deterministic — the same subscription and `identifier` always produce
