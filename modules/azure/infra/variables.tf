@@ -368,8 +368,14 @@ variable "aks_service_cidr" {
   # CoreDNS address and the overlap bounds from it, and locals evaluate before
   # preconditions, so a bad value fails as a function error that names neither
   # the variable nor the fix.
+  #
+  # cidrnetmask() rather than cidrhost() because it is the CIDR function that
+  # rejects IPv6, which cidrhost() accepts and the overlap math cannot use — it
+  # splits the network address on "." and subtracts the prefix from 32, so an
+  # IPv6 range reaches tonumber() whole and fails as the same unattributable
+  # function error. Every other verdict is identical between the two.
   validation {
-    condition     = var.aks_service_cidr == "" || can(cidrhost(var.aks_service_cidr, 0))
+    condition     = var.aks_service_cidr == "" || can(cidrnetmask(var.aks_service_cidr))
     error_message = "aks_service_cidr must be an IPv4 CIDR range such as 10.128.0.0/20, not a subnet resource ID. No subnet is created for this range — Kubernetes allocates ClusterIPs from it, so it must sit outside your VNet's address space."
   }
 }
