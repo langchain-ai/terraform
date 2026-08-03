@@ -529,7 +529,7 @@ resource "time_sleep" "agic_identity_propagation" {
   depends_on      = [azurerm_kubernetes_cluster.main]
 }
 
-# principal_type is set explicitly on the three assignments below: subscriptions that
+# principal_type is set explicitly on each AGIC assignment: subscriptions that
 # delegate roleAssignments/write with an ABAC condition on principalType return 403
 # when the request omits it.
 resource "azurerm_role_assignment" "agic_rg_reader" {
