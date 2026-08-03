@@ -14,15 +14,21 @@ variable "create_cluster" {
   default     = true
 }
 
-variable "existing_cluster_resource_group_name" {
-  type        = string
-  description = "Resource group of the pre-existing cluster (e.g. the customer's platform team owns the AKS cluster in a separate resource group from the one this module creates for Key Vault/Storage/identities). Only used when create_cluster = false. The root module resolves the fallback to its own resource group before passing this, deliberately: resolving it here against resource_group_name would tie the cluster lookup to an attribute of a resource being created, and that unknown defers the read past every guard on it."
-  default     = ""
+variable "create_vnet" {
+  type        = bool
+  description = "Whether the root module is creating the VNet. Only read to reject create_cluster = false with create_vnet = true: an attached cluster's nodes already run in an existing subnet, so a subnet Terraform carves could never be one of them."
+  default     = true
 }
 
 variable "existing_cluster_subnet_id" {
   type        = string
-  description = "The subnet the pre-existing cluster is expected to run nodes in, checked against its agent pools. Only used when create_cluster = false. Separate from subnet_id for the same reason as existing_cluster_resource_group_name: subnet_id can resolve to an output of the VNet module, and that unknown would defer the cluster read. The root passes aks_subnet_id straight through, which the attach path requires anyway."
+  description = "The subnet the pre-existing cluster's nodes run in. Only used when create_cluster = false, where it equals subnet_id because that path requires create_vnet = false. Exists as its own input so the guards below never reference a subnet id derived from the VNet module, whose outputs are pending on a first apply and would defer the cluster lookup to apply time."
+  default     = ""
+}
+
+variable "existing_cluster_resource_group_name" {
+  type        = string
+  description = "Resource group of the pre-existing cluster (e.g. the customer's platform team owns the AKS cluster in a separate resource group from the one this module creates for Key Vault/Storage/identities). Only used when create_cluster = false. Resolved by the caller, which must pass a value that does not reference a resource pending creation — reading it from azurerm_resource_group would make Terraform defer the cluster lookup, and every existing-cluster guard in this module with it."
   default     = ""
 }
 

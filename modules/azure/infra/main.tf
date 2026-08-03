@@ -496,16 +496,17 @@ module "aks" {
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
+  create_vnet    = var.create_vnet
 
-  # Both values are resolved here, to plain strings, rather than inside the module
-  # against azurerm_resource_group.resource_group.name and local.aks_subnet_id.
-  # Either of those reaches the cluster data source as a value unknown until apply,
-  # and one unknown argument defers the whole read — which silences all four guards
-  # on it during the first plan, the run where a config is most likely wrong.
-  # create_cluster = false requires create_vnet = false and a non-empty
-  # aks_subnet_id, so on that path this is exactly what local.aks_subnet_id
-  # resolves to, without the graph edge to the VNet module.
-  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name != "" ? var.existing_cluster_resource_group_name : local.resource_group_name
+  # Both of these are passed straight from variables, never derived from another
+  # resource. azurerm_resource_group.resource_group is pending creation on a first
+  # apply, and local.aks_subnet_id reads module.vnet.subnet_main_id, whose module
+  # has no count and so is pending too. A reference to either draws a dependency
+  # edge that defers the cluster lookup to apply, taking the OIDC issuer, Workload
+  # Identity, node subnet, and region guards with it, silent on exactly the run
+  # where a misconfiguration is most likely. var.aks_subnet_id is the right value
+  # to use because create_cluster = false requires create_vnet = false.
+  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name
   existing_cluster_subnet_id           = var.aks_subnet_id
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size

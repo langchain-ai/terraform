@@ -80,6 +80,15 @@ data "azurerm_kubernetes_cluster" "existing" {
     }
 
     precondition {
+      # Not derived from resource_group_name. That is the resource group this
+      # module creates for Key Vault and Storage, which is not where a cluster
+      # the customer's platform team owns lives, so guessing it produces a
+      # "cluster not found" naming a resource group the operator never mentioned.
+      condition     = var.existing_cluster_resource_group_name != ""
+      error_message = "create_cluster = false requires existing_cluster_resource_group_name to be set to the resource group holding cluster '${var.cluster_name}'. Find it with: az aks list --query \"[?name=='${var.cluster_name}'].resourceGroup\" -o tsv"
+    }
+
+    precondition {
       # 'agic' (Application Gateway add-on) and 'istio-addon' (Azure Service Mesh
       # add-on) are configured via arguments on the azurerm_kubernetes_cluster
       # *resource* block. With create_cluster = false that resource doesn't exist
@@ -87,6 +96,24 @@ data "azurerm_kubernetes_cluster" "existing" {
       # configured rather than erroring — fail fast instead.
       condition     = !contains(["agic", "istio-addon"], var.ingress_controller)
       error_message = "ingress_controller = '${var.ingress_controller}' requires create_cluster = true — it configures an AKS-managed add-on that only applies through a Terraform-owned cluster resource. Use 'nginx', 'istio', or 'envoy-gateway' when attaching to an existing cluster."
+    }
+
+    precondition {
+      # A subnet Terraform is about to carve can never be one the cluster's nodes
+      # already run in, so the postcondition below could never pass. Catching the
+      # combination here names the real problem; left to the postcondition it
+      # reads as a subnet mismatch instead of an impossible configuration.
+      condition     = !var.create_vnet
+      error_message = "create_cluster = false requires create_vnet = false. An attached cluster's nodes already run in an existing subnet, and Terraform cannot carve a new one they belong to. Set create_vnet = false and supply vnet_id plus the subnet ids."
+    }
+
+    precondition {
+      # Under create_cluster = false there is nothing to derive this from, and the
+      # postcondition that would catch a blank value compares it against the
+      # cluster's agent pools — a comparison that reports a mismatch rather than
+      # an unset variable.
+      condition     = var.existing_cluster_subnet_id != ""
+      error_message = "create_cluster = false requires aks_subnet_id to be set to a subnet cluster '${var.cluster_name}' already runs nodes in. It also drives the Blob and Key Vault firewall allowlists, so it cannot be left for Terraform to derive."
     }
 
     postcondition {

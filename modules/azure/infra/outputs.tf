@@ -119,7 +119,11 @@ output "langsmith_namespace" {
 
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  value       = "az aks get-credentials --resource-group ${azurerm_resource_group.resource_group.name} --name ${module.aks.cluster_name} --overwrite-existing"
+  # A pre-existing cluster lives in its own resource group, not the one this module
+  # creates for Key Vault and Storage, so the created group would name a resource
+  # group that does not contain the cluster. existing_cluster_resource_group_name is
+  # required when create_cluster = false, so this branch is never blank.
+  value = "az aks get-credentials --resource-group ${var.create_cluster ? azurerm_resource_group.resource_group.name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────

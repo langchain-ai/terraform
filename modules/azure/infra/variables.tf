@@ -134,7 +134,8 @@ variable "create_vnet" {
 # This path also requires create_vnet = false. aks_subnet_id has to name a subnet
 # the cluster already runs nodes in, which a subnet Terraform carves never is, so
 # attaching while building a VNet has no working configuration and the plan rejects
-# the combination outright. Prerequisites on the existing cluster:
+# the combination outright. Supply vnet_id and the subnet IDs of the network that
+# cluster already uses. Prerequisites on the existing cluster:
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
@@ -143,7 +144,7 @@ variable "create_vnet" {
 
 variable "create_cluster" {
   type        = bool
-  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster — provide existing_cluster_name (and existing_cluster_resource_group_name if it lives outside the resource group this module creates)."
+  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster — provide existing_cluster_name and existing_cluster_resource_group_name, both required on that path."
   default     = true
 }
 
@@ -155,7 +156,7 @@ variable "existing_cluster_name" {
 
 variable "existing_cluster_resource_group_name" {
   type        = string
-  description = "Resource group containing the pre-existing AKS cluster, when it differs from the resource group this module creates (langsmith-rg-<name_prefix>). Only used when create_cluster = false."
+  description = "Resource group containing the pre-existing AKS cluster. Required when create_cluster = false. No default is derived: the only name this module could guess is langsmith-rg-<name_prefix>, the resource group it creates for Key Vault and Storage, which is not where a cluster the customer's platform team owns lives."
   default     = ""
 }
 

@@ -55,7 +55,8 @@ create_cluster                       = false
 existing_cluster_name                = "customer-aks-cluster"
 existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
 
-# Point the supporting resources at the cluster's own network.
+# Required, not optional: the cluster's nodes already run in an existing subnet,
+# and a subnet Terraform carves could never be one of them.
 create_vnet        = false
 aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
 postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
