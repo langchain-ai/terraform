@@ -846,7 +846,9 @@ your own address space can be accepted when the cluster is created and break
 later, so plan makes you name one and rejects one that lands inside your VNet.
 Peered and on-premises ranges are still yours to keep clear of, since plan only
 sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
-automatically as the eleventh address unless you set one.
+automatically as the eleventh address unless you set one, and plan rejects a
+value outside the range — worth knowing if you set both by hand, because
+changing the range strands an address written against the old one.
 
 ### What a subnet you supply must already have
 
@@ -912,7 +914,8 @@ an apply:
 - every prefix Terraform is about to carve sits inside your VNet's address
   space. The defaults describe the VNet Terraform builds, so this is usually the
   first thing to change on a network of your own
-- `aks_service_cidr` is set, and does not overlap your VNet's address space
+- `aks_service_cidr` is set, and does not overlap your VNet's address space, and
+  `aks_dns_service_ip` sits inside it when you set one
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
 
 Whoever runs Terraform needs two kinds of access to the VNet, which normally
