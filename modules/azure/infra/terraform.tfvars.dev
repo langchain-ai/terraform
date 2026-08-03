@@ -36,7 +36,6 @@ clickhouse_source = "in-cluster"   # in-cluster for dev
 #------------------------------------------------------------------------------
 postgres_admin_username      = "langsmith"
 postgres_database_name       = "langsmith"
-postgres_deletion_protection = false
 
 #------------------------------------------------------------------------------
 # Redis (Azure Managed Redis / AMR)
@@ -52,7 +51,6 @@ default_node_pool_vm_size   = "Standard_D8s_v3"
 default_node_pool_min_count = 3
 default_node_pool_max_count = 6
 default_node_pool_max_pods  = 60
-aks_deletion_protection     = false
 
 additional_node_pools = {
   large = {

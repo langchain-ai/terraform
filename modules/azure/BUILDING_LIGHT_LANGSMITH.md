@@ -171,7 +171,6 @@ clickhouse_source = "in-cluster"  # ClickHouse is always in-cluster regardless
 default_node_pool_vm_size   = "Standard_DS4_v2"
 default_node_pool_max_count = 3     # autoscaler can add nodes if pods are pending
 default_node_pool_max_pods  = 60    # AKS default of 30 is too low — LangSmith needs ~25 pods
-aks_deletion_protection     = false # set true for long-lived deployments
 
 # No additional node pool needed for light deploy.
 # The standard deploy creates a "large" pool (Standard_D16s_v3) for ClickHouse,
