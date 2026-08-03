@@ -1,6 +1,20 @@
 {
   "vpc": [
     {
+      "Sid": "EC2TerminateKarpenterInstances",
+      "Effect": "Allow",
+      "Action": ["ec2:TerminateInstances"],
+      "Resource": "arn:aws:ec2:*:${account_id}:instance/*",
+      "Condition": {
+        "Null": {
+          "aws:ResourceTag/karpenter.sh/nodepool": "false"
+        },
+        "StringLike": {
+          "aws:ResourceTag/aws:eks:cluster-name": "*-smith-eks"
+        }
+      }
+    },
+    {
       "Sid": "EC2DeleteManagedResources",
       "Effect": "Allow",
       "Action": [
