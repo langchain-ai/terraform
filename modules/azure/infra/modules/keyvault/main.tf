@@ -83,11 +83,15 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
 # LangSmith pods use Workload Identity to assume this managed identity and
 # read secrets at runtime — currently used by setup-env.sh, and ready for
 # the CSI Secrets Store driver in Phase 2.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 
 resource "azurerm_role_assignment" "managed_identity_kv_reader" {
   scope                = azurerm_key_vault.langsmith.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.managed_identity_principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 # ── Wait for RBAC propagation ──────────────────────────────────────────────────
