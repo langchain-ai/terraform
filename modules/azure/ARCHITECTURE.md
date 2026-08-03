@@ -154,6 +154,29 @@ langsmith-vnet-<name_prefix>
 
 All subnets are private. Postgres and Redis are accessible only from within the VNet via private DNS resolution. No public endpoints.
 
+### Bring your own VNet (`create_vnet = false`)
+
+```
+<your existing VNet>
+├── <existing subnet>                    supplied via aks_subnet_id / postgres_subnet_id / redis_subnet_id
+└── langsmith-vnet<identifier>-subnet-*  created by Terraform for whichever IDs you left out
+```
+
+Each subnet is independently either supplied or created, so a VNet where the
+network team owns only some of the subnets still works. Subnets Terraform
+creates go into the existing VNet's resource group, and carry the same settings
+as the create path: the Storage and Key Vault service endpoints on the AKS
+subnet, the `Microsoft.DBforPostgreSQL/flexibleServers` delegation on the
+Postgres subnet, and no delegation on the Redis subnet, which holds the Azure
+Managed Redis private endpoint.
+
+The Application Gateway and bastion subnets are the exception: Terraform carves
+those only out of a VNet it owns, so on this path they are supplied through
+`agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
+
+Bastion and AGIC subnets have no bring-your-own input and exist only when
+Terraform manages the VNet. See [README.md](README.md#bring-your-own-vnet).
+
 ---
 
 ## Secret Flow
