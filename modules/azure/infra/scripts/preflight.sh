@@ -12,7 +12,8 @@
 #   2. Correct subscription is selected
 #   3. Required resource providers are registered
 #   4. The identity Terraform will use can write role assignments
-#   5. terraform.tfvars exists with required fields populated
+#   5. Subscription offer type is not blocked from provisioning Postgres
+#   6. terraform.tfvars exists with required fields populated
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -469,7 +470,37 @@ $RBAC_VERDICT
 EOF
 fi
 
-# ── 5. terraform.tfvars ───────────────────────────────────────────────────────
+# ── 5. Subscription offer type ────────────────────────────────────────────────
+# Azure blocks some subscription offer types from provisioning PostgreSQL
+# Flexible Server in high-demand regions, surfacing as LocationIsOfferRestricted
+# well into the apply, after AKS has already been built. The restriction is a
+# property of how the subscription was bought, not of regional capacity, so no
+# amount of retrying or resizing clears it. quotaId is the only field that
+# reports the offer type, and it is a prefix match: the suffix is a signup date.
+echo ""
+echo "── Subscription Offer Type ───────────────────────────"
+QUOTA_ID=$(az rest --method get \
+  --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
+  --query "subscriptionPolicies.quotaId" -o tsv 2>/dev/null || echo "")
+
+if [ -z "$QUOTA_ID" ]; then
+  warn "Could not read the subscription offer type — skipping offer restriction check"
+else
+  case "$QUOTA_ID" in
+    FreeTrial_*|MSDN_*|MSDNDevTest_*|VisualStudio_*|AzurePass_*|MPN_*|SponsoredMS_*)
+      warn "Subscription offer type is ${QUOTA_ID}."
+      warn "Offer types like this are commonly blocked from provisioning PostgreSQL"
+      warn "Flexible Server in high-demand regions (LocationIsOfferRestricted)."
+      warn "Request an exemption at https://aka.ms/postgres-request-quota-increase,"
+      warn "or set postgres_source = \"in-cluster\" for a dev deployment."
+      ;;
+    *)
+      pass "Subscription offer type: ${QUOTA_ID}"
+      ;;
+  esac
+fi
+
+# ── 6. terraform.tfvars ───────────────────────────────────────────────────────
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
 TFVARS="${INFRA_DIR}/terraform.tfvars"
@@ -505,7 +536,7 @@ else
   fi
 fi
 
-# ── 6. Other tooling ──────────────────────────────────────────────────────────
+# ── 7. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do

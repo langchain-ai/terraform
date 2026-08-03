@@ -124,6 +124,56 @@ Validated: full pass 2–5 deploy (production sizing, all addons) ran successful
 
 ---
 
+### LocationIsOfferRestricted — Postgres Flexible Server blocked in the region
+
+**Symptom:** AKS and the ingress controller create successfully, then Postgres fails several minutes into the apply:
+
+```text
+Error: creating Flexible Server ...: polling after CreateOrUpdate: polling failed:
+Status: "LocationIsOfferRestricted"
+Message: "Subscriptions are restricted from provisioning in location 'eastus'.
+Try again in a different location."
+```
+
+**Cause:** This is a subscription offer-type restriction, not regional capacity and not a configuration error. Azure blocks certain offer types (Free Trial, Azure Pass, Visual Studio and MSDN credit, some sponsored and CSP subscriptions) from provisioning PostgreSQL Flexible Server in high-demand regions. The error text points at the region, which sends most people hunting for a new one, but the subscription is what determines the outcome.
+
+Check the offer type:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/${SUB}?api-version=2022-12-01" \
+  --query "subscriptionPolicies.quotaId" -o tsv
+```
+
+`PayAsYouGo_*` and `EnterpriseAgreement_*` are unrestricted. `FreeTrial_*`, `MSDN_*`, `MSDNDevTest_*`, `VisualStudio_*`, `AzurePass_*`, `MPN_*`, and `SponsoredMS_*` are the restricted families. `make preflight` reports this before the apply starts.
+
+**Fixes, in order of preference:**
+
+1. **Convert the subscription to Pay-As-You-Go.** For a trial or credit-based subscription this removes the restriction outright, with no ticket and no configuration change.
+2. **Request an exemption** at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), quota type "Azure Database for PostgreSQL Flexible Server". Requests for offer restrictions are frequently approved the same day, and the region and SKU stay as configured.
+3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation.
+4. **Use in-cluster Postgres** for a dev or demo deployment. Set `postgres_source = "in-cluster"` and the Helm chart runs its own Postgres pod, so nothing is provisioned through the PostgreSQL resource provider. Not suitable for production.
+5. **Change the region.** Set `location` in `terraform.tfvars`. Because Postgres uses a delegated subnet it must sit in the same region as the VNet, so the whole deployment moves. Any resources already created are destroyed and recreated.
+
+---
+
+### AuthorizationFailed on roleAssignments/write
+
+**Symptom:** Resources create normally, then a role assignment fails with 403:
+
+```text
+Error: unexpected status 403 (403 Forbidden) with error: AuthorizationFailed:
+The client '<user>' with object id '<oid>' does not have authorization to
+perform action 'Microsoft.Authorization/roleAssignments/write' over scope '<scope>'
+```
+
+**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates eight of them.
+
+**Fix:** Grant `Role Based Access Control Administrator` at subscription scope, or `Owner` in place of both roles. When one role assignment succeeds and another on the same scope fails, an ABAC condition is restricting which role definitions the identity may grant. For the full permission inventory, the `checkAccess` probe, and how to read the condition, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+---
+
 ### Istio addon revision not supported
 
 **Symptom:**
