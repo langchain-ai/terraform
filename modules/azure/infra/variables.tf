@@ -360,8 +360,18 @@ variable "default_node_pool_max_pods" {
 # bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks."
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Size it /20: the range is virtual, so a large one costs no address space, and /24 (Azure's floor) caps the cluster at 251 Services, which a Pass 4 deployment can reach because LangGraph Platform adds Services per deployment. Fixed on the cluster at creation — outgrowing it means rebuilding the cluster."
   default     = ""
+
+  # Empty is the not-set sentinel main.tf falls back on, so it has to pass. Any
+  # other value is parsed here rather than in the locals: cidrhost() derives the
+  # CoreDNS address and the overlap bounds from it, and locals evaluate before
+  # preconditions, so a bad value fails as a function error that names neither
+  # the variable nor the fix.
+  validation {
+    condition     = var.aks_service_cidr == "" || can(cidrhost(var.aks_service_cidr, 0))
+    error_message = "aks_service_cidr must be an IPv4 CIDR range such as 10.128.0.0/20, not a subnet resource ID. No subnet is created for this range — Kubernetes allocates ClusterIPs from it, so it must sit outside your VNet's address space."
+  }
 }
 
 variable "aks_dns_service_ip" {

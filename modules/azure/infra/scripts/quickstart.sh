@@ -518,7 +518,19 @@ _run_section_3() {
   _hint "Kubernetes assigns ClusterIPs from a range that must not be used by anything"
   _hint "in your VNet or any network peered to it. It is not carved from your VNet —"
   _hint "pick a range that sits outside your VNet's address space entirely."
-  _ask "Kubernetes service CIDR" "10.0.64.0/20"
+  # Four subnet ID prompts run immediately above this one, and a resource ID
+  # pasted here reaches Terraform as a string the locals hand to cidrhost() —
+  # an invalid-CIDR error against a main.tf line the operator never wrote.
+  while true; do
+    _ask "Kubernetes service CIDR" "${AKS_SERVICE_CIDR:-10.0.64.0/20}"
+    if _valid_cidr "$_REPLY"; then break; fi
+    if _valid_subnet_id "$_REPLY"; then
+      _red "  ERROR: that is a subnet resource ID. No subnet is created for this range — Kubernetes allocates ClusterIPs from it, so it takes an address range like 10.0.64.0/20."
+    else
+      _red "  ERROR: expected an IPv4 CIDR, e.g. 10.0.64.0/20."
+    fi
+    echo ""
+  done
   AKS_SERVICE_CIDR="$_REPLY"
 
   # This section can be re-run from the review menu, after AGIC or a bastion has
