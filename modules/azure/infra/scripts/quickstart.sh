@@ -142,7 +142,7 @@ AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-PG_DELETION_PROTECTION KV_PURGE_PROTECTION SIZING_PROFILE
+PG_DELETION_PROTECTION KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -239,6 +239,11 @@ _load_tfvars() {
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
   _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
+  # Absent means an existing deployment predating the hash, or one that opted
+  # out. Either way it stays off — the writer must not turn it on underneath a
+  # deployment whose resources are already named.
+  UNIQUE_NAMES="false"
+  _TF_VAL=$(_parse_tfvar unique_resource_names)       && UNIQUE_NAMES="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
   # The add-ons are written only when true, so an absent key is genuinely false.
@@ -322,6 +327,11 @@ _run_section_1() {
 SUBSCRIPTION_ID=""
 NAME_PREFIX="dev"
 LOCATION="eastus"
+# True for a new deployment, so the globally-unique names carry the hash. An
+# existing tfvars overrides this on the way in: turning it on after the fact
+# renames Postgres, Redis, Storage and Key Vault, which Terraform executes as
+# destroy-and-recreate.
+UNIQUE_NAMES="true"
 OWNER="platform-team"
 COST_CENTER=""
 
@@ -1215,7 +1225,7 @@ location        = "${LOCATION}"
 
 # Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
 # Key Vault) so they cannot collide with another LangSmith deployment.
-unique_resource_names = true
+unique_resource_names = ${UNIQUE_NAMES}
 TFVARS
 
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
