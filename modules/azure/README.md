@@ -834,14 +834,18 @@ whether a prefix collides with a subnet that already exists in the VNet, because
 Azure's VNet read returns subnet names and not their ranges — so pick ranges you
 know are free.
 
-`aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
-it, and AKS requires a range that nothing on or connected to your VNet uses. The
-`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
-your own address space can be accepted when the cluster is created and break
-later, so plan makes you name one and rejects one that lands inside your VNet.
-Peered and on-premises ranges are still yours to keep clear of, since plan only
-sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
-automatically as the eleventh address unless you set one.
+`aks_service_cidr` is required on this path when Terraform creates the cluster.
+Kubernetes assigns ClusterIPs from it, and AKS requires a range that nothing on
+or connected to your VNet uses. The `10.0.64.0/20` default only avoids the VNet
+Terraform builds, and an overlap with your own address space can be accepted when
+the cluster is created and break later, so plan makes you name one and rejects one
+that lands inside your VNet. Peered and on-premises ranges are still yours to keep
+clear of, since plan only sees the VNet itself. `aks_dns_service_ip` follows from
+`aks_service_cidr` automatically as the eleventh address unless you set one.
+
+Attaching to an existing cluster (`create_cluster = false`) ignores both. Azure
+fixes the ClusterIP range when the cluster is created and it cannot be changed
+afterwards, so plan neither asks for a value nor checks one.
 
 ### What a subnet you supply must already have
 
@@ -880,7 +884,9 @@ an apply:
 - every prefix Terraform is about to carve sits inside your VNet's address
   space. The defaults describe the VNet Terraform builds, so this is usually the
   first thing to change on a network of your own
-- `aks_service_cidr` is set, and does not overlap your VNet's address space
+- `aks_service_cidr` is set, and does not overlap your VNet's address space, when
+  Terraform creates the cluster. Attaching to an existing one skips both checks,
+  since its ClusterIP range is already fixed and this value cannot change it
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
 
 Whoever runs Terraform needs two kinds of access to the VNet, which normally

@@ -403,17 +403,26 @@ resource "terraform_data" "validate_network" {
     # 10.0.64.0/20 only avoids the VNet that Terraform builds. Inside someone
     # else's address space AKS can accept an overlapping ClusterIP range and
     # break later, so make the operator name one.
+    #
+    # Asked for only when Terraform creates the cluster. service_cidr is settable
+    # once, on the cluster resource, so attaching to an existing cluster leaves
+    # this value configuring nothing — and requiring one that has no effect turns
+    # a plausible guess into a blocked deployment when the guess lands inside the
+    # VNet.
     precondition {
-      condition     = var.create_vnet || var.aks_service_cidr != ""
-      error_message = "aks_service_cidr is required when create_vnet = false. The 10.0.64.0/20 default is chosen to sit outside the Terraform-managed 10.0.0.0/17 and can fall inside your VNet. AKS requires a ClusterIP range that nothing on or connected to your VNet uses, so set one outside your VNet's address space."
+      condition     = var.create_vnet || !var.create_cluster || var.aks_service_cidr != ""
+      error_message = "aks_service_cidr is required when create_vnet = false and create_cluster = true. The 10.0.64.0/20 default is chosen to sit outside the Terraform-managed 10.0.0.0/17 and can fall inside your VNet. AKS requires a ClusterIP range that nothing on or connected to your VNet uses, so set one outside your VNet's address space."
     }
 
     # Requiring aks_service_cidr does not make it correct, and a range picked out
     # of the VNet's own space is the mistake the requirement exists to prevent.
     # AKS accepts the overlap at cluster creation and the collision surfaces
-    # later, so it is worth the read.
+    # later, so it is worth the read. Gated on create_cluster for the reason the
+    # requirement above is: an existing cluster's ClusterIP range is already set,
+    # Azure would not have built it overlapping its own VNet, and nothing here
+    # can change it.
     precondition {
-      condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || !local.service_cidr_overlaps_vnet
+      condition     = !var.create_cluster || length(data.azurerm_virtual_network.byo_vnet) == 0 || !local.service_cidr_overlaps_vnet
       error_message = "aks_service_cidr (${local.aks_service_cidr}) overlaps the address space of vnet_id (${join(", ", local.vnet_address_space)}). Kubernetes ClusterIPs are not carved from the VNet, and AKS requires a range nothing on or connected to it uses. This check only sees the VNet's own address space, so keep clear of peered and on-premises ranges too."
     }
 
@@ -438,8 +447,10 @@ module "aks" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
   subnet_id           = local.aks_subnet_id
-  service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
-  dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
+  # Both land on the cluster resource and nowhere else, so attaching to an
+  # existing cluster ignores them — its ClusterIP range is whatever Azure gave it.
+  service_cidr   = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
+  dns_service_ip = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster                       = var.create_cluster

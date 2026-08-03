@@ -153,9 +153,10 @@ resource "azurerm_kubernetes_cluster" "customer" {
     // with no policy engine accepts and then never enforces.
     network_policy    = "azure"
     load_balancer_sku = "standard"
-    // Must stay clear of the VNet address space: infra/main.tf:357 rejects an
-    // overlap, and the module needs this same value passed back as
-    // aks_service_cidr even though it ignores it for the cluster itself.
+    // Must stay clear of the VNet address space, which is what Azure requires of
+    // any real cluster. Fixed here, at creation, and unchangeable afterwards —
+    // which is why the LangSmith module ignores aks_service_cidr when attaching
+    // and no longer asks for it back.
     service_cidr   = var.aks_service_cidr
     dns_service_ip = cidrhost(var.aks_service_cidr, 10)
   }

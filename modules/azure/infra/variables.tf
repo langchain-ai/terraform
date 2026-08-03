@@ -358,13 +358,13 @@ variable "default_node_pool_max_pods" {
 # bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks."
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false and Terraform creates the cluster: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Ignored when create_cluster = false — the range is fixed on the cluster resource at creation, so an existing cluster keeps whatever Azure gave it and this value configures nothing."
   default     = ""
 }
 
 variable "aks_dns_service_ip" {
   type        = string
-  description = "CoreDNS ClusterIP. Must sit inside aks_service_cidr. Defaults to the eleventh address of aks_service_cidr, which is the Azure convention (10.0.64.10 for the default range)."
+  description = "CoreDNS ClusterIP. Must sit inside aks_service_cidr. Defaults to the eleventh address of aks_service_cidr, which is the Azure convention (10.0.64.10 for the default range). Ignored when create_cluster = false, for the same reason aks_service_cidr is."
   default     = ""
 }
 

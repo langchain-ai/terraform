@@ -59,9 +59,8 @@ output "langsmith_tfvars" {
     aks_subnet_id      = "${azurerm_subnet.aks.id}"
     postgres_subnet_id = "${azurerm_subnet.postgres.id}"
     redis_subnet_id    = "${azurerm_subnet.redis.id}"
-    # Required when create_vnet = false, then ignored for the cluster itself. It is
-    # only used for the overlap check against the VNet address space.
-    aks_service_cidr   = "${var.aks_service_cidr}"
+    # aks_service_cidr is deliberately absent. The cluster's ClusterIP range is
+    # fixed when Azure creates it, so attaching neither requires nor uses one.
 
     # ── Rejected on this path, listed so nobody re-adds them ────────────────────
     # ingress_controller = "agic"          — needs a Terraform-managed VNet

@@ -655,12 +655,21 @@ _run_section_3() {
   # Kubernetes ClusterIPs are internal to the cluster, but AKS still requires the
   # range to be unused by anything on or connected to the VNet. The default only
   # dodges the VNet Terraform builds, so on this path the operator must name one.
-  echo ""
-  _hint "Kubernetes assigns ClusterIPs from a range that must not be used by anything"
-  _hint "in your VNet or any network peered to it. It is not carved from your VNet —"
-  _hint "pick a range that sits outside your VNet's address space entirely."
-  _ask "Kubernetes service CIDR" "10.0.64.0/20"
-  AKS_SERVICE_CIDR="$_REPLY"
+  #
+  # Asked only when Terraform creates the cluster. The range is fixed on the
+  # cluster at creation, so an existing cluster keeps whatever Azure gave it and
+  # an answer here would configure nothing. Cleared on that path so the review
+  # screen and the tfvars writer both skip it.
+  if [[ "$CREATE_CLUSTER" == "true" ]]; then
+    echo ""
+    _hint "Kubernetes assigns ClusterIPs from a range that must not be used by anything"
+    _hint "in your VNet or any network peered to it. It is not carved from your VNet —"
+    _hint "pick a range that sits outside your VNet's address space entirely."
+    _ask "Kubernetes service CIDR" "${AKS_SERVICE_CIDR:-10.0.64.0/20}"
+    AKS_SERVICE_CIDR="$_REPLY"
+  else
+    AKS_SERVICE_CIDR=""
+  fi
 
   # This section can be re-run from the review menu, after AGIC or a bastion has
   # already been chosen. Neither is carved inside a VNet Terraform does not own,
@@ -692,16 +701,16 @@ AKS_DELETION_PROTECTION="false"
 _run_section_4() {
   _section "4. AKS Cluster"
 
-  # On an attached cluster the pool questions below configure nothing: the
-  # cluster's own pools are whatever its owner set. They are still asked because
-  # terraform plan sizes the AKS subnet against them, so they have to describe
-  # the pools the cluster really runs or the capacity check measures nothing.
   if [[ "$CREATE_CLUSTER" == "false" ]]; then
-    _hint "Attached to ${EXISTING_CLUSTER_NAME}. Terraform does not create or resize its"
-    _hint "node pools, so the numbers below only feed the AKS subnet capacity check."
-    _hint "Enter what the cluster actually runs, so the check measures the real thing."
+    # The default-pool sizing variables live inside the cluster resource, which is
+    # counted off when attaching, and the subnet capacity check no longer counts a
+    # default pool Terraform will not create. So they configure nothing here and
+    # asking would only invite the operator to describe pools that go unread.
+    _hint "Attached to ${EXISTING_CLUSTER_NAME}. Terraform never creates or resizes its"
+    _hint "default node pool, so node size and count are not asked here: they would"
+    _hint "configure nothing, and the subnet check does not count them."
     echo ""
-    _hint "Terraform can also add a 'large' pool (Standard_D16s_v3) for ClickHouse and"
+    _hint "Terraform can still add a 'large' pool (Standard_D16s_v3) for ClickHouse and"
     _hint "LangGraph. Declining leaves every pool with your platform team, and the"
     _hint "cluster then needs that capacity already."
     if _ask_yn "Let Terraform manage node pools on this cluster?" \
@@ -717,36 +726,36 @@ _run_section_4() {
     _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
     _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
     _hint "The autoscaler handles bursts — min_count is the always-on floor."
-  fi
 
-  local vm_default="$NODE_VM_SIZE"
-  local min_default="$NODE_MIN"
-  local max_default="$NODE_MAX"
-  if [[ "$PROFILE" == "prod" ]]; then
-    if ! _answered 4; then
-      vm_default="Standard_D8s_v3"
-      min_default=3
-      max_default=10
+    local vm_default="$NODE_VM_SIZE"
+    local min_default="$NODE_MIN"
+    local max_default="$NODE_MAX"
+    if [[ "$PROFILE" == "prod" ]]; then
+      if ! _answered 4; then
+        vm_default="Standard_D8s_v3"
+        min_default=3
+        max_default=10
+      fi
+      _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
     fi
-    _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
+
+    _ask "Node VM size" "$vm_default"
+    NODE_VM_SIZE="$_REPLY"
+    _ask_int "Node pool min count (always-on nodes)" "$min_default"
+    NODE_MIN="$_REPLY"
+    _ask_int "Node pool max count (autoscaler ceiling)" "$max_default"
+    NODE_MAX="$_REPLY"
+
+    # Azure CNI draws pod IPs from the AKS subnet, so this multiplies the subnet
+    # size: the cluster needs (max_count + 1) x (max_pods + 1) addresses. It is one
+    # of the two knobs the capacity check tells operators to lower, so it needs to
+    # be reachable from here.
+    _hint "Max pods per node multiplies the AKS subnet requirement, at"
+    _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
+    _hint "lower it if your subnet is fixed and tight."
+    _ask_int "Max pods per node" "$NODE_MAX_PODS"
+    NODE_MAX_PODS="$_REPLY"
   fi
-
-  _ask "Node VM size" "$vm_default"
-  NODE_VM_SIZE="$_REPLY"
-  _ask_int "Node pool min count (always-on nodes)" "$min_default"
-  NODE_MIN="$_REPLY"
-  _ask_int "Node pool max count (autoscaler ceiling)" "$max_default"
-  NODE_MAX="$_REPLY"
-
-  # Azure CNI draws pod IPs from the AKS subnet, so this multiplies the subnet
-  # size: the cluster needs (max_count + 1) x (max_pods + 1) addresses. It is one
-  # of the two knobs the capacity check tells operators to lower, so it needs to
-  # be reachable from here.
-  _hint "Max pods per node multiplies the AKS subnet requirement, at"
-  _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
-  _hint "lower it if your subnet is fixed and tight."
-  _ask_int "Max pods per node" "60"
-  NODE_MAX_PODS="$_REPLY"
 
   AKS_DELETION_PROTECTION="false"
   if [[ "$PROFILE" == "prod" ]]; then
@@ -1313,7 +1322,7 @@ while true; do
     printf "  %-24s %s\n" "   AKS subnet:"        "$(_subnet_review "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE")"
     printf "  %-24s %s\n" "   PostgreSQL subnet:" "$(_subnet_review "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE")"
     printf "  %-24s %s\n" "   Redis subnet:"      "$(_subnet_review "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE")"
-    printf "  %-24s %s\n" "   Service CIDR:"      "$AKS_SERVICE_CIDR"
+    [[ -n "$AKS_SERVICE_CIDR" ]]  && printf "  %-24s %s\n" "   Service CIDR:"   "$AKS_SERVICE_CIDR"
     [[ -n "$AGIC_SUBNET_ID" ]]    && printf "  %-24s %s\n" "   AGIC subnet:"    "reuse   $AGIC_SUBNET_ID"
     [[ -n "$BASTION_SUBNET_ID" ]] && printf "  %-24s %s\n" "   Bastion subnet:" "reuse   $BASTION_SUBNET_ID"
   fi
@@ -1406,9 +1415,10 @@ TFVARS
   [[ -n "$AKS_SUBNET_CIDR_LINE" ]]      && echo "$AKS_SUBNET_CIDR_LINE" >> "$OUTPUT"
   [[ -n "$POSTGRES_SUBNET_CIDR_LINE" ]] && echo "$POSTGRES_SUBNET_CIDR_LINE" >> "$OUTPUT"
   [[ -n "$REDIS_SUBNET_CIDR_LINE" ]]    && echo "$REDIS_SUBNET_CIDR_LINE" >> "$OUTPUT"
-  # Required on this path: the variable default is only safe against the VNet
-  # Terraform builds, so terraform plan rejects an empty value here.
-  printf '%-30s = "%s"\n' "aks_service_cidr" "$AKS_SERVICE_CIDR" >> "$OUTPUT"
+  # Required when Terraform creates the cluster: the variable default is only safe
+  # against the VNet Terraform builds, so plan rejects an empty value there.
+  # Empty means attaching, where the range is already fixed on the cluster.
+  [[ -n "$AKS_SERVICE_CIDR" ]] && printf '%-30s = "%s"\n' "aks_service_cidr" "$AKS_SERVICE_CIDR" >> "$OUTPUT"
   # Also required on this path, whenever the feature that needs them is on.
   [[ -n "$AGIC_SUBNET_ID" ]]    && printf '%-30s = "%s"\n' "agic_subnet_id" "$AGIC_SUBNET_ID" >> "$OUTPUT"
   [[ -n "$BASTION_SUBNET_ID" ]] && printf '%-30s = "%s"\n' "bastion_subnet_id" "$BASTION_SUBNET_ID" >> "$OUTPUT"
