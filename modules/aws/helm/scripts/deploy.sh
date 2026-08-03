@@ -289,6 +289,9 @@ helm repo update langchain
 
 # Guard: recover from broken release states before proceeding.
 #   - pending-upgrade: left by a Ctrl+C'd helm upgrade --wait. Roll back to clear.
+#   - pending-install: left by a disrupted initial install (e.g. transient EKS API
+#                      errors during make apply). No revision exists to roll back
+#                      to, so uninstall and let the deploy recreate it.
 #   - failed: left by a timed-out post-install hook or resource readiness check.
 #             helm upgrade works fine on a failed release — just log and continue.
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
@@ -297,6 +300,11 @@ if [[ "$_release_status" == "pending-upgrade" ]]; then
   echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'pending-upgrade' state (interrupted upgrade)."
   echo "         Rolling back to clear the lock..."
   helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
+  echo ""
+elif [[ "$_release_status" == "pending-install" ]]; then
+  echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'pending-install' state (disrupted initial install)."
+  echo "         No revision exists to roll back to. Uninstalling to clear the lock..."
+  helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
   echo ""
 elif [[ "$_release_status" == "failed" ]]; then
   echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
