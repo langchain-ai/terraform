@@ -112,7 +112,8 @@ locals {
   # before this runs, so index positionally:
   #   0:"" 1:subscriptions 2:<sub> 3:resourceGroups 4:<rg>
   #   5:providers 6:Microsoft.Network 7:virtualNetworks 8:<vnet> 9:subnets 10:<name>
-  byo_aks_subnet_parts = split("/", var.aks_subnet_id)
+  byo_aks_subnet_parts  = split("/", var.aks_subnet_id)
+  byo_agic_subnet_parts = split("/", var.agic_subnet_id)
 
   # Every supplied subnet ID, lowercased for comparison since Azure treats
   # resource IDs case-insensitively. Used to reject the same subnet twice.
@@ -392,6 +393,16 @@ data "azurerm_subnet" "byo_aks_subnet" {
   name                 = local.byo_aks_subnet_parts[10]
   virtual_network_name = local.byo_aks_subnet_parts[8]
   resource_group_name  = local.byo_aks_subnet_parts[4]
+}
+
+# Reads an operator-supplied Application Gateway subnet for its address prefixes.
+# The gateway originates traffic from this subnet rather than from an in-cluster
+# namespace, so the NetworkPolicy in k8s-bootstrap has to admit it by IP range.
+data "azurerm_subnet" "byo_agic_subnet" {
+  count                = local.byo_agic_subnet ? 1 : 0
+  name                 = local.byo_agic_subnet_parts[10]
+  virtual_network_name = local.byo_agic_subnet_parts[8]
+  resource_group_name  = local.byo_agic_subnet_parts[4]
 }
 
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
@@ -859,6 +870,12 @@ module "k8s_bootstrap" {
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace.
   ingress_controller = var.ingress_controller
+
+  # Application Gateway has no in-cluster namespace to allow, so the same policy
+  # admits it by the address range of its dedicated subnet. Read from a supplied
+  # subnet, otherwise the prefix the vnet module carved it from. Ignored unless
+  # ingress_controller = "agic".
+  agic_subnet_cidrs = local.byo_agic_subnet ? data.azurerm_subnet.byo_agic_subnet[0].address_prefixes : var.agic_subnet_address_prefix
 
   # Backing services — connection URLs are injected as K8s secrets.
   # generate-secrets.sh also writes these secrets with the full URL from KV.

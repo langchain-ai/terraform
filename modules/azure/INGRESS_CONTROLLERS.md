@@ -162,6 +162,9 @@ create_dns_zone        = true
 - AGIC watches `Ingress` resources and programs AGW routing rules
 - cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
 - Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor on VNet
+- The namespace NetworkPolicy admits the gateway by the address range of its subnet. In Azure CNI
+  mode AGW connects to pod IPs from that subnet rather than from a namespace, so unlike every other
+  controller here there is no source namespace to allow
 
 **RBAC timing — known issue:** The AKS AGIC addon creates its managed identity during cluster
 provisioning, but the identity requires ~5 minutes to register in Azure AD before role assignments

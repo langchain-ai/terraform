@@ -118,8 +118,9 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
 # Namespace the selected ingress controller's data plane runs in. The
 # NetworkPolicy below must allow ingress from this namespace, or the controller's
 # proxy cannot reach LangSmith pods (default-deny drops it → 503 with ~10s
-# connection timeout). AGIC is intentionally excluded: Application Gateway routes
-# from its dedicated subnet (an ip_block), not an in-cluster pod namespace.
+# connection timeout). AGIC resolves to "" and is allowed by ip_block instead:
+# Application Gateway routes from its dedicated subnet, not an in-cluster pod
+# namespace, so there is no namespace to name here.
 locals {
   ingress_namespace = lookup({
     "nginx"         = "ingress-nginx"
@@ -152,6 +153,22 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
             match_labels = {
               "kubernetes.io/metadata.name" = ingress.value
             }
+          }
+        }
+      }
+    }
+
+    # Application Gateway subnet — the AGIC counterpart to the namespace rule
+    # above. In Azure CNI mode the gateway puts pod IPs straight into its backend
+    # pool and connects from its own subnet, so there is no source namespace to
+    # match and only an address range identifies it. Azure requires that subnet be
+    # exclusive to the gateway, so the range admits nothing else.
+    dynamic "ingress" {
+      for_each = var.ingress_controller == "agic" ? var.agic_subnet_cidrs : []
+      content {
+        from {
+          ip_block {
+            cidr = ingress.value
           }
         }
       }
