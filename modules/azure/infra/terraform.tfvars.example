@@ -178,6 +178,14 @@ sizing_profile = "production"
 # ── Networking (optional — override only if reusing existing VNet) ─────────────
 # create_vnet          = false
 # vnet_id              = "/subscriptions/.../virtualNetworks/my-vnet"
+# An existing AKS subnet must carry the Microsoft.Storage and Microsoft.KeyVault
+# service endpoints — the storage and Key Vault firewalls allowlist it by ID and
+# Azure rejects a subnet rule without the matching endpoint. Add them yourself
+# (az network vnet subnet update --ids <id> --service-endpoints Microsoft.Storage
+# Microsoft.KeyVault, repeating any already there, since the flag replaces the
+# list), or have Terraform add them. Terraform patches only that property, and
+# needs write access on the subnet to do it.
+# manage_byo_subnet_service_endpoints = true
 # aks_subnet_id        = "/subscriptions/.../subnets/aks"
 # postgres_subnet_id   = "/subscriptions/.../subnets/postgres"
 # redis_subnet_id      = "/subscriptions/.../subnets/redis"

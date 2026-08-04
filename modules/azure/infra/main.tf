@@ -43,6 +43,19 @@ locals {
   redis_subnet_id    = var.create_vnet ? module.vnet.subnet_redis_id : var.redis_subnet_id
   agic_subnet_id     = var.create_vnet ? module.vnet.subnet_agic_id : ""
 
+  # ── Service endpoints on a bring-your-own AKS subnet ────────────────────────
+  # Both the blob storage and Key Vault firewalls allowlist the AKS subnet by ID,
+  # and Azure rejects a subnet rule whose subnet lacks the matching endpoint.
+  # Terraform puts both on the subnets it creates (see modules/networking), so
+  # this only ever applies to a subnet the operator supplied.
+  required_aks_service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+
+  manage_aks_subnet_endpoints = !var.create_vnet && var.aks_subnet_id != "" && var.manage_byo_subnet_service_endpoints
+
+  # The endpoints the supplied subnet already carries, exactly as Azure returned
+  # them, so the patch below can append without disturbing them.
+  byo_aks_subnet_service_endpoints = try(data.azapi_resource.byo_aks_subnet_endpoints[0].output.properties.serviceEndpoints, [])
+
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
   # Sub-modules merge their own { module = "..." } tag on top.
@@ -221,6 +234,58 @@ module "blob" {
   allowed_ips        = var.storage_allowed_ips
 
   tags = local.common_tags
+
+  # The subnet rule above is rejected until the endpoint is on the subnet. The ID
+  # is a plain string, so nothing orders these two without saying so.
+  depends_on = [azapi_update_resource.byo_aks_subnet_endpoints]
+}
+
+# ── Service endpoints on a supplied AKS subnet (opt-in) ───────────────────────
+# Reads the subnet's service endpoints in full so the patch below can add the two
+# LangSmith needs without dropping any the network team put there. azurerm_subnet
+# exposes only the service names, not the locations an endpoint can be scoped to,
+# so building the new list from it would quietly reset that scope.
+data "azapi_resource" "byo_aks_subnet_endpoints" {
+  count                  = local.manage_aks_subnet_endpoints ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.aks_subnet_id
+  response_export_values = ["properties.serviceEndpoints"]
+}
+
+# Adds the endpoints rather than requiring the operator to add them first. azurerm
+# has no standalone service-endpoint resource — service_endpoints is a property of
+# azurerm_subnet — so doing this in azurerm would mean importing the operator's
+# subnet and owning its prefixes, delegations and associations along with it.
+# azapi_update_resource patches the one property and leaves the rest alone.
+#
+# Off by default: this needs write access on a subnet that usually belongs to a
+# network team, and it rewrites the property on every apply, which fights their
+# tooling if they manage it too.
+resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
+  count       = local.manage_aks_subnet_endpoints ? 1 : 0
+  type        = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id = var.aks_subnet_id
+
+  body = {
+    properties = {
+      # Azure replaces the whole list on write, so the existing entries are passed
+      # back verbatim and only the missing ones appended. Removing an endpoint the
+      # subnet's other workloads depend on would be its own outage.
+      serviceEndpoints = concat(
+        local.byo_aks_subnet_service_endpoints,
+        [
+          for service in local.required_aks_service_endpoints : { service = service }
+          if !contains([for e in local.byo_aks_subnet_service_endpoints : try(e.service, "")], service)
+        ]
+      )
+    }
+  }
+
+  # Azure serializes writes per VNet and fails the loser with
+  # AnotherOperationInProgress. azurerm holds its own lock across the subnets it
+  # creates, but azapi does not share it, so this waits for those instead of
+  # racing them.
+  depends_on = [module.vnet]
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -268,7 +333,9 @@ module "keyvault" {
 
   tags = local.common_tags
 
-  depends_on = [module.blob]
+  # module.blob for the managed identity principal ID; the subnet patch for the
+  # same reason the storage account waits on it.
+  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints]
 }
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────

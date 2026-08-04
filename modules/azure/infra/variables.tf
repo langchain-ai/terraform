@@ -101,8 +101,14 @@ variable "vnet_id" {
 
 variable "aks_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the AKS cluster. If create_vnet is false, this is required."
+  description = "The id of the existing subnet to use for the AKS cluster. If create_vnet is false, this is required. The subnet must carry the Microsoft.Storage and Microsoft.KeyVault service endpoints: the blob storage firewall is always default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is absent. Add them yourself, or set manage_byo_subnet_service_endpoints = true to have Terraform add them."
   default     = ""
+}
+
+variable "manage_byo_subnet_service_endpoints" {
+  type        = bool
+  description = "Add the Microsoft.Storage and Microsoft.KeyVault service endpoints to the subnet given as aks_subnet_id. Terraform patches only that one property and leaves the rest of the subnet — address prefixes, delegations, NSG and route table associations — to whoever owns it. Needs Microsoft.Network/virtualNetworks/subnets/write on the subnet, so leave this false when it belongs to a network team that only granted read, or when their own tooling manages its endpoints and both would rewrite the property on every run."
+  default     = false
 }
 
 variable "postgres_subnet_id" {
