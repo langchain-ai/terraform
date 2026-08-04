@@ -245,8 +245,18 @@ output "enable_polly" {
 }
 
 output "enable_envoy_gateway" {
-  description = "Whether Envoy Gateway is installed for Kubernetes Gateway API routing"
-  value       = var.enable_envoy_gateway
+  description = "Whether Envoy Gateway is installed for Kubernetes Gateway API routing. Reflects the derived value, so the deploy scripts can read the mode that was actually applied rather than re-deriving it from terraform.tfvars."
+  value       = local.enable_envoy_gateway
+}
+
+output "enable_istio_gateway" {
+  description = "Whether the Istio ingress gateway path is enabled"
+  value       = var.enable_istio_gateway
+}
+
+output "enable_nginx_ingress" {
+  description = "Whether the NGINX ingress controller path is enabled"
+  value       = var.enable_nginx_ingress
 }
 
 output "gateway_target_group_arn" {

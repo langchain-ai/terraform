@@ -39,4 +39,11 @@ locals {
   private_subnets = var.create_vpc ? module.vpc[0].private_subnets : var.private_subnets
   public_subnets  = var.create_vpc ? module.vpc[0].public_subnets : var.public_subnets
   vpc_cidr_block  = var.create_vpc ? module.vpc[0].vpc_cidr_block : var.vpc_cidr_block
+
+  # Envoy Gateway is the default ingress mode, but a bare default of `true` would
+  # silently add a second gateway controller to every existing Istio/NGINX tfvars
+  # that never mentioned Envoy. Deriving it instead means "Envoy unless you already
+  # chose something else", so only configurations with no gateway controller at all
+  # change behaviour. An explicit true/false in terraform.tfvars still wins.
+  enable_envoy_gateway = var.enable_envoy_gateway != null ? var.enable_envoy_gateway : !(var.enable_istio_gateway || var.enable_nginx_ingress)
 }

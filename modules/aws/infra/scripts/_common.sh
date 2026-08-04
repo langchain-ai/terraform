@@ -10,6 +10,8 @@
 #
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
+#   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
+#   _quickstart_gateway_default — Resolve fresh/update gateway menu default
 #   _resolve_infra_dir        — Set INFRA_DIR relative to this script
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
@@ -47,6 +49,45 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /
+# enable_nginx_ingress) for post-apply scripts.
+#
+# enable_envoy_gateway is derived in Terraform — unset means "on unless Istio or
+# NGINX was chosen" — so terraform.tfvars text alone cannot tell you which mode was
+# applied. Read the Terraform output instead, and fall back to tfvars only when no
+# state exists yet (pre-apply callers such as preflight).
+_read_gateway_flag() {
+  local key="$1" val
+  val=$(terraform -chdir="$INFRA_DIR" output -raw "$key" 2>/dev/null) || val=""
+  if [[ "$val" != "true" && "$val" != "false" ]]; then
+    val=false
+    _tfvar_is_true "$key" && val=true
+  fi
+  echo "$val"
+}
+
+# Return the gateway menu choice for quickstart.
+# Fresh configurations recommend Envoy (1). Updates preserve the existing
+# controller; ALB is represented by all three controller flags being false (2).
+_quickstart_gateway_default() {
+  local update_mode="$1"
+  local envoy_enabled="$2"
+  local istio_enabled="$3"
+  local nginx_enabled="$4"
+
+  if [[ "$update_mode" != "true" ]]; then
+    echo "1"
+  elif [[ "$envoy_enabled" == "true" ]]; then
+    echo "1"
+  elif [[ "$nginx_enabled" == "true" ]]; then
+    echo "3"
+  elif [[ "$istio_enabled" == "true" ]]; then
+    echo "4"
+  else
+    echo "2"
+  fi
 }
 
 # ── AWS credential helpers ───────────────────────────────────────────────────

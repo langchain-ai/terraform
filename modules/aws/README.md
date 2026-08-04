@@ -359,9 +359,21 @@ For "bring your own infra" — skip `make init-app` and set all variables manual
 
 ---
 
-## Envoy Gateway — Alternative Ingress (Gateway API)
+## Envoy Gateway (Gateway API)
 
-By default, LangSmith uses the AWS Load Balancer Controller (ALB) for ingress. Set `enable_envoy_gateway = true` in `terraform.tfvars` to install Envoy Gateway instead.
+Envoy Gateway is the default ingress mode, both in Terraform and in `make quickstart` for new deployments. When rerun, quickstart keeps your existing ingress selection. Set `enable_envoy_gateway = false` to fall back to a standard ALB-backed Kubernetes Ingress.
+
+`enable_envoy_gateway` is unset by default and derived rather than hardcoded to `true`:
+
+| `terraform.tfvars` | Result |
+| --- | --- |
+| No gateway flags at all | Envoy Gateway |
+| `enable_istio_gateway = true` or `enable_nginx_ingress = true` | That controller, Envoy stays off |
+| `enable_envoy_gateway` set explicitly | Your value always wins |
+
+Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
+
+**Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
