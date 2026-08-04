@@ -190,6 +190,21 @@ resource "azurerm_kubernetes_cluster" "main" {
       default_node_pool[0].upgrade_settings,
       default_node_pool[0].zones,
     ]
+
+    # ignore_changes above makes a zone change a silent no-op: the plan comes
+    # back clean and the node pool stays where it is. Fail loudly instead, so a
+    # requested zone change is never mistaken for an applied one.
+    postcondition {
+      condition = toset(try(self.default_node_pool[0].zones, [])) == toset(var.availability_zones)
+      error_message = join("", [
+        "AKS node pool zones are [",
+        join(",", try(self.default_node_pool[0].zones, [])),
+        "] but availability_zones requests [",
+        join(",", var.availability_zones),
+        "]. AKS cannot re-zone an existing node pool; zones apply only at creation. ",
+        "Either revert availability_zones to match, or recreate the node pool.",
+      ])
+    }
   }
 }
 
