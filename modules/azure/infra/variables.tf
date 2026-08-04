@@ -385,6 +385,21 @@ variable "aks_service_cidr" {
     condition     = var.aks_service_cidr == "" || can(cidrnetmask(var.aks_service_cidr))
     error_message = "aks_service_cidr must be an IPv4 CIDR range such as 10.128.0.0/20, not a subnet resource ID. No subnet is created for this range — Kubernetes allocates ClusterIPs from it, so it must sit outside your VNet's address space."
   }
+
+  # Host bits set is the value that parses and still sends Azure something other
+  # than what plan checked. Every CIDR function masks them off, so the overlap
+  # precondition and the derived CoreDNS address are computed against the network
+  # address while main.tf hands the cluster the literal string. Azure then either
+  # rejects it partway through apply or stores the masked form, and service_cidr
+  # forces replacement, so a stored mismatch reads as drift and proposes
+  # rebuilding the cluster on every later plan.
+  #
+  # try(..., true) rather than can(): a value that is not a CIDR at all already
+  # fails the check above, and failing both reports two errors for one typo.
+  validation {
+    condition     = var.aks_service_cidr == "" || try(var.aks_service_cidr == cidrsubnet(var.aks_service_cidr, 0, 0), true)
+    error_message = "aks_service_cidr (${var.aks_service_cidr}) has host bits set. Use ${try(cidrsubnet(var.aks_service_cidr, 0, 0), "the network address")}, the network address of that range. Terraform masks the host bits when it checks the range against your VNet, but sends the value as written to Azure, so the range checked and the range created are not the same one."
+  }
 }
 
 variable "aks_dns_service_ip" {
