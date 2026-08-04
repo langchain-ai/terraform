@@ -314,6 +314,11 @@ cat > "$OUT_FILE" << EOF
 # values-overrides.yaml is gitignored — never commit it.
 #
 # Values chain: values.yaml (base) → this file → sizing overlay → addon overlays
+#
+# Generated from these terraform.tfvars values. deploy.sh reads them back and
+# stops the deploy if any has changed since this file was written — editing
+# terraform.tfvars does not regenerate this file. Re-run make init-values.
+$(_values_input_stamp)
 
 config:
   hostname: "${HOSTNAME}"

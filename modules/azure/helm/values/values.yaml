@@ -4,9 +4,9 @@
 #   - helm/scripts/deploy.sh   (shell path)  loads this as the base values file
 #   - app/main.tf              (Terraform)   loads this as the base values file
 #
-# Holds the Azure-native defaults that do NOT vary per deployment: NGINX ingress,
-# the Azure Blob Storage engine, and auth/secret conventions. Everything that
-# varies per environment is layered on top:
+# Holds the Azure-native defaults that do NOT vary per deployment: the Azure Blob
+# Storage engine and auth/secret conventions. Everything that varies per
+# environment is layered on top:
 #   Hostname, admin email, storage account/container, Workload Identity client ID,
 #     ingress class + TLS  → values-overrides.yaml (shell) or app/locals.tf (Terraform)
 #   External Postgres/Redis secret references          → same overrides layer
@@ -18,9 +18,12 @@
 
 ingress:
   enabled: true
-  # Default class. Overridden per ingress_controller in the overrides layer
-  # (istio, azure-application-gateway, or disabled for envoy-gateway/istio-addon).
-  ingressClassName: nginx
+  # No ingressClassName here on purpose. The overrides layer sets it per
+  # ingress_controller (nginx, istio, azure-application-gateway) and deliberately
+  # sets nothing for 'none', where the operator brings their own controller. A
+  # default here would win that case through Helm's deep merge and hand the
+  # Ingress to an nginx controller nobody asked for — or to no controller at all,
+  # if nginx was never installed.
 
 istioGateway:
   enabled: false

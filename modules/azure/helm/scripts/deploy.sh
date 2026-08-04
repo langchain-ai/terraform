@@ -51,6 +51,43 @@ if [[ ! -f "$OVERRIDES_FILE" ]]; then
   exit 1
 fi
 
+# ── Reject a values-overrides.yaml generated from different tfvars ─────────
+# init-values.sh bakes tfvars values into that file and `make deploy` never
+# regenerates it, so a tfvars edit afterwards leaves Terraform and Helm deploying
+# different configurations. Switching ingress_controller is the costly one: apply
+# rebuilds the Azure side while Helm keeps rendering for the old controller, which
+# surfaces as an outage with a full set of healthy-looking components.
+if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
+  echo ""
+else
+  _stale=""
+  _stamped="false"
+  for _key in $_VALUES_INPUT_KEYS; do
+    _was=$(_read_values_stamp "$OVERRIDES_FILE" "$_key") || continue
+    _stamped="true"
+    _now=$(_parse_tfvar "$_key") || _now=""
+    [[ "$_was" == "$_now" ]] && continue
+    _stale="${_stale}${_key}: generated with '${_was}', terraform.tfvars now says '${_now}'
+"
+  done
+
+  if [[ "$_stamped" != "true" ]]; then
+    warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
+    action "make init-values  (adds the stamp, so this check can run)"
+    echo ""
+  elif [[ -n "$_stale" ]]; then
+    fail "values-overrides.yaml was generated from different terraform.tfvars values:"
+    printf '%s' "$_stale" | while IFS= read -r _line; do
+      [[ -n "$_line" ]] && info "$_line"
+    done
+    echo ""
+    info "terraform apply used the current terraform.tfvars; this file still describes the old one."
+    action "make init-values  (regenerate it, then re-run make deploy)"
+    exit 1
+  fi
+fi
+
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
 _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"

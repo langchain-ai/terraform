@@ -11,6 +11,8 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _values_input_stamp       — tfvars values baked into values-overrides.yaml
+#   _read_values_stamp <f> <k> — Read one stamped value back out
 #   _name_suffix              — Resource-name suffix derived from name_prefix
 #   _derive_kv_name           — Key Vault name, mirroring local.keyvault_name
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
@@ -44,6 +46,40 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# ── values-overrides.yaml staleness stamp ────────────────────────────────────
+# terraform.tfvars keys whose value init-values.sh bakes into
+# values-overrides.yaml. That file is generated once and `make deploy` never
+# regenerates it, so editing terraform.tfvars afterwards leaves Terraform and
+# Helm deploying different configurations. init-values.sh writes these values
+# into the generated file's header; deploy.sh reads them back and compares.
+#
+# Keys deploy.sh re-reads from terraform.tfvars on every run — sizing_profile and
+# the enable_* flags, which select whole values files — are deliberately absent.
+# Those cannot go stale, so listing them would fail a deploy that is fine.
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location"
+
+# Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
+# leaves it empty when the key is absent — never the default a caller substitutes,
+# so both sides of the comparison are reading the same thing.
+_values_input_stamp() {
+  local key val
+  for key in $_VALUES_INPUT_KEYS; do
+    val=$(_parse_tfvar "$key") || val=""
+    printf '#   %s = %s\n' "$key" "$val"
+  done
+}
+
+# Read one stamped value back out of a generated values file. Prints the value and
+# returns 0 when the stamp line is present, including when the value is empty.
+# Returns 1 when the file carries no stamp for that key, which is how a file
+# written by an older init-values.sh is told apart from a genuine empty value.
+_read_values_stamp() {
+  local file="$1" key="$2" line
+  line=$(grep -E "^#   ${key} =" "$file" 2>/dev/null | head -1) || return 1
+  [[ -n "$line" ]] || return 1
+  printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
 }
 
 # Resource-name suffix, mirroring local.name_suffix in main.tf.
