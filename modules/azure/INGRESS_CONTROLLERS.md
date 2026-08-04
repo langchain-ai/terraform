@@ -141,7 +141,7 @@ in `values-overrides.yaml`. Required for chart validation — no manual steps ne
 ```hcl
 # HTTP-only (validated)
 ingress_controller     = "agic"
-agw_sku_tier           = "Standard_v2"    # or "WAF_v2" for built-in WAF
+agw_sku_tier           = "Standard_v2"    # create_waf = true forces WAF_v2
 dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 ```
@@ -172,7 +172,15 @@ take effect. Terraform adds a `time_sleep` of 300s between cluster creation and 
 creation to prevent the AGIC controller from entering CrashLoopBackOff with persistent 403 errors.
 Without this delay, AGIC fails immediately and requires `az aks update` to trigger reconciliation.
 
-**Enable WAF:** set `agw_sku_tier = "WAF_v2"` — built into AGW, no separate WAF module needed.
+**Enable WAF:** set `create_waf = true`. Terraform creates the WAF policy, attaches it to the
+gateway, and moves the gateway to `WAF_v2` — the only tier Azure permits a policy association on.
+Setting `agw_sku_tier = "WAF_v2"` on its own buys the tier without a policy, so nothing is inspected.
+
+The policy starts in `Detection` mode: matches are logged, nothing is blocked. OWASP CRS flags SQL
+and script fragments that appear legitimately in prompts and traces, so read
+`ApplicationGatewayFirewallLog` first, add exclusions for what it gets wrong, then set
+`waf_mode = "Prevention"`. Body-size enforcement is off for the same reason — batched run payloads
+exceed the 128 KB inspection limit, and Prevention mode blocks over-size requests outright.
 
 > **AGIC requires full cluster rebuild** to enable — the AGW subnet must be provisioned at
 > VNet creation time and cannot be added to an existing VNet.

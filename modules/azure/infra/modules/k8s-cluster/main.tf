@@ -412,6 +412,12 @@ resource "azurerm_application_gateway" "agw" {
   location            = var.location
   tags                = merge(var.tags, { module = "aks", component = "agic" })
 
+  # Attached only when the caller passes a policy, which it does with the
+  # WAF_v2 tier. Azure supports policy associations on no other tier, and the
+  # provider does not check the pair, so a Standard_v2 gateway with a policy
+  # plans clean and fails at apply.
+  firewall_policy_id = var.firewall_policy_id
+
   sku {
     name     = var.agw_sku_tier
     tier     = var.agw_sku_tier

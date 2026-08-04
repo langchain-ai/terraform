@@ -577,7 +577,13 @@ module "aks" {
   # AGIC — wired from vnet module output
   subscription_id = var.subscription_id
   agic_subnet_id  = local.agic_subnet_id
-  agw_sku_tier    = var.agw_sku_tier
+
+  # A WAF policy can only be associated with the WAF_v2 tier, so create_waf
+  # decides the tier rather than leaving the two to be set into a combination
+  # that fails at apply. agw_sku_tier still governs the no-WAF case, which keeps
+  # the tier of anyone who set it explicitly to run the gateway without a policy.
+  agw_sku_tier       = var.create_waf ? "WAF_v2" : var.agw_sku_tier
+  firewall_policy_id = one(module.waf[*].waf_policy_id)
 
   # Envoy Gateway
   envoy_gateway_version = var.envoy_gateway_version
