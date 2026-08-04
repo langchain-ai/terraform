@@ -24,10 +24,10 @@ resource "azapi_resource" "amr" {
   parent_id = var.resource_group_id
 
   body = {
-    # Top-level ARM property (sibling of sku), not a member of properties.
-    # null omits the key entirely, letting Azure choose placement.
-    zones = length(var.availability_zones) > 0 ? var.availability_zones : null
-    sku   = { name = var.amr_sku }
+    # No zones key. ARM rejects a zones array on every live AMR SKU tier with
+    # "Specifying zones for SKU 'X' is not supported. Zone redundancy is enabled
+    # by default for this SKU in regions with zones." Placement is automatic.
+    sku = { name = var.amr_sku }
     properties = {
       minimumTlsVersion = "1.2"
       # Required at API 2025-07-01. Private-endpoint-only — no public access.

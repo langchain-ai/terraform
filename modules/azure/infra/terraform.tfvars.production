@@ -133,10 +133,10 @@ sizing_profile = "production"
 #------------------------------------------------------------------------------
 # Multi-AZ — for zone-redundant HA (optional)
 #------------------------------------------------------------------------------
-# Zones apply at CREATION only — AKS node pools and AMR cannot be re-zoned in
-# place. Changing these on a live deployment fails the plan; recreate instead.
-# See README "Multi-AZ Support" for which regions publish zones.
+# AKS applies zones at node pool CREATION only. Changing availability_zones on a
+# live deployment fails the plan; recreate the node pool instead.
+# Redis is not here: Azure Managed Redis rejects an explicit zone list and is
+# zone-redundant automatically in regions that have zones.
 # availability_zones                 = ["1", "2", "3"]   # AKS nodes + Postgres primary
-# redis_availability_zones           = ["2"]             # AMR — separate from the above
 # postgres_standby_availability_zone = "2"
 # postgres_geo_redundant_backup      = true
