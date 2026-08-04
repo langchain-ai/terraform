@@ -227,7 +227,7 @@ variable "vnet_id" {
 
 variable "aks_subnet_id" {
   type        = string
-  description = "The id of an existing subnet to use for the AKS cluster. Leave empty to have Terraform create one in vnet_id using aks_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage and Microsoft.KeyVault service endpoints: the blob storage firewall is always default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is absent. Terraform checks this at plan time."
+  description = "The id of an existing subnet to use for the AKS cluster. Leave empty to have Terraform create one in vnet_id using aks_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage and Microsoft.KeyVault service endpoints: the blob storage firewall is always default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is absent. Terraform checks this at plan time, or adds them itself when manage_byo_subnet_service_endpoints is set."
   default     = ""
 
   validation {
@@ -278,6 +278,12 @@ variable "bastion_subnet_id" {
     condition     = var.bastion_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.bastion_subnet_id))
     error_message = "bastion_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
   }
+}
+
+variable "manage_byo_subnet_service_endpoints" {
+  type        = bool
+  description = "Add the Microsoft.Storage and Microsoft.KeyVault service endpoints to the subnet given as aks_subnet_id, instead of failing the plan when they are missing. Terraform patches only that one property and leaves the rest of the subnet — address prefixes, delegations, NSG and route table associations — to whoever owns it. Needs Microsoft.Network/virtualNetworks/subnets/write on the subnet, so leave this false when it belongs to a network team that only granted read, or when their own tooling manages its endpoints and both would rewrite the property on every run."
+  default     = false
 }
 
 variable "aks_subnet_address_prefix" {

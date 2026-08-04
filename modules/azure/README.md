@@ -931,7 +931,7 @@ afterwards, so plan neither asks for a value nor checks one.
 
 | Subnet | Requirement |
 |--------|-------------|
-| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
 | Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
 | Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
 | AGIC | The subnet to itself. Application Gateway v2 shares with nothing, and Azure recommends a `/24`. Only needed when `ingress_controller = "agic"` |
@@ -941,6 +941,32 @@ Every subnet you supply must be a different subnet. Sharing one fails during
 apply, because the Postgres subnet is delegated and Azure permits nothing else
 inside a delegated subnet, and because Application Gateway and Bastion each
 require a subnet of their own.
+
+#### Letting Terraform add the AKS service endpoints
+
+The service endpoints are the one requirement on that list Terraform can satisfy
+for you. Set `manage_byo_subnet_service_endpoints = true` and it patches the two
+missing endpoints onto the subnet during apply, appending to whatever is already
+there rather than replacing the list, and the plan-time check stands down.
+
+It patches only that property. Address prefixes, delegations, and NSG and route
+table associations stay with whoever owns the subnet — `azurerm` has no
+standalone service-endpoint resource, so this goes through `azapi` rather than
+adopting the subnet into state and taking the rest of it along.
+
+Leave it off, which is the default, when the subnet belongs to a network team
+that granted read and not `Microsoft.Network/virtualNetworks/subnets/write`, or
+when their own tooling sets the endpoints and the two would rewrite the property
+against each other on every run. Add them yourself instead, repeating any already
+present since the flag replaces the whole list:
+
+```bash
+az network vnet subnet update --ids <subnet-id> \
+  --service-endpoints Microsoft.Storage Microsoft.KeyVault
+```
+
+`terraform destroy` leaves the endpoints on the subnet — `azapi_update_resource`
+performs no operation on delete, and the subnet was never Terraform's to revert.
 
 ### What Terraform checks before applying
 
@@ -952,7 +978,8 @@ an apply:
   be unreachable, since the private DNS zones are linked to `vnet_id`
 - every supplied subnet ID names a different subnet
 - a supplied Postgres subnet already carries the `flexibleServers` delegation
-- a supplied AKS subnet carries both service endpoints
+- a supplied AKS subnet carries both service endpoints, unless
+  `manage_byo_subnet_service_endpoints` is on and Terraform is adding them
 - a supplied bastion subnet is named `AzureBastionSubnet`, which Azure requires
   and a well-formed resource ID does not guarantee
 - `agic_subnet_id` is set when AGIC is on, and `bastion_subnet_id` when the
