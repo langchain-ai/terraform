@@ -94,7 +94,27 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_authorized_ip_ranges`
 - `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
 
-The `agic` and `istio-addon` ingress modes require `create_cluster = true` — both configure AKS-managed add-ons that only apply to a Terraform-owned cluster. Use `nginx`, `istio`, or `envoy-gateway` instead.
+`istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
+
+`agic` works on an attached cluster, but the add-on is a prerequisite rather than something Terraform turns on. Enable it against your own Application Gateway before applying:
+
+```bash
+az aks enable-addons --name <cluster> --resource-group <cluster-rg> \
+  --addons ingress-appgw --appgw-id <application-gateway-resource-id>
+```
+
+Terraform then creates no Application Gateway, no public IP, and no role assignments: the gateway is yours, and `az aks enable-addons` grants the add-on identity its roles as part of enabling. The plan fails if the add-on isn't enabled.
+
+What the plan cannot check is whether the add-on identity actually holds those roles, because ARM has no way to list role assignments by principal from Terraform. If `az aks enable-addons` ran without RBAC write on the gateway's scopes, it enables the add-on and skips the grants, and AGIC then 403s at runtime against a green apply. Confirm all three before deploying:
+
+```bash
+AGIC_ID=$(az aks show --name <cluster> --resource-group <cluster-rg> \
+  --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
+az role assignment list --assignee "$AGIC_ID" --all \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+Expect `Reader` on the gateway's resource group, `Contributor` on the Application Gateway, and `Network Contributor` on its VNet.
 
 ---
 
