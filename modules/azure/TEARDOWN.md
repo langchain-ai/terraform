@@ -64,6 +64,14 @@ Runs `terraform destroy -auto-approve` from `azure/infra/`.
 - VNet + subnets
 - Resource group
 
+**Left behind under `create_vnet = false`:** your VNet and any subnets you
+supplied, since Terraform never owned them. If you also set
+`manage_byo_subnet_service_endpoints = true`, the `Microsoft.Storage` and
+`Microsoft.KeyVault` endpoints it added to the AKS subnet stay on it —
+`azapi_update_resource` performs no operation on delete. To take them back off,
+run `az network vnet subnet update --ids <subnet-id> --service-endpoints` with
+only the endpoints you want to keep, since the flag replaces the whole list.
+
 ---
 
 ## Step 3 — Clean Up Generated Files

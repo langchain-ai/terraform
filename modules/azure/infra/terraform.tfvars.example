@@ -203,6 +203,16 @@ sizing_profile = "production"
 # postgres_subnet_id   = "/subscriptions/.../virtualNetworks/my-vnet/subnets/postgres"
 # redis_subnet_id      = "/subscriptions/.../virtualNetworks/my-vnet/subnets/redis"
 #
+# Have Terraform add the two service endpoints to the AKS subnet above rather
+# than fail the plan when they are missing. It patches that one property and
+# leaves the rest of the subnet alone, but it needs write access on the subnet,
+# so leave this off if a network team owns it and only granted read, or if their
+# tooling sets the endpoints too. Otherwise add them yourself, repeating any
+# already there since the flag replaces the whole list:
+#   az network vnet subnet update --ids <subnet-id> \
+#     --service-endpoints Microsoft.Storage Microsoft.KeyVault
+# manage_byo_subnet_service_endpoints = true
+#
 # Or omit an ID above and set its prefix here to have Terraform carve it out.
 # These defaults are sized for the 10.0.0.0/17 VNet Terraform builds, so treat
 # them as a starting point. Plan reads your VNet and rejects a prefix outside its

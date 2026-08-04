@@ -86,6 +86,19 @@ locals {
     var.bastion_subnet_id,
   ]
 
+  # The endpoints the storage and Key Vault firewalls need on whichever subnet
+  # AKS ends up in. Terraform puts both on a subnet it carves (see the
+  # networking module), so this only matters for one you supply.
+  required_aks_service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+
+  manage_aks_subnet_endpoints = local.byo_aks_subnet && var.manage_byo_subnet_service_endpoints
+
+  # Read through azapi rather than the azurerm_subnet above, which reports the
+  # service names but not the locations scoping each one. Azure replaces the
+  # whole list on write, so a body rebuilt from names alone would quietly drop
+  # that scoping from endpoints belonging to the subnet's other workloads.
+  byo_aks_subnet_service_endpoints = try(data.azapi_resource.byo_aks_subnet_endpoints[0].output.properties.serviceEndpoints, [])
+
   # ── AKS ClusterIP range ─────────────────────────────────────────────────────
   # The create path gets the default here rather than on the variable, so that
   # the variable can be required under bring-your-own without breaking it.
@@ -283,14 +296,53 @@ data "azurerm_virtual_network" "byo_vnet" {
   resource_group_name = local.byo_vnet_parts[4]
 }
 
-# Reads an operator-supplied AKS subnet to confirm the service endpoints the
-# storage and Key Vault firewalls depend on. azurerm_subnet does expose
-# service_endpoints, so this needs no azapi.
+# Reads an operator-supplied AKS subnet for its address prefixes, and for the
+# service endpoints the storage and Key Vault firewalls depend on when Terraform
+# is only checking for them.
 data "azurerm_subnet" "byo_aks_subnet" {
   count                = local.byo_aks_subnet ? 1 : 0
   name                 = local.byo_aks_subnet_parts[10]
   virtual_network_name = local.byo_aks_subnet_parts[8]
   resource_group_name  = local.byo_aks_subnet_parts[4]
+}
+
+# ── Service endpoints on a supplied AKS subnet ────────────────────────────────
+# Only when manage_byo_subnet_service_endpoints is on. Reads the endpoints
+# already on the subnet so the patch below appends to them instead of replacing
+# them, and so the body settles: after the apply the read returns what was
+# added, the contains guard skips it, and the next plan is empty.
+data "azapi_resource" "byo_aks_subnet_endpoints" {
+  count                  = local.manage_aks_subnet_endpoints ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.aks_subnet_id
+  response_export_values = ["properties.serviceEndpoints"]
+}
+
+# Patches the one property. azurerm has no standalone service-endpoint resource
+# (service_endpoints is an attribute of azurerm_subnet), so doing this in azurerm
+# would mean importing the operator's subnet and owning its prefixes,
+# delegations, NSG and route table associations along with it.
+resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
+  count       = local.manage_aks_subnet_endpoints ? 1 : 0
+  type        = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id = var.aks_subnet_id
+
+  body = {
+    properties = {
+      serviceEndpoints = concat(
+        local.byo_aks_subnet_service_endpoints,
+        [
+          for service in local.required_aks_service_endpoints : { service = service }
+          if !contains([for e in local.byo_aks_subnet_service_endpoints : try(e.service, "")], service)
+        ]
+      )
+    }
+  }
+
+  # Azure serializes writes per VNet, and azapi does not share the subnet lock
+  # azurerm holds internally. Reachable whenever one subnet is supplied and
+  # another is carved into the same VNet.
+  depends_on = [module.vnet]
 }
 
 resource "terraform_data" "validate_network" {
@@ -354,13 +406,14 @@ resource "terraform_data" "validate_network" {
     # (hardcoded default-deny) and the Key Vault firewall. Azure rejects a subnet
     # rule whose subnet lacks the matching service endpoint, and azurerm exposes
     # no way to skip that check, so both endpoints are required regardless of
-    # keyvault_default_action.
+    # keyvault_default_action. Skipped when Terraform is the one adding them,
+    # since checking first would fail the plan that would fix it.
     precondition {
-      condition = length(data.azurerm_subnet.byo_aks_subnet) == 0 || alltrue([
-        for endpoint in ["Microsoft.Storage", "Microsoft.KeyVault"] :
+      condition = local.manage_aks_subnet_endpoints || length(data.azurerm_subnet.byo_aks_subnet) == 0 || alltrue([
+        for endpoint in local.required_aks_service_endpoints :
         contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
       ])
-      error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, or clear aks_subnet_id and let Terraform create one."
+      error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add them, or clear aks_subnet_id and let Terraform create a subnet."
     }
 
     # Each service needs its own subnet. Postgres is the reason this is fatal
@@ -545,6 +598,10 @@ module "blob" {
   allowed_ips        = var.storage_allowed_ips
 
   tags = local.common_tags
+
+  # A subnet ID is a plain string and creates no dependency, so the firewall rule
+  # has to be told to wait for the endpoint that makes it valid.
+  depends_on = [azapi_update_resource.byo_aks_subnet_endpoints]
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -592,7 +649,7 @@ module "keyvault" {
 
   tags = local.common_tags
 
-  depends_on = [module.blob]
+  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints]
 }
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
