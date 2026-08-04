@@ -102,7 +102,29 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_authorized_ip_ranges`
 - `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
 
-The `agic` and `istio-addon` ingress modes require `create_cluster = true`: both are arguments on the `azurerm_kubernetes_cluster` resource, which this path does not create. `agic_subnet_id` answers the network half of AGIC, not this one. That leaves `nginx`, `istio`, and `envoy-gateway`, and of those only `nginx` deploys end to end through Terraform Pass 2. See [Two Pass 2 paths](#two-pass-2-paths).
+`istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
+
+`agic` works on an attached cluster, but the add-on is a prerequisite rather than something Terraform turns on. Enable it against your own Application Gateway before applying:
+
+```bash
+az aks enable-addons --name <cluster> --resource-group <cluster-rg> \
+  --addons ingress-appgw --appgw-id <application-gateway-resource-id>
+```
+
+Terraform then creates no Application Gateway, no public IP, and no role assignments: the gateway is yours, and `az aks enable-addons` grants the add-on identity its roles as part of enabling. The plan fails if the add-on isn't enabled.
+
+What the plan cannot check is whether the add-on identity actually holds those roles, because ARM has no way to list role assignments by principal from Terraform. If `az aks enable-addons` ran without RBAC write on the gateway's scopes, it enables the add-on and skips the grants, and AGIC then 403s at runtime against a green apply. Confirm all three before deploying:
+
+```bash
+AGIC_ID=$(az aks show --name <cluster> --resource-group <cluster-rg> \
+  --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
+az role assignment list --assignee "$AGIC_ID" --all \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+Expect `Reader` on the gateway's resource group, `Contributor` on the Application Gateway, and `Network Contributor` on its VNet.
+
+So this path leaves `nginx`, `istio`, `envoy-gateway`, and `agic`. Of those, `nginx` and `agic` deploy end to end through Terraform Pass 2; `istio` and `envoy-gateway` need `make deploy`. See [Two Pass 2 paths](#two-pass-2-paths).
 
 Pass 1 installs cert-manager and KEDA. Helm will not adopt a release it does not own, so on a cluster already running either one the install fails on CRDs that are already registered, partway through an apply that has already built Azure resources. Turn off whichever the cluster provides:
 
@@ -114,6 +136,27 @@ install_keda         = false   # cluster already runs KEDA
 Both default to `true`, and `infra/scripts/quickstart.sh` asks about each one on this path only. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off.
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
+`istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
+
+`agic` works on an attached cluster, but the add-on is a prerequisite rather than something Terraform turns on. Enable it against your own Application Gateway before applying:
+
+```bash
+az aks enable-addons --name <cluster> --resource-group <cluster-rg> \
+  --addons ingress-appgw --appgw-id <application-gateway-resource-id>
+```
+
+Terraform then creates no Application Gateway, no public IP, and no role assignments: the gateway is yours, and `az aks enable-addons` grants the add-on identity its roles as part of enabling. The plan fails if the add-on isn't enabled.
+
+What the plan cannot check is whether the add-on identity actually holds those roles, because ARM has no way to list role assignments by principal from Terraform. If `az aks enable-addons` ran without RBAC write on the gateway's scopes, it enables the add-on and skips the grants, and AGIC then 403s at runtime against a green apply. Confirm all three before deploying:
+
+```bash
+AGIC_ID=$(az aks show --name <cluster> --resource-group <cluster-rg> \
+  --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
+az role assignment list --assignee "$AGIC_ID" --all \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+Expect `Reader` on the gateway's resource group, `Contributor` on the Application Gateway, and `Network Contributor` on its VNet.
 
 ---
 

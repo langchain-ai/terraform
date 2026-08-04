@@ -10,7 +10,7 @@ variable "cluster_name" {
 
 variable "create_cluster" {
   type        = bool
-  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster (BYOC) — Terraform reads it via a data source instead of managing it, while still creating the Managed Identities, federated credentials, and (optionally) additional node pools in this module. 'agic' and 'istio-addon' ingress modes require create_cluster = true (they configure AKS-managed add-ons only settable on a Terraform-owned cluster resource)."
+  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster (BYOC) — Terraform reads it via a data source instead of managing it, while still creating the Managed Identities, federated credentials, and (optionally) additional node pools in this module. 'istio-addon' requires create_cluster = true, since service_mesh_profile is only settable on a Terraform-owned cluster resource. 'agic' works on an attached cluster only when the ingress-appgw add-on is already enabled on it, because enabling it is the same kind of resource-only argument."
   default     = true
 }
 
