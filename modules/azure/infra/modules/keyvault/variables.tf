@@ -45,9 +45,15 @@ variable "managed_identity_principal_id" {
   description = "Principal ID of the user-assigned managed identity used by LangSmith K8s pods. Gets 'Key Vault Secrets User' role to read secrets at runtime."
 }
 
-variable "manage_role_assignments" {
+variable "manage_terraform_admin_assignment" {
   type        = bool
-  description = "Whether this module creates the two Key Vault role assignments: 'Key Vault Secrets Officer' for the Terraform deployer and 'Key Vault Secrets User' for the pod managed identity. True is the behaviour this module has always had, so a caller that does not set it is unaffected. The root module passes create_keyvault, giving both grants to a vault this module creates and neither to a customer-owned one, because creating them there means calling Microsoft.Authorization/roleAssignments/write on a resource the platform team owns. When false, the vault owner must grant the deployer read and write on secrets before apply, or the secret writes fail with 403."
+  description = "Whether this module creates the deployer's 'Key Vault Secrets Officer' grant. True is the behaviour this module has always had, so a caller that does not set it is unaffected. The root module passes create_keyvault, so a vault this module creates gets the grant and a customer-owned one does not, because creating it there means calling Microsoft.Authorization/roleAssignments/write on a resource the platform team owns. When false, the deployer must already hold read and write on secrets from a grant made outside this apply, or the secret writes fail with 403."
+  default     = true
+}
+
+variable "manage_managed_identity_assignment" {
+  type        = bool
+  description = "Whether this module creates the pod managed identity's 'Key Vault Secrets User' grant. Gated separately from manage_terraform_admin_assignment because the two requests carry different principal types, and a subscription that delegates roleAssignments/write through an ABAC condition on principalType can permit one and reject the other: this principal is always a service principal, while the deployer is a user under an interactive `az login`. Nobody can pre-grant this one, because the identity is created partway through the same apply, so leave it true wherever the deployer is allowed to create it at all."
   default     = true
 }
 

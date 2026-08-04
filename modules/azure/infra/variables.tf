@@ -118,9 +118,15 @@ variable "existing_keyvault_resource_group_name" {
   default     = ""
 }
 
-variable "keyvault_manage_role_assignments" {
+variable "keyvault_manage_terraform_admin_assignment" {
   type        = bool
-  description = "Whether Terraform creates the two Key Vault role assignments: 'Key Vault Secrets Officer' for the deployer and 'Key Vault Secrets User' for the pod managed identity. Leave null to follow create_keyvault, so a vault Terraform creates gets both grants and a customer-owned vault gets neither. Creating them on someone else's vault means calling Microsoft.Authorization/roleAssignments/write against a resource their platform team owns, which is the call such a team most often denies; instead have that team grant the deployer read/write on secrets before apply. Set true to attempt them anyway, or false on a vault Terraform creates when the grants already exist."
+  description = "Whether Terraform creates the deployer's 'Key Vault Secrets Officer' grant. Leave null to follow create_keyvault, so a vault Terraform creates gets the grant and a customer-owned vault does not. Creating it on someone else's vault means calling Microsoft.Authorization/roleAssignments/write against a resource their platform team owns, which is the call such a team most often denies. Set false on a vault Terraform creates when the grant already exists, or when the subscription delegates roleAssignments/write through an ABAC condition that permits only principalType ServicePrincipal and apply runs as a user — that request is rejected either way. A tenant admin must then grant the deployer Key Vault Secrets Officer on the vault or its resource group before apply, or the secret writes fail with 403."
+  default     = null
+}
+
+variable "keyvault_manage_managed_identity_assignment" {
+  type        = bool
+  description = "Whether Terraform creates the pod managed identity's 'Key Vault Secrets User' grant. Leave null to follow create_keyvault, so a vault Terraform creates gets the grant and a customer-owned vault does not. Separate from keyvault_manage_terraform_admin_assignment because this principal is always a service principal, so an ABAC condition on principalType that rejects a user deployer still permits this one. Nobody can pre-grant it, because the identity is created partway through the same apply, so leave it null or true unless the vault's owner has agreed to add it by hand."
   default     = null
 }
 
