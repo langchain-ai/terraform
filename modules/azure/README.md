@@ -126,7 +126,7 @@ Both default to `true`, and `infra/scripts/quickstart.sh` asks about each one on
 brew install azure-cli
 az --version
 
-# Terraform (>= 1.5)
+# Terraform (>= 1.9)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 

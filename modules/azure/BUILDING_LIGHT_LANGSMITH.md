@@ -35,7 +35,7 @@ Before starting, verify all of the following:
 ### Tools
 ```bash
 az --version          # Azure CLI — must be installed and logged in
-terraform --version   # >= 1.5
+terraform --version   # >= 1.9
 kubectl version       # any recent version
 helm version          # >= 3.x
 python3 --version     # for JSON parsing in scripts
