@@ -321,33 +321,6 @@ locals {
           awsRegion  = local.region
           apiURL     = "https://s3.${local.region}.amazonaws.com"
         }
-        }, {
-        for k, v in {
-          sandboxes = merge(
-            {
-              enabled     = true
-              clusterName = local.cluster_name
-              juicefs = {
-                csi = {
-                  existingSecretName = var.sandbox_juicefs_csi_config_secret_name
-                  node = {
-                    serviceAccount = {
-                      annotations = local.irsa_annotations
-                    }
-                  }
-                }
-              }
-              sandboxHost = {
-                deployment = {
-                  nodeSelector = {
-                    "sandbox.langsmith.com/host" = "true"
-                  }
-                }
-              }
-            },
-            var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
-          )
-        } : k => v if var.enable_sandboxes
       })
       commonEnv = concat(
         [
@@ -360,6 +333,34 @@ locals {
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
     var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
+    # Sandbox values are top-level in the chart, not under config.
+    {
+      for k, v in {
+        sandboxes = merge(
+          {
+            enabled = true
+            juicefs = {
+              csi = {
+                existingSecretName = var.sandbox_juicefs_csi_config_secret_name
+                node = {
+                  serviceAccount = {
+                    annotations = local.irsa_annotations
+                  }
+                }
+              }
+            }
+            sandboxHost = {
+              deployment = {
+                nodeSelector = {
+                  "sandbox.langsmith.com/host" = "true"
+                }
+              }
+            }
+          },
+          var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
+        )
+      } : k => v if var.enable_sandboxes
+    },
     {
       for k, v in {
         images = {

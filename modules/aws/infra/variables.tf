@@ -284,7 +284,7 @@ variable "sandbox_host_node_count" {
 
 variable "sandbox_host_instance_types" {
   type        = list(string)
-  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal; other examples include m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, and i4i.metal."
+  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal; other bare-metal examples include m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, and i4i.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants), which is cheaper than renting a whole host; set sandbox_host_local_nvme_bootstrap_enabled = false on families without instance store, and note that the EKS vpc-cni addon must be v1.21 or newer because v1.20 crashes on 8th-generation Intel instances."
   default     = ["m5d.metal"]
 }
 
