@@ -2,7 +2,7 @@
 #
 # First time?              make quickstart → make setup-env → make preflight → make init → make apply
 # Pass 1 (infra):          make setup-env → make init → make plan → make apply
-# Pass 1.5 (access):       make kubeconfig → make k8s-secrets
+# Pass 1.5 (secrets):      make seed-secrets → make kubeconfig → make k8s-secrets
 # Pass 2 (helm):           make init-values → make deploy
 # Full deploy (helm):      make deploy-all
 # Manage secrets:          make keyvault
@@ -10,7 +10,7 @@
 
 .PHONY: help quickstart setup-env preflight keyvault status status-quick \
         init plan apply destroy \
-        kubeconfig k8s-secrets \
+        seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
         clean
 
@@ -91,6 +91,9 @@ clean-force: ## Remove all local secrets and generated files without confirmatio
 
 # ── Pass 1.5: Cluster Access + K8s Secrets ────────────────────────────────────
 
+seed-secrets: ## Write LangSmith app secrets into Key Vault (run after apply; never overwrites)
+	cd $(INFRA_DIR) && bash scripts/seed-keyvault-secrets.sh
+
 kubeconfig: ## Fetch AKS credentials into ~/.kube/config
 	$(HELM_DIR)/scripts/get-kubeconfig.sh
 
@@ -110,4 +113,4 @@ uninstall: ## Uninstall LangSmith Helm release
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
-deploy-all: apply kubeconfig k8s-secrets init-values deploy ## Full deploy: infra → kubeconfig → secrets → helm
+deploy-all: apply seed-secrets kubeconfig k8s-secrets init-values deploy ## Full deploy: infra → KV secrets → kubeconfig → K8s secrets → helm

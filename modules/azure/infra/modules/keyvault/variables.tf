@@ -58,6 +58,9 @@ variable "allowed_subnet_ids" {
 }
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
+# Only secrets Terraform already holds for another reason. The LangSmith app
+# secrets are seeded post-apply by infra/scripts/seed-keyvault-secrets.sh so
+# they never land in Terraform state.
 
 variable "postgres_admin_password" {
   type        = string
@@ -65,56 +68,9 @@ variable "postgres_admin_password" {
   sensitive   = true
 }
 
-variable "langsmith_admin_password" {
-  type        = string
-  description = "LangSmith UI admin account password"
-  sensitive   = true
-  default     = ""
-}
-
 variable "langsmith_license_key" {
   type        = string
   description = "LangSmith enterprise license key"
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_api_key_salt" {
-  type        = string
-  description = "Salt used to hash LangSmith API keys. Keep stable — changing it invalidates all existing API keys."
-  sensitive   = true
-}
-
-variable "langsmith_jwt_secret" {
-  type        = string
-  description = "JWT signing secret for LangSmith sessions. Keep stable."
-  sensitive   = true
-}
-
-variable "langsmith_deployments_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for LangGraph Platform deployments. Empty = not stored."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_agent_builder_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for Agent Builder. Empty = not stored."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_insights_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for LangSmith Insights. Empty = not stored."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_polly_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for Polly agent. Empty = not stored."
   sensitive   = true
   default     = ""
 }

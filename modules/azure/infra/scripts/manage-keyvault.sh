@@ -180,11 +180,11 @@ cmd_set() {
     [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
   fi
 
-  # Validate admin password format
+  # Validate admin password format (shared rules — see _common.sh)
   if [[ "$key" == "langsmith-admin-password" ]]; then
-    if ! printf '%s' "$val" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-      _red "ERROR"; echo ": Admin password must contain a symbol: !#\$%()+,-./:?@[\\]^_{~}"
-      echo "  The Helm chart will reject a password without one."
+    if ! _pw_err=$(_validate_admin_password "$val"); then
+      _red "ERROR"; echo ": $_pw_err"
+      echo "  The Helm chart will reject it."
       exit 1
     fi
   fi
@@ -260,8 +260,8 @@ cmd_validate() {
         warnings=$((warnings + 1))
       else
         if [[ "$key" == "langsmith-admin-password" ]]; then
-          if ! printf '%s' "$val" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-            printf "  %-48s  %s\n" "$key" "$(_red "INVALID — missing required symbol")"
+          if ! _pw_err=$(_validate_admin_password "$val"); then
+            printf "  %-48s  %s\n" "$key" "$(_red "INVALID — ${_pw_err#Admin password is invalid — }")"
             warnings=$((warnings + 1))
             continue
           fi
