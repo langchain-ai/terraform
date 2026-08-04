@@ -187,13 +187,19 @@ variable "agic_subnet_id" {
 
 variable "agw_sku_tier" {
   type        = string
-  description = "Application Gateway SKU tier. 'Standard_v2' for standard deployments, 'WAF_v2' to enable WAF on the gateway."
+  description = "Application Gateway SKU tier. 'Standard_v2' for standard deployments, 'WAF_v2' to enable WAF on the gateway. The caller forces 'WAF_v2' whenever a firewall policy is attached."
   default     = "Standard_v2"
 
   validation {
     condition     = contains(["Standard_v2", "WAF_v2"], var.agw_sku_tier)
     error_message = "agw_sku_tier must be 'Standard_v2' or 'WAF_v2'."
   }
+}
+
+variable "firewall_policy_id" {
+  type        = string
+  description = "Resource ID of a WAF policy to attach to the Application Gateway. Requires agw_sku_tier = 'WAF_v2' — Azure supports policy associations on no other tier. Null leaves the gateway without a policy."
+  default     = null
 }
 
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────

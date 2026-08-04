@@ -704,14 +704,14 @@ variable "langsmith_polly_encryption_key" {
 
 variable "create_waf" {
   type        = bool
-  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). Attach to Application Gateway or Front Door manually after creation."
+  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). With ingress_controller = 'agic' the policy is attached to the Application Gateway and forces its WAF_v2 tier. Any other ingress controller leaves the policy unattached, for a Front Door or a gateway you own to reference."
   default     = false
 }
 
 variable "waf_mode" {
   type        = string
-  description = "WAF enforcement mode: Detection (log only) or Prevention (block)"
-  default     = "Prevention"
+  description = "WAF enforcement mode: Detection (log only) or Prevention (block). Detection by default because OWASP CRS matches SQL and script fragments that appear legitimately in LangSmith prompts and traces. Review the firewall log for false positives, add exclusions, then switch to Prevention."
+  default     = "Detection"
 }
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
