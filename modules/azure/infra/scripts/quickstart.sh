@@ -142,7 +142,7 @@ AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-PG_DELETION_PROTECTION KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+PG_DELETION_PROTECTION AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -211,7 +211,8 @@ _load_tfvars() {
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
-           sizing_profile postgres_admin_username postgres_database_name; do
+           sizing_profile postgres_admin_username postgres_database_name \
+           amr_sku; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
@@ -234,6 +235,7 @@ _load_tfvars() {
       sizing_profile)            SIZING_PROFILE="$_TF_VAL" ;;
       postgres_admin_username)   PG_ADMIN_USER="$_TF_VAL" ;;
       postgres_database_name)    PG_DB_NAME="$_TF_VAL" ;;
+      amr_sku)                   AMR_SKU="$_TF_VAL" ;;
     esac
   done
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
