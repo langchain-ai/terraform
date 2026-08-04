@@ -42,9 +42,33 @@ variable "cost_center" {
 
 variable "keyvault_name" {
   type        = string
-  description = "Name for the Azure Key Vault. Must be globally unique, 3-24 chars. Defaults to 'langsmith-kv<identifier>' which you may need to customize to avoid naming conflicts."
+  description = "Name for the Azure Key Vault. Must be globally unique, 3-24 chars. Defaults to 'langsmith-kv<identifier>' which you may need to customize to avoid naming conflicts. Only used when create_keyvault = true."
   default     = ""
   # When empty, main.tf computes: "langsmith-kv${local.identifier}"
+}
+
+variable "create_keyvault" {
+  type        = bool
+  description = "Whether to create a new Key Vault. Set false to attach to a pre-existing one — provide existing_keyvault_name and existing_keyvault_resource_group_name. Terraform then writes its secrets into that vault and changes nothing else about it: the vault's auth mode, network rules, and retention settings stay as its owner configured them, and keyvault_default_action, keyvault_allowed_ips, keyvault_soft_delete_retention_days, and keyvault_purge_protection are ignored."
+  default     = true
+}
+
+variable "existing_keyvault_name" {
+  type        = string
+  description = "Name of the pre-existing Key Vault to attach to. Required when create_keyvault = false; leaving it empty fails the plan rather than falling back to a derived name."
+  default     = ""
+}
+
+variable "existing_keyvault_resource_group_name" {
+  type        = string
+  description = "Resource group containing the pre-existing Key Vault. Required when create_keyvault = false. No default is derived: the only name this module could guess is langsmith-rg<identifier>, the resource group it creates, which is not where a vault the customer's platform team owns lives."
+  default     = ""
+}
+
+variable "keyvault_manage_role_assignments" {
+  type        = bool
+  description = "Whether Terraform creates the two Key Vault role assignments: 'Key Vault Secrets Officer' for the deployer and 'Key Vault Secrets User' for the pod managed identity. Leave null to follow create_keyvault, so a vault Terraform creates gets both grants and a customer-owned vault gets neither. Creating them on someone else's vault means calling Microsoft.Authorization/roleAssignments/write against a resource their platform team owns, which is the call such a team most often denies; instead have that team grant the deployer read/write on secrets before apply. Set true to attempt them anyway, or false on a vault Terraform creates when the grants already exist."
+  default     = null
 }
 
 variable "keyvault_purge_protection" {
