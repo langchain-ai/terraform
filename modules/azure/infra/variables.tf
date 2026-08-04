@@ -178,11 +178,6 @@ variable "redis_high_availability" {
   type        = bool
   description = "Zone-redundant HA for Azure Managed Redis (primary + replica across nodes). Required for the AMR SLA, so set true for production. Unsupported on Balanced_B0."
   default     = false
-
-  validation {
-    condition     = !(var.redis_high_availability && var.amr_sku == "Balanced_B0")
-    error_message = "Balanced_B0 cannot run high availability. Use Balanced_B1 or larger, or set redis_high_availability = false."
-  }
 }
 
 variable "blob_ttl_enabled" {
