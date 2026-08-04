@@ -68,12 +68,16 @@ locals {
   # unique_resource_names has no bearing on that path.
   keyvault_name = var.create_keyvault ? (var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}") : var.existing_keyvault_name
 
-  # Whether the keyvault module creates its two role assignments. Defaults to
-  # create_keyvault: a vault this module creates gets both grants, a customer's
-  # vault gets neither, because creating them there means calling
+  # Whether the keyvault module creates each of its two role assignments. Both
+  # default to create_keyvault: a vault this module creates gets both grants, a
+  # customer's vault gets neither, because creating them there means calling
   # Microsoft.Authorization/roleAssignments/write on a resource their platform
-  # team owns. keyvault_manage_role_assignments overrides either way.
-  keyvault_manage_role_assignments = var.keyvault_manage_role_assignments != null ? var.keyvault_manage_role_assignments : var.create_keyvault
+  # team owns. Gated one apiece rather than together because the two requests
+  # carry different principal types, and a subscription that delegates
+  # roleAssignments/write through an ABAC condition on principalType can reject
+  # the deployer's grant while permitting the managed identity's.
+  keyvault_manage_terraform_admin_assignment  = var.keyvault_manage_terraform_admin_assignment != null ? var.keyvault_manage_terraform_admin_assignment : var.create_keyvault
+  keyvault_manage_managed_identity_assignment = var.keyvault_manage_managed_identity_assignment != null ? var.keyvault_manage_managed_identity_assignment : var.create_keyvault
 
   # ── Network resolution ──────────────────────────────────────────────────────
   # create_vnet = true  → Terraform owns the whole network; BYO IDs are rejected
@@ -784,7 +788,8 @@ module "keyvault" {
   create_keyvault                       = var.create_keyvault
   existing_keyvault_name                = var.existing_keyvault_name
   existing_keyvault_resource_group_name = var.existing_keyvault_resource_group_name
-  manage_role_assignments               = local.keyvault_manage_role_assignments
+  manage_terraform_admin_assignment     = local.keyvault_manage_terraform_admin_assignment
+  manage_managed_identity_assignment    = local.keyvault_manage_managed_identity_assignment
 
   # The managed identity used by LangSmith pods gets read-only access to
   # all secrets so future CSI-driver integration requires no RBAC changes.

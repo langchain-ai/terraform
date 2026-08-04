@@ -47,7 +47,7 @@ variable "managed_identity_principal_id" {
 
 variable "terraform_principal_type" {
   type        = string
-  description = "Principal type of the identity running `terraform apply`, applied to its 'Key Vault Secrets Officer' grant. Null (default) omits the field and lets Azure infer it. Set \"User\" or \"ServicePrincipal\" only when the subscription delegates roleAssignments/write through an ABAC condition on principalType, which rejects requests that omit it."
+  description = "Principal type of the identity running `terraform apply`, applied to its 'Key Vault Secrets Officer' grant. Null (default) omits the field and lets Azure infer it. Set \"User\" or \"ServicePrincipal\" only when the subscription delegates roleAssignments/write through an ABAC condition on principalType, which rejects requests that omit it. Declaring the type does not satisfy a condition that permits only ServicePrincipal — a User deployer is still rejected, and needs manage_terraform_admin_assignment = false plus an out-of-band grant."
   default     = null
 
   validation {
@@ -56,9 +56,15 @@ variable "terraform_principal_type" {
   }
 }
 
-variable "manage_role_assignments" {
+variable "manage_terraform_admin_assignment" {
   type        = bool
-  description = "Whether this module creates the two Key Vault role assignments: 'Key Vault Secrets Officer' for the Terraform deployer and 'Key Vault Secrets User' for the pod managed identity. True is the behaviour this module has always had, so a caller that does not set it is unaffected. The root module passes create_keyvault, giving both grants to a vault this module creates and neither to a customer-owned one, because creating them there means calling Microsoft.Authorization/roleAssignments/write on a resource the platform team owns. When false, the vault owner must grant the deployer read and write on secrets before apply, or the secret writes fail with 403."
+  description = "Whether this module creates the deployer's 'Key Vault Secrets Officer' grant. True is the behaviour this module has always had, so a caller that does not set it is unaffected. The root module passes create_keyvault, so a vault this module creates gets the grant and a customer-owned one does not, because creating it there means calling Microsoft.Authorization/roleAssignments/write on a resource the platform team owns. When false, the deployer must already hold read and write on secrets from a grant made outside this apply, or the secret writes fail with 403."
+  default     = true
+}
+
+variable "manage_managed_identity_assignment" {
+  type        = bool
+  description = "Whether this module creates the pod managed identity's 'Key Vault Secrets User' grant. Gated separately from manage_terraform_admin_assignment because the two requests carry different principal types, and a subscription that delegates roleAssignments/write through an ABAC condition on principalType can permit one and reject the other: this principal is always a ServicePrincipal, while the deployer is a User under an interactive `az login`. Nobody can pre-grant this one, because the identity is created partway through the same apply, so leave it true wherever the deployer is allowed to create it at all."
   default     = true
 }
 

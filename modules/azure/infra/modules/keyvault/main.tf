@@ -93,8 +93,8 @@ data "azurerm_key_vault" "existing" {
     }
 
     postcondition {
-      condition     = self.rbac_authorization_enabled || !var.manage_role_assignments
-      error_message = "Key Vault '${var.existing_keyvault_name}' uses access policies, not Azure RBAC, so the role assignments this module creates would grant nothing while the apply still succeeded. Either set keyvault_manage_role_assignments = false and have the vault owner grant access with an access policy, or supply a vault with RBAC authorization enabled."
+      condition     = self.rbac_authorization_enabled || !(var.manage_terraform_admin_assignment || var.manage_managed_identity_assignment)
+      error_message = "Key Vault '${var.existing_keyvault_name}' uses access policies, not Azure RBAC, so the role assignments this module creates would grant nothing while the apply still succeeded. Either set keyvault_manage_terraform_admin_assignment = false and keyvault_manage_managed_identity_assignment = false and have the vault owner grant access with an access policy, or supply a vault with RBAC authorization enabled."
     }
   }
 }
@@ -122,9 +122,16 @@ locals {
 # team owns — the call such a team most often denies. The deployer exists before
 # apply starts and Azure RBAC inherits downward, so that team can grant this
 # role at the vault or its resource group ahead of time instead.
+#
+# Gated separately from the managed-identity grant below, because a subscription
+# that delegates roleAssignments/write through an ABAC condition on principalType
+# rejects this request and permits that one: a User deployer cannot create this,
+# and no value of terraform_principal_type changes that. Turning it off is how
+# such a deployment proceeds on a vault Terraform creates, with the grant made
+# out of band beforehand.
 
 resource "azurerm_role_assignment" "terraform_kv_admin" {
-  count = var.manage_role_assignments ? 1 : 0
+  count = var.manage_terraform_admin_assignment ? 1 : 0
 
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
@@ -151,7 +158,7 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
 # vault owner for it.
 
 resource "azurerm_role_assignment" "managed_identity_kv_reader" {
-  count = var.manage_role_assignments ? 1 : 0
+  count = var.manage_managed_identity_assignment ? 1 : 0
 
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets User"
@@ -164,11 +171,13 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
 # the first `terraform apply` would fail with 403 when creating secrets.
 # Subsequent applies skip this (the role already exists).
 #
-# No assignment to wait on when this module creates none: an access grant that
-# came from outside this apply propagated long ago.
+# Only the deployer's grant is worth waiting on, because the secret writes below
+# are what would 403 without it. The managed-identity grant is read at runtime by
+# pods that start long after this apply, and an access grant that came from
+# outside this apply propagated long ago.
 
 resource "time_sleep" "wait_for_rbac" {
-  count = var.manage_role_assignments ? 1 : 0
+  count = var.manage_terraform_admin_assignment ? 1 : 0
 
   create_duration = "30s"
   depends_on      = [azurerm_role_assignment.terraform_kv_admin]
