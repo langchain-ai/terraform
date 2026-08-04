@@ -58,8 +58,19 @@ locals {
   blob_name     = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
 
   # Key Vault name: max 24 chars, globally unique.
-  # Uses the user-supplied keyvault_name or derives from name_prefix.
-  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
+  # Uses the user-supplied keyvault_name or derives from name_prefix. When
+  # attaching to a customer-owned vault (create_keyvault = false) the name is
+  # theirs, with no fallback — an unset existing_keyvault_name fails on the
+  # keyvault module's precondition instead of deriving a name for a vault that
+  # was never created.
+  keyvault_name = var.create_keyvault ? (var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}") : var.existing_keyvault_name
+
+  # Whether the keyvault module creates its two role assignments. Defaults to
+  # create_keyvault: a vault this module creates gets both grants, a customer's
+  # vault gets neither, because creating them there means calling
+  # Microsoft.Authorization/roleAssignments/write on a resource their platform
+  # team owns. keyvault_manage_role_assignments overrides either way.
+  keyvault_manage_role_assignments = var.keyvault_manage_role_assignments != null ? var.keyvault_manage_role_assignments : var.create_keyvault
 
   # ── Network resolution ──────────────────────────────────────────────────────
   # create_vnet = true  → Terraform owns the whole network; BYO IDs are rejected
@@ -727,6 +738,15 @@ module "keyvault" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
 
+  # Bring-your-own Key Vault: attach to a customer-owned vault instead of
+  # creating one. The module writes its secrets into that vault and changes
+  # nothing else about it, so the network ACL and retention settings below are
+  # ignored on this path.
+  create_keyvault                       = var.create_keyvault
+  existing_keyvault_name                = var.existing_keyvault_name
+  existing_keyvault_resource_group_name = var.existing_keyvault_resource_group_name
+  manage_role_assignments               = local.keyvault_manage_role_assignments
+
   # The managed identity used by LangSmith pods gets read-only access to
   # all secrets so future CSI-driver integration requires no RBAC changes.
   managed_identity_principal_id = module.blob.k8s_managed_identity_principal_id
@@ -866,8 +886,11 @@ module "diagnostics" {
   agw_id = module.aks.agw_id
 
   # Boolean flags known at plan time — count cannot depend on computed resource IDs.
+  # Key Vault diagnostics only when this module owns the vault: writing a
+  # diagnostic setting onto a customer's vault changes their resource, and a
+  # platform-owned vault usually already has one collecting AuditEvent.
   enable_aks_diag      = true
-  enable_keyvault_diag = true
+  enable_keyvault_diag = var.create_keyvault
   enable_postgres_diag = var.postgres_source == "external"
   enable_agw_diag      = var.ingress_controller == "agic"
 
