@@ -1099,18 +1099,10 @@ _run_section_5() {
   if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
     echo ""
     _hint "AGIC provisions an Azure Application Gateway v2 with a dedicated /24 subnet."
-    _hint "WAF_v2 adds OWASP 3.2 rules + bot protection — no separate WAF module needed."
+    _hint "The gateway runs Standard_v2. Answering yes to the WAF policy later attaches"
+    _hint "one and moves the gateway to WAF_v2, the only tier Azure allows it on."
     _hint "Note: AGIC requires a full cluster rebuild to enable (the add-on is part of the"
     _hint "cluster resource). With a VNet you own, supply the Application Gateway subnet."
-    _ask_choice --default "$(_index_of "$AGW_SKU_TIER" Standard_v2 WAF_v2)" \
-      "Application Gateway SKU tier:" \
-      "Standard_v2 — standard routing (no WAF)" \
-      "WAF_v2      — with integrated WAF (OWASP 3.2 + bot protection)"
-    if [[ "$_CHOICE" == "2" ]]; then
-      AGW_SKU_TIER="WAF_v2"
-    else
-      AGW_SKU_TIER="Standard_v2"
-    fi
   fi
 }
 
@@ -1470,9 +1462,12 @@ _run_section_10() {
     fi
 
     echo ""
-    _hint "WAF policy      — Azure WAF with OWASP 3.2 rules + bot protection on the LB."
-    _hint "                  Only applies when ingress_controller = agic (WAF_v2 SKU)."
-    _hint "                  For nginx/istio, use Azure Front Door or DDoS Protection instead."
+    _hint "WAF policy      — Azure WAF with OWASP 3.2 rules + bot protection."
+    _hint "                  With ingress_controller = agic the policy is attached to the"
+    _hint "                  Application Gateway, which moves it to the WAF_v2 tier (~\$250/mo"
+    _hint "                  more). Starts in Detection mode — logs matches without blocking."
+    _hint "                  For nginx/istio the policy is created but nothing references it —"
+    _hint "                  use Azure Front Door or DDoS Protection instead."
     if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then
       CREATE_WAF="true"
     else
