@@ -1,5 +1,7 @@
 terraform {
-  required_version = ">= 1.5"
+  # 1.7+ required for the `removed` blocks that drop the app secrets from state
+  # without deleting them from Key Vault (see removed.tf).
+  required_version = ">= 1.7"
 
   required_providers {
     azurerm = {

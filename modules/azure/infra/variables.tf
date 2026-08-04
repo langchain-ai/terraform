@@ -349,10 +349,14 @@ variable "postgres_admin_password" {
   default     = ""
 }
 
-# ── LangSmith secrets (stored in Key Vault by the keyvault module) ────────────
-# These are written to Azure Key Vault on first apply. On subsequent runs,
-# setup-env.sh reads them back from Key Vault so they stay stable.
-# Application deployment uses helm/scripts/generate-secrets.sh to pull from KV.
+# ── LangSmith secrets ─────────────────────────────────────────────────────────
+# Only the license key is a Terraform variable: the k8s_bootstrap module needs
+# it to create the langsmith-license K8s secret.
+#
+# The admin password, API key salt, JWT secret and Fernet encryption keys are
+# NOT Terraform variables by design — Terraform would persist them in plaintext
+# in state. scripts/seed-keyvault-secrets.sh writes them directly to Key Vault
+# after apply, and helm/scripts/generate-secrets.sh reads them back from KV.
 
 variable "langsmith_release_name" {
   type        = string
@@ -367,62 +371,9 @@ variable "langsmith_license_key" {
   default     = ""
 }
 
-variable "langsmith_admin_password" {
-  type        = string
-  description = "Initial LangSmith organization admin password. Stored in Key Vault: langsmith-admin-password."
-  sensitive   = true
-  default     = ""
-}
-
 variable "langsmith_admin_email" {
   type        = string
   description = "Initial LangSmith organization admin email. Set via setup-env.sh — used as initialOrgAdminEmail in Helm values."
-  default     = ""
-}
-
-variable "langsmith_api_key_salt" {
-  type        = string
-  description = "Salt used to hash LangSmith API keys. Generate once: openssl rand -base64 32. Keep stable — changing invalidates all API keys. Stored in Key Vault: langsmith-api-key-salt. Set via setup-env.sh (TF_VAR_langsmith_api_key_salt)."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_jwt_secret" {
-  type        = string
-  description = "JWT secret for LangSmith Basic Auth sessions. Generate once: openssl rand -base64 32. Keep stable. Stored in Key Vault: langsmith-jwt-secret. Set via setup-env.sh (TF_VAR_langsmith_jwt_secret)."
-  sensitive   = true
-  default     = ""
-}
-
-# ── LangGraph Platform encryption keys ───────────────────────────────────────
-# Stored in Key Vault by Terraform. Read by generate-secrets.sh when enabling
-# optional features via Helm overlays. Generate once and never change.
-
-variable "langsmith_deployments_encryption_key" {
-  type        = string
-  description = "Fernet key for LangSmith Deployments. Stored in Key Vault: langsmith-deployments-encryption-key."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_agent_builder_encryption_key" {
-  type        = string
-  description = "Fernet key for Agent Builder. Stored in Key Vault: langsmith-agent-builder-encryption-key."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_insights_encryption_key" {
-  type        = string
-  description = "Fernet key for Insights (Clio). Stored in Key Vault: langsmith-insights-encryption-key. Must stay stable — changing breaks existing insights data."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_polly_encryption_key" {
-  type        = string
-  description = "Fernet key for Polly agent. Stored in Key Vault: langsmith-polly-encryption-key. Must stay stable — changing breaks existing Polly data."
-  sensitive   = true
   default     = ""
 }
 
