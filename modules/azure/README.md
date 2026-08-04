@@ -169,7 +169,7 @@ Expect `Reader` on the gateway's resource group, `Contributor` on the Applicatio
 brew install azure-cli
 az --version
 
-# Terraform (>= 1.9)
+# Terraform (>= 1.5)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 

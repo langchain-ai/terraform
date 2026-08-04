@@ -1,7 +1,5 @@
 terraform {
-  # 1.9 is the floor for variable validation that references other variables,
-  # which the Balanced_B0 + high-availability guard needs.
-  required_version = ">= 1.9"
+  required_version = ">= 1.5"
 
   required_providers {
     azurerm = {
