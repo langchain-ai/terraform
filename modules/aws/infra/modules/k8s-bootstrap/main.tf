@@ -449,6 +449,11 @@ resource "helm_release" "envoy_gateway" {
 # (which normally creates it) runs with a short TTL and may not re-run on
 # subsequent applies. Without a GatewayClass, the Gateway stays in "Waiting
 # for controller" state indefinitely.
+#
+# Istio and NGINX keep their proxy Service internal with a one-line Helm value.
+# Envoy cannot: its Service is created per Gateway at runtime, so the override
+# must be an EnvoyProxy on the GatewayClass. Without it the Service defaults to
+# LoadBalancer and AWS provisions an NLB that never receives traffic.
 resource "terraform_data" "envoy_gateway_resource" {
   count = var.enable_envoy_gateway ? 1 : 0
 
@@ -468,12 +473,29 @@ resource "terraform_data" "envoy_gateway_resource" {
       ${local._ctx_check}
       kubectl create namespace ${var.namespace} --dry-run=client -o yaml | kubectl apply -f -
       cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: langsmith-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: eg
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: langsmith-proxy
+    namespace: envoy-gateway-system
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -513,6 +535,7 @@ MANIFEST
       aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete gateway langsmith-gateway -n ${self.input.namespace} --ignore-not-found=true --wait=true --timeout=180s 2>/dev/null || true
       kubectl delete gatewayclass eg --ignore-not-found=true 2>/dev/null || true
+      kubectl delete envoyproxy langsmith-proxy -n envoy-gateway-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
 
@@ -626,6 +649,32 @@ resource "helm_release" "istio_base" {
   namespace        = "istio-system"
   create_namespace = true
   version          = "1.23.0"
+}
+
+# Istio GatewayClasses are not removed by Helm. Use terraform_data so the
+# destroy provisioner can reference self.input (helm_release cannot use
+# var.* in destroy-time provisioners).
+resource "terraform_data" "istio_gatewayclass_cleanup" {
+  count = var.enable_istio_gateway ? 1 : 0
+
+  input = {
+    cluster_name = var.cluster_name
+    region       = var.region
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
+      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
+        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
+      fi
+      kubectl delete gatewayclass istio istio-remote --ignore-not-found=true 2>/dev/null || true
+    EOT
+  }
+
+  depends_on = [helm_release.istio_base]
 }
 
 resource "helm_release" "istiod" {

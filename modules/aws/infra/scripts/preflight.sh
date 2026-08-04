@@ -173,7 +173,7 @@ run_post_infra_checks() {
   # ── 2. Cluster reachability ─────────────────────────────────────────────────
   info "--- Cluster Reachability ---"
   local version_out
-  version_out=$(kubectl version --short 2>&1 || kubectl version 2>&1 || true)
+  version_out=$(kubectl version 2>&1 || true)
   if echo "$version_out" | grep -qi "error\|unable to connect\|refused\|timed out"; then
     error "Cannot reach the cluster: $version_out"
     error "Check VPN/network access and re-run 'make kubeconfig'."

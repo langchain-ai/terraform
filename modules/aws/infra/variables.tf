@@ -88,11 +88,11 @@ variable "eks_public_access_cidrs" {
 variable "eks_cluster_version" {
   type        = string
   description = "The EKS version of the kubernetes cluster"
-  default     = "1.33"
+  default     = "1.34"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.eks_cluster_version))
-    error_message = "EKS cluster version must be in format X.Y (e.g., 1.31)."
+    error_message = "EKS cluster version must be in format X.Y (e.g., 1.34)."
   }
 }
 
@@ -746,8 +746,11 @@ variable "sandbox_service_url_base_url" {
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."
-  default     = false
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
+  # Unset (null) means "derive" — see local.enable_envoy_gateway in locals.tf.
+  # An explicit true or false in terraform.tfvars always wins over the derivation,
+  # so existing Istio/NGINX deployments keep working without a tfvars edit.
+  default = null
 }
 
 variable "enable_istio_gateway" {

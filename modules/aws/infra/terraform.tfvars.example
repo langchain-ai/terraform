@@ -150,7 +150,7 @@ create_vpc = true
 
 # Kubernetes version. Check AWS docs for supported versions:
 # https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html
-eks_cluster_version = "1.33"
+eks_cluster_version = "1.34"
 
 # Public API endpoint — controls whether the EKS API server is reachable
 # from outside the VPC.
@@ -526,15 +526,17 @@ langsmith_namespace = "langsmith"
 #------------------------------------------------------------------------------
 # INGRESS / GATEWAY MODE
 #------------------------------------------------------------------------------
-# Three mutually exclusive options (only one should be true at a time):
+# Three mutually exclusive options — enabling two is rejected at plan time,
+# because all gateway modes share one ALB target group and only one port can be
+# health-checked on it.
 #
-#   ALB only (default)
+#   ALB only
 #     enable_envoy_gateway = false
 #     enable_istio_gateway = false
 #     → Chart creates a standard Kubernetes Ingress; the AWS LB Controller
 #       provisions an Application Load Balancer.
 #
-#   Envoy Gateway
+#   Envoy Gateway (default)
 #     enable_envoy_gateway = true
 #     enable_istio_gateway = false
 #     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
@@ -547,7 +549,11 @@ langsmith_namespace = "langsmith"
 #       Gateway resource already installed in the cluster.
 #       Also opens port 15017 on the node SG for the istiod webhook.
 #
-enable_envoy_gateway = false
+# enable_envoy_gateway has no hardcoded default. Leave it out entirely and Envoy
+# Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true,
+# so existing Istio/NGINX configurations keep working untouched. Setting it
+# explicitly — as below — always wins over that derivation.
+enable_envoy_gateway = true
 enable_istio_gateway = false
 
 #------------------------------------------------------------------------------

@@ -146,10 +146,11 @@ _validate_conflicts() {
     printf "  Both paths create ClusterIssuer/letsencrypt-prod. Pick one in Section 7.\n"
   fi
 
-  # ACM cert with non-ALB gateway — ACM requires ALB for certificate attachment
-  if [[ "$tls" == "acm" && ( "$envoy" == "true" || "$istio" == "true" ) ]]; then
-    _conflict_warn "tls_certificate_source = \"acm\" with Istio or Envoy Gateway."
-    printf "  ACM certificates attach to ALB only. Use DNS-01 for Istio, or switch to ALB.\n"
+  # ACM terminates at the ALB, which can forward to Envoy but not to an
+  # independently managed Istio NLB.
+  if [[ "$tls" == "acm" && "$istio" == "true" ]]; then
+    _conflict_warn "tls_certificate_source = \"acm\" with Istio Gateway."
+    printf "  Use DNS-01 for Istio, or switch to ALB/Envoy.\n"
   fi
 
   # DNS-01 IRSA enabled but no Istio — cert-manager would issue a cert with no Gateway to use it
@@ -291,7 +292,7 @@ fi
 
 _section "4. EKS Cluster"
 
-_ask "EKS Kubernetes version" "$(_existing "eks_cluster_version" "1.31")"
+_ask "EKS Kubernetes version" "$(_existing "eks_cluster_version" "1.34")"
 EKS_VERSION="$_REPLY"
 
 EKS_PUBLIC="true"; EKS_PUBLIC_CIDRS=""; CREATE_BASTION="false"
@@ -397,32 +398,31 @@ _section "6. Ingress / Gateway Mode"
 echo ""
 printf "  ${DIM}Choose how traffic reaches LangSmith. These options are mutually exclusive:${RESET}\n"
 printf "  ${DIM}only one gateway controller can be active at a time.${RESET}\n"
-printf "  ${DIM}ALB is the default and simplest. Istio/Envoy needed for split dataplane.${RESET}\n"
+printf "  ${DIM}Envoy Gateway is recommended for new configurations. ALB is simplest if${RESET}\n"
+printf "  ${DIM}you don't need Gateway API. Istio is another split-dataplane option.${RESET}\n"
 
 _ex_envoy=$(_existing "enable_envoy_gateway" "false")
 _ex_istio=$(_existing "enable_istio_gateway" "false")
 _ex_nginx=$(_existing "enable_nginx_ingress" "false")
-_gw_default=1
-[[ "$_ex_nginx" == "true" ]] && _gw_default=2
-[[ "$_ex_envoy" == "true" ]] && _gw_default=3
-[[ "$_ex_istio" == "true" ]] && _gw_default=4
+_gw_default=$(_quickstart_gateway_default \
+  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
 
 _ask_choice --default "$_gw_default" "Ingress / Gateway mode:" \
+  "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support (recommended for new configurations)" \
   "ALB (Application Load Balancer) — standard, TLS via ACM or Let's Encrypt HTTP-01" \
-  "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding" \
-  "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support" \
+  "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding (legacy, not recommended)" \
   "Istio Gateway — VirtualServices, split dataplane, TLS via Let's Encrypt DNS-01"
 
-GATEWAY_MODE="alb"
-ENABLE_ENVOY="false"
+GATEWAY_MODE="envoy"
+ENABLE_ENVOY="true"
 ENABLE_ISTIO="false"
 ENABLE_NGINX="false"
 
 case "$_CHOICE" in
-  1) GATEWAY_MODE="alb" ;;
-  2) GATEWAY_MODE="nginx"; ENABLE_NGINX="true" ;;
-  3) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
-  4) GATEWAY_MODE="istio"; ENABLE_ISTIO="true" ;;
+  1) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
+  2) GATEWAY_MODE="alb"; ENABLE_ENVOY="false" ;;
+  3) GATEWAY_MODE="nginx"; ENABLE_ENVOY="false"; ENABLE_NGINX="true" ;;
+  4) GATEWAY_MODE="istio"; ENABLE_ENVOY="false"; ENABLE_ISTIO="true" ;;
 esac
 
 # For NGINX: brief note (ALB TGB wires automatically, no extra input needed)
@@ -456,9 +456,9 @@ _ex_domain=$(_existing "langsmith_domain" "")
 _ex_acm=$(_existing "acm_certificate_arn" "")
 _ex_le_email=$(_existing "letsencrypt_email" "")
 
-# For Istio and Envoy, only DNS-01 works on EKS (HTTP-01 fails due to NLB hairpin NAT).
-# ACM is also unavailable for both — ACM certificates attach to ALB only.
-# Offer a restricted 2-option menu for both NLB-backed gateway modes.
+# Istio uses DNS-01 because HTTP-01 fails through its NLB hairpin path and ACM
+# cannot attach to the in-cluster gateway. Envoy remains behind the
+# Terraform-managed ALB, so ACM can terminate TLS before traffic reaches Envoy.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
   printf "  ${DIM}On EKS, Istio requires DNS-01 (Let's Encrypt via Route 53) for TLS.${RESET}\n"
@@ -476,18 +476,17 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
   TLS_MODE="$_CHOICE"  # 1=dns01, 2=no_tls
 elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   echo ""
-  printf "  ${DIM}On EKS, Envoy Gateway uses an NLB. HTTP-01 is not shown: EKS NLBs block${RESET}\n"
-  printf "  ${DIM}hairpin traffic, so cert-manager cannot complete the self-check.${RESET}\n"
-  printf "  ${DIM}ACM is also not shown: ACM attaches to ALB only, not Envoy NLB.${RESET}\n"
-  _tls_default_envoy=2; [[ "$_ex_tls" == "none" || -z "$_ex_tls" ]] || _tls_default_envoy=1
+  printf "  ${DIM}The existing ALB terminates TLS and forwards HTTP to Envoy Gateway.${RESET}\n"
+  printf "  ${DIM}Let's Encrypt is not shown because the automated DNS-01 path is Istio-only.${RESET}\n"
+  _tls_default_envoy=2; [[ "$_ex_tls" == "acm" ]] && _tls_default_envoy=1
   _ask_choice --default "$_tls_default_envoy" "TLS certificate (Envoy mode):" \
-    "Let's Encrypt DNS-01 via Route 53 — fully automated, recommended" \
+    "ACM — AWS Certificate Manager (TLS terminates at the ALB, recommended)" \
     "None — HTTP only (useful for initial deploy, add TLS later)"
   case "$_CHOICE" in
-    1) TLS_SOURCE="none"   ;; # tls_certificate_source stays "none"; cert-manager handles it
+    1) TLS_SOURCE="acm"  ;;
     2) TLS_SOURCE="none"   ;;
   esac
-  TLS_MODE="$_CHOICE"  # 1=dns01, 2=no_tls
+  TLS_MODE="$_CHOICE"  # 1=acm, 2=no_tls
 else
   _tls_default_alb=3
   [[ "$_ex_tls" == "acm" ]]        && _tls_default_alb=1
@@ -520,16 +519,14 @@ DOMAIN="$_REPLY"
 
 # Let's Encrypt email (HTTP-01 or DNS-01)
 if [[ "$TLS_SOURCE" == "letsencrypt" ]] || \
-   [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]] || \
-   [[ "$GATEWAY_MODE" == "envoy" && "$TLS_MODE" == "1" ]]; then
+   [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]]; then
   echo ""
   _ask "Email for Let's Encrypt expiry notifications" "$_ex_le_email"
   LE_EMAIL="$_REPLY"
 fi
 
-# cert-manager IRSA for DNS-01 (Istio and Envoy)
-if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]] || \
-   [[ "$GATEWAY_MODE" == "envoy" && "$TLS_MODE" == "1" ]]; then
+# cert-manager IRSA for DNS-01 (Istio)
+if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]]; then
   CREATE_CERT_MANAGER="true"
   echo ""
   printf "  ${DIM}cert-manager uses IRSA (no static credentials) to create DNS TXT records.${RESET}\n"
@@ -541,21 +538,21 @@ if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]] || \
   fi
 fi
 
-if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" && "$GATEWAY_MODE" == "alb" ]]; then
+if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" ]]; then
   echo ""
   _yellow "WARNING"; printf ": Running production without TLS is not recommended.\n"
 fi
 
-# Early exit: ACM is incompatible with Envoy/Istio (ACM attaches to ALB listeners only)
-if [[ ("$ENABLE_ENVOY" == "true" || "$ENABLE_ISTIO" == "true") && "$TLS_SOURCE" == "acm" ]]; then
+# Early exit: ACM is incompatible with Istio's independently managed gateway.
+if [[ "$ENABLE_ISTIO" == "true" && "$TLS_SOURCE" == "acm" ]]; then
   echo ""
-  _red "ERROR"; printf ": ACM certificates require ALB and cannot be used with Envoy or Istio Gateway.\n"
+  _red "ERROR"; printf ": ACM certificates cannot be used with Istio Gateway.\n"
   echo ""
-  printf "  ACM attaches to ALB listeners only. Envoy and Istio use their own\n"
-  printf "  load balancers (NLB/Gateway API) and cannot reference ACM certificates.\n"
+  printf "  ACM attaches to ALB listeners. Use DNS-01 for Istio, or choose\n"
+  printf "  ALB/Envoy so the Terraform-managed ALB can terminate TLS.\n"
   echo ""
   printf "  Re-run:  ${CYAN}make quickstart${RESET}\n"
-  printf "  Choose:  Let's Encrypt (DNS-01 for Istio, HTTP-01 for Envoy) or None\n"
+  printf "  Choose:  Let's Encrypt DNS-01 or None\n"
   echo ""
   exit 1
 fi
@@ -686,8 +683,8 @@ _pre_write_guard() {
     _red "ABORT"; printf ": HTTP-01 (tls_certificate_source=letsencrypt) and DNS-01 (create_cert_manager_irsa=true) are mutually exclusive.\n"
     abort=1
   fi
-  if [[ "$TLS_SOURCE" == "acm" && ( "$ENABLE_ENVOY" == "true" || "$ENABLE_ISTIO" == "true" ) ]]; then
-    _red "ABORT"; printf ": ACM certificates require ALB and cannot be used with Istio or Envoy Gateway.\n"
+  if [[ "$TLS_SOURCE" == "acm" && "$ENABLE_ISTIO" == "true" ]]; then
+    _red "ABORT"; printf ": ACM is not supported by the quickstart Istio path; use DNS-01 or None.\n"
     abort=1
   fi
   if (( abort )); then

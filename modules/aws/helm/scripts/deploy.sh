@@ -175,9 +175,6 @@ _enable_polly=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
-_enable_envoy_gateway=false
-_enable_istio_gateway=false
-_enable_nginx_ingress=false
 _enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
@@ -186,10 +183,14 @@ _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
-_tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
-_tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
-_tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
+
+# Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
+# is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
+# hostname resolution below to the Ingress status instead of the Terraform ALB.
+_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
+_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
+_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
 
 # Classic ALB Ingress mode = none of the gateway/nginx routing modes are enabled.
 # In that mode the AWS Load Balancer Controller creates and owns the ALB, so the
@@ -349,6 +350,9 @@ helm repo update langchain
 
 # Guard: recover from broken release states before proceeding.
 #   - pending-upgrade: left by a Ctrl+C'd helm upgrade --wait. Roll back to clear.
+#   - pending-install: left by a disrupted initial install (e.g. transient EKS API
+#                      errors during make apply). No revision exists to roll back
+#                      to, so uninstall and let the deploy recreate it.
 #   - failed: left by a timed-out post-install hook or resource readiness check.
 #             helm upgrade works fine on a failed release — just log and continue.
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
@@ -357,6 +361,11 @@ if [[ "$_release_status" == "pending-upgrade" ]]; then
   echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'pending-upgrade' state (interrupted upgrade)."
   echo "         Rolling back to clear the lock..."
   helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
+  echo ""
+elif [[ "$_release_status" == "pending-install" ]]; then
+  echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'pending-install' state (disrupted initial install)."
+  echo "         No revision exists to roll back to. Uninstalling to clear the lock..."
+  helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
   echo ""
 elif [[ "$_release_status" == "failed" ]]; then
   echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."

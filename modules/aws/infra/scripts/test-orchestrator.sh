@@ -81,7 +81,7 @@ fi
 # the calling shell (setup-env.sh must have been sourced before this script).
 
 export WORKER_REGION;         WORKER_REGION="${WORKER_REGION:-$(_parse_tfvar "region" 2>/dev/null || echo "us-west-2")}"
-export WORKER_EKS_VERSION;    WORKER_EKS_VERSION="${WORKER_EKS_VERSION:-$(_parse_tfvar "eks_cluster_version" 2>/dev/null || echo "1.31")}"
+export WORKER_EKS_VERSION;    WORKER_EKS_VERSION="${WORKER_EKS_VERSION:-$(_parse_tfvar "eks_cluster_version" 2>/dev/null || echo "1.34")}"
 # Workers always use in-cluster Postgres/Redis — cheap, fast, no per-worker RDS/ElastiCache
 # Env var overrides take precedence over terraform.tfvars (useful for one-off domain/email overrides)
 export WORKER_DOMAIN;         WORKER_DOMAIN="${WORKER_DOMAIN:-$(_parse_tfvar "langsmith_domain" 2>/dev/null || echo "")}"

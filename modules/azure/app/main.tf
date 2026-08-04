@@ -209,9 +209,9 @@ resource "helm_release" "langsmith" {
   # Values layering — YAML files are the single source of truth (shared with helm/scripts path).
   # Files are loaded from helm/values/ (populated by make init-values from examples/).
   values = concat(
-    # 1. Base Azure config (NGINX ingress, Blob WI, external PG/Redis)
-    [file("${local.values_path}/langsmith-values.yaml")],
-    # 2. Dynamic overrides (hostname, WI annotations, storage account)
+    # 1. Azure base config (NGINX ingress default, Blob engine, auth/secret defaults)
+    [file("${local.values_path}/values.yaml")],
+    # 2. Dynamic overrides (hostname, storage account, WI, ingress/TLS, external PG/Redis)
     [yamlencode(local.overrides_values)],
     # 3. Sizing
     var.sizing == "production" ? [file("${local.values_path}/langsmith-values-sizing-production.yaml")] : [],
@@ -297,8 +297,8 @@ resource "terraform_data" "validate_required" {
       error_message = "clickhouse_host is required when enable_insights = true"
     }
     precondition {
-      condition     = fileexists("${local.values_path}/langsmith-values.yaml")
-      error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (copies templates from helm/values/examples/)"
+      condition     = fileexists("${local.values_path}/values.yaml")
+      error_message = "Azure base values not found at ${local.values_path}/values.yaml. It is tracked in git under modules/azure/helm/values/ — set var.helm_values_path if your values live elsewhere."
     }
   }
 }
