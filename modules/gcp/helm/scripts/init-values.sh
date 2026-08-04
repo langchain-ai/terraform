@@ -566,25 +566,23 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_service_url_block=""
   if [[ -n "$_sandbox_service_url_base_url" ]]; then
     _sandbox_service_url_block="
-    serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
   _sandbox_config_block="
-  sandboxes:
-    enabled: true
-    clusterName: \"${CLUSTER_NAME}\"${_sandbox_service_url_block}
-    xServiceAuthJwtSecret: \"${SANDBOX_X_SERVICE_AUTH_JWT_SECRET}\"
-    callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
-    juicefs:
-      csi:
-        existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-        node:
-          serviceAccount:
-            annotations:
-              iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
-    sandboxHost:
-      deployment:
-        nodeSelector:
-          sandbox.langsmith.com/host: \"true\""
+sandboxes:
+  enabled: true${_sandbox_service_url_block}
+  callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
+  juicefs:
+    csi:
+      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+      node:
+        serviceAccount:
+          annotations:
+            iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+  sandboxHost:
+    deployment:
+      nodeSelector:
+        sandbox.langsmith.com/host: \"true\""
   _sandbox_top_level_block="
 images:
   sandboxHostImage:

@@ -666,23 +666,22 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_service_url_block=""
   if [[ -n "$_sandbox_service_url_base_url" ]]; then
     _sandbox_service_url_block="
-    serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
   _sandbox_config_block="
-  sandboxes:
-    enabled: true
-    clusterName: \"${CLUSTER_NAME}\"${_sandbox_service_url_block}
-    juicefs:
-      csi:
-        existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-        node:
-          serviceAccount:
-            annotations:
-              eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
-    sandboxHost:
-      deployment:
-        nodeSelector:
-          sandbox.langsmith.com/host: \"true\""
+sandboxes:
+  enabled: true${_sandbox_service_url_block}
+  juicefs:
+    csi:
+      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+      node:
+        serviceAccount:
+          annotations:
+            eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+  sandboxHost:
+    deployment:
+      nodeSelector:
+        sandbox.langsmith.com/host: \"true\""
   _sandbox_top_level_block="
 images:
   sandboxHostImage:
