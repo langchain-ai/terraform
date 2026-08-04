@@ -140,12 +140,12 @@ COST_CENTER CREATE_CLUSTER EXISTING_CLUSTER_NAME EXISTING_CLUSTER_RG
 EXISTING_CLUSTER_POOLS_MANAGED
 CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
-AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
+AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID MANAGE_BYO_ENDPOINTS
 NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INSTALL_KEDA INSTALL_CERT_MANAGER
 INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+AMR_SKU REDIS_HA KV_PURGE_PROTECTION KV_MANAGE_TF_ADMIN SIZING_PROFILE UNIQUE_NAMES
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -267,10 +267,21 @@ _load_tfvars() {
     _valid_rg_name      "$EXISTING_CLUSTER_RG"   || EXISTING_CLUSTER_RG=""
   }
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
+  # Written only when false. The Terraform default is null, which follows
+  # create_keyvault, so an absent key has to stay absent rather than come back as
+  # an explicit true — that would force the deployer's grant onto a vault the
+  # customer's platform team owns. Read back because losing it re-attempts a
+  # roleAssignments/write an ABAC condition on principalType may reject, which
+  # fails the apply before any secret is written.
+  _TF_VAL=$(_parse_tfvar keyvault_manage_terraform_admin_assignment) && KV_MANAGE_TF_ADMIN="$_TF_VAL"
   # The add-ons are written only when true, so an absent key is genuinely false.
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_bastion)              && CREATE_BASTION="$_TF_VAL"
+  # Written only when true, the non-default. Read back because dropping it takes
+  # azapi_update_resource out of the config, and plan then requires the two
+  # service endpoints to already be on a subnet Terraform no longer maintains.
+  _TF_VAL=$(_parse_tfvar manage_byo_subnet_service_endpoints) && MANAGE_BYO_ENDPOINTS="$_TF_VAL"
   [[ "$CREATE_VNET" == "false" ]] && {
     VNET_ID=$(_tfvar vnet_id)
     AKS_SUBNET_ID=$(_tfvar aks_subnet_id)
@@ -453,6 +464,10 @@ EXISTING_CLUSTER_RG=""
 EXISTING_CLUSTER_POOLS_MANAGED="false"
 CREATE_VNET="true"
 VNET_ID=""
+# Matches the Terraform default. Only meaningful with a supplied AKS subnet, where
+# turning it on has Terraform add the Microsoft.Storage and Microsoft.KeyVault
+# service endpoints the storage and Key Vault firewalls need.
+MANAGE_BYO_ENDPOINTS="false"
 AKS_SUBNET_ID=""
 POSTGRES_SUBNET_ID=""
 REDIS_SUBNET_ID=""
@@ -1387,6 +1402,10 @@ _run_section_7() {
 
 # -- 8. Key Vault ------------------------------------------------------------
 KV_PURGE_PROTECTION="false"
+# true is what this module has always done and what every deployment wants where
+# the deployer is allowed to create the grant at all, so it is only written to
+# tfvars when the operator turns it off.
+KV_MANAGE_TF_ADMIN="true"
 
 _run_section_8() {
   _section "8. Key Vault"
@@ -1411,6 +1430,26 @@ _run_section_8() {
   else
     KV_PURGE_PROTECTION="false"
     _hint "Dev profile: keyvault_purge_protection = false (name reusable immediately after destroy)."
+  fi
+
+  # Asked on both profiles, because the subscription policy that makes the answer
+  # "no" has nothing to do with dev versus prod. Terraform writes ~10 secrets
+  # through the data plane, and Owner and Contributor grant no data-plane access
+  # on an RBAC-enabled vault, so something has to create this grant.
+  echo ""
+  _hint "Terraform normally grants itself 'Key Vault Secrets Officer' so it can write"
+  _hint "the LangSmith secrets into the vault."
+  _hint ""
+  _hint "Answer no only if your subscription refuses role assignments for users — some"
+  _hint "delegate Microsoft.Authorization/roleAssignments/write through a condition that"
+  _hint "permits only service principals, and an interactive 'az login' is a user. A"
+  _hint "tenant admin then has to grant it before you apply, or the secret writes 403."
+  local kv_admin_yn="y"
+  _answered 8 && kv_admin_yn="$(_yn_default "$KV_MANAGE_TF_ADMIN")"
+  if _ask_yn "Let Terraform create its own Key Vault Secrets Officer grant?" "$kv_admin_yn"; then
+    KV_MANAGE_TF_ADMIN="true"
+  else
+    KV_MANAGE_TF_ADMIN="false"
   fi
 }
 
@@ -1637,6 +1676,7 @@ while true; do
   printf "  %-24s %s\n" "   Redis:"           "$REDIS_SOURCE"
   printf "  %-24s %s\n" "   ClickHouse:"      "$CH_SOURCE"
   printf "  %-24s %s\n" "8. KV purge prot.:"  "$KV_PURGE_PROTECTION"
+  printf "  %-24s %s\n" "   TF grants itself:" "$KV_MANAGE_TF_ADMIN"
   printf "  %-24s %s\n" "9. Sizing:"          "$SIZING_PROFILE"
   if [[ "$PROFILE" == "prod" ]]; then
     printf "  %-24s %s\n" "10. WAF:"            "$CREATE_WAF"
@@ -1713,6 +1753,12 @@ TFVARS
   # A subnet ID reuses an existing subnet; its absence plus a CIDR tells
   # Terraform to create that subnet inside the VNet above.
   [[ -n "$AKS_SUBNET_ID" ]]      && echo "aks_subnet_id      = \"${AKS_SUBNET_ID}\"" >> "$OUTPUT"
+  # Written only when true, the non-default, and only alongside the subnet it acts
+  # on. Terraform then adds the Microsoft.Storage and Microsoft.KeyVault service
+  # endpoints, which plan otherwise requires to be there already. Needs
+  # Microsoft.Network/virtualNetworks/subnets/write on a subnet another team owns.
+  [[ "$MANAGE_BYO_ENDPOINTS" == "true" && -n "$AKS_SUBNET_ID" ]] && \
+    printf '%-30s = true\n' "manage_byo_subnet_service_endpoints" >> "$OUTPUT"
   [[ -n "$POSTGRES_SUBNET_ID" ]] && echo "postgres_subnet_id = \"${POSTGRES_SUBNET_ID}\"" >> "$OUTPUT"
   [[ -n "$REDIS_SUBNET_ID" ]]    && echo "redis_subnet_id    = \"${REDIS_SUBNET_ID}\"" >> "$OUTPUT"
   [[ -n "$AKS_SUBNET_CIDR_LINE" ]]      && echo "$AKS_SUBNET_CIDR_LINE" >> "$OUTPUT"
@@ -1834,6 +1880,22 @@ cat >> "$OUTPUT" << TFVARS
 # Key Vault
 #------------------------------------------------------------------------------
 keyvault_purge_protection = ${KV_PURGE_PROTECTION}
+TFVARS
+
+# Written only when false, so a null keeps following create_keyvault: a vault
+# Terraform creates gets the grant, a customer-owned one does not. An explicit
+# true would force the deployer's grant onto a vault another team owns.
+[[ "$KV_MANAGE_TF_ADMIN" == "false" ]] && cat >> "$OUTPUT" << 'TFVARS'
+# Terraform does not create its own "Key Vault Secrets Officer" grant. A tenant
+# admin must grant the deployer that role on the vault or its resource group
+# before apply, or the secret writes below fail with 403. The pod managed
+# identity's grant is unaffected and is still created: that principal is a
+# service principal, and nobody can pre-grant it because the identity does not
+# exist until this apply creates it.
+keyvault_manage_terraform_admin_assignment = false
+TFVARS
+
+cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
 # Blob Storage
