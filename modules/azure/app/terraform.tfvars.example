@@ -12,7 +12,7 @@ admin_email = "admin@example.com"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # hostname = "langsmith.example.com"   # Defaults to dns_label or Front Door FQDN
-# chart_version = "0.7.0"              # Empty = latest
+# chart_version = "~0.15.1"            # Defaults to the supported line; empty = latest
 # release_name  = "langsmith"
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
