@@ -110,7 +110,7 @@ Expect `Reader` on the gateway's resource group, `Contributor` on the Applicatio
 
 ### Deploying against an existing Key Vault
 
-Set `create_keyvault = false` to write LangSmith's secrets into a Key Vault the customer already owns. Terraform reads the vault, writes its nine secrets, and changes nothing else about it: the auth mode, network rules, retention, and purge protection stay as the vault's owner configured them, and `keyvault_default_action`, `keyvault_allowed_ips`, `keyvault_soft_delete_retention_days`, and `keyvault_purge_protection` are ignored.
+Set `create_keyvault = false` to write LangSmith's secrets into a Key Vault the customer already owns. Terraform reads the vault, writes its nine secrets, and changes nothing else about it: the auth mode, network rules, retention, and purge protection stay as the vault's owner configured them, and `keyvault_default_action`, `keyvault_allowed_ips`, and `keyvault_purge_protection` are ignored.
 
 ```hcl
 create_keyvault                       = false
