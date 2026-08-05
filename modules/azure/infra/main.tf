@@ -964,7 +964,9 @@ module "diagnostics" {
   enable_aks_diag      = true
   enable_keyvault_diag = var.create_keyvault
   enable_postgres_diag = var.postgres_source == "external"
-  enable_agw_diag      = var.ingress_controller == "agic"
+  # Matches the gateway's own condition. With create_cluster = false the gateway
+  # belongs to whoever owns the cluster, so there is nothing here to collect from.
+  enable_agw_diag = var.ingress_controller == "agic" && var.create_cluster
 
   tags = local.common_tags
 }
