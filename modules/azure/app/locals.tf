@@ -186,5 +186,14 @@ locals {
     # overlay files set enabled = true when the flags are on, keeping this consistent.
     { insights = { enabled = var.enable_insights } },
     { polly = { enabled = var.enable_polly } },
+    # operator and the fleet servers live in wi_components when their flag is on,
+    # so the map above already owns those keys. Only inject a disable when the
+    # flag is off — adding the key while on would clobber the WI config via
+    # merge()'s shallow merge.
+    var.enable_agent_deploys ? {} : { operator = { enabled = false } },
+    var.enable_fleet ? {} : {
+      fleetToolServer    = { enabled = false }
+      fleetTriggerServer = { enabled = false }
+    },
   )
 }
