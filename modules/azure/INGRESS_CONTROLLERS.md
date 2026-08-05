@@ -161,7 +161,8 @@ create_dns_zone        = true
 - AKS provisions `IngressClass` named `azure-application-gateway`
 - AGIC watches `Ingress` resources and programs AGW routing rules
 - cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
-- Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor on VNet
+- Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor
+  on the VNet (see `agic_network_contributor_scope` below to narrow that one)
 - The namespace NetworkPolicy admits the gateway by the address range of its subnet. In Azure CNI
   mode AGW connects to pod IPs from that subnet rather than from a namespace, so unlike every other
   controller here there is no source namespace to allow
@@ -171,6 +172,30 @@ provisioning, but the identity requires ~5 minutes to register in Azure AD befor
 take effect. Terraform adds a `time_sleep` of 300s between cluster creation and role assignment
 creation to prevent the AGIC controller from entering CrashLoopBackOff with persistent 403 errors.
 Without this delay, AGIC fails immediately and requires `az aks update` to trigger reconciliation.
+
+**Narrowing the Network Contributor grant:** by default AGIC's identity gets Network Contributor on
+the whole VNet. That role is `Microsoft.Network/*` with no exclusions, so at VNet scope the identity
+can write to every subnet in it, including which NSG or route table each one carries. AGIC needs
+`subnets/join/action` and `subnets/read` on one subnet, and Azure documents those as assignable on
+the virtual network *or subnet*.
+
+When Terraform creates the VNet this costs nothing, since it is a VNet you own. Bringing your own is
+different, and there `agic_network_contributor_scope` has two better answers:
+
+```hcl
+agic_network_contributor_scope = "subnet"   # grant only on the AGW subnet
+agic_network_contributor_scope = "none"     # create the assignment yourself, out of band
+```
+
+Use `none` when your network team will not delegate `Microsoft.Authorization/roleAssignments/write`
+on their VNet. Terraform then skips the assignment, and AGIC returns 403 until someone grants the
+add-on identity (`ingressapplicationgateway-<cluster>`, in the `MC_` resource group) the join
+permission on the gateway subnet.
+
+The default is `vnet` rather than the least-privilege option because a role assignment's scope cannot
+be edited in place. Switching an existing deployment to `subnet` plans a destroy and create of the
+assignment, and AGIC can return 403 until the new one propagates. Prefer setting it correctly on a
+new deployment.
 
 **Enable WAF:** set `create_waf = true`. Terraform creates the WAF policy, attaches it to the
 gateway, and moves the gateway to `WAF_v2` — the only tier Azure permits a policy association on.

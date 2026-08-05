@@ -172,6 +172,17 @@ variable "agw_sku_tier" {
   }
 }
 
+variable "agic_network_contributor_scope" {
+  type        = string
+  description = "Where to grant the AGIC identity Network Contributor: 'vnet' (the whole VNet, the default), 'subnet' (only the Application Gateway's subnet, which is all AGIC needs), or 'none' (skip it, for an operator who creates the assignment out of band)."
+  default     = "vnet"
+
+  validation {
+    condition     = contains(["vnet", "subnet", "none"], var.agic_network_contributor_scope)
+    error_message = "agic_network_contributor_scope must be vnet, subnet or none."
+  }
+}
+
 variable "firewall_policy_id" {
   type        = string
   description = "Resource ID of a WAF policy to attach to the Application Gateway. Requires agw_sku_tier = 'WAF_v2' — Azure supports policy associations on no other tier. Null leaves the gateway without a policy."

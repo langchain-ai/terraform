@@ -585,6 +585,8 @@ module "aks" {
   agw_sku_tier       = var.create_waf ? "WAF_v2" : var.agw_sku_tier
   firewall_policy_id = one(module.waf[*].waf_policy_id)
 
+  agic_network_contributor_scope = var.agic_network_contributor_scope
+
   # Envoy Gateway
   envoy_gateway_version = var.envoy_gateway_version
 

@@ -752,6 +752,17 @@ variable "agw_sku_tier" {
   }
 }
 
+variable "agic_network_contributor_scope" {
+  type        = string
+  description = "Where AGIC's identity gets Network Contributor. 'vnet' grants it on the whole virtual network, which is the default and what existing deployments have. 'subnet' grants it only on the Application Gateway subnet, which is all AGIC needs and the right choice for a VNet you do not own. 'none' skips the assignment for an operator who creates it themselves. Only used when ingress_controller = 'agic'."
+  default     = "vnet"
+
+  validation {
+    condition     = contains(["vnet", "subnet", "none"], var.agic_network_contributor_scope)
+    error_message = "agic_network_contributor_scope must be 'vnet', 'subnet' or 'none'."
+  }
+}
+
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────
 
 variable "envoy_gateway_version" {
