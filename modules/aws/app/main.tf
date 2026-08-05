@@ -109,11 +109,6 @@ data "aws_ssm_parameter" "polly_key" {
   name  = "${local.ssm_prefix}/polly-encryption-key"
 }
 
-data "aws_ssm_parameter" "sandbox_x_service_auth_jwt_secret" {
-  count = var.enable_sandboxes ? 1 : 0
-  name  = "${local.ssm_prefix}/sandbox-x-service-auth-jwt-secret"
-}
-
 data "aws_ssm_parameter" "sandbox_callback_signing_jwk" {
   count = var.enable_sandboxes ? 1 : 0
   name  = "${local.ssm_prefix}/sandbox-callback-signing-jwk"
@@ -191,12 +186,8 @@ resource "kubectl_manifest" "external_secret" {
             remoteRef = { key = "${local.ssm_prefix}/polly-encryption-key" }
           },
         ] : [],
-        # Sandbox service-auth secret — only if sandboxes enabled
+        # Sandbox callback signing key — only if sandboxes enabled
         var.enable_sandboxes ? [
-          {
-            secretKey = "sandbox_x_service_auth_jwt_secret"
-            remoteRef = { key = "${local.ssm_prefix}/sandbox-x-service-auth-jwt-secret" }
-          },
           {
             secretKey = "sandbox_callback_signing_jwk"
             remoteRef = { key = "${local.ssm_prefix}/sandbox-callback-signing-jwk" }

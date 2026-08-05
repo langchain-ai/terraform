@@ -832,13 +832,6 @@ variable "langsmith_polly_encryption_key" {
   default     = ""
 }
 
-variable "sandbox_x_service_auth_jwt_secret" {
-  type        = string
-  description = "Sandbox service-auth JWT secret. Generate once and keep stable. Used by init-values.sh and the app module when sandboxes are enabled."
-  sensitive   = true
-  default     = ""
-}
-
 variable "sandbox_callback_signing_jwk" {
   type        = string
   description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh and the app module when sandboxes are enabled."

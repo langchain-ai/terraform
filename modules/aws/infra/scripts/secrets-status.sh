@@ -42,7 +42,6 @@ _param_note() {
     langsmith-jwt-secret)              echo " (auto-generated)" ;;
     redis-auth-token)                  echo " (auto-generated)" ;;
     sandbox-juicefs-redis-auth-token)  echo " (auto-generated)" ;;
-    sandbox-x-service-auth-jwt-secret) echo " (auto-generated)" ;;
     sandbox-callback-signing-jwk)      echo " (auto-generated)" ;;
     *)                                 echo "" ;;
   esac
@@ -80,7 +79,6 @@ SSM_PREFIX="/langsmith/${_name_prefix}-${_environment}"
 if _tfvar_is_true "enable_sandboxes"; then
   REQUIRED_PARAMS+=(
     "sandbox-juicefs-redis-auth-token"
-    "sandbox-x-service-auth-jwt-secret"
     "sandbox-callback-signing-jwk"
   )
 fi

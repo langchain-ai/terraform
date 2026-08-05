@@ -225,13 +225,6 @@ variable "sandbox_juicefs_csi_config_secret_name" {
   default     = "juicefs-csi-config"
 }
 
-variable "sandbox_x_service_auth_jwt_secret" {
-  description = "Sandbox service-auth JWT secret. Required when enable_sandboxes = true."
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "sandbox_callback_signing_jwk" {
   description = "Sandbox callback signing private JWK. Required when enable_sandboxes = true."
   type        = string

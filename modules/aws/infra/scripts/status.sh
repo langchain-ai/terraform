@@ -85,7 +85,6 @@ done
 
 if _tfvar_is_true "enable_sandboxes"; then
   for var in TF_VAR_sandbox_juicefs_redis_auth_token \
-             TF_VAR_sandbox_x_service_auth_jwt_secret \
              TF_VAR_sandbox_callback_signing_jwk; do
     _check_var "$var" || _env_ok=false
   done
@@ -137,7 +136,6 @@ else
   if _tfvar_is_true "enable_sandboxes"; then
     _required_params+=(
       sandbox-juicefs-redis-auth-token
-      sandbox-x-service-auth-jwt-secret
       sandbox-callback-signing-jwk
     )
   fi

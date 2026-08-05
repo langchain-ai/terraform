@@ -646,13 +646,6 @@ variable "langsmith_api_key_salt" {
   default     = ""
 }
 
-variable "sandbox_x_service_auth_jwt_secret" {
-  type        = string
-  description = "Sandbox service-auth JWT secret. Declared so setup-env.sh can export TF_VAR_sandbox_x_service_auth_jwt_secret without Terraform warnings; app secret sync reads it from SSM."
-  sensitive   = true
-  default     = ""
-}
-
 variable "sandbox_callback_signing_jwk" {
   type        = string
   description = "Sandbox callback signing private JWK. Declared so setup-env.sh can export TF_VAR_sandbox_callback_signing_jwk without Terraform warnings; app secret sync reads it from SSM."

@@ -182,14 +182,12 @@ EXISTING_API_KEY_SALT=""
 EXISTING_JWT_SECRET=""
 EXISTING_ADMIN_PASSWORD=""
 EXISTING_LICENSE_KEY=""
-EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET=""
 EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_API_KEY_SALT=$(_extract_yaml_value "apiKeySalt")
   EXISTING_JWT_SECRET=$(_extract_yaml_value "jwtSecret")
   EXISTING_ADMIN_PASSWORD=$(_extract_yaml_value "initialOrgAdminPassword")
   EXISTING_LICENSE_KEY=$(_extract_yaml_value "langsmithLicenseKey")
-  EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET=$(_extract_yaml_value "xServiceAuthJwtSecret")
   EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=$(_extract_yaml_value "callbackSigningJwk")
 fi
 
@@ -279,16 +277,10 @@ _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;         
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
-SANDBOX_X_SERVICE_AUTH_JWT_SECRET="${TF_VAR_sandbox_x_service_auth_jwt_secret:-$EXISTING_SANDBOX_X_SERVICE_AUTH_JWT_SECRET}"
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
-    exit 1
-  fi
-  if [[ -z "$SANDBOX_X_SERVICE_AUTH_JWT_SECRET" ]]; then
-    echo "ERROR: TF_VAR_sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true." >&2
-    echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
   if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then

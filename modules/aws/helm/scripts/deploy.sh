@@ -136,7 +136,6 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _require_env "LANGSMITH_ADMIN_PASSWORD"
   _require_env "LANGSMITH_ADMIN_EMAIL"
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    _require_env "TF_VAR_sandbox_x_service_auth_jwt_secret"
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
 
@@ -144,7 +143,6 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _sandbox_secret_literals=()
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_secret_literals=(
-      --from-literal=sandbox_x_service_auth_jwt_secret="${TF_VAR_sandbox_x_service_auth_jwt_secret}"
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
     )
   fi

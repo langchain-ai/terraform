@@ -193,10 +193,6 @@ resource "terraform_data" "validate_required" {
       error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
     }
     precondition {
-      condition     = !var.enable_sandboxes || var.sandbox_x_service_auth_jwt_secret != ""
-      error_message = "sandbox_x_service_auth_jwt_secret is required when enable_sandboxes = true."
-    }
-    precondition {
       condition     = !var.enable_sandboxes || var.sandbox_callback_signing_jwk != ""
       error_message = "sandbox_callback_signing_jwk is required when enable_sandboxes = true."
     }

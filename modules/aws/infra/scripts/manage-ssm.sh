@@ -49,7 +49,6 @@ OPTIONAL_PARAMS=(
   "deployments-encryption-key"
   "polly-encryption-key"
   "sandbox-juicefs-redis-auth-token"
-  "sandbox-x-service-auth-jwt-secret"
   "sandbox-callback-signing-jwk"
 )
 
@@ -57,7 +56,6 @@ OPTIONAL_PARAMS=(
 STABLE_PARAMS=(
   "langsmith-api-key-salt"
   "langsmith-jwt-secret"
-  "sandbox-x-service-auth-jwt-secret"
   "sandbox-callback-signing-jwk"
 )
 
@@ -71,7 +69,6 @@ DIFF_SSM_KEYS=(
   "insights-encryption-key"
   "deployments-encryption-key"
   "polly-encryption-key"
-  "sandbox-x-service-auth-jwt-secret"
   "sandbox-callback-signing-jwk"
 )
 DIFF_K8S_KEYS=(
@@ -83,7 +80,6 @@ DIFF_K8S_KEYS=(
   "insights_encryption_key"
   "deployments_encryption_key"
   "polly_encryption_key"
-  "sandbox_x_service_auth_jwt_secret"
   "sandbox_callback_signing_jwk"
 )
 
