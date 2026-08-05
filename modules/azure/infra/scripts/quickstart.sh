@@ -1466,6 +1466,8 @@ _run_section_10() {
     _hint "                  With ingress_controller = agic the policy is attached to the"
     _hint "                  Application Gateway, which moves it to the WAF_v2 tier (~\$250/mo"
     _hint "                  more). Starts in Detection mode — logs matches without blocking."
+    _hint "                  Say yes to diagnostics too, or nothing collects the firewall log and"
+    _hint "                  you cannot see what to exclude before switching to Prevention."
     _hint "                  For nginx/istio the policy is created but nothing references it —"
     _hint "                  use Azure Front Door or DDoS Protection instead."
     if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then

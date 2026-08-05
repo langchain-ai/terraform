@@ -77,3 +77,10 @@ output "agw_name" {
   description = "Name of the Application Gateway resource (empty when ingress_controller != 'agic', or when attaching to a cluster whose gateway the customer owns)"
   value       = local.agic_managed ? azurerm_application_gateway.agw[0].name : ""
 }
+
+# Read through one() rather than repeating the condition its siblings use, so this
+# keeps returning null whatever ends up gating the gateway's count.
+output "agw_id" {
+  description = "Resource ID of the Application Gateway, for the diagnostics module to attach a setting to. Null when no gateway is created."
+  value       = one(azurerm_application_gateway.agw[*].id)
+}

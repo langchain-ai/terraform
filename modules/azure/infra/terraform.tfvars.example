@@ -88,7 +88,7 @@ additional_node_pools = {
 # "istio"         — Istio via Helm (self-managed)
 # "agic"          — Application Gateway Ingress Controller (enterprise Azure, native WAF)
 #                   Provisions App Gateway v2 + dedicated /24 subnet + AGIC Helm chart
-#                   Use agw_sku_tier = "WAF_v2" to enable WAF on the gateway
+#                   Set create_waf = true for a WAF; it moves the gateway to WAF_v2
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API native, uses Gateway/HTTPRoute)
 # "none"          — skip (bring your own)
 ingress_controller = "nginx"
