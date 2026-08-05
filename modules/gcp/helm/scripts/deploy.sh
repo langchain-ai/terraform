@@ -61,6 +61,19 @@ _validate_sandbox_values_file() {
   fi
 }
 
+# The values on this branch use the chart 0.16 schema. Chart 0.15 ignores the
+# unknown keys rather than rejecting them, so a 0.15 deploy renders cleanly while
+# silently dropping the external Insights Postgres/Redis wiring and falling back
+# to in-cluster StatefulSets. Refuse instead. The pin above stays on 0.15 until
+# chart 0.16.0 is GA, because Helm tilde ranges skip prereleases.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+if [[ -n "$_chart_line" && "$(printf '%s\n0.16\n' "$_chart_line" | sort -V | head -1)" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' is on the $_chart_line line, but these values require chart 0.16 or newer." >&2
+  echo "       Until 0.16.0 is GA, pass the release candidate explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0-rc.29 make deploy" >&2
+  exit 1
+fi
+
 # ── tfvars helpers ────────────────────────────────────────────────────────────
 _parse_tfvar() {
   local key="$1"
@@ -291,27 +304,15 @@ if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|be
   _devel_flag="--devel"
 fi
 
-set +e
-_helm_output=$(helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
-  --timeout 20m 2>&1)
-_helm_exit=$?
-set -e
-echo "$_helm_output"
-
-if [[ $_helm_exit -ne 0 ]]; then
-  if echo "$_helm_output" | rg -q "post-(install|upgrade) hooks failed: resource not ready, name: ${RELEASE_NAME}-agent-bootstrap, kind: Job"; then
-    echo ""
-    echo "WARNING: Helm reported agent-bootstrap hook timeout."
-    echo "         Continuing with non-blocking readiness checks."
-  else
-    echo "ERROR: Helm upgrade failed." >&2
-    exit $_helm_exit
-  fi
+  --timeout 20m; then
+  echo "ERROR: Helm upgrade failed." >&2
+  exit 1
 fi
 
 echo ""
@@ -360,16 +361,11 @@ else
   echo "         Check with: kubectl get pods -n $NAMESPACE"
 fi
 
-# Informational only: agent bootstrap can take longer and should not block deploy.
-if kubectl get job -n "$NAMESPACE" "${RELEASE_NAME}-agent-bootstrap" >/dev/null 2>&1; then
-  _bootstrap_status=$(kubectl get job -n "$NAMESPACE" "${RELEASE_NAME}-agent-bootstrap" \
-    -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
-  if [[ "$_bootstrap_status" != "True" ]]; then
-    echo ""
-    echo "Agent bootstrap is still running (non-blocking):"
-    echo "  kubectl logs -n $NAMESPACE job/${RELEASE_NAME}-agent-bootstrap --tail=120"
-  fi
-fi
+# Chart 0.16 removed the bundled agent-bootstrap Job. Helm no longer owns it, so an
+# upgrade from 0.15 strands the old Completed job in the namespace. Deleting it here
+# clears that orphan on the first 0.16 deploy and is a no-op on a fresh install.
+kubectl delete job -n "$NAMESPACE" "${RELEASE_NAME}-agent-bootstrap" \
+  --ignore-not-found=true 2>/dev/null || true
 
 echo ""
 
@@ -377,7 +373,7 @@ echo ""
 # This SA is used by operator-spawned agent deployment pods. It is created by
 # the operator on first use and is NOT part of the Helm release, so it does not
 # survive namespace teardowns or fresh cluster rebuilds. Without it, new agent
-# pod revisions cannot be scheduled and the agent-bootstrap job hangs indefinitely.
+# pod revisions cannot be scheduled.
 _wi_annotation=$(terraform -chdir="$INFRA_DIR" output -raw workload_identity_annotation 2>/dev/null || true)
 if [[ -n "$_wi_annotation" ]]; then
   kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \

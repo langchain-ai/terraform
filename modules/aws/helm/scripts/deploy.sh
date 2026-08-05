@@ -63,6 +63,19 @@ _validate_sandbox_values_file() {
   fi
 }
 
+# The values on this branch use the chart 0.16 schema. Chart 0.15 ignores the
+# unknown keys rather than rejecting them, so a 0.15 deploy renders cleanly while
+# silently dropping the external Insights Postgres/Redis wiring and falling back
+# to in-cluster StatefulSets. Refuse instead. The pin above stays on 0.15 until
+# chart 0.16.0 is GA, because Helm tilde ranges skip prereleases.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+if [[ -n "$_chart_line" && "$(printf '%s\n0.16\n' "$_chart_line" | sort -V | head -1)" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' is on the $_chart_line line, but these values require chart 0.16 or newer." >&2
+  echo "       Until 0.16.0 is GA, pass the release candidate explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0-rc.29 make deploy" >&2
+  exit 1
+fi
+
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
@@ -387,10 +400,9 @@ if [[ -n "$_irsa_arn_pre" ]]; then
     eks.amazonaws.com/role-arn="$_irsa_arn_pre" --overwrite
 fi
 
-# Pre-delete any completed/failed bootstrap job from a previous deploy.
-# The bootstrap job is a post-upgrade hook — if a previous run left it in a
-# completed or failed state Helm treats it as blocking and times out the release.
-# Deleting it here lets Helm create a fresh job on every upgrade without error.
+# Chart 0.16 removed the bundled agent-bootstrap Job. Helm no longer owns it, so an
+# upgrade from 0.15 strands the old Completed job in the namespace. Deleting it here
+# clears that orphan on the first 0.16 deploy and is a no-op on a fresh install.
 kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
   --ignore-not-found=true 2>/dev/null || true
 

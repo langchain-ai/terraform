@@ -400,6 +400,19 @@ if [[ -z "$CHART_VERSION" ]]; then
 fi
 CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 
+# The values on this branch use the chart 0.16 schema. Chart 0.15 ignores the
+# unknown keys rather than rejecting them, so a 0.15 deploy renders cleanly while
+# silently dropping the external Insights Postgres/Redis wiring and falling back
+# to in-cluster StatefulSets. Refuse instead. The pin above stays on 0.15 until
+# chart 0.16.0 is GA, because Helm tilde ranges skip prereleases.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+if [[ -n "$_chart_line" && "$(printf '%s\n0.16\n' "$_chart_line" | sort -V | head -1)" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' is on the $_chart_line line, but these values require chart 0.16 or newer." >&2
+  echo "       Until 0.16.0 is GA, pass the release candidate explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0-rc.29 make deploy" >&2
+  exit 1
+fi
+
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
