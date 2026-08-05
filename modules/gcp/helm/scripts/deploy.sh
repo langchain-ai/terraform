@@ -17,9 +17,21 @@
 #   8. langsmith-values-fleet.yaml                      — Fleet standalone v0.15+ (if enable_fleet)
 #   9. langsmith-values-standalone-polly.yaml           — Polly standalone v0.15+ (if enable_standalone_polly)
 #  10. langsmith-values-standalone-insights.yaml        — Insights standalone v0.15+ (if enable_standalone_insights)
+#  11. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
+#  12. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
 #
 # Generate values files: ./helm/scripts/init-values.sh
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,17 +41,69 @@ VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
-# Override with the CHART_VERSION env var for an exact patch if needed.
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
 
 # ── tfvars helpers ────────────────────────────────────────────────────────────
+# Values are cut at the closing quote, or at an inline # for bare booleans and
+# numbers, so a commented flag line still reads as a flag. Keep identical to the
+# other copies of this function.
 _parse_tfvar() {
-  local key="$1"
-  awk -F= "/^[[:space:]]*${key}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" \
-    "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
 }
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
+
+# ── Chart version ─────────────────────────────────────────────────────────────
+# Default pins the chart *line*: latest 0.15.x, never auto-jump to 0.16.
+#
+# Enabling SmithDB infrastructure does not move that line on its own — upgrading
+# the whole application is the operator's decision, not a side effect. SmithDB
+# callers pass an explicit version instead.
+_chart_version_was_set="${CHART_VERSION+x}"
+CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+
+_smithdb_enabled=false
+_tfvar_is_true "enable_smithdb" && _smithdb_enabled=true
+_smithdb_ingestion_enabled=false
+_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
+_smithdb_migration_enabled=false
+_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+_smithdb_query_enabled=false
+_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+
+# The pattern accepts prereleases because the 0.16 line has so far published
+# release candidates only, and rejects range syntax: Helm's semver ranges never
+# match a prerelease, so "~0.16.0" silently resolves to nothing and the deploy
+# would fail later with an opaque "chart not found".
+if [[ "$_smithdb_enabled" == "true" ]]; then
+  if [[ "$_chart_version_was_set" != "x" ]]; then
+    echo "ERROR: enable_smithdb = true requires an explicit CHART_VERSION of 0.16 or newer." >&2
+    echo "       Example: CHART_VERSION=0.16.0 make deploy" >&2
+    echo "       List what is published: helm search repo langchain/langsmith --versions --devel" >&2
+    exit 1
+  fi
+  if [[ "$CHART_VERSION" == "~"* || "$CHART_VERSION" == "^"* ]]; then
+    echo "ERROR: SmithDB requires an exact chart version, not the range '$CHART_VERSION'." >&2
+    echo "       Helm semver ranges never match prereleases, and the 0.16 line is" >&2
+    echo "       prerelease-only, so the range would resolve to no chart at all." >&2
+    echo "       Example: CHART_VERSION=0.16.0 make deploy" >&2
+    exit 1
+  fi
+  # The prerelease and build-metadata groups follow semver: hyphens are legal
+  # inside a prerelease identifier (0.16.0-rc-N), and +build suffixes appear on
+  # internally published charts. The character classes stay restricted to
+  # [0-9A-Za-z.-] because this is the only gate on an operator-supplied value
+  # that is later interpolated into the helm command line.
+  if [[ ! "$CHART_VERSION" =~ ^0\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\.[0-9]+)?(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    echo "ERROR: SmithDB requires a chart version of 0.16 or newer; got '$CHART_VERSION'." >&2
+    exit 1
+  fi
+fi
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -202,6 +266,24 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# SmithDB last, so its overrides beat every sizing and addon file above.
+if [[ "$_smithdb_enabled" == "true" ]]; then
+  _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+
+  if [[ ! -f "$_smithdb_file" || ! -f "$_smithdb_overrides_file" ]]; then
+    echo "ERROR: enable_smithdb = true but the SmithDB values files are missing." >&2
+    echo "Run: ./helm/scripts/init-values.sh" >&2
+    exit 1
+  fi
+
+  VALUES_ARGS+=(-f "$_smithdb_file" -f "$_smithdb_overrides_file")
+  echo "  ✔ langsmith-values-smithdb.yaml"
+  echo "  ✔ langsmith-values-smithdb-overrides.yaml"
+elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then
+  echo "  ○ langsmith-values-smithdb.yaml (file exists but enable_smithdb=false — skipped)"
+fi
 echo ""
 
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
@@ -225,10 +307,23 @@ case "$_release_status" in
     echo ""
     ;;
   failed)
-    echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
-    echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
-    echo "         Proceeding with upgrade..."
-    echo ""
+    # `helm upgrade --install` aborts with "has no deployed releases" when the
+    # history holds no revision in deployed status, which is what a failed first
+    # install leaves behind. A release with a good revision behind it can upgrade
+    # in place, so only clear the record when there is nothing to upgrade from.
+    if helm history "$RELEASE_NAME" -n "$NAMESPACE" --output json 2>/dev/null \
+      | grep -q '"status":"deployed"'; then
+      echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
+      echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
+      echo "         An earlier revision did deploy, so upgrading in place..."
+      echo ""
+    else
+      echo "WARNING: Helm release '${RELEASE_NAME}' failed on its first install, so no"
+      echo "         deployed revision exists to upgrade from. Removing the dead release"
+      echo "         record so this run can install cleanly..."
+      helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait
+      echo ""
+    fi
     ;;
 esac
 
@@ -236,10 +331,13 @@ echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
-# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14).
-# Helm silently skips any version tagged with -rc./-alpha./-beta. without it.
+# --devel is required for pre-release chart versions (any 0.15.x or 0.16.x
+# release candidate). Helm silently skips any version carrying a semver prerelease
+# component without it. Keyed off the prerelease component itself rather than a
+# list of known tags, so forms like -rc22 or -alpha-3 are not missed; the part
+# after a + is build metadata and never makes a version a prerelease.
 _devel_flag=""
-if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
+if [[ "${CHART_VERSION%%+*}" == *-* ]]; then
   _devel_flag="--devel"
 fi
 
@@ -289,6 +387,19 @@ fi
 [[ "$_enable_standalone_polly" == "true" ]]   && _core_deployments+=("langsmith-standalone-polly-api-server")
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("langsmith-standalone-insights-api-server")
 
+# SmithDB pods wait on the cluster autoscaler adding a node to the tainted
+# Local SSD pool, which is slower than a normal rollout on a warm cluster.
+_smithdb_deployments=()
+if [[ "$_smithdb_enabled" == "true" ]]; then
+  _smithdb_deployments=(
+    "${RELEASE_NAME}-smithdb-cluster-manager"
+    "${RELEASE_NAME}-smithdb-ingestion"
+    "${RELEASE_NAME}-smithdb-query"
+    "${RELEASE_NAME}-smithdb-compaction"
+    "${RELEASE_NAME}-smithdb-compaction-worker"
+  )
+fi
+
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do
   if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
@@ -297,12 +408,30 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
+# Guarded on length because bash 3.2 (macOS /bin/bash) aborts under `set -u` when
+# an empty array is expanded, and this array is empty whenever SmithDB is off.
+if [[ ${#_smithdb_deployments[@]} -gt 0 ]]; then
+  for dep in "${_smithdb_deployments[@]}"; do
+    if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=10m 2>/dev/null; then
+      echo "  ⏳ $dep not ready within 10m (Local SSD nodes may still be provisioning)"
+      _all_ready=false
+    fi
+  done
+fi
+
 if [[ "$_all_ready" == "true" ]]; then
   echo "All core deployments ready."
 else
   echo ""
   echo "WARNING: Some deployments are still rolling out."
   echo "         Check with: kubectl get pods -n $NAMESPACE"
+  if [[ "$_smithdb_enabled" == "true" ]]; then
+    echo ""
+    echo "         If SmithDB pods are Pending, confirm the Local SSD nodes came up and"
+    echo "         advertise enough allocatable ephemeral-storage:"
+    echo "           kubectl get nodes -l smithdb-local/instance-store=true"
+    echo "           kubectl get node NODE -o jsonpath='{.status.allocatable.ephemeral-storage}'"
+  fi
 fi
 
 # Informational only: agent bootstrap can take longer and should not block deploy.
@@ -351,3 +480,24 @@ echo ""
 echo "Next checks:"
 echo "  kubectl get pods -n $NAMESPACE"
 echo "  helm status $RELEASE_NAME -n $NAMESPACE"
+
+if [[ "$_smithdb_enabled" == "true" ]]; then
+  echo ""
+  echo "SmithDB services are deployed. LangSmith integration advances in stages,"
+  echo "driven by infra/terraform.tfvars; ClickHouse stays enabled throughout."
+  echo "  ingestion: $_smithdb_ingestion_enabled   migration: $_smithdb_migration_enabled   query: $_smithdb_query_enabled"
+  echo ""
+  echo "  Verify the cache mount is on Local SSD, not the boot disk:"
+  echo "    kubectl exec -n $NAMESPACE deploy/${RELEASE_NAME}-smithdb-query -- df -h /data"
+  echo ""
+  echo "  Confirm the metastore migration Job completed:"
+  echo "    kubectl get job -n $NAMESPACE -l app.kubernetes.io/component=${RELEASE_NAME}-smithdb-metastore-migration"
+  echo ""
+  if [[ "$_smithdb_ingestion_enabled" == "true" ]]; then
+    echo "  Confirm segments are landing in the bucket:"
+    echo "    gcloud storage ls gs://\$(terraform -chdir=$INFRA_DIR output -raw smithdb_object_store_bucket)/**"
+  else
+    echo "  Advance to the next stage by setting smithdb_ingestion_enabled = true in"
+    echo "  $INFRA_DIR/terraform.tfvars, then re-running: make init-values && make deploy"
+  fi
+fi

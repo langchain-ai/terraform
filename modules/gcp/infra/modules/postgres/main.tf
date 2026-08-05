@@ -17,6 +17,11 @@ resource "google_sql_database_instance" "postgres" {
     disk_type         = "PD_SSD"
     disk_autoresize   = true
 
+    # The resource-level deletion_protection above only stops Terraform. This
+    # flag is the one Cloud SQL enforces, so gcloud and the console refuse the
+    # delete too. Driven by the same variable to keep it a single decision.
+    deletion_protection_enabled = var.deletion_protection
+
     ip_configuration {
       ipv4_enabled                                  = false
       private_network                               = var.network_id

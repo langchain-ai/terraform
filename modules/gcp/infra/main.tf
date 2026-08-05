@@ -132,6 +132,35 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_polly || var.enable_deployments
       error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
     }
+
+    precondition {
+      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null)
+      error_message = "smithdb_external_metastore_host and smithdb_external_metastore_username are required when smithdb_metastore_source = 'external'."
+    }
+
+    precondition {
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # Autopilot manages node pools itself, so the dedicated Local SSD pools this
+    # module creates do not exist there and the overlay's nodeSelector would
+    # never match — SmithDB pods would sit Pending indefinitely. Autopilot needs
+    # the cloud.google.com/gke-ephemeral-storage-local-ssd nodeSelector instead.
+    precondition {
+      condition     = !var.enable_smithdb || !var.gke_use_autopilot
+      error_message = "enable_smithdb is not supported with gke_use_autopilot = true. SmithDB needs the dedicated Local SSD node pools this module creates on GKE Standard. See the SmithDB section of README.md."
+    }
   }
 }
 
@@ -186,8 +215,9 @@ module "networking" {
   services_cidr = var.services_cidr
 
   # Private service connection (requires servicenetworking.networksAdmin role)
-  # Always enable private service connection for external PostgreSQL and Redis
-  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external"
+  # Always enable private service connection for external PostgreSQL and Redis,
+  # and for the SmithDB metastore, which is private-IP only.
+  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || (var.enable_smithdb && var.smithdb_metastore_source == "create")
 
   # Labels
   labels = local.common_labels
@@ -327,6 +357,92 @@ module "storage" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB Module (Optional, enable_smithdb)
+#
+# SmithDB is the in-chart columnar store/query engine (chart 0.16+). It needs
+# three things from the cloud: a dedicated Postgres metastore, its own object
+# store, and node-local SSD cache capacity. This module owns the first two plus
+# the Workload Identity binding; the node pools are in module.smithdb_nodes.
+#------------------------------------------------------------------------------
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name       = local.smithdb_name
+  project_id = var.project_id
+  region     = var.region
+  labels     = local.common_labels
+
+  namespace    = var.langsmith_namespace
+  release_name = var.langsmith_release_name
+
+  network_id                 = module.networking.vpc_id
+  private_network_connection = module.networking.private_service_connection
+
+  # Metastore — dedicated Cloud SQL instance, or bring your own (AlloyDB).
+  metastore_source            = var.smithdb_metastore_source
+  metastore_instance_name     = local.smithdb_metastore_instance_name
+  metastore_database_version  = var.smithdb_metastore_database_version
+  metastore_tier              = var.smithdb_metastore_tier
+  metastore_disk_size         = var.smithdb_metastore_disk_size
+  metastore_high_availability = var.smithdb_metastore_high_availability
+
+  metastore_deletion_protection = var.smithdb_metastore_deletion_protection
+  metastore_ssl_mode            = var.smithdb_metastore_ssl_mode
+  metastore_master_username     = var.smithdb_metastore_master_username
+  metastore_master_password     = var.smithdb_metastore_master_password
+
+  external_metastore_host     = var.smithdb_external_metastore_host
+  external_metastore_port     = var.smithdb_external_metastore_port
+  external_metastore_database = var.smithdb_external_metastore_database
+  external_metastore_username = var.smithdb_external_metastore_username
+  external_metastore_password = var.smithdb_external_metastore_password
+
+  # Object store
+  bucket_name          = local.smithdb_bucket_name
+  bucket_kms_key       = var.smithdb_bucket_kms_key
+  bucket_force_destroy = var.smithdb_bucket_force_destroy
+
+  service_account_email = var.smithdb_service_account_email
+
+  depends_on = [module.networking, google_project_service.apis]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB Node Pools (Optional, enable_smithdb)
+# Local SSD-backed ephemeral storage for the SmithDB cache, plus a compute pool.
+# Not created on Autopilot, where Google manages node pools; see the SmithDB
+# section of README.md for the Autopilot path.
+#------------------------------------------------------------------------------
+module "smithdb_nodes" {
+  source = "./modules/smithdb-nodes"
+  count  = var.enable_smithdb && !var.gke_use_autopilot ? 1 : 0
+
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
+  name_prefix  = local.base_name
+
+  node_service_account_email = var.gke_node_service_account_email
+  node_locations             = var.smithdb_node_locations
+
+  instance_store_machine_type    = var.smithdb_instance_store_machine_type
+  instance_store_local_ssd_count = var.smithdb_instance_store_local_ssd_count
+  instance_store_disk_size_gb    = var.smithdb_instance_store_disk_size
+  instance_store_min_nodes       = var.smithdb_instance_store_min_nodes
+  instance_store_max_nodes       = var.smithdb_instance_store_max_nodes
+
+  compute_machine_type = var.smithdb_compute_machine_type
+  compute_disk_size_gb = var.smithdb_compute_disk_size
+  compute_min_nodes    = var.smithdb_compute_min_nodes
+  compute_max_nodes    = var.smithdb_compute_max_nodes
+
+  labels = local.common_labels
+
+  depends_on = [module.gke_cluster]
+}
+
+#------------------------------------------------------------------------------
 # IAM Module (Optional)
 #------------------------------------------------------------------------------
 module "iam" {
@@ -412,6 +528,10 @@ module "k8s_bootstrap" {
 
   project_id  = var.project_id
   environment = var.environment
+
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
 
   # Namespace configuration
   langsmith_namespace         = var.langsmith_namespace
@@ -566,11 +686,58 @@ resource "kubernetes_secret" "standalone_insights_redis" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB metastore Secret (chart 0.16+)
+# Created here so it exists before Helm runs. The chart reads it through
+# smithdb.config.existingSecretName and the per-field *SecretKey mappings
+# generated into the SmithDB values overrides.
+#------------------------------------------------------------------------------
+resource "kubernetes_secret" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = var.langsmith_namespace
+  }
+
+  data = {
+    smithdb_metastore_db_host     = module.smithdb[0].metastore_host
+    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
+    smithdb_metastore_db_username = module.smithdb[0].metastore_username
+    smithdb_metastore_db_password = module.smithdb[0].metastore_password
+  }
+
+  depends_on = [module.k8s_bootstrap]
+}
+
+# Credential for the in-chart taskdb Postgres backing the historical
+# ClickHouse-to-SmithDB migration. Created unconditionally with SmithDB so that
+# smithdb_migration_enabled stays a values-only flip.
+resource "kubernetes_secret" "smithdb_taskdb" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-taskdb"
+    namespace = var.langsmith_namespace
+  }
+
+  data = {
+    postgres_password = module.smithdb[0].taskdb_password
+  }
+
+  depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
 # Ingress Module (Optional)
 #------------------------------------------------------------------------------
 module "ingress" {
   source = "./modules/ingress"
   count  = var.install_ingress ? 1 : 0
+
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
   langsmith_domain    = var.langsmith_domain

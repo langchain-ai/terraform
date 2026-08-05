@@ -39,6 +39,11 @@ locals {
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
 
+  # SmithDB (optional, enable_smithdb)
+  smithdb_name                    = "${local.base_name}-smithdb"
+  smithdb_metastore_instance_name = "${local.base_name}-smithdb-pg${local.suffix}"
+  smithdb_bucket_name             = var.smithdb_bucket_name != "" ? var.smithdb_bucket_name : "${var.project_id}-${local.base_name}-smithdb${local.suffix}"
+
   #----------------------------------------------------------------------------
   # Common Labels (applied to all resources)
   #----------------------------------------------------------------------------

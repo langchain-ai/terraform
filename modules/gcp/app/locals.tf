@@ -98,6 +98,74 @@ locals {
       }
     }
   }
+
+  # Chart version. Enabling SmithDB never moves the chart line implicitly — the
+  # operator picks the version. The pattern accepts semver prereleases and build
+  # metadata because the 0.16 line has only ever published release candidates,
+  # and rejects range syntax because Helm never matches a prerelease against a
+  # range, so "~0.16.0" would resolve to no chart at all.
+  chart_version_effective         = var.chart_version
+  smithdb_chart_version_supported = can(regex("^0\\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\\.[0-9]+)?(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", var.chart_version))
+
+  # SmithDB overrides — env-specific config generated from the infra outputs,
+  # plus the staged LangSmith integration gates. Equivalent to what
+  # init-values.sh writes into langsmith-values-smithdb-overrides.yaml, and
+  # layered last for the same reason.
+  smithdb_overrides = var.enable_smithdb ? {
+    smithdb = {
+      serviceAccount = {
+        annotations = {
+          # Workload Identity — binds the chart's SmithDB service account to the
+          # dedicated GCP service account holding objectAdmin on the bucket.
+          "iam.gke.io/gcp-service-account" = var.smithdb_gsa_email
+        }
+      }
+      config = {
+        existingSecretName = var.smithdb_metastore_secret_name
+        objectStore = {
+          type   = "gcs"
+          bucket = var.smithdb_object_store_bucket
+        }
+        metastore = {
+          hostSecretKey     = "smithdb_metastore_db_host"
+          databaseSecretKey = "smithdb_metastore_db_name"
+          usernameSecretKey = "smithdb_metastore_db_username"
+          passwordSecretKey = "smithdb_metastore_db_password"
+          port              = tostring(var.smithdb_metastore_port)
+          useSsl            = var.smithdb_metastore_use_ssl
+        }
+      }
+      # The migration Job reads its own useSsl leaf, which the chart defaults to
+      # false. Cloud SQL is created with ssl_mode = ENCRYPTED_ONLY, so leaving it
+      # unset makes the pre-install hook fail on connect and takes the release
+      # down with it.
+      metastoreMigration = {
+        useSsl = var.smithdb_metastore_use_ssl
+      }
+      # The chart refuses to render with the migration gate on unless taskdb has
+      # a credential, so always point it at the Terraform-created secret.
+      migration = {
+        taskdb = {
+          postgres = {
+            auth = {
+              existingSecretName = var.smithdb_taskdb_secret_name
+            }
+          }
+        }
+      }
+      langsmith = {
+        ingestion = {
+          enabled = var.smithdb_ingestion_enabled
+        }
+        migration = {
+          enabled = var.smithdb_migration_enabled
+        }
+        query = {
+          enabled = var.smithdb_query_enabled
+        }
+      }
+    }
+  } : {}
 }
 
 #------------------------------------------------------------------------------
@@ -149,6 +217,30 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = fileexists("${local.values_path}/langsmith-values.yaml")
       error_message = "Helm values files not found at ${local.values_path}/langsmith-values.yaml. Run: make init-values"
+    }
+    precondition {
+      condition     = !var.enable_smithdb || fileexists("${local.values_path}/langsmith-values-smithdb.yaml")
+      error_message = "enable_smithdb = true but ${local.values_path}/langsmith-values-smithdb.yaml is missing. Run: make init-values"
+    }
+    precondition {
+      condition     = !var.enable_smithdb || (var.smithdb_object_store_bucket != null && var.smithdb_gsa_email != null)
+      error_message = "smithdb_object_store_bucket and smithdb_gsa_email are required when enable_smithdb = true. Run: make init-app (they come from the infra outputs)."
+    }
+    precondition {
+      condition     = !var.enable_smithdb || local.smithdb_chart_version_supported
+      error_message = "enable_smithdb requires an exact chart_version of 0.16 or newer, for example \"0.16.0\". Ranges such as \"~0.16.0\" never match the prerelease-only 0.16 line, and enabling SmithDB does not move the chart line on its own. List what is published with: helm search repo langchain/langsmith --versions --devel"
+    }
+    precondition {
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
   }
 }

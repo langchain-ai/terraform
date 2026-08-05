@@ -6,6 +6,22 @@
 locals {
   # Use standard-install.yaml (v1.4.1) for production stability
   gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+
+  # Every kubectl provisioner in this module starts with this. Without it kubectl
+  # uses whatever context the operator's kubeconfig happens to have selected,
+  # which may be an unrelated cluster in another cloud, or nothing at all on a
+  # first run - and it applies these resources there instead of failing. The
+  # credentials go to a temp file that dies with the provisioner's shell, so the
+  # operator's ~/.kube/config and current context are left untouched.
+  # Deliberately no `set -e`: the scripts below tolerate some non-zero exits, so
+  # only the credential fetch itself is fail-fast.
+  kubectl_creds = <<-EOT
+    KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+    export KUBECONFIG
+    trap 'rm -f "$KUBECONFIG"' EXIT
+    gcloud container clusters get-credentials ${var.cluster_name} \
+      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+  EOT
 }
 
 resource "null_resource" "install_gateway_api_crds" {
@@ -13,6 +29,7 @@ resource "null_resource" "install_gateway_api_crds" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      ${local.kubectl_creds}
       # Wait for API server to be accessible
       for i in {1..30}; do
         if kubectl cluster-info >/dev/null 2>&1; then
@@ -86,6 +103,7 @@ resource "null_resource" "apply_gateway_class" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      ${local.kubectl_creds}
       # Wait for Gateway API CRDs to be available
       for i in {1..30}; do
         if kubectl get crd gatewayclasses.gateway.networking.k8s.io >/dev/null 2>&1; then
@@ -173,6 +191,7 @@ resource "null_resource" "apply_gateway" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      ${local.kubectl_creds}
       # Wait for Gateway CRD to be available
       for i in {1..30}; do
         if kubectl get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1; then
@@ -231,6 +250,7 @@ resource "null_resource" "apply_reference_grant" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      ${local.kubectl_creds}
       # Wait for ReferenceGrant CRD to be available
       for i in {1..30}; do
         if kubectl get crd referencegrants.gateway.networking.k8s.io >/dev/null 2>&1; then
@@ -260,6 +280,7 @@ resource "null_resource" "get_external_ip" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      ${local.kubectl_creds}
       # Wait for Envoy proxy service to have external IP
       # The Envoy proxy service is created by Envoy Gateway for each Gateway resource
       for i in {1..60}; do

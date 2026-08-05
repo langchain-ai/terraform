@@ -23,7 +23,20 @@
 #   gcloud auth application-default login   (or a service account with secretmanager.admin)
 #   Secret Manager API must be enabled (enabled automatically by terraform apply)
 #
-# NOTE: No `set -euo pipefail` — this script is intended to be sourced.
+# NOTE: No `set -euo pipefail` — this script is intended to be sourced. Those
+# options would leak into the caller's shell and leave it armed to exit on the
+# next non-zero command, which looks exactly like the terminal crashing.
+#
+# The inverse of the guard the executable scripts carry: this one has to be
+# sourced, because running it as a subprocess would export TF_VAR_* into a shell
+# that exits immediately afterwards, silently discarding every value.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
+  echo "ERROR: source this script, do not run it:" >&2
+  echo "         source ${0}" >&2
+  echo "       Running it exports the TF_VAR_* values into a subshell that then exits," >&2
+  echo "       so terraform would see none of them." >&2
+  exit 1
+fi
 
 # Resolve infra directory so this script works regardless of where it's sourced from.
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"

@@ -111,7 +111,7 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version. Empty string = latest. SmithDB requires an explicit version of 0.16 or newer, for example \"0.16.0\". While the 0.16 line is prerelease-only, pass the exact release candidate tag; ranges never match a prerelease."
   type        = string
   default     = ""
 }
@@ -197,6 +197,73 @@ variable "enable_standalone_insights" {
 
 variable "enable_usage_telemetry" {
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)"
+  type        = bool
+  default     = false
+}
+
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.16+)
+# Populated from the infra outputs by make init-app. The metastore credentials
+# live in the Terraform-created smithdb-metastore Kubernetes secret, so no
+# password variable is needed here.
+#------------------------------------------------------------------------------
+
+variable "enable_smithdb" {
+  description = "Enable the SmithDB values overlay. Requires enable_smithdb = true in the infra module so the metastore, bucket, Workload Identity binding, and node pools exist."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_object_store_bucket" {
+  description = "SmithDB object-store GCS bucket name (infra output smithdb_object_store_bucket)"
+  type        = string
+  default     = null
+}
+
+variable "smithdb_gsa_email" {
+  description = "GCP service account email for SmithDB pods (infra output smithdb_gsa_email)"
+  type        = string
+  default     = null
+}
+
+variable "smithdb_metastore_secret_name" {
+  description = "Kubernetes secret holding the SmithDB metastore credentials"
+  type        = string
+  default     = "smithdb-metastore"
+}
+
+variable "smithdb_metastore_port" {
+  description = "SmithDB metastore port"
+  type        = number
+  default     = 5432
+}
+
+variable "smithdb_taskdb_secret_name" {
+  description = "Kubernetes secret holding the in-chart taskdb Postgres password used by the historical migration"
+  type        = string
+  default     = "smithdb-taskdb"
+}
+
+variable "smithdb_metastore_use_ssl" {
+  description = "Whether SmithDB connects to the metastore over TLS"
+  type        = bool
+  default     = true
+}
+
+variable "smithdb_ingestion_enabled" {
+  description = "Route new LangSmith writes to SmithDB as well as ClickHouse. Enable only after the SmithDB services pass readiness checks."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  description = "Enable the historical ClickHouse-to-SmithDB migration integration once dual ingestion is healthy."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  description = "Serve LangSmith UI and API reads from SmithDB, after ingestion and any required historical migration are validated."
   type        = bool
   default     = false
 }

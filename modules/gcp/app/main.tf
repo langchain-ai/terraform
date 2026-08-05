@@ -78,8 +78,10 @@ resource "helm_release" "langsmith" {
   create_namespace = true
   repository       = "https://langchain-ai.github.io/helm"
   chart            = "langsmith"
-  version          = var.chart_version != "" ? var.chart_version : null
-  timeout          = var.helm_timeout
+  # An exact prerelease version resolves without the provider's devel flag,
+  # which is ignored whenever version is set.
+  version = local.chart_version_effective != "" ? local.chart_version_effective : null
+  timeout = var.helm_timeout
 
   # Do NOT use wait = true. The chart's post-install bootstrap job deploys
   # operator-managed agents (clio, polly, agent-builder) which can take 10+
@@ -107,6 +109,8 @@ resource "helm_release" "langsmith" {
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
     var.enable_insights ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
     var.enable_polly ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
+    # 5. SmithDB last, so its overrides beat every sizing and addon file above.
+    var.enable_smithdb ? [file("${local.values_path}/langsmith-values-smithdb.yaml"), yamlencode(local.smithdb_overrides)] : [],
   )
 }
 

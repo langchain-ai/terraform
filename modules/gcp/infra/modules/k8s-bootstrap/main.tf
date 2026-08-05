@@ -1,5 +1,21 @@
 # K8s Bootstrap Module - Namespaces, Service Accounts, Secrets, and KEDA
 
+locals {
+  # The kubectl provisioners further down fetch their own cluster credentials
+  # instead of trusting the operator's current context, which may point at an
+  # unrelated cluster or be empty on a first run. The credentials land in a temp
+  # file that dies with the provisioner's shell, leaving ~/.kube/config alone.
+  # Deliberately no `set -e`: those scripts tolerate non-zero exits in their retry
+  # loops, so only the credential fetch is fail-fast.
+  kubectl_creds = <<-EOT
+    KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+    export KUBECONFIG
+    trap 'rm -f "$KUBECONFIG"' EXIT
+    gcloud container clusters get-credentials ${var.cluster_name} \
+      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+  EOT
+}
+
 #------------------------------------------------------------------------------
 # LangSmith Namespace
 #------------------------------------------------------------------------------
@@ -189,6 +205,39 @@ resource "kubernetes_resource_quota" "langsmith" {
       "limits.cpu"      = "100"
       "limits.memory"   = "200Gi"
       "pods"            = "100"
+    }
+  }
+}
+
+#------------------------------------------------------------------------------
+# Limit Range
+#------------------------------------------------------------------------------
+# Companion to the quota above, and required rather than optional: once a
+# ResourceQuota constrains requests/limits for a resource, Kubernetes rejects any
+# pod whose containers omit them. Chart workloads that leave resources unset would
+# fail admission with no pod created and only a FailedCreate event to show for it -
+# the SmithDB metastore-migration hook Job did exactly that. These defaults are
+# applied at admission only to containers that omit a value; anything with explicit
+# requests or limits is untouched.
+resource "kubernetes_limit_range" "langsmith" {
+  metadata {
+    name      = "langsmith-defaults"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type = "Container"
+
+      default_request = {
+        cpu    = "100m"
+        memory = "256Mi"
+      }
+
+      default = {
+        cpu    = "1"
+        memory = "1Gi"
+      }
     }
   }
 }
@@ -403,6 +452,7 @@ resource "null_resource" "apply_letsencrypt_issuer" {
 
   provisioner "local-exec" {
     command    = <<-EOT
+      ${local.kubectl_creds}
       # Wait for cert-manager CRDs to be available
       for i in {1..30}; do
         if kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
@@ -479,6 +529,7 @@ resource "null_resource" "apply_certificate" {
 
   provisioner "local-exec" {
     command    = <<-EOT
+      ${local.kubectl_creds}
       # Wait for Certificate CRD to be available
       for i in {1..30}; do
         if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then

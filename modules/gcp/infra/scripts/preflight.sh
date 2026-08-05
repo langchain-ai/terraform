@@ -14,6 +14,16 @@
 #   make preflight -- --domain langsmith.example.com  # + Cloud DNS zone check
 #   make preflight -- --create-test-resources  # + create/destroy a real GCS bucket
 #   make preflight -- -y                       # non-interactive
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -100,8 +110,21 @@ fi
 success "terraform.tfvars found"
 
 # ── Parse key values from tfvars ──────────────────────────────────────────────
+# Inline comments are legal in tfvars and the examples use them heavily, so the
+# value has to be cut at the closing quote (quoted values, which may contain a
+# literal #) or at the # (bare booleans and numbers). Splitting on = and keeping
+# the rest of the line would silently yield "external#CloudSQL,privateIP" and
+# every comparison against it would fail. Keep this function identical to the
+# copies in infra/scripts/_common.sh and helm/scripts/*.sh.
 _tfvar() {
-  awk -F= "/^[[:space:]]*${1}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" "$TFVARS" 2>/dev/null || true
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$TFVARS" 2>/dev/null || true
 }
 
 PROJECT_ID=$(_tfvar "project_id")
@@ -112,6 +135,9 @@ REDIS_SOURCE=$(_tfvar "redis_source")
 ENABLE_SECRET_MANAGER=$(_tfvar "enable_secret_manager_module")
 ENABLE_DNS=$(_tfvar "enable_dns_module")
 TLS_SOURCE=$(_tfvar "tls_certificate_source")
+ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
+SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")
+SMITHDB_METASTORE_SOURCE="${SMITHDB_METASTORE_SOURCE:-create}"
 
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "your-gcp-project-id" ]]; then
   error "project_id not set in terraform.tfvars — edit it before running preflight."
@@ -240,8 +266,20 @@ fi
 if [[ "$TLS_SOURCE" == "letsencrypt" ]]; then
   CONDITIONAL_PERMISSIONS+=("certificatemanager.certs.create")
 fi
+# The SmithDB metastore is its own Cloud SQL instance, so these are needed even
+# when postgres_source is not "external" and the block above did not add them.
+if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ]]; then
+  for _p in "cloudsql.instances.create" "cloudsql.databases.create" \
+    "servicenetworking.services.addPeering" "compute.globalAddresses.create"; do
+    case " ${CONDITIONAL_PERMISSIONS[*]-} " in *" $_p "*) ;; *) CONDITIONAL_PERMISSIONS+=("$_p") ;; esac
+  done
+fi
 
-ALL_PERMISSIONS=("${CORE_PERMISSIONS[@]}" "${CONDITIONAL_PERMISSIONS[@]}")
+# The ${arr[@]+...} guard is required: bash 3.2, which is what macOS ships as
+# /bin/bash, treats expansion of an empty array as an unbound variable under
+# `set -u` and aborts. CONDITIONAL_PERMISSIONS is empty whenever every optional
+# module is off.
+ALL_PERMISSIONS=("${CORE_PERMISSIONS[@]}" ${CONDITIONAL_PERMISSIONS[@]+"${CONDITIONAL_PERMISSIONS[@]}"})
 
 # Obtain a bearer token — requires active gcloud auth (already verified above).
 _ACCESS_TOKEN=$(gcloud auth print-access-token 2>/dev/null || true)
@@ -310,21 +348,89 @@ warning "If terraform apply fails with 'constraint violated', check your org pol
 printf "\n"
 info "Checking key service quotas in region '$REGION'..."
 
-# CPUs in region (need at least 4 per e2-standard-4 node)
-CPU_QUOTA=$(gcloud compute regions describe "$REGION" --project "$PROJECT_ID" \
-  --format="value(quotas[name=CPUS].limit)" 2>/dev/null | head -1 || echo "")
-CPU_USED=$(gcloud compute regions describe "$REGION" --project "$PROJECT_ID" \
-  --format="value(quotas[name=CPUS].usage)" 2>/dev/null | head -1 || echo "")
-
-if [[ -n "$CPU_QUOTA" && -n "$CPU_USED" ]]; then
-  CPU_AVAILABLE=$(echo "$CPU_QUOTA - $CPU_USED" | bc 2>/dev/null || echo "?")
-  if [[ "$CPU_AVAILABLE" =~ ^[0-9]+$ && "$CPU_AVAILABLE" -lt 8 ]]; then
-    warning "Low CPU quota in $REGION: ${CPU_AVAILABLE} available (need at least 8 for a 2-node e2-standard-4 cluster)"
-  else
-    success "CPU quota: ${CPU_AVAILABLE:-?} available in $REGION"
+# A projection like --format="value(quotas[name=CPUS].limit)" does not filter:
+# gcloud returns the entire quotas array, the value never parses as a number, and
+# this check used to warn unconditionally. `describe` also rejects --filter, being
+# a single-resource command, so flatten the list and select the row here. One
+# describe call is cached and reused because every metric comes from it.
+_QUOTAS_RAW=""
+_quota_avail() {
+  if [[ -z "$_QUOTAS_RAW" ]]; then
+    _QUOTAS_RAW=$(gcloud compute regions describe "$REGION" --project "$PROJECT_ID" \
+      --flatten="quotas[]" --format="value(quotas.metric,quotas.limit,quotas.usage)" \
+      2>/dev/null || true)
   fi
-else
-  warning "Could not read CPU quota — verify manually in: Console → IAM → Quotas"
+  awk -v m="$1" '$1 == m { print $2, $3; exit }' <<< "$_QUOTAS_RAW"
+}
+
+# Compares in awk rather than bash: limits arrive as floats ("3000.0") and the
+# unmetered ones as ~9.2e18, which overflows bash integer arithmetic.
+_check_quota() {
+  local metric="$1" needed="$2" label="$3" line limit usage avail
+  line="$(_quota_avail "$metric")"
+  if [[ -z "$line" ]]; then
+    warning "Could not read $metric quota — verify manually in: Console → IAM → Quotas"
+    return 0
+  fi
+  limit="$(awk '{print $1}' <<< "$line")"
+  usage="$(awk '{print $2}' <<< "$line")"
+  if awk -v l="$limit" 'BEGIN{exit !(l > 1e12)}'; then
+    success "$metric: unmetered in $REGION (need ~${needed} for ${label})"
+    return 0
+  fi
+  avail="$(awk -v l="$limit" -v u="$usage" 'BEGIN{printf "%d", l - u}')"
+  if awk -v a="$avail" -v n="$needed" 'BEGIN{exit !(a < n)}'; then
+    warning "Low $metric in $REGION: ${avail} available, need ~${needed} for ${label}"
+  else
+    success "$metric: ${avail} available in $REGION (need ~${needed} for ${label})"
+  fi
+}
+
+# vCPU count is the trailing number of the machine type; the family prefix maps to
+# the per-family quota metric. Both are best-effort — a type we cannot parse simply
+# drops out of the estimate rather than producing a bogus number.
+_vcpu_of()   { awk -v t="$1" 'BEGIN{ sub(/^.*-/, "", t); print (t ~ /^[0-9]+$/) ? t : 0 }'; }
+_family_of() { awk -v t="$1" 'BEGIN{ sub(/-.*$/, "", t); print toupper(t) }'; }
+
+_check_quota "CPUS" 8 "any 2-node cluster"
+
+# SmithDB adds two autoscaling pools. max_nodes is per zone, so the worst case is
+# max_nodes x zones x vCPU per pool — that is the number that has to fit under the
+# per-family quota, which is far tighter than the aggregate CPUS quota.
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  _is_type=$(_tfvar "smithdb_instance_store_machine_type"); _is_type="${_is_type:-n2-standard-16}"
+  _cm_type=$(_tfvar "smithdb_compute_machine_type");         _cm_type="${_cm_type:-n2-standard-8}"
+  _is_max=$(_tfvar "smithdb_instance_store_max_nodes");      _is_max="${_is_max:-3}"
+  _cm_max=$(_tfvar "smithdb_compute_max_nodes");             _cm_max="${_cm_max:-3}"
+  _ssd_count=$(_tfvar "smithdb_instance_store_local_ssd_count"); _ssd_count="${_ssd_count:-3}"
+
+  # Counts entries in the smithdb_node_locations list; unset means the pools span
+  # every zone the region has, which is 3 for all current regions.
+  _zones=$(_tfvar "smithdb_node_locations")
+  if [[ -n "$_zones" ]]; then
+    _zones=$(awk -v s="$_zones" 'BEGIN{ n=gsub(/"[^"]*"/, "", s); print (n > 0) ? n : 3 }')
+  else
+    _zones=3
+  fi
+
+  printf "\n"
+  info "SmithDB is enabled — checking node pool quota at full autoscale (${_zones} zone(s))"
+
+  for _pool in "instance-store:$_is_type:$_is_max" "compute:$_cm_type:$_cm_max"; do
+    _name="${_pool%%:*}"; _rest="${_pool#*:}"; _type="${_rest%%:*}"; _max="${_rest##*:}"
+    _vcpu=$(_vcpu_of "$_type")
+    if [[ "$_vcpu" == "0" ]]; then
+      info "  Skipping $_name pool ($_type) — cannot infer vCPU count from the machine type"
+      continue
+    fi
+    _need=$(( _vcpu * _max * _zones ))
+    _check_quota "$(_family_of "$_type")_CPUS" "$_need" "SmithDB $_name pool at max ($_max x ${_zones}z x $_type)"
+  done
+
+  if [[ "$_ssd_count" != "0" ]]; then
+    _ssd_need=$(( _ssd_count * 375 * _is_max * _zones ))
+    _check_quota "LOCAL_SSD_TOTAL_GB" "$_ssd_need" "${_ssd_count} x 375GB per node on the instance-store pool"
+  fi
 fi
 
 # ── Cloud DNS zone check ──────────────────────────────────────────────────────
