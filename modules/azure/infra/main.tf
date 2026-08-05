@@ -836,10 +836,14 @@ module "diagnostics" {
   keyvault_id = module.keyvault.vault_id
   postgres_id = var.postgres_source == "external" ? module.postgres[0].postgres_id : ""
 
+  # Null when no gateway exists, which falls back to the variable's default.
+  agw_id = module.aks.agw_id
+
   # Boolean flags known at plan time — count cannot depend on computed resource IDs.
   enable_aks_diag      = true
   enable_keyvault_diag = true
   enable_postgres_diag = var.postgres_source == "external"
+  enable_agw_diag      = var.ingress_controller == "agic"
 
   tags = local.common_tags
 }

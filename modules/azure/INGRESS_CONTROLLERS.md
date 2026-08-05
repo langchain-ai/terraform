@@ -182,6 +182,26 @@ and script fragments that appear legitimately in prompts and traces, so read
 `waf_mode = "Prevention"`. Body-size enforcement is off for the same reason — batched run payloads
 exceed the 128 KB inspection limit, and Prevention mode blocks over-size requests outright.
 
+Set `create_diagnostics = true` alongside it. Terraform then sends that log to the Log Analytics
+workspace it creates, and it is queryable without further setup:
+
+```kusto
+AzureDiagnostics
+| where Category == "ApplicationGatewayFirewallLog"
+| summarize count() by ruleId_s, action_s, requestUri_s
+| order by count_ desc
+```
+
+In Detection mode every entry reads `action_s == "Detected"`, which Azure documents as the only action
+that mode produces. Each rule ID and URI pair above is a candidate exclusion.
+
+`create_diagnostics` defaults to `false`, and leaving it off is the one way to end up with a WAF you
+cannot tune. Azure keeps a resource log only while a diagnostic setting routes it somewhere, so the
+WAF still matches traffic, metrics still show match counts, and nothing tells you which request or
+which pattern tripped a rule. That detail is exactly what an exclusion is written from. Note it cuts
+both ways: the firewall log records the matched part of a request in plain text, and the access log
+records request URIs, so both land in your workspace under `log_retention_days`.
+
 > **AGIC requires full cluster rebuild** to enable — the AGW subnet must be provisioned at
 > VNet creation time and cannot be added to an existing VNet.
 
