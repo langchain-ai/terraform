@@ -227,8 +227,11 @@ which pattern tripped a rule. That detail is exactly what an exclusion is writte
 both ways: the firewall log records the matched part of a request in plain text, and the access log
 records request URIs, so both land in your workspace under `log_retention_days`.
 
-> **AGIC requires full cluster rebuild** to enable — the AGW subnet must be provisioned at
-> VNet creation time and cannot be added to an existing VNet.
+> **Enabling AGIC updates the cluster in place.** The add-on is an argument on the cluster
+> resource, so pointing an existing deployment at `agic` adds the gateway, the add-on and its
+> three role assignments without replacing the cluster or anything running on it. The gateway
+> does need a subnet to itself: Terraform carves one out of a VNet it owns, and
+> `agic_subnet_id` names an existing one in a VNet it does not.
 
 ---
 

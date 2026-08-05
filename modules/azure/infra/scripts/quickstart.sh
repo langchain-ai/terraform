@@ -1044,8 +1044,8 @@ _run_section_5() {
   _hint "nginx       — standard K8s ingress, supported everywhere, easiest to debug."
   _hint "istio-addon — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
   _hint "istio       — self-managed Istio via Helm; more control, more operational overhead."
-  _hint "agic        — Azure Application Gateway; enterprise WAF built-in, but requires a"
-  _hint "              dedicated /24 subnet in a Terraform-managed VNet."
+  _hint "agic        — Azure Application Gateway; enterprise WAF built-in. Needs a"
+  _hint "              dedicated /24 subnet, carved for you or named with agic_subnet_id."
   _hint "envoy-gateway — Gateway API native; useful if you're standardizing on Gateway API."
   _hint "Start with nginx unless you have a specific reason to use another."
 
@@ -1116,8 +1116,9 @@ _run_section_5() {
     _hint "AGIC provisions an Azure Application Gateway v2 with a dedicated /24 subnet."
     _hint "The gateway runs Standard_v2. Answering yes to the WAF policy later attaches"
     _hint "one and moves the gateway to WAF_v2, the only tier Azure allows it on."
-    _hint "Note: AGIC requires a full cluster rebuild to enable (the add-on is part of the"
-    _hint "cluster resource). With a VNet you own, supply the Application Gateway subnet."
+    _hint "Switching an existing deployment to AGIC updates the cluster in place — the"
+    _hint "add-on is an argument on the cluster resource, not a new cluster."
+    _hint "With a VNet you own, supply the Application Gateway subnet."
   fi
 }
 
