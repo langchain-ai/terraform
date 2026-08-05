@@ -1,0 +1,28 @@
+modules/aws/TROUBLESHOOTING.md
+  s_3d12a05d0ced29::t_742d26ada9aa55 395-399,402,421-436
+  s_3d12a05d0ced29::t_0f32c2078af9a6 490
+  s_3d12a05d0ced29::t_5d312633c14ca4 438
+  s_3d12a05d0ced29::t_de302255d30169 317
+  s_3d12a05d0ced29::t_11691ee4c9fc4b 382-383
+  s_3d12a05d0ced29::t_85e4b5396ff3cb 466
+  s_3d12a05d0ced29::t_30b9bb6f106aad 319-326,328,330,341-360
+  s_3d12a05d0ced29::t_41833e26b32d39 467-489,491-631
+  s_3d12a05d0ced29::t_0c7cb63493bd8c 437
+  s_3d12a05d0ced29::t_a3545394e52427 439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "de2bbbf29b9515c943895f416c597460de41f445",
+  "prompts": {},
+  "sessions": {
+    "s_3d12a05d0ced29": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1fd209bb-237b-490f-85db-aaed9a488120",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
