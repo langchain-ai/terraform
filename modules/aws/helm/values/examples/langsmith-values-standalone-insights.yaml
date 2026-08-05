@@ -36,10 +36,16 @@
 # writes a top-level `insights.enabled: false` into langsmith-values-overrides.yaml.)
 insights:
   enabled: true
-  namePrefix: "standalone-insights"
   # encryptionKey is written by init-values.sh into langsmith-values-overrides.yaml
   # from TF_VAR_langsmith_insights_encryption_key. Do NOT set it here — do not change
   # once data exists.
+
+# Chart 0.16 co-hosts the Engine and Insights agents on one deployment, so every
+# workload setting moved out of `insights` into `engineInsightsAgent`. Only
+# insights.enabled and insights.encryptionKey stay above; the chart hard-fails on
+# insights.{namePrefix,apiServer,queue,postgres,redis}.
+engineInsightsAgent:
+  namePrefix: "standalone-insights"
 
   # Explicit resources — a strict ResourceQuota rejects any pod without cpu/memory
   # requests and limits (migration issue #7). Sizing mirrors the legacy

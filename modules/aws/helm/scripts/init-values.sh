@@ -655,9 +655,13 @@ if [[ "$_enable_standalone_insights" == "true" ]]; then
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
+  # Chart 0.16 keeps the encryption key on `insights` but moved the workload
+  # settings — including the service accounts — to `engineInsightsAgent`.
   _standalone_block+="
 insights:
   encryptionKey: \"${_insights_key}\"
+
+engineInsightsAgent:
   apiServer:
     serviceAccount:
       annotations:

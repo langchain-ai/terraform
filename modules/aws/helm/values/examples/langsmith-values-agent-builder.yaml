@@ -28,15 +28,9 @@ config:
         memoryMb: 512
         memoryLimitMb: 1024
 
-backend:
-  agentBootstrap:
-    # Required: runs the post-install/post-upgrade job that creates the langsmith-agent-builder-config
-    # ConfigMap and registers Agent Builder as an LGP deployment. Without this the Agent Builder
-    # nav item will not appear in the UI.
-    enabled: true
-
 # Chart v0.15 renamed agentBuilderToolServer/agentBuilderTriggerServer to
-# fleetToolServer/fleetTriggerServer. The underlying images are unchanged.
+# fleetToolServer/fleetTriggerServer. Both now run on the consolidated
+# images.backendImage (chart 0.16.0-rc.17).
 fleetToolServer:
   enabled: true
 
