@@ -98,8 +98,11 @@ ingress_controller = "nginx"
 # istio_addon_revision = "asm-1-27"
 
 # AGIC options — only used when ingress_controller = "agic"
-# agw_sku_tier            = "Standard_v2"   # or "WAF_v2" to enable WAF on the App Gateway
+# agw_sku_tier            = "Standard_v2"   # create_waf = true forces WAF_v2
 # agic_subnet_address_prefix = ["10.0.96.0/24"]  # must not overlap other subnets
+# Scope of AGIC's Network Contributor grant: "vnet" (default), "subnet", or "none".
+# Prefer "subnet" in a VNet you do not own — it is all AGIC needs. See INGRESS_CONTROLLERS.md.
+# agic_network_contributor_scope = "subnet"
 
 # ── DNS + TLS ─────────────────────────────────────────────────────────────────
 # Azure Public IP DNS label — free Azure subdomain, no domain registration needed.
