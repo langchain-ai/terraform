@@ -63,23 +63,22 @@ az account show
 ```
 Confirm the subscription ID and name match the target deployment.
 
-### Step 1 — Secrets setup
+### Step 1 — Terraform input setup
 ```bash
 make setup-env
 ```
 This script:
-- Reads `identifier` and `environment` from `terraform.tfvars` to build Key Vault name
-- Prompts for new values on first run: `postgres_password`, `license_key`, `admin_password`, `admin_email`
-- Auto-generates stable secrets on first run: `api_key_salt`, `jwt_secret`, Fernet keys
+- Prompts for `postgres_admin_password`, `langsmith_license_key`, `admin_email`
 - Writes `secrets.auto.tfvars` — automatically loaded by Terraform
 
-**Critical invariants — never violate on a live deployment:**
-- `api_key_salt` is write-once: rotating it invalidates all API keys
-- `jwt_secret` is write-once: rotating it invalidates all active user sessions
-- `admin_password` must meet Azure password complexity requirements
+Those three are the only secrets Terraform sees, because it needs them to build
+something. The LangSmith app secrets are seeded separately in Step 7 so their
+plaintext never lands in Terraform state.
 
 > **`secrets.auto.tfvars` is gitignored — never commit it.**
-> On subsequent runs, `setup-env` reads from Key Vault — no prompts.
+> Upgrading from a release before the secret split? The seven removed variables
+> still sitting in your file produce a `Value for undeclared variable` warning
+> each and are otherwise ignored. Delete those lines to quiet it.
 
 ### Step 2 — Preflight check
 ```bash
@@ -108,7 +107,7 @@ Review the plan. Expected resource categories:
 - VNet, subnets (main, postgres, redis), private DNS zones
 - AKS cluster, default node pool, large node pool, OIDC issuer, managed identity, federated credentials
 - Azure Blob storage account + container
-- Azure Key Vault + all application secrets
+- Azure Key Vault, its RBAC role assignments, and two secrets (Postgres password, license key)
 - Azure DB for PostgreSQL Flexible Server + private endpoint
 - Azure Cache for Redis Premium + private endpoint
 - cert-manager, KEDA, NGINX ingress Helm releases
@@ -123,6 +122,24 @@ make apply
 Typical duration: **15–25 min** (AKS cluster provisioning takes ~10–15 min; PostgreSQL and Redis add ~5 min each).
 
 If apply fails partway through, it is safe to re-run — Terraform is idempotent.
+
+### Step 7 — Seed Key Vault
+```bash
+make seed-secrets
+```
+Prompts for the initial LangSmith admin password (or reads
+`$LANGSMITH_ADMIN_PASSWORD`) and generates the API key salt, JWT secret, and the
+four Fernet encryption keys, writing all seven directly to Key Vault. Requires
+the Key Vault Secrets Officer role, which `make apply` grants to the deployer.
+
+**Critical invariants — never violate on a live deployment:**
+- Every seeded secret is write-once. The script skips any that already exists, so re-running it is safe and never rotates a value.
+- Rotating `langsmith-api-key-salt` invalidates all API keys.
+- Rotating `langsmith-jwt-secret` invalidates all active user sessions.
+- Rotating any Fernet key makes existing encrypted data unreadable.
+- The admin password needs 12+ characters with a lowercase letter, an uppercase letter, and a symbol. The script rejects a bad one up front; the chart's auth-bootstrap job would otherwise fail ~10 minutes into the release.
+
+Rotate deliberately via `make keyvault` when you actually intend to.
 
 ---
 
