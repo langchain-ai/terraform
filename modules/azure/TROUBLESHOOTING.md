@@ -229,6 +229,48 @@ terraform apply
 
 ---
 
+### Existing Key Vault — apply creates the role assignment, then 403s on the secrets
+
+**Symptom:** apply gets past `azurerm_role_assignment` and fails on the first `azurerm_key_vault_secret`:
+```
+Error: checking for presence of existing Secret "langsmith-api-key-salt"
+(Key Vault "https://customer-platform-kv.vault.azure.net/"): keyvault.BaseClient#GetSecret:
+Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
+Service returned an error. Status=403 Code="Forbidden"
+```
+
+**Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
+
+1. The vault's firewall has `default_action = Deny` and the apply host's IP isn't allowlisted. Control-plane calls like the role assignment go through ARM and succeed; secret writes go to the vault's data plane and get dropped.
+2. The deployer doesn't hold Key Vault Secrets Officer on the vault. With `create_keyvault = false`, Terraform doesn't create that grant, so it has to exist beforehand.
+3. The grant exists but hasn't propagated. Key Vault data-plane RBAC can lag a fresh assignment by a few minutes, and on the attach path there's no `time_sleep` to absorb it because Terraform didn't create the assignment.
+
+**Fix:**
+```bash
+# 1. Which is it — check the firewall first
+az keyvault show --name <vault> --query "properties.networkAcls" -o json
+
+# Allowlist the apply host
+az keyvault network-rule add --name <vault> --ip-address "$(curl -s ifconfig.me)/32"
+
+# 2. Confirm the deployer's role, at the vault or above it
+az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --scope "$(az keyvault show --name <vault> --query id -o tsv)" \
+  --include-inherited --query "[].roleDefinitionName" -o tsv
+
+# Grant it, if the platform team allows you to
+az role assignment create --role "Key Vault Secrets Officer" \
+  --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --scope "$(az keyvault show --name <vault> --query id -o tsv)"
+
+# 3. Propagation — confirm data-plane access directly, then re-run apply
+az keyvault secret list --vault-name <vault> --query "length(@)"
+```
+
+**Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
+
+---
+
 ## Pass 2 — Application
 
 ### `dns_label` subdomain not resolving — TLS cert stuck pending

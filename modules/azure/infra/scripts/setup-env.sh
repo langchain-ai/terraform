@@ -29,7 +29,23 @@ if [[ -f "terraform.tfvars" ]]; then
     | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' \
     | tr -d '[:space:]') || _identifier=""
 fi
-_kv_name="langsmith-kv${_identifier}"
+
+# ── Resolve Key Vault name ────────────────────────────────────────────────────
+# Priority: terraform output → derived from identifier. Same order as manage-keyvault.sh.
+#
+# The derivation alone is wrong whenever the name is not the default (keyvault_name
+# set, or create_keyvault = false where the name is the customer's), and reading the
+# wrong vault fails silently: _kv_secret below falls through to the local file, then
+# to generating a fresh value. A machine without those files would mint a new
+# api_key_salt and jwt_secret, and Terraform would write them over the live ones.
+#
+# Before the first successful apply there is no output and no vault to read from, so
+# the derivation is just a placeholder for the display line.
+if _kv_name=$(terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$_kv_name" ]]; then
+  : # got it from terraform output
+else
+  _kv_name="langsmith-kv${_identifier}"
+fi
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # If stdin is not a tty and the env var is not set, exit with a clear error
