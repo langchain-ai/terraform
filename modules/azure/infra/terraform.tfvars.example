@@ -86,7 +86,8 @@ additional_node_pools = {
 # "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
 # "istio"         — Istio via Helm (self-managed)
 # "agic"          — Application Gateway Ingress Controller (enterprise Azure, native WAF)
-#                   Provisions App Gateway v2 + dedicated /24 subnet + AGIC Helm chart
+#                   Provisions App Gateway v2 + a dedicated /24 subnet, and enables the
+#                   AKS ingress-appgw add-on (Microsoft deprecated the AGIC Helm chart)
 #                   Set create_waf = true for a WAF; it moves the gateway to WAF_v2
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API native, uses Gateway/HTTPRoute)
 # "none"          — skip (bring your own)

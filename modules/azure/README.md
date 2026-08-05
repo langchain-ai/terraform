@@ -199,7 +199,7 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | `nginx` **(default)** | `ingress-nginx` Helm chart → Azure LB | Standard deployments. Simplest setup. Use this for quickstart. |
 | `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
-| `agic` | Azure Application Gateway v2 + AGIC Helm chart | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
+| `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 | `envoy-gateway` | `gateway-helm` OCI chart — Kubernetes Gateway API | Gateway API-native. Modern alternative to Ingress. |
 
 ---
@@ -365,7 +365,7 @@ Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if ne
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + all 10 application secrets
 - cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)
-- For `agic`: Application Gateway v2 + public IP + AGIC managed identity + Contributor/Reader role assignments + AGIC Helm chart
+- For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
 - For `envoy-gateway`: `envoyproxy/gateway-helm` in `envoy-gateway-system` namespace
 - `langsmith` namespace + `langsmith-sa` service account
 
@@ -431,7 +431,7 @@ Translates Terraform outputs and `terraform.tfvars` flags into Helm values files
 - Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
-- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure/application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
+- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
 - Generates `helm/values/values-overrides.yaml` with: hostname, auth config, Blob WI config, Postgres/Redis blocks, Workload Identity annotations for 5 service accounts, ingress/TLS block
 - Copies the selected sizing file from `examples/` into `helm/values/`
 - Copies addon files based on `enable_*` flags: `agent-deploys` (with `url` and `tlsEnabled` injected automatically), `agent-builder`, `insights` (minimal in-cluster file or full external example), `polly`
@@ -713,7 +713,7 @@ azure/
 │           ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
 │           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights / Clio
 │           ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
-│           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)
+│           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure-application-gateway)
 │           ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
 │           ├── langsmith-values-ingress-envoy-gateway.yaml    # Ingress: Envoy Gateway (Gateway API)
 │           └── letsencrypt-issuer-dns01.yaml                  # cert-manager ClusterIssuer for DNS-01 TLS

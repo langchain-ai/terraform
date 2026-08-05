@@ -380,8 +380,8 @@ resource "helm_release" "istio_gateway" {
 }
 
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
-# Provisions an Azure Application Gateway v2 and installs the AGIC Helm chart.
-# AGIC watches Kubernetes Ingress resources with ingressClassName: azure/application-gateway
+# Provisions an Azure Application Gateway v2 and enables the AKS ingress-appgw add-on.
+# AGIC watches Kubernetes Ingress resources with ingressClassName: azure-application-gateway
 # and programs AGW routing rules dynamically. Auth uses Workload Identity (ARM auth).
 #
 # Prerequisites: agic_subnet_id must point to a dedicated /24+ subnet in the same VNet.
