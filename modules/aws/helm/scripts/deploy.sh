@@ -53,9 +53,9 @@ _chart_version_supports_sandboxes() {
 _validate_sandbox_values_file() {
   local values_file="$1"
 
-  if ! grep -Eq '^[[:space:]]{2}sandboxes:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{4}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{8}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
+  if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
     || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
