@@ -149,7 +149,7 @@ kubectl get crd | grep langchain      # operator CRDs registered
 
 **Prerequisite:** Pass 3 healthy — `listener` and `operator` pods Running.
 
-Agent Builder adds `agent-builder-tool-server`, `agent-builder-trigger-server`, and an `agentBootstrap` Job that registers the built-in Polly agent URL in a ConfigMap.
+Agent Builder adds `agent-builder-tool-server` and `agent-builder-trigger-server`. Chart 0.16 removed the `agentBootstrap` Job that used to register the built-in Polly agent URL in a ConfigMap; the standalone `polly` deployment handles that now.
 
 ```bash
 # infra/terraform.tfvars
@@ -165,22 +165,16 @@ make deploy
 
 ```bash
 kubectl get pods -n langsmith | grep agent-builder
-# Expected: tool-server Running, trigger-server Running, agentBootstrap Completed
+# Expected: tool-server Running, trigger-server Running
 
-kubectl get pods -n langsmith | grep -E "tool-server|trigger-server|Bootstrap"
-```
-
-**Watchout:** The `agentBootstrap` Job creates the `langsmith-polly-config` ConfigMap that the frontend reads for the Polly UI. If the frontend was already running when bootstrap completed, roll it:
-
-```bash
-kubectl rollout restart deployment langsmith-frontend -n langsmith
+kubectl get pods -n langsmith | grep -E "tool-server|trigger-server"
 ```
 
 ---
 
 ## Pass 5 — Insights + Polly
 
-**Prerequisite:** Pass 4 healthy — Agent Builder pods Running, `agentBootstrap` Completed.
+**Prerequisite:** Pass 4 healthy — Agent Builder pods Running.
 
 Insights enables ClickHouse-backed trace analytics. Polly is the AI eval/monitoring agent (requires Deployments + Agent Builder). Enable both together.
 
@@ -234,7 +228,7 @@ Then re-run `make init-values && make deploy`.
 | **2 (Helm)** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **2 (TF)** | Same via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
 | **3** | LangSmith Deployments — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
-| **4** | Agent Builder — tool-server, trigger-server, agentBootstrap job | `make init-values && make deploy` |
+| **4** | Agent Builder — tool-server, trigger-server | `make init-values && make deploy` |
 | **5** | Insights + Polly — clio analytics pods, Polly eval agent | `make init-values && make deploy` |
 
 ---
@@ -385,7 +379,7 @@ langsmith-agent-builder-bootstrap-xxxxx            0/1     Completed   0        
 **Pass 5 adds** (after `enable_insights = true`, `enable_polly = true`):
 ```
 langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0          5m   # Insights analytics
-# Polly agent pod appears in langsmith ns after agentBootstrap registers it
+# Polly agent pod appears in langsmith ns once the standalone polly deployment registers it
 ```
 
 ---
@@ -400,7 +394,7 @@ langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0        
 
 > **`insights_encryption_key` and `polly_encryption_key` must never change** after first enable — changing either breaks existing encrypted data permanently.
 
-> **Roll frontend after first Polly enable.** The `agentBootstrap` job creates `langsmith-polly-config` ConfigMap with `VITE_POLLY_DEPLOYMENT_URL` after Polly registers. If the frontend pod was running before bootstrap completed, Polly shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
+> **Roll frontend after first Polly enable.** The `langsmith-polly-config` ConfigMap carrying `VITE_POLLY_DEPLOYMENT_URL` is written once Polly registers. The frontend loads it via `envFrom` at pod start, so a frontend pod that was already running shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
 
 > **Uninstall Helm BEFORE `terraform destroy`.** The Azure Load Balancer created by NGINX blocks VNet deletion. Run `helm uninstall langsmith -n langsmith --wait` first.
 

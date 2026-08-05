@@ -115,11 +115,6 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ## Pass 4 — Agent Builder
 
-### `langsmith-agent-bootstrap` (Job)
-- **What**: One-time Job that registers the bundled Agent Builder agent via the operator on first enable
-- **Runs**: Once on `helm upgrade` when `backend.agentBootstrap.enabled: true` — then Completed
-- **Effect**: Triggers operator to create the `agent-builder-<hash>` dynamic deployment (4 pods)
-
 ### `langsmith-agent-builder-tool-server`
 - **What**: MCP (Model Context Protocol) tool server — executes tools called by the Agent Builder agent
 - **Depends on**: `backend`, Blob Storage
@@ -130,7 +125,7 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Depends on**: `backend`, Redis
 - **WI**: Yes
 
-### Dynamic Agent Builder pods (operator-managed, created by `agentBootstrap` Job)
+### Dynamic Agent Builder pods (operator-managed)
 | Pod | What |
 |-----|------|
 | `agent-builder-<hash>` | Main Agent Builder agent — handles agent generation and assistants |

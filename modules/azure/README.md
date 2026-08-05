@@ -602,7 +602,7 @@ Enables standalone Fleet, the re-architected successor to Agent Builder (chart v
 
 **`langsmith-values-agent-builder.yaml`** — Pass 4 (`enable_agent_builder = true`) — **legacy, superseded by `enable_fleet`**
 
-Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Also enables `backend.agentBootstrap` — a post-install job that registers Agent Builder as an LGP deployment and creates the required ConfigMap. Without this job, the Agent Builder nav item does not appear in the UI. Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi.
+Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi. Chart 0.16 removed the `backend.agentBootstrap` job that used to register Agent Builder as an LGP deployment; the standalone `fleet` deployment replaces it.
 
 > Requires `enable_deployments = true`. Prefer `enable_fleet` for new deployments.
 

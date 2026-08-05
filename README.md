@@ -76,6 +76,21 @@ What this means for you:
 - Browse all releases in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 - Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch. Some features may require setting a compatible minimum chart version explicitly.
 
+### Moving to the 0.16 chart line
+
+This branch carries the chart 0.16 values schema. Chart `0.16.0` is not GA yet, so the
+pins above stay on the 0.15 line — `~0.16.0` would match nothing, because Helm tilde
+ranges skip prereleases. Deploy against the release candidate explicitly:
+
+```bash
+cd modules/aws && make apply && make init-values && CHART_VERSION="0.16.0-rc.29" make deploy
+```
+
+The values are 0.16-only, so each `deploy.sh` refuses to run against an older chart
+rather than deploying a half-configured release. Read
+[MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md) before upgrading an existing
+install.
+
 The per-release history is published in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 
 > Tags are immutable. Use `pre-terraform-migration` only for the legacy pre-`0.15` state (see [History](#history)).

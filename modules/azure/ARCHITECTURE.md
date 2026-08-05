@@ -27,10 +27,9 @@ No new diagram — Pass 5 adds `config.insights.enabled: true` only. Clio deploy
 
 **[LangSmith Azure — Pass 4 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
 
-Adds to Pass 3 — 3 static + 4 dynamic pods:
+Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
 - `langsmith-agent-builder-trigger-server` — webhooks + scheduled triggers (WI)
-- `langsmith-agent-bootstrap` — one-time Job (Completed), registers bundled Agent Builder agent
 - `agent-builder-<hash>` + `queue` + `redis` + `lg-<hash>-0` — operator-managed Agent Builder agent deployment (dynamic)
 
 ### Pass 3 — LangGraph Platform Containers (verified)
