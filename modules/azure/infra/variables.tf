@@ -49,7 +49,7 @@ variable "keyvault_name" {
 
 variable "create_keyvault" {
   type        = bool
-  description = "Whether to create a new Key Vault. Set false to attach to a pre-existing one — provide existing_keyvault_name and existing_keyvault_resource_group_name. Terraform then writes its secrets into that vault and changes nothing else about it: the vault's auth mode, network rules, and retention settings stay as its owner configured them, and keyvault_default_action, keyvault_allowed_ips, keyvault_soft_delete_retention_days, and keyvault_purge_protection are ignored."
+  description = "Whether to create a new Key Vault. Set false to attach to a pre-existing one — provide existing_keyvault_name and existing_keyvault_resource_group_name. Terraform then writes its secrets into that vault and changes nothing else about it: the vault's auth mode, network rules, and retention settings stay as its owner configured them, and keyvault_default_action, keyvault_allowed_ips, and keyvault_purge_protection are ignored."
   default     = true
 }
 
