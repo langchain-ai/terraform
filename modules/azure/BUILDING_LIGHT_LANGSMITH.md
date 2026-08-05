@@ -213,45 +213,33 @@ Every Azure resource name is derived from it: `langsmith-rg-demo`, `langsmith-ak
 
 ---
 
-### 1b — Bootstrap secrets
+### 1b — Bootstrap Terraform inputs
 
-`setup-env.sh` handles all sensitive values — passwords, license keys, and auto-generated cryptographic keys. **Never put secrets directly in `terraform.tfvars`.**
+`setup-env.sh` collects the three values Terraform needs and writes them to `secrets.auto.tfvars`. **Never put secrets directly in `terraform.tfvars`.**
 
 ```bash
 cd terraform/azure
 make setup-env
 ```
 
-**On first run**, the script:
-1. Prompts for: PostgreSQL admin password, LangSmith license key, admin password, admin email
-2. Generates (or reads from local fallback files): API key salt, JWT secret, 4 Fernet encryption keys
-3. Writes everything to `secrets.auto.tfvars` (automatically picked up by Terraform, chmod 600, gitignored)
-
-**On subsequent runs** (after `terraform apply` has created Key Vault):
-1. Reads all secrets silently from Key Vault — no prompts
-2. Re-writes `secrets.auto.tfvars` from Key Vault values
-3. Ensures Terraform state stays consistent across machines
+The script prompts for:
+1. PostgreSQL admin password — Terraform creates the flexible server with it
+2. LangSmith license key — the `k8s-bootstrap` module builds the `langsmith-license` K8s secret from it
+3. Initial org admin email
 
 ```
-LangSmith — secret bootstrap
-  identifier : -demo
-  key_vault  : langsmith-kv-demo
+LangSmith — Terraform input bootstrap
 
 PostgreSQL admin password  : ****
 LangSmith license key      : ****
-LangSmith admin password   : ****
-Initial org admin email    : you@example.com
-
-  Resolving stable secrets...
-  Generated langsmith-api-key-salt → .api_key_salt (Terraform stores in Key Vault on apply)
-  Generated langsmith-jwt-secret → .jwt_secret (Terraform stores in Key Vault on apply)
-  Generated langsmith-deployments-encryption-key → .deployments_key (...)
-  ...
+Initial org admin email    : ****
 
   Wrote secrets.auto.tfvars (chmod 600)
 ```
 
-> **Important:** The script uses environment variable overrides to skip prompts. If you need to run non-interactively (CI/CD), set: `LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_PASSWORD`, `LANGSMITH_ADMIN_EMAIL` before running the script.
+The LangSmith app secrets — admin password, API key salt, JWT secret, and the four Fernet encryption keys — are deliberately absent. Terraform state holds every variable as plaintext, so those go straight into Key Vault in step 1d instead, after the vault exists.
+
+> **Important:** Set `LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, and `LANGSMITH_ADMIN_EMAIL` to run non-interactively (CI/CD). Without a tty and without these set, the script exits with an error rather than writing empty values.
 
 ---
 
@@ -274,7 +262,7 @@ Type `yes` when prompted (or use `-auto-approve` if you prefer).
 
 **Expected output (successful apply):**
 ```
-Apply complete! Resources: 41 added, 0 changed, 0 destroyed.
+Apply complete! Resources: 34 added, 0 changed, 0 destroyed.
 
 Outputs:
 aks_cluster_name                         = "langsmith-aks-demo"
@@ -302,7 +290,7 @@ storage_account_k8s_managed_identity_client_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxx
 | Federated credential | (on the MI) | OIDC trust: pod SA → Azure MI |
 | Storage account | `langsmithblob<id>` | Blob storage for trace payloads |
 | Blob container | `langsmithblob<id>-container` | Container within storage account |
-| Key Vault | `langsmith-kv<id>` | All secrets, 10 entries |
+| Key Vault | `langsmith-kv<id>` | Postgres password + license key; step 1d adds seven more |
 | cert-manager | in `cert-manager` ns | Helm release, manages TLS certs |
 | KEDA | in `keda` ns | Helm release, pod autoscaler |
 | NGINX | in `ingress-nginx` ns | Helm release, ingress + Load Balancer |
@@ -318,6 +306,47 @@ storage_account_k8s_managed_identity_client_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxx
 | `QuotaExceeded` for Standard_DS4_v2 | vCPU quota too low | File a quota increase in the Azure portal for the region |
 | `InvalidResourceReference` on VNet/subnet | Race condition | Re-run `terraform apply` — Terraform usually resolves on retry |
 | Timeout on cert-manager or KEDA | Slow image pull | Re-run `terraform apply` — Helm releases are idempotent |
+
+---
+
+### 1d — Seed the LangSmith app secrets
+
+The vault exists now, and `make apply` granted you the Key Vault Secrets Officer role on it. Write the seven app secrets straight in:
+
+```bash
+cd terraform/azure
+make seed-secrets
+```
+
+It prompts for the initial admin password and generates the rest:
+
+```
+LangSmith — seed Key Vault secrets
+  key_vault : langsmith-kv-demo
+
+  Seeding...
+
+  Initial LangSmith admin password
+    min 12 chars, with a lowercase letter, an uppercase letter,
+    and a symbol from: !#$%()+,-./:?@[\]^_{~}
+    password:
+
+  set   langsmith-admin-password
+  set   langsmith-api-key-salt
+  set   langsmith-jwt-secret
+  set   langsmith-deployments-encryption-key
+  set   langsmith-agent-builder-encryption-key
+  set   langsmith-insights-encryption-key
+  set   langsmith-polly-encryption-key
+
+  Done.
+```
+
+Set `LANGSMITH_ADMIN_PASSWORD` to skip the prompt in CI. The script validates the password against the chart's rules up front — without that check, a weak password fails inside the `auth-bootstrap` job about ten minutes into the Helm release, which is a miserable way to find out.
+
+Every secret is write-once: a re-run prints `skip (already set)` and changes nothing. That is deliberate, because rotating any of them is destructive — a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable. Use `make keyvault` when you actually mean to rotate.
+
+The Fernet keys are seeded even for features you have not enabled, so turning on Insights or Polly later never forces a rotation.
 
 ---
 
