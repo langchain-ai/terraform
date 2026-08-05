@@ -111,7 +111,7 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Pinned to the supported chart line, matching helm/scripts/deploy.sh. Empty string = latest, which can cross chart lines on the next apply."
+  description = "LangSmith Helm chart version constraint. Defaults to the pinned ~0.15.1 line (latest 0.15.x, never 0.16), matching the deploy scripts. Empty string = newest published chart."
   type        = string
   default     = "~0.15.1"
 }
