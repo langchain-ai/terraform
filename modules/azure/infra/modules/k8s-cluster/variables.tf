@@ -78,7 +78,7 @@ variable "additional_node_pools" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
+  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
   default     = "nginx"
 
   validation {
@@ -163,13 +163,30 @@ variable "agic_subnet_id" {
 
 variable "agw_sku_tier" {
   type        = string
-  description = "Application Gateway SKU tier. 'Standard_v2' for standard deployments, 'WAF_v2' to enable WAF on the gateway."
+  description = "Application Gateway SKU tier. 'Standard_v2' for standard deployments, 'WAF_v2' to enable WAF on the gateway. The caller forces 'WAF_v2' whenever a firewall policy is attached."
   default     = "Standard_v2"
 
   validation {
     condition     = contains(["Standard_v2", "WAF_v2"], var.agw_sku_tier)
     error_message = "agw_sku_tier must be 'Standard_v2' or 'WAF_v2'."
   }
+}
+
+variable "agic_network_contributor_scope" {
+  type        = string
+  description = "Where to grant the AGIC identity Network Contributor: 'vnet' (the whole VNet, the default), 'subnet' (only the Application Gateway's subnet, which is all AGIC needs), or 'none' (skip it, for an operator who creates the assignment out of band)."
+  default     = "vnet"
+
+  validation {
+    condition     = contains(["vnet", "subnet", "none"], var.agic_network_contributor_scope)
+    error_message = "agic_network_contributor_scope must be vnet, subnet or none."
+  }
+}
+
+variable "firewall_policy_id" {
+  type        = string
+  description = "Resource ID of a WAF policy to attach to the Application Gateway. Requires agw_sku_tier = 'WAF_v2' — Azure supports policy associations on no other tier. Null leaves the gateway without a policy."
+  default     = null
 }
 
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────

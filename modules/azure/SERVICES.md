@@ -50,7 +50,7 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### `langsmith-clickhouse`
 - **What**: Columnar database — trace spans, run metadata, eval results
-- **Type**: StatefulSet · 500Gi PVC · large node pool (requires 15Gi RAM)
+- **Type**: StatefulSet · large node pool · CPU/RAM scale by sizing profile (see [SIZING.md](helm/values/examples/SIZING.md))
 - **Notes**: In-cluster is for dev/POC only (single pod, no replication, no backups). For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ### One-time Jobs (Pass 2)
@@ -67,15 +67,15 @@ All passes verified during production deploy (external Postgres + Redis).
 ### Azure DB for PostgreSQL Flexible Server
 - **What**: Relational DB — orgs, users, projects, API keys, settings
 - **Version**: PostgreSQL ≥ 14 required (Azure Flexible Server defaults to 16)
-- **Extensions**: `btree_gin`, `btree_gist`, `pgcrypto`, `citext`, `ltree`, `pg_trgm` — enabled automatically by the postgres module
+- **Extensions**: `pgcrypto`, `btree_gin`, `pg_trgm`, `btree_gist`, `citext`, `ltree` — enabled automatically by the postgres module
 - **Access**: Private VNet only (subnet-postgres) · SSL port 5432
 - **Secret**: `langsmith-postgres-secret` — created by Terraform k8s-bootstrap module
 
-### Azure Cache for Redis Premium
+### Azure Managed Redis (AMR)
 - **What**: Queue + cache — trace ingestion queue, pub/sub, short-lived cache
-- **Version**: Redis ≥ 5 required (Azure Cache for Redis Premium defaults to Redis 6)
+- **Version**: Redis ≥ 5 required (Azure Managed Redis runs the Redis Enterprise engine)
 - **Dedicated instance**: Each LangSmith installation must use its own dedicated Redis — shared instances cause deployment tasks to route incorrectly
-- **Access**: Private VNet only (subnet-redis) · TLS port 6380
+- **Access**: Private endpoint only (subnet-redis, private DNS zone) · TLS port 10000
 - **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module
 
 ### Azure Blob Storage

@@ -22,14 +22,15 @@ set -euo pipefail
 
 SECRETS_FILE="secrets.auto.tfvars"
 
-# ── Read identifier from terraform.tfvars ─────────────────────────────────────
-_identifier=""
-if [[ -f "terraform.tfvars" ]]; then
-  _identifier=$(grep -E '^\s*identifier\s*=' terraform.tfvars \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' \
-    | tr -d '[:space:]') || _identifier=""
-fi
-_kv_name="langsmith-kv${_identifier}"
+# ── Resolve the Key Vault name ────────────────────────────────────────────────
+# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix,
+# an explicit keyvault_name, and the unique_resource_names hash. Deriving it here
+# by hand is how this script and three others drifted apart.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_common.sh"
+
+_name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
+_kv_name=$(_derive_kv_name)
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # If stdin is not a tty and the env var is not set, exit with a clear error
@@ -100,8 +101,8 @@ except ImportError:
 # ── Collect secrets ───────────────────────────────────────────────────────────
 echo ""
 echo "LangSmith — secret bootstrap"
-echo "  identifier : ${_identifier:-(empty)}"
-echo "  key_vault  : $_kv_name"
+echo "  name_prefix : ${_name_prefix:-(empty)}"
+echo "  key_vault   : $_kv_name"
 echo ""
 
 pg_password=$(_prompt "LANGSMITH_PG_PASSWORD"     "PostgreSQL admin password  ")

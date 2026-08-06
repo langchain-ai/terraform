@@ -52,3 +52,6 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Ignore the quickstart wizard's resume checkpoint
+.quickstart-state
