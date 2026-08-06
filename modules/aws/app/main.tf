@@ -230,13 +230,13 @@ resource "helm_release" "langsmith" {
   create_namespace = true
   repository       = "https://langchain-ai.github.io/helm"
   chart            = "langsmith"
-  version          = var.chart_version != "" ? var.chart_version : null
+  version          = var.chart_version
   timeout          = var.helm_timeout
 
-  # Do NOT use wait = true. The chart's post-install bootstrap job deploys
-  # operator-managed agents (clio, polly, agent-builder) which can take 10+
-  # minutes on a cold cluster with autoscaling. Terraform marks the release as
-  # failed if the job exceeds the timeout — even though all workloads are healthy.
+  # Do NOT use wait = true. The chart's post-install hooks and the operator's
+  # agent pods can take 10+ minutes to settle on a cold cluster with autoscaling.
+  # Terraform marks the release as failed if a hook exceeds the timeout — even
+  # though all workloads are healthy.
   wait = false
 
   force_update = var.helm_force_update
@@ -367,6 +367,12 @@ locals {
         annotations = local.irsa_annotations
       }
     } },
+    # Chart 0.16 defaults insights/polly ON, and config.existingSecretName means the
+    # chart finds a key and deploys them without complaint. Make the enable_* flags
+    # authoritative so a base install does not quietly grow two agent deployments.
+    # The insights/polly overlay files set enabled = true when the flags are on.
+    { insights = { enabled = var.enable_insights } },
+    { polly = { enabled = var.enable_polly } },
   )
 
   # Agent deploys override — only the dynamic tlsEnabled field.
