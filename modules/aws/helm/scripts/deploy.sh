@@ -31,11 +31,11 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line* by default. Sandboxes require chart 0.16+, but the script
-# does not silently move chart lines; set CHART_VERSION explicitly when enabling them.
+# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
+# Override with the CHART_VERSION env var for an exact patch if needed.
 _chart_version_provided=false
 [[ -n "${CHART_VERSION:-}" ]] && _chart_version_provided=true
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -63,17 +63,29 @@ _validate_sandbox_values_file() {
   fi
 }
 
-# The values on this branch use the chart 0.16 schema. Chart 0.15 ignores the
-# unknown keys rather than rejecting them, so a 0.15 deploy renders cleanly while
-# silently dropping the external Insights Postgres/Redis wiring and falling back
-# to in-cluster StatefulSets. Refuse instead. The pin above stays on 0.15 until
-# chart 0.16.0 is GA, because Helm tilde ranges skip prereleases.
-_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1)"
-if [[ -n "$_chart_line" && "$(printf '%s\n0.16\n' "$_chart_line" | sort -V | head -1)" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' is on the $_chart_line line, but these values require chart 0.16 or newer." >&2
-  echo "       Until 0.16.0 is GA, pass the release candidate explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0-rc.29 make deploy" >&2
+# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
+# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
+# keys instead of rejecting them, so it renders cleanly while silently dropping
+# the external Insights Postgres/Redis wiring and falling back to in-cluster
+# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
+# rather than deploy a half-configured release.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$_chart_line" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
+  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0 make deploy" >&2
   exit 1
+fi
+# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
+# are on the 0.16 line but still drop the block silently.
+if [[ "$CHART_VERSION" == *-* ]]; then
+  _rc="${CHART_VERSION##*-rc.}"
+  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
+    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
+    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
+    exit 1
+  fi
 fi
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
@@ -195,6 +207,21 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
+
+# Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the bundled
+# agent-bootstrap Job, so config.agentBuilder on its own now renders the tool/trigger
+# servers and the UI nav item but no agent runtime behind them. The two paths also
+# manage the same data with different schemas, so they must not run together.
+if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+  echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
+  echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
+  exit 1
+fi
+if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
+  echo "WARNING: enable_agent_builder without enable_fleet deploys the Agent Builder UI and its" >&2
+  echo "         tool/trigger servers, but chart 0.16 removed the bundled agent-bootstrap Job that" >&2
+  echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
+fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
@@ -322,8 +349,7 @@ fi
 # ALB is controller-owned and its DNS is read from the Ingress status (single
 # best-effort attempt here — on a first deploy the Ingress doesn't exist yet and
 # there is nothing to sync). A stale hostname causes the operator to set
-# unreachable agent endpoints, which keeps the bootstrap hook stuck at DEPLOYING
-# and times out the release.
+# unreachable agent endpoints, which keeps agent deployments stuck at DEPLOYING.
 _live_lb=""
 _live_lb=$(_resolve_entry_hostname 1) || true
 if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
@@ -385,9 +411,9 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo ""
 fi
 
-# Ensure langsmith-ksa service account exists before Helm runs the bootstrap hook.
-# The hook deploys operator-managed agent pods that reference this SA. It must exist
-# before the post-install/post-upgrade hook fires — not after Helm returns.
+# Ensure langsmith-ksa service account exists before Helm runs its post-install hooks.
+# Operator-managed agent pods reference this SA, so it must exist before the
+# post-install/post-upgrade hooks fire — not after Helm returns.
 # Source the IRSA ARN from the overrides file (written by init-values.sh) so this
 # works on fresh clusters where langsmith-platform-backend doesn't exist yet.
 _irsa_arn_pre=$(grep -m1 'eks.amazonaws.com/role-arn' "${ENV_FILE}" 2>/dev/null \
@@ -413,19 +439,19 @@ if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|be
   _devel_flag="--devel"
 fi
 
-# Helm timeout is configurable (migration issue #2). Chart 0.15 with all features
-# enabled (Insights + Deployments + Fleet) regularly exceeds the old hardcoded 20m
-# on the first upgrade because of sequential stateful rollouts + bootstrap jobs.
+# Helm timeout is configurable (migration issue #2). With all features enabled
+# (Insights + Deployments + Fleet) the first upgrade regularly exceeds the old
+# hardcoded 20m because of sequential stateful rollouts and migration jobs.
 _helm_timeout="${HELM_TIMEOUT:-30m}"
 
 # Deploy with --server-side=false to avoid SSA field ownership conflicts with the
 # ALB ingress controller. Helm 3.14+ defaults to server-side apply, which fights
 # with the controller over .spec.rules ownership. Client-side apply sidesteps this.
 #
-# We intentionally do NOT use --wait here. The chart's post-install bootstrap job
-# deploys operator-managed agents (clio, polly, agent-builder) which can take 10+
-# minutes on a cold cluster with autoscaling. Using --wait causes the release to go
-# 'failed' if the job exceeds the timeout — even though all workloads are healthy.
+# We intentionally do NOT use --wait here. The chart's post-install hooks and the
+# operator's agent pods can take 10+ minutes to settle on a cold cluster with
+# autoscaling. Using --wait causes the release to go 'failed' if a hook exceeds the
+# timeout — even though all workloads are healthy.
 # Instead, we do our own readiness check below.
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
@@ -442,7 +468,7 @@ echo ""
 
 # ── Wait for core components to be ready ────────────────────────────────────
 # Instead of --wait (which blocks on hooks), check that the core deployments
-# are available. This decouples app readiness from the bootstrap job.
+# are available. This decouples app readiness from the chart's hooks.
 _core_deployments=(
   "${RELEASE_NAME}-frontend"
   "${RELEASE_NAME}-backend"
