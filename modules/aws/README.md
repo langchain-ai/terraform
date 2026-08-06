@@ -41,7 +41,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 brew install awscli
 aws --version
 
-# Terraform (>= 1.5)
+# Terraform (>= 1.11.0)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 
