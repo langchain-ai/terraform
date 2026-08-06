@@ -4,8 +4,6 @@ Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
 > **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
-> **Sandboxes need the `v0.16.*` module line.** `enable_sandboxes = true` requires LangSmith chart `0.16.0` or newer, and this line pins `~0.15.1`. `deploy.sh` refuses to run unless you name a 0.16 chart explicitly, and doing so pairs a 0.16 chart with values still on the pre-0.16 schema, which is not a supported combination. Deploy sandboxes from a `v0.16.*` tag instead.
-
 ---
 
 ## Overview
