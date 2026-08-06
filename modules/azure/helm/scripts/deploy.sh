@@ -425,6 +425,32 @@ if [[ "$CHART_VERSION" == *-* ]]; then
   fi
 fi
 
+# Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
+# only creates an addon file when it is missing, so a values directory generated on the
+# 0.15 line keeps its stale copies and they get loaded here. The chart does reject them,
+# but its error names the key, not the generated file that carries it.
+_legacy_files=""
+for _vf in "$VALUES_DIR"/*.yaml; do
+  [[ -f "$_vf" ]] || continue
+  if awk '
+      /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+      top == "config"  && /^  (insights|polly):/ { found = 1 }
+      top == "backend" && /^  agentBootstrap:/   { found = 1 }
+      END { exit !found }
+    ' "$_vf"; then
+    _legacy_files+="         $(basename "$_vf")
+"
+  fi
+done
+if [[ -n "$_legacy_files" ]]; then
+  echo "ERROR: these values files use the chart 0.15 schema, which chart 0.16 rejects:" >&2
+  printf '%s' "$_legacy_files" >&2
+  echo "       config.insights, config.polly and backend.agentBootstrap were removed." >&2
+  echo "       init-values.sh only creates an addon file when it is missing, so delete the" >&2
+  echo "       files listed above and re-run 'make init-values' to regenerate them." >&2
+  exit 1
+fi
+
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
