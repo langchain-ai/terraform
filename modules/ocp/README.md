@@ -33,7 +33,7 @@ Pass 3 — LangSmith Deployments (LangGraph Platform)
 - OpenShift 4.12+ or ROSA cluster
 - `oc` CLI authenticated (`oc login`)
 - Helm 3.12+
-- Terraform 1.5+
+- Terraform 1.11.0+
 - Cluster admin role for initial setup
 
 ## Reference
