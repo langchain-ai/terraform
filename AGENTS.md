@@ -12,17 +12,22 @@ before the PR does, not a separate standard.
 
 - `modules/<provider>/{infra,app}` — each is its own Terraform root: own
   `versions.tf`, `backend.tf`, state. `infra/` provisions the cloud foundation;
-  `app/` Helm-deploys LangSmith. `aws`, `azure`, and `gcp` have both, which is
-  the six roots the gate covers.
+  `app/` Helm-deploys LangSmith. `aws`, `azure`, and `gcp` have both.
+- `modules/byoc/aws/langsmith-byoc-role/` — a seventh root, one level deeper
+  than the rest: the customer-side IAM role and break-glass role for BYOC.
+  Gated like the others, so run the checks after touching the policies.
 - `modules/<provider>/helm/scripts/` — the shell drivers (`deploy.sh`,
   `init-values.sh`, secrets managers). Linted as part of the provider, not the
   root, since they drive the `app` root.
 - `modules/<provider>/infra/modules/<name>/` — internal child modules
   (networking, k8s-cluster, postgres, redis, storage, dns, secrets, iam…).
   Local `source = "./modules/..."` only; no registry module publishing here.
-  Validated transitively via `--call-module-type=all`, not as their own roots.
-- Not gated: `modules/ocp` (infra is mostly stubs, no `versions.tf`) and
-  `modules/byoc/aws/langsmith-byoc-role`. Edit those with extra care.
+  Validated transitively via `--call-module-type=all`, not as their own roots —
+  even the two that carry a `versions.tf` (azure `keyvault`, azure `redis`), so
+  the gate identifies a child module by its path, not by depth.
+- Not gated: `modules/ocp` — the OpenShift port is still stubs with no
+  `versions.tf` anywhere, so there is nothing to init against. Edit with extra
+  care; `terraform fmt -check` is the only automated cover it has.
 - `.terraform.lock.hcl`, `*.tfvars`, `*.tfstate*` are gitignored per provider
   dir. Lock files on disk are the pinned provider versions — read them, don't
   guess versions.

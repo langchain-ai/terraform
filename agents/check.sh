@@ -21,24 +21,41 @@ SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
 
 init_upgrade=0
-if [ "${1:-}" = "--init-upgrade" ]; then
-  init_upgrade=1
-  shift
-fi
+list_roots=0
+case "${1:-}" in
+  --init-upgrade) init_upgrade=1; shift ;;
+  --list-roots) list_roots=1; shift ;;
+esac
 
-# No args: every terraform root. A root is modules/<provider>/<root> with its
-# own versions.tf. Anything deeper (infra/modules/*) is a child module,
-# validated transitively via --call-module-type=all. modules/byoc and
-# modules/ocp have no <provider>/<root>/versions.tf and are not covered.
-if [ $# -eq 0 ]; then
+# No args: every terraform root, discovered rather than listed so a new root
+# cannot be silently missed. A root is any directory under modules/ with its own
+# versions.tf, minus the internal child modules under
+# modules/<provider>/<root>/modules/<child>/ -- those are validated transitively
+# via --call-module-type=all, and two of them (azure keyvault, azure redis) do
+# carry a versions.tf, so depth alone cannot tell them apart from a root.
+# Depth genuinely varies: modules/aws/infra is two levels down,
+# modules/byoc/aws/langsmith-byoc-role is three. modules/ocp has no versions.tf
+# anywhere, so it is not covered.
+if [ $# -eq 0 ] || [ "$list_roots" -eq 1 ]; then
   discovered=()
-  for _versions in "$REPO_ROOT"/modules/*/*/versions.tf; do
-    [ -f "$_versions" ] || continue
-    discovered+=("${_versions%/versions.tf}")
-  done
+  while IFS= read -r _versions; do
+    [ -n "$_versions" ] || continue
+    case "${_versions#modules/}" in */modules/*) continue ;; esac
+    discovered+=("$REPO_ROOT/${_versions%/versions.tf}")
+  done <<EOF
+$(cd "$REPO_ROOT" && find modules -name versions.tf -not -path '*/.terraform/*' | sort)
+EOF
   if [ ${#discovered[@]} -eq 0 ]; then
     echo "check: found no terraform roots under modules/" >&2
     exit 2
+  fi
+  # --list-roots keeps CI from re-implementing the rule above: the workflow
+  # filters this list per provider instead of carrying its own glob.
+  if [ "$list_roots" -eq 1 ]; then
+    for _root in "${discovered[@]}"; do
+      echo "${_root#"$REPO_ROOT/"}"
+    done
+    exit 0
   fi
   set -- "${discovered[@]}"
 fi

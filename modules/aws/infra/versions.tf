@@ -18,5 +18,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # Required by time_sleep.wait_for_alb_webhook in main.tf
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.10"
+    }
   }
 }

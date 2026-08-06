@@ -2,7 +2,8 @@
 # Dump `terraform providers schema -json` per root into agents/schema/.
 # Ground truth for the pinned provider versions, for agents to grep instead of
 # guessing attribute names. Gitignored: regenerate rather than commit.
-# Usage: bash agents/dump-schemas.sh [<provider>/<root> ...]   (default: all)
+# Usage: bash agents/dump-schemas.sh [<path-below-modules> ...]  (default: all)
+#   e.g. aws/infra, byoc/aws/langsmith-byoc-role
 set -u
 
 unset CDPATH
@@ -10,16 +11,16 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 OUT_DIR="$REPO_ROOT/agents/schema"
 mkdir -p "$OUT_DIR"
 
-# Same discovery rule as check.sh: a root is modules/<provider>/<root> with its
-# own versions.tf. Discovered rather than hardcoded so a new root cannot be
-# silently missed.
+# Root discovery lives in check.sh (--list-roots) rather than being repeated
+# here, so the two scripts cannot drift apart about what counts as a root.
 if [ $# -eq 0 ]; then
   discovered=()
-  for _versions in "$REPO_ROOT"/modules/*/*/versions.tf; do
-    [ -f "$_versions" ] || continue
-    _root=${_versions%/versions.tf}
-    discovered+=("${_root#"$REPO_ROOT/modules/"}")
-  done
+  while IFS= read -r _root; do
+    [ -n "$_root" ] || continue
+    discovered+=("${_root#modules/}")
+  done <<EOF
+$(bash "$REPO_ROOT/agents/check.sh" --list-roots)
+EOF
   if [ ${#discovered[@]} -eq 0 ]; then
     echo "dump-schemas: found no terraform roots under modules/" >&2
     exit 2

@@ -22,16 +22,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # One job per provider so a failure names the provider, and so the three
-  # provider rulesets install in parallel. Each covers that provider's roots
-  # (infra + app) and its shell scripts.
+  # One job per provider so a failure names the provider, and so the provider
+  # rulesets install in parallel. Each covers that provider's roots and its shell
+  # scripts. byoc is the standalone langsmith-byoc-role IAM root -- no shell
+  # scripts, one root nested a level deeper than the others.
   check:
     name: check (${{ matrix.provider }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: [aws, azure, gcp]
+        provider: [aws, azure, gcp, byoc]
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
@@ -59,7 +60,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-          key: tf-providers-${{ matrix.provider }}-${{ hashFiles(format('modules/{0}/*/.terraform.lock.hcl', matrix.provider), format('modules/{0}/*/versions.tf', matrix.provider)) }}
+          # ** rather than *: byoc's root sits one level deeper. Lock files are
+          # gitignored repo-wide, so in practice versions.tf drives the key.
+          key: tf-providers-${{ matrix.provider }}-${{ hashFiles(format('modules/{0}/**/.terraform.lock.hcl', matrix.provider), format('modules/{0}/**/versions.tf', matrix.provider)) }}
           restore-keys: |
             tf-providers-${{ matrix.provider }}-
 
@@ -72,16 +75,17 @@ jobs:
       - name: Create plugin cache dir
         run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
-      # No args to check.sh would sweep all three providers in one job; pass the
-      # provider's roots explicitly so the matrix leg stays scoped.
+      # No args to check.sh would sweep every provider in one job, so scope the
+      # matrix leg by filtering the script's own root list. check.sh --list-roots
+      # is the single source of the discovery rule -- root depth varies and two
+      # child modules carry a versions.tf, so a glob here would drift from it.
       - name: Run checks
         run: |
           set -euo pipefail
           roots=()
-          for v in modules/${{ matrix.provider }}/*/versions.tf; do
-            [ -f "$v" ] || continue
-            roots+=("${v%/versions.tf}")
-          done
+          while IFS= read -r r; do
+            roots+=("$r")
+          done < <(bash agents/check.sh --list-roots | grep "^modules/${{ matrix.provider }}/")
           if [ ${#roots[@]} -eq 0 ]; then
             echo "no terraform roots for ${{ matrix.provider }}" >&2
             exit 1
