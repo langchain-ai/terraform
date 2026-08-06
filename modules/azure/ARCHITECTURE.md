@@ -68,14 +68,9 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 ## Deployment Paths
 
-### Pass 2 — Two ways to deploy the Helm chart
+### Pass 2 — Deploy the Helm chart
 
-| Path | How | When to use |
-|------|-----|-------------|
-| **Helm path** | `make init-values && make deploy` | Default. Shell script, interactive, reads TF outputs dynamically. Best for first deploys and day-2 re-deploys. |
-| **Terraform path** | `make init-app && make apply-app` | Declarative. K8s secrets + langsmith-ksa SA + Helm release in Terraform state. Best for GitOps/CI pipelines. |
-
-The Terraform path uses the `app/` module. `make init-app` calls `app/scripts/pull-infra-outputs.sh` to read all infra outputs and write them into `app/infra.auto.tfvars.json`.
+`make init-values && make deploy` — shell script, interactive, reads TF outputs dynamically.
 
 ### Ingress Options
 
