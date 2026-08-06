@@ -173,7 +173,9 @@ Managed Redis private endpoint.
 The Application Gateway and bastion subnets are the exception: Terraform carves
 those only out of a VNet it owns, so on this path they are supplied through
 `agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
-See [README.md](README.md#bring-your-own-vnet).
+
+Bastion and AGIC subnets have no bring-your-own input and exist only when
+Terraform manages the VNet. See [README.md](README.md#bring-your-own-vnet).
 
 ---
 

@@ -951,6 +951,63 @@ azure/
 
 ---
 
+## Resource naming
+
+Most Azure resource names only need to be unique inside your resource group. Four
+do not: **PostgreSQL**, **Redis**, **Storage**, and **Key Vault** names live in a
+namespace shared by every Azure tenant, as does the public-IP `dns_label`. Two
+deployments that ask for the same name collide, and the second one fails partway
+through `terraform apply`.
+
+`unique_resource_names = true` (set in every `terraform.tfvars` template and by
+`quickstart.sh`) appends a 6-character hash derived from your subscription ID and
+`name_prefix`, and shortens the base from `langsmith-` to `ls-` to make room
+inside the 24-character Storage and Key Vault limits:
+
+| | `unique_resource_names = false` | `unique_resource_names = true` |
+|---|---|---|
+| Resource group | `langsmith-rg-dev` | `ls-rg-dev` |
+| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-a1b2c3` |
+| Redis | `langsmith-redis-dev` | `ls-redis-dev-a1b2c3` |
+| Storage | `langsmithblobdev` | `lsblobdeva1b2c3` |
+| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-a1b2c3` |
+
+The Storage row is the only one that looks different, and the hyphens are the
+reason. Azure Storage account names accept only lowercase letters and digits, so
+the module strips the hyphens from `ls-blob-dev-a1b2c3` before creating it. Every
+other name, including the blob container, keeps them.
+
+The hash is deterministic — the same subscription and `name_prefix` always produce
+the same name, so repeat applies are stable and no random values are stored.
+`a1b2c3` above stands in for it; yours differs.
+
+Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
+hyphens inside the same 24-character limit Storage has, so it runs out of room
+first. `terraform plan` reports the exact overage rather than letting Azure
+reject the name mid-apply.
+
+> **On an existing deployment, leave `unique_resource_names = false`.** Turning it
+> on renames every resource, which Terraform carries out as destroy-and-recreate:
+> Postgres and Storage would lose their data. It defaults to `false` so bumping to
+> a newer tag is a no-op.
+
+To pin one name, either to keep an existing resource or to dodge a collision
+without renaming the whole deployment, set it explicitly:
+
+```hcl
+postgres_name        = "langsmith-postgres-dev"
+redis_name           = "langsmith-redis-mycorp-dev"
+storage_account_name = "langsmithblobdev"
+keyvault_name        = "langsmith-kv-dev"
+```
+
+`make preflight` checks these four names plus `dns_label` against Azure's
+availability APIs before you apply. Redis is the exception: Azure exposes no
+working name-availability endpoint for Managed Redis, so a cross-tenant Redis
+collision only surfaces at apply time.
+
+---
+
 ## Bring your own VNet
 
 By default Terraform creates the VNet and every subnet. To deploy into a VNet
@@ -1102,63 +1159,6 @@ feature when `create_vnet = false` and its subnet ID is empty. Application
 Gateway v2 wants the subnet to itself and Azure recommends a `/24`. Azure Bastion
 requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger;
 plan checks the name, and Azure enforces the size at apply.
-
----
-
-## Resource naming
-
-Most Azure resource names only need to be unique inside your resource group. Four
-do not: **PostgreSQL**, **Redis**, **Storage**, and **Key Vault** names live in a
-namespace shared by every Azure tenant, as does the public-IP `dns_label`. Two
-deployments that ask for the same name collide, and the second one fails partway
-through `terraform apply`.
-
-`unique_resource_names = true` (set in every `terraform.tfvars` template and by
-`quickstart.sh`) appends a 6-character hash derived from your subscription ID and
-`name_prefix`, and shortens the base from `langsmith-` to `ls-` to make room
-inside the 24-character Storage and Key Vault limits:
-
-| | `unique_resource_names = false` | `unique_resource_names = true` |
-|---|---|---|
-| Resource group | `langsmith-rg-dev` | `ls-rg-dev` |
-| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-a1b2c3` |
-| Redis | `langsmith-redis-dev` | `ls-redis-dev-a1b2c3` |
-| Storage | `langsmithblobdev` | `lsblobdeva1b2c3` |
-| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-a1b2c3` |
-
-The Storage row is the only one that looks different, and the hyphens are the
-reason. Azure Storage account names accept only lowercase letters and digits, so
-the module strips the hyphens from `ls-blob-dev-a1b2c3` before creating it. Every
-other name, including the blob container, keeps them.
-
-The hash is deterministic — the same subscription and `name_prefix` always produce
-the same name, so repeat applies are stable and no random values are stored.
-`a1b2c3` above stands in for it; yours differs.
-
-Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
-hyphens inside the same 24-character limit Storage has, so it runs out of room
-first. `terraform plan` reports the exact overage rather than letting Azure
-reject the name mid-apply.
-
-> **On an existing deployment, leave `unique_resource_names = false`.** Turning it
-> on renames every resource, which Terraform carries out as destroy-and-recreate:
-> Postgres and Storage would lose their data. It defaults to `false` so bumping to
-> a newer tag is a no-op.
-
-To pin one name, either to keep an existing resource or to dodge a collision
-without renaming the whole deployment, set it explicitly:
-
-```hcl
-postgres_name        = "langsmith-postgres-dev"
-redis_name           = "langsmith-redis-mycorp-dev"
-storage_account_name = "langsmithblobdev"
-keyvault_name        = "langsmith-kv-dev"
-```
-
-`make preflight` checks these four names plus `dns_label` against Azure's
-availability APIs before you apply. Redis is the exception: Azure exposes no
-working name-availability endpoint for Managed Redis, so a cross-tenant Redis
-collision only surfaces at apply time.
 
 ---
 

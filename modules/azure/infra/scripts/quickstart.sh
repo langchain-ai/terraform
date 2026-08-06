@@ -1384,6 +1384,16 @@ _run_section_7() {
     AMR_SKU="$_REPLY"
   fi
 
+  # Without this prompt every quickstart deployment silently took the Balanced_B0
+  # module default, which some regions cannot allocate.
+  if [[ "$REDIS_SOURCE" == "external" ]]; then
+    echo ""
+    _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
+    _hint "if the region reports AllocationFailed."
+    _ask "Azure Managed Redis SKU" "Balanced_B0"
+    AMR_SKU="$_REPLY"
+  fi
+
   echo ""
   local ch_choice=""
   _answered 7 && { [[ "$CH_SOURCE" == "external" ]] && ch_choice=2 || ch_choice=1; }
