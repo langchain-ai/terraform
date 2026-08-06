@@ -21,7 +21,7 @@ Full topology: all passes (2–4), AKS namespaces, pod names, external managed s
 
 ### Pass 5 — Insights (verified)
 
-No new diagram — Pass 5 adds `config.insights.enabled: true` only. Clio deploys lazily as a dynamic LangGraph deployment via the operator on first UI invocation. Pod topology at deploy time is identical to Pass 4.
+No new diagram — Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
 
 ### Pass 4 — Agent Builder Containers (verified)
 

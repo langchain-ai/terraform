@@ -373,13 +373,14 @@ langsmith-operator-xxxxxxxxx-xxxxx                 1/1     Running     0        
 ```
 langsmith-agent-builder-tool-server-xxxxx          1/1     Running     0          5m
 langsmith-agent-builder-trigger-server-xxxxx       1/1     Running     0          5m
-langsmith-agent-builder-bootstrap-xxxxx            0/1     Completed   0          5m
 ```
 
 **Pass 5 adds** (after `enable_insights = true`, `enable_polly = true`):
 ```
-langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0          5m   # Insights analytics
-# Polly agent pod appears in langsmith ns once the standalone polly deployment registers it
+langsmith-standalone-insights-api-server-xxxxx     1/1     Running     0          5m   # Insights analytics
+langsmith-standalone-insights-queue-xxxxx          1/1     Running     0          5m
+langsmith-standalone-polly-api-server-xxxxx        1/1     Running     0          5m
+langsmith-standalone-polly-queue-xxxxx             1/1     Running     0          5m
 ```
 
 ---
