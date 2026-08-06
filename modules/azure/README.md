@@ -158,6 +158,43 @@ az role assignment list --assignee "$AGIC_ID" --all \
 
 Expect `Reader` on the gateway's resource group, `Contributor` on the Application Gateway, and `Network Contributor` on its VNet.
 
+### Deploying against an existing Key Vault
+
+Set `create_keyvault = false` to write LangSmith's secrets into a Key Vault the customer already owns. Terraform reads the vault, writes its nine secrets, and changes nothing else about it: the auth mode, network rules, retention, and purge protection stay as the vault's owner configured them, and `keyvault_default_action`, `keyvault_allowed_ips`, and `keyvault_purge_protection` are ignored.
+
+```hcl
+create_keyvault                       = false
+existing_keyvault_name                = "customer-platform-kv"
+existing_keyvault_resource_group_name = "customer-platform-rg"
+```
+
+Vault prerequisites, all answerable from one command:
+
+```bash
+az keyvault show --name <vault> --query "{rbac:properties.enableRbacAuthorization, \
+  purgeProtection:properties.enablePurgeProtection, \
+  softDeleteDays:properties.softDeleteRetentionInDays, \
+  networkDefaultAction:properties.networkAcls.defaultAction, resourceGroup:resourceGroup}"
+```
+
+| Requirement | Why | Fix |
+|---|---|---|
+| Azure RBAC authorization, not access policies | Terraform grants access with `azurerm_role_assignment`, which grants nothing on an access-policy vault while the apply still reports success | Migrate the vault to RBAC or pick a different one. The plan fails naming this rather than applying |
+| Deployer already holds Key Vault Secrets Officer | Terraform writes the nine secrets through the data plane, and it does not create its own grant on a vault it doesn't own | Have the vault's owner grant it on the vault or its resource group before apply, or set `keyvault_manage_terraform_admin_assignment = true` if the deployer has `roleAssignments/write` on the vault |
+| Apply host's IP allowlisted, if the vault firewall is on | A vault with `default_action = Deny` accepts the role assignment and then rejects the secret writes partway through apply, with an error that reads nothing like a permissions error | Add the apply host's egress IP to the vault firewall, or add the AKS subnet with the `Microsoft.KeyVault` service endpoint |
+| Purge protection off, on any vault you intend to tear down | Destroying the deployment soft-deletes the nine secrets, reserving their names for the vault's retention window. Purging early needs a permission the deployer won't have on a vault someone else owns, so the next apply blocks until the window passes | Leave purge protection off on dev vaults |
+
+Both role assignments follow `create_keyvault`, so neither is attempted on a vault Terraform doesn't own:
+
+- `keyvault_manage_terraform_admin_assignment` grants the deployer Key Vault Secrets Officer. Pre-grant it, per the table above.
+- `keyvault_manage_managed_identity_assignment` grants the pod identity Key Vault Secrets User. Nobody can pre-grant this one, because the identity is created partway through the same apply. Skipping it costs nothing today: secrets reach pods through the `langsmith-config-secret` that `make k8s-secrets` writes, and nothing reads the vault from inside the cluster. It would matter to a future CSI Secrets Store path.
+
+Terraform writes no diagnostic setting on an attached vault, since `enable_keyvault_diag` follows `create_keyvault` too, and a vault owned by a platform team almost certainly collects AuditEvent already.
+
+`keyvault_name` is ignored when attaching. `existing_keyvault_name` is the name, with no fallback: leaving it empty fails the plan instead of quietly deriving `langsmith-kv{identifier}` and creating a vault nobody asked for.
+
+> **Attach to a vault dedicated to this deployment.** Microsoft recommends [one vault per application, per environment, and per region](https://learn.microsoft.com/en-us/azure/key-vault/general/secure-key-vault), because grouping unrelated secrets into one vault widens the blast radius of a compromise, and vault-level RBAC is what grants read access to every secret in it. A vault shared with the customer's other applications adds two failures this module can't prevent: secret names like `postgres-admin-password` colliding with theirs, where a write lands as a new version and breaks their app silently, and a `terraform destroy` that deletes secrets belonging to something else.
+
 ---
 
 ## Prerequisites
@@ -442,7 +479,7 @@ Key behaviors:
 
 Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name via `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without
+- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without — before the first apply
 - **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
 - **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
 - Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists

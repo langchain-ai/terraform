@@ -30,7 +30,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 _name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
-_kv_name=$(_derive_kv_name)
+
+# Priority: terraform output → derived. Same order as manage-keyvault.sh.
+#
+# The derivation alone is wrong whenever the name is not the default (keyvault_name
+# set, or create_keyvault = false where the name is the customer's), and reading the
+# wrong vault fails silently: _kv_secret below falls through to the local file, then
+# to generating a fresh value. A machine without those files would mint a new
+# api_key_salt and jwt_secret, and Terraform would write them over the live ones.
+#
+# Before the first successful apply there is no output and no vault to read from, so
+# the derivation is just a placeholder for the display line.
+if _kv_name=$(terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$_kv_name" ]]; then
+  : # got it from terraform output
+else
+  _kv_name=$(_derive_kv_name)
+fi
 
 # LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.
 _REQUIRED_VARS="LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD LANGSMITH_ADMIN_EMAIL"
