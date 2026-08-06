@@ -1,0 +1,49 @@
+CHANGELOG.md
+  s_1cb73393c88004::t_82ae391e77a4ec 14-15,17-18,20-27
+MIGRATION-0.15-to-0.16.md
+  s_1cb73393c88004::t_d6d31aa45341bf 114-115,117-121
+  s_1cb73393c88004::t_5e686eac591710 14-16,18-25,28,34-35
+  s_1cb73393c88004::t_bd5abfc1a43c7c 43-44,53-60
+  s_1cb73393c88004::t_38bbf5c082d0c7 146,174-179,187
+  s_1cb73393c88004::t_32bc41c301a730 61,131-145,147-169
+README.md
+  s_1cb73393c88004::t_49c841a75d8a1f 62-63,65,69,75,79,81-86,89,92-93
+modules/aws/README.md
+  s_1cb73393c88004::t_e232c265e46097 5,705,711
+modules/aws/TEST_CYCLE.md
+  s_1cb73393c88004::t_c78332d54bdf47 291
+modules/azure/ARCHITECTURE.md
+  s_1cb73393c88004::t_780745739705ee 24
+modules/azure/QUICK_REFERENCE.md
+  s_1cb73393c88004::t_984aa385417c2a 380-383
+modules/azure/README.md
+  s_1cb73393c88004::t_1e99bac3451528 5,613,618
+modules/azure/TROUBLESHOOTING.md
+  s_1cb73393c88004::t_82c25b3629e506 517,520,677
+modules/gcp/QUICK_REFERENCE.md
+  s_1cb73393c88004::t_a7f3061eeac483 99,261,263,346
+modules/gcp/README.md
+  s_1cb73393c88004::t_426251cfc7375f 5,369,381-382
+modules/gcp/TEST_CYCLE.md
+  s_1cb73393c88004::t_980a63b87d417e 303
+modules/gcp/TROUBLESHOOTING.md
+  s_1cb73393c88004::t_36b200286bd469 310
+modules/ocp/README.md
+  s_1cb73393c88004::t_421cd66b9850d4 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d02aff0252377680a329c1dfcf28dc0b57829675",
+  "prompts": {},
+  "sessions": {
+    "s_1cb73393c88004": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a77f586f-02a9-4649-be18-d8eb46402624",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
