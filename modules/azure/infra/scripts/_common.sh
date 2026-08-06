@@ -15,6 +15,7 @@
 #   _read_values_stamp <f> <k> — Read one stamped value back out
 #   _name_suffix              — Resource-name suffix derived from name_prefix
 #   _derive_kv_name           — Key Vault name, mirroring local.keyvault_name
+#   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -116,6 +117,32 @@ _derive_kv_name() {
     echo "ls-kv${suffix}-${hash}"
   else
     echo "langsmith-kv${suffix}"
+  fi
+}
+
+# ── Admin password rules ─────────────────────────────────────────────────────
+# The LangSmith Helm chart's auth-bootstrap job rejects an initial org admin
+# password without a symbol, and it fails ~10 minutes into the release rather
+# than at the point the value was entered. Same rule set as the AWS module's
+# setup-env.sh, so a password valid on one cloud is valid on the other.
+#
+# Prints the reason and returns 1 on failure; returns 0 silently on success.
+_validate_admin_password() {
+  local pw="$1" err=""
+
+  if [[ ${#pw} -lt 12 ]]; then
+    err="must be at least 12 characters long"
+  elif ! printf '%s' "$pw" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
+    err="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
+  elif ! printf '%s' "$pw" | grep -q '[a-z]'; then
+    err="must contain at least one lowercase letter"
+  elif ! printf '%s' "$pw" | grep -q '[A-Z]'; then
+    err="must contain at least one uppercase letter"
+  fi
+
+  if [[ -n "$err" ]]; then
+    echo "Admin password is invalid — ${err}."
+    return 1
   fi
 }
 

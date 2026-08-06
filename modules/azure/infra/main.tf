@@ -788,11 +788,12 @@ module "blob" {
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 # Centralized secret storage for all LangSmith sensitive values.
 # Depends on blob module (needs the managed identity principal ID for RBAC).
-# Secrets stored here: postgres password, admin password, license key, JWT
-# secret, API key salt, and all Fernet encryption keys.
+# Secrets stored here by Terraform: postgres password and license key.
 #
-# First-apply: Key Vault is created and all current TF_VAR_* values are stored.
-# Subsequent applies: setup-env.sh reads from Key Vault instead of local files.
+# The LangSmith app secrets (admin password, API key salt, JWT secret, Fernet
+# keys) are written straight to the vault by scripts/seed-keyvault-secrets.sh
+# after apply, so they never enter Terraform state. Run `make seed-secrets`
+# between `make apply` and `make k8s-secrets`.
 
 module "keyvault" {
   source              = "./modules/keyvault"
@@ -827,18 +828,11 @@ module "keyvault" {
   allowed_subnet_ids     = [local.aks_subnet_id]
 
   # ── Secrets ─────────────────────────────────────────────────────────────────
-  # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
-  # on subsequent applies, eliminating local .secret files.
-  postgres_admin_password  = var.postgres_admin_password
-  langsmith_admin_password = var.langsmith_admin_password
-  langsmith_license_key    = var.langsmith_license_key
-  langsmith_api_key_salt   = var.langsmith_api_key_salt
-  langsmith_jwt_secret     = var.langsmith_jwt_secret
-
-  langsmith_deployments_encryption_key   = var.langsmith_deployments_encryption_key
-  langsmith_agent_builder_encryption_key = var.langsmith_agent_builder_encryption_key
-  langsmith_insights_encryption_key      = var.langsmith_insights_encryption_key
-  langsmith_polly_encryption_key         = var.langsmith_polly_encryption_key
+  # Only the two Terraform already holds in state for another reason. The
+  # LangSmith app secrets are written to the vault post-apply by
+  # scripts/seed-keyvault-secrets.sh and never pass through Terraform.
+  postgres_admin_password = var.postgres_admin_password
+  langsmith_license_key   = var.langsmith_license_key
 
   purge_protection_enabled = var.keyvault_purge_protection
 
