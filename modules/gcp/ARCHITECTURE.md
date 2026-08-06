@@ -101,7 +101,7 @@ GCS Bucket  (Workload Identity — no static HMAC keys for GCS SA auth)
 | Services | `10.8.0.0/20` | GKE ClusterIP services (secondary range) |
 | Private service connection | `/16` allocated by Google | Cloud SQL, Memorystore private IPs |
 
-Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"` or `redis_source = "external"`.
+Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"`, `redis_source = "external"`, or `enable_sandboxes = true` for the dedicated JuiceFS metadata Redis.
 
 ---
 

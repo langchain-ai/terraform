@@ -54,6 +54,7 @@ langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>
 postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/dev/null || echo "external")
 redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
 langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace)
+sandbox_juicefs_csi_config_secret_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null || echo "juicefs-csi-config")
 
 # ── Read region and environment from terraform output ────────────────────────
 
@@ -89,7 +90,8 @@ cat > "$OUT_FILE" <<EOF
   "langsmith_domain": "$langsmith_domain",
   "postgres_source": "$postgres_source",
   "redis_source": "$redis_source",
-  "langsmith_namespace": "$langsmith_namespace"
+  "langsmith_namespace": "$langsmith_namespace",
+  "sandbox_juicefs_csi_config_secret_name": "$sandbox_juicefs_csi_config_secret_name"
 }
 EOF
 

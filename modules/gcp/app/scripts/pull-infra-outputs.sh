@@ -48,6 +48,7 @@ langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namesp
 postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/dev/null || echo "external")
 redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
 workload_identity_annotation=$(terraform -chdir="$INFRA_DIR" output -raw workload_identity_annotation 2>/dev/null || echo "")
+sandbox_juicefs_csi_config_secret_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null || echo "juicefs-csi-config")
 
 # ── Write infra.auto.tfvars.json ─────────────────────────────────────────────
 
@@ -64,7 +65,8 @@ cat > "$OUT_FILE" <<EOF
   "langsmith_namespace":          "$langsmith_namespace",
   "postgres_source":              "$postgres_source",
   "redis_source":                 "$redis_source",
-  "workload_identity_annotation": "$workload_identity_annotation"
+  "workload_identity_annotation": "$workload_identity_annotation",
+  "sandbox_juicefs_csi_config_secret_name": "$sandbox_juicefs_csi_config_secret_name"
 }
 EOF
 
