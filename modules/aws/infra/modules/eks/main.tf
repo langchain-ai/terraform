@@ -21,7 +21,8 @@ module "eks" {
   # AWS CLI or console) and the state already reflects the new values.
   eks_managed_node_groups = {
     for k, v in var.eks_managed_node_groups : k => merge(v, {
-      desired_size = coalesce(v.desired_size, v.min_size)
+      desired_size             = coalesce(v.desired_size, v.min_size)
+      iam_role_use_name_prefix = coalesce(v.iam_role_use_name_prefix, true)
     })
   }
 

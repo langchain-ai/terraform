@@ -79,6 +79,26 @@ output "redis_connection_url" {
   sensitive   = true
 }
 
+output "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_redis_name" {
+  description = "Dedicated ElastiCache Redis name for sandbox JuiceFS metadata"
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+}
+
+output "sandbox_juicefs_bucket_url" {
+  description = "S3 endpoint URL passed to JuiceFS for sandbox object storage"
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_bucket_url : null
+}
+
+output "sandbox_juicefs_host_cache_dirs" {
+  description = "Host paths mounted from sandbox-host instance-store devices for JuiceFS cache when configured"
+  value       = var.enable_sandboxes ? local.sandbox_host_cache_dirs : []
+}
+
 #------------------------------------------------------------------------------
 # Storage (S3)
 #------------------------------------------------------------------------------

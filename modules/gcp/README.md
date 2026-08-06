@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Google Kubernetes Engine (GKE), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`, never `0.16`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the default LangSmith chart line (`~0.15.1` = latest `0.15.x`). Features with a higher minimum chart line require setting a compatible chart version explicitly. See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -176,6 +176,48 @@ letsencrypt_email      = "<ops@your-domain>"
 # LangSmith Deployments (Pass 3)
 enable_langsmith_deployment = true
 ```
+
+**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform creates a
+dedicated Memorystore Redis instance for JuiceFS sandbox metadata and configures
+that dedicated instance with `maxmemory-policy=noeviction`. The main LangSmith
+Redis keeps its normal eviction policy. Terraform writes the JuiceFS Redis
+connection URL into the precreated Kubernetes CSI config Secret and Helm values
+reference only that Secret name. The dedicated JuiceFS Redis is private to the
+VPC and does not generate a separate Redis AUTH credential by default, avoiding
+an additional Terraform-state secret. The default JuiceFS Redis size is 5 GB;
+use 20 GB or higher for SaaS-like production scale. Set
+`sandbox_juicefs_redis_rdb_snapshot_period` when Redis metadata snapshots are
+required.
+
+**Sandbox node identity:** When `enable_sandboxes = true`, Terraform creates a
+restricted service account for the sandbox-host GKE node pool and grants only the
+standard GKE node/telemetry roles. JuiceFS GCS access remains on the Workload
+Identity service account used by the JuiceFS CSI node service account.
+
+**Sandbox resource governance:** The LangSmith namespace always retains aggregate
+CPU/memory request quotas and its pod-count quota. Non-sandbox deployments also
+enforce aggregate CPU/memory limits. Sandbox deployments omit only the aggregate
+limit quotas because sandbox-host manages Firecracker VMs in child cgroups beneath
+its pod cgroup and must not receive a namespace-injected parent limit. A LimitRange
+injects configurable CPU/memory requests into third-party containers that omit
+them; it deliberately does not inject limits. Before changing
+`enable_sandboxes` from `true` to `false` on a retained cluster, remove the
+sandbox Helm workloads first so the strict limit quota is not restored while
+those workloads still require admission.
+
+**Sandbox network policy:** The `sandbox-host` pod runs host-networked, so its
+source is the node IP. How it is authorized to reach in-namespace services
+(platform-backend) depends on `gke_network_policy_provider`:
+
+1) `CALICO` - the `langsmith-default` default-deny ingress policy is kept, and an
+   additional policy admits the node subnet (Calico's `ipBlock` matches node IPs).
+2) `DATA_PLANE_V2` (Cilium, the default) - a standard NetworkPolicy cannot
+   authorize node-sourced traffic (an `ipBlock` does not match it and the
+   `CiliumNetworkPolicy` CRD is not exposed), so when `enable_sandboxes = true` the
+   module keeps `langsmith-default` but excludes the `platform-backend` component
+   (`app.kubernetes.io/component` NotIn) - that one JWT-authed service stays
+   reachable while every other pod keeps the default-deny. Set
+   `platform_backend_component_label` if your Helm release is not named `langsmith`.
 
 ### Terraform state backend (recommended for production)
 
@@ -354,6 +396,11 @@ helm upgrade langsmith langchain/langsmith \
 | `redis_memory_size` | `5` | no | Memorystore Redis memory size in GB |
 | `redis_high_availability` | `true` | no | Enable Memorystore HA tier (Standard HA) |
 | `redis_prevent_destroy` | `false` | no | Prevent accidental Terraform destroy of Redis |
+| `sandbox_default_container_requests` | `{cpu = "100m", memory = "128Mi"}` | no | Requests injected into sandbox containers that omit them; no default limits are imposed |
+| `sandbox_juicefs_redis_memory_size` | `5` | no | Memory size in GB for dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_high_availability` | `true` | no | Enable HA tier for dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_prevent_destroy` | `false` | no | Prevent accidental Terraform destroy of dedicated JuiceFS metadata Redis |
+| `sandbox_juicefs_redis_rdb_snapshot_period` | `null` | no | Optional RDB snapshot period for dedicated JuiceFS metadata Redis |
 | `clickhouse_source` | `in-cluster` | no | `in-cluster`, `langsmith-managed`, or `external` |
 | `clickhouse_host` | `""` | when external | ClickHouse host (external/managed only) |
 | `clickhouse_port` | `9440` | no | ClickHouse native protocol port |

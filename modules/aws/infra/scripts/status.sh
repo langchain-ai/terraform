@@ -82,6 +82,13 @@ for var in TF_VAR_name_prefix TF_VAR_environment TF_VAR_region \
   _check_var "$var" || _env_ok=false
 done
 
+if _tfvar_is_true "enable_sandboxes"; then
+  for var in TF_VAR_sandbox_juicefs_redis_auth_token \
+             TF_VAR_sandbox_callback_signing_jwk; do
+    _check_var "$var" || _env_ok=false
+  done
+fi
+
 if [[ "$_env_ok" == "false" ]]; then
   action "source infra/scripts/setup-env.sh"
   set_next "source infra/scripts/setup-env.sh"
@@ -124,6 +131,13 @@ else
     insights-encryption-key
     deployments-encryption-key
   )
+
+  if _tfvar_is_true "enable_sandboxes"; then
+    _required_params+=(
+      sandbox-juicefs-redis-auth-token
+      sandbox-callback-signing-jwk
+    )
+  fi
 
   for param in "${_required_params[@]}"; do
     if aws ssm get-parameter --name "${_ssm_prefix}/${param}" \
