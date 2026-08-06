@@ -13,7 +13,7 @@
 #   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
 #   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
 #   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
-#   7. langsmith-values-insights.yaml            — Insights/Clio (if enable_insights = true)
+#   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)

@@ -192,9 +192,11 @@ make deploy
 **Verify:**
 
 ```bash
-kubectl get pods -n langsmith | grep -E "clickhouse|polly|clio"
-# ClickHouse already running from Pass 2; Insights operator deploys clio pods
-kubectl get pods -n langsmith -w     # watch for new clio/analytics pods to come up
+kubectl get pods -n langsmith | grep -E "clickhouse|polly|insights"
+# ClickHouse already running from Pass 2. On chart 0.16 Insights and Polly are
+# static Deployments (standalone-insights-*, standalone-polly-*), not agent pods
+# the operator spawns lazily on first use.
+kubectl get pods -n langsmith -w     # watch the standalone-insights/-polly pods come up
 ```
 
 **Watchouts:**
@@ -229,7 +231,7 @@ Then re-run `make init-values && make deploy`.
 | **2 (TF)** | Same via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
 | **3** | LangSmith Deployments — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
 | **4** | Agent Builder — tool-server, trigger-server | `make init-values && make deploy` |
-| **5** | Insights + Polly — clio analytics pods, Polly eval agent | `make init-values && make deploy` |
+| **5** | Insights + Polly — standalone-insights and standalone-polly api-server + queue pods | `make init-values && make deploy` |
 
 ---
 

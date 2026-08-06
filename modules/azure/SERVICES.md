@@ -139,9 +139,9 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ## Pass 5 — Insights
 
-### Insights / Clio (dynamic)
+### Insights
 - **What**: AI-powered analytics — auto-summarizes traces, detects patterns, surfaces anomalies
-- **Deployment**: No static pods — Clio deploys lazily as a dynamic LangGraph deployment via the operator on first UI invocation
+- **Deployment**: Static pods on chart 0.16 — `standalone-insights-api-server` and `standalone-insights-queue`, running the combined `langsmith-insights-engine` image. This replaces the Clio deployment the operator used to spawn lazily on first UI invocation; chart 0.16 rejects the `langsmith-clio` image outright.
 - **Depends on**: ClickHouse (read-heavy), `backend`, Postgres
 - **Encryption key**: Read from `langsmith-config-secret` (`insights_encryption_key`)
 - **Warning**: Never change `insights_encryption_key` after first enable — permanently breaks existing insights data

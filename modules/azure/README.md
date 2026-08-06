@@ -523,7 +523,7 @@ sizing_profile       = "production"   # minimum | dev | production | production-
 enable_deployments   = true           # Pass 3 — LangSmith Deployments (listener + operator + host-backend)
 enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.15+; requires enable_deployments)
 enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
-enable_insights      = true           # Pass 5 — Insights / Clio (ClickHouse-backed analytics)
+enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 ```
 
@@ -673,7 +673,7 @@ azure/
 │           ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
 │           ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
 │           ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
-│           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights / Clio
+│           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights
 │           ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
 │           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)
 │           ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
