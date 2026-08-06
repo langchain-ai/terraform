@@ -78,7 +78,8 @@ All commands run from `terraform/aws/`. Run `make help` for a quick inline summa
 | `make kubeconfig` | Update `~/.kube/config` with EKS cluster credentials (`aws eks update-kubeconfig`) |
 | `make ssm` | Interactive SSM parameter manager — view, set, rotate, validate, diff vs K8s secret |
 | `make tls` | BYO ACM cert + Route53 A alias — use when `langsmith_domain` is set and you need DNS wiring |
-| `make clean` | Remove all local generated and sensitive files (run after `make destroy`) |
+| `make purge-secrets` | Delete this deployment's SSM parameters after Terraform has no managed resources |
+| `make clean` | Remove local generated files after `make destroy` and `make purge-secrets` |
 
 ---
 
