@@ -175,6 +175,7 @@ _tf_destroy() {
     "helm_release\.|kubernetes_namespace\.|kubernetes_storage_class\.|kubernetes_secret\.|terraform_data\.letsencrypt|terraform_data\.istio|time_sleep\." || true)
   if [[ -n "$_k8s_resources" ]]; then
     _warn "Pre-removing k8s-provider state entries to avoid connectivity errors during destroy"
+    # shellcheck disable=SC2033  # xargs runs _tf via `sh -c`, which resolves shell functions
     echo "$_k8s_resources" | xargs -I{} _tf state rm "{}" >> "$logfile" 2>&1 || true
   fi
 
@@ -498,7 +499,7 @@ create_cert_manager_irsa = false"
     "alb"
   # Wait up to 5 min for cert
   _step "Waiting for Let's Encrypt certificate (HTTP-01, up to 5 min)..."
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     local ready
     ready=$(kubectl get certificate -n langsmith -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
     [[ "$ready" == "True" ]] && break
@@ -742,7 +743,7 @@ cert_manager_hosted_zone_id = \"${_hosted_zone}\""
 
   # Verify old secret was deleted (uid changed = new cert issued)
   _step "Waiting for new certificate (up to 5 min)..."
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     local ready
     ready=$(kubectl get certificate langsmith-tls -n istio-system \
       -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
@@ -880,7 +881,7 @@ create_cert_manager_irsa = false"
   # but the Envoy Gateway controller needs ~30-60s to reconcile them.
   _step "Waiting for GatewayClass 'eg' to be Accepted (up to 3 min)..."
   if [[ "$DRY_RUN" != "true" ]]; then
-    for i in $(seq 1 18); do
+    for _ in $(seq 1 18); do
       local _gc_accepted
       _gc_accepted=$(kubectl get gatewayclass eg \
         -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "")
@@ -891,7 +892,7 @@ create_cert_manager_irsa = false"
 
   _step "Waiting for Gateway 'langsmith-gateway' to be Programmed (up to 3 min)..."
   if [[ "$DRY_RUN" != "true" ]]; then
-    for i in $(seq 1 18); do
+    for _ in $(seq 1 18); do
       local _gw_prog
       _gw_prog=$(kubectl get gateway langsmith-gateway -n langsmith \
         -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "")
@@ -930,7 +931,7 @@ create_cert_manager_irsa = false"
   _step "Waiting for Envoy Gateway NLB hostname (up to 5 min)..."
   local nlb_host=""
   if [[ "$DRY_RUN" != "true" ]]; then
-    for i in $(seq 1 30); do
+    for _ in $(seq 1 30); do
       nlb_host=$(kubectl get svc -n envoy-gateway-system \
         -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
         -o jsonpath='{.items[0].status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
@@ -949,7 +950,7 @@ create_cert_manager_irsa = false"
   # (hostname appears in AWS before the LB finishes health-check probing)
   _step "Waiting for NLB to serve traffic on http://${nlb_host}/api/v1/health (up to 3 min)..."
   if [[ "$DRY_RUN" != "true" && -n "$nlb_host" ]]; then
-    for i in $(seq 1 18); do
+    for _ in $(seq 1 18); do
       local _hc
       _hc=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 \
         "http://${nlb_host}/api/v1/health" 2>/dev/null || echo "000")

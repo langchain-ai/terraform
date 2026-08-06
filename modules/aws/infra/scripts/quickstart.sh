@@ -119,7 +119,6 @@ _existing_bool() {
 # Each check prints a warning but does NOT abort — user can fix via the wizard.
 
 _validate_conflicts() {
-  local file="$1"
   local found=0
 
   _conflict_warn() { _yellow "CONFLICT"; printf ": %s\n" "$1"; found=1; }
@@ -192,7 +191,7 @@ fi
 
 # In update mode, check for conflicting values already in the file.
 if [[ "$UPDATE_MODE" == "true" ]]; then
-  _validate_conflicts "$OUTPUT"
+  _validate_conflicts
 fi
 
 # ── Banner ───────────────────────────────────────────────────────────────────

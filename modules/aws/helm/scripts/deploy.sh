@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2154  # TF_VAR_* / setup-env.sh exports are resolved at runtime, not in this file
 
 # MIT License - Copyright (c) 2026 LangChain, Inc.
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.

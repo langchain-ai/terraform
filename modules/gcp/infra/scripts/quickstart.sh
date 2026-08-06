@@ -284,8 +284,6 @@ _ask_choice "ClickHouse:" \
 
 CH_SOURCE="in-cluster"
 CH_HOST=""
-CH_PASSWORD=""
-CH_TLS="true"
 [[ "$_CHOICE" == "2" ]] && CH_SOURCE="langsmith-managed"
 
 if [[ "$PROFILE" == "prod" && "$CH_SOURCE" == "in-cluster" ]]; then
@@ -298,8 +296,8 @@ if [[ "$CH_SOURCE" != "in-cluster" ]]; then
   echo ""
   _ask "ClickHouse host" ""
   CH_HOST="$_REPLY"
-  _ask "ClickHouse password (or set TF_VAR_clickhouse_password later)" ""
-  CH_PASSWORD="$_REPLY"
+  # Password intentionally not collected here — set via TF_VAR_clickhouse_password
+  printf "  ${DIM}ClickHouse password: export TF_VAR_clickhouse_password before apply${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
