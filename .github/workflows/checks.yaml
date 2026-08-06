@@ -1,0 +1,106 @@
+name: Terraform & Shell Checks
+
+on:
+  pull_request:
+    paths:
+      - "modules/**"
+      - "agents/**"
+      - ".github/workflows/checks.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "modules/**"
+      - "agents/**"
+      - ".github/workflows/checks.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # One job per provider so a failure names the provider, and so the three
+  # provider rulesets install in parallel. Each covers that provider's roots
+  # (infra + app) and its shell scripts.
+  check:
+    name: check (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [aws, azure, gcp]
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.64.0
+
+      # Pinned rather than relying on the runner image: ubuntu-latest does ship
+      # shellcheck, but an image bump could change its version and move the
+      # findings under a gate that fails on warnings. Pin so the bar only
+      # changes when we change it.
+      - name: Setup shellcheck
+        uses: ./.github/actions/setup-shellcheck
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ matrix.provider }}-${{ hashFiles(format('modules/{0}/*/.terraform.lock.hcl', matrix.provider), format('modules/{0}/*/versions.tf', matrix.provider)) }}
+          restore-keys: |
+            tf-providers-${{ matrix.provider }}-
+
+      - name: Cache TFLint plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-plugins-${{ hashFiles(format('modules/{0}/.tflint.hcl', matrix.provider)) }}
+
+      - name: Create plugin cache dir
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+      # No args to check.sh would sweep all three providers in one job; pass the
+      # provider's roots explicitly so the matrix leg stays scoped.
+      - name: Run checks
+        run: |
+          set -euo pipefail
+          roots=()
+          for v in modules/${{ matrix.provider }}/*/versions.tf; do
+            [ -f "$v" ] || continue
+            roots+=("${v%/versions.tf}")
+          done
+          if [ ${#roots[@]} -eq 0 ]; then
+            echo "no terraform roots for ${{ matrix.provider }}" >&2
+            exit 1
+          fi
+          printf 'roots: %s\n' "${roots[*]}"
+          bash agents/check.sh "${roots[@]}"
+
+  # The grader's own scripts are outside modules/, so check.sh does not lint
+  # them. Cover them here.
+  shellcheck-tooling:
+    name: shellcheck (agents/)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup shellcheck
+        uses: ./.github/actions/setup-shellcheck
+
+      # Same bar check.sh applies to the provider scripts.
+      - name: Shellcheck agents/
+        run: shellcheck -S warning agents/*.sh

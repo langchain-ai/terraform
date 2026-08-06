@@ -1,0 +1,31 @@
+name: Setup shellcheck
+description: Install a pinned shellcheck release so the lint bar is reproducible.
+
+inputs:
+  version:
+    description: shellcheck release tag (without the leading v)
+    required: false
+    # Keep in step with the version contributors run locally: a mismatch means
+    # a locally-clean tree can still fail CI on rules the other version added.
+    default: "0.11.0"
+
+runs:
+  using: composite
+  steps:
+    - name: Install shellcheck ${{ inputs.version }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        want="${{ inputs.version }}"
+        if command -v shellcheck >/dev/null 2>&1 \
+           && shellcheck --version | grep -qx "version: $want"; then
+          echo "shellcheck $want already present"
+          exit 0
+        fi
+        tmp=$(mktemp -d)
+        url="https://github.com/koalaman/shellcheck/releases/download/v${want}/shellcheck-v${want}.linux.x86_64.tar.xz"
+        curl -fsSL --retry 3 --retry-delay 2 "$url" -o "$tmp/sc.tar.xz"
+        tar -xJf "$tmp/sc.tar.xz" -C "$tmp"
+        sudo install -m 0755 "$tmp/shellcheck-v${want}/shellcheck" /usr/local/bin/shellcheck
+        rm -rf "$tmp"
+        shellcheck --version
