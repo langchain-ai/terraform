@@ -15,6 +15,12 @@ if [ $# -lt 1 ]; then
   exit 2
 fi
 
+init_upgrade=0
+if [ "${1:-}" = "--init-upgrade" ]; then
+  init_upgrade=1
+  shift
+fi
+
 status=0
 for dir in "$@"; do
   case "$dir" in /*) ;; *) dir="$REPO_ROOT/$dir" ;; esac
@@ -25,26 +31,19 @@ for dir in "$@"; do
   if [ ! -d "$dir/.terraform" ]; then
     (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
       status=1; continue; }
-  fi
-
-  if [ "${1:-}" = "--init-upgrade" ]; then
+  elif [ "$init_upgrade" -eq 1 ]; then
     (cd "$dir" && terraform init -backend=false -input=false -upgrade -no-color) || status=1
   fi
 
   (cd "$dir" && terraform validate -no-color) || status=1
 
   if command -v tflint >/dev/null 2>&1; then
-    # Config (provider plugin pins) lives in modules/<provider>/.tflint.hcl.
-    # --chdir makes tflint inspect the root while resolving the config upward
-    # from it. Deep inspection is off: no cloud creds needed.
-    tflint_parent=$(CDPATH= cd -- "$dir/.." && pwd)
-    # Warnings are advisory (pre-existing noise); fail the gate only on
-    # tflint errors or worse.
-    if [ -f "$tflint_parent/.tflint.hcl" ]; then
-      tflint --chdir="$dir" --call-module-type=all --format compact --minimum-failure-severity=error || status=1
-    else
-      (cd "$dir" && tflint --call-module-type=all --format compact --minimum-failure-severity=error) || status=1
-    fi
+    # Config (provider plugin pins) lives in modules/<provider>/.tflint.hcl and
+    # resolves upward from the root being inspected. --chdir points tflint at
+    # the root without changing where the config search starts. Deep
+    # inspection is off: no cloud creds needed. Warnings are advisory
+    # (pre-existing noise); fail the gate only on errors or worse.
+    tflint --chdir="$dir" --call-module-type=all --format compact --minimum-failure-severity=error || status=1
   else
     echo "   (tflint not installed, skipping lint)"
   fi
