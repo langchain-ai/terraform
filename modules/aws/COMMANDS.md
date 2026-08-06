@@ -47,17 +47,6 @@ All commands run from `terraform/aws/`. Run `make help` for a quick inline summa
 
 ---
 
-## Terraform App (Pass 2 alt)
-
-| Command | Description |
-|---------|-------------|
-| `make init-app` | Pull live infra Terraform outputs into `app/infra.auto.tfvars.json` |
-| `make plan-app` | `terraform plan` for the `app/` module (auto-runs `init-app` first) |
-| `make apply-app` | Deploy LangSmith Helm release via Terraform (`app/` module) |
-| `make destroy-app` | Destroy the Helm release via Terraform; leaves infrastructure intact |
-
----
-
 ## Fast Path
 
 | Command | Description |
@@ -65,7 +54,6 @@ All commands run from `terraform/aws/`. Run `make help` for a quick inline summa
 | `make quickdeploy` | Full deploy in one command — chains `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` with gates; requires `source infra/scripts/setup-env.sh` + `make quickstart` first |
 | `make quickdeploy-auto` | Same as `quickdeploy` but non-interactive — passes `-auto-approve` to terraform; use in automation |
 | `make deploy-all` | `make apply` → `make kubeconfig` → `make init-values` → `make deploy` in sequence |
-| `make deploy-all-tf` | `make apply` → `make init-values` → Terraform `app/` plan+apply in sequence |
 
 ---
 

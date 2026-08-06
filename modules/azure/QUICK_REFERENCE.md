@@ -64,22 +64,6 @@ vi infra/terraform.tfvars   # required: subscription_id, identifier, location
 # then continue from step 2 above
 ```
 
-**Terraform Helm path** (alternative Pass 2 — Helm release managed in Terraform state):
-
-```bash
-# After make apply, instead of make kubeconfig → make k8s-secrets → make deploy:
-cp app/terraform.tfvars.example app/terraform.tfvars
-vi app/terraform.tfvars   # set admin_email at minimum
-make init-app             # pulls infra outputs into app/infra.auto.tfvars.json + tf init
-make apply-app            # creates K8s secrets + langsmith-ksa SA + Helm release via Terraform
-```
-
-Or end-to-end via Terraform:
-
-```bash
-make deploy-all-tf   # apply → init-values → init-app → apply-app
-```
-
 ---
 
 ## Day-2 Operations
@@ -91,23 +75,17 @@ make status
 # Quick status (skip Key Vault + K8s queries)
 make status-quick
 
-# Re-deploy after changing Helm values or upgrading chart version (Helm path)
+# Re-deploy after changing Helm values or upgrading chart version
 make deploy
 
-# Re-generate Helm values after Terraform changes (Helm path)
+# Re-generate Helm values after Terraform changes
 make init-values
 
 # Update kubeconfig for the AKS cluster
 make kubeconfig
 
-# Re-create langsmith-config-secret from Key Vault (Helm path)
+# Re-create langsmith-config-secret from Key Vault
 make k8s-secrets
-
-# Re-apply Helm release changes (Terraform path)
-make apply-app
-
-# Re-pull infra outputs after infra changes (Terraform path)
-make init-app
 ```
 
 ---
@@ -231,8 +209,7 @@ Then re-run `make init-values && make deploy`.
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA | `make apply` |
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
-| **2 (Helm)** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
-| **2 (TF)** | Same via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
+| **2** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **3** | LangSmith Deployments — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
 | **4** | Agent Builder — tool-server, trigger-server, agentBootstrap job | `make init-values && make deploy` |
 | **5** | Insights + Polly — clio analytics pods, Polly eval agent | `make init-values && make deploy` |
@@ -279,27 +256,6 @@ sizing_profile = "production"
 # enable_agent_builder = true
 # enable_insights      = true
 # enable_polly         = true
-```
-
----
-
-## app/terraform.tfvars (Terraform Helm path)
-
-Only needed when using `make apply-app`. Infrastructure values are auto-populated by `make init-app`. You only need to set app-specific config:
-
-```hcl
-# ── Required ──────────────────────────────────────────────────────────────────
-admin_email = "you@example.com"
-
-# ── Optional ──────────────────────────────────────────────────────────────────
-# sizing = "production"          # minimum | dev | production | production-large
-# chart_version = "0.7.0"        # pin version; empty = latest
-
-# ── Feature toggles ───────────────────────────────────────────────────────────
-# enable_agent_deploys = true    # Pass 3 — LangSmith Deployments
-# enable_agent_builder = true    # Pass 4 — Agent Builder (requires agent_deploys)
-# enable_insights      = true    # Pass 5 — Insights (requires clickhouse_host)
-# enable_polly         = true    # Pass 5 — Polly (requires agent_deploys)
 ```
 
 ---
