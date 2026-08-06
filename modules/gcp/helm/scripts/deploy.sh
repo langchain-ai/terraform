@@ -34,9 +34,7 @@ NAMESPACE="${NAMESPACE:-langsmith}"
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
-_chart_version_provided=false
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  _chart_version_provided=true
   echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
@@ -130,11 +128,6 @@ _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ "$_chart_version_provided" != "true" ]]; then
-    echo "ERROR: enable_sandboxes = true requires CHART_VERSION to be set explicitly to chart 0.16.0 or newer." >&2
-    echo "       Example: CHART_VERSION='~0.16.0' ./helm/scripts/deploy.sh" >&2
-    exit 1
-  fi
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
     exit 1
