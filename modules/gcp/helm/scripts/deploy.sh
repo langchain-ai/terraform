@@ -31,8 +31,15 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 # Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
 # Override with the CHART_VERSION env var for an exact patch if needed.
+# An exported CHART_VERSION outlives the command that set it, so a value left over
+# from an earlier session silently wins over the pin. Say so rather than deploying
+# a different chart than the branch intends.
 _chart_version_provided=false
-[[ -n "${CHART_VERSION:-}" ]] && _chart_version_provided=true
+if [[ -n "${CHART_VERSION:-}" ]]; then
+  _chart_version_provided=true
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
 _chart_version_supports_sandboxes() {
@@ -355,6 +362,16 @@ echo ""
 _devel_flag=""
 if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
   _devel_flag="--devel"
+fi
+
+# Resolve the pin to a concrete version and print it. Without this the only place
+# the installed version shows up is `helm list`, after the release is already out.
+_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+  | awk '/^version:/{print $2}') || _resolved_chart=""
+echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+if [[ -z "$_resolved_chart" ]]; then
+  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+  exit 1
 fi
 
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
