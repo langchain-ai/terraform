@@ -1,0 +1,21 @@
+modules/azure/helm/values/examples/langsmith-values-agent-builder.yaml
+  s_1cb73393c88004::t_dce5d68b061ae5 16-25
+modules/aws/helm/values/examples/langsmith-values-agent-builder.yaml
+  s_1cb73393c88004::t_d97df2a9e2fd8d 20-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "705fd45fcfb0ec84c4aa84d27797c890f0176f2c",
+  "prompts": {},
+  "sessions": {
+    "s_1cb73393c88004": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a77f586f-02a9-4649-be18-d8eb46402624",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
