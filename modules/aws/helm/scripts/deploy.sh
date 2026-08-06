@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2154  # TF_VAR_* / setup-env.sh exports are resolved at runtime, not in this file
 
 # MIT License - Copyright (c) 2026 LangChain, Inc.
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
@@ -143,11 +142,13 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
   _sandbox_secret_literals=()
   if [[ "$_enable_sandboxes" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _sandbox_secret_literals=(
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
     )
   fi
 
+  # shellcheck disable=SC2154  # TF_VAR_* exported by setup-env.sh; _require_env above asserts them
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
     --from-literal=langsmith_license_key="${LANGSMITH_LICENSE_KEY}" \

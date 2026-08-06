@@ -175,8 +175,13 @@ _tf_destroy() {
     "helm_release\.|kubernetes_namespace\.|kubernetes_storage_class\.|kubernetes_secret\.|terraform_data\.letsencrypt|terraform_data\.istio|time_sleep\." || true)
   if [[ -n "$_k8s_resources" ]]; then
     _warn "Pre-removing k8s-provider state entries to avoid connectivity errors during destroy"
-    # shellcheck disable=SC2033  # xargs runs _tf via `sh -c`, which resolves shell functions
-    echo "$_k8s_resources" | xargs -I{} _tf state rm "{}" >> "$logfile" 2>&1 || true
+    # Loop rather than xargs: _tf is a shell function, and xargs execs its
+    # command directly without a shell, so `xargs _tf` fails with
+    # "xargs: _tf: No such file or directory" -- silently, under `|| true`.
+    while IFS= read -r _k8s_addr; do
+      [[ -n "$_k8s_addr" ]] || continue
+      _tf state rm "$_k8s_addr" >> "$logfile" 2>&1 || true
+    done <<< "$_k8s_resources"
   fi
 
   _tf destroy -auto-approve >> "$logfile" 2>&1

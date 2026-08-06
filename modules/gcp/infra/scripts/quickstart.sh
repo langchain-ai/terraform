@@ -296,8 +296,12 @@ if [[ "$CH_SOURCE" != "in-cluster" ]]; then
   echo ""
   _ask "ClickHouse host" ""
   CH_HOST="$_REPLY"
-  # Password intentionally not collected here — set via TF_VAR_clickhouse_password
-  printf "  ${DIM}ClickHouse password: export TF_VAR_clickhouse_password before apply${RESET}\n"
+  # Not prompted for: a password belongs in the environment, not in tfvars.
+  # infra/main.tf requires it whenever clickhouse_source != "in-cluster", so
+  # apply hard-fails without it. Keep this loud.
+  echo ""
+  _yellow "REQUIRED"; printf ": export TF_VAR_clickhouse_password before running apply.\n"
+  printf "  clickhouse_source=%s has no default password.\n" "$CH_SOURCE"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
