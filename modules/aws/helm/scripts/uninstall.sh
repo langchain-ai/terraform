@@ -46,15 +46,16 @@ echo ""
 # ── Get cluster name from Terraform output ────────────────────────────────────
 echo "Reading cluster name from Terraform output..."
 _state_output=""
-if ! _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null); then
+if ! _cluster_output=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>&1); then
   if _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1) && [[ -z "${_state_output//[$' \t\r\n']/}" ]]; then
     skip "Terraform state is empty; uninstall is already complete."
     exit 0
   fi
-  echo "ERROR: Could not read cluster_name from Terraform state." >&2
-  printf "       %s\n" "$_state_output" >&2
+  echo "ERROR: Could not read cluster_name from Terraform output." >&2
+  printf "       %s\n" "$_cluster_output" >&2
   exit 1
 fi
+_cluster_name="$_cluster_output"
 echo "  cluster_name = $_cluster_name"
 echo ""
 
