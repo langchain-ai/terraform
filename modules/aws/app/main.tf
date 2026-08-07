@@ -109,6 +109,11 @@ data "aws_ssm_parameter" "polly_key" {
   name  = "${local.ssm_prefix}/polly-encryption-key"
 }
 
+data "aws_ssm_parameter" "sandbox_callback_signing_jwk" {
+  count = var.enable_sandboxes ? 1 : 0
+  name  = "${local.ssm_prefix}/sandbox-callback-signing-jwk"
+}
+
 # ── ESO: ExternalSecret ──────────────────────────────────────────────────────
 # Syncs secrets from SSM → K8s Secret (langsmith-config).
 # deploy.sh does this with kubectl apply; here we manage it in Terraform.
@@ -179,6 +184,13 @@ resource "kubectl_manifest" "external_secret" {
           {
             secretKey = "polly_encryption_key"
             remoteRef = { key = "${local.ssm_prefix}/polly-encryption-key" }
+          },
+        ] : [],
+        # Sandbox callback signing key — only if sandboxes enabled
+        var.enable_sandboxes ? [
+          {
+            secretKey = "sandbox_callback_signing_jwk"
+            remoteRef = { key = "${local.ssm_prefix}/sandbox-callback-signing-jwk" }
           },
         ] : [],
       )
@@ -289,7 +301,7 @@ locals {
         ingressClassName = "alb"
         annotations      = local.ingress_annotations
       }
-      config = {
+      config = merge({
         hostname             = local.hostname
         initialOrgAdminEmail = var.admin_email
         deployment = {
@@ -300,7 +312,7 @@ locals {
           awsRegion  = local.region
           apiURL     = "https://s3.${local.region}.amazonaws.com"
         }
-      }
+      })
       commonEnv = concat(
         [
           { name = "AWS_REGION", value = local.region },
@@ -312,6 +324,43 @@ locals {
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
     var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
+    # Sandbox values are top-level in the chart, not under config.
+    {
+      for k, v in {
+        sandboxes = merge(
+          {
+            enabled = true
+            juicefs = {
+              csi = {
+                existingSecretName = var.sandbox_juicefs_csi_config_secret_name
+                node = {
+                  serviceAccount = {
+                    annotations = local.irsa_annotations
+                  }
+                }
+              }
+            }
+            sandboxHost = {
+              deployment = {
+                nodeSelector = {
+                  "sandbox.langsmith.com/host" = "true"
+                }
+              }
+            }
+          },
+          var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
+        )
+      } : k => v if var.enable_sandboxes
+    },
+    {
+      for k, v in {
+        images = {
+          sandboxHostImage = {
+            tag = var.sandbox_host_image_tag
+          }
+        }
+      } : k => v if var.enable_sandboxes
+    },
     # IRSA annotations for each component
     { for component in local.irsa_components : component => {
       serviceAccount = {

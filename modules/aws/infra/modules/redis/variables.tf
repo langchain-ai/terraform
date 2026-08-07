@@ -30,7 +30,20 @@ variable "vpc_cidr_block" {
 }
 
 variable "auth_token" {
-  description = "Auth token for Redis in-transit encryption. Must be hex string (no base64 special chars)."
+  description = "Optional auth token for Redis in-transit encryption. Must be a hex string when set."
   type        = string
+  default     = null
   sensitive   = true
+}
+
+variable "parameter_group_name" {
+  description = "ElastiCache parameter group name."
+  type        = string
+  default     = "default.redis7"
+}
+
+variable "snapshot_retention_limit" {
+  description = "Number of days to retain automated Redis snapshots. 0 disables automated snapshots."
+  type        = number
+  default     = 0
 }

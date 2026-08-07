@@ -9,11 +9,11 @@
 # Fast deploy:       make quickdeploy   (chains apply → kubeconfig → init-values → deploy)
 # Post-infra check:  make preflight-post
 # Full deploy:       make deploy-all
-# Teardown:          make uninstall → make destroy → make clean
+# Teardown:          make uninstall → make destroy → make purge-secrets → make clean
 # Where am I?        make status
 # Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart status status-quick setup-env init plan apply destroy tf \
+.PHONY: help quickstart status status-quick setup-env init plan apply destroy tf purge-secrets \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso uninstall clean deploy-all deploy-all-tf \
         init-app plan-app apply-app destroy-app tf-app \
@@ -87,6 +87,9 @@ destroy: ## terraform destroy (infra) — run make uninstall first
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	terraform -chdir=$(INFRA_DIR) $(ARGS)
 
+purge-secrets: ## Delete SSM secrets after Terraform has no managed resources
+	$(INFRA_DIR)/scripts/purge-secrets.sh
+
 preflight: ## Run infra preflight checks
 	$(INFRA_DIR)/scripts/preflight.sh
 
@@ -137,7 +140,7 @@ apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
 
-clean: ## Remove all local generated/sensitive files (run after terraform destroy)
+clean: ## Remove local generated files (run after make destroy and make purge-secrets)
 	$(INFRA_DIR)/scripts/clean.sh
 
 test-e2e: ## Run E2E gateway tests (ALB or Envoy Gateway)

@@ -25,6 +25,43 @@ variable "workload_identity_gsa_email" {
   default     = ""
 }
 
+variable "resource_quota_include_limits" {
+  description = "Include aggregate CPU and memory limits in the LangSmith namespace ResourceQuota. Disable for sandbox-host, whose Firecracker VMs use child cgroups beneath the pod cgroup."
+  type        = bool
+  default     = true
+}
+
+variable "default_container_requests" {
+  description = "Default CPU and memory requests injected by a LimitRange into containers that omit them. An empty map disables the LimitRange. No default limits are imposed."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = (
+      length(var.default_container_requests) == 0 ||
+      (
+        length(var.default_container_requests) == 2 &&
+        contains(keys(var.default_container_requests), "cpu") &&
+        contains(keys(var.default_container_requests), "memory") &&
+        alltrue([for value in values(var.default_container_requests) : trimspace(value) != ""])
+      )
+    )
+    error_message = "default_container_requests must be empty or contain exactly non-empty cpu and memory values."
+  }
+}
+
+variable "sandbox_host_ingress_cidrs" {
+  description = "Node-network CIDRs admitted to LangSmith pods for the host-networked sandbox-host. Used on CALICO, where an ipBlock matches node IPs. On GKE Dataplane V2 an ipBlock does not match node-sourced traffic, so the root leaves this empty and scopes the default-deny (default_deny_excluded_component) instead. Empty disables the policy."
+  type        = list(string)
+  default     = []
+}
+
+variable "default_deny_excluded_component" {
+  description = "app.kubernetes.io/component label value to EXCLUDE from the langsmith-default default-deny ingress policy, leaving that one pod reachable while every other pod stays denied. Used on GKE Dataplane V2 to let the host-networked sandbox-host reach platform-backend without dropping namespace isolation (an ipBlock cannot match node-sourced traffic on Cilium). Empty selects all pods (full default-deny)."
+  type        = string
+  default     = ""
+}
+
 #------------------------------------------------------------------------------
 # Database Credentials
 #------------------------------------------------------------------------------

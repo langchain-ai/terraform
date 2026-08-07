@@ -31,8 +31,10 @@ unique_resource_names = true
 # ── Sources — external managed services ───────────────────────────────────────
 postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
 redis_source      = "external"    # "external" = Azure Managed Redis
-clickhouse_source = "in-cluster"  # ClickHouse always in-cluster (dev/POC)
-                                  # Production: use LangChain Managed ClickHouse
+clickhouse_source = "in-cluster"  # "in-cluster" = chart-managed StatefulSet (dev/POC)
+                                  # "external"   = LangChain Managed ClickHouse, Altinity,
+                                  #                or any reachable ClickHouse. init-values.sh
+                                  #                prompts for the connection details.
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 postgres_admin_username      = "langsmith"

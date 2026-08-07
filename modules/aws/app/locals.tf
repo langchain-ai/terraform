@@ -127,6 +127,14 @@ resource "terraform_data" "validate_required" {
       error_message = "clickhouse_host is required when enable_insights = true"
     }
     precondition {
+      condition     = !var.enable_sandboxes || (var.chart_version != "" && can(regex("^(~>?)?v?(0\\.(1[6-9]|[2-9][0-9])\\.|[1-9][0-9]*\\.)", var.chart_version)))
+      error_message = "enable_sandboxes requires chart_version to be explicitly set to chart 0.16.0 or newer, for example \"~0.16.0\"."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
+      error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
+    }
+    precondition {
       condition     = fileexists("${local.values_path}/langsmith-values.yaml")
       error_message = "Helm values files not found at ${local.values_path}/. Run: make init-values (copies templates from helm/values/examples/)"
     }
