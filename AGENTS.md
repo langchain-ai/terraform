@@ -23,9 +23,10 @@ before the PR does, not a separate standard.
   Validated transitively via `--call-module-type=all`, not as their own roots —
   even the two that carry a `versions.tf` (azure `keyvault`, azure `redis`), so
   the gate identifies a child module by its path, not by depth.
-- Not gated: `modules/ocp` — the OpenShift port is still stubs with no
-  `versions.tf` anywhere, so there is nothing to init against. Edit with extra
-  care; `terraform fmt -check` is the only automated cover it has.
+- Not gated for terraform: `modules/ocp`. The OpenShift port is still stubs
+  with no `versions.tf` anywhere, so there is nothing to init against. Its
+  shell scripts are covered (CI lints every tracked `*.sh`); the HCL has only
+  `terraform fmt -check`. Edit with extra care.
 - `.terraform.lock.hcl`, `*.tfvars`, `*.tfstate*` are gitignored per provider
   dir. Lock files on disk are the pinned provider versions — read them, don't
   guess versions.
@@ -49,8 +50,10 @@ before the PR does, not a separate standard.
   run with `SHELLCHECK_SEVERITY=` or `TFLINT_SEVERITY=`. `terraform plan` needs
   cloud creds and state — never run it without explicit user approval.
 - **CI runs the same script**, one job per provider, so a green local run is a
-  green PR. If you change what the gate covers, change `agents/check.sh` rather
-  than the workflow, and the workflow picks it up.
+  green PR. The provider list is derived from `--list-roots`, so a root added
+  under a new directory gets its own job with no workflow edit. If you change
+  what the gate covers, change `agents/check.sh` rather than the workflow, and
+  the workflow picks it up.
 - Read-only cloud commands (`get`/`describe`/`list`) are fine unprompted.
   Anything mutating — `apply`, `plan` against real state, cloud-CLI writes —
   needs explicit approval first.

@@ -5,6 +5,8 @@ on:
     paths:
       - "modules/**"
       - "agents/**"
+      - ".github/scripts/**"
+      - ".github/actions/setup-shellcheck/**"
       - ".github/workflows/checks.yaml"
   push:
     branches:
@@ -12,6 +14,8 @@ on:
     paths:
       - "modules/**"
       - "agents/**"
+      - ".github/scripts/**"
+      - ".github/actions/setup-shellcheck/**"
       - ".github/workflows/checks.yaml"
 
 permissions:
@@ -22,17 +26,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The provider list is derived from the roots check.sh finds, not written out
+  # here. Listing them by hand is the one drift that fails quietly: add a root
+  # under a directory no leg claims and it goes unchecked while every job stays
+  # green. Deriving it means a new root always gets a leg.
+  providers:
+    name: discover providers
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.discover.outputs.list }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive the provider list from check.sh
+        id: discover
+        run: |
+          set -euo pipefail
+          roots=$(bash agents/check.sh --list-roots)
+          if [ -z "$roots" ]; then
+            echo "check.sh --list-roots returned nothing, so this workflow would" >&2
+            echo "have checked no terraform at all. Every versions.tf is missing," >&2
+            echo "or the root discovery in agents/check.sh is broken." >&2
+            exit 1
+          fi
+          printf 'roots found:\n%s\n' "$roots"
+          list=$(printf '%s\n' "$roots" | cut -d/ -f2 | sort -u \
+            | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "providers: $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
   # One job per provider so a failure names the provider, and so the provider
   # rulesets install in parallel. Each covers that provider's roots and its shell
   # scripts. byoc is the standalone langsmith-byoc-role IAM root -- no shell
   # scripts, one root nested a level deeper than the others.
   check:
     name: check (${{ matrix.provider }})
+    needs: providers
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: [aws, azure, gcp, byoc]
+        provider: ${{ fromJSON(needs.providers.outputs.list) }}
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
@@ -86,17 +121,16 @@ jobs:
           while IFS= read -r r; do
             roots+=("$r")
           done < <(bash agents/check.sh --list-roots | grep "^modules/${{ matrix.provider }}/")
-          if [ ${#roots[@]} -eq 0 ]; then
-            echo "no terraform roots for ${{ matrix.provider }}" >&2
-            exit 1
-          fi
           printf 'roots: %s\n' "${roots[*]}"
           bash agents/check.sh "${roots[@]}"
 
-  # The grader's own scripts are outside modules/, so check.sh does not lint
-  # them. Cover them here.
-  shellcheck-tooling:
-    name: shellcheck (agents/)
+  # check.sh scopes shellcheck to providers that have a terraform root, so
+  # anything outside those trees gets no cover from the legs above: agents/,
+  # .github/scripts/, and modules/ocp/ (stubs, no versions.tf). Lint every
+  # tracked script here at the same bar, so a new script is gated wherever it
+  # lands rather than only in the directories we thought to name.
+  shellcheck-all:
+    name: shellcheck (all scripts)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -106,5 +140,13 @@ jobs:
         uses: ./.github/actions/setup-shellcheck
 
       # Same bar check.sh applies to the provider scripts.
-      - name: Shellcheck agents/
-        run: shellcheck -S warning agents/*.sh
+      - name: Shellcheck every tracked script
+        run: |
+          set -euo pipefail
+          count=$(git ls-files '*.sh' | wc -l | tr -d ' ')
+          if [ "$count" -eq 0 ]; then
+            echo "no *.sh tracked in git, so this job checked nothing" >&2
+            exit 1
+          fi
+          echo "linting $count tracked script(s) at -S warning"
+          git ls-files -z '*.sh' | xargs -0 shellcheck -S warning
