@@ -52,8 +52,6 @@ aceBackend:
     port: 1987
 
 backend:
-  agentBootstrap:
-    enabled: true
   deployment:
     resources:
       limits:

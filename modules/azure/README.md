@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`, never `0.16`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -523,7 +523,7 @@ sizing_profile       = "production"   # minimum | dev | production | production-
 enable_deployments   = true           # Pass 3 — LangSmith Deployments (listener + operator + host-backend)
 enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.15+; requires enable_deployments)
 enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
-enable_insights      = true           # Pass 5 — Insights / Clio (ClickHouse-backed analytics)
+enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 ```
 
@@ -602,7 +602,7 @@ Enables standalone Fleet, the re-architected successor to Agent Builder (chart v
 
 **`langsmith-values-agent-builder.yaml`** — Pass 4 (`enable_agent_builder = true`) — **legacy, superseded by `enable_fleet`**
 
-Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Also enables `backend.agentBootstrap` — a post-install job that registers Agent Builder as an LGP deployment and creates the required ConfigMap. Without this job, the Agent Builder nav item does not appear in the UI. Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi.
+Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi. Chart 0.16 removed the `backend.agentBootstrap` job that used to register Agent Builder as an LGP deployment; the standalone `fleet` deployment replaces it.
 
 > Requires `enable_deployments = true`. Prefer `enable_fleet` for new deployments.
 
@@ -610,12 +610,12 @@ Enables the visual agent builder UI and its two supporting services: `fleetToolS
 
 Enables ClickHouse-backed analytics in the Insights tab. The file generated depends on `clickhouse_source` in `terraform.tfvars`:
 
-- `in-cluster` → minimal file with just `config.insights.enabled: true`. The Helm chart manages ClickHouse internally. No external connection needed.
+- `in-cluster` → minimal file with just `insights.enabled: true`. The Helm chart manages ClickHouse internally. No external connection needed.
 - `external` → full file with `clickhouse.external.enabled: true` and a `langsmith-clickhouse` secret reference. You must create the secret and fill in the ClickHouse host/credentials before deploying.
 
 **`langsmith-values-polly.yaml`** — Pass 5 (`enable_polly = true`)
 
-Enables Polly, the AI-powered evaluation and monitoring agent. Polly runs as an LGP deployment (operator-managed pod). Sets resource limits for Polly's agent worker (2 CPU / 4 Gi request, 4 CPU / 8 Gi limit, scales 1–5 replicas).
+Enables Polly, the AI-powered evaluation and monitoring agent. On chart 0.16 Polly runs as the standalone top-level `polly` deployment (an api-server and a queue pod), not an operator-managed LGP deployment. Sets resource limits for its api-server (2 CPU / 4 Gi request, 4 CPU / 8 Gi limit).
 
 > Requires `enable_deployments = true`.
 
@@ -673,7 +673,7 @@ azure/
 │           ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
 │           ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
 │           ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
-│           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights / Clio
+│           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights
 │           ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
 │           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)
 │           ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon

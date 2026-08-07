@@ -96,9 +96,14 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version. Pinned to the 0.16 line; these values use the chart 0.16 schema."
   type        = string
-  default     = ""
+  default     = "~0.16.0"
+
+  validation {
+    condition     = can(regex("^~?0\\.16\\.[0-9]+$", var.chart_version))
+    error_message = "chart_version must name the chart 0.16 line (for example \"~0.16.0\" or \"0.16.1\"). Chart 0.15 ignores the 0.16-only keys in these values and silently falls back to in-cluster Insights databases; 0.17 has not been validated against them."
+  }
 }
 
 variable "helm_timeout" {

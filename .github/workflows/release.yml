@@ -6,7 +6,7 @@ name: Release (auto-tag on merge)
 # deploy.sh pins, see .github/scripts/chart-line.sh). PATCH is a module revision
 # counter that increments on any repo change, regardless of provider. The tag
 # PATCH is NOT the chart version - the chart is resolved as the latest patch in
-# the pinned line (e.g. ~0.15.1).
+# the pinned line (e.g. ~0.16.0).
 #
 # Skip a release for a given merge by including "[skip release]" in the commit
 # message. Run manually with dry_run=true to preview the computed version.
