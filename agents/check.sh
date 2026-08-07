@@ -2,12 +2,15 @@
 # Machine grading for HCL and shell edits. Enforced in CI by
 # .github/workflows/checks.yaml, and run locally before handing back:
 #   bash agents/check.sh                    # every root, plus every script
-#   bash agents/check.sh modules/aws/infra  # one root, terraform only
+#   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
 #   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
 # state) and tflint with the provider's pinned ruleset. Scripts are linted
-# repo-wide, not per root. Exit non-zero on failure.
+# repo-wide rather than per root, so naming a directory checks terraform only.
+#
+# set -u, deliberately without -e: a failing root records a non-zero status and
+# the loop continues, so one broken root still reports on the rest.
 set -u
 
 unset CDPATH
@@ -15,7 +18,7 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # Script linting gates at warning: the repo is clean at that bar, so holding it
 # there prevents regression. tflint gates at error because the HCL still carries
 # pre-existing warnings (unused variables, missing version constraints).
-# CI sets neither -- it inherits these, so a green local run is a green PR.
+# CI sets neither, it inherits these, so a green local run is a green PR.
 SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
 
@@ -38,82 +41,79 @@ lint_scripts() {
     | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
 }
 
-init_upgrade=0
-list_roots=0
+# Print the terraform roots at or beneath one repo-relative directory. Roots are
+# discovered rather than listed so a new one cannot be silently missed, and so a
+# CI leg can scope itself to modules/<provider> without carrying a second copy
+# of the rule. A root is any directory with its own versions.tf, minus the
+# internal child modules under modules/<provider>/<root>/modules/<child>/:
+# those are validated transitively via --call-module-type=all, and two of them
+# (azure keyvault, azure redis) do carry a versions.tf, so depth alone cannot
+# tell them apart from a root. Depth varies anyway, modules/aws/infra is two
+# levels down and modules/byoc/aws/langsmith-byoc-role is three.
+discover_roots() {
+  local versions
+  while IFS= read -r versions; do
+    versions=${versions#./}
+    [ -n "$versions" ] || continue
+    case "${versions#modules/}" in */modules/*) continue ;; esac
+    echo "${versions%/versions.tf}"
+  done <<EOF
+$(cd "$REPO_ROOT" && find "$1" -name versions.tf -not -path '*/.terraform/*' | sort)
+EOF
+}
+
 case "${1:-}" in
-  --init-upgrade) init_upgrade=1; shift ;;
-  --list-roots) list_roots=1; shift ;;
   --scripts) lint_scripts; exit $? ;;
 esac
 
-# No args: every terraform root and every script. Roots are discovered rather
-# than listed so a new one cannot be silently missed. Naming roots on the command
-# line means terraform only -- use --scripts for the shell half.
-# A root is any directory under modules/ with its own
-# versions.tf, minus the internal child modules under
-# modules/<provider>/<root>/modules/<child>/ -- those are validated transitively
-# via --call-module-type=all, and two of them (azure keyvault, azure redis) do
-# carry a versions.tf, so depth alone cannot tell them apart from a root.
-# Depth genuinely varies: modules/aws/infra is two levels down,
-# modules/byoc/aws/langsmith-byoc-role is three. modules/ocp has no versions.tf
-# anywhere, so it is not covered.
 lint_all=0
-if [ $# -eq 0 ] || [ "$list_roots" -eq 1 ]; then
-  discovered=()
-  while IFS= read -r _versions; do
-    [ -n "$_versions" ] || continue
-    case "${_versions#modules/}" in */modules/*) continue ;; esac
-    discovered+=("$REPO_ROOT/${_versions%/versions.tf}")
-  done <<EOF
-$(cd "$REPO_ROOT" && find modules -name versions.tf -not -path '*/.terraform/*' | sort)
-EOF
-  if [ ${#discovered[@]} -eq 0 ]; then
-    echo "check: found no terraform roots under modules/" >&2
-    exit 2
-  fi
-  # --list-roots keeps CI from re-implementing the rule above: the workflow
-  # filters this list per provider instead of carrying its own glob.
-  if [ "$list_roots" -eq 1 ]; then
-    for _root in "${discovered[@]}"; do
-      echo "${_root#"$REPO_ROOT/"}"
-    done
-    exit 0
-  fi
-  set -- "${discovered[@]}"
+if [ $# -eq 0 ]; then
+  set -- modules
   lint_all=1
 fi
+
+# Expand each named directory into the roots beneath it. An empty expansion
+# fails rather than passing quietly: a CI leg scoped to one provider would
+# otherwise report success having checked nothing.
+roots=()
+for arg in "$@"; do
+  arg=${arg#"$REPO_ROOT/"}
+  arg=${arg%/}
+  if [ ! -d "$REPO_ROOT/$arg" ]; then
+    echo "check: no such dir: $arg" >&2
+    exit 2
+  fi
+  before=${#roots[@]}
+  while IFS= read -r _root; do
+    [ -n "$_root" ] || continue
+    roots+=("$_root")
+  done <<EOF
+$(discover_roots "$arg")
+EOF
+  if [ "${#roots[@]}" -eq "$before" ]; then
+    echo "check: no terraform root under $arg, so this run would have checked" >&2
+    echo "nothing. The directory was renamed, or its versions.tf is gone." >&2
+    exit 2
+  fi
+done
 
 # Provider dirs already handled, so tflint --init runs once per provider rather
 # than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
 status=0
 
-for dir in "$@"; do
-  case "$dir" in /*) ;; *) dir="$REPO_ROOT/$dir" ;; esac
-  [ -d "$dir" ] || { echo "check: no such dir: $dir" >&2; status=2; continue; }
+for rel in "${roots[@]}"; do
+  dir="$REPO_ROOT/$rel"
+  # Everything provider-scoped (the tflint config) hangs off the provider dir.
+  provider=${rel#modules/}
+  provider=${provider%%/*}
+  provider_dir="$REPO_ROOT/modules/$provider"
 
-  # Resolve the owning provider dir. Everything provider-scoped (the tflint
-  # config, the shell scripts) hangs off this.
-  case "$dir" in
-    "$REPO_ROOT"/modules/*/*)
-      rel=${dir#"$REPO_ROOT/modules/"}
-      provider=${rel%%/*}
-      provider_dir="$REPO_ROOT/modules/$provider"
-      ;;
-    *)
-      rel=""
-      provider=""
-      provider_dir="$dir"
-      ;;
-  esac
-
-  echo "== check ${dir#"$REPO_ROOT/"}"
+  echo "== check $rel"
 
   if [ ! -d "$dir/.terraform" ]; then
     (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
       status=1; continue; }
-  elif [ "$init_upgrade" -eq 1 ]; then
-    (cd "$dir" && terraform init -backend=false -input=false -upgrade -no-color) || status=1
   fi
 
   (cd "$dir" && terraform validate -no-color) || status=1

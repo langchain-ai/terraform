@@ -27,10 +27,10 @@ concurrency:
 
 jobs:
   # One job per provider so a failure names the provider, and so the provider
-  # rulesets install in parallel. Only the directory names live here: each leg
-  # filters check.sh --list-roots to its own prefix, so which directories are
-  # roots stays defined in one place. byoc is the standalone langsmith-byoc-role
-  # IAM root, nested a level deeper than the others.
+  # rulesets install in parallel. Only the directory names live here: check.sh
+  # expands modules/<provider> into the roots beneath it, so which directories
+  # are roots stays defined in one place. byoc is the standalone
+  # langsmith-byoc-role IAM root, nested a level deeper than the others.
   check:
     name: check (${{ matrix.provider }})
     runs-on: ubuntu-latest
@@ -73,26 +73,13 @@ jobs:
       - name: Create plugin cache dir
         run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
-      # No args to check.sh would sweep every provider in one job, so scope the
-      # matrix leg by filtering the script's own root list. check.sh --list-roots
-      # is the single source of the discovery rule -- root depth varies and two
-      # child modules carry a versions.tf, so a glob here would drift from it.
-      # Naming roots also means terraform only; the scripts are the job below.
+      # No args would sweep every provider in one job, so name this leg's
+      # directory. check.sh expands it into the roots beneath it and exits 2 if
+      # there are none, so a renamed directory fails the leg instead of passing
+      # having checked nothing. Naming a directory means terraform only; the
+      # scripts are the job below.
       - name: Run checks
-        run: |
-          set -euo pipefail
-          roots=()
-          while IFS= read -r r; do
-            roots+=("$r")
-          done < <(bash agents/check.sh --list-roots | grep "^modules/${{ matrix.provider }}/")
-          if [ ${#roots[@]} -eq 0 ]; then
-            echo "no terraform roots under modules/${{ matrix.provider }}/, so" >&2
-            echo "this job would have checked nothing. The directory was renamed" >&2
-            echo "or removed, or its versions.tf is gone." >&2
-            exit 1
-          fi
-          printf 'roots: %s\n' "${roots[*]}"
-          bash agents/check.sh "${roots[@]}"
+        run: bash agents/check.sh "modules/${{ matrix.provider }}"
 
   # Every tracked script, one bar, whole repo -- including the ones outside the
   # provider trees (agents/, .github/scripts/, modules/ocp/). Its own job rather

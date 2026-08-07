@@ -41,9 +41,9 @@ before the PR does, not a separate standard.
 - **Work in small units**: one resource or module, run the checks below, then
   continue. Don't write 300 lines and hand back a correction cycle.
 - **Machine-graded before handing back**, and fix what it reports:
-  - HCL edit → `bash agents/check.sh <terraform-root-dir>`: `terraform validate`
-    plus `tflint` with the provider's pinned ruleset from
-    `modules/<provider>/.tflint.hcl`.
+  - HCL edit → `bash agents/check.sh <dir>`: `terraform validate` plus `tflint`
+    with the provider's pinned ruleset from `modules/<provider>/.tflint.hcl`,
+    for every root at or beneath the directory you name.
   - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
   - No argument → both, across every root.
