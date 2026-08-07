@@ -84,8 +84,7 @@ module "vnet" {
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
-  enable_bastion     = var.create_bastion
-  availability_zones = var.availability_zones
+  enable_bastion = var.create_bastion
 
   # AGIC subnet: provisioned only when ingress_controller = "agic"
   enable_agic                = var.ingress_controller == "agic"

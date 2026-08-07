@@ -67,12 +67,6 @@ variable "bastion_subnet_address_prefix" {
   default     = ["10.0.80.0/27"] # 32 IPs — sufficient for a single jump VM
 }
 
-variable "availability_zones" {
-  type        = list(string)
-  description = "Availability zones to spread resources across. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone (lower cost)."
-  default     = ["1"]
-}
-
 variable "enable_agic" {
   type        = bool
   description = "Create a dedicated subnet for AGIC (Application Gateway Ingress Controller). Required when ingress_controller = 'agic'."
