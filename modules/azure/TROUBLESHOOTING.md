@@ -229,6 +229,54 @@ terraform apply
 
 ---
 
+### AuthorizationFailed on roleAssignments/write — subscription gates principalType
+
+**Symptom:**
+```
+Error: unexpected status 403 (403 Forbidden) with error: AuthorizationFailed:
+The client 'you@example.com' with object id '<your-object-id>' does not have
+authorization to perform action 'Microsoft.Authorization/roleAssignments/write'
+over scope '/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/
+vaults/<vault>/providers/Microsoft.Authorization/roleAssignments/<guid>'
+or the scope is invalid.
+
+  with module.keyvault.azurerm_role_assignment.terraform_kv_admin,
+  on modules/keyvault/main.tf line 80
+```
+
+**Cause:** Two unrelated problems produce this identical message.
+
+Usually it means exactly what it says: the apply identity has no `User Access Administrator`. Confirm with `az role assignment list --assignee <your-object-id> --all -o table` and get UAA or Owner.
+
+If that listing already shows UAA (or a custom role granting `Microsoft.Authorization/roleAssignments/write`), the cause is different: the subscription delegates that permission behind an ABAC condition on `principalType`. Enterprises use this to let a deployer grant roles to managed identities without handing out blanket Owner. The condition is evaluated against the request, so a request that leaves `principalType` out fails it, and ARM returns the generic message above with no mention of the condition. Nothing in the error tells you a condition exists.
+
+**Fix:** Grants targeting managed identities already declare `principal_type = "ServicePrincipal"` and need no action. The exception is the apply identity's own `Key Vault Secrets Officer` grant, which cannot hardcode a value because that principal is a user under an interactive `az login` and a service principal in CI:
+
+```hcl
+# terraform.tfvars
+terraform_principal_type = "User"             # interactive az login
+terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
+```
+
+Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
+
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+
+```bash
+# Run by a subscription owner, who is not subject to the delegation condition
+RA_ID=$(az role assignment create --role "Key Vault Secrets Officer" \
+  --assignee-object-id <your-object-id> --assignee-principal-type User \
+  --scope "$(az keyvault show --name langsmith-kv<identifier> --query id -o tsv)" \
+  --query id -o tsv)
+
+terraform -chdir=infra import \
+  'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
+```
+
+**Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
+
+---
+
 ## Pass 2 — Application
 
 ### `dns_label` subdomain not resolving — TLS cert stuck pending

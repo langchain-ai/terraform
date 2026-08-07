@@ -192,3 +192,12 @@ sizing_profile = "production"
 # keyvault_default_action  = "Deny"
 # keyvault_allowed_ips     = ["203.0.113.42/32"]
 # aks_authorized_ip_ranges = ["203.0.113.42/32", "198.51.100.0/24"]
+
+# ── Constrained role-assignment delegation (optional) ─────────────────────────
+# Set only if `terraform apply` fails with a 403 AuthorizationFailed on
+# Microsoft.Authorization/roleAssignments/write. Some subscriptions delegate
+# that permission through an ABAC condition on principalType, which rejects
+# requests that leave the field out. Grants to managed identities already
+# declare "ServicePrincipal"; this covers the apply identity's own Key Vault
+# grant, which is a user interactively and a service principal in CI.
+# terraform_principal_type = "User"
