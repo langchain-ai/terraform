@@ -85,6 +85,12 @@ apply: ## terraform apply (infra)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+	@echo ""
+	@echo "  ✔ Infrastructure destroyed."
+	@echo ""
+	@echo "  Next step: delete this deployment's SSM secrets."
+	@echo "    make purge-secrets"
+	@echo ""
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	terraform -chdir=$(INFRA_DIR) $(ARGS)

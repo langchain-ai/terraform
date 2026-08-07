@@ -30,33 +30,105 @@ HELM_VALUES_DIR="$AWS_DIR/helm/values"
 
 source "$SCRIPT_DIR/_common.sh"
 
+_local_state_backups=()
+
+_collect_local_state_backups() {
+  _local_state_backups=()
+  local _backup
+  for _backup in "$INFRA_DIR/terraform.tfstate.backup" "$INFRA_DIR"/terraform.tfstate.*.backup; do
+    [[ -f "$_backup" ]] && _local_state_backups+=("$_backup")
+  done
+}
+
+_has_local_artifacts() {
+  [[ -f "$INFRA_DIR/terraform.tfvars" ]] && return 0
+  [[ -f "$INFRA_DIR/terraform.tfstate" ]] && return 0
+  [[ -f "$INFRA_DIR/terraform.tfstate.backup" ]] && return 0
+
+  for f in "$INFRA_DIR"/terraform.tfstate.*.backup "$HELM_VALUES_DIR"/langsmith-values*.yaml; do
+    [[ -f "$f" ]] && return 0
+  done
+
+  [[ -d "$INFRA_DIR/logs" ]] && find "$INFRA_DIR/logs" -mindepth 1 -maxdepth 1 -print -quit | grep -q . && return 0
+  return 1
+}
+
+_managed_state_resources() {
+  printf '%s\n' "$1" \
+    | grep -E '^[[:alnum:]_-]+(\[[^]]+\])?(\.[[:alnum:]_-]+(\[[^]]+\])?)+' \
+    | grep -vE '(^|\.)data\.' || true
+}
+
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  LangSmith AWS — Clean local files"
 echo "══════════════════════════════════════════════════════"
 echo ""
 warn "This removes local generated files only; it does not delete AWS resources or SSM parameters."
-warn "Run AFTER: make uninstall && make destroy && make purge-secrets"
-info "To delete SSM parameters after Terraform has no managed resources, run: make purge-secrets"
+info "It removes terraform.tfvars, local Terraform state/backups, logs, and generated Helm values."
 echo ""
 
-# Guard: if tfstate exists with tracked resources, abort unless forced.
-if [[ -f "$INFRA_DIR/terraform.tfstate" ]]; then
-  _state_resources=$(grep -c '"type":' "$INFRA_DIR/terraform.tfstate" 2>/dev/null || true)
-  if [[ "$_state_resources" -gt 0 ]]; then
-    echo ""
-    fail "terraform.tfstate exists with ${_state_resources} tracked resource(s)."
-    warn "Run 'terraform destroy' BEFORE 'make clean' — otherwise Terraform loses track"
-    warn "of your AWS resources and you'll have to delete them manually."
-    warn "  make uninstall                     # remove Helm release first"
-    warn "  cd infra && terraform destroy      # terraform destroy"
-    warn "  make clean                         # then clean local files"
-    echo ""
-    printf "  Force clean anyway? [y/N] "
-    read -r _force
-    [[ "$_force" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 0; }
-    echo ""
+if ! _has_local_artifacts; then
+  skip "No local generated files to clean. Cleanup skipped."
+  exit 0
+fi
+
+if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  fail "terraform.tfvars not found; cannot verify Terraform and SSM cleanup."
+  exit 1
+fi
+
+_backup_confirmation_required=false
+if ! _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1); then
+  # A local backend with no state file has no resources to protect. Terraform
+  # reports it as an error, unlike an initialized empty or remote state.
+  if [[ "$_state_output" == *"No state file was found"* ]]; then
+    _collect_local_state_backups
+    if (( ${#_local_state_backups[@]} > 0 )); then
+      _backup_confirmation_required=true
+    fi
+    _state_output=""
+  else
+    fail "Could not read Terraform state; refusing to remove local configuration."
+    printf "  %s\n" "$_state_output" >&2
+    exit 1
   fi
+fi
+
+_state_resources=$(_managed_state_resources "$_state_output")
+if [[ -n "${_state_resources//[$' \t\r\n']/}" ]]; then
+  fail "Terraform state still tracks managed resources; refusing to clean."
+  printf "  %s\n" "$_state_resources" >&2
+  exit 1
+fi
+
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_environment=$(_parse_tfvar "environment") || _environment=""
+_region=$(_parse_tfvar "region") || _region=""
+if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
+  fail "name_prefix, environment, and region are required to verify SSM cleanup."
+  exit 1
+fi
+
+SSM_PREFIX="/langsmith/${_name_prefix}-${_environment}"
+if ! _ssm_params=$(_aws ssm get-parameters-by-path --region "$_region" --path "${SSM_PREFIX}/" --recursive --query 'Parameters[].Name' --output text 2>&1); then
+  fail "Could not verify SSM cleanup; refusing to remove local configuration."
+  printf "  %s\n" "$_ssm_params" >&2
+  exit 1
+fi
+if [[ -n "$_ssm_params" && "$_ssm_params" != "None" ]]; then
+  fail "SSM parameters remain under ${SSM_PREFIX}/; run 'make purge-secrets' first."
+  exit 1
+fi
+
+if [[ "$_backup_confirmation_required" == true ]]; then
+  warn "Terraform state is missing, but local state backup(s) remain:"
+  printf "  %s\n" "${_local_state_backups[@]#$AWS_DIR/}"
+  warn "Deleting them removes the only local recovery record for this deployment."
+  printf "  Type DELETE BACKUPS to continue: "
+  read -r _backup_confirm
+  [[ "$_backup_confirm" == "DELETE BACKUPS" ]] || { echo "  Aborted."; exit 0; }
+  echo ""
 fi
 
 printf "  Continue? [y/N] "
