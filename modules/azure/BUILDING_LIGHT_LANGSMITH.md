@@ -162,7 +162,7 @@ cost_center = "engineering"       # any string — for resource tagging
 # No Azure DB for PostgreSQL, no Azure Cache for Redis are provisioned.
 postgres_source   = "in-cluster"
 redis_source      = "in-cluster"
-clickhouse_source = "in-cluster"  # ClickHouse is always in-cluster regardless
+clickhouse_source = "in-cluster"  # chart-managed StatefulSet — right choice for a light install
 
 # ── AKS cluster sizing ─────────────────────────────────────────────────────────
 # Standard_DS4_v2 = 8 vCPU, 28 GB RAM per node
