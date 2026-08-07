@@ -365,7 +365,10 @@ aws s3 rb s3://$PREFIX-traces
 
 ## B6 — Delete SSM Parameters
 
-When Terraform state is unavailable, `make purge-secrets` refuses to run. Use this manual fallback only after confirming that the deployment has been removed.
+When Terraform reports no state file and no local state backup exists,
+`make purge-secrets` can remove the parameters after its typed-prefix confirmation.
+Use this manual fallback only when Terraform state cannot be read, and only after
+confirming that the deployment has been removed.
 
 ```bash
 set -euo pipefail
