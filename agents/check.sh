@@ -71,7 +71,7 @@ for dir in "$@"; do
   [ -d "$dir" ] || { echo "check: no such dir: $dir" >&2; status=2; continue; }
 
   # Resolve the owning provider dir. Everything provider-scoped (the tflint
-  # config, the shell scripts, the schema dump name) hangs off this.
+  # config, the shell scripts) hangs off this.
   case "$dir" in
     "$REPO_ROOT"/modules/*/*)
       rel=${dir#"$REPO_ROOT/modules/"}
@@ -148,19 +148,6 @@ for dir in "$@"; do
     esac
   else
     echo "   (shellcheck not installed, skipping script lint)"
-  fi
-
-  # Refresh the agent-facing schema dump. Local convenience only: the dump is
-  # gitignored and CI has no agent to read it.
-  if [ -n "$rel" ] && [ -z "${CI:-}" ]; then
-    schema="$REPO_ROOT/agents/schema/$(echo "$rel" | tr '/' '-').schema.json"
-    if [ ! -f "$schema" ] || [ "$dir/versions.tf" -nt "$schema" ] \
-       || { [ -f "$dir/.terraform.lock.hcl" ] && [ "$dir/.terraform.lock.hcl" -nt "$schema" ]; }; then
-      mkdir -p "$REPO_ROOT/agents/schema"
-      (cd "$dir" && terraform providers schema -json) > "$schema.tmp" \
-        && mv "$schema.tmp" "$schema" \
-        && echo "   schema refreshed: agents/schema/$(basename "$schema")"
-    fi
   fi
 done
 

@@ -1,8 +1,6 @@
 # AGENTS.md — repo conventions for agent work
 
-Conventions for AI agents editing this repo. Facts about provider arguments
-live in `agents/schema/*.json` (generated ground truth, gitignored) — this file
-is conventions only.
+Conventions for AI agents editing this repo.
 
 The checks below are the same ones CI runs
 (`.github/workflows/checks.yaml`). Running them locally is how you find out
@@ -36,7 +34,9 @@ before the PR does, not a separate standard.
 
 - **Before writing HCL**, check `versions.tf` (constraints) and
   `.terraform.lock.hcl` (resolved pins) in the root you're editing. Write
-  against the pinned version, not training-data defaults.
+  against the pinned version, not training-data defaults. For exact attribute
+  names and types, run `terraform providers schema -json` in the root and grep
+  it rather than guessing.
 - **Work in small units**: one resource or module, run the checks below, then
   continue. Don't write 300 lines and hand back a correction cycle.
 - **Machine-graded before handing back**: after every HCL or shell edit run
@@ -51,11 +51,6 @@ before the PR does, not a separate standard.
 - **CI runs the same script**, one job per provider, so a green local run is a
   green PR. If you change what the gate covers, change `agents/check.sh` rather
   than the workflow, and the workflow picks it up.
-- **Schema ground truth**: `agents/schema/<provider>-<root>.schema.json` is
-  `terraform providers schema -json` for the pinned versions. Grep it for
-  exact attribute names/types instead of relying on memory. Regenerate with
-  `bash agents/dump-schemas.sh` after any provider upgrade (or just delete
-  the file — check.sh regenerates on demand).
 - Read-only cloud commands (`get`/`describe`/`list`) are fine unprompted.
   Anything mutating — `apply`, `plan` against real state, cloud-CLI writes —
   needs explicit approval first.
