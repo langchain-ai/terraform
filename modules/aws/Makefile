@@ -64,6 +64,12 @@ apply: ## terraform apply (infra)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
 	terraform -chdir=$(INFRA_DIR) destroy
+	@echo ""
+	@echo "  ✔ Infrastructure destroyed."
+	@echo ""
+	@echo "  Next step: delete this deployment's SSM secrets."
+	@echo "    make purge-secrets"
+	@echo ""
 
 purge-secrets: ## Delete SSM secrets after Terraform has no managed resources
 	$(INFRA_DIR)/scripts/purge-secrets.sh

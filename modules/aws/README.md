@@ -1059,4 +1059,9 @@ make destroy-app
 cd terraform/aws/infra
 terraform apply
 terraform destroy
+
+# After destroy succeeds, remove cloud secrets explicitly, then local files.
+cd ..
+make purge-secrets
+make clean
 ```
