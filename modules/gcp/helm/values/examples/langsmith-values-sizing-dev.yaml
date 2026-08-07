@@ -146,11 +146,18 @@ fleetToolServer:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
-        memory: "256Mi"
+        cpu: "1"
+        memory: "1Gi"
       limits:
-        cpu: "500m"
-        memory: "512Mi"
+        cpu: "2500m"
+        memory: "3Gi"
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 1989
+      failureThreshold: 30
+      periodSeconds: 5
+      timeoutSeconds: 5
 
 fleetTriggerServer:
   deployment:
