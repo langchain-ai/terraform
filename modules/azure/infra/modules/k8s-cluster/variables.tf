@@ -8,6 +8,30 @@ variable "cluster_name" {
   description = "Name of the cluster"
 }
 
+variable "create_cluster" {
+  type        = bool
+  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster (BYOC) — Terraform reads it via a data source instead of managing it, while still creating the Managed Identities, federated credentials, and (optionally) additional node pools in this module. 'istio-addon' requires create_cluster = true, since service_mesh_profile is only settable on a Terraform-owned cluster resource. 'agic' works on an attached cluster only when the ingress-appgw add-on is already enabled on it, because enabling it is the same kind of resource-only argument."
+  default     = true
+}
+
+variable "create_vnet" {
+  type        = bool
+  description = "Whether the root module is creating the VNet. Only read to reject create_cluster = false with create_vnet = true: an attached cluster's nodes already run in an existing subnet, so a subnet Terraform carves could never be one of them."
+  default     = true
+}
+
+variable "existing_cluster_subnet_id" {
+  type        = string
+  description = "The subnet the pre-existing cluster's nodes run in. Only used when create_cluster = false, where it equals subnet_id because that path requires create_vnet = false. Exists as its own input so the guards below never reference a subnet id derived from the VNet module, whose outputs are pending on a first apply and would defer the cluster lookup to apply time."
+  default     = ""
+}
+
+variable "existing_cluster_resource_group_name" {
+  type        = string
+  description = "Resource group of the pre-existing cluster. Only used when create_cluster = false. Resolved by the caller, which must pass a value that does not reference a resource pending creation — reading it from azurerm_resource_group would make Terraform defer the cluster lookup, and every existing-cluster guard in this module with it."
+  default     = ""
+}
+
 variable "location" {
   type        = string
   description = "Location of the cluster"

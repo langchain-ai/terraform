@@ -26,14 +26,34 @@ locals {
   # Derived resource names — all prefixed with "langsmith-<identifier>"
   resource_group_name = "langsmith-rg${local.identifier}"
   vnet_name           = "langsmith-vnet${local.identifier}"
-  aks_name            = "langsmith-aks${local.identifier}"
-  postgres_name       = "langsmith-postgres${local.identifier}"
-  redis_name          = "langsmith-redis${local.identifier}"
-  blob_name           = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
+
+  # Cluster name: derived for new clusters, or the customer's existing cluster
+  # name when attaching to one (create_cluster = false). No fallback in the
+  # attach case — an unset existing_cluster_name fails on the aks module's
+  # precondition instead of looking up a cluster that was never created.
+  aks_name      = var.create_cluster ? "langsmith-aks${local.identifier}" : var.existing_cluster_name
+  postgres_name = "langsmith-postgres${local.identifier}"
+  redis_name    = "langsmith-redis${local.identifier}"
+  blob_name     = "langsmith-blob${local.identifier}" # blob module strips hyphens → "langsmithblobdz"
 
   # Key Vault name: max 24 chars, globally unique.
-  # Uses the user-supplied keyvault_name or derives from identifier.
-  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "langsmith-kv${local.identifier}"
+  # Uses the user-supplied keyvault_name or derives from identifier. When
+  # attaching to a customer-owned vault (create_keyvault = false) the name is
+  # theirs, with no fallback — an unset existing_keyvault_name fails on the
+  # keyvault module's precondition instead of deriving a name for a vault that
+  # was never created.
+  keyvault_name = var.create_keyvault ? (var.keyvault_name != "" ? var.keyvault_name : "langsmith-kv${local.identifier}") : var.existing_keyvault_name
+
+  # Whether the keyvault module creates each of its two role assignments. Both
+  # default to create_keyvault: a vault this module creates gets both grants, a
+  # customer's vault gets neither, because creating them there means calling
+  # Microsoft.Authorization/roleAssignments/write on a resource their platform
+  # team owns. Gated one apiece rather than together because the two requests
+  # carry different principal types, and a subscription that delegates
+  # roleAssignments/write through an ABAC condition on principalType can reject
+  # the deployer's grant while permitting the managed identity's.
+  keyvault_manage_terraform_admin_assignment  = var.keyvault_manage_terraform_admin_assignment != null ? var.keyvault_manage_terraform_admin_assignment : var.create_keyvault
+  keyvault_manage_managed_identity_assignment = var.keyvault_manage_managed_identity_assignment != null ? var.keyvault_manage_managed_identity_assignment : var.create_keyvault
 
   # Subnet ID resolution: use newly-created VNet subnets OR bring-your-own
   # existing ones (set create_vnet = false and supply the IDs via variables).
@@ -107,13 +127,30 @@ module "aks" {
   service_cidr        = var.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = var.aks_dns_service_ip # CoreDNS IP (must be within service_cidr)
 
+  # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
+  create_cluster = var.create_cluster
+  create_vnet    = var.create_vnet
+
+  # Both of these are passed straight from variables, never derived from another
+  # resource. azurerm_resource_group.resource_group is pending creation on a first
+  # apply, and local.aks_subnet_id reads module.vnet.subnet_main_id, whose module
+  # has no count and so is pending too. A reference to either draws a dependency
+  # edge that defers the cluster lookup to apply, taking the OIDC issuer, Workload
+  # Identity, node subnet, and region guards with it, silent on exactly the run
+  # where a misconfiguration is most likely. var.aks_subnet_id is the right value
+  # to use because create_cluster = false requires create_vnet = false.
+  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name
+  existing_cluster_subnet_id           = var.aks_subnet_id
+
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads)
-  additional_node_pools = var.additional_node_pools
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # On a pre-existing cluster whose node pools the customer owns, pass an empty
+  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
+  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller
@@ -237,6 +274,16 @@ module "keyvault" {
   name                = local.keyvault_name
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
+
+  # Bring-your-own Key Vault: attach to a customer-owned vault instead of
+  # creating one. The module writes its secrets into that vault and changes
+  # nothing else about it, so the network ACL and retention settings below are
+  # ignored on this path.
+  create_keyvault                       = var.create_keyvault
+  existing_keyvault_name                = var.existing_keyvault_name
+  existing_keyvault_resource_group_name = var.existing_keyvault_resource_group_name
+  manage_terraform_admin_assignment     = local.keyvault_manage_terraform_admin_assignment
+  manage_managed_identity_assignment    = local.keyvault_manage_managed_identity_assignment
 
   # The managed identity used by LangSmith pods gets read-only access to
   # all secrets so future CSI-driver integration requires no RBAC changes.
@@ -368,8 +415,11 @@ module "diagnostics" {
   postgres_id = var.postgres_source == "external" ? module.postgres[0].postgres_id : ""
 
   # Boolean flags known at plan time — count cannot depend on computed resource IDs.
+  # Key Vault diagnostics only when this module owns the vault: writing a
+  # diagnostic setting onto a customer's vault changes their resource, and a
+  # platform-owned vault usually already has one collecting AuditEvent.
   enable_aks_diag      = true
-  enable_keyvault_diag = true
+  enable_keyvault_diag = var.create_keyvault
   enable_postgres_diag = var.postgres_source == "external"
 
   tags = local.common_tags

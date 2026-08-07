@@ -130,6 +130,15 @@ keyvault_purge_protection = false   # set true for production
 # Optional: override the generated Key Vault name (must be globally unique, 3–24 chars)
 # keyvault_name = "my-langsmith-kv"
 
+# Optional: attach to a Key Vault the customer already owns instead of creating one.
+# Terraform writes its nine secrets into it and changes nothing else about the vault,
+# so the settings above are ignored. Requires a vault in Azure RBAC mode with
+# Key Vault Secrets Officer already granted to the deployer. See the README section
+# "Deploying against an existing Key Vault" for the full prerequisites.
+# create_keyvault                       = false
+# existing_keyvault_name                = "customer-platform-kv"
+# existing_keyvault_resource_group_name = "customer-platform-rg"
+
 # ── Blob storage ──────────────────────────────────────────────────────────────
 blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads

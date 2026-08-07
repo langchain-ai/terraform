@@ -32,6 +32,8 @@ data "azurerm_client_config" "current" {}
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 resource "azurerm_key_vault" "langsmith" {
+  count = var.create_keyvault ? 1 : 0
+
   name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -67,25 +69,85 @@ resource "azurerm_key_vault" "langsmith" {
   tags = merge(var.tags, { module = "keyvault" })
 }
 
+# ── Bring-your-own Key Vault ───────────────────────────────────────────────────
+# Read-only lookup of a customer-owned vault (create_keyvault = false). Never
+# creates or modifies it: the vault's auth mode, network rules, and retention
+# settings belong to whoever provisioned it, so every var this module would
+# otherwise apply to those settings is ignored on this path.
+
+data "azurerm_key_vault" "existing" {
+  count = var.create_keyvault ? 0 : 1
+
+  name                = var.existing_keyvault_name
+  resource_group_name = var.existing_keyvault_resource_group_name
+
+  lifecycle {
+    precondition {
+      condition     = var.existing_keyvault_name != ""
+      error_message = "create_keyvault = false requires existing_keyvault_name to be set to the name of the Key Vault to attach to."
+    }
+
+    precondition {
+      condition     = var.existing_keyvault_resource_group_name != ""
+      error_message = "create_keyvault = false requires existing_keyvault_resource_group_name to be set to the resource group holding Key Vault '${var.existing_keyvault_name}'. Find it with: az keyvault show --name ${var.existing_keyvault_name} --query resourceGroup -o tsv"
+    }
+
+    postcondition {
+      condition     = self.rbac_authorization_enabled || !(var.manage_terraform_admin_assignment || var.manage_managed_identity_assignment)
+      error_message = "Key Vault '${var.existing_keyvault_name}' uses access policies, not Azure RBAC, so the role assignments this module creates would grant nothing while the apply still succeeded. Either set keyvault_manage_terraform_admin_assignment = false and keyvault_manage_managed_identity_assignment = false and have the vault owner grant access with an access policy, or supply a vault with RBAC authorization enabled."
+    }
+  }
+}
+
+locals {
+  # One vault, reached two ways. Only one of the two ever has an instance, so
+  # the [0] index is always the live one.
+  vault_id   = var.create_keyvault ? azurerm_key_vault.langsmith[0].id : data.azurerm_key_vault.existing[0].id
+  vault_name = var.create_keyvault ? azurerm_key_vault.langsmith[0].name : data.azurerm_key_vault.existing[0].name
+  vault_uri  = var.create_keyvault ? azurerm_key_vault.langsmith[0].vault_uri : data.azurerm_key_vault.existing[0].vault_uri
+}
+
 # ── RBAC: Terraform deployer ───────────────────────────────────────────────────
 # "Key Vault Secrets Officer" allows: create, read, update, delete, list secrets.
 # This grants the person running `terraform apply` full secret management rights.
 # For CI/CD pipelines, replace the object_id with a dedicated service principal.
+#
+# Skipped by default on a customer-owned vault, where creating it means calling
+# Microsoft.Authorization/roleAssignments/write against a resource the platform
+# team owns — the call such a team most often denies. The deployer exists before
+# apply starts and Azure RBAC inherits downward, so that team can grant this
+# role at the vault or its resource group ahead of time instead.
+#
+# Gated separately from the managed-identity grant below, because a subscription
+# that delegates roleAssignments/write through an ABAC condition on principalType
+# rejects this request and permits that one: a user deployer cannot create this.
+# Turning it off is how such a deployment proceeds on a vault Terraform creates,
+# with the grant made out of band beforehand.
 
 resource "azurerm_role_assignment" "terraform_kv_admin" {
-  scope                = azurerm_key_vault.langsmith.id
+  count = var.manage_terraform_admin_assignment ? 1 : 0
+
+  scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
 # ── RBAC: Pod managed identity ─────────────────────────────────────────────────
 # "Key Vault Secrets User" allows: read (get) secrets only.
-# LangSmith pods use Workload Identity to assume this managed identity and
-# read secrets at runtime — currently used by setup-env.sh, and ready for
-# the CSI Secrets Store driver in Phase 2.
+#
+# Nobody can pre-grant this one: the identity is created by the k8s-cluster
+# module partway through the same apply, so there is no object ID to grant to
+# beforehand. Skipping it on a customer-owned vault costs nothing today, because
+# no runtime path reads the vault — create-k8s-secrets.sh reads it with the
+# operator's own credentials and writes a Kubernetes Secret, and there is no
+# SecretProviderClass in the tree. Wiring up the CSI Secrets Store driver later
+# would need this grant, and on a customer-owned vault that means asking the
+# vault owner for it.
 
 resource "azurerm_role_assignment" "managed_identity_kv_reader" {
-  scope                = azurerm_key_vault.langsmith.id
+  count = var.manage_managed_identity_assignment ? 1 : 0
+
+  scope                = local.vault_id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.managed_identity_principal_id
 }
@@ -94,8 +156,15 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
 # Azure RBAC role assignments propagate within 1–3 minutes. Without this wait
 # the first `terraform apply` would fail with 403 when creating secrets.
 # Subsequent applies skip this (the role already exists).
+#
+# Only the deployer's grant is worth waiting on, because the secret writes below
+# are what would 403 without it. The managed-identity grant is read at runtime by
+# pods that start long after this apply, and an access grant that came from
+# outside this apply propagated long ago.
 
 resource "time_sleep" "wait_for_rbac" {
+  count = var.manage_terraform_admin_assignment ? 1 : 0
+
   create_duration = "30s"
   depends_on      = [azurerm_role_assignment.terraform_kv_admin]
 }
@@ -111,7 +180,7 @@ resource "time_sleep" "wait_for_rbac" {
 resource "azurerm_key_vault_secret" "postgres_admin_password" {
   name         = "postgres-admin-password"
   value        = var.postgres_admin_password
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "postgres", module = "keyvault" })
 
@@ -121,7 +190,7 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
 resource "azurerm_key_vault_secret" "langsmith_api_key_salt" {
   name         = "langsmith-api-key-salt"
   value        = var.langsmith_api_key_salt
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
 
   # CRITICAL: Changing this value invalidates ALL existing LangSmith API keys.
@@ -139,7 +208,7 @@ resource "azurerm_key_vault_secret" "langsmith_api_key_salt" {
 resource "azurerm_key_vault_secret" "langsmith_jwt_secret" {
   name         = "langsmith-jwt-secret"
   value        = var.langsmith_jwt_secret
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
 
   # CRITICAL: Changing this invalidates all active LangSmith user sessions.
@@ -155,7 +224,7 @@ resource "azurerm_key_vault_secret" "langsmith_admin_password" {
   count        = var.langsmith_admin_password != "" ? 1 : 0
   name         = "langsmith-admin-password"
   value        = var.langsmith_admin_password
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "langsmith", module = "keyvault" })
 
@@ -166,7 +235,7 @@ resource "azurerm_key_vault_secret" "langsmith_license_key" {
   count        = var.langsmith_license_key != "" ? 1 : 0
   name         = "langsmith-license-key"
   value        = var.langsmith_license_key
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "langsmith", module = "keyvault" })
 
@@ -177,7 +246,7 @@ resource "azurerm_key_vault_secret" "deployments_encryption_key" {
   count        = var.langsmith_deployments_encryption_key != "" ? 1 : 0
   name         = "langsmith-deployments-encryption-key"
   value        = var.langsmith_deployments_encryption_key
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
 
   # CRITICAL: Changing this key corrupts all encrypted LangGraph deployment data.
@@ -193,7 +262,7 @@ resource "azurerm_key_vault_secret" "agent_builder_encryption_key" {
   count        = var.langsmith_agent_builder_encryption_key != "" ? 1 : 0
   name         = "langsmith-agent-builder-encryption-key"
   value        = var.langsmith_agent_builder_encryption_key
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
 
   lifecycle {
@@ -208,7 +277,7 @@ resource "azurerm_key_vault_secret" "insights_encryption_key" {
   count        = var.langsmith_insights_encryption_key != "" ? 1 : 0
   name         = "langsmith-insights-encryption-key"
   value        = var.langsmith_insights_encryption_key
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
 
   lifecycle {
@@ -223,7 +292,7 @@ resource "azurerm_key_vault_secret" "polly_encryption_key" {
   count        = var.langsmith_polly_encryption_key != "" ? 1 : 0
   name         = "langsmith-polly-encryption-key"
   value        = var.langsmith_polly_encryption_key
-  key_vault_id = azurerm_key_vault.langsmith.id
+  key_vault_id = local.vault_id
   content_type = "text/plain"
 
   lifecycle {
