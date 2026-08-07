@@ -23,6 +23,7 @@ NAMESPACE="${NAMESPACE:-langsmith}"
 # ── Resolve config from terraform.tfvars ──────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
+  echo "       Cannot safely identify a deployment to uninstall." >&2
   exit 1
 fi
 
@@ -44,16 +45,32 @@ echo ""
 
 # ── Get cluster name from Terraform output ────────────────────────────────────
 echo "Reading cluster name from Terraform output..."
-_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || {
-  echo "ERROR: Could not read cluster_name. Is 'terraform apply' complete?" >&2
+_state_output=""
+if ! _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null); then
+  if _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1) && [[ -z "${_state_output//[$' \t\r\n']/}" ]]; then
+    skip "Terraform state is empty; uninstall is already complete."
+    exit 0
+  fi
+  echo "ERROR: Could not read cluster_name from Terraform state." >&2
+  printf "       %s\n" "$_state_output" >&2
   exit 1
-}
+fi
 echo "  cluster_name = $_cluster_name"
 echo ""
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────
+if ! _cluster_status=$(_aws eks describe-cluster --name "$_cluster_name" --region "$_region" --query 'cluster.status' --output text 2>&1); then
+  if [[ "$_cluster_status" == *"ResourceNotFoundException"* ]]; then
+    skip "EKS cluster '$_cluster_name' no longer exists; uninstall is already complete."
+    exit 0
+  fi
+  fail "Could not verify EKS cluster '$_cluster_name'."
+  printf "  %s\n" "$_cluster_status" >&2
+  exit 1
+fi
+
 echo "Updating kubeconfig for cluster: $_cluster_name..."
-aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+_aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
 echo "  Active context: $(kubectl config current-context)"
 echo ""
 
@@ -72,7 +89,13 @@ fi
 echo ""
 
 # ── Uninstall Helm release ────────────────────────────────────────────────────
-if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null | grep -q '"name"'; then
+if ! _helm_releases=$(_helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>&1); then
+  fail "Could not list Helm releases in namespace '$NAMESPACE'."
+  printf "  %s\n" "$_helm_releases" >&2
+  exit 1
+fi
+
+if grep -q '"name"' <<<"$_helm_releases"; then
   echo "Uninstalling Helm release '$RELEASE_NAME'..."
   helm uninstall "$RELEASE_NAME" -n "$NAMESPACE"
 else
@@ -97,7 +120,10 @@ kubectl delete deployments,services,pods,jobs,statefulsets,replicasets \
 # Operator-spawned agent deployment pods use a different label pattern
 kubectl delete deployments,pods \
   -l "langsmith.dev/managed-by=operator" \
-  -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
+  -n "$NAMESPACE" --ignore-not-found
 echo ""
 
 echo "Uninstall complete."
+echo ""
+echo "Next step: destroy this deployment's infrastructure."
+echo "  make destroy"
