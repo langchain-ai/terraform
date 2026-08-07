@@ -608,10 +608,12 @@ Enables the visual agent builder UI and its two supporting services: `fleetToolS
 
 **`langsmith-values-insights.yaml`** — Pass 5 (`enable_insights = true`)
 
-Enables ClickHouse-backed analytics in the Insights tab. The file generated depends on `clickhouse_source` in `terraform.tfvars`:
+Enables ClickHouse-backed analytics in the Insights tab. The file is the same either way — it only sets `insights.enabled: true`.
 
-- `in-cluster` → minimal file with just `config.insights.enabled: true`. The Helm chart manages ClickHouse internally. No external connection needed.
-- `external` → full file with `clickhouse.external.enabled: true` and a `langsmith-clickhouse` secret reference. You must create the secret and fill in the ClickHouse host/credentials before deploying.
+Where ClickHouse runs is a separate decision, made by `clickhouse_source` in `terraform.tfvars` and written into `values-overrides.yaml`, not this file:
+
+- `in-cluster` → the chart runs ClickHouse as a StatefulSet. Dev/POC only; the PVC is a zonal Azure managed disk, so the pod is pinned to one zone for the life of the volume.
+- `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. `init-values.sh` prompts for host/ports/user/password/db/tls and creates that secret; `deploy.sh` refuses to deploy if it is missing a key.
 
 **`langsmith-values-polly.yaml`** — Pass 5 (`enable_polly = true`)
 

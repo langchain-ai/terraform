@@ -279,9 +279,36 @@ else
   pass "langsmith-config-secret exists"
 fi
 
-# Note: langsmith-clickhouse secret not checked here — in-cluster ClickHouse
-# is managed by the chart. External ClickHouse requires a separate secret;
-# see langsmith-values-insights.yaml for instructions.
+# ── Ensure langsmith-clickhouse secret exists (external ClickHouse only) ──
+# With clickhouse_source = "external" the chart skips its own ClickHouse
+# StatefulSet and resolves all seven connection fields through secretKeyRef with
+# optional=false. A missing secret or a missing key strands every LangSmith pod
+# in CreateContainerConfigError, so fail here where the cause is still legible.
+_clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
+if [[ "$_clickhouse_source" == "external" ]]; then
+  info "Verifying langsmith-clickhouse secret..."
+  # go-template over key names only — secret values never leave the API server.
+  _ch_keys=$(kubectl get secret langsmith-clickhouse -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _ch_keys=""
+  if [[ -z "$_ch_keys" ]]; then
+    fail "clickhouse_source = \"external\" but secret langsmith-clickhouse is missing in namespace $NAMESPACE."
+    action "Run: make init-values   (prompts for the connection and creates the secret)"
+    exit 1
+  fi
+  _ch_missing=""
+  for _ch_key in clickhouse_host clickhouse_port clickhouse_native_port \
+                 clickhouse_user clickhouse_password clickhouse_db clickhouse_tls; do
+    grep -qx "$_ch_key" <<< "$_ch_keys" || _ch_missing="${_ch_missing} ${_ch_key}"
+  done
+  if [[ -n "$_ch_missing" ]]; then
+    fail "Secret langsmith-clickhouse is missing required keys:${_ch_missing}"
+    action "kubectl delete secret langsmith-clickhouse -n $NAMESPACE && make init-values"
+    exit 1
+  fi
+  pass "langsmith-clickhouse secret exists with all required keys"
+else
+  skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
+fi
 
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
 _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
