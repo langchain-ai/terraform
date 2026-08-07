@@ -13,7 +13,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | Pass | What | How | Time |
 |------|------|-----|------|
 | **Pass 1** | AKS cluster, Postgres, Redis, Blob, Key Vault, cert-manager, KEDA | `make apply` | ~15–20 min |
-| **Pass 1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` | ~2 min |
+| **Pass 1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` | ~2 min |
 | **Pass 2** | LangSmith Helm chart (~25 pods production) — **Helm path** | `make init-values` → `make deploy` | ~10 min |
 | **Pass 2** | LangSmith Helm chart (~25 pods production) — **Terraform path** | `make init-app` → `make apply-app` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
@@ -51,7 +51,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 brew install azure-cli
 az --version
 
-# Terraform (>= 1.5)
+# Terraform (>= 1.7 — `removed` blocks are used in the keyvault module)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 
@@ -85,6 +85,21 @@ az account show   # verify correct subscription
 
 ---
 
+## Upgrading an existing deployment
+
+The LangSmith application secrets used to be Terraform-managed, which persisted their plaintext in Terraform state. They are now written directly to Key Vault by `make seed-secrets`, and Terraform manages only the vault and its RBAC.
+
+If you deployed before this change:
+
+1. **Upgrade Terraform to >= 1.7.** The keyvault module uses `removed` blocks, which earlier versions reject.
+2. **Run `make apply`.** The `removed` blocks drop the seven secrets from state with `destroy = false`, so the values stay in Key Vault and running pods are unaffected. Nothing is deleted.
+3. **Run `make clean`** whenever you next tear down, or delete `infra/.api_key_salt`, `infra/.jwt_secret`, `infra/.deployments_key`, `infra/.agent_builder_key`, `infra/.insights_key`, and `infra/.polly_key` by hand. `setup-env.sh` no longer writes these plaintext files, but existing ones are not removed automatically.
+4. **Rotate at your discretion.** Values that were in Terraform state are still valid and nothing forces a rotation, but anyone who could read your state file has seen them. Rotate with `make keyvault set <name> <value>` followed by `make k8s-secrets`, keeping in mind that rotating the API key salt invalidates every API key, the JWT secret drops every session, and a Fernet key makes existing encrypted data unreadable.
+
+`make seed-secrets` is a no-op on an already-populated vault, so running it on an upgraded deployment is safe.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -97,7 +112,7 @@ make quickstart
 # cp infra/terraform.tfvars.example infra/terraform.tfvars
 # vi infra/terraform.tfvars
 
-# 2. Bootstrap secrets (prompts on first run, reads from Key Vault on repeat)
+# 2. Bootstrap Terraform inputs (Postgres password, license key, admin email)
 make setup-env
 
 # 3. Check prerequisites
@@ -109,24 +124,27 @@ make preflight
 make init
 make apply
 
-# 5. Get cluster credentials + K8s secrets
+# 5. Seed the LangSmith app secrets into Key Vault (prompts for the admin password)
+make seed-secrets
+
+# 6. Get cluster credentials + K8s secrets
 make kubeconfig
 make k8s-secrets
 
-# 6. Generate Helm values from Terraform outputs
+# 7. Generate Helm values from Terraform outputs
 make init-values
 
-# 7. Deploy LangSmith (~10 min) — Helm path
+# 8. Deploy LangSmith (~10 min) — Helm path
 make deploy
 
-# 8. Check status
+# 9. Check status
 make status
 ```
 
 Or run everything after `make apply` in one shot:
 
 ```bash
-make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
+make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
 ```
 
 **Terraform Helm path** (alternative to steps 5–7 above):
@@ -154,7 +172,7 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 | Pass | What | Make target |
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA + ClusterIssuer | `make apply` |
-| **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
+| **1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` |
 | **2 (Helm)** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
 | **2 (TF)** | LangSmith Helm via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
 | **3** | + LangSmith Deployments (`enable_deployments = true`) — bump `min_count` to 5 first | `make apply && make init-values && make deploy` |
@@ -274,18 +292,43 @@ Key behaviors:
 
 ---
 
-### `make setup-env` — Bootstrap secrets
+### `make setup-env` — Bootstrap Terraform inputs
 **Script:** `infra/scripts/setup-env.sh`
 
-Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
+Collects the values Terraform itself needs and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name from `identifier` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
-- **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
-- **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
-- Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists
-- **Read-only against Key Vault** — never writes to KV directly. Terraform is the sole Key Vault writer; `setup-env.sh` only reads from it
+- Prompts for the PostgreSQL admin password, the LangSmith license key, and the admin email
+- Skips any prompt whose env var is already set (`LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_EMAIL`)
 
-> Run this before `make plan` or `make apply`. Re-run any time to rotate credentials.
+Only two secrets reach Terraform, because Terraform needs them to build something and would hold them in state either way: the Postgres password (it creates the flexible server) and the license key (the `k8s_bootstrap` module creates the `langsmith-license` K8s secret from it). Everything else is seeded by `make seed-secrets`.
+
+> Run this before `make plan` or `make apply`.
+
+---
+
+### `make seed-secrets` — Write app secrets into Key Vault
+**Script:** `infra/scripts/seed-keyvault-secrets.sh`
+
+Writes the LangSmith application secrets directly into Key Vault via `az`, after `make apply` has created the vault. These never pass through Terraform, so they never land in Terraform state — the same split the AWS module uses with SSM and the GCP module uses with Secret Manager.
+
+Seeds seven secrets:
+
+| Secret | Source |
+|---|---|
+| `langsmith-admin-password` | Prompted, or `$LANGSMITH_ADMIN_PASSWORD` |
+| `langsmith-api-key-salt` | Generated (`openssl rand -base64 32`) |
+| `langsmith-jwt-secret` | Generated (`openssl rand -base64 32`) |
+| `langsmith-deployments-encryption-key` | Generated (Fernet) |
+| `langsmith-agent-builder-encryption-key` | Generated (Fernet) |
+| `langsmith-insights-encryption-key` | Generated (Fernet) |
+| `langsmith-polly-encryption-key` | Generated (Fernet) |
+
+- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable. Rotate deliberately with `make keyvault` instead.
+- **Validates the admin password before storing it:** min 12 characters, with a lowercase letter, an uppercase letter, and a symbol from ``!#$%()+,-./:?@[\]^_{~}``. The Helm chart's auth-bootstrap job rejects a password without a symbol, and it fails ~10 minutes into the release rather than at the point you typed it.
+- Requires the **Key Vault Secrets Officer** role on the vault, which `make apply` grants to the deployer identity.
+- Set `LANGSMITH_ADMIN_PASSWORD` to run it non-interactively (CI); it exits with a clear error if the password is unset and stdin is not a tty.
+
+> Run this between `make apply` and `make k8s-secrets`. `make deploy-all` includes it.
 
 ---
 
@@ -324,7 +367,7 @@ Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if ne
 - Azure DB for PostgreSQL Flexible Server (if `postgres_source = "external"`)
 - Azure Cache for Redis Premium (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
-- Azure Key Vault (RBAC mode, soft-delete) + all 10 application secrets
+- Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The seven LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
 - cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)
 - For `agic`: Application Gateway v2 + public IP + AGIC managed identity + Contributor/Reader role assignments + AGIC Helm chart
 - For `envoy-gateway`: `envoyproxy/gateway-helm` in `envoy-gateway-system` namespace
@@ -348,7 +391,7 @@ Runs `terraform destroy -auto-approve` in `infra/`. Same as `make destroy` but s
 Prompts for confirmation, then removes all generated and sensitive local files. Safe to run after a full teardown.
 
 - Removes `infra/terraform.tfvars` and `infra/secrets.auto.tfvars`
-- Removes temporary dot-files written by `setup-env.sh` (`.api_key_salt`, `.jwt_secret`, `.deployments_key`, etc.)
+- Removes the legacy plaintext dot-files (`.api_key_salt`, `.jwt_secret`, `.deployments_key`, etc.). `setup-env.sh` no longer writes these, but deployments created before the Key Vault seeding change still have them on disk
 - Removes `infra/terraform.tfstate` and `terraform.tfstate.backup` (only present when not using remote backend)
 - Removes `helm/values/values-overrides.yaml` and all `helm/values/langsmith-values-*.yaml` (generated by `make init-values`)
 - Keeps `terraform.tfvars.example`, `helm/values/examples/`, and `.terraform/` cache
@@ -691,7 +734,7 @@ azure/
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
-| `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete) + all application secrets. |
+| `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete), its network ACLs and role assignments, and the two secrets Terraform needs (Postgres password, license key). The LangSmith app secrets are seeded by `make seed-secrets`, not Terraform. |
 | `postgres` | optional | Azure DB for PostgreSQL Flexible Server. Enabled when `postgres_source = "external"`. Multi-AZ standby supported. |
 | `redis` | optional | Azure Cache for Redis Premium. Enabled when `redis_source = "external"`. |
 | `dns` | optional | Azure DNS zone + A record. Required for DNS-01 cert issuance (`tls_certificate_source = "dns01"`). |
