@@ -30,6 +30,16 @@ HELM_VALUES_DIR="$AWS_DIR/helm/values"
 
 source "$SCRIPT_DIR/_common.sh"
 
+_local_state_backups=()
+
+_collect_local_state_backups() {
+  _local_state_backups=()
+  local _backup
+  for _backup in "$INFRA_DIR/terraform.tfstate.backup" "$INFRA_DIR"/terraform.tfstate.*.backup; do
+    [[ -f "$_backup" ]] && _local_state_backups+=("$_backup")
+  done
+}
+
 _has_local_artifacts() {
   [[ -f "$INFRA_DIR/terraform.tfvars" ]] && return 0
   [[ -f "$INFRA_DIR/terraform.tfstate" ]] && return 0
@@ -68,10 +78,15 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
+_backup_confirmation_required=false
 if ! _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1); then
   # A local backend with no state file has no resources to protect. Terraform
   # reports it as an error, unlike an initialized empty or remote state.
   if [[ "$_state_output" == *"No state file was found"* ]]; then
+    _collect_local_state_backups
+    if (( ${#_local_state_backups[@]} > 0 )); then
+      _backup_confirmation_required=true
+    fi
     _state_output=""
   else
     fail "Could not read Terraform state; refusing to remove local configuration."
@@ -104,6 +119,16 @@ fi
 if [[ -n "$_ssm_params" && "$_ssm_params" != "None" ]]; then
   fail "SSM parameters remain under ${SSM_PREFIX}/; run 'make purge-secrets' first."
   exit 1
+fi
+
+if [[ "$_backup_confirmation_required" == true ]]; then
+  warn "Terraform state is missing, but local state backup(s) remain:"
+  printf "  %s\n" "${_local_state_backups[@]#$AWS_DIR/}"
+  warn "Deleting them removes the only local recovery record for this deployment."
+  printf "  Type DELETE BACKUPS to continue: "
+  read -r _backup_confirm
+  [[ "$_backup_confirm" == "DELETE BACKUPS" ]] || { echo "  Aborted."; exit 0; }
+  echo ""
 fi
 
 printf "  Continue? [y/N] "

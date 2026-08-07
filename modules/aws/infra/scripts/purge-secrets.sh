@@ -33,6 +33,15 @@ _managed_state_resources() {
     | grep -vE '(^|\.)data\.' || true
 }
 
+_has_local_state_backups() {
+  local _backup
+  [[ -f "$INFRA_DIR/terraform.tfstate.backup" ]] && return 0
+  for _backup in "$INFRA_DIR"/terraform.tfstate.*.backup; do
+    [[ -f "$_backup" ]] && return 0
+  done
+  return 1
+}
+
 SSM_PREFIX="/langsmith/${_name_prefix}-${_environment}"
 
 echo ""
@@ -41,9 +50,13 @@ info "SSM prefix: ${SSM_PREFIX}/"
 info "AWS region: $_region"
 
 if ! _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1); then
-  fail "Could not read Terraform state; refusing to delete SSM parameters."
-  printf "  %s\n" "$_state_output" >&2
-  exit 1
+  if [[ "$_state_output" == *"No state file was found"* ]] && ! _has_local_state_backups; then
+    _state_output=""
+  else
+    fail "Could not read Terraform state; refusing to delete SSM parameters."
+    printf "  %s\n" "$_state_output" >&2
+    exit 1
+  fi
 fi
 
 _state_resources=$(_managed_state_resources "$_state_output")
