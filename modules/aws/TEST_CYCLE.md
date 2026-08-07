@@ -343,6 +343,10 @@ helm uninstall cert-manager -n cert-manager 2>/dev/null || true
 
 # 2. Destroy all infrastructure
 terraform -chdir=infra destroy
+
+# 3. After destroy succeeds, remove cloud secrets, then local files.
+make purge-secrets
+make clean
 ```
 
 **Before destroy, verify:**
