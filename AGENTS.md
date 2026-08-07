@@ -15,8 +15,8 @@ before the PR does, not a separate standard.
   than the rest: the customer-side IAM role and break-glass role for BYOC.
   Gated like the others, so run the checks after touching the policies.
 - `modules/<provider>/helm/scripts/` — the shell drivers (`deploy.sh`,
-  `init-values.sh`, secrets managers). Linted as part of the provider, not the
-  root, since they drive the `app` root.
+  `init-values.sh`, secrets managers). Linted by `check.sh --scripts` along with
+  every other tracked script, not per root.
 - `modules/<provider>/infra/modules/<name>/` — internal child modules
   (networking, k8s-cluster, postgres, redis, storage, dns, secrets, iam…).
   Local `source = "./modules/..."` only; no registry module publishing here.
@@ -40,20 +40,24 @@ before the PR does, not a separate standard.
   it rather than guessing.
 - **Work in small units**: one resource or module, run the checks below, then
   continue. Don't write 300 lines and hand back a correction cycle.
-- **Machine-graded before handing back**: after every HCL or shell edit run
-  `bash agents/check.sh <terraform-root-dir>` (no argument checks every root)
-  and fix what it reports. Per root it runs `terraform validate`, `tflint` with
-  the provider's pinned ruleset from `modules/<provider>/.tflint.hcl`, and
-  `shellcheck` over the provider's `*.sh`. **shellcheck fails on warnings** (the
-  repo is clean at that bar — keep it there); tflint fails only on errors,
-  because the HCL still carries pre-existing warnings. Override for a one-off
-  run with `SHELLCHECK_SEVERITY=` or `TFLINT_SEVERITY=`. `terraform plan` needs
-  cloud creds and state — never run it without explicit user approval.
-- **CI runs the same script**, one job per provider, so a green local run is a
-  green PR. The provider list is derived from `--list-roots`, so a root added
-  under a new directory gets its own job with no workflow edit. If you change
-  what the gate covers, change `agents/check.sh` rather than the workflow, and
-  the workflow picks it up.
+- **Machine-graded before handing back**, and fix what it reports:
+  - HCL edit → `bash agents/check.sh <terraform-root-dir>`: `terraform validate`
+    plus `tflint` with the provider's pinned ruleset from
+    `modules/<provider>/.tflint.hcl`.
+  - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
+    tracked `*.sh`. No terraform, so it returns in about a second.
+  - No argument → both, across every root.
+
+  **shellcheck fails on warnings** (the repo is clean at that bar — keep it
+  there); tflint fails only on errors, because the HCL still carries
+  pre-existing warnings. Override for a one-off run with
+  `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
+  needs cloud creds and state — never run it without explicit user approval.
+- **CI runs the same script**, one job per provider plus one for the scripts, so
+  a green local run is a green PR. If you change what the gate covers, change
+  `agents/check.sh` rather than the workflow. A new root under an existing
+  `modules/<provider>/` needs no workflow edit; a brand-new provider directory
+  needs a `matrix.provider` entry in `.github/workflows/checks.yaml`.
 - Read-only cloud commands (`get`/`describe`/`list`) are fine unprompted.
   Anything mutating — `apply`, `plan` against real state, cloud-CLI writes —
   needs explicit approval first.

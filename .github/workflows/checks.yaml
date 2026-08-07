@@ -26,48 +26,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The provider list is derived from the roots check.sh finds, not written out
-  # here. Listing them by hand is the one drift that fails quietly: add a root
-  # under a directory no leg claims and it goes unchecked while every job stays
-  # green. Deriving it means a new root always gets a leg.
-  providers:
-    name: discover providers
-    runs-on: ubuntu-latest
-    outputs:
-      list: ${{ steps.discover.outputs.list }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Derive the provider list from check.sh
-        id: discover
-        run: |
-          set -euo pipefail
-          roots=$(bash agents/check.sh --list-roots)
-          if [ -z "$roots" ]; then
-            echo "check.sh --list-roots returned nothing, so this workflow would" >&2
-            echo "have checked no terraform at all. Every versions.tf is missing," >&2
-            echo "or the root discovery in agents/check.sh is broken." >&2
-            exit 1
-          fi
-          printf 'roots found:\n%s\n' "$roots"
-          list=$(printf '%s\n' "$roots" | cut -d/ -f2 | sort -u \
-            | jq -Rsc 'split("\n") | map(select(length > 0))')
-          echo "providers: $list"
-          echo "list=$list" >> "$GITHUB_OUTPUT"
-
   # One job per provider so a failure names the provider, and so the provider
-  # rulesets install in parallel. Each covers that provider's roots and its shell
-  # scripts. byoc is the standalone langsmith-byoc-role IAM root -- no shell
-  # scripts, one root nested a level deeper than the others.
+  # rulesets install in parallel. Only the directory names live here: each leg
+  # filters check.sh --list-roots to its own prefix, so which directories are
+  # roots stays defined in one place. byoc is the standalone langsmith-byoc-role
+  # IAM root, nested a level deeper than the others.
   check:
     name: check (${{ matrix.provider }})
-    needs: providers
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: ${{ fromJSON(needs.providers.outputs.list) }}
+        provider: [aws, azure, byoc, gcp]
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
@@ -83,13 +53,6 @@ jobs:
         uses: terraform-linters/setup-tflint@v4
         with:
           tflint_version: v0.64.0
-
-      # Pinned rather than relying on the runner image: ubuntu-latest does ship
-      # shellcheck, but an image bump could change its version and move the
-      # findings under a gate that fails on warnings. Pin so the bar only
-      # changes when we change it.
-      - name: Setup shellcheck
-        uses: ./.github/actions/setup-shellcheck
 
       - name: Cache Terraform providers
         uses: actions/cache@v4
@@ -114,6 +77,7 @@ jobs:
       # matrix leg by filtering the script's own root list. check.sh --list-roots
       # is the single source of the discovery rule -- root depth varies and two
       # child modules carry a versions.tf, so a glob here would drift from it.
+      # Naming roots also means terraform only; the scripts are the job below.
       - name: Run checks
         run: |
           set -euo pipefail
@@ -121,14 +85,20 @@ jobs:
           while IFS= read -r r; do
             roots+=("$r")
           done < <(bash agents/check.sh --list-roots | grep "^modules/${{ matrix.provider }}/")
+          if [ ${#roots[@]} -eq 0 ]; then
+            echo "no terraform roots under modules/${{ matrix.provider }}/, so" >&2
+            echo "this job would have checked nothing. The directory was renamed" >&2
+            echo "or removed, or its versions.tf is gone." >&2
+            exit 1
+          fi
           printf 'roots: %s\n' "${roots[*]}"
           bash agents/check.sh "${roots[@]}"
 
-  # check.sh scopes shellcheck to providers that have a terraform root, so
-  # anything outside those trees gets no cover from the legs above: agents/,
-  # .github/scripts/, and modules/ocp/ (stubs, no versions.tf). Lint every
-  # tracked script here at the same bar, so a new script is gated wherever it
-  # lands rather than only in the directories we thought to name.
+  # Every tracked script, one bar, whole repo -- including the ones outside the
+  # provider trees (agents/, .github/scripts/, modules/ocp/). Its own job rather
+  # than part of the legs above: it needs no terraform, so findings land in
+  # seconds instead of behind an init, and a shell failure reads as a shell
+  # failure rather than as check (aws).
   shellcheck-all:
     name: shellcheck (all scripts)
     runs-on: ubuntu-latest
@@ -136,17 +106,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Pinned rather than relying on the runner image: ubuntu-latest does ship
+      # shellcheck, but an image bump could change its version and move the
+      # findings under a gate that fails on warnings. Pin so the bar only
+      # changes when we change it.
       - name: Setup shellcheck
         uses: ./.github/actions/setup-shellcheck
 
-      # Same bar check.sh applies to the provider scripts.
       - name: Shellcheck every tracked script
-        run: |
-          set -euo pipefail
-          count=$(git ls-files '*.sh' | wc -l | tr -d ' ')
-          if [ "$count" -eq 0 ]; then
-            echo "no *.sh tracked in git, so this job checked nothing" >&2
-            exit 1
-          fi
-          echo "linting $count tracked script(s) at -S warning"
-          git ls-files -z '*.sh' | xargs -0 shellcheck -S warning
+        run: bash agents/check.sh --scripts

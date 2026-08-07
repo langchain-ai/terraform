@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Machine grading for HCL and shell edits. Enforced in CI by
 # .github/workflows/checks.yaml, and run locally before handing back:
-#   bash agents/check.sh                    # every terraform root
-#   bash agents/check.sh modules/aws/infra  # one root
+#   bash agents/check.sh                    # every root, plus every script
+#   bash agents/check.sh modules/aws/infra  # one root, terraform only
+#   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
-# state), tflint with the provider's pinned ruleset, and shellcheck over the
-# provider's *.sh. Exit non-zero on failure.
+# state) and tflint with the provider's pinned ruleset. Scripts are linted
+# repo-wide, not per root. Exit non-zero on failure.
 set -u
 
 unset CDPATH
@@ -15,20 +16,40 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # there prevents regression. tflint gates at error because the HCL still carries
 # pre-existing warnings (unused variables, missing version constraints).
 # CI sets neither -- it inherits these, so a green local run is a green PR.
-# (Comment deliberately does not open with the linter's name: a comment whose
-# first word is that name is parsed as an inline directive, not prose.)
 SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
+
+# Every tracked *.sh at one bar, whole repo, once. Not scoped per provider:
+# the sweep takes about a second, and scoping it left the scripts outside a
+# provider tree (agents/, .github/scripts/, modules/ocp/) with no cover at all.
+# git ls-files rather than find, so ignored trees (.terraform/, a worktree under
+# .claude/) drop out without an exclude list.
+lint_scripts() {
+  command -v shellcheck >/dev/null 2>&1 || {
+    echo "   (shellcheck not installed, skipping script lint)"; return 0; }
+  local count
+  count=$(git -C "$REPO_ROOT" ls-files '*.sh' | wc -l | tr -d ' ')
+  if [ "$count" -eq 0 ]; then
+    echo "check: no *.sh tracked in git, so no script was linted" >&2
+    return 2
+  fi
+  echo "== shellcheck $count script(s) at -S $SHELLCHECK_SEVERITY"
+  (cd "$REPO_ROOT" && git ls-files -z '*.sh' \
+    | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
+}
 
 init_upgrade=0
 list_roots=0
 case "${1:-}" in
   --init-upgrade) init_upgrade=1; shift ;;
   --list-roots) list_roots=1; shift ;;
+  --scripts) lint_scripts; exit $? ;;
 esac
 
-# No args: every terraform root, discovered rather than listed so a new root
-# cannot be silently missed. A root is any directory under modules/ with its own
+# No args: every terraform root and every script. Roots are discovered rather
+# than listed so a new one cannot be silently missed. Naming roots on the command
+# line means terraform only -- use --scripts for the shell half.
+# A root is any directory under modules/ with its own
 # versions.tf, minus the internal child modules under
 # modules/<provider>/<root>/modules/<child>/ -- those are validated transitively
 # via --call-module-type=all, and two of them (azure keyvault, azure redis) do
@@ -36,6 +57,7 @@ esac
 # Depth genuinely varies: modules/aws/infra is two levels down,
 # modules/byoc/aws/langsmith-byoc-role is three. modules/ocp has no versions.tf
 # anywhere, so it is not covered.
+lint_all=0
 if [ $# -eq 0 ] || [ "$list_roots" -eq 1 ]; then
   discovered=()
   while IFS= read -r _versions; do
@@ -58,12 +80,12 @@ EOF
     exit 0
   fi
   set -- "${discovered[@]}"
+  lint_all=1
 fi
 
-# Provider dirs already handled, so tflint --init and shellcheck run once each
-# rather than per root. Space-delimited for bash 3.2 (no associative arrays).
+# Provider dirs already handled, so tflint --init runs once per provider rather
+# than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
-shellchecked=" "
 status=0
 
 for dir in "$@"; do
@@ -124,31 +146,10 @@ for dir in "$@"; do
   else
     echo "   (tflint not installed, skipping lint)"
   fi
-
-  # Lint the provider's shell scripts (deploy, secrets, setup helpers). Scoped
-  # to the provider rather than the root because the scripts under helm/ drive
-  # the app root and belong to the same review.
-  if command -v shellcheck >/dev/null 2>&1; then
-    case "$shellchecked" in
-      *" $provider_dir "*) ;;
-      *)
-        shellchecked="$shellchecked$provider_dir "
-        # find runs from inside provider_dir so -path matches relative paths:
-        # a worktree checkout lives under .claude/, which would otherwise
-        # exclude every file in the tree.
-        sc_count=$(cd "$provider_dir" && find . -name '*.sh' \
-          -not -path '*/.terraform/*' -not -path '*/.claude/*' | wc -l | tr -d ' ')
-        if [ "$sc_count" -gt 0 ]; then
-          (cd "$provider_dir" && find . -name '*.sh' \
-            -not -path '*/.terraform/*' -not -path '*/.claude/*' \
-            -print0 | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY") || status=1
-          echo "   shellcheck: $sc_count script(s) at -S $SHELLCHECK_SEVERITY"
-        fi
-        ;;
-    esac
-  else
-    echo "   (shellcheck not installed, skipping script lint)"
-  fi
 done
+
+if [ "$lint_all" -eq 1 ]; then
+  lint_scripts || status=1
+fi
 
 exit "$status"
