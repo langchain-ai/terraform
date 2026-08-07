@@ -889,5 +889,6 @@ module "dns" {
 
   # Grant cert-manager DNS Zone Contributor so it can create TXT records
   # for DNS-01 ACME challenges. Only needed when tls_certificate_source = "dns01".
+  grant_cert_manager_dns    = var.tls_certificate_source == "dns01"
   cert_manager_principal_id = var.tls_certificate_source == "dns01" ? module.aks.cert_manager_identity_principal_id : ""
 }
