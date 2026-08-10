@@ -432,6 +432,7 @@ PY
         fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
   else
+    pass "checkAccess answered, so the verdicts below are this principal's effective access with deny assignments and ABAC conditions applied"
     while IFS= read -r LINE; do
       case "$LINE" in
         pass\ *) pass "${LINE#pass }" ;;

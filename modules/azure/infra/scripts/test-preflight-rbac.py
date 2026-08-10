@@ -140,7 +140,7 @@ CASES = [
         "expect": [
             f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE}. All eight role assignments",
         ],
-        "reject": ["deny assignment", "PIM holds"],
+        "reject": ["by deny assignment", "PIM holds"],
     },
     {
         "name": "a deny assignment is named and called out as overriding Owner",
