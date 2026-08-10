@@ -191,12 +191,12 @@ _kv_probe || true   # once, in the parent shell — result is reused by every _k
 
 # Generated Postgres password goes through _kv_secret so it stays stable across
 # runs: Key Vault after the first apply, .pg_password before it.
-_pg_generated=false
+_pg_resolved=false
 if [[ -z "$pg_password" ]]; then
   echo ""
-  echo "  No PostgreSQL password given — generating one..."
+  echo "  No PostgreSQL password given — resolving one..."
   pg_password=$(_kv_secret "postgres-admin-password" ".pg_password" "$_pg_generator")
-  _pg_generated=true
+  _pg_resolved=true
 fi
 
 echo ""
@@ -230,9 +230,9 @@ chmod 600 "$SECRETS_FILE"
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "  Wrote $SECRETS_FILE (chmod 600)"
-if [[ "$_pg_generated" == "true" ]]; then
+if [[ "$_pg_resolved" == "true" ]]; then
   echo ""
-  echo "  A PostgreSQL admin password was generated for you. View it with:"
+  echo "  The PostgreSQL admin password was set for you. View it with:"
   echo "    grep postgres_admin_password $SECRETS_FILE"
   echo "  After terraform apply it is also in Key Vault:"
   echo "    az keyvault secret show --vault-name $_kv_name \\"
