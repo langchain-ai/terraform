@@ -10,6 +10,15 @@ variable "subscription_id" {
   description = "Azure subscription ID"
   type        = string
   default     = null
+
+  # A non-GUID value is only rejected once azurerm builds its authorizer, which
+  # reports it as an opaque auth failure against the provider block. Catch the
+  # shape here instead. null stays valid: it is the not-yet-supplied sentinel
+  # that the plan-time precondition reports.
+  validation {
+    condition     = var.subscription_id == null || can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.subscription_id))
+    error_message = "subscription_id must be a GUID, not a subscription name or list index. Get it with: az account show --query id -o tsv"
+  }
 }
 
 variable "resource_group_name" {

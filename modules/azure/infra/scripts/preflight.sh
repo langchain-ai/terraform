@@ -146,6 +146,8 @@ else
     VALUE=$(grep "^${FIELD}" "$TFVARS" 2>/dev/null | head -1 | cut -d'"' -f2 || echo "")
     if [ -z "$VALUE" ] || [[ "$VALUE" == *"<"* ]]; then
       fail "terraform.tfvars: ${FIELD} is empty or still a placeholder"
+    elif [ "$FIELD" = "subscription_id" ] && ! [[ "$VALUE" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+      fail "terraform.tfvars: subscription_id is \"${VALUE}\", which is not a GUID. Get it with: az account show --query id -o tsv"
     else
       pass "terraform.tfvars: ${FIELD} is set"
     fi
