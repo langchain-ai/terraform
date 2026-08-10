@@ -1,0 +1,22 @@
+modules/gcp/helm/values/examples/langsmith-values-sizing-dev.yaml
+  s_a5c04217333a5e::t_7e03da1749e3ea 4-8,10,18-26,30-33,44-45,48,56,66,68-70,77-78,80-81,90-92,99,101-103,110-111,114,123,125-127,135-138,145-146,149,159-162,169-170,173,181-183,189-190,193,199-200,203,209-210,212-213
+modules/gcp/helm/values/examples/langsmith-values-fleet.yaml
+  s_a5c04217333a5e::t_38bb663ededa03 33-67
+  s_a5c04217333a5e::t_6d25153395b1cd 81-118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "76ed4727e38b4fee4db65f157e3c297586416c78",
+  "prompts": {},
+  "sessions": {
+    "s_a5c04217333a5e": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "03629c52-7c14-4b48-9409-240ba86baaf2",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
