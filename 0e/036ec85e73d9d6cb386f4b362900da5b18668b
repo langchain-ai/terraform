@@ -1,0 +1,29 @@
+.github/workflows/chart-line-check.yml
+  s_54f98030d80d3b::t_c92f0b5b7df576 3-6,10,16
+CHANGELOG.md
+  s_54f98030d80d3b::t_22f983dc51a387 5-8
+  s_54f98030d80d3b::t_b1305fb1bdb50d 21
+.github/workflows/release.yml
+  s_54f98030d80d3b::t_206ec1f2a03765 73-90
+  s_54f98030d80d3b::t_7694e2f1f204fe 3-4,12-15
+  s_54f98030d80d3b::t_c9636724a3b774 22-24
+  s_54f98030d80d3b::t_c37539f450f95b 16
+README.md
+  s_54f98030d80d3b::t_f9ab75e3d59445 7-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0e036ec85e73d9d6cb386f4b362900da5b18668b",
+  "prompts": {},
+  "sessions": {
+    "s_54f98030d80d3b": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "9bc16646-a19d-41fa-a069-64a11c37b808",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
