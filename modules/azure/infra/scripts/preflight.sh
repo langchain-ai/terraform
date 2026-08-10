@@ -463,7 +463,7 @@ if [ -z "$QUOTA_ID" ]; then
   warn "Could not read the subscription offer type — skipping offer restriction check"
 else
   case "$QUOTA_ID" in
-    FreeTrial_*|MSDN_*|MSDNDevTest_*|VisualStudio_*|AzurePass_*|MPN_*|SponsoredMS_*)
+    FreeTrial_*|MSDN_*|MSDNDevTest_*|VisualStudio_*|AzurePass_*|MPN_*|Sponsored_*)
       warn "Subscription offer type is ${QUOTA_ID}."
       warn "Offer types like this are commonly blocked from provisioning PostgreSQL"
       warn "Flexible Server in high-demand regions (LocationIsOfferRestricted)."
