@@ -57,6 +57,12 @@ _ask_yn() {
   [[ "$_REPLY" =~ ^[Yy] ]]
 }
 
+_feature_prompt() {
+  local prompt="$1" enabled="$2"
+  local state="disabled"; [[ "$enabled" == "true" ]] && state="enabled"
+  printf '%s [%s]' "$prompt" "$state"
+}
+
 _ask_choice() {
   # Usage: _ask_choice [--default N] "prompt" "opt1" "opt2" ...
   local default=""
@@ -639,26 +645,37 @@ _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_ab=$(_existing "enable_agent_builder" "false")
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
+_ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
+ENABLE_SANDBOXES="false"
 
-_ask_yn "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" \
+_ask_yn "$(_feature_prompt "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" "$_ex_deploys")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
 
 if [[ "$ENABLE_DEPLOYMENTS" == "true" ]]; then
-  _ask_yn "  ↳ Enable Agent Builder (visual agent UI, requires Deployments)?" \
+  _ask_yn "$(_feature_prompt "  ↳ Enable Agent Builder (visual agent UI, requires Deployments)?" "$_ex_ab")" \
     "$([[ "$_ex_ab" == "true" ]] && echo "y" || echo "n")" \
     && ENABLE_AGENT_BUILDER="true" || ENABLE_AGENT_BUILDER="false"
-  _ask_yn "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" \
+  _ask_yn "$(_feature_prompt "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" "$_ex_polly")" \
     "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
     && ENABLE_POLLY="true" || ENABLE_POLLY="false"
 fi
 
-_ask_yn "Enable Insights (ClickHouse analytics dashboard)?" \
+_ask_yn "$(_feature_prompt "Enable Insights (ClickHouse analytics dashboard)?" "$_ex_insights")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
+
+echo ""
+printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
+printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
+printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
+if _ask_yn "$(_feature_prompt "Enable LangSmith Sandboxes?" "$_ex_sandboxes")" \
+  "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
+  ENABLE_SANDBOXES="true"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Write terraform.tfvars
@@ -873,6 +890,12 @@ enable_insights      = ${ENABLE_INSIGHTS}
 enable_polly         = ${ENABLE_POLLY}
 TFVARS
 
+if [[ "$ENABLE_SANDBOXES" == "true" ]]; then
+  cat >> "$OUTPUT" << TFVARS
+enable_sandboxes = true
+TFVARS
+fi
+
 # Security add-ons
 HAS_SECURITY=false; SECURITY_BLOCK=""
 [[ "${ALB_SCHEME:-internet-facing}" != "internet-facing" ]] && { SECURITY_BLOCK+="alb_scheme          = \"${ALB_SCHEME}\"\n"; HAS_SECURITY=true; }
@@ -917,6 +940,7 @@ printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
 [[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
 [[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
+printf "  %-26s %s\n" "Sandboxes:" "$ENABLE_SANDBOXES"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"

@@ -60,8 +60,7 @@ _validate_sandbox_values_file() {
 
   if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
     || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
+    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file"; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
     exit 1
@@ -481,12 +480,21 @@ _helm_timeout="${HELM_TIMEOUT:-30m}"
 # Instead, we do our own readiness check below.
 # Resolve the pin to a concrete version and print it. Without this the only place
 # the installed version shows up is `helm list`, after the release is already out.
-_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
+_chart_metadata=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
 echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
+fi
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the Sandbox image." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag"
 fi
 
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \

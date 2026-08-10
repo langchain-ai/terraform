@@ -242,13 +242,8 @@ _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
 
-_sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ -z "$_sandbox_host_image_tag" ]]; then
-    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
-    exit 1
-  fi
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
 fi
 
@@ -683,7 +678,6 @@ insights:
 fi
 
 _sandbox_config_block=""
-_sandbox_top_level_block=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_service_url_block=""
   if [[ -n "$_sandbox_service_url_base_url" ]]; then
@@ -704,10 +698,6 @@ sandboxes:
     deployment:
       nodeSelector:
         sandbox.langsmith.com/host: \"true\""
-  _sandbox_top_level_block="
-images:
-  sandboxHostImage:
-    tag: \"${_sandbox_host_image_tag}\""
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
@@ -799,7 +789,6 @@ operator:
 ${_routing_block}
 ${_external_services_block}
 ${_standalone_block}
-${_sandbox_top_level_block}
 YAML
 
 echo "Written: $OUT_FILE"
