@@ -16,6 +16,7 @@ secrets.auto.tfvars
 plan.out
 
 # Local secret files generated before Key Vault exists
+infra/.pg_password
 infra/.api_key_salt
 infra/.jwt_secret
 infra/.deployments_key
