@@ -25,7 +25,8 @@ make quickstart
 #    reads silently from Key Vault on every subsequent run
 make setup-env
 
-# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC, quotas)
+# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC,
+#    quotas, and that the globally-unique resource names are still free)
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
@@ -60,7 +61,7 @@ make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
 
 ```bash
 cp infra/terraform.tfvars.example infra/terraform.tfvars
-vi infra/terraform.tfvars   # required: subscription_id, identifier, location
+vi infra/terraform.tfvars   # required: subscription_id, name_prefix, location
 # then continue from step 2 above
 ```
 
@@ -244,7 +245,7 @@ Then re-run `make init-values && make deploy`.
 ```hcl
 # ── Required ──────────────────────────────────────────────────────────────────
 subscription_id = ""              # az account show --query id -o tsv
-identifier      = "-prod"         # suffix appended to every resource name
+name_prefix     = "prod"          # appended to every resource name (no leading hyphen)
 location        = "eastus"        # Azure region
 
 # ── Data sources ──────────────────────────────────────────────────────────────

@@ -24,13 +24,14 @@ config:
 
 hostBackend:
   enabled: true
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "512Mi"
-    limits:
-      cpu: "2"
-      memory: "2Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "500m"
+        memory: "512Mi"
+      limits:
+        cpu: "2"
+        memory: "2Gi"
   autoscaling:
     hpa:
       enabled: true
@@ -40,23 +41,25 @@ hostBackend:
 
 listener:
   enabled: true
-  resources:
-    requests:
-      cpu: "1000m"
-      memory: "2Gi"
-    limits:
-      cpu: "2"
-      memory: "4Gi"
+  deployment:
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
 
 operator:
   enabled: true
-  resources:
-    requests:
-      cpu: "100m"
-      memory: "128Mi"
-    limits:
-      cpu: "500m"
-      memory: "512Mi"
+  deployment:
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
   # Deployment template for operator-spawned agent pods.
   # Agent pods run as langsmith-ksa (created by deploy.sh with WI annotation).
   # Workload Identity is used for blob storage access — no static credentials needed.

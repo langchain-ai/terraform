@@ -10,7 +10,7 @@
 #   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
-#   - infra/terraform.tfvars    → identifier, environment, location, tls_certificate_source,
+#   - infra/terraform.tfvars    → name_prefix, environment, location, tls_certificate_source,
 #                                 postgres_source, redis_source, sizing_profile
 #   - terraform output          → storage_account_name, storage_container_name,
 #                                 storage_account_k8s_managed_identity_client_id,
@@ -45,8 +45,8 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
-_identifier=$(_parse_tfvar "identifier") || _identifier=""
-_environment=$(_parse_tfvar "environment") || _environment="dev"
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
 _location=$(_parse_tfvar "location") || _location="eastus"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
@@ -70,7 +70,7 @@ _first_run="false"
 
 echo ""
 echo "Parsed terraform.tfvars:"
-info "identifier             = ${_identifier:-(empty)}"
+info "name_prefix            = ${_name_prefix:-(empty)}"
 info "environment            = $_environment"
 info "location               = $_location"
 info "tls_certificate_source = $_tls_source (protocol: $_protocol)"

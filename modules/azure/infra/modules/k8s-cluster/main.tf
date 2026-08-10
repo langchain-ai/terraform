@@ -380,8 +380,8 @@ resource "helm_release" "istio_gateway" {
 }
 
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
-# Provisions an Azure Application Gateway v2 and installs the AGIC Helm chart.
-# AGIC watches Kubernetes Ingress resources with ingressClassName: azure/application-gateway
+# Provisions an Azure Application Gateway v2 and enables the AKS ingress-appgw add-on.
+# AGIC watches Kubernetes Ingress resources with ingressClassName: azure-application-gateway
 # and programs AGW routing rules dynamically. Auth uses Workload Identity (ARM auth).
 #
 # Prerequisites: agic_subnet_id must point to a dedicated /24+ subnet in the same VNet.
@@ -411,6 +411,12 @@ resource "azurerm_application_gateway" "agw" {
   resource_group_name = var.resource_group_name
   location            = var.location
   tags                = merge(var.tags, { module = "aks", component = "agic" })
+
+  # Attached only when the caller passes a policy, which it does with the
+  # WAF_v2 tier. Azure supports policy associations on no other tier, and the
+  # provider does not check the pair, so a Standard_v2 gateway with a policy
+  # plans clean and fails at apply.
+  firewall_policy_id = var.firewall_policy_id
 
   sku {
     name     = var.agw_sku_tier
@@ -495,7 +501,8 @@ resource "azurerm_application_gateway" "agw" {
 # assigned explicitly. Three permissions are required:
 #   1. Reader on the resource group (discover AGW and related resources)
 #   2. Contributor on the Application Gateway (update routing rules)
-#   3. Network Contributor on the VNet (subnet join action for AGW subnet)
+#   3. Network Contributor for the subnet join action on the AGW subnet, at VNet
+#      scope by default and narrowed by agic_network_contributor_scope
 #
 # The add-on identity object_id is exposed via:
 #   azurerm_kubernetes_cluster.main.ingress_application_gateway[0]
@@ -528,9 +535,19 @@ resource "azurerm_role_assignment" "agic_agw_contributor" {
   depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
 
+# Network Contributor is Microsoft.Network/* with no NotActions, so at VNet scope
+# this identity can write to every subnet in the VNet, including which NSG or
+# route table each one carries. AGIC needs subnets/join/action and subnets/read on
+# one subnet, and Azure documents those as assignable "on the virtual network or
+# subnet", so 'subnet' is sufficient and is what a VNet you do not own should get.
+#
+# The default stays 'vnet' because scope is ForceNew: narrowing it destroys and
+# recreates the assignment, which is a non-empty plan and a window of 403s for
+# every deployment already running. 'none' leaves the grant to an operator whose
+# network team will not delegate roleAssignments/write on their VNet.
 resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
-  scope                = local.agic_vnet_id
+  count                = var.ingress_controller == "agic" && var.agic_network_contributor_scope != "none" ? 1 : 0
+  scope                = var.agic_network_contributor_scope == "subnet" ? var.agic_subnet_id : local.agic_vnet_id
   role_definition_name = "Network Contributor"
   principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
   depends_on           = [time_sleep.agic_identity_propagation]

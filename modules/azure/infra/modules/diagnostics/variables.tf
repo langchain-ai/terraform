@@ -37,6 +37,12 @@ variable "postgres_id" {
   default     = ""
 }
 
+variable "agw_id" {
+  type        = string
+  description = "Resource ID of the Application Gateway to enable diagnostic settings on."
+  default     = ""
+}
+
 # Boolean flags for count — must be known at plan time (cannot use computed IDs for count).
 variable "enable_aks_diag" {
   type        = bool
@@ -53,6 +59,12 @@ variable "enable_keyvault_diag" {
 variable "enable_postgres_diag" {
   type        = bool
   description = "Whether to create the PostgreSQL diagnostic setting. Set to true when postgres_source = external."
+  default     = false
+}
+
+variable "enable_agw_diag" {
+  type        = bool
+  description = "Whether to create the Application Gateway diagnostic setting. Set to true when ingress_controller = 'agic'. Without it the WAF's firewall log is not collected anywhere, and Detection mode reports only match counts through metrics."
   default     = false
 }
 

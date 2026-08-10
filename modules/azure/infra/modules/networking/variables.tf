@@ -3,6 +3,24 @@ variable "network_name" {
   description = "Name of the virtual network"
 }
 
+variable "create_vnet" {
+  type        = bool
+  description = "Create the VNet. When false, subnets are created inside the VNet identified by existing_vnet_id."
+  default     = true
+}
+
+variable "existing_vnet_id" {
+  type        = string
+  description = "Resource ID of an existing VNet to create subnets in. Required when create_vnet = false."
+  default     = ""
+}
+
+variable "create_main_subnet" {
+  type        = bool
+  description = "Create the main (AKS) subnet. False when an existing AKS subnet is supplied."
+  default     = true
+}
+
 variable "location" {
   type        = string
   description = "Location of the virtual network"
@@ -25,15 +43,15 @@ variable "main_subnet_address_prefix" {
   default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
-variable "enable_external_postgres" {
+variable "create_postgres_subnet" {
   type        = bool
-  description = "Enable external Postgres"
+  description = "Create the delegated Postgres subnet. False when Postgres is in-cluster, or when an existing Postgres subnet is supplied."
   default     = true
 }
 
-variable "enable_external_redis" {
+variable "create_redis_subnet" {
   type        = bool
-  description = "Enable external Redis"
+  description = "Create the Redis subnet. False when Redis is in-cluster, or when an existing Redis subnet is supplied."
   default     = true
 }
 
