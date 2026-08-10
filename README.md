@@ -4,6 +4,8 @@ Terraform modules for deploying **LangSmith Self-Hosted** on AWS, Azure, GCP, an
 
 LangSmith is LangChain's observability, evaluation, and prompt-engineering platform. This repository packages the cloud foundation (network / cluster / database / cache / object storage / secrets / DNS) and the Helm deployment of the LangSmith application as reusable, production-ready Terraform.
 
+> **This is the `0.15` maintenance branch.** Chart line `0.15` is superseded by `0.16`, which ships as `v0.16.*` tags. This branch keeps shipping `v0.15.*` releases for installs staying on chart `0.15.x`, so staying here is supported — but deploy from a `v0.15.*` tag, never from the branch itself. See [Versioning and releases](#versioning-and-releases). Read `MIGRATION-0.15-to-0.16.md` on the `0.16` line before moving across; the values schema changed in ways chart `0.15` ignores silently rather than rejecting.
+
 ## Who this is for
 
 Enterprise customers running LangSmith in their own cloud account or OpenShift cluster. If you are evaluating Self-Hosted or standing up a production deployment, start here.
