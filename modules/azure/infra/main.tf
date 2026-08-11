@@ -598,8 +598,12 @@ module "aks" {
   langsmith_namespace    = var.langsmith_namespace
   langsmith_release_name = var.langsmith_release_name
 
-  # Preserve existing identity name when migrating from storage module.
-  # New deployments leave this unset and get "${cluster_name}-app-identity".
+  # The one name that does not follow the convention above, pinned so that
+  # deployments predating the storage-module split keep their identity instead of
+  # destroying it and its federated credential. Passing it unconditionally means
+  # the module's "${cluster_name}-app-identity" fallback is never reached, so new
+  # deployments get this name too. Safe because the identity is resource-group
+  # scoped and the resource group name already carries name_prefix.
   workload_identity_name = "k8s-app-identity"
 
   availability_zones = var.availability_zones
