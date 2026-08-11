@@ -473,11 +473,16 @@ resource "terraform_data" "validate_network" {
     # no way to skip that check, so both endpoints are required regardless of
     # keyvault_default_action. Skipped when Terraform is the one adding them,
     # since checking first would fail the plan that would fix it.
+    # Iterating the data source rather than guarding an index on it: && and ||
+    # do not short-circuit before Terraform 1.14, so a length() == 0 guard still
+    # evaluates the [0] beside it and fails the plan on every create path.
     precondition {
-      condition = local.manage_aks_subnet_endpoints || length(data.azurerm_subnet.byo_aks_subnet) == 0 || alltrue([
-        for endpoint in local.required_aks_service_endpoints :
-        contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
-      ])
+      condition = local.manage_aks_subnet_endpoints || alltrue(flatten([
+        for subnet in data.azurerm_subnet.byo_aks_subnet : [
+          for endpoint in local.required_aks_service_endpoints :
+          contains(subnet.service_endpoints, endpoint)
+        ]
+      ]))
       error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add them, or clear aks_subnet_id and let Terraform create a subnet."
     }
 
