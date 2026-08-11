@@ -30,6 +30,41 @@ fleet:
   # Shared with the legacy config.agentBuilder path — do not change once data exists.
   # encryptionKey: ""
 
+  # Explicit resources — the chart defaults these two standalone blocks to {},
+  # and k8s-bootstrap applies a namespace ResourceQuota that rejects any pod
+  # not declaring cpu/memory requests AND limits. There is no LimitRange to
+  # default them from: the only one this module creates supplies requests
+  # alone, and only when sandboxes are enabled. Without these blocks both
+  # Deployments sit at 0/1 forever with
+  #   failed quota: langsmith-quota: must specify limits.cpu for: api-server
+  # on the ReplicaSet rather than on any pod, so nothing appears in
+  # kubectl get pods to explain the absence.
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+    autoscaling:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 70
+
+  queue:
+    enabled: true
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+
   postgres:
     external:
       enabled: true
@@ -43,3 +78,41 @@ fleet:
       # Secret created by Terraform (infra/main.tf: kubernetes_secret.fleet_redis).
       # Contains key: redis_connection_url = redis://<host>:<port>
       existingSecretName: "langsmith-fleet-redis"
+
+# fleetToolServer / fleetTriggerServer are separate top-level Deployments, not
+# part of the fleet.* block above. This file is loaded after the sizing overlay
+# in deploy.sh, so what is set here wins over the sizing profile — which is the
+# point: the sizing profiles are per-environment, this constraint is not.
+fleetToolServer:
+  enabled: true
+  # The fleet-tool-server image CPU-pegs on startup (LANGGRAPH_DEPLOYMENT_URL
+  # sync/poll loop) and CrashLoopBackOffs on a 1-CPU limit, because uvicorn
+  # cannot serve /health on port 1989 within the default probe window. It needs
+  # >= 2 CPU and a relaxed startup probe; CPU settles below 20m afterwards.
+  #
+  # The failure does not look like CPU starvation from the outside. The uvicorn
+  # parent binds the port and stays up, so the container is never OOMKilled and
+  # never exits non-zero; the workers are reaped in a loop that logs only
+  # "Child process [N] died" with no traceback, and the pod's lastState reads
+  # Completed with exit code 0. Do not lower these values to fit a sizing
+  # profile — this is the same constraint the AWS module carries.
+  deployment:
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "2500m"
+        memory: 3Gi
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 1989
+      failureThreshold: 30
+      periodSeconds: 5
+      timeoutSeconds: 5
+
+fleetTriggerServer:
+  # Currently only supports a single replica (chart-enforced) to prevent
+  # duplicate trigger executions — do not set a replica count here.
+  enabled: true

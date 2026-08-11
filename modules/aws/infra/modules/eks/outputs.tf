@@ -41,3 +41,13 @@ output "node_security_group_id" {
   description = "Security group ID attached to EKS worker nodes and pod ENIs. Used to grant ALB access to gateway proxy pods (target-type: ip)."
   value       = module.eks.node_security_group_id
 }
+
+output "karpenter_node_iam_role_name" {
+  description = "Name of the Karpenter node IAM role (null when Karpenter is disabled). Referenced by the SmithDB EC2NodeClass role."
+  value       = var.enable_karpenter ? try(module.eks_blueprints_addons.karpenter.node_iam_role_name, null) : null
+}
+
+output "karpenter_node_iam_role_arn" {
+  description = "ARN of the Karpenter node IAM role (null when Karpenter is disabled)."
+  value       = var.enable_karpenter ? try(module.eks_blueprints_addons.karpenter.node_iam_role_arn, null) : null
+}

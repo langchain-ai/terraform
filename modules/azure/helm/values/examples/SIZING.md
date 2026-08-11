@@ -9,16 +9,17 @@ Four sizing profiles for different deployment scenarios. Each profile has a corr
 | **Production** | Any environment serving real traffic, multi-replica with HPA | `langsmith-values-sizing-production.yaml` |
 | **Production Large** | High-volume (~50 concurrent users, ~1,000 traces/sec), elevated baselines | `langsmith-values-sizing-production-large.yaml` |
 
-### Operator-managed pods (LGP resources)
+### Agent workloads (Insights, Polly, Fleet)
 
-The sizing values files control Helm-deployed components and `config.*.agent.resources` for operator-managed agent server/queue pods. Database and redis sidecar resources are written by the bootstrap job at production-scale defaults and **cannot be controlled via Helm values**.
+On chart 0.16 the standalone agents are ordinary Deployments, and everything about them is settable from Helm values. Each agent splits into an api-server and a queue:
 
-To right-size database/redis sidecars after deploy, update via the **LangSmith UI**:
+- `polly.apiServer.deployment.resources` and `polly.queue.deployment.resources`
+- `engineInsightsAgent.apiServer.deployment.resources` and `engineInsightsAgent.queue.deployment.resources`
+- `fleet.apiServer.deployment.resources` and `fleet.queue.deployment.resources`
 
-1. Log into LangSmith as an org admin
-2. Navigate to each bundled agent deployment (agent-builder, clio, smith-polly)
-3. Update the resource spec (db, redis) to match your sizing profile
-4. This creates a new revision — the operator reconciles the lower resources automatically
+Each agent also gets its own Postgres and Redis. Left alone those are in-cluster StatefulSets sized by `<agent>.postgres.statefulSet.resources` and `<agent>.redis.statefulSet.resources` (`engineInsightsAgent.*` for Insights). Setting `<agent>.postgres.external.enabled` points the agent at a managed database instead, which is what the `langsmith-values-standalone-*.yaml` overlays do.
+
+This replaces the chart 0.15 arrangement, where `config.*.agent.resources` fed an agent-bootstrap Job that wrote database and redis sidecars at production-scale defaults which could then only be reduced through the LangSmith UI. Chart 0.16 removed that Job, so there is no longer anything to correct after the fact - and `config.agentBuilder.agent.resources` is no longer read at all.
 
 ---
 

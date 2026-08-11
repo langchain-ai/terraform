@@ -107,6 +107,20 @@ resource "null_resource" "apply_gateway_class" {
 # Envoy Gateway Resource
 #------------------------------------------------------------------------------
 locals {
+  # Gateway API rejects hostname: "" but treats an absent hostname as "match any
+  # host", which is what a deployment reached by IP needs. Merge the key in only
+  # when there is a domain to put in it.
+  gateway_listener_hostname = var.langsmith_domain != "" ? { hostname = var.langsmith_domain } : {}
+
+  # Port 80 carries the ACME challenge for Let's Encrypt, and is the only
+  # entrypoint when no certificate source is configured.
+  gateway_http_listener_enabled = var.tls_certificate_source != "existing"
+
+  # The HTTPS listener references var.tls_secret_name, which nothing creates when
+  # tls_certificate_source = "none". Declaring it anyway leaves a listener that
+  # can never be programmed, so omit it instead.
+  gateway_https_listener_enabled = var.tls_certificate_source != "none"
+
   gateway_yaml = var.ingress_type == "envoy" ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "Gateway"
@@ -120,24 +134,20 @@ locals {
     spec = {
       gatewayClassName = "envoy-gateway-class"
       listeners = concat(
-        # HTTP listener for ACME challenge (required for Let's Encrypt)
-        var.tls_certificate_source == "letsencrypt" ? [{
+        local.gateway_http_listener_enabled ? [merge({
           name     = "http"
           protocol = "HTTP"
           port     = 80
-          hostname = var.langsmith_domain
           allowedRoutes = {
             namespaces = {
               from = "All"
             }
           }
-        }] : [],
-        # HTTPS listener
-        [{
+        }, local.gateway_listener_hostname)] : [],
+        local.gateway_https_listener_enabled ? [merge({
           name     = "https"
           protocol = "HTTPS"
           port     = 443
-          hostname = var.langsmith_domain
           tls = {
             mode = "Terminate"
             certificateRefs = [{
@@ -151,7 +161,7 @@ locals {
               from = "All"
             }
           }
-        }]
+        }, local.gateway_listener_hostname)] : []
       )
     }
   }) : ""

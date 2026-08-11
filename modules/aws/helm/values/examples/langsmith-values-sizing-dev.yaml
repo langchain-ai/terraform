@@ -114,10 +114,13 @@ hostBackend:
     resources:
       requests:
         cpu: "250m"
-        memory: "512Mi"
+        # 512Mi was below host-backend's idle footprint (~455Mi), so the default
+        # memory-based HPA (target 80%) pinned it to maxReplicas. 1Gi keeps idle
+        # utilization ~45% so it settles at 1 replica.
+        memory: "1Gi"
       limits:
         cpu: "1"
-        memory: "1Gi"
+        memory: "2Gi"
 
 listener:
   deployment:

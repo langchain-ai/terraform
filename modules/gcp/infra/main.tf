@@ -517,6 +517,10 @@ module "k8s_bootstrap" {
     var.enable_sandboxes ? var.sandbox_default_container_requests : {}
   )
 
+  # The JuiceFS CSI driver runs at system-node-critical / system-cluster-critical,
+  # which GKE admits only into a namespace holding a PriorityClass-scoped quota.
+  allow_critical_priority_pods = var.enable_sandboxes
+
   # Host-networked sandbox-host must reach platform-backend, and the CNI dictates how:
   #  - CALICO: an ipBlock for the node subnet matches node-sourced traffic, so keep
   #    the full default-deny and admit the node subnet.

@@ -26,5 +26,15 @@ containerSecurityContext:
 storage:
   storageClassName: ""  # Use cluster default; set explicitly if needed (e.g. ocs-storagecluster-ceph-rbd)
 
+# Chart 0.16 ships insights.enabled and polly.enabled as true. This module sets no
+# config.existingSecretName, so leaving them on makes the chart hard-fail on the
+# encryption key it cannot find. Turn them on in values-overrides.yaml, together
+# with the matching encryptionKey, when you actually want those agents.
+insights:
+  enabled: false
+
+polly:
+  enabled: false
+
 config:
   blobStorageBackend: s3  # Override in values-overrides.yaml if using a different backend

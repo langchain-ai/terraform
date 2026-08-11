@@ -11,7 +11,7 @@ admin_email = "admin@example.com"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # hostname      = "langsmith.example.com"   # Defaults to Gateway IP
-# chart_version = "0.7.0"                   # Empty = latest
+# chart_version = "~0.16.0"                 # Must be on the chart 0.16 line
 # release_name  = "langsmith"
 
 # ── Sizing ────────────────────────────────────────────────────────────────────

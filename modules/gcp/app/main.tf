@@ -78,13 +78,13 @@ resource "helm_release" "langsmith" {
   create_namespace = true
   repository       = "https://langchain-ai.github.io/helm"
   chart            = "langsmith"
-  version          = var.chart_version != "" ? var.chart_version : null
+  version          = var.chart_version
   timeout          = var.helm_timeout
 
-  # Do NOT use wait = true. The chart's post-install bootstrap job deploys
-  # operator-managed agents (clio, polly, agent-builder) which can take 10+
-  # minutes on a cold cluster with autoscaling. Terraform marks the release as
-  # failed if the job exceeds the timeout — even though all workloads are healthy.
+  # Do NOT use wait = true. The chart's post-install hooks and the operator's
+  # agent pods can take 10+ minutes to settle on a cold cluster with autoscaling.
+  # Terraform marks the release as failed if a hook exceeds the timeout — even
+  # though all workloads are healthy.
   wait = false
 
   force_update = var.helm_force_update

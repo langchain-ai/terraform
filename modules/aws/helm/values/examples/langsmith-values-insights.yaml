@@ -8,15 +8,18 @@
 #   - ClickHouse instance (AWS Marketplace, LangChain managed, or self-hosted)
 #   - ClickHouse must be reachable from the EKS cluster
 
-config:
-  insights:
-    enabled: true
-    # encryptionKey is pulled from SSM via ESO — do not set it here.
-    # Required SSM parameter: /langsmith/{prefix}-{env}/insights-encryption-key
-    # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/insights-encryption-key" \
-    #             --value "<key>" --type SecureString
-    # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
+# Chart 0.15.1 removed the bundled config.insights path and its validator hard-fails
+# on the mere presence of the key (hasKey), even when set to false. The top-level
+# insights block is the only supported path. Workload settings (scaling, databases,
+# resources) live in engineInsightsAgent — see langsmith-values-standalone-insights.yaml.
+insights:
+  enabled: true
+  # encryptionKey is pulled from SSM via ESO — do not set it here.
+  # Required SSM parameter: /langsmith/{prefix}-{env}/insights-encryption-key
+  # Generate: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/insights-encryption-key" \
+  #             --value "<key>" --type SecureString
+  # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
 
 clickhouse:
   external:

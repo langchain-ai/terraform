@@ -114,11 +114,36 @@ If a stale ALB remains after 2 minutes, delete it manually — it will block VPC
 
 ## A4 — Pre-Destroy: Unblock RDS
 
-Two things will cause `terraform destroy` to fail on RDS if not addressed first.
+Before destroying, disable deletion protection and choose whether to keep a final
+snapshot for each Terraform-managed RDS instance.
 
-### 4a — Disable deletion protection
+### 4a — Update terraform.tfvars
 
-Check if deletion protection is on (it defaults to `true` in the postgres module):
+```hcl
+postgres_deletion_protection = false
+postgres_skip_final_snapshot = false
+
+smithdb_metastore_deletion_protection = false
+smithdb_metastore_skip_final_snapshot = false
+```
+
+Keep `skip_final_snapshot = false` for production. Use `true` only when no final
+snapshot is needed, such as a disposable dev/test environment. The `dev` and
+`minimum` profiles already set all four values for deletion without snapshots.
+
+The SmithDB settings apply only when `enable_smithdb = true` and
+`smithdb_metastore_source = "create"`. Do not rerun the production quickstart after
+this edit because it restores deletion protection.
+
+Apply the changes before destroying:
+
+```bash
+cd aws/infra
+source ./scripts/setup-env.sh
+terraform apply
+```
+
+For `postgres_source = "external"`, verify deletion protection is off:
 
 ```bash
 aws rds describe-db-instances \
@@ -128,33 +153,26 @@ aws rds describe-db-instances \
   --output text
 ```
 
-If `True`, disable it:
+Repeat with `<name_prefix>-<environment>-smithdb-metastore` when Terraform creates
+the SmithDB metastore.
+
+### 4b — Check final snapshot names
+
+When `skip_final_snapshot = false`, confirm the fixed snapshot names are available:
 
 ```bash
-aws rds modify-db-instance \
-  --db-instance-identifier <name_prefix>-<environment>-pg \
-  --no-deletion-protection \
+aws rds describe-db-snapshots \
+  --db-snapshot-identifier <name_prefix>-<environment>-pg-final \
+  --region <region>
+
+aws rds describe-db-snapshots \
+  --db-snapshot-identifier <name_prefix>-<environment>-smithdb-metastore-final \
   --region <region>
 ```
 
-### 4b — Enable skip_final_snapshot
-
-The postgres module does not set `skip_final_snapshot`, so the AWS provider defaults to `false`. Without a `final_snapshot_identifier`, `terraform destroy` will fail immediately on the RDS step.
-
-In `modules/postgres/main.tf`, uncomment the line before running destroy:
-
-```hcl
-# Uncomment before running terraform destroy
-# skip_final_snapshot = true
-```
-
-Then run a targeted apply to push the change before destroying:
-
-```bash
-cd aws/infra
-source ./scripts/setup-env.sh
-terraform apply -target=module.postgres
-```
+Run the second command only when Terraform creates the SmithDB metastore. An existing
+snapshot causes `DBSnapshotAlreadyExists`; no matching snapshot means the name is
+available. Final snapshots remain after teardown and incur storage charges.
 
 ## A5 — Destroy AWS Infrastructure
 

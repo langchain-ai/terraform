@@ -31,6 +31,12 @@ variable "resource_quota_include_limits" {
   default     = true
 }
 
+variable "allow_critical_priority_pods" {
+  description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the JuiceFS CSI driver the sandbox feature depends on: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Leave false when sandboxes are disabled."
+  type        = bool
+  default     = false
+}
+
 variable "default_container_requests" {
   description = "Default CPU and memory requests injected by a LimitRange into containers that omit them. An empty map disables the LimitRange. No default limits are imposed."
   type        = map(string)

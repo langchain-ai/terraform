@@ -212,12 +212,14 @@ _enable_deployments=$(_parse_tfvar "enable_deployments") || _enable_deployments=
 _enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_builder="false"
 _enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
 _enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
+_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
 
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
 info "enable_deployments   = $_enable_deployments"
 info "enable_agent_builder = $_enable_agent_builder"
 info "enable_insights      = $_enable_insights"
+info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 echo ""
 echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
@@ -439,6 +441,16 @@ else
   echo "istioGateway:"
   echo "  enabled: false"
 fi)
+
+# Chart 0.16 ships insights.enabled and polly.enabled as true. This module sets
+# config.existingSecretName, so the chart finds an encryption key and deploys both
+# agents without complaint — a base install would quietly grow workloads nobody
+# asked for. Make the terraform enable_* flags authoritative. The addon overlays
+# load after this file, so an enabled feature still turns itself back on.
+insights:
+  enabled: ${_enable_insights}
+polly:
+  enabled: ${_enable_polly}
 EOF
 
 pass "Generated: ${OUT_FILE}"
@@ -511,7 +523,6 @@ INSIGHTS_EOF
   fi
 fi
 
-_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
 [[ "$_enable_polly"         == "true" ]] && _copy_addon "polly"
 
 # Patch tlsEnabled in agent-deploys — derive from tls_certificate_source.

@@ -98,3 +98,9 @@ variable "deletion_protection" {
   description = "Prevent accidental RDS instance deletion. Set false for dev/test environments where you need to destroy and recreate."
   default     = true
 }
+
+variable "skip_final_snapshot" {
+  type        = bool
+  description = "Skip the final snapshot when the RDS instance is destroyed. Set true for dev/test environments that are rebuilt under the same name."
+  default     = false
+}

@@ -31,6 +31,8 @@
 # Prerequisites (set in terraform.tfvars before running):
 #   - name_prefix, environment, region
 #   - postgres_source, redis_source (external or in-cluster)
+#   - For destructive external-RDS tests: postgres_skip_final_snapshot = true
+#   - For a managed SmithDB metastore: smithdb_metastore_skip_final_snapshot = true
 #   - For permutations 2-6: langsmith_domain (must be Route 53 delegated)
 #   - For permutations 2, 3, 5, 6: letsencrypt_email
 #   - For permutations 5, 6, 7: cert_manager_hosted_zone_id
@@ -86,6 +88,23 @@ _environment=$(_parse_tfvar "environment") || { echo "ERROR: environment not set
 _domain=$(_parse_tfvar "langsmith_domain") || _domain=""
 _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
 _hosted_zone=$(_parse_tfvar "cert_manager_hosted_zone_id") || _hosted_zone=""
+
+if [[ "$DRY_RUN" != "true" && "$SKIP_DESTROY" != "true" ]]; then
+  _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
+  _postgres_skip_snapshot=$(_parse_tfvar "postgres_skip_final_snapshot") || _postgres_skip_snapshot="false"
+  if [[ "$_postgres_source" == "external" && "$_postgres_skip_snapshot" != "true" ]]; then
+    echo "ERROR: destructive permutation tests require postgres_skip_final_snapshot = true." >&2
+    exit 1
+  fi
+
+  _smithdb_enabled=$(_parse_tfvar "enable_smithdb") || _smithdb_enabled="false"
+  _smithdb_source=$(_parse_tfvar "smithdb_metastore_source") || _smithdb_source="create"
+  _smithdb_skip_snapshot=$(_parse_tfvar "smithdb_metastore_skip_final_snapshot") || _smithdb_skip_snapshot="false"
+  if [[ "$_smithdb_enabled" == "true" && "$_smithdb_source" == "create" && "$_smithdb_skip_snapshot" != "true" ]]; then
+    echo "ERROR: destructive permutation tests require smithdb_metastore_skip_final_snapshot = true." >&2
+    exit 1
+  fi
+fi
 
 _cluster_name="${_name_prefix}-${_environment}-eks"
 
