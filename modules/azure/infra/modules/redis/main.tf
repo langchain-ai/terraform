@@ -20,7 +20,7 @@
 resource "azapi_resource" "amr" {
   type      = "Microsoft.Cache/redisEnterprise@2025-07-01"
   name      = var.name
-  location  = var.location
+  location  = coalesce(var.cluster_location, var.location)
   parent_id = var.resource_group_id
 
   body = {

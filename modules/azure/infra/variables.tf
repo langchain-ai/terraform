@@ -184,7 +184,7 @@ variable "postgres_subnet_address_prefix" {
 
 variable "amr_sku" {
   type        = string
-  description = "Azure Managed Redis SKU. Balanced_B1 (1 GB) is the default — Balanced_B0 (0.5 GB) exists but sits on the most capacity-constrained pool and intermittently fails to allocate, and it can't run high availability. Bump (Balanced_B3/B5/...) for more memory. (Replaces the classic redis_capacity.)"
+  description = "Azure Managed Redis SKU. Balanced_B1 (1 GB) is the default — Balanced_B0 (0.5 GB) exists but sits on the most capacity-constrained pool and intermittently fails to allocate, and it can't run high availability. Bump (Balanced_B3/B5/...) for more memory. A larger SKU does not cure InsufficientCapacity: that shortage is regional and reaches every Balanced size, so use redis_location for it. (Replaces the classic redis_capacity.)"
   default     = "Balanced_B1"
 }
 
@@ -192,6 +192,12 @@ variable "redis_high_availability" {
   type        = bool
   description = "Zone-redundant HA for Azure Managed Redis (primary + replica across nodes). Required for the AMR SLA, so set true for production. Unsupported on Balanced_B0."
   default     = false
+}
+
+variable "redis_location" {
+  type        = string
+  description = "Region for the AMR cluster. Defaults to var.location. Set this only when AMR reports InsufficientCapacity in your region — the private endpoint and every other resource stay in var.location, so the change is a cross-region private link, not a second deployment."
+  default     = null
 }
 
 variable "blob_ttl_enabled" {

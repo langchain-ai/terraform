@@ -8,6 +8,12 @@ variable "location" {
   description = "Location of the Redis instance"
 }
 
+variable "cluster_location" {
+  type        = string
+  description = "Region for the AMR cluster itself. Defaults to var.location. Set this only when AMR has no capacity in the deployment's region — the private endpoint stays in var.location either way, because it must be co-regional with its subnet."
+  default     = null
+}
+
 variable "resource_group_name" {
   type        = string
   description = "Resource group name (for the private endpoint + DNS zone)"
