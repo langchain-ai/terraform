@@ -139,7 +139,7 @@ _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
 COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
-NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
+NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
 PG_DELETION_PROTECTION AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
@@ -241,6 +241,16 @@ _load_tfvars() {
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
   _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
+  # Dropping this would rewrite a tuned max_pods back to 60 and, because Azure CNI
+  # sizes the AKS subnet from it, resize the node pool underneath a live cluster.
+  _TF_VAL=$(_parse_tfvar default_node_pool_max_pods)  && NODE_MAX_PODS="$_TF_VAL"
+  # Both guards are derived from the profile inside their own section, and loading
+  # a tfvars marks every section answered and goes straight to review — so the
+  # section never re-runs and the derivation never happens. Read them back or a
+  # re-run silently disarms the destroy protection on a live prod cluster and its
+  # database, the one pair of settings whose default must not win by accident.
+  _TF_VAL=$(_parse_tfvar aks_deletion_protection)      && AKS_DELETION_PROTECTION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar postgres_deletion_protection) && PG_DELETION_PROTECTION="$_TF_VAL"
   # Absent means an existing deployment predating the hash, or one that opted
   # out. Either way it stays off — the writer must not turn it on underneath a
   # deployment whose resources are already named.
@@ -646,7 +656,7 @@ _run_section_4() {
   _hint "Max pods per node multiplies the AKS subnet requirement, at"
   _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
   _hint "lower it if your subnet is fixed and tight."
-  _ask_int "Max pods per node" "60"
+  _ask_int "Max pods per node" "$NODE_MAX_PODS"
   NODE_MAX_PODS="$_REPLY"
 
   AKS_DELETION_PROTECTION="false"

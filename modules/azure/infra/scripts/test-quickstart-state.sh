@@ -146,6 +146,28 @@ eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
 eq "CREATE_WAF read"                 "$CREATE_WAF"  "true"
 
+# Test 2 catches a variable assigned but not whitelisted. The reverse — a tfvar
+# the writer emits that nothing reads back — is invisible to it, and each of the
+# three below reached main under exactly that gap. All three are written from a
+# variable whose section derives it, and loading a tfvars marks every section
+# answered and jumps to review, so the section never runs. Left unread they get
+# written back as their script defaults: max_pods resized underneath a live node
+# pool, and both guards disarmed on a prod cluster and its database.
+echo "5b. Settings only a section derives still survive a tfvars round-trip"
+cat > "$OUTPUT" << EOF
+# Profile: prod
+subscription_id = "sub-1"
+$NAME_TFKEY = "acme"
+default_node_pool_max_pods   = 110
+aks_deletion_protection      = true
+postgres_deletion_protection = true
+EOF
+NODE_MAX_PODS=60; AKS_DELETION_PROTECTION="false"; PG_DELETION_PROTECTION="false"
+_load_tfvars
+eq "max_pods read back"          "$NODE_MAX_PODS"            "110"
+eq "AKS guard read back"         "$AKS_DELETION_PROTECTION"  "true"
+eq "Postgres guard read back"    "$PG_DELETION_PROTECTION"   "true"
+
 echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state
 eval "$NAME_VAR="; PROFILE=""
