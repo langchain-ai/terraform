@@ -85,6 +85,57 @@ variable "langsmith_domain" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB (chart 0.16+) — auto-populated from infra outputs by make init-app.
+#------------------------------------------------------------------------------
+variable "enable_smithdb" {
+  description = "Deploy the in-chart SmithDB component. Requires the SmithDB cloud dependencies from infra (enable_smithdb = true there) and an explicit chart version of 0.16 or newer."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_object_store_bucket" {
+  description = "SmithDB object-store S3 bucket name (from infra output)."
+  type        = string
+  default     = null
+}
+
+variable "smithdb_irsa_role_arn" {
+  description = "IAM role ARN for the SmithDB service account, IRSA (from infra output)."
+  type        = string
+  default     = null
+}
+
+variable "smithdb_metastore_use_ssl" {
+  description = "Whether SmithDB connects to its metastore over SSL (from infra output)."
+  type        = bool
+  default     = true
+}
+
+variable "smithdb_metastore_port" {
+  description = "SmithDB metastore Postgres port."
+  type        = number
+  default     = 5432
+}
+
+variable "smithdb_ingestion_enabled" {
+  description = "Route new LangSmith writes to SmithDB as well as ClickHouse. Enable only after SmithDB services pass readiness checks."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  description = "Enable historical ClickHouse-to-SmithDB migration integration after dual ingestion is healthy."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  description = "Serve LangSmith queries from SmithDB after ingestion and any required historical migration are validated."
+  type        = bool
+  default     = false
+}
+
+#------------------------------------------------------------------------------
 # App configuration — set these in terraform.tfvars
 #------------------------------------------------------------------------------
 
@@ -107,9 +158,14 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version constraint. Defaults to the pinned ~0.15.1 line (latest 0.15.x, never 0.16), matching the deploy scripts. Empty string = newest published chart."
+  description = "LangSmith Helm chart version. Pinned to the 0.16 line; these values use the chart 0.16 schema. Sandboxes and SmithDB require this line."
   type        = string
-  default     = "~0.15.1"
+  default     = "~0.16.0"
+
+  validation {
+    condition     = can(regex("^~?0\\.16\\.[0-9]+$", var.chart_version))
+    error_message = "chart_version must name the chart 0.16 line (for example \"~0.16.0\" or \"0.16.1\"). Chart 0.15 ignores the 0.16-only keys in these values and silently falls back to in-cluster Insights databases; 0.17 has not been validated against them."
+  }
 }
 
 variable "helm_timeout" {

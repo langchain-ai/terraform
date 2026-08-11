@@ -142,10 +142,11 @@ resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
   value     = "on"
 }
 
-resource "azurerm_postgresql_flexible_server_configuration" "connection_throttling" {
-  # Azure names this parameter connection_throttle.enable. "connection_throttling"
-  # does not exist on any supported version and the API rejects it with
-  # ParameterNotExists, after the server itself has already been created.
+# Throttle repeated failed logins from the same host (brute-force mitigation).
+# The parameter is named connection_throttling on the retired Single Server; on
+# Flexible Server it is connection_throttle.enable, and the old name is rejected
+# with ParameterNotExists.
+resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle" {
   name      = "connection_throttle.enable"
   server_id = azurerm_postgresql_flexible_server.db.id
   value     = "on"

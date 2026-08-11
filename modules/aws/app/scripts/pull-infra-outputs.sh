@@ -56,6 +56,13 @@ redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/nul
 langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace)
 sandbox_juicefs_csi_config_secret_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null || echo "juicefs-csi-config")
 
+# SmithDB (empty/false when enable_smithdb = false in infra)
+enable_smithdb=$(terraform -chdir="$INFRA_DIR" output -raw enable_smithdb 2>/dev/null || echo "false")
+smithdb_object_store_bucket=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null || echo "")
+smithdb_irsa_role_arn=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null || echo "")
+smithdb_metastore_use_ssl=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null || echo "true")
+smithdb_metastore_port=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_port 2>/dev/null || echo "5432")
+
 # ── Read region and environment from terraform output ────────────────────────
 
 region=$(terraform -chdir="$INFRA_DIR" output -raw region 2>/dev/null) || region=""
@@ -91,6 +98,11 @@ cat > "$OUT_FILE" <<EOF
   "postgres_source": "$postgres_source",
   "redis_source": "$redis_source",
   "langsmith_namespace": "$langsmith_namespace",
+  "enable_smithdb": $enable_smithdb,
+  "smithdb_object_store_bucket": "$smithdb_object_store_bucket",
+  "smithdb_irsa_role_arn": "$smithdb_irsa_role_arn",
+  "smithdb_metastore_use_ssl": $smithdb_metastore_use_ssl,
+  "smithdb_metastore_port": $smithdb_metastore_port,
   "sandbox_juicefs_csi_config_secret_name": "$sandbox_juicefs_csi_config_secret_name"
 }
 EOF

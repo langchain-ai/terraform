@@ -230,13 +230,13 @@ resource "helm_release" "langsmith" {
   create_namespace = true
   repository       = "https://langchain-ai.github.io/helm"
   chart            = "langsmith"
-  version          = var.chart_version != "" ? var.chart_version : null
+  version          = var.chart_version
   timeout          = var.helm_timeout
 
-  # Do NOT use wait = true. The chart's post-install bootstrap job deploys
-  # operator-managed agents (clio, polly, agent-builder) which can take 10+
-  # minutes on a cold cluster with autoscaling. Terraform marks the release as
-  # failed if the job exceeds the timeout — even though all workloads are healthy.
+  # Do NOT use wait = true. The chart's post-install hooks and the operator's
+  # agent pods can take 10+ minutes to settle on a cold cluster with autoscaling.
+  # Terraform marks the release as failed if a hook exceeds the timeout — even
+  # though all workloads are healthy.
   wait = false
 
   force_update = var.helm_force_update
@@ -257,6 +257,9 @@ resource "helm_release" "langsmith" {
     var.enable_agent_builder ? [file("${local.values_path}/langsmith-values-agent-builder.yaml")] : [],
     var.enable_insights ? [file("${local.values_path}/langsmith-values-insights.yaml"), yamlencode(local.insights_overrides)] : [],
     var.enable_polly ? [file("${local.values_path}/langsmith-values-polly.yaml")] : [],
+    # 5. SmithDB — overlay (from examples) + dynamic overrides. Layered last so
+    #    object-store, IRSA, and staged integration gates win.
+    var.enable_smithdb ? [file("${local.values_path}/langsmith-values-smithdb.yaml"), yamlencode(local.smithdb_overrides)] : [],
   )
 }
 
@@ -367,16 +370,12 @@ locals {
         annotations = local.irsa_annotations
       }
     } },
-    # Chart defaults insights/polly/operator ON. Make the enable_* flags
-    # authoritative so a flag left off doesn't deploy a component that then
-    # references encryption keys absent from langsmith-config-secret. insights
-    # and polly aren't in irsa_components, so toggle them directly. operator is
-    # (when agent deploys are on), so only inject a disable when off — adding an
-    # operator key while on would clobber its IRSA annotations via merge()'s
-    # shallow merge.
+    # Chart 0.16 defaults insights/polly ON, and config.existingSecretName means the
+    # chart finds a key and deploys them without complaint. Make the enable_* flags
+    # authoritative so a base install does not quietly grow two agent deployments.
+    # The insights/polly overlay files set enabled = true when the flags are on.
     { insights = { enabled = var.enable_insights } },
     { polly = { enabled = var.enable_polly } },
-    var.enable_agent_deploys ? {} : { operator = { enabled = false } },
   )
 
   # Agent deploys override — only the dynamic tlsEnabled field.
@@ -401,6 +400,52 @@ locals {
         user               = var.clickhouse_username
         tls                = var.clickhouse_tls
         existingSecretName = "langsmith-clickhouse"
+      }
+    }
+  }
+
+  # SmithDB override — object store, IRSA, metastore secret mapping, and staged
+  # LangSmith integration gates. Mirrors the scripts path.
+  # The smithdb-local secret is created by the infra module.
+  smithdb_overrides = {
+    smithdb = {
+      serviceAccount = {
+        annotations = {
+          "eks.amazonaws.com/role-arn" = var.smithdb_irsa_role_arn
+        }
+      }
+      config = {
+        objectStore = {
+          type   = "s3"
+          bucket = var.smithdb_object_store_bucket
+          s3 = {
+            region                   = local.region
+            accessKeyIdSecretKey     = ""
+            secretAccessKeySecretKey = ""
+          }
+        }
+        metastore = {
+          hostSecretKey     = "smithdb_metastore_db_host"
+          databaseSecretKey = "smithdb_metastore_db_name"
+          usernameSecretKey = "smithdb_metastore_db_username"
+          passwordSecretKey = "smithdb_metastore_db_password"
+          port              = tostring(var.smithdb_metastore_port)
+          useSsl            = var.smithdb_metastore_use_ssl
+        }
+      }
+      metastoreMigration = {
+        useSsl = var.smithdb_metastore_use_ssl
+      }
+      langsmith = {
+        ingestion = {
+          enabled = var.smithdb_ingestion_enabled
+        }
+        migration = {
+          enabled = var.smithdb_migration_enabled
+        }
+        query = {
+          enabled = var.smithdb_query_enabled
+        }
       }
     }
   }

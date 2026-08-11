@@ -13,7 +13,7 @@
 #   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
 #   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
 #   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
-#   7. langsmith-values-insights.yaml            — Insights/Clio (if enable_insights = true)
+#   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -457,12 +457,70 @@ echo ""
 
 # ── Chart version ─────────────────────────────────────────────────────────
 # Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
-# We pin the chart *line* (~0.15.1 => latest 0.15.x, never 0.16) so an
+# We pin the chart *line* (~0.16.0 => latest 0.16.x, never 0.17) so an
 # un-pinned deploy can't silently jump a breaking minor.
+# An exported CHART_VERSION outlives the command that set it, so a value left over
+# from an earlier session silently wins over the pin. Say so rather than deploying
+# a different chart than the branch intends.
+if [[ -n "${CHART_VERSION:-}" ]]; then
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+
+# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
+# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
+# keys instead of rejecting them, so it renders cleanly while silently dropping
+# the external Insights Postgres/Redis wiring and falling back to in-cluster
+# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
+# rather than deploy a half-configured release.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$_chart_line" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
+  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+  exit 1
+fi
+# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
+# are on the 0.16 line but still drop the block silently.
+if [[ "$CHART_VERSION" == *-* ]]; then
+  _rc="${CHART_VERSION##*-rc.}"
+  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
+    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
+    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
+    exit 1
+  fi
+fi
+
+# Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
+# only creates an addon file when it is missing, so a values directory generated on the
+# 0.15 line keeps its stale copies and they get loaded here. The chart does reject them,
+# but its error names the key, not the generated file that carries it.
+_legacy_files=""
+for _vf in "$VALUES_DIR"/*.yaml; do
+  [[ -f "$_vf" ]] || continue
+  if awk '
+      /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+      top == "config"  && /^  (insights|polly):/ { found = 1 }
+      top == "backend" && /^  agentBootstrap:/   { found = 1 }
+      END { exit !found }
+    ' "$_vf"; then
+    _legacy_files+="         $(basename "$_vf")
+"
+  fi
+done
+if [[ -n "$_legacy_files" ]]; then
+  echo "ERROR: these values files use the chart 0.15 schema, which chart 0.16 rejects:" >&2
+  printf '%s' "$_legacy_files" >&2
+  echo "       config.insights, config.polly and backend.agentBootstrap were removed." >&2
+  echo "       init-values.sh only creates an addon file when it is missing, so delete the" >&2
+  echo "       files listed above and re-run 'make init-values' to regenerate them." >&2
+  exit 1
+fi
 
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
@@ -556,6 +614,16 @@ echo ""
 
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain &>/dev/null
+
+# Resolve the pin to a concrete version and print it. Without this the only place
+# the installed version shows up is `helm list`, after the release is already out.
+_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+  | awk '/^version:/{print $2}') || _resolved_chart=""
+echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+if [[ -z "$_resolved_chart" ]]; then
+  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+  exit 1
+fi
 
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
