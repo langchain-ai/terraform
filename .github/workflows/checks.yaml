@@ -102,3 +102,17 @@ jobs:
 
       - name: Shellcheck every tracked script
         run: bash agents/check.sh --scripts
+
+  # Catches a variable that ships working but undiscoverable: declared, valid,
+  # lint-clean, and mentioned in no terraform.tfvars.example, so the customer
+  # copying the template never learns the option exists. Needs neither terraform
+  # nor shellcheck, so it is its own job and lands in seconds.
+  tfvars-docs:
+    name: tfvars docs (every variable documented)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Every declared variable appears in its tfvars example
+        run: bash agents/check.sh --tfvars

@@ -46,15 +46,25 @@ before the PR does, not a separate standard.
     for every root at or beneath the directory you name.
   - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
-  - No argument → both, across every root.
+  - New variable → `bash agents/check.sh --tfvars`: every variable a root
+    declares has to be mentioned in that root's `terraform.tfvars.example`.
+    A mention anywhere counts, commented out or in prose.
+  - No argument → all three, across every root.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries
   pre-existing warnings. Override for a one-off run with
   `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
   needs cloud creds and state — never run it without explicit user approval.
-- **CI runs the same script**, one job per provider plus one for the scripts, so
-  a green local run is a green PR. If you change what the gate covers, change
+
+  **Document a new variable in the same commit that declares it.** The
+  `--tfvars` gate has a baseline, `agents/tfvars-doc-baseline.txt`, holding the
+  app-root inputs `make init-app` writes plus documentation debt predating the
+  gate. Adding a line there is the wrong fix for new work. The baseline is
+  checked both ways, so an entry that is documented now, or whose variable is
+  gone, fails the gate until the line is deleted.
+- **CI runs the same script**, one job per provider plus one for the scripts and
+  one for the tfvars docs, so a green local run is a green PR. If you change what the gate covers, change
   `agents/check.sh` rather than the workflow. A new root under an existing
   `modules/<provider>/` needs no workflow edit; a brand-new provider directory
   needs a `matrix.provider` entry in `.github/workflows/checks.yaml`.

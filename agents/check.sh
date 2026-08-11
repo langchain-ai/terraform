@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Machine grading for HCL and shell edits. Enforced in CI by
 # .github/workflows/checks.yaml, and run locally before handing back:
-#   bash agents/check.sh                    # every root, plus every script
+#   bash agents/check.sh                    # every root, every script, tfvars docs
 #   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
 #   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
+#   bash agents/check.sh --tfvars           # every variable is documented, no terraform
 #
 # Per root: terraform validate (init -backend=false, so no cloud creds or
-# state) and tflint with the provider's pinned ruleset. Scripts are linted
-# repo-wide rather than per root, so naming a directory checks terraform only.
+# state) and tflint with the provider's pinned ruleset. Scripts and tfvars docs
+# are checked repo-wide rather than per root, so naming a directory checks
+# terraform only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
@@ -21,6 +23,11 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # CI sets neither, it inherits these, so a green local run is a green PR.
 SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
+# Variables knowingly absent from a terraform.tfvars.example: the app-root
+# inputs that make init-app writes from infra outputs, plus documentation debt
+# predating the gate. Both live in one file because the gate only cares whether
+# an entry is expected, not why it is there.
+TFVARS_BASELINE=${TFVARS_BASELINE:-$REPO_ROOT/agents/tfvars-doc-baseline.txt}
 
 # Every tracked *.sh at one bar, whole repo, once. Not scoped per provider:
 # the sweep takes about a second, and scoping it left the scripts outside a
@@ -39,6 +46,78 @@ lint_scripts() {
   echo "== shellcheck $count script(s) at -S $SHELLCHECK_SEVERITY"
   (cd "$REPO_ROOT" && git ls-files -z '*.sh' \
     | xargs -0 shellcheck -S "$SHELLCHECK_SEVERITY")
+}
+
+# Every variable a root declares has to be mentioned in that root's
+# terraform.tfvars.example. Without this, adding a variable and documenting
+# nothing passes fmt, validate, tflint and shellcheck: the option ships working
+# but undiscoverable, and the customer copying the template never learns it
+# exists. A mention anywhere in the file counts, including commented out or in
+# prose, since most options are documented as "uncomment to enable".
+#
+# Roots are the directories that ship a terraform.tfvars.example, discovered
+# from git rather than listed, so a new root is covered the day it lands.
+# The other profiles (.production, .dev, .minimum) are curated subsets and are
+# deliberately not held to this bar.
+check_tfvars_docs() {
+  local example root var undocumented="" baseline new stale rc=0 count=0
+
+  while IFS= read -r example; do
+    [ -n "$example" ] || continue
+    root=${example%/terraform.tfvars.example}
+    count=$((count + 1))
+    while IFS= read -r var; do
+      [ -n "$var" ] || continue
+      grep -qE "(^|[^A-Za-z0-9_])${var}([^A-Za-z0-9_]|\$)" \
+        "$REPO_ROOT/$example" && continue
+      undocumented="${undocumented}${root} ${var}
+"
+    done <<EOF
+$(grep -h '^variable "' "$REPO_ROOT/$root"/*.tf 2>/dev/null \
+  | sed 's/^variable "//; s/".*//' | sort -u)
+EOF
+  done <<EOF
+$(cd "$REPO_ROOT" && git ls-files '*/terraform.tfvars.example')
+EOF
+
+  # Same guard as the root expansion: an empty sweep fails rather than passing
+  # having checked nothing.
+  if [ "$count" -eq 0 ]; then
+    echo "check: no terraform.tfvars.example tracked in git, so no root was" >&2
+    echo "checked for undocumented variables." >&2
+    return 2
+  fi
+
+  echo "== tfvars docs: $count root(s) with a terraform.tfvars.example"
+
+  undocumented=$(printf '%s' "$undocumented" | sort -u)
+  baseline=$(grep -vE '^[[:space:]]*(#|$)' "$TFVARS_BASELINE" 2>/dev/null | sort -u)
+
+  # Both directions. Only checking for new entries would let the baseline cover
+  # variables that have since been documented or deleted, and it would never
+  # shrink.
+  new=$(printf '%s\n' "$undocumented" | grep -v '^$' \
+    | grep -Fxv -f <(printf '%s\n' "$baseline"))
+  stale=$(printf '%s\n' "$baseline" | grep -v '^$' \
+    | grep -Fxv -f <(printf '%s\n' "$undocumented"))
+
+  if [ -n "$new" ]; then
+    echo "check: declared but absent from the root's terraform.tfvars.example," >&2
+    echo "so a customer copying the template cannot discover it:" >&2
+    printf '%s\n' "$new" | sed 's/^/   /' >&2
+    echo "Document each one, or add it to ${TFVARS_BASELINE#"$REPO_ROOT/"}." >&2
+    rc=1
+  fi
+
+  if [ -n "$stale" ]; then
+    echo "check: baseline entr(ies) that are no longer undocumented -- the" >&2
+    echo "variable is either documented now or gone. Delete these lines from" >&2
+    echo "${TFVARS_BASELINE#"$REPO_ROOT/"}:" >&2
+    printf '%s\n' "$stale" | sed 's/^/   /' >&2
+    rc=1
+  fi
+
+  return "$rc"
 }
 
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
@@ -64,6 +143,7 @@ EOF
 
 case "${1:-}" in
   --scripts) lint_scripts; exit $? ;;
+  --tfvars)  check_tfvars_docs; exit $? ;;
 esac
 
 lint_all=0
@@ -150,6 +230,7 @@ done
 
 if [ "$lint_all" -eq 1 ]; then
   lint_scripts || status=1
+  check_tfvars_docs || status=1
 fi
 
 exit "$status"

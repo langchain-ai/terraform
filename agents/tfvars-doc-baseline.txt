@@ -1,0 +1,136 @@
+# Variables that do not appear in their root's terraform.tfvars.example.
+# Enforced by check_tfvars_docs in agents/check.sh: a variable missing from both
+# the template and this file fails the gate, and an entry here that IS now
+# documented (or deleted) also fails, so the list cannot silently rot.
+#
+# Two kinds of entry, deliberately in one file since the gate treats them alike:
+#
+#   1. Not customer-facing. The modules/*/app roots take most of their inputs
+#      from the matching infra root's outputs, written by `make init-app`.
+#      Putting those in a template invites hand-editing a generated value.
+#
+#   2. Documentation debt predating the gate. These should be documented and
+#      the line deleted. Adding a line here is the wrong fix for new work:
+#      a variable added today gets documented today.
+#
+# Format: "<root> <variable>", one per line.
+
+# modules/aws/app
+modules/aws/app acm_certificate_arn
+modules/aws/app alb_arn
+modules/aws/app alb_dns_name
+modules/aws/app alb_scheme
+modules/aws/app environment
+modules/aws/app eso_refresh_interval
+modules/aws/app helm_force_update
+modules/aws/app helm_timeout
+modules/aws/app helm_values_path
+modules/aws/app langsmith_domain
+modules/aws/app langsmith_irsa_role_arn
+modules/aws/app langsmith_namespace
+modules/aws/app name_prefix
+modules/aws/app postgres_source
+modules/aws/app redis_source
+modules/aws/app tls_certificate_source
+modules/aws/app tls_enabled_for_deploys
+
+# modules/aws/infra
+modules/aws/infra bastion_enable_ssh
+modules/aws/infra bastion_instance_type
+modules/aws/infra bastion_key_name
+modules/aws/infra bastion_root_volume_size_gb
+modules/aws/infra bastion_ssh_allowed_cidrs
+modules/aws/infra create_bastion
+modules/aws/infra create_langsmith_irsa_role
+modules/aws/infra dns_include_wildcard_san
+modules/aws/infra eks_addons
+modules/aws/infra eks_managed_node_group_defaults
+modules/aws/infra enable_fleet
+modules/aws/infra enable_polly
+modules/aws/infra enable_standalone_insights
+modules/aws/infra enable_standalone_polly
+modules/aws/infra istio_nlb_scheme
+modules/aws/infra langsmith_api_key_salt
+modules/aws/infra langsmith_jwt_secret
+modules/aws/infra langsmith_polly_encryption_key
+modules/aws/infra postgres_engine_version
+modules/aws/infra postgres_password
+modules/aws/infra redis_auth_token
+modules/aws/infra sandbox_callback_signing_jwk
+modules/aws/infra sandbox_juicefs_csi_config_secret_name
+modules/aws/infra sandbox_juicefs_csi_config_secret_revision
+modules/aws/infra sandbox_juicefs_name
+modules/aws/infra vpc_private_subnets
+modules/aws/infra vpc_public_subnets
+
+# modules/azure/app
+modules/azure/app helm_force_update
+modules/azure/app helm_timeout
+modules/azure/app helm_values_path
+modules/azure/app ingress_controller
+modules/azure/app langsmith_namespace
+modules/azure/app postgres_source
+modules/azure/app redis_cluster_safe_mode
+modules/azure/app redis_source
+modules/azure/app storage_container_name
+modules/azure/app tls_certificate_source
+modules/azure/app tls_enabled_for_deploys
+modules/azure/app workload_identity_client_id
+
+# modules/azure/infra
+modules/azure/infra aks_dns_service_ip
+modules/azure/infra aks_service_cidr
+modules/azure/infra bastion_admin_ssh_public_key
+modules/azure/infra bastion_allowed_ssh_cidrs
+modules/azure/infra bastion_vm_size
+modules/azure/infra enable_fleet
+modules/azure/infra envoy_gateway_version
+modules/azure/infra ingress_ip
+modules/azure/infra istio_version
+modules/azure/infra langsmith_admin_email
+modules/azure/infra langsmith_admin_password
+modules/azure/infra langsmith_agent_builder_encryption_key
+modules/azure/infra langsmith_api_key_salt
+modules/azure/infra langsmith_deployments_encryption_key
+modules/azure/infra langsmith_helm_chart_version
+modules/azure/infra langsmith_insights_encryption_key
+modules/azure/infra langsmith_jwt_secret
+modules/azure/infra langsmith_license_key
+modules/azure/infra langsmith_polly_encryption_key
+modules/azure/infra log_retention_days
+modules/azure/infra postgres_admin_password
+modules/azure/infra postgres_subnet_address_prefix
+modules/azure/infra redis_subnet_address_prefix
+modules/azure/infra waf_mode
+
+# modules/gcp/app
+modules/gcp/app enable_fleet
+modules/gcp/app enable_standalone_insights
+modules/gcp/app enable_standalone_polly
+modules/gcp/app environment
+modules/gcp/app helm_force_update
+modules/gcp/app helm_timeout
+modules/gcp/app helm_values_path
+modules/gcp/app ingress_ip
+modules/gcp/app langsmith_namespace
+modules/gcp/app name_prefix
+modules/gcp/app postgres_source
+modules/gcp/app redis_source
+modules/gcp/app sandbox_callback_signing_jwk
+modules/gcp/app tls_certificate_source
+modules/gcp/app workload_identity_annotation
+
+# modules/gcp/infra
+modules/gcp/infra enable_fleet
+modules/gcp/infra enable_standalone_insights
+modules/gcp/infra enable_standalone_polly
+modules/gcp/infra gke_node_service_account_email
+modules/gcp/infra install_cert_manager
+modules/gcp/infra langsmith_polly_encryption_key
+modules/gcp/infra platform_backend_component_label
+modules/gcp/infra sandbox_callback_signing_jwk
+modules/gcp/infra sandbox_host_disk_size_gb
+modules/gcp/infra sandbox_juicefs_csi_config_secret_name
+modules/gcp/infra sandbox_juicefs_csi_config_secret_revision
+modules/gcp/infra sandbox_juicefs_name
+modules/gcp/infra sandbox_juicefs_redis_prevent_destroy
