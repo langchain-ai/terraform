@@ -307,7 +307,7 @@ make deploy
 
 ### Issue #12 — `langsmith-ksa` missing Workload Identity annotation
 
-**Symptom:** Operator-spawned agent deployment pods fail to start or are stuck in `Pending`. Logs show permission errors or the agent bootstrap job hangs.
+**Symptom:** Operator-spawned agent deployment pods fail to start or are stuck in `Pending`. Logs show permission errors.
 
 **Cause:** `langsmith-ksa` is created by the LangSmith operator (not Helm) and does not survive namespace teardowns or fresh cluster rebuilds. `deploy.sh` re-annotates it post-deploy, but if a previous deploy was interrupted the annotation may be missing.
 
