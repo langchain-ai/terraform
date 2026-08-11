@@ -85,6 +85,14 @@ variable "location" {
 variable "subscription_id" {
   type        = string
   description = "The subscription id of the LangSmith deployment"
+
+  # A non-GUID value (e.g. the row number from `az account list -o table`) is
+  # only rejected once azurerm builds its authorizer, which reports it as an
+  # opaque auth failure. Catch the shape here instead.
+  validation {
+    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.subscription_id))
+    error_message = "subscription_id must be a GUID, not a subscription name or list index. Get it with: az account show --query id -o tsv"
+  }
 }
 
 variable "create_vnet" {
