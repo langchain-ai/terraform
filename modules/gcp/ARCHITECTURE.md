@@ -19,7 +19,7 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
 | 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
-| 5 | Insights + Polly | Clio analytics (ClickHouse-backed), Polly eval agent |
+| 5 | Insights + Polly | standalone-insights (ClickHouse-backed analytics), standalone-polly eval agent |
 
 ---
 

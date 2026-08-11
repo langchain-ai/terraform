@@ -110,6 +110,12 @@ locals {
         annotations = local.wi_annotations
       }
     } } : {},
+    # Chart 0.16 defaults insights/polly ON. Make the enable_* flags authoritative:
+    # when false, disable them so the chart skips the standalone components instead
+    # of failing validation on the encryption key it cannot find. The insights/polly
+    # overlay files set enabled = true when the flags are on, keeping this consistent.
+    { insights = { enabled = var.enable_insights } },
+    { polly = { enabled = var.enable_polly } },
   )
 
   # Agent deploys override — TLS flag only (dynamic per environment).
@@ -175,6 +181,10 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_agent_builder || var.enable_agent_deploys
       error_message = "enable_agent_builder requires enable_agent_deploys = true"
+    }
+    precondition {
+      condition     = !(var.enable_fleet && var.enable_agent_builder)
+      error_message = "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path, and chart 0.16 removed the bundled agent-bootstrap Job that used to back it. Set enable_agent_builder = false."
     }
     precondition {
       condition     = !var.enable_polly || var.enable_agent_deploys
