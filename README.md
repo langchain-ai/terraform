@@ -49,7 +49,7 @@ Each provider directory is a self-contained deployment with a `Makefile`, an `in
 
 1. **Check out the latest release tag, not `main`** — see [Versioning and releases](#versioning-and-releases) for the one-line command. `main` is the development branch and may move under you.
 2. Pick the provider folder above and read its `README.md`.
-3. Install the prerequisites it lists (Terraform ≥ 1.5, `kubectl`, `helm`, and your cloud CLI).
+3. Install the prerequisites it lists (Terraform ≥ 1.11.0, `kubectl`, `helm`, and your cloud CLI).
 4. Run the interactive wizard (`make quickstart` on AWS; equivalent setup on Azure / GCP).
 5. `make apply` → `make deploy`.
 

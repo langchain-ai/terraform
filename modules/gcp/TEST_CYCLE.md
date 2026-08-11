@@ -12,7 +12,7 @@ checklist below.
 
 **Tools required** (all must be in PATH):
 - `gcloud` CLI — authenticated to the target project
-- `terraform` v1.5+
+- `terraform` v1.11.0+
 - `kubectl`
 - `helm` v3+
 
