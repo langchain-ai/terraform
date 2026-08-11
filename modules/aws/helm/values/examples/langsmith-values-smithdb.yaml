@@ -1,0 +1,79 @@
+# SmithDB overlay for LangSmith self-hosted on AWS (chart 0.16+).
+#
+# SmithDB is the in-chart columnar store/query engine. It shares the LangSmith
+# namespace and release; it cannot run in a separate namespace or cluster.
+#
+# init-values.sh copies this to ../langsmith-values-smithdb.yaml when
+# enable_smithdb = true, and generates ../langsmith-values-smithdb-overrides.yaml
+# with the environment-specific bits (object-store bucket, region, IRSA role ARN,
+# metastore host/secret mapping) from the infra outputs.
+#
+# Rollout gates and cloud-specific values are generated from Terraform outputs.
+# This file only carries scheduling that differs from the chart defaults.
+
+smithdb:
+  enabled: true
+
+  config:
+    existingSecretName: "smithdb-local"
+    # objectStore and metastore connection details are injected by
+    # langsmith-values-smithdb-overrides.yaml (generated from infra outputs).
+
+  # Cache-heavy workloads run on the instance-store node group.
+  # nodeSelectors/tolerations match the labels/taints set by the SmithDB node
+  # groups in infra.
+  query:
+    deployment:
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: 200Gi
+      volumeMounts:
+        - name: local-ssd-storage
+          mountPath: /data
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+  ingestion:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+  compactionWorker:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  # Compute-oriented long-running workloads use the dedicated compute node group.
+  compaction:
+    deployment:
+      nodeSelector:
+        smithdb-local/compute: "true"
+      tolerations:
+        - key: smithdb-local/compute
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  clusterManager:
+    deployment:
+      nodeSelector:
+        smithdb-local/compute: "true"
+      tolerations:
+        - key: smithdb-local/compute
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
