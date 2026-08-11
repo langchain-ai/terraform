@@ -462,6 +462,25 @@ _ask_required_subnet() {
   done
 }
 
+# Reject an octet over 255 or a prefix over 32, which the regex alone accepts and
+# cidrhost() then rejects at plan time against a main.tf line nobody wrote.
+_valid_cidr() {
+  local cidr="$1" o prefix
+  [[ "$cidr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  prefix="${BASH_REMATCH[5]}"
+  for o in "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"; do
+    (( o >= 0 && o <= 255 )) || return 1
+  done
+  (( prefix >= 0 && prefix <= 32 )) || return 1
+  return 0
+}
+
+_valid_subnet_id() {
+  local id_lc
+  id_lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ "$id_lc" =~ ^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$ ]]
+}
+
 # One subnet's line on the review screen: the ID being reused, or the CIDR
 # Terraform will carve. Lets an operator catch a pasted ID before anything runs.
 _subnet_review() {
