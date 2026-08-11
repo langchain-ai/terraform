@@ -135,7 +135,7 @@ jobs:
           notes="Changed: ${PROVIDERS}
           ${SUBJECT}
 
-          Chart line: ${LINE} (deploys latest ${LINE}.x via ~${LINE}.1)."
+          Chart line: ${LINE} (deploys the latest ${LINE}.x)."
           gh release create "$NEXT" --title "$NEXT" --notes "$notes"
 
       - name: Dry-run summary
