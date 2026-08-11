@@ -153,7 +153,7 @@ All subnets are private. Postgres and Redis are accessible only from within the 
 ```
 <your existing VNet>
 ├── <existing subnet>                    supplied via aks_subnet_id / postgres_subnet_id / redis_subnet_id
-└── langsmith-vnet<identifier>-subnet-*  created by Terraform for whichever IDs you left out
+└── langsmith-vnet-<name_prefix>-subnet-*  created by Terraform for whichever IDs you left out
 ```
 
 Each subnet is independently either supplied or created, so a VNet where the
@@ -167,9 +167,7 @@ Managed Redis private endpoint.
 The Application Gateway and bastion subnets are the exception: Terraform carves
 those only out of a VNet it owns, so on this path they are supplied through
 `agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
-
-Bastion and AGIC subnets have no bring-your-own input and exist only when
-Terraform manages the VNet. See [README.md](README.md#bring-your-own-vnet).
+See [README.md](README.md#bring-your-own-vnet).
 
 ---
 
