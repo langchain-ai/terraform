@@ -224,6 +224,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
@@ -232,6 +233,7 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
+_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
 
 # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the bundled
 # agent-bootstrap Job, so config.agentBuilder on its own now renders the tool/trigger
@@ -366,6 +368,20 @@ if [[ "$_sizing_profile" != "default" ]]; then
   fi
 else
   echo "  ○ sizing: chart defaults (sizing_profile = default)"
+fi
+
+# SmithDB overlay + env overrides — layered last so object-store, identity, and
+# staged LangSmith integration gates win over base/sizing defaults.
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
+    VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+    echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"
+  else
+    echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
+    exit 1
+  fi
 fi
 
 # ── Pre-deploy hostname check ────────────────────────────────────────────────

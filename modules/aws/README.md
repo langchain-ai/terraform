@@ -969,6 +969,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
+| `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
@@ -1005,6 +1006,13 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
 | `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
+| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 requires an explicit compatible chart version. See [SMITHDB.md](SMITHDB.md). |
+| `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
+| `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
+| `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
+| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
+| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
+| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |

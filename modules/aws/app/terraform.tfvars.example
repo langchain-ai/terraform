@@ -14,6 +14,13 @@ admin_email = "admin@example.com"
 # chart_version = "~0.16.0"            # Must be on the chart 0.16 line
 # release_name  = "langsmith"
 
+# ── SmithDB staged rollout ────────────────────────────────────────────────────
+# enable_smithdb              = true
+# chart_version               = "0.16.21"
+# smithdb_ingestion_enabled   = false
+# smithdb_migration_enabled   = false
+# smithdb_query_enabled       = false
+
 # ── Sizing ────────────────────────────────────────────────────────────────────
 # "production"       = multi-replica with HPA (~20 users, ~100 traces/sec)
 # "production-large" = high-volume (~50 users, ~1000 traces/sec)
