@@ -2,9 +2,10 @@
 
 The per-release history lives in
 **[GitHub Releases](https://github.com/langchain-ai/terraform/releases)**, which
-are created automatically on every merge to `main` by
-[`.github/workflows/release.yml`](.github/workflows/release.yml). This file is not
-maintained by hand.
+are created automatically by
+[`.github/workflows/release.yml`](.github/workflows/release.yml) on every merge to
+`main` and to the `release/*` maintenance branches. This file is not maintained by
+hand.
 
 ## Versioning
 
@@ -17,4 +18,4 @@ Releases are global tags `vMAJOR.MINOR.PATCH`:
   repo, regardless of provider, and is **not** the chart version (`v0.15.4`
   does not mean chart `0.15.4`).
 
-Deploy from a tag (`git checkout v0.15.0`), never from `main`.
+Deploy from a tag (`git checkout v0.15.0`), never from a branch.

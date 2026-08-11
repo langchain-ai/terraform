@@ -1,6 +1,7 @@
 name: Release (auto-tag on merge)
 
-# Cuts a global tag on every merge to main that touches modules/**.
+# Cuts a global tag on every merge that touches modules/**, on main and on the
+# release/* maintenance branches.
 #
 # Versioning: MAJOR.MINOR is the supported LangSmith chart line (parsed from the
 # deploy.sh pins, see .github/scripts/chart-line.sh). PATCH is a module revision
@@ -8,12 +9,19 @@ name: Release (auto-tag on merge)
 # PATCH is NOT the chart version - the chart is resolved as the latest patch in
 # the pinned line (e.g. ~0.15.1).
 #
+# Because the next patch is looked up per line (v0.15.* vs v0.16.*) while tags are
+# repo-global, main and a release/* branch on a different line release in parallel
+# without colliding. The concurrency group below is deliberately global so two
+# branches can never compute the same version at once.
+#
 # Skip a release for a given merge by including "[skip release]" in the commit
 # message. Run manually with dry_run=true to preview the computed version.
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'release/*'
     paths:
       - 'modules/**'
   workflow_dispatch:
@@ -61,6 +69,24 @@ jobs:
           line="$(.github/scripts/chart-line.sh)"
           echo "line=$line" >> "$GITHUB_OUTPUT"
           echo "Chart line: $line"
+
+      - name: Assert branch matches chart line
+        # A release/<line> branch exists to keep releasing its own line. If a pin from
+        # another line is merged or backported into it, the line resolved above would
+        # be wrong for the branch and the tag would land in the other line's series.
+        # Refuse instead. main is unconstrained: it is where the line moves.
+        if: steps.skipcheck.outputs.skip != 'true' && startsWith(github.ref_name, 'release/')
+        env:
+          LINE: ${{ steps.line.outputs.line }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # Branch name is untrusted input; read it from the env, never interpolated.
+          expected="${BRANCH#release/}"
+          if [[ "$expected" != "$LINE" ]]; then
+            echo "::error::branch ${BRANCH} pins chart line ${LINE}, refusing to tag" >&2
+            exit 1
+          fi
+          echo "Branch ${BRANCH} matches chart line ${LINE}."
 
       - name: Compute next tag
         if: steps.skipcheck.outputs.skip != 'true'

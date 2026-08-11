@@ -1,18 +1,19 @@
 name: Chart Line Check
 
-# Fails a PR (or push to main) if the chart line pin in any provider's deploy.sh
-# is missing or the providers disagree. This catches a bad/divergent pin before
-# it can reach the release workflow, which derives the tag MAJOR.MINOR from it.
+# Fails a PR (or push) targeting main or a release/* maintenance branch if the
+# chart line pin in any provider's deploy.sh is missing or the providers disagree.
+# This catches a bad/divergent pin before it can reach the release workflow, which
+# derives the tag MAJOR.MINOR from it.
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/*']
     paths:
       - 'modules/**/helm/scripts/deploy.sh'
       - '.github/scripts/chart-line.sh'
       - '.github/workflows/chart-line-check.yml'
   push:
-    branches: [main]
+    branches: [main, 'release/*']
     paths:
       - 'modules/**/helm/scripts/deploy.sh'
       - '.github/scripts/chart-line.sh'
