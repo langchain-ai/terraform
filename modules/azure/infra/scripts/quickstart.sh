@@ -419,16 +419,26 @@ AKS_SERVICE_CIDR=""
 # Ask for one subnet in bring-your-own-VNet mode. An empty answer means
 # "Terraform creates it", which then needs a CIDR to carve out of the VNet.
 # Sets _SUBNET_ID and _SUBNET_CIDR_LINE.
+#
+# This section is re-entered from the review menu, so the current answer is the
+# default and Enter keeps it. That leaves no way to spell "stop reusing this one
+# and carve it instead", hence `-`: without it, going back to change one subnet
+# would silently convert the other two from reuse to create.
 _ask_subnet() {
-  local label="$1" cidr_var="$2" default_cidr="$3" note="$4"
-  _SUBNET_ID=""
-  _SUBNET_CIDR_LINE=""
+  local label="$1" cidr_var="$2" default_cidr="$3" note="$4" current_id="$5" current_cidr_line="$6"
+  local prompt="${label} subnet resource ID (Enter = let Terraform create it)" cidr_default
   echo ""
   _hint "$note"
-  _ask "${label} subnet resource ID (Enter = let Terraform create it)" ""
+  [[ -n "$current_id" ]] && prompt="${label} subnet resource ID (- = let Terraform create it instead)"
+  _ask "$prompt" "$current_id"
   _SUBNET_ID="$_REPLY"
+  [[ "$_SUBNET_ID" == "-" ]] && _SUBNET_ID=""
+  _SUBNET_CIDR_LINE=""
   if [[ -z "$_SUBNET_ID" ]]; then
-    _ask "CIDR for the new ${label} subnet" "$default_cidr"
+    # Re-offer the CIDR already carved for this subnet rather than the module
+    # default, which on a re-run would move a subnet that already has addresses.
+    cidr_default=$(printf '%s' "$current_cidr_line" | sed -n 's/.*\["\(.*\)"\].*/\1/p')
+    _ask "CIDR for the new ${label} subnet" "${cidr_default:-$default_cidr}"
     # Padded so the three prefix lines line up with each other in the tfvars.
     _SUBNET_CIDR_LINE="$(printf '%-30s = ["%s"]' "$cidr_var" "$_REPLY")"
   fi
@@ -439,13 +449,15 @@ _ask_subnet() {
 # Lowercased before matching for the same reason as vnet_re below, and the
 # optional third argument enforces a name Azure demands.
 _ask_required_subnet() {
-  local label="$1" note="$2" want_name="$3" id_lc want_lc
+  local label="$1" note="$2" want_name="$3" current="$4" id_lc want_lc
   local subnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$'
   want_lc=$(printf '%s' "$want_name" | tr '[:upper:]' '[:lower:]')
   echo ""
   _hint "$note"
   while true; do
-    _ask "${label} subnet resource ID" ""
+    # Offered as the default so re-entering this section does not mean retyping a
+    # full resource ID. Required, so there is no empty answer to spell here.
+    _ask "${label} subnet resource ID" "$current"
     _REQUIRED_SUBNET_ID="$_REPLY"
     id_lc=$(printf '%s' "$_REQUIRED_SUBNET_ID" | tr '[:upper:]' '[:lower:]')
     if [[ ! "$id_lc" =~ $subnet_re ]]; then
@@ -537,15 +549,18 @@ _run_section_3() {
   done
 
   _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
-    "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+    "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints." \
+    "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE"
   AKS_SUBNET_ID="$_SUBNET_ID"; AKS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   _ask_subnet "PostgreSQL" "postgres_subnet_address_prefix" "10.0.32.0/20" \
-    "An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and contain nothing else. A new one gets that delegation automatically."
+    "An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and contain nothing else. A new one gets that delegation automatically." \
+    "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE"
   POSTGRES_SUBNET_ID="$_SUBNET_ID"; POSTGRES_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   _ask_subnet "Redis" "redis_subnet_address_prefix" "10.0.48.0/20" \
-    "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint."
+    "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint." \
+    "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE"
   REDIS_SUBNET_ID="$_SUBNET_ID"; REDIS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   # Kubernetes ClusterIPs are internal to the cluster, but AKS still requires the
@@ -576,12 +591,12 @@ _run_section_3() {
   # are still at their defaults and the prompts below ask at the point of choice.
   if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
     _ask_required_subnet "Application Gateway" \
-      "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." ""
+      "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." "" "$AGIC_SUBNET_ID"
     AGIC_SUBNET_ID="$_REQUIRED_SUBNET_ID"
   fi
   if [[ "$CREATE_BASTION" == "true" ]]; then
     _ask_required_subnet "Azure Bastion" \
-      "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet"
+      "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet" "$BASTION_SUBNET_ID"
     BASTION_SUBNET_ID="$_REQUIRED_SUBNET_ID"
   fi
 
@@ -683,7 +698,7 @@ _run_section_5() {
     # does not own, so on that path the operator names one that already exists.
     if [[ "$INGRESS_CONTROLLER" == "agic" && "$CREATE_VNET" == "false" ]]; then
       _ask_required_subnet "Application Gateway" \
-        "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." ""
+        "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." "" "$AGIC_SUBNET_ID"
       AGIC_SUBNET_ID="$_REQUIRED_SUBNET_ID"
     fi
     break
@@ -1062,7 +1077,7 @@ _run_section_10() {
       # bring-your-own path the operator names an existing one.
       if [[ "$CREATE_VNET" == "false" ]]; then
         _ask_required_subnet "Azure Bastion" \
-          "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet"
+          "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet" "$BASTION_SUBNET_ID"
         BASTION_SUBNET_ID="$_REQUIRED_SUBNET_ID"
       fi
     else
