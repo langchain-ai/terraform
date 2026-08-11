@@ -13,7 +13,7 @@ This directory contains the Terraform configuration to deploy LangSmith on AWS. 
 | Pass | What | How | Time |
 |------|------|-----|------|
 | **Pass 1** | VPC, EKS cluster, RDS, ElastiCache, S3, ALB, IRSA, ESO | `make apply` | ~20–25 min |
-| **Pass 2** | LangSmith Helm chart + ESO wiring | `make init-values` → `make deploy` (scripts) or `make apply-app` (Terraform) | ~10 min |
+| **Pass 2** | LangSmith Helm chart + ESO wiring | `make init-values` → `make deploy` | ~10 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
 
@@ -152,39 +152,30 @@ aws/
 │       ├── cloudtrail/     ← CloudTrail trail to S3 (optional)
 │       ├── waf/            ← WAFv2 Web ACL attached to ALB (optional)
 │       └── firewall/       ← AWS Network Firewall, FQDN-based egress filtering (optional)
-├── helm/                   ← Pass 2 option A: script-driven Helm deploy
-│   ├── scripts/
-│   │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
-│   │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
-│   │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
-│   │   ├── preflight-check.sh      ← Pre-deploy validation
-│   │   └── uninstall.sh            ← Helm uninstall + cleanup
-│   └── values/
-│       ├── examples/                                    ← Reference templates (init-values.sh copies from here)
-│       │   ├── langsmith-values.yaml                    ← Base AWS values
-│       │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
-│       │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
-│       │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
-│       │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
-│       │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
-│       │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
-│       │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
-│       │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
-│       │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
-│       │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
-│       ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
-│       ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
-│       ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
-│       └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
-└── app/                    ← Pass 2 option B: Terraform-managed Helm deploy
-    ├── main.tf             ← Providers, ESO resources, helm_release
-    ├── variables.tf        ← Infra inputs (auto-populated) + app config
-    ├── locals.tf           ← Variable resolution + validation
-    ├── outputs.tf          ← LangSmith URL, release status
-    ├── versions.tf
-    ├── terraform.tfvars.example
-    └── scripts/
-        └── pull-infra-outputs.sh  ← Reads infra outputs → infra.auto.tfvars.json
+└── helm/                   ← Pass 2: script-driven Helm deploy
+    ├── scripts/
+    │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
+    │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
+    │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
+    │   ├── preflight-check.sh      ← Pre-deploy validation
+    │   └── uninstall.sh            ← Helm uninstall + cleanup
+    └── values/
+        ├── examples/                                    ← Reference templates (init-values.sh copies from here)
+        │   ├── langsmith-values.yaml                    ← Base AWS values
+        │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
+        │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
+        │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
+        │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
+        │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
+        │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
+        │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+        │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
+        │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
+        │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
+        ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
+        ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
+        ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
+        └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
 ```
 
 ---
@@ -290,8 +281,6 @@ kubectl get pods -n kube-system
 
 ## Pass 2 — LangSmith Application
 
-Two paths — pick one:
-
 ### Fast Path — Single Command Deploy
 
 If `source infra/scripts/setup-env.sh` and `make quickstart` have already been run, you can chain all of Pass 1 and Pass 2 in one command:
@@ -306,10 +295,6 @@ make quickdeploy-auto
 
 `make quickdeploy` gates on secrets being loaded and `terraform.tfvars` existing, then runs: `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` in sequence. If any step fails it exits with instructions to retry that step individually.
 
-### Option A: Script-driven Helm deploy (recommended)
-
-Best for: most deployments. Interactive prompts guide you through sizing and product choices.
-
 ```bash
 cd terraform/aws
 
@@ -318,44 +303,6 @@ make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
 `init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
-
-### Option B: Terraform-managed Helm deploy
-
-Best for: teams that want the full deployment in Terraform state, or "bring your own infra" scenarios.
-
-```bash
-cd terraform/aws
-
-# Generate Helm values files from templates (required — the app module reads these)
-make init-values
-
-# Pull infra outputs into app/infra.auto.tfvars.json
-make init-app
-
-# Configure app-specific settings
-cp app/terraform.tfvars.example app/terraform.tfvars
-# Edit app/terraform.tfvars — set admin_email, sizing, feature toggles
-
-# Deploy
-make plan-app
-make apply-app
-```
-
-> **Important:** `make init-values` is required before `make plan-app`. The app module reads YAML values files from `helm/values/` — `init-values` copies them from `helm/values/examples/` based on your sizing and product choices.
-
-The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_release` in Terraform. Feature toggles are variables:
-
-```hcl
-admin_email          = "admin@example.com"
-sizing               = "production"   # production | production-large | dev | none
-enable_agent_deploys = true
-enable_agent_builder = true
-enable_insights      = true
-enable_polly         = true
-clickhouse_host      = "clickhouse.example.com"
-```
-
-For "bring your own infra" — skip `make init-app` and set all variables manually in `app/terraform.tfvars`.
 
 ---
 
@@ -752,7 +699,7 @@ make status          # full check
 make status-quick    # skip SSM + K8s queries (faster, for quick credential checks)
 ```
 
-**The 10 sections it checks:**
+**The 9 sections it checks:**
 
 | # | Check | What it looks at |
 |---|---|---|
@@ -765,7 +712,6 @@ make status-quick    # skip SSM + K8s queries (faster, for quick credential chec
 | 7 | **Helm Values** | `langsmith-values-overrides.yaml` exists; hostname is populated; addon files present |
 | 8 | **Kubernetes Resources** | Namespace exists; ESO `ClusterSecretStore` and `ExternalSecret` are deployed and synced; `langsmith-config` secret exists |
 | 9 | **Helm Release** | Release status (`deployed`, `failed`, `pending-upgrade`); pod count |
-| 10 | **Terraform Helm App** | `app/` Terraform module state (alternative Pass 2 path only) |
 
 ---
 
@@ -774,21 +720,6 @@ make status-quick    # skip SSM + K8s queries (faster, for quick credential chec
 **When to use:** To remove the LangSmith Helm release (keeps infrastructure intact).
 
 Runs `helm/scripts/uninstall.sh`. Uninstalls the `langsmith` Helm release and cleans up associated Kubernetes resources (ESO objects, service accounts). Does **not** destroy Terraform infrastructure (VPC, EKS, RDS, Redis, S3).
-
----
-
-### `make init-app` / `make plan-app` / `make apply-app` / `make destroy-app`
-
-**When to use:** Pass 2 Option B — managing the Helm deploy via Terraform instead of scripts.
-
-These targets use the `app/` Terraform module which manages the ESO resources and `helm_release` resource inside Terraform state.
-
-- `make init-app` — pulls live Terraform outputs from `infra/` into `app/infra.auto.tfvars.json`
-- `make plan-app` — runs `init-app` then `terraform plan` in `app/`
-- `make apply-app` — applies the Helm release via Terraform
-- `make destroy-app` — destroys just the Helm release (keeps infra)
-
-> Requires `make init-values` first — the app module reads YAML values files from `helm/values/`.
 
 ---
 
@@ -1024,18 +955,11 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 
 ## Teardown
 
-### If deployed via scripts (Option A)
+### Uninstall the Helm release
 
 ```bash
 cd terraform/aws
 make uninstall
-```
-
-### If deployed via Terraform (Option B)
-
-```bash
-cd terraform/aws
-make destroy-app
 ```
 
 ### Destroy infrastructure

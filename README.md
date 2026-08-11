@@ -19,11 +19,11 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 | GCP | [`modules/gcp/`](modules/gcp/README.md) | GKE | GA |
 | OpenShift | [`modules/ocp/`](modules/ocp/README.md) | OCP / ROSA | Preview |
 
-Each provider directory is a self-contained deployment with a `Makefile`, a two-pass Terraform layout (`infra/` + `app/`), Helm values, and operator scripts. The shared module structure is described in [`modules/README.md`](modules/README.md).
+Each provider directory is a self-contained deployment with a `Makefile`, an `infra/` Terraform layout, Helm values, and operator scripts. The shared module structure is described in [`modules/README.md`](modules/README.md).
 
 ## What you get
 
-- **Two-pass deploy.** `infra/` provisions the cloud foundation; `app/` (or the Helm scripts) installs the LangSmith chart.
+- **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.
 - **Secrets via your cloud's native store** (AWS SSM, Azure Key Vault, GCP Secret Manager), synced into Kubernetes by [External Secrets Operator](https://external-secrets.io/) — no secrets in git, no secrets in `tfvars`.
 - **Sizing profiles:** `dev`, `production`, `production-large` — selected with a single variable.
 - **Enterprise feature toggles:**

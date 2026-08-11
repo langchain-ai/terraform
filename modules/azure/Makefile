@@ -4,9 +4,7 @@
 # Pass 1 (infra):          make setup-env → make init → make plan → make apply
 # Pass 1.5 (access):       make kubeconfig → make k8s-secrets
 # Pass 2 (helm):           make init-values → make deploy
-# Pass 2 (terraform helm): make init-app → make apply-app
 # Full deploy (helm):      make deploy-all
-# Full deploy (terraform): make deploy-all-tf
 # Manage secrets:          make keyvault
 # Where am I?              make status
 
@@ -14,12 +12,10 @@
         init plan apply destroy \
         kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
-        init-app plan-app apply-app destroy-app deploy-all-tf \
         clean
 
 INFRA_DIR := infra
 HELM_DIR  := helm
-APP_DIR   := app
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -112,23 +108,6 @@ deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
 
-# ── Pass 2: App (Terraform Helm) ──────────────────────────────────────────────
-
-init-app: ## Pull infra outputs → app/infra.auto.tfvars.json, then terraform init (app)
-	$(APP_DIR)/scripts/pull-infra-outputs.sh
-	terraform -chdir=$(APP_DIR) init -input=false
-
-plan-app: init-app ## terraform plan (app) — auto-pulls infra outputs first
-	terraform -chdir=$(APP_DIR) plan
-
-apply-app: ## terraform apply (app)
-	terraform -chdir=$(APP_DIR) apply
-
-destroy-app: ## terraform destroy (app)
-	terraform -chdir=$(APP_DIR) destroy
-
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
 deploy-all: apply kubeconfig k8s-secrets init-values deploy ## Full deploy: infra → kubeconfig → secrets → helm
-
-deploy-all-tf: apply init-values init-app apply-app ## Full Terraform deploy: infra apply → init-values → app init+apply
