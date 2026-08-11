@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`, never `0.16`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -359,9 +359,21 @@ For "bring your own infra" — skip `make init-app` and set all variables manual
 
 ---
 
-## Envoy Gateway — Alternative Ingress (Gateway API)
+## Envoy Gateway (Gateway API)
 
-By default, LangSmith uses the AWS Load Balancer Controller (ALB) for ingress. Set `enable_envoy_gateway = true` in `terraform.tfvars` to install Envoy Gateway instead.
+Envoy Gateway is the default ingress mode, both in Terraform and in `make quickstart` for new deployments. When rerun, quickstart keeps your existing ingress selection. Set `enable_envoy_gateway = false` to fall back to a standard ALB-backed Kubernetes Ingress.
+
+`enable_envoy_gateway` is unset by default and derived rather than hardcoded to `true`:
+
+| `terraform.tfvars` | Result |
+| --- | --- |
+| No gateway flags at all | Envoy Gateway |
+| `enable_istio_gateway = true` or `enable_nginx_ingress = true` | That controller, Envoy stays off |
+| `enable_envoy_gateway` set explicitly | Your value always wins |
+
+Enabling two controllers is rejected at plan time by a precondition in `infra/main.tf`, because all gateway modes share a single ALB target group and only one port can be health-checked on it.
+
+**Upgrading an existing deployment?** Istio and NGINX deployments are unaffected - the derivation leaves Envoy off for them without any `terraform.tfvars` edit. Only a configuration with no gateway flags at all changes: it switches from ALB Ingress to Envoy Gateway on the next `terraform apply`, which recreates the ALB target group on port `10080` and causes a brief traffic blip. Set `enable_envoy_gateway = false` to stay on ALB, and always review `terraform plan` before applying.
 
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
@@ -690,13 +702,13 @@ The sizing file is always loaded last so it can override replicas/resources set 
 
 **Step 7 — Broken release recovery.** Checks the current Helm release status. If `pending-upgrade` (left by a Ctrl+C'd upgrade), rolls back automatically. If `failed` (common after a first deploy timeout), logs a warning and proceeds — Helm upgrade works fine on a failed release.
 
-**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the post-install bootstrap job can take 10+ minutes while agent pods spin up on new nodes.
+**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the chart's post-install hooks and the operator's agent pods can take 10+ minutes to settle on new nodes.
 
 **Step 9 — Core readiness.** Polls each core deployment with `kubectl rollout status --timeout=5m`:
 - `langsmith-frontend`, `langsmith-backend`, `langsmith-platform-backend`, `langsmith-ingest-queue`, `langsmith-queue`
 - Plus `langsmith-host-backend`, `langsmith-listener`, `langsmith-operator` if Deployments is enabled
 
-**Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and the bootstrap job hangs.
+**Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and stay unschedulable.
 
 **Step 11 — Frontend restart.** Restarts the frontend deployment to pick up the latest ConfigMap. Then prints the ALB hostname and port-forward instructions.
 

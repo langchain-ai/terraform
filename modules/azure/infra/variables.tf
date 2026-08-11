@@ -321,7 +321,7 @@ variable "langsmith_domain" {
 
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Empty string = use latest available."
+  description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Must be on the chart 0.16 line — deploy.sh rejects anything else, because these values use the 0.16 schema. Empty string = use the pinned ~0.16.0 line default."
   default     = ""
 }
 
@@ -414,7 +414,7 @@ variable "langsmith_agent_builder_encryption_key" {
 
 variable "langsmith_insights_encryption_key" {
   type        = string
-  description = "Fernet key for Insights (Clio). Stored in Key Vault: langsmith-insights-encryption-key. Must stay stable — changing breaks existing insights data."
+  description = "Fernet key for Insights. Stored in Key Vault: langsmith-insights-encryption-key. Must stay stable — changing breaks existing insights data."
   sensitive   = true
   default     = ""
 }
@@ -539,7 +539,7 @@ variable "enable_agent_builder" {
 
 variable "enable_insights" {
   type        = bool
-  description = "Pass 5 — enable Insights / Clio. Read by deploy.sh — Terraform ignores this value."
+  description = "Pass 5 — enable Insights. Read by deploy.sh — Terraform ignores this value."
   default     = false
 }
 

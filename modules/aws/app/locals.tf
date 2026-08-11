@@ -59,9 +59,9 @@ locals {
     "eks.amazonaws.com/role-arn" = local.langsmith_irsa_role_arn
   }
 
-  # SmithDB never changes the chart line implicitly. Operators must explicitly
-  # select a stable 0.16 or newer release when enabling it.
-  chart_version_effective         = var.chart_version != "" ? var.chart_version : null
+  # chart_version is already validated to the 0.16 line, so this is a second line
+  # of defence rather than the primary gate: it keeps SmithDB from deploying on a
+  # chart older than 0.16 if that validation is ever relaxed to admit more lines.
   smithdb_chart_version_supported = can(regex("^~?0\\.(1[6-9]|[2-9][0-9]|[1-9][0-9]{2,})(\\.[0-9]+)?$", var.chart_version))
 
   # Components that need IRSA service account annotations.
@@ -130,6 +130,14 @@ resource "terraform_data" "validate_required" {
     precondition {
       condition     = !var.enable_insights || var.clickhouse_host != ""
       error_message = "clickhouse_host is required when enable_insights = true"
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || (var.chart_version != "" && can(regex("^(~>?)?v?(0\\.(1[6-9]|[2-9][0-9])\\.|[1-9][0-9]*\\.)", var.chart_version)))
+      error_message = "enable_sandboxes requires chart_version to be explicitly set to chart 0.16.0 or newer, for example \"~0.16.0\"."
+    }
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_image_tag != ""
+      error_message = "sandbox_host_image_tag is required when enable_sandboxes = true."
     }
     precondition {
       condition     = fileexists("${local.values_path}/langsmith-values.yaml")

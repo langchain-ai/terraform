@@ -66,6 +66,16 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_juicefs_redis_instance_type != ""
+      error_message = "sandbox_juicefs_redis_instance_type is required when enable_sandboxes = true."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || (var.sandbox_juicefs_redis_auth_token != "" && length(var.sandbox_juicefs_redis_auth_token) >= 16)
+      error_message = "sandbox_juicefs_redis_auth_token is required (min 16 chars) when enable_sandboxes = true. Run: source ./scripts/setup-env.sh, or set TF_VAR_sandbox_juicefs_redis_auth_token."
+    }
+
+    precondition {
       condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != "" || var.langsmith_domain != ""
       error_message = "When tls_certificate_source = 'acm', either acm_certificate_arn (existing cert) or langsmith_domain (auto-provision via Route 53) is required."
     }
@@ -162,6 +172,18 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
+
+    # Two gateway controllers share one ALB target group (all three
+    # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
+    # gateway_target_port can only describe one of them, so a second controller
+    # leaves both permanently unhealthy. init-values.sh rejects this combination
+    # too, but only after apply — fail at plan time instead.
+    precondition {
+      condition = length([
+        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway, var.enable_nginx_ingress] : true if enabled
+      ]) <= 1
+      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
+    }
   }
 }
 
@@ -207,7 +229,7 @@ module "eks" {
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
-  eks_managed_node_groups         = var.eks_managed_node_groups
+  eks_managed_node_groups         = local.eks_managed_node_groups
   enable_karpenter                = var.enable_smithdb
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
@@ -235,13 +257,42 @@ module "redis" {
   source = "./modules/redis"
   count  = var.redis_source == "external" ? 1 : 0
 
-  name           = local.redis_name
-  vpc_id         = local.vpc_id
-  subnet_ids     = local.private_subnets
-  instance_type  = var.redis_instance_type
-  ingress_cidrs  = [local.vpc_cidr_block]
-  vpc_cidr_block = local.vpc_cidr_block
-  auth_token     = var.redis_auth_token
+  name                 = local.redis_name
+  vpc_id               = local.vpc_id
+  subnet_ids           = local.private_subnets
+  instance_type        = var.redis_instance_type
+  ingress_cidrs        = [local.vpc_cidr_block]
+  vpc_cidr_block       = local.vpc_cidr_block
+  auth_token           = var.redis_auth_token
+  parameter_group_name = "default.redis7"
+}
+
+resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  name        = "${local.sandbox_juicefs_redis_name}-redis7"
+  family      = "redis7"
+  description = "Redis 7 parameters for sandbox JuiceFS metadata."
+
+  parameter {
+    name  = "maxmemory-policy"
+    value = "noeviction"
+  }
+}
+
+module "sandbox_juicefs_redis" {
+  source = "./modules/redis"
+  count  = var.enable_sandboxes ? 1 : 0
+
+  name                     = local.sandbox_juicefs_redis_name
+  vpc_id                   = local.vpc_id
+  subnet_ids               = local.private_subnets
+  instance_type            = var.sandbox_juicefs_redis_instance_type
+  ingress_cidrs            = [local.vpc_cidr_block]
+  vpc_cidr_block           = local.vpc_cidr_block
+  auth_token               = var.sandbox_juicefs_redis_auth_token
+  parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
+  snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
 }
 
 module "storage" {
@@ -432,7 +483,7 @@ module "alb" {
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
   bucket_suffix          = random_id.bucket_suffix.hex
-  enable_envoy_gateway   = var.enable_envoy_gateway
+  enable_envoy_gateway   = local.enable_envoy_gateway
   enable_istio_gateway   = var.enable_istio_gateway
   enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
@@ -451,14 +502,14 @@ module "alb" {
 # NGINX Ingress:  port 80    (ingress-nginx-controller)
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
-  count = var.enable_envoy_gateway ? 1 : 0
+  count = local.enable_envoy_gateway ? 1 : 0
 
   # Target the NODE security group (attached to EC2 instances and pod ENIs via VPC-CNI).
   # The cluster primary SG is on the control plane only — not on worker nodes.
   security_group_id            = module.eks.node_security_group_id
   referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 8080
-  to_port                      = 8080
+  from_port                    = 10080
+  to_port                      = 10080
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Envoy Gateway proxy pods on HTTP (target-type: ip)"
 
@@ -563,6 +614,11 @@ locals {
   redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
     "redis://langsmith-redis:6379"
   )
+
+  # DB 0 is reserved for the main LangSmith install.
+  redis_db_fleet    = 1
+  redis_db_polly    = 2
+  redis_db_insights = 3
 }
 
 module "k8s_bootstrap" {
@@ -582,7 +638,7 @@ module "k8s_bootstrap" {
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
 
-  enable_envoy_gateway     = var.enable_envoy_gateway
+  enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
   enable_nginx_ingress     = var.enable_nginx_ingress
   gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
@@ -602,6 +658,28 @@ module "k8s_bootstrap" {
   depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
 }
 
+resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = var.langsmith_namespace
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
+    storage = "s3"
+    bucket  = local.sandbox_juicefs_bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
+
+  depends_on = [module.k8s_bootstrap]
+}
+
 #------------------------------------------------------------------------------
 # Standalone Agent Features (chart v0.15+) — Fleet / Polly / Insights
 #------------------------------------------------------------------------------
@@ -612,8 +690,9 @@ module "k8s_bootstrap" {
 #   - RDS has no Terraform resource to create a logical database, so a one-shot
 #     in-cluster psql Job runs CREATE DATABASE (it has a network path to the
 #     private RDS instance; a local Terraform runner does not).
-#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes /1 /2 /3.
-#     DB index 0 is reserved for the main LangSmith install.
+#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes.
+#     DB 0 is reserved for the main LangSmith install, DB 1 for Fleet, DB 2
+#     for Polly, and DB 3 for Insights.
 # The K8s Secrets below feed the chart's fleet/polly/insights
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 
@@ -633,9 +712,9 @@ locals {
   # when it exists.
   standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
 
-  standalone_fleet_redis_url    = "${local.standalone_redis_base}/1"
-  standalone_polly_redis_url    = "${local.standalone_redis_base}/2"
-  standalone_insights_redis_url = "${local.standalone_redis_base}/3"
+  standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
+  standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
+  standalone_insights_redis_url = "${local.standalone_redis_base}/${local.redis_db_insights}"
 }
 
 # ── Per-feature logical database creation (in-cluster psql Job) ───────────────

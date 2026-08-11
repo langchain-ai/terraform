@@ -57,6 +57,12 @@ _ask_yn() {
   [[ "$_REPLY" =~ ^[Yy] ]]
 }
 
+_feature_prompt() {
+  local prompt="$1" enabled="$2"
+  local state="disabled"; [[ "$enabled" == "true" ]] && state="enabled"
+  printf '%s [%s]' "$prompt" "$state"
+}
+
 _ask_choice() {
   # Usage: _ask_choice [--default N] "prompt" "opt1" "opt2" ...
   local default=""
@@ -146,10 +152,11 @@ _validate_conflicts() {
     printf "  Both paths create ClusterIssuer/letsencrypt-prod. Pick one in Section 7.\n"
   fi
 
-  # ACM cert with non-ALB gateway — ACM requires ALB for certificate attachment
-  if [[ "$tls" == "acm" && ( "$envoy" == "true" || "$istio" == "true" ) ]]; then
-    _conflict_warn "tls_certificate_source = \"acm\" with Istio or Envoy Gateway."
-    printf "  ACM certificates attach to ALB only. Use DNS-01 for Istio, or switch to ALB.\n"
+  # ACM terminates at the ALB, which can forward to Envoy but not to an
+  # independently managed Istio NLB.
+  if [[ "$tls" == "acm" && "$istio" == "true" ]]; then
+    _conflict_warn "tls_certificate_source = \"acm\" with Istio Gateway."
+    printf "  Use DNS-01 for Istio, or switch to ALB/Envoy.\n"
   fi
 
   # DNS-01 IRSA enabled but no Istio — cert-manager would issue a cert with no Gateway to use it
@@ -406,32 +413,31 @@ _section "6. Ingress / Gateway Mode"
 echo ""
 printf "  ${DIM}Choose how traffic reaches LangSmith. These options are mutually exclusive:${RESET}\n"
 printf "  ${DIM}only one gateway controller can be active at a time.${RESET}\n"
-printf "  ${DIM}ALB is the default and simplest. Istio/Envoy needed for split dataplane.${RESET}\n"
+printf "  ${DIM}Envoy Gateway is recommended for new configurations. ALB is simplest if${RESET}\n"
+printf "  ${DIM}you don't need Gateway API. Istio is another split-dataplane option.${RESET}\n"
 
 _ex_envoy=$(_existing "enable_envoy_gateway" "false")
 _ex_istio=$(_existing "enable_istio_gateway" "false")
 _ex_nginx=$(_existing "enable_nginx_ingress" "false")
-_gw_default=1
-[[ "$_ex_nginx" == "true" ]] && _gw_default=2
-[[ "$_ex_envoy" == "true" ]] && _gw_default=3
-[[ "$_ex_istio" == "true" ]] && _gw_default=4
+_gw_default=$(_quickstart_gateway_default \
+  "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
 
 _ask_choice --default "$_gw_default" "Ingress / Gateway mode:" \
+  "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support (recommended for new configurations)" \
   "ALB (Application Load Balancer) — standard, TLS via ACM or Let's Encrypt HTTP-01" \
-  "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding" \
-  "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support" \
+  "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding (legacy, not recommended)" \
   "Istio Gateway — VirtualServices, split dataplane, TLS via Let's Encrypt DNS-01"
 
-GATEWAY_MODE="alb"
-ENABLE_ENVOY="false"
+GATEWAY_MODE="envoy"
+ENABLE_ENVOY="true"
 ENABLE_ISTIO="false"
 ENABLE_NGINX="false"
 
 case "$_CHOICE" in
-  1) GATEWAY_MODE="alb" ;;
-  2) GATEWAY_MODE="nginx"; ENABLE_NGINX="true" ;;
-  3) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
-  4) GATEWAY_MODE="istio"; ENABLE_ISTIO="true" ;;
+  1) GATEWAY_MODE="envoy"; ENABLE_ENVOY="true" ;;
+  2) GATEWAY_MODE="alb"; ENABLE_ENVOY="false" ;;
+  3) GATEWAY_MODE="nginx"; ENABLE_ENVOY="false"; ENABLE_NGINX="true" ;;
+  4) GATEWAY_MODE="istio"; ENABLE_ENVOY="false"; ENABLE_ISTIO="true" ;;
 esac
 
 # For NGINX: brief note (ALB TGB wires automatically, no extra input needed)
@@ -465,9 +471,9 @@ _ex_domain=$(_existing "langsmith_domain" "")
 _ex_acm=$(_existing "acm_certificate_arn" "")
 _ex_le_email=$(_existing "letsencrypt_email" "")
 
-# For Istio and Envoy, only DNS-01 works on EKS (HTTP-01 fails due to NLB hairpin NAT).
-# ACM is also unavailable for both — ACM certificates attach to ALB only.
-# Offer a restricted 2-option menu for both NLB-backed gateway modes.
+# Istio uses DNS-01 because HTTP-01 fails through its NLB hairpin path and ACM
+# cannot attach to the in-cluster gateway. Envoy remains behind the
+# Terraform-managed ALB, so ACM can terminate TLS before traffic reaches Envoy.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
   printf "  ${DIM}On EKS, Istio requires DNS-01 (Let's Encrypt via Route 53) for TLS.${RESET}\n"
@@ -485,18 +491,17 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
   TLS_MODE="$_CHOICE"  # 1=dns01, 2=no_tls
 elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   echo ""
-  printf "  ${DIM}On EKS, Envoy Gateway uses an NLB. HTTP-01 is not shown: EKS NLBs block${RESET}\n"
-  printf "  ${DIM}hairpin traffic, so cert-manager cannot complete the self-check.${RESET}\n"
-  printf "  ${DIM}ACM is also not shown: ACM attaches to ALB only, not Envoy NLB.${RESET}\n"
-  _tls_default_envoy=2; [[ "$_ex_tls" == "none" || -z "$_ex_tls" ]] || _tls_default_envoy=1
+  printf "  ${DIM}The existing ALB terminates TLS and forwards HTTP to Envoy Gateway.${RESET}\n"
+  printf "  ${DIM}Let's Encrypt is not shown because the automated DNS-01 path is Istio-only.${RESET}\n"
+  _tls_default_envoy=2; [[ "$_ex_tls" == "acm" ]] && _tls_default_envoy=1
   _ask_choice --default "$_tls_default_envoy" "TLS certificate (Envoy mode):" \
-    "Let's Encrypt DNS-01 via Route 53 — fully automated, recommended" \
+    "ACM — AWS Certificate Manager (TLS terminates at the ALB, recommended)" \
     "None — HTTP only (useful for initial deploy, add TLS later)"
   case "$_CHOICE" in
-    1) TLS_SOURCE="none"   ;; # tls_certificate_source stays "none"; cert-manager handles it
+    1) TLS_SOURCE="acm"  ;;
     2) TLS_SOURCE="none"   ;;
   esac
-  TLS_MODE="$_CHOICE"  # 1=dns01, 2=no_tls
+  TLS_MODE="$_CHOICE"  # 1=acm, 2=no_tls
 else
   _tls_default_alb=3
   [[ "$_ex_tls" == "acm" ]]        && _tls_default_alb=1
@@ -529,16 +534,14 @@ DOMAIN="$_REPLY"
 
 # Let's Encrypt email (HTTP-01 or DNS-01)
 if [[ "$TLS_SOURCE" == "letsencrypt" ]] || \
-   [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]] || \
-   [[ "$GATEWAY_MODE" == "envoy" && "$TLS_MODE" == "1" ]]; then
+   [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]]; then
   echo ""
   _ask "Email for Let's Encrypt expiry notifications" "$_ex_le_email"
   LE_EMAIL="$_REPLY"
 fi
 
-# cert-manager IRSA for DNS-01 (Istio and Envoy)
-if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]] || \
-   [[ "$GATEWAY_MODE" == "envoy" && "$TLS_MODE" == "1" ]]; then
+# cert-manager IRSA for DNS-01 (Istio)
+if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]]; then
   CREATE_CERT_MANAGER="true"
   echo ""
   printf "  ${DIM}cert-manager uses IRSA (no static credentials) to create DNS TXT records.${RESET}\n"
@@ -550,21 +553,21 @@ if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]] || \
   fi
 fi
 
-if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" && "$GATEWAY_MODE" == "alb" ]]; then
+if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" ]]; then
   echo ""
   _yellow "WARNING"; printf ": Running production without TLS is not recommended.\n"
 fi
 
-# Early exit: ACM is incompatible with Envoy/Istio (ACM attaches to ALB listeners only)
-if [[ ("$ENABLE_ENVOY" == "true" || "$ENABLE_ISTIO" == "true") && "$TLS_SOURCE" == "acm" ]]; then
+# Early exit: ACM is incompatible with Istio's independently managed gateway.
+if [[ "$ENABLE_ISTIO" == "true" && "$TLS_SOURCE" == "acm" ]]; then
   echo ""
-  _red "ERROR"; printf ": ACM certificates require ALB and cannot be used with Envoy or Istio Gateway.\n"
+  _red "ERROR"; printf ": ACM certificates cannot be used with Istio Gateway.\n"
   echo ""
-  printf "  ACM attaches to ALB listeners only. Envoy and Istio use their own\n"
-  printf "  load balancers (NLB/Gateway API) and cannot reference ACM certificates.\n"
+  printf "  ACM attaches to ALB listeners. Use DNS-01 for Istio, or choose\n"
+  printf "  ALB/Envoy so the Terraform-managed ALB can terminate TLS.\n"
   echo ""
   printf "  Re-run:  ${CYAN}make quickstart${RESET}\n"
-  printf "  Choose:  Let's Encrypt (DNS-01 for Istio, HTTP-01 for Envoy) or None\n"
+  printf "  Choose:  Let's Encrypt DNS-01 or None\n"
   echo ""
   exit 1
 fi
@@ -651,6 +654,7 @@ _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_ab=$(_existing "enable_agent_builder" "false")
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
+_ex_sandboxes=$(_existing "enable_sandboxes" "false")
 _ex_smithdb=$(_existing "enable_smithdb" "false")
 _ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
 _ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
@@ -658,6 +662,7 @@ _ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
+ENABLE_SANDBOXES="false"
 ENABLE_SMITHDB="false"
 SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
 if [[ "$PROFILE" == "prod" ]]; then
@@ -671,29 +676,38 @@ else
   SMITHDB_SKIP_FINAL_SNAPSHOT="true"
 fi
 
-_ask_yn "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" \
+_ask_yn "$(_feature_prompt "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" "$_ex_deploys")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
 
 if [[ "$ENABLE_DEPLOYMENTS" == "true" ]]; then
-  _ask_yn "  ↳ Enable Agent Builder (visual agent UI, requires Deployments)?" \
+  _ask_yn "$(_feature_prompt "  ↳ Enable Agent Builder (visual agent UI, requires Deployments)?" "$_ex_ab")" \
     "$([[ "$_ex_ab" == "true" ]] && echo "y" || echo "n")" \
     && ENABLE_AGENT_BUILDER="true" || ENABLE_AGENT_BUILDER="false"
-  _ask_yn "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" \
+  _ask_yn "$(_feature_prompt "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" "$_ex_polly")" \
     "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
     && ENABLE_POLLY="true" || ENABLE_POLLY="false"
 fi
 
-_ask_yn "Enable Insights (ClickHouse analytics dashboard)?" \
+_ask_yn "$(_feature_prompt "Enable Insights (ClickHouse analytics dashboard)?" "$_ex_insights")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
 
-if _ask_yn "Enable SmithDB Deployment? (requires LangSmith Helm chart 0.16 or newer)" \
+if _ask_yn "$(_feature_prompt "Enable SmithDB (columnar trace store, needs local-NVMe nodes via Karpenter)?" "$_ex_smithdb")" \
   "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SMITHDB="true"
   [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
   [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
   [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
+fi
+
+echo ""
+printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
+printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
+printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
+if _ask_yn "$(_feature_prompt "Enable LangSmith Sandboxes?" "$_ex_sandboxes")" \
+  "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
+  ENABLE_SANDBOXES="true"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -719,8 +733,8 @@ _pre_write_guard() {
     _red "ABORT"; printf ": HTTP-01 (tls_certificate_source=letsencrypt) and DNS-01 (create_cert_manager_irsa=true) are mutually exclusive.\n"
     abort=1
   fi
-  if [[ "$TLS_SOURCE" == "acm" && ( "$ENABLE_ENVOY" == "true" || "$ENABLE_ISTIO" == "true" ) ]]; then
-    _red "ABORT"; printf ": ACM certificates require ALB and cannot be used with Istio or Envoy Gateway.\n"
+  if [[ "$TLS_SOURCE" == "acm" && "$ENABLE_ISTIO" == "true" ]]; then
+    _red "ABORT"; printf ": ACM is not supported by the quickstart Istio path; use DNS-01 or None.\n"
     abort=1
   fi
   if (( abort )); then
@@ -917,6 +931,12 @@ smithdb_metastore_deletion_protection = ${SMITHDB_DELETION_PROTECTION}
 smithdb_metastore_skip_final_snapshot = ${SMITHDB_SKIP_FINAL_SNAPSHOT}
 TFVARS
 
+if [[ "$ENABLE_SANDBOXES" == "true" ]]; then
+  cat >> "$OUTPUT" << TFVARS
+enable_sandboxes = true
+TFVARS
+fi
+
 # Security add-ons
 HAS_SECURITY=false; SECURITY_BLOCK=""
 [[ "${ALB_SCHEME:-internet-facing}" != "internet-facing" ]] && { SECURITY_BLOCK+="alb_scheme          = \"${ALB_SCHEME}\"\n"; HAS_SECURITY=true; }
@@ -961,7 +981,8 @@ printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
 [[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
 [[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
-printf "  %-26s %s\n" "SmithDB:"      "$ENABLE_SMITHDB"
+printf "  %-26s %s\n" "Sandboxes:" "$ENABLE_SANDBOXES"
+printf "  %-26s %s\n" "SmithDB:" "$ENABLE_SMITHDB"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"

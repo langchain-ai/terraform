@@ -19,7 +19,7 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
 | 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
-| 5 | Insights + Polly | Clio analytics (ClickHouse-backed), Polly eval agent |
+| 5 | Insights + Polly | standalone-insights (ClickHouse-backed analytics), standalone-polly eval agent |
 
 ---
 
@@ -101,7 +101,7 @@ GCS Bucket  (Workload Identity — no static HMAC keys for GCS SA auth)
 | Services | `10.8.0.0/20` | GKE ClusterIP services (secondary range) |
 | Private service connection | `/16` allocated by Google | Cloud SQL, Memorystore private IPs |
 
-Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"` or `redis_source = "external"`.
+Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"`, `redis_source = "external"`, or `enable_sandboxes = true` for the dedicated JuiceFS metadata Redis.
 
 ---
 

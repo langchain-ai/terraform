@@ -111,9 +111,14 @@ variable "release_name" {
 }
 
 variable "chart_version" {
-  description = "LangSmith Helm chart version. Empty string = latest."
+  description = "LangSmith Helm chart version. Pinned to the 0.16 line; these values use the chart 0.16 schema. Sandboxes require this line."
   type        = string
-  default     = ""
+  default     = "~0.16.0"
+
+  validation {
+    condition     = can(regex("^~?0\\.16\\.[0-9]+$", var.chart_version))
+    error_message = "chart_version must name the chart 0.16 line (for example \"~0.16.0\" or \"0.16.1\"). Chart 0.15 ignores the 0.16-only keys in these values and silently falls back to in-cluster Insights databases; 0.17 has not been validated against them."
+  }
 }
 
 variable "helm_timeout" {
@@ -199,6 +204,37 @@ variable "enable_usage_telemetry" {
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)"
   type        = bool
   default     = false
+}
+
+variable "enable_sandboxes" {
+  description = "Enable LangSmith Sandboxes in the Helm release. Requires infra enable_sandboxes=true and the sandbox service-auth secret."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_host_image_tag" {
+  description = "sandbox-host image tag. Required when enable_sandboxes = true."
+  type        = string
+  default     = ""
+}
+
+variable "sandbox_service_url_base_url" {
+  description = "Optional base URL used to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  type        = string
+  default     = ""
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  description = "Existing Kubernetes Secret containing JuiceFS CSI config, created by the infra module when enable_sandboxes = true."
+  type        = string
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_callback_signing_jwk" {
+  description = "Sandbox callback signing private JWK. Required when enable_sandboxes = true."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 #------------------------------------------------------------------------------

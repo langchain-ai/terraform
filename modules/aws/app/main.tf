@@ -109,6 +109,11 @@ data "aws_ssm_parameter" "polly_key" {
   name  = "${local.ssm_prefix}/polly-encryption-key"
 }
 
+data "aws_ssm_parameter" "sandbox_callback_signing_jwk" {
+  count = var.enable_sandboxes ? 1 : 0
+  name  = "${local.ssm_prefix}/sandbox-callback-signing-jwk"
+}
+
 # ── ESO: ExternalSecret ──────────────────────────────────────────────────────
 # Syncs secrets from SSM → K8s Secret (langsmith-config).
 # deploy.sh does this with kubectl apply; here we manage it in Terraform.
@@ -181,6 +186,13 @@ resource "kubectl_manifest" "external_secret" {
             remoteRef = { key = "${local.ssm_prefix}/polly-encryption-key" }
           },
         ] : [],
+        # Sandbox callback signing key — only if sandboxes enabled
+        var.enable_sandboxes ? [
+          {
+            secretKey = "sandbox_callback_signing_jwk"
+            remoteRef = { key = "${local.ssm_prefix}/sandbox-callback-signing-jwk" }
+          },
+        ] : [],
       )
     }
   })
@@ -218,13 +230,13 @@ resource "helm_release" "langsmith" {
   create_namespace = true
   repository       = "https://langchain-ai.github.io/helm"
   chart            = "langsmith"
-  version          = local.chart_version_effective
+  version          = var.chart_version
   timeout          = var.helm_timeout
 
-  # Do NOT use wait = true. The chart's post-install bootstrap job deploys
-  # operator-managed agents (clio, polly, agent-builder) which can take 10+
-  # minutes on a cold cluster with autoscaling. Terraform marks the release as
-  # failed if the job exceeds the timeout — even though all workloads are healthy.
+  # Do NOT use wait = true. The chart's post-install hooks and the operator's
+  # agent pods can take 10+ minutes to settle on a cold cluster with autoscaling.
+  # Terraform marks the release as failed if a hook exceeds the timeout — even
+  # though all workloads are healthy.
   wait = false
 
   force_update = var.helm_force_update
@@ -292,7 +304,7 @@ locals {
         ingressClassName = "alb"
         annotations      = local.ingress_annotations
       }
-      config = {
+      config = merge({
         hostname             = local.hostname
         initialOrgAdminEmail = var.admin_email
         deployment = {
@@ -303,7 +315,7 @@ locals {
           awsRegion  = local.region
           apiURL     = "https://s3.${local.region}.amazonaws.com"
         }
-      }
+      })
       commonEnv = concat(
         [
           { name = "AWS_REGION", value = local.region },
@@ -315,12 +327,55 @@ locals {
     # Postgres/Redis: disable external if using in-cluster
     var.postgres_source != "external" ? { postgres = { external = { enabled = false } } } : {},
     var.redis_source != "external" ? { redis = { external = { enabled = false } } } : {},
+    # Sandbox values are top-level in the chart, not under config.
+    {
+      for k, v in {
+        sandboxes = merge(
+          {
+            enabled = true
+            juicefs = {
+              csi = {
+                existingSecretName = var.sandbox_juicefs_csi_config_secret_name
+                node = {
+                  serviceAccount = {
+                    annotations = local.irsa_annotations
+                  }
+                }
+              }
+            }
+            sandboxHost = {
+              deployment = {
+                nodeSelector = {
+                  "sandbox.langsmith.com/host" = "true"
+                }
+              }
+            }
+          },
+          var.sandbox_service_url_base_url != "" ? { serviceUrlBaseUrl = var.sandbox_service_url_base_url } : {},
+        )
+      } : k => v if var.enable_sandboxes
+    },
+    {
+      for k, v in {
+        images = {
+          sandboxHostImage = {
+            tag = var.sandbox_host_image_tag
+          }
+        }
+      } : k => v if var.enable_sandboxes
+    },
     # IRSA annotations for each component
     { for component in local.irsa_components : component => {
       serviceAccount = {
         annotations = local.irsa_annotations
       }
     } },
+    # Chart 0.16 defaults insights/polly ON, and config.existingSecretName means the
+    # chart finds a key and deploys them without complaint. Make the enable_* flags
+    # authoritative so a base install does not quietly grow two agent deployments.
+    # The insights/polly overlay files set enabled = true when the flags are on.
+    { insights = { enabled = var.enable_insights } },
+    { polly = { enabled = var.enable_polly } },
   )
 
   # Agent deploys override — only the dynamic tlsEnabled field.

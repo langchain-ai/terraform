@@ -314,13 +314,20 @@ terraform apply -var-file=terraform.tfvars
 
 ---
 
-### Issue #13 — Private EKS cluster unreachable (bastion required)
+### Issue #13 — Private EKS cluster unreachable from outside the VPC
 
-**Symptom:** `kubectl` and `terraform apply` timeout when `enable_public_eks_cluster = false`.
+**Symptom:** `kubectl` and `terraform apply` timeout when `enable_public_eks_cluster = false`. During Pass 1 the in-cluster resources (gp3 StorageClass, AWS Load Balancer Controller, Cluster Autoscaler, Metrics Server) all fail together:
+```
+Error: Post "https://<cluster-id>.gr7.<region>.eks.amazonaws.com/apis/storage.k8s.io/v1/storageclasses":
+       dial tcp 10.0.3.234:443: i/o timeout
 
-**Cause:** The EKS API endpoint is private-only. You must run commands from within the VPC — either via the bastion host or a VPN connection.
+Error: Kubernetes cluster unreachable: Get "https://<cluster-id>.gr7.<region>.eks.amazonaws.com/version":
+       dial tcp 10.0.3.234:443: i/o timeout
+```
 
-**Fix:**
+**Cause:** The EKS API endpoint is private-only. The `kubernetes` and `helm` providers run wherever Terraform runs, so the address in the error is a private VPC IP with no route from outside. You must run commands from within the VPC — via the bastion host or a VPN connection — or expose the endpoint.
+
+**Fix — from inside the VPC:**
 
 ```bash
 # If bastion was provisioned (create_bastion = true):
@@ -331,7 +338,26 @@ aws eks update-kubeconfig --region <region> --name <cluster-name>
 kubectl get nodes
 ```
 
-If the bastion wasn't provisioned, either set `create_bastion = true` and re-apply, or temporarily set `enable_public_eks_cluster = true`.
+If the bastion wasn't provisioned, set `create_bastion = true` and re-apply.
+
+**Fix — from a workstation outside the VPC:** expose the API endpoint and restrict it to your address:
+
+```bash
+curl -s https://checkip.amazonaws.com
+```
+
+```hcl
+# terraform.tfvars
+enable_public_eks_cluster = true
+eks_public_access_cidrs   = ["<your-ip>/32"]
+```
+
+```bash
+make plan    # shows the endpoint update plus the in-cluster resources still to add
+make apply
+```
+
+The endpoint update takes a few minutes, after which the previously failed resources converge on the same apply run. Note the allowlist has to be updated whenever your address changes — point it at a stable VPN egress range for anything beyond one-off testing, and never widen it to `0.0.0.0/0`.
 
 ---
 
@@ -353,6 +379,8 @@ terraform apply -var-file=terraform.tfvars
 # Then redeploy Helm to pick up the new ALB
 ```
 
+---
+
 ### Issue #15 — ALB hostname changed after ingress recreation
 
 **Symptom:** LangSmith URL stops working. Agent deployments stuck in DEPLOYING state.
@@ -364,13 +392,14 @@ a different hostname is issued. The `config.deployment.url` in the Helm values s
 to the old hostname, so the operator's health checks fail and deployments stay stuck.
 
 This also happens if the ALB controller creates a new ALB instead of reusing the
-Terraform pre-provisioned one. The `group.name` annotation is required alongside
-`load-balancer-arn` to prevent this — without it, the controller's behavior is
-inconsistent across ingress reconciliations.
+existing one. The `group.name` annotation is what keeps the controller reusing a
+single stable ALB across ingress reconciliations. There is no supported annotation
+for binding an ingress to a pre-provisioned ALB — `load-balancer-arn` is not a real
+controller annotation, it was silently ignored, and setting it produced a second,
+orphaned ALB. `init-values.sh` no longer emits it.
 
 **Prevention:**
-- Ensure `group.name` and `load-balancer-arn` annotations are both set
-  (`init-values.sh` does this automatically when a pre-provisioned ALB exists)
+- Ensure the `group.name` annotation is set (`init-values.sh` does this automatically)
 - Never delete the ingress unless you plan to update all hostname-dependent config
 - Avoid `helm rollback` without `--server-side=false` — the ingress SSA conflict
   can trigger a delete/recreate cycle
@@ -388,6 +417,25 @@ terraform output alb_dns_name
 make init-values
 make deploy
 ```
+
+**On deployments created before `load-balancer-arn` was removed:** the printed URL
+returns `404 Not Found` from `awselb/2.0` while every pod is `Running`.
+`kubectl describe ingress langsmith-ingress -n langsmith` shows two ALB hostnames —
+the Terraform-provisioned one carrying the host rule but no listener rules, and the
+controller-created `k8s-<group>-<id>` one carrying the listener rules. Confirm the
+workload is healthy, then repoint at the controller-owned ALB and delete the orphan.
+
+```bash
+# App is fine if this serves the UI — the problem is at the ALB/ingress layer
+kubectl port-forward svc/langsmith-frontend -n langsmith 8080:80
+
+# Identify which ALB actually has the rules
+curl -I --max-time 10 -H "Host: <ingress-host-rule>" http://<alb-dns-name>/
+
+make init-values && make deploy
+```
+
+---
 
 ### Issue #16 — Node group scaling changes not applied by terraform
 
@@ -412,6 +460,172 @@ aws eks update-nodegroup-config \
   --scaling-config minSize=3,maxSize=8,desiredSize=5 \
   --region <region>
 ```
+
+---
+
+### Issue #17 — aws configure sso fails: RegisterClient invalid_request
+
+**Symptom:** The command fails immediately after the SSO start URL, region, and scopes are entered:
+```
+aws: [ERROR]: An error occurred (InvalidRequestException) when calling the RegisterClient operation:
+
+error: invalid_request
+error_description: Invalid request.
+```
+
+**Cause:** The **SSO region** prompt has to be answered with the region where the IAM Identity Center instance is provisioned, not the region you intend to deploy into. The directory (`d-<id>.awsapps.com/start`) lives in exactly one region.
+
+**Fix:** Confirm the region in the AWS console under IAM Identity Center, then re-run `aws configure sso`:
+
+```
+SSO session name:          <your-sso-session>
+SSO start URL:             https://<directory>.awsapps.com/start
+SSO region:                us-east-1        # where Identity Center lives
+SSO registration scopes:   sso:account:access
+Default client Region:     us-west-2        # where you deploy
+CLI default output format: json
+Profile name:              <your-profile>
+```
+
+This is a one-time setup. Each session afterwards needs only `aws sso login --profile <your-profile>` and `export AWS_PROFILE=<your-profile>`. The Authenticate section of the [README](README.md#authenticate) covers the full SSO flow.
+
+---
+
+### Issue #18 — setup-env.sh completes but every SSM parameter is MISSING
+
+**Symptom:** `source infra/scripts/setup-env.sh` prints its usual summary and `TF_VAR_*` are exported, but `make secrets` reports all required SSM parameters as `MISSING`, and:
+```
+aws sts get-caller-identity
+# Unable to locate credentials
+```
+
+**Cause:** No AWS credentials were active in the shell when the script was sourced. `setup-env.sh` suppresses AWS CLI errors so it can fall back to local `.secret` files, and it exports each value into the shell whether or not the SSM write succeeded. The result is a shell that looks correctly configured while SSM is empty.
+
+**Fix:**
+
+```bash
+export AWS_PROFILE=<your-profile>
+aws sso login                        # or aws configure, for key-based accounts
+aws sts get-caller-identity          # must succeed before continuing
+
+source ./infra/scripts/setup-env.sh  # backfills TF_VAR_* already in the shell into SSM
+make secrets                         # all SET
+```
+
+The backfill path detects "set in the environment, missing in SSM" and writes without re-prompting, so the license key and admin password do not have to be entered again.
+
+**Prevention:** Run `make preflight` before `make setup-env` — it fails fast when `aws sts get-caller-identity` returns nothing.
+
+---
+
+### Issue #19 — Resuming setup-env.sh after aborting at a prompt
+
+**Symptom:** The script was interrupted partway through, commonly at the `LANGSMITH_LICENSE_KEY` prompt. It is unclear whether re-sourcing in the same shell is safe.
+
+**Cause:** Not a defect — the script is idempotent and reads existing values back from SSM. The ambiguity is that when `LANGSMITH_LICENSE_KEY` or `LANGSMITH_ADMIN_PASSWORD` are already exported, the script skips both the prompt and the SSM write for them.
+
+**Fix:** SSO credentials are short-lived, so refresh first. If neither secret was entered before the abort, the same shell is fine:
+
+```bash
+aws sso login --profile <your-profile>
+source ./infra/scripts/setup-env.sh
+```
+
+If either was entered and the script failed afterwards, clear them first (or open a new shell) so they are re-prompted and written to SSM:
+
+```bash
+unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
+```
+
+Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently; only what is missing is prompted for.
+
+---
+
+### Issue #20 — manage-ssm.sh set fails: invalid choice 'none'
+
+**Symptom:**
+```
+./infra/scripts/manage-ssm.sh set postgres-password '<value>'
+aws: [ERROR]: An error occurred (ParamValidation): argument --output: Found invalid choice 'none'
+```
+
+**Cause:** The script passes `--output none` to `aws ssm put-parameter`. The AWS CLI accepts `json`, `text`, `table`, `yaml`, and `yaml-stream` — `none` is not valid, so the call fails before anything is written to SSM.
+
+**Fix:** Write the parameter with the CLI directly, then verify:
+
+```bash
+aws ssm put-parameter \
+  --region <region> \
+  --name "/langsmith/<name_prefix>-<environment>/<param-name>" \
+  --value '<value>' \
+  --type SecureString \
+  --overwrite
+
+./infra/scripts/manage-ssm.sh list
+```
+
+In the script itself, `--output none` should be replaced with `--output text >/dev/null`.
+
+---
+
+### Issue #21 — make init fails: S3 backend bucket does not exist
+
+**Symptom:**
+```
+Initializing the backend...
+Error: Failed to get existing workspaces: S3 bucket "<your-tf-state-bucket>" does not exist.
+The referenced S3 bucket must have been previously created.
+```
+
+**Cause:** `infra/backend.tf` was populated from `backend.tf.example` with a bucket that does not exist yet. Terraform cannot bootstrap its own state bucket — the bucket has to exist before `terraform init` runs. The shipped `backend.tf` uses local state, so this only appears once you opt into the S3 backend.
+
+**Fix — create the bucket first** (recommended whenever more than one person applies against the deployment):
+
+```bash
+aws s3api create-bucket \
+  --bucket <your-tf-state-bucket> \
+  --region <region> \
+  --create-bucket-configuration LocationConstraint=<region>   # omit this line in us-east-1
+
+aws s3api put-bucket-versioning \
+  --bucket <your-tf-state-bucket> \
+  --versioning-configuration Status=Enabled
+
+aws s3api put-bucket-encryption \
+  --bucket <your-tf-state-bucket> \
+  --server-side-encryption-configuration \
+    '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+aws s3api put-public-access-block \
+  --bucket <your-tf-state-bucket> \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+**Fix — fall back to local state:** remove or rename `infra/backend.tf`. Terraform then writes `terraform.tfstate` into `infra/`. Acceptable for single-operator testing only, since the state file is not shared, locked, or versioned.
+
+---
+
+### Issue #22 — Bastion instance create fails: root volume smaller than AMI snapshot
+
+**Symptom:**
+```
+Error: creating EC2 Instance: operation error EC2: RunInstances, ...
+  api error InvalidBlockDeviceMapping: Volume of size 20GB is smaller than snapshot 'snap-...',
+  expect size >= 30GB
+
+  with module.bastion[0].aws_instance.bastion,
+```
+
+**Cause:** The bastion root volume defaults to 20 GB (`bastion_root_volume_size_gb` in `infra/variables.tf`, `root_volume_size_gb` in `infra/modules/bastion/variables.tf`) while the AMI in use has a 30 GB root snapshot. EC2 rejects `RunInstances` when the requested volume is smaller than the source snapshot.
+
+**Fix:** Override the size in `terraform.tfvars` and re-apply:
+
+```hcl
+bastion_root_volume_size_gb = 30   # 40 leaves headroom for kubectl and helm caches, and logs
+```
+
+If the bastion is not needed — for example when the EKS endpoint is public with an IP allowlist (Issue #13) — set `create_bastion = false` instead.
 
 ---
 

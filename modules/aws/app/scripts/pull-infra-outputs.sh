@@ -54,6 +54,7 @@ langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>
 postgres_source=$(terraform -chdir="$INFRA_DIR" output -raw postgres_source 2>/dev/null || echo "external")
 redis_source=$(terraform -chdir="$INFRA_DIR" output -raw redis_source 2>/dev/null || echo "external")
 langsmith_namespace=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace)
+sandbox_juicefs_csi_config_secret_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null || echo "juicefs-csi-config")
 
 # SmithDB (empty/false when enable_smithdb = false in infra)
 enable_smithdb=$(terraform -chdir="$INFRA_DIR" output -raw enable_smithdb 2>/dev/null || echo "false")
@@ -101,7 +102,8 @@ cat > "$OUT_FILE" <<EOF
   "smithdb_object_store_bucket": "$smithdb_object_store_bucket",
   "smithdb_irsa_role_arn": "$smithdb_irsa_role_arn",
   "smithdb_metastore_use_ssl": $smithdb_metastore_use_ssl,
-  "smithdb_metastore_port": $smithdb_metastore_port
+  "smithdb_metastore_port": $smithdb_metastore_port,
+  "sandbox_juicefs_csi_config_secret_name": "$sandbox_juicefs_csi_config_secret_name"
 }
 EOF
 

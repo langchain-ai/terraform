@@ -96,7 +96,7 @@ enable_standalone_insights = true   # standalone Insights     (replaces enable_i
 enable_usage_telemetry = true
 ```
 
-> **Chart v0.15+:** `config.agentBuilder.*`, `config.polly.*`, and `config.insights.*` are deprecated in favor of the top-level standalone blocks. Use the standalone flags above instead.
+> **Chart 0.16:** `config.polly.*` and `config.insights.*` are rejected outright — the chart fails the release if either key is present at all. `config.agentBuilder.*` still gates the Agent Builder UI and its tool/trigger servers, but no longer deploys an agent runtime. Use the standalone flags above.
 
 To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
 
@@ -258,9 +258,9 @@ kubectl get pods -n langsmith | grep -E "fleet|tool-server|trigger-server"
 
 **Prerequisite:** Pass 2 healthy. Does **not** require Pass 3 or Pass 4.
 
-In chart v0.15+, Polly and Insights run as standalone microservices with dedicated Cloud SQL and Memorystore provisioned by Terraform. The bundled `config.polly.*` and `config.insights.*` paths are deprecated in favor of the top-level standalone blocks.
+In chart 0.15+, Polly and Insights run as standalone microservices with dedicated Cloud SQL and Memorystore provisioned by Terraform. The bundled `config.polly.*` and `config.insights.*` paths were removed; the top-level `polly` and `insights` blocks are the only supported path.
 
-> **Chart v0.15+.** `config.polly.*` and `config.insights.*` are deprecated — use the top-level `polly.*` and `insights.*` blocks via the standalone flags below instead.
+> **Chart 0.16.** `config.polly.*` and `config.insights.*` are rejected — use the top-level `polly.*` and `insights.*` blocks via the standalone flags below instead.
 
 **Step 1 — enable flags in `infra/terraform.tfvars`:**
 
@@ -343,7 +343,7 @@ langsmith-standalone-insights-queue-xxx        1/1  Running    0
 
 > **Encryption keys must never change after first enable.** `polly_encryption_key` and `insights_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
 
-> **Chart v0.15+ schema change.** `config.agentBuilder.*`, `config.polly.*`, and `config.insights.*` are deprecated. Use the top-level `fleet.*`, `polly.*`, and `insights.*` standalone blocks instead — enabled via `enable_fleet`, `enable_standalone_polly`, and `enable_standalone_insights`.
+> **Chart 0.16 schema change.** `config.polly.*` and `config.insights.*` are rejected, and `config.agentBuilder.*` no longer deploys an agent runtime now that the bundled bootstrap Job is gone. Use the top-level `fleet.*`, `polly.*`, and `insights.*` standalone blocks instead — enabled via `enable_fleet`, `enable_standalone_polly`, and `enable_standalone_insights`.
 
 > **Envoy Gateway IP changes on teardown.** GCP releases the external IP when the Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
 

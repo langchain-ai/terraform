@@ -11,7 +11,7 @@ admin_email = "admin@example.com"
 # ── Optional overrides ────────────────────────────────────────────────────────
 
 # hostname = "langsmith.example.com"   # Defaults to ALB DNS name
-# chart_version = "0.15.1"             # SmithDB requires an explicit 0.16 or newer version
+# chart_version = "~0.16.0"            # Must be on the chart 0.16 line
 # release_name  = "langsmith"
 
 # ── SmithDB staged rollout ────────────────────────────────────────────────────
@@ -36,6 +36,18 @@ admin_email = "admin@example.com"
 # enable_insights        = true    # Insights (requires ClickHouse below)
 # enable_polly           = true    # Polly AI eval/monitoring (requires agent_deploys)
 # enable_usage_telemetry = true    # Extended usage telemetry reporting
+
+# ── Sandboxes ────────────────────────────────────────────────────────────────
+# Requires infra enable_sandboxes = true. The infra module creates the JuiceFS
+# CSI config Secret in the LangSmith namespace; pass the same Secret name here.
+# Run `source infra/scripts/setup-env.sh` so the sandbox SSM secrets exist before deploy.
+# Sandboxes require chart 0.16.0 or newer, and the chart version must be explicit.
+#
+# enable_sandboxes = true
+# chart_version = "~0.16.0"
+# sandbox_host_image_tag = "0.0.0"
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
+# sandbox_juicefs_csi_config_secret_name = "juicefs-csi-config"
 
 # ── ClickHouse (required when enable_insights = true) ────────────────────────
 

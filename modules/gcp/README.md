@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Google Kubernetes Engine (GKE), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`, never `0.16`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -366,7 +366,7 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
-| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = latest) |
+| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.16.0` line; must be on the 0.16 line) |
 | `install_ingress` | `true` | no | Install Envoy Gateway via Terraform |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy`, `istio`, or `other` |
 | `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing` |
@@ -378,8 +378,8 @@ helm upgrade langsmith langchain/langsmith \
 | `enable_standalone_polly` | `false` | no | Enable Polly standalone (chart v0.15+) — replaces `enable_polly`; does not require `enable_deployments` |
 | `enable_standalone_insights` | `false` | no | Enable Insights standalone (chart v0.15+) — replaces `enable_insights`; does not require `enable_deployments` |
 | `enable_agent_builder` | `false` | no | Deprecated (chart v0.15+) — `config.agentBuilder.*` is superseded by `enable_fleet` (`fleet.*`) |
-| `enable_insights` | `false` | no | Deprecated (chart v0.15+) — `config.insights.*` is superseded by `enable_standalone_insights` (`insights.*`) |
-| `enable_polly` | `false` | no | Deprecated (chart v0.15+) — `config.polly.*` is superseded by `enable_standalone_polly` (`polly.*`) |
+| `enable_insights` | `false` | no | Enables Insights without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_insights` is preferred |
+| `enable_polly` | `false` | no | Enables Polly without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_polly` is preferred |
 | `owner` | `platform-team` | no | Owner label applied to all resources |
 | `cost_center` | `""` | no | Cost center label for billing attribution |
 | `labels` | `{}` | no | Additional labels applied to all resources |
