@@ -304,6 +304,12 @@ variable "amr_sku" {
   default     = "Balanced_B0"
 }
 
+variable "redis_location" {
+  type        = string
+  description = "Region for the AMR cluster. Defaults to var.location. Set this only when AMR reports InsufficientCapacity in your region — the private endpoint and every other resource stay in var.location, so the change is a cross-region private link, not a second deployment."
+  default     = null
+}
+
 variable "blob_ttl_enabled" {
   type        = bool
   description = "Enable TTL for the blob container"

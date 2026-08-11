@@ -660,6 +660,7 @@ module "redis" {
   subnet_id           = local.redis_subnet_id                    # private endpoint goes here
   vnet_id             = local.vnet_id                            # private DNS zone link
   amr_sku             = var.amr_sku
+  cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
 }
