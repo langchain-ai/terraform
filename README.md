@@ -69,6 +69,16 @@ git fetch --tags
 git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
 ```
 
+If you would rather download than clone, every release has a source archive — one URL per release, covering all providers:
+
+```bash
+TAG=v0.16.0     # latest v0.16.* — see GitHub Releases below
+curl -sL "https://github.com/langchain-ai/terraform/archive/refs/tags/${TAG}.zip" -o "${TAG}.zip"
+unzip "${TAG}.zip"     # extracts terraform-0.16.0/
+```
+
+GitHub generates these archives on request, so don't pin a checksum of one; clone and check out the tag if you need bit-for-bit reproducibility.
+
 What this means for you:
 
 - Pin to a tag for reproducible infrastructure; re-run the command above to move to a newer patch within the line as fixes land.
