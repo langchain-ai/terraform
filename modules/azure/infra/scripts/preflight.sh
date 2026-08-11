@@ -189,13 +189,26 @@ else
 
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # printf adds the newline grep needs to see an empty identifier as a line to
-  # match rather than as no input at all. Empty is valid: it means no suffix.
-  IDENTIFIER=$(tfvar identifier)
-  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
+  # Mirrors local.resource_group_name in main.tf, both halves of it: name_prefix
+  # replaced identifier and carries no leading hyphen, and unique_resource_names
+  # shortens the base from "langsmith" to "ls". Get either wrong and this probes a
+  # resource group that does not exist, which comes back looking like missing RBAC.
+  # unique_resource_names is unquoted, so tfvar() cannot read it.
+  NAME_PREFIX=$(tfvar name_prefix)
+  [ -n "$NAME_PREFIX" ] || NAME_PREFIX=$(tfvar identifier)
+  NAME_SUFFIX=""
+  [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
+  NAME_BASE="langsmith"
+  if grep -qE '^[[:space:]]*unique_resource_names[[:space:]]*=[[:space:]]*true' "$TFVARS_FILE" 2>/dev/null; then
+    NAME_BASE="ls"
+  fi
+
+  # printf adds the newline grep needs to see an empty suffix as a line to match
+  # rather than as no input at all. Empty is valid: it means no suffix.
+  if printf '%s\n' "$NAME_SUFFIX" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
+    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${NAME_BASE}-rg${NAME_SUFFIX}")
   else
-    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
+    warn "terraform.tfvars: name_prefix is not a valid resource-name suffix, so the deployment resource group was not checked"
   fi
 
   EXISTING_VNET=$(tfvar vnet_id)
@@ -651,7 +664,14 @@ echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do
   if command -v "$TOOL" &>/dev/null; then
-    VERSION=$("$TOOL" version --short 2>/dev/null | head -1 || "$TOOL" version 2>/dev/null | head -1 || echo "installed")
+    # Chained with || these fall through on exit status, and pipefail makes both
+    # earlier branches fail while still printing: kubectl dropped --short after
+    # 1.27, and `kubectl version` exits non-zero when no API server is reachable.
+    # So a working kubectl reported its version and got "installed" appended on a
+    # line of its own. Fall back on an empty result instead of a failed one.
+    VERSION=$("$TOOL" version --short 2>/dev/null | head -1) || true
+    [ -n "$VERSION" ] || VERSION=$("$TOOL" version 2>/dev/null | head -1) || true
+    [ -n "$VERSION" ] || VERSION="installed"
     pass "${TOOL}: ${VERSION}"
   else
     warn "${TOOL} not found — needed for later passes"
