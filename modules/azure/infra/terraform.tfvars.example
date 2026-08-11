@@ -3,8 +3,12 @@
 # Copy to terraform.tfvars and fill in your values:
 #   cp terraform.tfvars.example terraform.tfvars
 #
-# Sensitive values (passwords, license key, Fernet keys) are NOT set here.
-# Run ./setup-env.sh — prompts on first run, reads from Key Vault on subsequent runs.
+# Sensitive values are NOT set here and have no variable in this file: the
+# Postgres admin password, the LangSmith license key, the admin email, the API
+# key salt, the JWT secret, and the Fernet encryption keys. Run ./setup-env.sh —
+# it prompts on the first run and reads from Key Vault afterwards, so none of
+# them reach Terraform state. The external ClickHouse credentials are separate
+# again; `make init-values` prompts for those. See the clickhouse_source note.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Required ──────────────────────────────────────────────────────────────────
@@ -28,17 +32,40 @@ unique_resource_names = true
 # owner       = "platform-team"
 # cost_center = "engineering"
 
+# Pin an individual resource name instead of deriving it. Use these to keep the
+# names an existing deployment already has when you cannot turn on
+# unique_resource_names, or to work around a single global-namespace collision
+# without renaming everything. Each is globally unique in Azure.
+# postgres_name        = "ls-pg-prod"      # → <name>.postgres.database.azure.com, 3–63 chars
+# redis_name           = "ls-redis-prod"   # → <name>.<location>.redisenterprise.cache.azure.net, 1–60 chars
+# storage_account_name = "lsblobprod"      # 3–24 chars, lowercase alphanumeric only
+
 # ── Sources — external managed services ───────────────────────────────────────
 postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
 redis_source      = "external"    # "external" = Azure Managed Redis
 clickhouse_source = "in-cluster"  # "in-cluster" = chart-managed StatefulSet (dev/POC)
                                   # "external"   = LangChain Managed ClickHouse, Altinity,
-                                  #                or any reachable ClickHouse. init-values.sh
-                                  #                prompts for the connection details.
+                                  #                or any reachable ClickHouse.
+
+# ClickHouse is the trace and run store, so clickhouse_source drives it on its
+# own — enable_insights does not enter into it. "in-cluster" is dev/POC only:
+# the PVC is a zonal Azure managed disk, which pins the pod to one zone for the
+# life of the volume. Use "external" for production.
+#
+# On "external" the chart skips its StatefulSet and reads the connection from a
+# langsmith-clickhouse secret. `make init-values` prompts for all seven fields
+# (host, HTTP port, native port, user, password, database, TLS) and creates the
+# secret; `make deploy` refuses to run if any key is missing. Nothing about the
+# connection is stored in tfvars or Terraform state.
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 postgres_admin_username      = "langsmith"
 postgres_database_name       = "langsmith"    # database name on the server
+
+# Server SKU. Change tiers if apply fails with LocationIsOfferRestricted — that
+# restriction is sometimes scoped to a SKU family, so a different tier can clear
+# it without moving region.
+# postgres_sku_name = "GP_Standard_D2ds_v4"
 
 # ── Redis (Azure Managed Redis / AMR) ─────────────────────────────────────────
 # redis_source = "external" provisions Azure Managed Redis (Microsoft.Cache/redisEnterprise,
@@ -84,6 +111,35 @@ additional_node_pools = {
   }
 }
 
+# ── Attach to an AKS cluster you already run (optional) ───────────────────────
+# Deploy LangSmith onto a cluster your platform team owns instead of creating
+# one. Terraform still creates Postgres, Redis, Storage, and Key Vault; it reads
+# the cluster's region and subnets from Azure and changes nothing else about it.
+# Both names are required on this path — plan fails rather than guessing.
+# The node sizing above is ignored; the cluster must already have room.
+# create_cluster                       = false
+# existing_cluster_name                = "platform-aks-prod"
+# existing_cluster_resource_group_name = "platform-rg"
+#
+# Let Terraform add the additional_node_pools above to that cluster. Off by
+# default: adding a node pool to someone else's cluster is worth opting into.
+# Left off, the cluster needs a node that can hold ClickHouse by itself — 2 vCPU
+# / 8 GiB at the production sizing profile, 4 vCPU / 16 GiB at production-large
+# — plus room for LangGraph workloads. Run infra/scripts/preflight.sh to check
+# that against the live nodes before applying. Terraform only ever adds new
+# pools; it never adopts pools that already exist.
+# existing_cluster_node_pools_managed = true
+#
+# Cluster add-ons. Both install by default. Set false for anything the cluster
+# already runs — installing a second copy conflicts.
+# cert-manager issues the TLS certificate; tls_certificate_source = "dns01"
+# requires Terraform to install it, because the DNS-01 solver needs a
+# workload-identity annotation Terraform only adds to its own install.
+# KEDA scales the LangSmith queue workers on Redis queue depth, so if you skip
+# it here the cluster has to provide it.
+# install_cert_manager = false
+# install_keda         = false
+
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "nginx"         — NGINX ingress via Helm (standard, start here)
 # "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
@@ -99,6 +155,11 @@ ingress_controller = "nginx"
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
 # istio_addon_revision = "asm-1-27"
+
+# Chart versions for the self-managed controllers. Pin these if your platform
+# team standardizes on a version; each is used only by its own controller.
+# istio_version         = "1.29.1"   # ingress_controller = "istio"
+# envoy_gateway_version = "v1.2.0"   # ingress_controller = "envoy-gateway"
 
 # AGIC options — only used when ingress_controller = "agic"
 # agw_sku_tier            = "Standard_v2"   # create_waf = true forces WAF_v2
@@ -137,6 +198,12 @@ tls_certificate_source = "none"
 # create_dns_zone        = true
 # langsmith_domain       = "langsmith.example.com"
 # letsencrypt_email      = "you@example.com"
+#
+# The A record takes a second apply, because the load balancer IP does not exist
+# until the ingress controller is deployed. Leave ingress_ip empty for the first
+# apply, then read the IP and re-apply to create the record. `make status`
+# prints the exact value once the LB has one.
+# ingress_ip = "203.0.113.10"
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 keyvault_purge_protection = false   # set true for production
@@ -152,6 +219,27 @@ keyvault_purge_protection = false   # set true for production
 # create_keyvault                       = false
 # existing_keyvault_name                = "customer-platform-kv"
 # existing_keyvault_resource_group_name = "customer-platform-rg"
+
+# The two Key Vault role assignments are gated independently. Left unset, each
+# follows create_keyvault — a vault Terraform creates gets the grant, a
+# customer-owned vault does not.
+#
+# The deployer's "Key Vault Secrets Officer" grant. Creating it on a vault you
+# do not own calls roleAssignments/write against a platform team's resource,
+# which is the call such a team most often denies. Set false when the grant
+# already exists, or when the subscription delegates roleAssignments/write
+# through an ABAC condition that only permits principalType ServicePrincipal
+# while apply runs as a User. Either way, a tenant admin has to grant the
+# deployer Key Vault Secrets Officer on the vault or its resource group before
+# apply, or the secret writes fail with 403.
+# keyvault_manage_terraform_admin_assignment = false
+#
+# The pod managed identity's "Key Vault Secrets User" grant. This principal is
+# always a ServicePrincipal, so an ABAC condition that rejects a User deployer
+# still permits it. Nobody can pre-grant it — the identity is created partway
+# through the same apply — so leave it unset unless the vault's owner has agreed
+# to add it by hand.
+# keyvault_manage_managed_identity_assignment = false
 
 # ── Blob storage ──────────────────────────────────────────────────────────────
 blob_ttl_enabled    = true
@@ -174,11 +262,23 @@ langsmith_release_name = "langsmith"
 #
 sizing_profile = "production"
 
+# Pin the LangSmith Helm chart for reproducible deploys. Must name the chart
+# 0.16 line — these values use the 0.16 schema and deploy.sh rejects anything
+# else. Empty uses the pinned ~0.16.0 default.
+# langsmith_helm_chart_version = "0.16.1"
+
 # Pass 3 — LangGraph Platform (hostBackend, listener, operator)
 # Required before enabling agent_builder, insights, or polly.
 # enable_deployments = true
 
-# Pass 4 — Agent Builder UI (fleetToolServer, fleetTriggerServer)
+# Pass 4 — Fleet, the successor to Agent Builder. Prefer this for new deploys.
+# Unlike the other flags this one also drives Terraform: it creates a dedicated
+# langsmith_fleet Postgres database and the langsmith-fleet-postgres secret.
+# Requires enable_deployments = true and postgres_source = "external".
+# Mutually exclusive with enable_agent_builder.
+# enable_fleet = true
+
+# Pass 4 — Agent Builder UI (fleetToolServer, fleetTriggerServer) — legacy
 # enable_agent_builder = true
 
 # Pass 5 — Insights (ClickHouse-backed trace analytics)
@@ -192,6 +292,21 @@ sizing_profile = "production"
 # create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)
 # create_diagnostics = true   # Log Analytics + diagnostic settings (recommended for prod)
 # create_bastion     = true   # Jump VM for private AKS node access
+
+# WAF enforcement. Detection logs matches, Prevention blocks them. Start in
+# Detection: the OWASP core rule set matches SQL and script fragments that turn
+# up legitimately in LangSmith prompts and traces. Review the firewall log,
+# add exclusions for the false positives, then switch to Prevention.
+# waf_mode = "Prevention"
+
+# Log Analytics retention, only used with create_diagnostics = true.
+# log_retention_days = 90
+
+# Bastion options, only used with create_bastion = true. Narrow the SSH range —
+# the default allows the whole internet, which is wrong for production.
+# bastion_vm_size              = "Standard_B2s"
+# bastion_allowed_ssh_cidrs    = ["203.0.113.0/24"]
+# bastion_admin_ssh_public_key = "ssh-ed25519 AAAA..."
 
 # ── Multi-AZ (optional) ───────────────────────────────────────────────────────
 # AKS applies zones at node pool CREATION only. Changing availability_zones on a

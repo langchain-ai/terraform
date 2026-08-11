@@ -35,7 +35,19 @@ unique_resource_names = true
 #------------------------------------------------------------------------------
 postgres_source   = "external"     # Azure DB for PostgreSQL Flexible Server
 redis_source      = "external"     # Azure Managed Redis
-clickhouse_source = "in-cluster"   # use LangChain Managed ClickHouse for full prod
+clickhouse_source = "in-cluster"
+
+# Switch ClickHouse to "external" for a real production deployment. In-cluster
+# puts the trace and run store on a zonal Azure managed disk, which pins the pod
+# to one zone for the life of the volume. External points the chart at LangChain
+# Managed ClickHouse, Altinity, or any ClickHouse you run:
+#
+#   clickhouse_source = "external"
+#
+# `make init-values` then prompts for host, HTTP port, native port, user,
+# password, database, and TLS, and creates the langsmith-clickhouse secret.
+# `make deploy` refuses to run if any of the seven keys is missing. None of it
+# is stored in tfvars or Terraform state.
 
 #------------------------------------------------------------------------------
 # PostgreSQL — production grade, deletion protection on
@@ -117,7 +129,12 @@ sizing_profile = "production"
 # Pass 3 — LangGraph Platform
 # enable_deployments = true
 
-# Pass 4 — Agent Builder
+# Pass 4 — Fleet (successor to Agent Builder; prefer this for new deploys).
+# Also creates a langsmith_fleet Postgres database. Requires enable_deployments.
+# Mutually exclusive with enable_agent_builder.
+# enable_fleet = true
+
+# Pass 4 — Agent Builder (legacy)
 # enable_agent_builder = true
 
 # Pass 5 — Insights / Polly
@@ -128,7 +145,55 @@ sizing_profile = "production"
 # Optional add-ons — recommended for production
 #------------------------------------------------------------------------------
 # create_diagnostics = true   # Log Analytics + diagnostic settings
-# create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)
+# log_retention_days = 90     # default; raise for a longer compliance window
+
+# create_waf = true   # Azure WAF policy (OWASP 3.2 + bot protection)
+# Start in Detection. The OWASP core rule set matches SQL and script fragments
+# that appear legitimately in LangSmith prompts and traces, so review the
+# firewall log and add exclusions before switching to Prevention.
+# waf_mode = "Prevention"
+
+#------------------------------------------------------------------------------
+# Network hardening
+#------------------------------------------------------------------------------
+# Default-deny firewalls on Storage, Key Vault, and the AKS API server. AKS pods
+# reach Storage and Key Vault over service endpoints on the AKS subnet and are
+# allowlisted automatically — list only the clients that need those data planes
+# directly (operator workstations, CI runners, jumpboxes). The defaults below are
+# left empty so a first apply works from anywhere; production should set them.
+# storage_allowed_ips      = ["203.0.113.42/32"]
+# aks_authorized_ip_ranges = ["203.0.113.42/32", "198.51.100.0/24"]
+
+# Key Vault default-deny. The first apply writes ~10 secrets over the data plane
+# from whatever host runs Terraform, so "Deny" with an incomplete
+# keyvault_allowed_ips fails that apply. Either include the apply host's egress
+# IP here, or apply once with the default "Allow" and switch to "Deny" after.
+# keyvault_default_action = "Deny"
+# keyvault_allowed_ips    = ["203.0.113.42/32"]
+
+#------------------------------------------------------------------------------
+# Chart version
+#------------------------------------------------------------------------------
+# Pin the chart for reproducible deploys. Must be on the 0.16 line — these
+# values use the 0.16 schema and deploy.sh rejects anything else.
+# langsmith_helm_chart_version = "0.16.1"
+
+#------------------------------------------------------------------------------
+# Attaching to infrastructure the platform team owns
+#------------------------------------------------------------------------------
+# This profile assumes Terraform creates the VNet, the AKS cluster, and the Key
+# Vault. To deploy onto a cluster, VNet, or vault that already exists, see the
+# matching sections of terraform.tfvars.example:
+#   create_cluster  = false  + existing_cluster_name / _resource_group_name
+#   create_vnet     = false  + aks_subnet_id / postgres_subnet_id / redis_subnet_id
+#   create_keyvault = false  + existing_keyvault_name / _resource_group_name
+# Each path has prerequisites the plan checks, and the Key Vault path needs role
+# assignments a platform team usually has to grant by hand.
+#
+# On an existing cluster, also turn off anything the cluster already runs — a
+# second install of either one fails the apply on conflicting CRDs:
+# install_cert_manager = false
+# install_keda         = false
 
 #------------------------------------------------------------------------------
 # Multi-AZ — for zone-redundant HA (optional)
