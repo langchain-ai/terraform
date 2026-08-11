@@ -45,6 +45,9 @@ setup-env: ## Bootstrap secrets → secrets.auto.tfvars (prompts on first run, r
 preflight: ## Run Azure pre-flight checks (login, providers, RBAC, terraform.tfvars)
 	cd $(INFRA_DIR) && bash scripts/preflight.sh
 
+test-preflight: ## Run the pre-flight RBAC tests (stubbed az, no Azure account needed)
+	python3 $(INFRA_DIR)/scripts/test-preflight-rbac.py
+
 init: ## terraform init (infra)
 	terraform -chdir=$(INFRA_DIR) init
 
