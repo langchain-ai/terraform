@@ -580,8 +580,9 @@ module "aks" {
 
   # A WAF policy can only be associated with the WAF_v2 tier, so create_waf
   # decides the tier rather than leaving the two to be set into a combination
-  # that fails at apply. agw_sku_tier still governs the no-WAF case, which keeps
-  # the tier of anyone who set it explicitly to run the gateway without a policy.
+  # that fails at apply. The dependency runs both ways: WAF_v2 is equally
+  # invalid without a policy, so agw_sku_tier = "WAF_v2" on its own is rejected
+  # by a precondition on the gateway rather than silently downgraded.
   agw_sku_tier       = var.create_waf ? "WAF_v2" : var.agw_sku_tier
   firewall_policy_id = one(module.waf[*].waf_policy_id)
 
