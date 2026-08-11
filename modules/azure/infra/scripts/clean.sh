@@ -80,7 +80,7 @@ _rm "$INFRA_DIR/terraform.tfvars"
 _rm "$INFRA_DIR/secrets.auto.tfvars"
 
 # Temp secret files written by setup-env.sh before Key Vault exists
-for f in .api_key_salt .jwt_secret .deployments_key .agent_builder_key .insights_key .polly_key; do
+for f in .pg_password .api_key_salt .jwt_secret .deployments_key .agent_builder_key .insights_key .polly_key; do
   _rm "$INFRA_DIR/$f"
 done
 

@@ -223,7 +223,7 @@ make setup-env
 ```
 
 **On first run**, the script:
-1. Prompts for: PostgreSQL admin password, LangSmith license key, admin password, admin email
+1. Prompts for: PostgreSQL admin password, LangSmith license key, admin password, admin email. Press Enter at the PostgreSQL prompt to have a compliant password generated for you — the script prints where to read it back.
 2. Generates (or reads from local fallback files): API key salt, JWT secret, 4 Fernet encryption keys
 3. Writes everything to `secrets.auto.tfvars` (automatically picked up by Terraform, chmod 600, gitignored)
 
@@ -237,10 +237,16 @@ LangSmith — secret bootstrap
   identifier : -demo
   key_vault  : langsmith-kv-demo
 
-PostgreSQL admin password  : ****
-LangSmith license key      : ****
-LangSmith admin password   : ****
+  Passwords are hidden as you type. Press Enter on the PostgreSQL prompt
+  to have one generated for you — this script prints where to view it.
+
+PostgreSQL admin password (Enter = generate):
+LangSmith license key      :
+LangSmith admin password   :
 Initial org admin email    : you@example.com
+
+  Key Vault langsmith-kv-demo not reachable (not created yet, not logged in,
+  or no network) — using local files.
 
   Resolving stable secrets...
   Generated langsmith-api-key-salt → .api_key_salt (Terraform stores in Key Vault on apply)
@@ -251,7 +257,7 @@ Initial org admin email    : you@example.com
   Wrote secrets.auto.tfvars (chmod 600)
 ```
 
-> **Important:** The script uses environment variable overrides to skip prompts. If you need to run non-interactively (CI/CD), set: `LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_PASSWORD`, `LANGSMITH_ADMIN_EMAIL` before running the script.
+> **Important:** The script uses environment variable overrides to skip prompts. If you need to run non-interactively — CI/CD, or a sandboxed shell such as Cursor's, where there is no terminal to prompt on — set `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_PASSWORD`, and `LANGSMITH_ADMIN_EMAIL` before running the script. `LANGSMITH_PG_PASSWORD` is optional; leave it unset and a password is generated. Without those three the script exits with a message naming what is missing.
 
 ---
 
