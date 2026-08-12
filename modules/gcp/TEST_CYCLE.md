@@ -12,7 +12,7 @@ checklist below.
 
 **Tools required** (all must be in PATH):
 - `gcloud` CLI — authenticated to the target project
-- `terraform` v1.5+
+- `terraform` v1.11.0+
 - `kubectl`
 - `helm` v3+
 
@@ -337,6 +337,6 @@ Secrets that must be provided for Helm (via `--set` or in `values-overrides.yaml
 | `config.basicAuth.jwtSecret` | `openssl rand -base64 32` | **Never** — invalidates all sessions |
 | `config.basicAuth.initialOrgAdminPassword` | User-defined | Yes |
 | `config.agentBuilder.encryptionKey` | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` | Requires re-encryption |
-| `config.insights.encryptionKey` | Same as above | Requires re-encryption |
+| `insights.encryptionKey` | Same as above | Requires re-encryption |
 | `config.blobStorage.accessKey` | GCP Console → Cloud Storage → Interoperability → HMAC Keys | Yes |
 | `config.blobStorage.accessKeySecret` | Same | Yes |

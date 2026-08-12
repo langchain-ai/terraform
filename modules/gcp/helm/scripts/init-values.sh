@@ -158,6 +158,7 @@ CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/nul
 }
 WI_ANNOTATION=$(terraform -chdir="$INFRA_DIR" output -raw workload_identity_annotation 2>/dev/null) || WI_ANNOTATION=""
 INGRESS_IP=$(terraform -chdir="$INFRA_DIR" output -raw ingress_ip 2>/dev/null) || INGRESS_IP=""
+SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
 
 echo "  storage_bucket_name           = $BUCKET_NAME"
 echo "  cluster_name                  = $CLUSTER_NAME"
@@ -234,18 +235,31 @@ echo ""
 # Prefer TF_VAR_* from setup-env.sh, then existing file values.
 _extract_yaml_value() {
   local key="$1"
-  awk -F': ' -v k="$key" '$1 ~ "^[[:space:]]*"k"$" { gsub(/"/, "", $2); gsub(/[[:space:]]+$/, "", $2); print $2; exit }' "$OUT_FILE" 2>/dev/null || true
+  awk -F': ' -v k="$key" '
+    $1 ~ "^[[:space:]]*"k"$" {
+      v = $2
+      gsub(/[[:space:]]+$/, "", v)
+      if ((substr(v, 1, 1) == "\"" && substr(v, length(v), 1) == "\"") ||
+          (substr(v, 1, 1) == "\047" && substr(v, length(v), 1) == "\047")) {
+        v = substr(v, 2, length(v) - 2)
+      }
+      print v
+      exit
+    }
+  ' "$OUT_FILE" 2>/dev/null || true
 }
 
 EXISTING_API_KEY_SALT=""
 EXISTING_JWT_SECRET=""
 EXISTING_ADMIN_PASSWORD=""
 EXISTING_LICENSE_KEY=""
+EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_API_KEY_SALT=$(_extract_yaml_value "apiKeySalt")
   EXISTING_JWT_SECRET=$(_extract_yaml_value "jwtSecret")
   EXISTING_ADMIN_PASSWORD=$(_extract_yaml_value "initialOrgAdminPassword")
   EXISTING_LICENSE_KEY=$(_extract_yaml_value "langsmithLicenseKey")
+  EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=$(_extract_yaml_value "callbackSigningJwk")
 fi
 
 API_KEY_SALT="${TF_VAR_langsmith_api_key_salt:-$EXISTING_API_KEY_SALT}"
@@ -312,6 +326,7 @@ _enable_usage_telemetry=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
+_enable_sandboxes=false
 _tfvars_drive_addons=false
 
 # Resolve encryption keys up front so the standalone copy+inject blocks below
@@ -329,6 +344,26 @@ _tfvar_is_true "enable_usage_telemetry"    && { _enable_usage_telemetry=true;   
 _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;              _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
+
+_sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
+    exit 1
+  fi
+  if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
+    echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  if [[ -z "$WI_ANNOTATION" ]]; then
+    echo "ERROR: enable_sandboxes requires Workload Identity. Set enable_gcp_iam_module = true and re-run terraform apply." >&2
+    exit 1
+  fi
+fi
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -340,6 +375,14 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   fi
   if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
     echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
+    exit 1
+  fi
+  # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
+  # bundled agent-bootstrap Job, so the two paths can no longer be combined and
+  # the legacy one has no agent runtime of its own.
+  if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+    echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
+    echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
     exit 1
   fi
 
@@ -420,7 +463,13 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
     echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
   fi
 
-elif [[ "$_first_run" == "true" ]]; then
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  else
+    echo "  ✗ Sandboxes (enable_sandboxes = false)"
+  fi
+
+elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
   # No tfvars flags set — interactive fallback on first run
   echo "  (no enable_* flags in terraform.tfvars — prompting interactively)"
   echo ""
@@ -470,6 +519,14 @@ else
   [[ -f "$VALUES_DIR/langsmith-values-standalone-insights.yaml" ]] && echo "  ✔ Standalone Insights (existing file)" || echo "  ✗ Standalone Insights"
 fi
 
+if [[ "$_tfvars_drive_addons" != "true" ]]; then
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  else
+    echo "  ✗ Sandboxes (enable_sandboxes = false)"
+  fi
+fi
+
 # Insights — create file based on clickhouse_source
 if [[ "$_enable_insights" == "true" && ! -f "$_insights_file" ]]; then
   echo ""
@@ -479,9 +536,8 @@ if [[ "$_enable_insights" == "true" && ! -f "$_insights_file" ]]; then
 # ClickHouse runs as a StatefulSet pod in the cluster (dev/POC only).
 # For production, set clickhouse_source = "external" in terraform.tfvars
 # and re-run init-values.sh to configure an external ClickHouse connection.
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 CHEOF
     echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
   else
@@ -517,9 +573,8 @@ CHEOF
 # Auto-generated by init-values.sh — ClickHouse connection details.
 # Re-run init-values.sh or edit this file to update.
 # Password is stored in the langsmith-clickhouse K8s Secret (not this file).
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 
 clickhouse:
   external:
@@ -654,6 +709,35 @@ redis:
     enabled: false"
 fi
 
+_sandbox_config_block=""
+_sandbox_top_level_block=""
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_service_url_block=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_block="
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
+  _sandbox_config_block="
+sandboxes:
+  enabled: true${_sandbox_service_url_block}
+  callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
+  juicefs:
+    csi:
+      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+      node:
+        serviceAccount:
+          annotations:
+            iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+  sandboxHost:
+    deployment:
+      nodeSelector:
+        sandbox.langsmith.com/host: \"true\""
+  _sandbox_top_level_block="
+images:
+  sandboxHostImage:
+    tag: \"${_sandbox_host_image_tag}\""
+fi
+
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
 _addon_keys_block=""
 _fleet_key_block=""
@@ -681,16 +765,13 @@ if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
     exit 1
   fi
 
-  # Only write the legacy config.* keys when the old bundled-path flags are set.
-  # chart >= 0.15.1 blocks config.agentBuilder/insights/polly via validate.yaml.
-  if [[ "$_enable_agent_builder" == "true" || "$_enable_insights" == "true" || "$_enable_polly" == "true" ]]; then
+  # config.agentBuilder is still the Agent Builder enablement path in chart 0.16.
+  # config.insights and config.polly were removed in 0.15.1 — validate.yaml rejects
+  # them on presence alone, so their keys go on the top-level blocks below.
+  if [[ "$_enable_agent_builder" == "true" ]]; then
     _addon_keys_block="
   agentBuilder:
-    encryptionKey: \"${_agent_builder_key}\"
-  insights:
-    encryptionKey: \"${_insights_key}\"
-  polly:
-    encryptionKey: \"${_polly_key}\""
+    encryptionKey: \"${_agent_builder_key}\""
   fi
 
   if [[ "$_enable_fleet" == "true" ]]; then
@@ -699,17 +780,38 @@ fleet:
   encryptionKey: \"${_agent_builder_key}\""
   fi
 
-  if [[ "$_enable_standalone_polly" == "true" ]]; then
+  # One top-level block per feature regardless of which flag turned it on. Writing
+  # a legacy and a standalone variant separately would emit the key twice in the
+  # same document, and the second mapping would win silently.
+  if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
     _standalone_polly_key_block="
 polly:
   encryptionKey: \"${_polly_key}\""
   fi
 
-  if [[ "$_enable_standalone_insights" == "true" ]]; then
+  if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
     _standalone_insights_key_block="
 insights:
   encryptionKey: \"${_insights_key}\""
   fi
+fi
+
+# ── Agent defaults ────────────────────────────────────────────────────────────
+# Chart 0.16 ships insights.enabled and polly.enabled as true. Without an explicit
+# false a base install grows two agent deployments nobody asked for, and because
+# this module sets no config.existingSecretName the chart then hard-fails on the
+# missing encryptionKey. Make the terraform enable_* flags authoritative. The
+# addon overlays load after this file, so an enabled feature still turns itself on.
+_agent_defaults_block=""
+if [[ "$_enable_insights" != "true" && "$_enable_standalone_insights" != "true" ]]; then
+  _agent_defaults_block+="
+insights:
+  enabled: false"
+fi
+if [[ "$_enable_polly" != "true" && "$_enable_standalone_polly" != "true" ]]; then
+  _agent_defaults_block+="
+polly:
+  enabled: false"
 fi
 
 # ── Workload Identity annotation block ────────────────────────────────────────
@@ -794,6 +896,7 @@ ${_addon_keys_block}
     region: "${_region}"
     apiURL: "https://storage.googleapis.com"
     s3UsePathStyle: false
+${_sandbox_config_block}
 
 gateway:
   name: "${_gateway_name}"
@@ -803,6 +906,8 @@ ${_external_services_block}
 ${_fleet_key_block}
 ${_standalone_polly_key_block}
 ${_standalone_insights_key_block}
+${_sandbox_top_level_block}
+${_agent_defaults_block}
 YAML
 
 echo "Written: $OUT_FILE"

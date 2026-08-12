@@ -3,7 +3,7 @@
 # the object-store GCS bucket, and the Workload Identity service account the
 # SmithDB pods use for bucket access. The Kubernetes secrets and node pools that
 # consume these are wired in the infra root; the Helm release itself is deployed
-# in Pass 2 (helm/ or app/).
+# in Pass 2 (helm/).
 
 variable "name" {
   type        = string

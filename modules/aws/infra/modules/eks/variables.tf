@@ -47,11 +47,19 @@ variable "eks_managed_node_group_defaults" {
 
 variable "eks_managed_node_groups" {
   type = map(object({
-    name           = string
-    instance_types = list(string)
-    min_size       = optional(number, 1)
-    desired_size   = optional(number, null)
-    max_size       = optional(number, 10)
+    name                         = string
+    instance_types               = list(string)
+    min_size                     = optional(number, 1)
+    desired_size                 = optional(number, null)
+    max_size                     = optional(number, 10)
+    labels                       = optional(map(string), {})
+    taints                       = optional(any, {})
+    block_device_mappings        = optional(any, {})
+    update_config                = optional(any, {})
+    cloudinit_pre_nodeadm        = optional(any, [])
+    iam_role_name                = optional(string, null)
+    iam_role_use_name_prefix     = optional(bool, null)
+    iam_role_additional_policies = optional(map(string), {})
   }))
   description = "EKS managed node groups. desired_size defaults to min_size when omitted."
   default = {
@@ -60,6 +68,18 @@ variable "eks_managed_node_groups" {
       instance_types = ["m5.4xlarge"]
     }
   }
+}
+
+variable "enable_karpenter" {
+  type        = bool
+  description = "Install the Karpenter controller (via eks-blueprints-addons): controller IRSA, node IAM role, and the SQS interruption queue. Required for the SmithDB instance-store/compute pools. Coexists with cluster-autoscaler (disjoint nodes)."
+  default     = false
+}
+
+variable "karpenter_chart_version" {
+  type        = string
+  description = "Karpenter Helm chart version. MUST be compatible with cluster_version - see https://karpenter.sh/docs/upgrading/compatibility/. K8s 1.33 needs >= 1.5 (1.34 -> 1.6, 1.35 -> 1.9, 1.36 -> 1.13). Uses the karpenter.sh/v1 + karpenter.k8s.aws/v1 APIs (Karpenter >= 1.0). Default targets the module's default EKS 1.33."
+  default     = "1.5.0"
 }
 
 variable "tags" {

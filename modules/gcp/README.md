@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Google Kubernetes Engine (GKE), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`, never `0.16`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -38,7 +38,7 @@ This directory contains the Terraform configuration to deploy LangSmith on GCP. 
 brew install --cask google-cloud-sdk
 gcloud version
 
-# Terraform (>= 1.5)
+# Terraform (>= 1.11.0)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 
@@ -368,7 +368,7 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
-| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = latest) |
+| `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.16.0` line; must be on the 0.16 line) |
 | `install_ingress` | `true` | no | Install Envoy Gateway via Terraform |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy`, `istio`, or `other` |
 | `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing` |
@@ -380,8 +380,8 @@ helm upgrade langsmith langchain/langsmith \
 | `enable_standalone_polly` | `false` | no | Enable Polly standalone (chart v0.15+) — replaces `enable_polly`; does not require `enable_deployments` |
 | `enable_standalone_insights` | `false` | no | Enable Insights standalone (chart v0.15+) — replaces `enable_insights`; does not require `enable_deployments` |
 | `enable_agent_builder` | `false` | no | Deprecated (chart v0.15+) — `config.agentBuilder.*` is superseded by `enable_fleet` (`fleet.*`) |
-| `enable_insights` | `false` | no | Deprecated (chart v0.15+) — `config.insights.*` is superseded by `enable_standalone_insights` (`insights.*`) |
-| `enable_polly` | `false` | no | Deprecated (chart v0.15+) — `config.polly.*` is superseded by `enable_standalone_polly` (`polly.*`) |
+| `enable_insights` | `false` | no | Enables Insights without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_insights` is preferred |
+| `enable_polly` | `false` | no | Enables Polly without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_polly` is preferred |
 | `owner` | `platform-team` | no | Owner label applied to all resources |
 | `cost_center` | `""` | no | Cost center label for billing attribution |
 | `labels` | `{}` | no | Additional labels applied to all resources |
@@ -441,13 +441,13 @@ Adding a private `googleapis.com` DNS zone would pin resolution to `private.goog
 
 ### Chart version
 
-Enabling the infrastructure does not move the repository's chart line. Pass 2 requires an explicit version of 0.16 or newer, because upgrading the whole application is a separate decision from provisioning SmithDB's dependencies:
+SmithDB needs chart 0.16 or newer. That is already the line `deploy.sh` pins, and it refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
 
 ```bash
-CHART_VERSION=0.16.0 make deploy
+CHART_VERSION=0.16.3 make deploy
 ```
 
-The 0.16 line has so far published release candidates only, so an exact prerelease tag is required. Helm's semver ranges never match a prerelease, so `~0.16.0` resolves to no chart at all and range syntax is rejected up front. List what exists with `helm search repo langchain/langsmith --versions --devel`. On the Terraform `app/` path, set the same value as `chart_version`.
+List what is published with `helm search repo langchain/langsmith --versions`.
 
 ### Staged rollout
 

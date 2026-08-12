@@ -6,7 +6,7 @@
 
 # patch-lgp-resources.sh — Right-size operator-managed LGP resources.
 #
-# The LangSmith operator deploys agent pods (agent-builder, clio, polly) with
+# The LangSmith operator deploys LangGraph Platform (lgp) pods with
 # hardcoded resource requests that assume production scale: 1 CPU / 2Gi for
 # each redis sidecar, 1 CPU / 3.8Gi for each database, and maxReplicas 5-10
 # for KEDA ScaledObjects. On a dev/test cluster this eats 12+ CPU and 24+ Gi

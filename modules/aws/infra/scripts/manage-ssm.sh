@@ -48,12 +48,15 @@ OPTIONAL_PARAMS=(
   "insights-encryption-key"
   "deployments-encryption-key"
   "polly-encryption-key"
+  "sandbox-juicefs-redis-auth-token"
+  "sandbox-callback-signing-jwk"
 )
 
 # Stable secrets that should never be changed after first deploy
 STABLE_PARAMS=(
   "langsmith-api-key-salt"
   "langsmith-jwt-secret"
+  "sandbox-callback-signing-jwk"
 )
 
 # SSM key → K8s secret data key (parallel arrays for diff subcommand)
@@ -66,6 +69,7 @@ DIFF_SSM_KEYS=(
   "insights-encryption-key"
   "deployments-encryption-key"
   "polly-encryption-key"
+  "sandbox-callback-signing-jwk"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -76,6 +80,7 @@ DIFF_K8S_KEYS=(
   "insights_encryption_key"
   "deployments_encryption_key"
   "polly_encryption_key"
+  "sandbox_callback_signing_jwk"
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -330,10 +335,9 @@ cmd_diff() {
   echo "Comparing SSM → K8s secret (langsmith-config in $NAMESPACE)..."
   echo ""
 
-  # Get the K8s secret data keys
-  local k8s_keys
-  k8s_keys=$(kubectl get secret langsmith-config -n "$NAMESPACE" \
-    -o jsonpath='{.data}' 2>/dev/null) || {
+  # Verify the K8s secret exists before comparing
+  kubectl get secret langsmith-config -n "$NAMESPACE" \
+    -o jsonpath='{.data}' >/dev/null 2>&1 || {
     _red "ERROR"; echo ": langsmith-config secret not found in namespace $NAMESPACE."
     echo "  Is ESO configured? Run: ./helm/scripts/deploy.sh"
     exit 1
@@ -434,7 +438,8 @@ _interactive_set() {
   if _param_exists "$PICKED_KEY"; then
     local current
     current=$(_get_param "$PICKED_KEY")
-    local masked="${current:0:4}$(printf '%*s' $(( ${#current} - 4 )) '' | tr ' ' '*')"
+    local masked
+    masked="${current:0:4}$(printf '%*s' $(( ${#current} - 4 )) '' | tr ' ' '*')"
     [[ ${#current} -le 4 ]] && masked="****"
     echo "  Current value: $masked"
   else

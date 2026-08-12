@@ -192,6 +192,24 @@ resource "kubernetes_secret" "tls_certificate" {
 #------------------------------------------------------------------------------
 # Resource Quotas
 #------------------------------------------------------------------------------
+locals {
+  langsmith_resource_quota_requests = {
+    "requests.cpu"    = "50"
+    "requests.memory" = "120Gi"
+    "pods"            = "100"
+  }
+
+  langsmith_resource_quota_limits = {
+    "limits.cpu"    = "100"
+    "limits.memory" = "200Gi"
+  }
+
+  langsmith_resource_quota_hard = merge(
+    local.langsmith_resource_quota_requests,
+    var.resource_quota_include_limits ? local.langsmith_resource_quota_limits : {},
+  )
+}
+
 resource "kubernetes_resource_quota" "langsmith" {
   metadata {
     name      = "langsmith-quota"
@@ -199,45 +217,66 @@ resource "kubernetes_resource_quota" "langsmith" {
   }
 
   spec {
+    hard = local.langsmith_resource_quota_hard
+  }
+}
+
+# GKE configures the apiserver's ResourceQuota admission plugin with
+# limitedResources over the PriorityClass scope, so a pod requesting
+# system-node-critical or system-cluster-critical is admitted only where a
+# quota with a matching scopeSelector already exists — which is how GKE keeps
+# those classes inside kube-system (see its own gcp-critical-pods quota).
+#
+# The JuiceFS CSI driver the sandbox feature depends on uses both: the
+# juicefs-csi-node DaemonSet is system-node-critical and the
+# juicefs-csi-controller StatefulSet is system-cluster-critical. Without this
+# quota neither is ever created — the DaemonSet reports desired N, current 0
+# with the rejection recorded only on the controller object, csi.juicefs.com
+# never registers on any node, and sandbox-host sits in ContainerCreating on a
+# FailedMount that names a missing CSI driver rather than a quota.
+#
+# The pod ceiling matches GKE's own quota for these classes: this object exists
+# to grant the capability, not to cap it. The unscoped langsmith-quota above
+# still counts these pods against the namespace CPU and memory budget.
+resource "kubernetes_resource_quota_v1" "langsmith_critical_pods" {
+  count = var.allow_critical_priority_pods ? 1 : 0
+
+  metadata {
+    name      = "langsmith-critical-pods"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
     hard = {
-      "requests.cpu"    = "50"
-      "requests.memory" = "120Gi"
-      "limits.cpu"      = "100"
-      "limits.memory"   = "200Gi"
-      "pods"            = "100"
+      pods = "1G"
+    }
+
+    scope_selector {
+      match_expression {
+        scope_name = "PriorityClass"
+        operator   = "In"
+        values     = ["system-node-critical", "system-cluster-critical"]
+      }
     }
   }
 }
 
-#------------------------------------------------------------------------------
-# Limit Range
-#------------------------------------------------------------------------------
-# Companion to the quota above, and required rather than optional: once a
-# ResourceQuota constrains requests/limits for a resource, Kubernetes rejects any
-# pod whose containers omit them. Chart workloads that leave resources unset would
-# fail admission with no pod created and only a FailedCreate event to show for it -
-# the SmithDB metastore-migration hook Job did exactly that. These defaults are
-# applied at admission only to containers that omit a value; anything with explicit
-# requests or limits is untouched.
-resource "kubernetes_limit_range" "langsmith" {
+# ResourceQuota request tracking requires every admitted container to declare
+# requests. Supply conservative defaults for third-party sandbox containers that
+# omit them, but deliberately do not inject limits: sandbox-host creates per-VM
+# child cgroups beneath its pod cgroup and needs access to dedicated node capacity.
+resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
+  count = length(var.default_container_requests) > 0 ? 1 : 0
+
   metadata {
-    name      = "langsmith-defaults"
+    name      = "langsmith-default-requests"
     namespace = kubernetes_namespace.langsmith.metadata[0].name
   }
 
   spec {
     limit {
-      type = "Container"
-
-      default_request = {
-        cpu    = "100m"
-        memory = "256Mi"
-      }
-
-      default = {
-        cpu    = "1"
-        memory = "1Gi"
-      }
+      type            = "Container"
+      default_request = var.default_container_requests
     }
   }
 }
@@ -245,6 +284,14 @@ resource "kubernetes_limit_range" "langsmith" {
 #------------------------------------------------------------------------------
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
+# Default-deny-style ingress: only the langsmith and envoy-gateway namespaces may
+# reach LangSmith pods. Always created. When default_deny_excluded_component is set
+# (GKE Dataplane V2 + sandboxes), that one component (platform-backend) is excluded
+# from the selector so the host-networked, node-sourced sandbox-host can reach it —
+# a standard NetworkPolicy can't authorize node traffic on Cilium (an ipBlock does
+# not match it and the CiliumNetworkPolicy CRD is not exposed). Every other pod
+# keeps the default-deny. CALICO instead keeps the full default-deny and admits the
+# node subnet via kubernetes_network_policy.sandbox_host_ingress.
 resource "kubernetes_network_policy" "langsmith_default" {
   metadata {
     name      = "langsmith-default"
@@ -252,7 +299,16 @@ resource "kubernetes_network_policy" "langsmith_default" {
   }
 
   spec {
-    pod_selector {}
+    pod_selector {
+      dynamic "match_expressions" {
+        for_each = var.default_deny_excluded_component != "" ? [1] : []
+        content {
+          key      = "app.kubernetes.io/component"
+          operator = "NotIn"
+          values   = [var.default_deny_excluded_component]
+        }
+      }
+    }
 
     ingress {
       from {
@@ -272,6 +328,38 @@ resource "kubernetes_network_policy" "langsmith_default" {
     }
 
     egress {}
+
+    policy_types = ["Ingress"]
+  }
+}
+
+# CALICO only: admit the node subnet so the host-networked sandbox-host (source =
+# node IP) can reach platform-backend (default-blueprint-ensure,
+# host-observations/report). Calico's ipBlock matches node IPs. On Dataplane V2 an
+# ipBlock does NOT match node-sourced traffic, so there the root leaves
+# sandbox_host_ingress_cidrs empty and scopes langsmith-default to exclude
+# platform-backend instead. Created only when the list is non-empty (CALICO + sandboxes).
+resource "kubernetes_network_policy" "sandbox_host_ingress" {
+  count = length(var.sandbox_host_ingress_cidrs) > 0 ? 1 : 0
+
+  metadata {
+    name      = "langsmith-allow-sandbox-host"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    ingress {
+      dynamic "from" {
+        for_each = var.sandbox_host_ingress_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+    }
 
     policy_types = ["Ingress"]
   }

@@ -81,26 +81,20 @@ Apply infrastructure, then generate values:
 make init-values
 ```
 
-SmithDB requires an explicit Helm chart version of 0.16 or newer. Enabling the
-infrastructure does not move the repository's chart line on its own, because
-upgrading the whole application is a separate decision:
+Then deploy:
 
 ```sh
-CHART_VERSION=0.16.0 make deploy
+make deploy
 ```
 
-The 0.16 line has so far published release candidates only, so an exact
-prerelease tag is required. Helm's semver ranges never match a prerelease, so
-`~0.16.0` resolves to no chart at all; both the script and the `app/` module
-reject range syntax up front rather than letting the deploy fail later with an
-opaque "chart not found". Check what is published with:
+SmithDB needs chart 0.16 or newer. `deploy.sh` already pins the 0.16 line and
+refuses anything off it, so there is nothing SmithDB-specific to set. To name an
+exact patch rather than the latest on the line, pass `CHART_VERSION=0.16.3`.
+Check what is published with:
 
 ```sh
-helm search repo langchain/langsmith --versions --devel
+helm search repo langchain/langsmith --versions
 ```
-
-For the Terraform app path, set an explicit `chart_version` of 0.16 or newer and
-`enable_smithdb = true` in `app/terraform.tfvars`.
 
 ## Staged rollout
 
@@ -119,8 +113,8 @@ smithdb:
 ```
 
 Set `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, and
-`smithdb_query_enabled` in `infra/terraform.tfvars`; the app path exposes the
-same flags. Terraform enforces that migration and query each require ingestion.
+`smithdb_query_enabled` in `infra/terraform.tfvars`. Terraform enforces that
+migration and query each require ingestion.
 Apply and validate each stage separately, and keep ClickHouse enabled throughout
 LangSmith v16.
 

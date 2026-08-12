@@ -52,21 +52,40 @@ _redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-_enable_envoy_gateway=false
-_tfvar_is_true "enable_envoy_gateway" && _enable_envoy_gateway=true
+# Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
+# is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
+# Envoy still deploys it. Reading the applied state keeps this script in agreement with
+# what Terraform actually built.
+_enable_envoy_gateway=$(_read_gateway_flag "enable_envoy_gateway")
+_enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
+_enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
 
-_enable_istio_gateway=false
-_tfvar_is_true "enable_istio_gateway" && _enable_istio_gateway=true
+_enable_smithdb=false
+_tfvar_is_true "enable_smithdb" && _enable_smithdb=true
+_smithdb_ingestion_enabled=false
+_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
+_smithdb_migration_enabled=false
+_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+_smithdb_query_enabled=false
+_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+_smithdb_metastore_use_ssl=$(_parse_tfvar "smithdb_metastore_use_ssl") || _smithdb_metastore_use_ssl="true"
 
-_enable_nginx_ingress=false
-_tfvar_is_true "enable_nginx_ingress" && _enable_nginx_ingress=true
+if [[ "$_enable_smithdb" != "true" && ( "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
+  echo "ERROR: SmithDB integration gates require enable_smithdb = true." >&2
+  exit 1
+fi
+if [[ "$_smithdb_ingestion_enabled" != "true" && ( "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
+  echo "ERROR: SmithDB migration/query require smithdb_ingestion_enabled = true." >&2
+  exit 1
+fi
 
 _gateway_modes=0
 [[ "$_enable_envoy_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 [[ "$_enable_istio_gateway" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 [[ "$_enable_nginx_ingress" == "true" ]] && _gateway_modes=$(( _gateway_modes + 1 )) || true
 if (( _gateway_modes > 1 )); then
-  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true in terraform.tfvars." >&2
+  echo "ERROR: Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true." >&2
+  echo "       Envoy Gateway is the default when enable_envoy_gateway is unset — set it to false explicitly in terraform.tfvars to run Istio or NGINX, then re-apply." >&2
   exit 1
 fi
 
@@ -147,6 +166,14 @@ EXISTING_HOSTNAME=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_HOSTNAME=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_HOSTNAME=""
+  # HOSTNAME must stay bare: the output block writes "${_protocol}://${HOSTNAME}",
+  # so reusing the stored value verbatim prepends a second scheme on every re-run
+  # ("http://http://alb..."), which breaks OAuth redirects and deployment URLs.
+  # Loop rather than strip once so an already-corrupted file self-heals.
+  while [[ "$EXISTING_HOSTNAME" =~ ^https?:// ]]; do
+    EXISTING_HOSTNAME="${EXISTING_HOSTNAME#http://}"
+    EXISTING_HOSTNAME="${EXISTING_HOSTNAME#https://}"
+  done
 fi
 if [[ -n "$_langsmith_domain" ]]; then
   HOSTNAME="$_langsmith_domain"
@@ -220,6 +247,7 @@ _enable_usage_telemetry=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
+_enable_sandboxes=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
@@ -228,6 +256,12 @@ _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
+_tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+
+_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
+fi
 
 echo "Product addons (from terraform.tfvars):"
 
@@ -247,6 +281,14 @@ fi
 if [[ "$_enable_agent_builder" == "true" ]]; then
   if [[ "$_enable_deployments" != "true" ]]; then
     echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
+    exit 1
+  fi
+  # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
+  # bundled agent-bootstrap Job, so the two paths can no longer be combined and
+  # the legacy one has no agent runtime of its own.
+  if [[ "$_enable_fleet" == "true" ]]; then
+    echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
+    echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
     exit 1
   fi
   if [[ ! -f "$_builder_file" ]]; then
@@ -270,9 +312,8 @@ if [[ "$_enable_insights" == "true" ]]; then
 # ClickHouse runs as a StatefulSet pod in the cluster (dev/POC only).
 # For production, set clickhouse_source = "external" in terraform.tfvars
 # and re-run init-values.sh to configure an external ClickHouse connection.
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 CHEOF
       echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
     else
@@ -314,9 +355,8 @@ CHEOF
 # Auto-generated by init-values.sh — external ClickHouse connection.
 # Re-run init-values.sh or edit this file to update.
 # Password is stored in the langsmith-clickhouse K8s Secret (not this file).
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 
 clickhouse:
   external:
@@ -408,6 +448,12 @@ if [[ "$_enable_standalone_insights" == "true" ]]; then
   fi
 else
   echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
+fi
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+else
+  echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
 
 # Patch tlsEnabled in agent-deploys if present — derive from tls_certificate_source.
@@ -626,9 +672,13 @@ if [[ "$_enable_standalone_insights" == "true" ]]; then
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
+  # Chart 0.16 keeps the encryption key on `insights` but moved the workload
+  # settings — including the service accounts — to `engineInsightsAgent`.
   _standalone_block+="
 insights:
   encryptionKey: \"${_insights_key}\"
+
+engineInsightsAgent:
   apiServer:
     serviceAccount:
       annotations:
@@ -641,6 +691,29 @@ else
   _standalone_block+="
 insights:
   enabled: false"
+fi
+
+_sandbox_config_block=""
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_service_url_block=""
+  if [[ -n "$_sandbox_service_url_base_url" ]]; then
+    _sandbox_service_url_block="
+  serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
+  fi
+  _sandbox_config_block="
+sandboxes:
+  enabled: true${_sandbox_service_url_block}
+  juicefs:
+    csi:
+      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
+      node:
+        serviceAccount:
+          annotations:
+            eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+  sandboxHost:
+    deployment:
+      nodeSelector:
+        sandbox.langsmith.com/host: \"true\""
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────
@@ -675,6 +748,7 @@ config:
     bucketName: "${BUCKET_NAME}"
     awsRegion: "${_region}"
     apiURL: "https://s3.${_region}.amazonaws.com"
+${_sandbox_config_block}
 
 commonEnv:
   - name: AWS_REGION
@@ -735,4 +809,70 @@ YAML
 
 echo "Written: $OUT_FILE"
 echo ""
+
+# ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
+# Copies the SmithDB overlay and generates langsmith-values-smithdb-overrides.yaml
+# with the object-store bucket, region, IRSA role ARN, and metastore secret-key
+# mapping from the infra outputs. All LangSmith integration gates start disabled;
+# operators enable ingestion, migration, and query in separate validated stages.
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+
+  if [[ ! -f "$_smithdb_file" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
+    echo "SmithDB: created langsmith-values-smithdb.yaml"
+  else
+    echo "SmithDB: langsmith-values-smithdb.yaml (existing)"
+  fi
+
+  SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
+  SMITHDB_IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_irsa_role_arn 2>/dev/null) || SMITHDB_IRSA_ROLE_ARN=""
+  if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_IRSA_ROLE_ARN" ]]; then
+    echo "ERROR: enable_smithdb = true but smithdb_object_store_bucket / smithdb_irsa_role_arn outputs are empty." >&2
+    echo "       Is 'terraform apply' complete in $INFRA_DIR with enable_smithdb = true?" >&2
+    exit 1
+  fi
+  echo "  smithdb_object_store_bucket = $SMITHDB_BUCKET"
+  echo "  smithdb_irsa_role_arn       = $SMITHDB_IRSA_ROLE_ARN"
+
+  cat > "$_smithdb_overrides" << SMITHDB_YAML
+# Auto-generated by init-values.sh — SmithDB environment-specific overrides.
+# Re-run init-values.sh to refresh from Terraform outputs.
+#
+# Advance these flags one stage at a time by following the SmithDB installation
+# guide. Keep ClickHouse enabled throughout version 16.
+smithdb:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "${SMITHDB_IRSA_ROLE_ARN}"
+  config:
+    objectStore:
+      type: "s3"
+      bucket: "${SMITHDB_BUCKET}"
+      s3:
+        region: "${_region}"
+        accessKeyIdSecretKey: ""
+        secretAccessKeySecretKey: ""
+    metastore:
+      hostSecretKey: "smithdb_metastore_db_host"
+      databaseSecretKey: "smithdb_metastore_db_name"
+      usernameSecretKey: "smithdb_metastore_db_username"
+      passwordSecretKey: "smithdb_metastore_db_password"
+      port: "5432"
+      useSsl: ${_smithdb_metastore_use_ssl}
+  metastoreMigration:
+    useSsl: ${_smithdb_metastore_use_ssl}
+  langsmith:
+    ingestion:
+      enabled: ${_smithdb_ingestion_enabled}
+    migration:
+      enabled: ${_smithdb_migration_enabled}
+    query:
+      enabled: ${_smithdb_query_enabled}
+SMITHDB_YAML
+  echo "SmithDB: written $_smithdb_overrides"
+  echo ""
+fi
+
 echo "Next step: make deploy"

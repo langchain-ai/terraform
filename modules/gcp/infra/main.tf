@@ -82,6 +82,13 @@ locals {
   # Must match modules/iam account_id format.
   workload_identity_gsa_account_id = "${var.name_prefix}-langsmith"
   workload_identity_gsa_email      = "${local.workload_identity_gsa_account_id}@${var.project_id}.iam.gserviceaccount.com"
+
+  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+
+  # DB 0 is reserved for the main LangSmith install.
+  redis_db_fleet    = 1
+  redis_db_polly    = 2
+  redis_db_insights = 3
 }
 
 #------------------------------------------------------------------------------
@@ -161,6 +168,21 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_smithdb || !var.gke_use_autopilot
       error_message = "enable_smithdb is not supported with gke_use_autopilot = true. SmithDB needs the dedicated Local SSD node pools this module creates on GKE Standard. See the SmithDB section of README.md."
     }
+
+    precondition {
+      condition     = !var.enable_sandboxes || !var.gke_use_autopilot
+      error_message = "enable_sandboxes requires Standard GKE because sandbox-host needs a dedicated nested-virtualization node pool."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.enable_gcp_iam_module
+      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the JuiceFS CSI node service account can access the shared GCS bucket."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= var.sandbox_host_min_node_count
+      error_message = "sandbox_host_max_node_count must be greater than or equal to sandbox_host_min_node_count."
+    }
   }
 }
 
@@ -194,6 +216,28 @@ resource "google_project_service" "apis" {
 }
 
 #------------------------------------------------------------------------------
+# Sandbox-host Node Service Account
+#------------------------------------------------------------------------------
+resource "google_service_account" "sandbox_host_node" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  project      = var.project_id
+  account_id   = local.sandbox_host_node_sa_account_id
+  display_name = "LangSmith sandbox-host node service account"
+  description  = "Restricted GKE node identity for LangSmith sandbox-host nodes."
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "sandbox_host_node" {
+  for_each = var.enable_sandboxes ? local.sandbox_host_node_sa_project_roles : toset([])
+
+  project = var.project_id
+  role    = each.value
+  member  = google_service_account.sandbox_host_node[0].member
+}
+
+#------------------------------------------------------------------------------
 # Networking Module
 #------------------------------------------------------------------------------
 module "networking" {
@@ -214,10 +258,11 @@ module "networking" {
   pods_cidr     = var.pods_cidr
   services_cidr = var.services_cidr
 
-  # Private service connection (requires servicenetworking.networksAdmin role)
-  # Always enable private service connection for external PostgreSQL and Redis,
-  # and for the SmithDB metastore, which is private-IP only.
-  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || (var.enable_smithdb && var.smithdb_metastore_source == "create")
+  # Private service connection (requires servicenetworking.networksAdmin role).
+  # Needed by external PostgreSQL and Redis, by the SmithDB metastore, which is
+  # private-IP only, and by the Memorystore instance backing sandbox JuiceFS
+  # metadata.
+  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || var.enable_sandboxes || (var.enable_smithdb && var.smithdb_metastore_source == "create")
 
   # Labels
   labels = local.common_labels
@@ -258,6 +303,19 @@ module "gke_cluster" {
   deletion_protection        = var.gke_deletion_protection
   network_policy_provider    = var.gke_network_policy_provider
 
+  # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
+  # virtualization and are isolated from the default LangSmith workload pool.
+  enable_sandbox_host_node_pool          = var.enable_sandboxes
+  sandbox_host_node_count                = var.sandbox_host_node_count
+  sandbox_host_min_node_count            = var.sandbox_host_min_node_count
+  sandbox_host_max_node_count            = var.sandbox_host_max_node_count
+  sandbox_host_machine_type              = var.sandbox_host_machine_type
+  sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb
+  sandbox_host_ephemeral_local_ssd_count = var.sandbox_host_ephemeral_local_ssd_count
+  sandbox_host_node_service_account_email = (
+    var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+  )
+
   # Master authorized networks — empty list keeps the master publicly reachable
   # for Terraform-driven Helm/kubectl steps. Populate var.gke_master_authorized_cidrs
   # in terraform.tfvars to restrict to operator/CI CIDRs.
@@ -266,7 +324,10 @@ module "gke_cluster" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [module.networking]
+  depends_on = [
+    module.networking,
+    google_project_iam_member.sandbox_host_node,
+  ]
 }
 
 #------------------------------------------------------------------------------
@@ -324,12 +385,43 @@ module "redis" {
   redis_version     = var.redis_version
   high_availability = var.redis_high_availability
   prevent_destroy   = var.redis_prevent_destroy
+  maxmemory_policy  = "allkeys-lru"
 
   # Network
   network_id = module.networking.vpc_id
 
   # Labels
   labels = local.common_labels
+
+  depends_on = [module.networking]
+}
+
+module "sandbox_juicefs_redis" {
+  source = "./modules/redis"
+  count  = var.enable_sandboxes ? 1 : 0
+
+  project_id  = var.project_id
+  region      = var.region
+  environment = var.environment
+
+  # Use centralized naming
+  instance_name = local.sandbox_juicefs_redis_instance_name
+
+  # Configuration
+  memory_size_gb      = var.sandbox_juicefs_redis_memory_size
+  redis_version       = var.redis_version
+  high_availability   = var.sandbox_juicefs_redis_high_availability
+  prevent_destroy     = var.sandbox_juicefs_redis_prevent_destroy
+  maxmemory_policy    = "noeviction"
+  rdb_snapshot_period = var.sandbox_juicefs_redis_rdb_snapshot_period
+
+  # Network
+  network_id = module.networking.vpc_id
+
+  # Labels
+  labels = merge(local.common_labels, {
+    "component" = "sandbox-juicefs-cache"
+  })
 
   depends_on = [module.networking]
 }
@@ -484,6 +576,7 @@ module "iam" {
     "langsmith-standalone-polly-queue",
     "langsmith-standalone-insights-api-server",
     "langsmith-standalone-insights-queue",
+    "juicefs-csi-node-sa",
   ]
   gcs_bucket_name = module.storage.bucket_name
 }
@@ -537,13 +630,38 @@ module "k8s_bootstrap" {
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
 
+  # sandbox-host manages Firecracker VMs in child cgroups and must not receive
+  # a namespace-injected parent limit. Keep request and pod-count governance,
+  # and inject requests only for third-party containers that omit them.
+  resource_quota_include_limits = !var.enable_sandboxes
+  default_container_requests = (
+    var.enable_sandboxes ? var.sandbox_default_container_requests : {}
+  )
+
+  # The JuiceFS CSI driver runs at system-node-critical / system-cluster-critical,
+  # which GKE admits only into a namespace holding a PriorityClass-scoped quota.
+  allow_critical_priority_pods = var.enable_sandboxes
+
+  # Host-networked sandbox-host must reach platform-backend, and the CNI dictates how:
+  #  - CALICO: an ipBlock for the node subnet matches node-sourced traffic, so keep
+  #    the full default-deny and admit the node subnet.
+  #  - DATA_PLANE_V2 (Cilium): node-sourced traffic can't be authorized by a standard
+  #    NetworkPolicy (ipBlock doesn't match it; the CiliumNetworkPolicy CRD isn't
+  #    exposed), so keep the default-deny but exclude platform-backend from it.
+  sandbox_host_ingress_cidrs = (
+    var.enable_sandboxes && var.gke_network_policy_provider == "CALICO" ? [var.subnet_cidr] : []
+  )
+  default_deny_excluded_component = (
+    var.enable_sandboxes && var.gke_network_policy_provider == "DATA_PLANE_V2" ? var.platform_backend_component_label : ""
+  )
+
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
   postgres_connection_url = var.postgres_source == "external" ? "postgresql://${urlencode(module.cloudsql[0].username)}:${urlencode(module.cloudsql[0].password)}@${module.cloudsql[0].connection_ip}:5432/${module.cloudsql[0].database_name}?sslmode=require" : ""
 
   # Redis connection - only when using external Redis
   use_managed_redis    = var.redis_source == "external"
-  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+  redis_connection_url = local.redis_connection_url
 
   # KEDA for LangSmith Deployment feature
   install_keda = var.enable_langsmith_deployment
@@ -582,6 +700,28 @@ module "k8s_bootstrap" {
   depends_on = [time_sleep.wait_for_cluster, module.cloudsql, module.iam]
 }
 
+resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = var.langsmith_namespace
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "redis://${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
+    storage = "gs"
+    bucket  = module.storage.bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
+
+  depends_on = [module.k8s_bootstrap]
+}
+
 #------------------------------------------------------------------------------
 # Standalone Agent Databases (chart v0.15+)
 # Each standalone agent gets its own logical database on the shared Cloud SQL
@@ -609,6 +749,8 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 # Memorystore Cluster mode does not support logical DB numbers — see MIGRATION_NOTES_v15.md.
+# For non-cluster Redis, DB 0 is reserved for the main LangSmith install,
+# DB 1 for Fleet, DB 2 for Polly, and DB 3 for Insights.
 resource "kubernetes_secret" "fleet_redis" {
   count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
   metadata {
@@ -616,7 +758,7 @@ resource "kubernetes_secret" "fleet_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_fleet}"
   }
   depends_on = [module.k8s_bootstrap]
 }
@@ -648,7 +790,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/2"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_polly}"
   }
   depends_on = [module.k8s_bootstrap]
 }
@@ -680,7 +822,7 @@ resource "kubernetes_secret" "standalone_insights_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/3"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_insights}"
   }
   depends_on = [module.k8s_bootstrap]
 }

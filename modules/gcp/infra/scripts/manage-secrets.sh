@@ -58,6 +58,7 @@ OPTIONAL_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-callback-signing-jwk
 )
 
 # Encryption keys that must NEVER change after first deploy.
@@ -67,6 +68,7 @@ STABLE_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-callback-signing-jwk
 )
 
 # SM key → TF_VAR name (for diff subcommand)
@@ -77,6 +79,7 @@ DIFF_SM_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-callback-signing-jwk
 )
 DIFF_TF_VARS=(
   TF_VAR_postgres_password
@@ -85,6 +88,7 @@ DIFF_TF_VARS=(
   TF_VAR_langsmith_agent_builder_encryption_key
   TF_VAR_langsmith_insights_encryption_key
   TF_VAR_langsmith_polly_encryption_key
+  TF_VAR_sandbox_callback_signing_jwk
 )
 
 ALL_KEYS=("${REQUIRED_KEYS[@]}" "${OPTIONAL_KEYS[@]}")
@@ -436,7 +440,8 @@ _interactive_set() {
     local len="${#current}"
     local visible=4
     [[ $len -le 4 ]] && visible=0
-    local masked="${current:0:$visible}$(printf '%*s' $(( len - visible )) '' | tr ' ' '*')"
+    local masked
+    masked="${current:0:$visible}$(printf '%*s' $(( len - visible )) '' | tr ' ' '*')"
     echo "  Current value: $masked  ($len chars)"
   else
     echo "  Current value: $(_yellow "(not set)")"

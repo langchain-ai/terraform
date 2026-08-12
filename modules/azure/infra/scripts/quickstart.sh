@@ -154,12 +154,18 @@ _run_section_2() {
     AUTO_SUB=$(az account show --query id --output tsv 2>/dev/null) || AUTO_SUB=""
   fi
 
-  if [[ -n "$AUTO_SUB" ]]; then
-    _ask "Azure subscription ID" "$AUTO_SUB"
-  else
-    _ask "Azure subscription ID (az account show --query id -o tsv)" ""
-  fi
-  SUBSCRIPTION_ID="$_REPLY"
+  while true; do
+    if [[ -n "$AUTO_SUB" ]]; then
+      _ask "Azure subscription ID" "$AUTO_SUB"
+    else
+      _ask "Azure subscription ID (az account show --query id -o tsv)" ""
+    fi
+    SUBSCRIPTION_ID="$_REPLY"
+    if [[ "$SUBSCRIPTION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+      break
+    fi
+    _red "  ERROR: must be a GUID, not a subscription name or a row number from 'az account list -o table'."
+  done
 
   while true; do
     _ask "Identifier suffix (lowercase, starts with hyphen, e.g. -prod, -staging, -myco)" "-dev"

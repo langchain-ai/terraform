@@ -18,10 +18,6 @@ config:
     # re-encrypting all existing Agent Builder configurations.
     # encryptionKey: "YOUR_AGENT_BUILDER_FERNET_KEY"
 
-# Chart 0.16 removed backend.agentBootstrap and fails the render if it is set.
-# The bundled bootstrap Job that registered Agent Builder as an LGP deployment is
-# gone; the fleet servers below cover that role now.
-
 fleetToolServer:
   enabled: true
 

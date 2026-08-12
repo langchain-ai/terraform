@@ -294,8 +294,6 @@ _ask_choice "ClickHouse:" \
 
 CH_SOURCE="in-cluster"
 CH_HOST=""
-CH_PASSWORD=""
-CH_TLS="true"
 [[ "$_CHOICE" == "2" ]] && CH_SOURCE="langsmith-managed"
 
 if [[ "$PROFILE" == "prod" && "$CH_SOURCE" == "in-cluster" ]]; then
@@ -308,8 +306,12 @@ if [[ "$CH_SOURCE" != "in-cluster" ]]; then
   echo ""
   _ask "ClickHouse host" ""
   CH_HOST="$_REPLY"
-  _ask "ClickHouse password (or set TF_VAR_clickhouse_password later)" ""
-  CH_PASSWORD="$_REPLY"
+  # Not prompted for: a password belongs in the environment, not in tfvars.
+  # infra/main.tf requires it whenever clickhouse_source != "in-cluster", so
+  # apply hard-fails without it. Keep this loud.
+  echo ""
+  _yellow "REQUIRED"; printf ": export TF_VAR_clickhouse_password before running apply.\n"
+  printf "  clickhouse_source=%s has no default password.\n" "$CH_SOURCE"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -398,7 +400,7 @@ fi
 # provide, so only offer it on Standard clusters.
 if [[ "$USE_AUTOPILOT" == "false" ]]; then
   echo ""
-  _ask_yn "Enable SmithDB? (requires LangSmith Helm chart 0.16 or newer)" "n" \
+  _ask_yn "Enable SmithDB? (columnar trace store, needs Local SSD node pools)" "n" \
     && ENABLE_SMITHDB="true" || true
   if [[ "$ENABLE_SMITHDB" == "true" ]]; then
     printf "  $(_dim "SmithDB services deploy with all LangSmith integration gates off.")\n"
@@ -610,16 +612,11 @@ printf "     ${CYAN}make init && make plan${RESET}\n"
 printf "     ${CYAN}make apply${RESET}\n"
 echo ""
 printf "  4. Deploy LangSmith:\n"
+printf "     ${CYAN}make init-values && make deploy${RESET}\n"
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  printf "     ${CYAN}make init-values${RESET}\n"
   echo ""
-  printf "  ${DIM}SmithDB requires an explicit chart version of 0.16 or newer — enabling the${RESET}\n"
-  printf "  ${DIM}infrastructure does not move the chart line on its own:${RESET}\n"
-  printf "     ${CYAN}CHART_VERSION=0.16.0 make deploy${RESET}\n"
-  echo ""
-  printf "  ${DIM}List what is published:${RESET}\n"
-  printf "     ${CYAN}helm search repo langchain/langsmith --versions --devel${RESET}\n"
-else
-  printf "     ${CYAN}make init-values && make deploy${RESET}\n"
+  printf "  ${DIM}SmithDB needs chart 0.16 or newer, which the deploy pin already targets.${RESET}\n"
+  printf "  ${DIM}To name an exact patch instead:${RESET}\n"
+  printf "     ${CYAN}CHART_VERSION=0.16.3 make deploy${RESET}\n"
 fi
 echo ""

@@ -19,7 +19,7 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
 | 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
-| 5 | Insights + Polly | Clio analytics (ClickHouse-backed), Polly eval agent |
+| 5 | Insights + Polly | standalone-insights (ClickHouse-backed analytics), standalone-polly eval agent |
 
 ---
 
@@ -101,7 +101,7 @@ GCS Bucket  (Workload Identity — no static HMAC keys for GCS SA auth)
 | Services | `10.8.0.0/20` | GKE ClusterIP services (secondary range) |
 | Private service connection | `/16` allocated by Google | Cloud SQL, Memorystore private IPs |
 
-Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"` or `redis_source = "external"`.
+Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"`, `redis_source = "external"`, or `enable_sandboxes = true` for the dedicated JuiceFS metadata Redis.
 
 ---
 
@@ -125,7 +125,7 @@ For GCS access using HMAC keys (S3-compatible API), create a service account key
 
 SmithDB stays disabled by default. When enabled, Pass 1 adds a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP, a dedicated GCS object store, a SmithDB-specific service account with its own Workload Identity binding scoped to that one bucket, and two GKE Standard node pools - one Local SSD-backed for the cache-heavy workloads and one for compute. Object-store traffic uses the subnet's Private Google Access rather than Cloud NAT.
 
-Pass 2 requires an explicit chart version of 0.16 or newer and deploys the services with ingestion, migration, and query integration all disabled. See [SMITHDB.md](SMITHDB.md).
+Pass 2 deploys the services on the pinned 0.16 chart line with ingestion, migration, and query integration all disabled. See [SMITHDB.md](SMITHDB.md).
 
 ---
 
