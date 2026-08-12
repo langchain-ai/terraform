@@ -143,6 +143,7 @@ NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
 PG_DELETION_PROTECTION AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+BLOB_TTL_ENABLED BLOB_TTL_SHORT_DAYS BLOB_TTL_LONG_DAYS
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -248,6 +249,9 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar unique_resource_names)       && UNIQUE_NAMES="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_enabled)            && BLOB_TTL_ENABLED="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_short_days)         && BLOB_TTL_SHORT_DAYS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_long_days)          && BLOB_TTL_LONG_DAYS="$_TF_VAL"
   # The add-ons are written only when true, so an absent key is genuinely false.
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
@@ -867,6 +871,11 @@ PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
 AMR_SKU="Balanced_B0"
+# Storage is not optional — LangSmith needs a blob container for run artifacts —
+# but how long those artifacts live is a policy choice, so section 7 asks.
+BLOB_TTL_ENABLED="true"
+BLOB_TTL_SHORT_DAYS="14"
+BLOB_TTL_LONG_DAYS="400"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -947,6 +956,26 @@ _run_section_7() {
     echo ""
     _yellow "NOTE"; printf ": In-cluster ClickHouse is not recommended for production.\n"
     printf "  See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse\n"
+  fi
+
+  # Storage came with the deployment whether or not anyone asked, and the
+  # retention defaults were written into tfvars unasked with it. A customer with
+  # a data-retention policy has to see this as a choice.
+  echo ""
+  _hint "LangSmith stores run inputs, outputs and attachments in an Azure Storage account"
+  _hint "this module creates. Retention expires them on a schedule: short-lived covers the"
+  _hint "per-run payloads, long-lived covers datasets and exports."
+  local ttl_yn
+  ttl_yn="$(_yn_default "$BLOB_TTL_ENABLED")"
+  if _ask_yn "Expire stored artifacts on a schedule?" "$ttl_yn"; then
+    BLOB_TTL_ENABLED="true"
+    _ask_int "Days to keep short-lived artifacts" "$BLOB_TTL_SHORT_DAYS"
+    BLOB_TTL_SHORT_DAYS="$_REPLY"
+    _ask_int "Days to keep long-lived artifacts" "$BLOB_TTL_LONG_DAYS"
+    BLOB_TTL_LONG_DAYS="$_REPLY"
+  else
+    BLOB_TTL_ENABLED="false"
+    _hint "Artifacts are kept until you delete them. Storage cost grows with trace volume."
   fi
 }
 
@@ -1359,9 +1388,9 @@ keyvault_purge_protection = ${KV_PURGE_PROTECTION}
 #------------------------------------------------------------------------------
 # Blob Storage
 #------------------------------------------------------------------------------
-blob_ttl_enabled    = true
-blob_ttl_short_days = 14
-blob_ttl_long_days  = 400
+blob_ttl_enabled    = ${BLOB_TTL_ENABLED}
+blob_ttl_short_days = ${BLOB_TTL_SHORT_DAYS}
+blob_ttl_long_days  = ${BLOB_TTL_LONG_DAYS}
 
 #------------------------------------------------------------------------------
 # LangSmith
