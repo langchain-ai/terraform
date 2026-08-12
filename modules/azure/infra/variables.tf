@@ -804,7 +804,7 @@ variable "agic_subnet_address_prefix" {
 
 variable "agw_sku_tier" {
   type        = string
-  description = "Application Gateway SKU tier. 'Standard_v2' or 'WAF_v2' (enables WAF). Only used when ingress_controller = 'agic'."
+  description = "Application Gateway SKU tier. Only used when ingress_controller = 'agic'. To turn WAF on, set create_waf = true rather than setting this to 'WAF_v2': create_waf selects the tier and creates the policy, and Azure rejects a WAF_v2 gateway that has no policy attached."
   default     = "Standard_v2"
 
   validation {

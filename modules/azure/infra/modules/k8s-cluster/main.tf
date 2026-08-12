@@ -637,6 +637,16 @@ resource "azurerm_application_gateway" "agw" {
   }
 
   lifecycle {
+    # Azure rejects a WAF_v2 gateway that has no policy attached, with
+    # ApplicationGatewayFirewallNotConfiguredForSelectedSku. There is no mode
+    # where the tier runs without one, so catch the pair here rather than 15
+    # minutes into an apply. Deliberately not a silent downgrade to Standard_v2:
+    # an operator who asked for WAF should not end up with no firewall.
+    precondition {
+      condition     = var.agw_sku_tier != "WAF_v2" || var.firewall_policy_id != null
+      error_message = "agw_sku_tier is WAF_v2 but no WAF policy was supplied. Set create_waf = true, which creates the policy and selects the WAF_v2 tier for you, or set agw_sku_tier = \"Standard_v2\"."
+    }
+
     # AGIC manages these resources after initial creation.
     # Ignoring prevents Terraform from overwriting AGIC-programmed routing rules
     # on every subsequent apply.
