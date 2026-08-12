@@ -222,25 +222,36 @@ make setup-env
 ```
 
 The script prompts for:
-1. PostgreSQL admin password — Terraform creates the flexible server with it
+1. PostgreSQL admin password — Terraform creates the flexible server with it. Press Enter to have a compliant password generated for you; the script prints where to read it back.
 2. LangSmith license key — the `k8s-bootstrap` module builds the `langsmith-license` K8s secret from it
 3. Initial org admin email
+
+It writes those three to `secrets.auto.tfvars` (picked up by Terraform automatically, chmod 600, gitignored). Once `terraform apply` has created Key Vault, a re-run reads the generated Postgres password back from the vault instead of generating a new one.
 
 ```
 LangSmith — Terraform input bootstrap
 
+  name_prefix : -demo
+  key_vault   : langsmith-kv-demo
+
   Passwords are hidden as you type.
 
-PostgreSQL admin password  : ****
-LangSmith license key      : ****
+PostgreSQL admin password (Enter = generate):
+LangSmith license key      :
 Initial org admin email    : you@example.com
+
+  Key Vault langsmith-kv-demo not reachable (not created yet, not logged in,
+  or no network) — using local files.
+
+  No PostgreSQL password given — resolving one...
+  Generated postgres-admin-password → .pg_password (Terraform stores in Key Vault on apply)
 
   Wrote secrets.auto.tfvars (chmod 600)
 ```
 
 The LangSmith app secrets — admin password, API key salt, JWT secret, and the four Fernet encryption keys — are deliberately absent. Terraform state holds every variable as plaintext, so those go straight into Key Vault in step 1d instead, after the vault exists.
 
-> **Important:** Set `LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, and `LANGSMITH_ADMIN_EMAIL` to run non-interactively — CI/CD, or a sandboxed shell such as Cursor's, where there is no terminal to prompt on. Without a tty and without these set, the script exits with a message naming what is missing rather than writing empty values.
+> **Important:** The script uses environment variable overrides to skip prompts. If you need to run non-interactively — CI/CD, or a sandboxed shell such as Cursor's, where there is no terminal to prompt on — set `LANGSMITH_LICENSE_KEY` and `LANGSMITH_ADMIN_EMAIL` before running the script. `LANGSMITH_PG_PASSWORD` is optional; leave it unset and a password is generated. Without those two the script exits with a message naming what is missing.
 
 ---
 

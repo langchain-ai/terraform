@@ -23,11 +23,39 @@ set -euo pipefail
 # encryption keys) are NOT handled here. Terraform would persist their plaintext
 # in state, so scripts/seed-keyvault-secrets.sh writes them directly to Key Vault
 # after apply. Run `make seed-secrets` between `make apply` and `make k8s-secrets`.
+#
+# setup-env.sh is READ-ONLY against Key Vault — it never writes to KV directly.
 
 SECRETS_FILE="secrets.auto.tfvars"
 
-_REQUIRED_VARS="LANGSMITH_PG_PASSWORD LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_EMAIL"
+# ── Resolve the Key Vault name ────────────────────────────────────────────────
+# Priority: terraform output → _derive_kv_name. Same order as manage-keyvault.sh.
+#
+# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix,
+# an explicit keyvault_name, and the unique_resource_names hash. Deriving it here
+# by hand is how this script and three others drifted apart. The terraform output
+# still wins, because it is the only source that is right when create_keyvault =
+# false and the vault name is the customer's.
+#
+# Reading the wrong vault fails silently: _kv_secret below falls through to the
+# local file, then to generating a fresh value. A machine without those files
+# would mint a new api_key_salt and jwt_secret, and Terraform would write them
+# over the live ones.
+#
+# Before the first successful apply there is no output and no vault to read from,
+# so the derivation is just a placeholder for the display line.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_common.sh"
 
+_name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
+if _kv_name=$(terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$_kv_name" ]]; then
+  : # got it from terraform output
+else
+  _kv_name=$(_derive_kv_name)
+fi
+
+# LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.
+_REQUIRED_VARS="LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_EMAIL"
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # Prompt text goes to stderr: stdout is the return channel for the value, so
@@ -77,21 +105,117 @@ if [[ ! -t 0 ]]; then
   fi
 fi
 
+# ── Key Vault reachability (probed once, not per secret) ──────────────────────
+# Bounded by timeout(1) when available so a sandbox with blocked egress fails
+# fast instead of stalling on a TCP timeout. timeout is not in the macOS base
+# install, and gtimeout is the Homebrew coreutils name; run bare if neither.
+_timeout_bin=""
+for _t in timeout gtimeout; do
+  if command -v "$_t" >/dev/null 2>&1; then _timeout_bin="$_t"; break; fi
+done
+_az() {
+  if [[ -n "$_timeout_bin" ]]; then
+    "$_timeout_bin" 30 az "$@"
+  else
+    az "$@"
+  fi
+}
+
+# Probed at top level (see below), never first from inside _kv_secret: that runs
+# in a command-substitution subshell, so a result cached there would be lost and
+# every secret would re-probe.
+_kv_reachable=""   # "" until probed, then "yes" or "no"
+_kv_probe() {
+  if [[ -z "$_kv_reachable" ]]; then
+    if _az keyvault show --name "$_kv_name" --output none 2>/dev/null; then
+      _kv_reachable="yes"
+      echo "  Key Vault $_kv_name is reachable — reading existing secrets." >&2
+    else
+      _kv_reachable="no"
+      echo "  Key Vault $_kv_name not reachable (not created yet, not logged in," >&2
+      echo "  or no network) — using local files." >&2
+    fi
+  fi
+  [[ "$_kv_reachable" == "yes" ]]
+}
+
+# ── Stable secret: read from Key Vault or local fallback, generate if missing ──
+# Priority: Key Vault (written by Terraform) → local fallback file → generate fresh
+# Never writes to Key Vault directly — Terraform owns all KV writes.
+_kv_secret() {
+  local kv_secret_name="$1"
+  local fallback_file="$2"
+  local generator="$3"
+  local val=""
+
+  # 1. Read from Key Vault (available after terraform apply)
+  if _kv_probe; then
+    val=$(_az keyvault secret show \
+      --vault-name "$_kv_name" \
+      --name "$kv_secret_name" \
+      --query value -o tsv 2>/dev/null) || val=""
+  fi
+
+  # 2. Fall back to local file (before first apply, or on a machine without KV access)
+  if [[ -z "$val" && -f "$fallback_file" ]]; then
+    val=$(cat "$fallback_file")
+  fi
+
+  # 3. Generate fresh — write to local file only; Terraform stores in Key Vault on apply
+  if [[ -z "$val" ]]; then
+    val=$(eval "$generator") || {
+      echo "ERROR: Secret generator failed for $kv_secret_name." >&2
+      echo "       Command: $generator" >&2
+      echo "       Ensure required tools are installed (openssl, python3)." >&2
+      return 1
+    }
+    if [[ -z "$val" ]]; then
+      echo "ERROR: Secret generator for $kv_secret_name produced empty output." >&2
+      return 1
+    fi
+    echo "$val" > "$fallback_file"
+    chmod 600 "$fallback_file"
+    echo "  Generated $kv_secret_name → $fallback_file (Terraform stores in Key Vault on apply)" >&2
+  fi
+
+  echo "$val"
+}
+
+# Azure Postgres Flexible Server requires 8–128 characters from 3 of 4 character
+# classes, so the random body carries a fixed prefix that guarantees the mix.
+_pg_generator='printf "Ls1!%s\n" "$(openssl rand -base64 32 | tr -dc "A-Za-z0-9" | cut -c1-24)"'
+
 # ── Collect secrets ───────────────────────────────────────────────────────────
 echo ""
 echo "LangSmith — Terraform input bootstrap"
+echo "  name_prefix : ${_name_prefix:-(empty)}"
+echo "  key_vault   : $_kv_name"
 echo ""
-echo "  Passwords are hidden as you type."
+echo "  Passwords are hidden as you type. Press Enter on the PostgreSQL prompt"
+echo "  to have one generated for you — this script prints where to view it."
 echo ""
 
-pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "PostgreSQL admin password  ")
+pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "PostgreSQL admin password (Enter = generate)" optional)
 license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "LangSmith license key      ")
 admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL" "Initial org admin email    " visible)
+
+echo ""
+_kv_probe || true   # once, in the parent shell — result is reused by every _kv_secret call
+
+# Generated Postgres password goes through _kv_secret so it stays stable across
+# runs: Key Vault after the first apply, .pg_password before it.
+_pg_resolved=false
+if [[ -z "$pg_password" ]]; then
+  echo ""
+  echo "  No PostgreSQL password given — resolving one..."
+  pg_password=$(_kv_secret "postgres-admin-password" ".pg_password" "$_pg_generator")
+  _pg_resolved=true
+fi
 
 # ── Write secrets.auto.tfvars ─────────────────────────────────────────────────
 cat > "$SECRETS_FILE" << EOF
 # Auto-generated by setup-env.sh — DO NOT COMMIT
-# Re-run ./setup-env.sh to regenerate.
+# Re-run ./setup-env.sh to refresh secrets from Key Vault.
 
 postgres_admin_password = "$pg_password"
 langsmith_license_key   = "$license_key"
@@ -103,6 +227,14 @@ chmod 600 "$SECRETS_FILE"
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "  Wrote $SECRETS_FILE (chmod 600)"
+if [[ "$_pg_resolved" == "true" ]]; then
+  echo ""
+  echo "  The PostgreSQL admin password was set for you. View it with:"
+  echo "    grep postgres_admin_password $SECRETS_FILE"
+  echo "  After terraform apply it is also in Key Vault:"
+  echo "    az keyvault secret show --vault-name $_kv_name \\"
+  echo "      --name postgres-admin-password --query value -o tsv"
+fi
 echo ""
 echo "Next (from terraform/azure/):"
 echo "  make preflight     # verify az login, providers, RBAC"

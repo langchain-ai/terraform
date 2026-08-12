@@ -238,7 +238,7 @@ The LangSmith application secrets used to be Terraform-managed, which persisted 
 
 If you deployed before this change:
 
-1. **Upgrade Terraform to >= 1.7.** The keyvault module uses `removed` blocks, which earlier versions reject.
+1. **Upgrade Terraform to >= 1.11.** That is the floor for every module in this repo; the keyvault module also needs the `removed` blocks it added in 1.7.
 2. **Run `make apply`.** The `removed` blocks drop the seven secrets from state with `destroy = false`, so the values stay in Key Vault and running pods are unaffected. Nothing is deleted.
 3. **Run `make clean`** whenever you next tear down, or delete `infra/.api_key_salt`, `infra/.jwt_secret`, `infra/.deployments_key`, `infra/.agent_builder_key`, `infra/.insights_key`, and `infra/.polly_key` by hand. `setup-env.sh` no longer writes these plaintext files, but existing ones are not removed automatically.
 4. **Rotate at your discretion.** Values that were in Terraform state are still valid and nothing forces a rotation, but anyone who could read your state file has seen them. Rotate with `make keyvault set <name> <value>` followed by `make k8s-secrets`, keeping in mind that rotating the API key salt invalidates every API key, the JWT secret drops every session, and a Fernet key makes existing encrypted data unreadable.
