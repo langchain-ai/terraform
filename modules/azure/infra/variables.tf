@@ -594,6 +594,11 @@ variable "tls_certificate_source" {
     condition     = contains(["none", "letsencrypt", "dns01", "existing"], var.tls_certificate_source)
     error_message = "tls_certificate_source must be 'none', 'letsencrypt', 'dns01', or 'existing'."
   }
+
+  validation {
+    condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
+    error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
+  }
 }
 
 # Both default true, which is what this module did before the flags existed. Set
