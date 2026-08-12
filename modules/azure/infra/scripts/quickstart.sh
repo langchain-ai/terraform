@@ -128,6 +128,58 @@ _hint() {
   printf "  ${DIM}%s${RESET}\n" "$1"
 }
 
+# Compose the resource names Terraform will derive, from answers already given.
+# Mirror of the naming locals in infra/main.tf — keep the two in step. The
+# wizard knows every input the derivation needs, so a name that busts an Azure
+# ceiling can be caught at the prompt instead of at preflight or at plan.
+_derive_names() {
+  local suffix="" uniq="" base hash
+  [[ -n "$NAME_PREFIX" ]] && suffix="-${NAME_PREFIX}"
+  if [[ "$UNIQUE_NAMES" == "true" ]]; then
+    base="ls"
+    if command -v shasum &>/dev/null; then
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}" | shasum -a 256 | cut -c1-6)
+    else
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}" | sha256sum | cut -c1-6)
+    fi
+    uniq="-${hash}"
+  else
+    base="langsmith"
+  fi
+  _RG_NAME="${base}-rg${suffix}"
+  _AKS_NAME="${base}-aks${suffix}"
+  _KV_NAME="${base}-kv${suffix}${uniq}"
+  _PG_NAME="${base}-postgres${suffix}${uniq}"
+  _REDIS_NAME="${base}-redis${suffix}${uniq}"
+  # The blob module strips the hyphens, so the 24-char limit applies to the
+  # stripped form and that is also the name Azure ends up showing.
+  _BLOB_NAME="${base}blob${suffix}${uniq}"
+  _BLOB_NAME="${_BLOB_NAME//-/}"
+  # Not derived from name_base — the workspace name predates it and renaming a
+  # Log Analytics workspace destroys the logs in it.
+  _LAW_NAME="langsmith-logs${suffix}"
+}
+
+# One line per derived name that busts its Azure ceiling. The count is the
+# number that says how much to cut, so print it rather than just the rule.
+_name_length_errors() {
+  local spec label name max
+  for spec in "Storage account:${_BLOB_NAME}:24" \
+    "Key Vault:${_KV_NAME}:24" \
+    "Postgres:${_PG_NAME}:63" \
+    "Redis:${_REDIS_NAME}:60"; do
+    label="${spec%%:*}"
+    name="${spec#*:}"
+    max="${name##*:}"
+    name="${name%:*}"
+    if (( ${#name} > max )); then
+      printf '%s name "%s" is %d chars; Azure allows at most %d.\n' \
+        "$label" "$name" "${#name}" "$max"
+    fi
+  done
+  return 0
+}
+
 # ── Resume state ──────────────────────────────────────────────────────────────
 # Answers are checkpointed after every completed section so an exit (Ctrl-C,
 # `q`, a dropped SSH session) never costs more than the section in progress.
@@ -375,6 +427,7 @@ _run_section_2() {
   # the default on a blank reply, so an empty default would make Enter fail the
   # regex below and re-prompt forever. Offer the sentinel back instead.
   local name_default="${NAME_PREFIX:-none}"
+  local name_errors="" name_error_line
   [[ "$PROFILE" == "prod" ]] && ! _answered 2 && name_default="prod"
   while true; do
     _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
@@ -391,7 +444,20 @@ _run_section_2() {
     # because the prefix always lands on the end of "ls-<resource>" and the
     # composed name still starts with a letter.
     if [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
-      break
+      # Storage and Key Vault cap at 24 characters including the resource word
+      # and the uniqueness hash, so ~12 characters is the practical ceiling here
+      # and the wizard can say so with the actual name rather than a rule of
+      # thumb. The plan-time preconditions stay as the backstop for a
+      # hand-written tfvars.
+      _derive_names
+      name_errors="$(_name_length_errors)"
+      [[ -z "$name_errors" ]] && break
+      while IFS= read -r name_error_line; do
+        _red "  ERROR: $name_error_line"
+      done <<< "$name_errors"
+      _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
+      _hint "keyvault_name in terraform.tfvars once this run has written it."
+      continue
     fi
     _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
   done
@@ -406,7 +472,9 @@ _run_section_2() {
   COST_CENTER="$_REPLY"
 
   echo ""
-  printf "  Resources: ls-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
+  _derive_names
+  printf "  Resource group  $(_cyan "$_RG_NAME")  in  $(_cyan "$LOCATION")\n"
+  printf "  Cluster $(_cyan "$_AKS_NAME") · Key Vault $(_cyan "$_KV_NAME") · Storage $(_cyan "$_BLOB_NAME")\n"
 }
 
 # -- 3. Networking -----------------------------------------------------------
@@ -1232,6 +1300,26 @@ while true; do
     printf "  %-24s %s\n" "    Log Analytics:"  "$CREATE_DIAGNOSTICS"
     printf "  %-24s %s\n" "    Bastion:"        "$CREATE_BASTION"
   fi
+  # What the answers add up to. The resource group and the storage account are
+  # never asked about, so this is the only place an operator with a naming or a
+  # storage policy sees that they are part of the deployment at all.
+  _derive_names
+  echo ""
+  printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  printf "    %-18s %s\n" "AKS cluster"     "$_AKS_NAME"
+  printf "    %-18s %s\n" "Key Vault"       "$_KV_NAME"
+  printf "    %-18s %s\n" "Storage account" "$_BLOB_NAME  (LangSmith run artifacts)"
+  [[ "$PG_SOURCE" == "external" ]]    && printf "    %-18s %s\n" "PostgreSQL"     "$_PG_NAME"
+  [[ "$REDIS_SOURCE" == "external" ]] && printf "    %-18s %s\n" "Redis"          "$_REDIS_NAME  ($AMR_SKU)"
+  # 90 days is the log_retention_days default; the wizard does not ask for it.
+  [[ "$CREATE_DIAGNOSTICS" == "true" ]] && printf "    %-18s %s\n" "Log Analytics" "$_LAW_NAME  (90-day retention)"
+  if [[ "$BLOB_TTL_ENABLED" == "true" ]]; then
+    printf "    %-18s %s\n" "Blob retention" "short-lived ${BLOB_TTL_SHORT_DAYS}d, long-lived ${BLOB_TTL_LONG_DAYS}d"
+  else
+    printf "    %-18s %s\n" "Blob retention" "off — artifacts are kept until you delete them"
+  fi
+  printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+
   echo ""
   printf "  ${DIM}Press Enter to write terraform.tfvars, a section number (1-10) to change it,${RESET}\n"
   printf "  ${DIM}or q to save your answers and quit without writing.${RESET}\n"
