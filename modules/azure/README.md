@@ -26,7 +26,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | Azure DB for PostgreSQL (private) | Azure Cache for Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+| **Production** | Azure DB for PostgreSQL (private) | Azure Managed Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
 >
@@ -539,7 +539,7 @@ Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if ne
 - VNet + subnets (AKS, Postgres, Redis) + private DNS zones
 - AKS cluster + node pools + OIDC issuer + managed identity + Workload Identity federated credentials
 - Azure DB for PostgreSQL Flexible Server (if `postgres_source = "external"`)
-- Azure Cache for Redis Premium (if `redis_source = "external"`)
+- Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The seven LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
 - cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)

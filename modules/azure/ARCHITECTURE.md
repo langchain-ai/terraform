@@ -54,7 +54,7 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
 - 1 StatefulSet: clickhouse (large node pool, 500Gi PVC)
 - 3 completed Jobs: backend-migrations, backend-ch-migrations, backend-auth-bootstrap
-- External: Azure DB for PostgreSQL (subnet-postgres), Azure Cache for Redis Premium (subnet-redis)
+- External: Azure DB for PostgreSQL (subnet-postgres), Azure Managed Redis (subnet-redis)
 - WI pods (4): backend, platform-backend, queue, ingest-queue
 
 ### Light Deploy (All In-Cluster)
@@ -120,7 +120,7 @@ AKS Cluster
 
 Azure Managed Services
 ├── Azure DB for PostgreSQL Flexible Server (private VNet)
-├── Azure Cache for Redis Premium (private VNet)
+├── Azure Managed Redis (private VNet)
 ├── Azure Blob Storage (Workload Identity — no static keys)
 └── Azure Key Vault
 ```
@@ -143,7 +143,7 @@ langsmith-vnet-<name_prefix>
 langsmith-vnet-<name_prefix>
 ├── subnet-0              (AKS nodes)
 ├── subnet-postgres       (Azure DB for PostgreSQL Flexible Server)
-└── subnet-redis          (Azure Cache for Redis Premium)
+└── subnet-redis          (Azure Managed Redis)
 ```
 
 All subnets are private. Postgres and Redis are accessible only from within the VNet via private DNS resolution. No public endpoints.
