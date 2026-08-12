@@ -576,12 +576,21 @@ else
     echo "$1" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$'
   }
 
-  # _check_name <label> <name> <url> <json-body> <availability-field>
+  # _check_name <label> <name> <url> <json-body> <availability-field> <max-len> <remedy>
   # A definitive "taken" fails the run. Anything else (auth blip, api-version
   # drift, unparseable body) only warns — preflight must never block a deploy
   # because Azure rotated an API version.
   _check_name() {
-    local label="$1" name="$2" url="$3" body="$4" field="$5" resp avail msg
+    local label="$1" name="$2" url="$3" body="$4" field="$5" max_len="$6" remedy="$7"
+    local resp avail reason msg
+    # Length is decided here rather than by Azure. The API reports an over-long
+    # name as nameAvailable false, which reads as a collision when nothing is
+    # taken, and its rule text carries no count. Same sentence the preconditions
+    # in main.tf print, so the failure reads the same wherever it catches you.
+    if [ "${#name}" -gt "$max_len" ]; then
+      fail "${label} name '${name}' is ${#name} chars; Azure allows at most ${max_len}. ${remedy}"
+      return 0
+    fi
     if ! _name_is_safe "$name"; then
       warn "${label}: '${name}' is not a valid Azure resource name — check skipped"
       return 0
@@ -596,35 +605,48 @@ else
       return 0
     fi
     avail=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('${field}',''))" 2>/dev/null || echo "")
+    reason=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('reason',''))" 2>/dev/null || echo "")
     # Azure's Key Vault message runs several hundred chars of soft-delete prose;
     # keep the first sentence so one failure doesn't bury the rest of the report.
     msg=$(echo "$resp" | python3 -c "
 import sys, json
 m = (json.load(sys.stdin).get('message', '') or '').strip()
 print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null || echo "")
+    # nameAvailable is false for two unrelated reasons, and the remedies are
+    # opposites: a taken name needs a different one, an illegal name needs a
+    # legal one. Reporting both as taken puts our headline in direct conflict
+    # with the Azure message printed after it.
     case "$avail" in
       True)  pass "${label}: '${name}' is available" ;;
-      False) fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+      False)
+        case "$reason" in
+          Invalid) fail "${label}: '${name}' is not a legal Azure resource name. ${msg}" ;;
+          *)       fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+        esac ;;
       *)     warn "${label}: '${name}' — unexpected API response; collision would surface during apply" ;;
     esac
   }
 
   _check_name "Postgres" "$PG_NAME" \
     "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
-    "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable"
+    "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable" \
+    63 "Shorten var.name_prefix or set var.postgres_name explicitly."
 
   _check_name "Storage account" "$BLOB_NAME" \
     "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
-    "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable"
+    "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable" \
+    24 "Shorten var.name_prefix or set var.storage_account_name explicitly."
 
   _check_name "Key Vault" "$KV_NAME" \
     "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
-    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable" \
+    24 "Shorten var.name_prefix or set var.keyvault_name explicitly."
 
   if [ -n "$DNS_LABEL" ]; then
     _check_name "Public IP DNS label" "$DNS_LABEL" \
       "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
-      "" "available"
+      "" "available" \
+      63 "Shorten var.dns_label."
   else
     warn "dns_label not set — skipping DNS label check"
   fi
@@ -636,7 +658,9 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   # in-subscription case can be pre-checked — a leftover from a failed apply.
   # A cross-tenant Redis collision still surfaces at apply time; the hashed name
   # under unique_resource_names is what makes that unlikely.
-  if _name_is_safe "$REDIS_NAME"; then
+  if [ "${#REDIS_NAME}" -gt 60 ]; then
+    fail "Redis name '${REDIS_NAME}' is ${#REDIS_NAME} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly."
+  elif _name_is_safe "$REDIS_NAME"; then
     REDIS_HIT=$(az redisenterprise list --query "length([?name=='${REDIS_NAME}'])" -o tsv 2>/dev/null || echo "0")
     echo "$REDIS_HIT" | grep -qE '^[0-9]+$' || REDIS_HIT=0
     if [ "$REDIS_HIT" -gt "0" ]; then

@@ -280,8 +280,12 @@ resource "azurerm_resource_group" "resource_group" {
       error_message = "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly."
     }
     precondition {
-      condition     = length(local.postgres_name) <= 63 && length(local.redis_name) <= 60
-      error_message = "Postgres name '${local.postgres_name}' must be <= 63 chars and Redis name '${local.redis_name}' <= 60. Shorten var.name_prefix or set var.postgres_name / var.redis_name explicitly."
+      condition     = length(local.postgres_name) <= 63
+      error_message = "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly."
+    }
+    precondition {
+      condition     = length(local.redis_name) <= 60
+      error_message = "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly."
     }
   }
 }
