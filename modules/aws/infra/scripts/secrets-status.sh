@@ -38,10 +38,12 @@ REQUIRED_PARAMS=(
 # Human-readable annotations for auto-generated params
 _param_note() {
   case "$1" in
-    langsmith-api-key-salt) echo " (auto-generated)" ;;
-    langsmith-jwt-secret)   echo " (auto-generated)" ;;
-    redis-auth-token)       echo " (auto-generated)" ;;
-    *)                      echo "" ;;
+    langsmith-api-key-salt)            echo " (auto-generated)" ;;
+    langsmith-jwt-secret)              echo " (auto-generated)" ;;
+    redis-auth-token)                  echo " (auto-generated)" ;;
+    sandbox-juicefs-redis-auth-token)  echo " (auto-generated)" ;;
+    sandbox-callback-signing-jwk)      echo " (auto-generated)" ;;
+    *)                                 echo "" ;;
   esac
 }
 
@@ -73,6 +75,13 @@ fi
 
 _environment="${_environment:-dev}"
 SSM_PREFIX="/langsmith/${_name_prefix}-${_environment}"
+
+if _tfvar_is_true "enable_sandboxes"; then
+  REQUIRED_PARAMS+=(
+    "sandbox-juicefs-redis-auth-token"
+    "sandbox-callback-signing-jwk"
+  )
+fi
 
 # ── SSM status table ──────────────────────────────────────────────────────────
 header "SSM Parameter Store"

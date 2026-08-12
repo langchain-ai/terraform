@@ -12,7 +12,7 @@ checklist below.
 
 **Tools required** (all must be in PATH):
 - `az` CLI >= 2.50 — authenticated to the target subscription
-- `terraform` v1.9+
+- `terraform` v1.11.0+
 - `kubectl`
 - `helm` v3.12+
 
