@@ -888,8 +888,12 @@ _run_section_7() {
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
-      AMR_SKU="Balanced_B3"
-      REDIS_HA="true"
+      # Fresh run only: a re-entry has already parsed the operator's SKU and HA
+      # choice out of tfvars, and resetting here would discard it.
+      if ! _answered 7; then
+        AMR_SKU="Balanced_B3"
+        REDIS_HA="true"
+      fi
     fi
   else
     # No default until the section has been answered once — a fresh run still
@@ -920,8 +924,23 @@ _run_section_7() {
     echo ""
     _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
     _hint "if the region reports AllocationFailed."
-    _ask "Azure Managed Redis SKU" "Balanced_B0"
-    AMR_SKU="$_REPLY"
+    # Default to the SKU already chosen, never a literal: the prod branch above
+    # picks Balanced_B3 with HA on, and a hardcoded B0 default overwrites it into
+    # a pair the redis module rejects — so pressing Enter here failed plan.
+    while true; do
+      _ask "Azure Managed Redis SKU" "$AMR_SKU"
+      AMR_SKU="$_REPLY"
+      [[ "$AMR_SKU" == "Balanced_B0" && "$REDIS_HA" == "true" ]] || break
+      # amr_sku and redis_high_availability are written to tfvars independently,
+      # so the pair has to be checked at the prompt. Same two remedies the
+      # module's validation names, offered now instead of 20 lines into a plan.
+      echo ""
+      _yellow "NOTE"; printf ": Balanced_B0 cannot run zone-redundant HA.\n"
+      if _ask_yn "Turn Redis HA off and keep Balanced_B0?" "n"; then
+        REDIS_HA="false"
+        break
+      fi
+    done
   fi
 
   echo ""
