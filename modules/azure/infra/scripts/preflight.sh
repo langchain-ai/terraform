@@ -32,6 +32,21 @@ fail() { echo -e "${FAIL} $1"; ERRORS=$((ERRORS + 1)); }
 pass() { echo -e "${PASS} $1"; }
 warn() { echo -e "${WARN} $1"; }
 
+# Renders the "<severity> <message>" lines the python helpers below emit, so the
+# shell only prints verdicts. Feed it a heredoc rather than a pipe: a pipeline
+# would run fail() in a subshell and lose the ERRORS increment.
+_render() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      pass\ *) pass "${line#pass }" ;;
+      warn\ *) warn "${line#warn }" ;;
+      fail\ *) fail "${line#fail }" ;;
+      *) [ -z "$line" ] || warn "$line" ;;
+    esac
+  done
+}
+
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  LangSmith Azure — Pre-flight Checks"
@@ -209,15 +224,18 @@ else
   fi
 
   # roleAssignments/write is the action that decides; the rest are what a
-  # principal without broad resource access trips over first. checkAccess batches,
-  # so all of them cost one request per scope. The object ID goes through
-  # json.dumps into a file rather than onto a command line.
+  # principal without broad resource access trips over first. resourceGroups/read
+  # is what plan exercises before any of the writes — refresh reads everything
+  # already in state — so a run against an applied deployment fails there first.
+  # checkAccess batches, so all of them cost one request per scope. The object ID
+  # goes through json.dumps into a file rather than onto a command line.
   python3 - "$PRINCIPAL_ID" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
 ACTIONS = [
     "Microsoft.Authorization/roleAssignments/write",
     "Microsoft.Authorization/roleAssignments/delete",
+    "Microsoft.Resources/subscriptions/resourceGroups/read",
     "Microsoft.Resources/subscriptions/resourceGroups/write",
     "Microsoft.ContainerService/managedClusters/write",
     "Microsoft.KeyVault/vaults/write",
@@ -250,10 +268,18 @@ PY
   # calling identity's eligibilities, so this is skipped when Terraform will
   # authenticate as somebody else rather than mislabelled as that principal's.
   echo "{}" > "${RBAC_TMP}/eligibilities.json"
+  echo "{}" > "${RBAC_TMP}/activations.json"
   if [ "$PRINCIPAL_IS_CALLER" -eq 1 ]; then
     az rest --method get \
       --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
       -o json > "${RBAC_TMP}/eligibilities.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/eligibilities.json"
+    # The sibling call for what is active right now, with the time it expires.
+    # An activation that lapses between a passing preflight and the next plan is
+    # indistinguishable from never having activated, and a first apply of AKS
+    # plus Postgres outlasts a short window comfortably.
+    az rest --method get \
+      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      -o json > "${RBAC_TMP}/activations.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/activations.json"
   fi
 
   # One pass over the responses so the shell only renders verdicts. Each line it
@@ -440,10 +466,10 @@ for deny_name, scopes in by_verdict(write_no):
 
 for refused, scopes in by_verdict(other):
     if refused:
-        out.append("fail Not permitted at %s: %s. The deployment creates all of these."
-                   % (scope_list(scopes), refused))
+        out.append("fail Not permitted at %s: %s. The deployment needs all of these: the reads to "
+                   "refresh state, the writes to create it." % (scope_list(scopes), refused))
     else:
-        out.append("pass Every resource type the deployment creates is writable at %s"
+        out.append("pass Every resource action the deployment needs is permitted at %s"
                    % scope_list(scopes))
 
 for _, scopes in by_verdict(delete_no):
@@ -474,15 +500,60 @@ PY
     esac
   else
     pass "checkAccess answered, so the verdicts below are this principal's effective access with deny assignments and ABAC conditions applied"
-    while IFS= read -r LINE; do
-      case "$LINE" in
-        pass\ *) pass "${LINE#pass }" ;;
-        warn\ *) warn "${LINE#warn }" ;;
-        fail\ *) fail "${LINE#fail }" ;;
-        *) [ -z "$LINE" ] || warn "$LINE" ;;
-      esac
-    done <<EOF
+    _render <<EOF
 $RBAC_VERDICT
+EOF
+  fi
+
+  # Reported whatever the verdicts above say, because the failure this catches
+  # looks like a pass: access is real at preflight and gone by the time refresh
+  # runs. Only the calling identity's own activations are visible.
+  PIM_ACTIVE=$(python3 - "${RBAC_TMP}/activations.json" <<'PY' || echo ""
+import json, re, sys
+from datetime import datetime, timezone
+
+# An apply that creates AKS and a Postgres flexible server takes 20-25 minutes,
+# so anything under this is a window that will lapse mid-run.
+WARN_MINUTES = 45
+
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.loads(fh.read() or "{}") or {}
+except (OSError, ValueError):
+    raise SystemExit(0)
+
+now = datetime.now(timezone.utc)
+out = []
+for instance in data.get("value") or []:
+    props = instance.get("properties") or {}
+    end = props.get("endDateTime")
+    if not end:
+        continue  # a permanent assignment has nothing to expire
+    # ARM returns UTC here. Parsed by pattern rather than fromisoformat, which
+    # rejects the 7-digit fractional seconds Azure sometimes emits.
+    stamp = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})", end)
+    if not stamp:
+        continue
+    expires = datetime(*[int(part) for part in stamp.groups()], tzinfo=timezone.utc)
+    left = int((expires - now).total_seconds() // 60)
+    if left <= 0:
+        continue
+    role = (((props.get("expandedProperties") or {}).get("roleDefinition") or {})
+            .get("displayName") or "a role")
+    where = props.get("scope") or "?"
+    if left <= WARN_MINUTES:
+        out.append("warn PIM activation of %s at %s expires in %d minutes. Apply takes longer than "
+                   "that, and once it lapses the next plan 403s on reads while refreshing state. "
+                   "Re-activate for a longer window before applying." % (role, where, left))
+    else:
+        out.append("pass PIM activation of %s at %s has %dh%02dm left" % (role, where, left // 60, left % 60))
+
+print("\n".join(out))
+PY
+  )
+  if [ -n "$PIM_ACTIVE" ]; then
+    _render <<EOF
+$PIM_ACTIVE
 EOF
   fi
 fi

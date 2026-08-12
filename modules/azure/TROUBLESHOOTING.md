@@ -220,9 +220,30 @@ The client '<user>' with object id '<oid>' does not have authorization to
 perform action 'Microsoft.Authorization/roleAssignments/write' over scope '<scope>'
 ```
 
-**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates eight of them.
+**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates one for each of its own managed identities.
 
 **Fix:** Grant `Role Based Access Control Administrator` at subscription scope, or `Owner` in place of both roles. When one role assignment succeeds and another on the same scope fails, an ABAC condition is restricting which role definitions the identity may grant. For the full permission inventory, the `checkAccess` probe, and how to read the condition, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+---
+
+### AuthorizationFailed on a read, during plan rather than apply
+
+**Symptom:** `terraform plan` against an already-applied deployment fails while refreshing, before it proposes any change:
+
+```text
+Error: retrieving Public IP Address ...: unexpected status 403 (403 Forbidden)
+  ... does not have authorization to perform action
+  'Microsoft.Network/publicIPAddresses/read' over scope ...
+
+Error: reading resource group: ...
+  'Microsoft.Resources/subscriptions/resourceGroups/read'
+```
+
+Azure closes that message with "if access was recently granted, please refresh your credentials", which reads as an instruction to run `az login` again. That is rarely the fix.
+
+**Cause:** Refresh reads every resource in state, so plan needs read access on all of them before it needs write access on anything. When a read that worked an hour ago starts failing, the usual reason is a PIM activation that expired. The roles are still eligible, so the portal still lists them, and nothing in the error says the window closed. The other case is an identity that never had read access, which `make preflight` now probes for directly.
+
+**Fix:** Re-activate the role (portal: PIM → My roles → Activate) for longer than the apply will take. A first apply of AKS plus Postgres runs 20-25 minutes. `make preflight` prints the time remaining on any active PIM activation and warns when it is under 45 minutes, so run it again after re-activating. If nothing was activated in the first place, [PERMISSIONS.md](PERMISSIONS.md) lists the roles to ask for.
 
 ---
 
