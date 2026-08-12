@@ -417,7 +417,7 @@ Setting `enable_smithdb = true` provisions four things:
 
 ### Requirements and constraints
 
-1) **Postgres 17 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own - for AlloyDB, run the Auth Proxy as a sidecar through `smithdb.commonInitContainers`, point the host at `127.0.0.1`, and set `smithdb_metastore_use_ssl = false` since the proxy terminates TLS on the pod loopback.
+1) **Postgres 17 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, `smithdb_metastore_use_auth_proxy = true` runs a Cloud SQL Auth Proxy sidecar so the instance can stay `ENCRYPTED_ONLY`; AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
 
 2) **A dedicated object-storage bucket, single-region, in the cluster's region.** Multi-region and dual-region buckets add replication cost and unpredictable tail latency on segment reads. The module deliberately creates no object-expiry lifecycle rules and no versioning: SmithDB owns the lifecycle of its own segments, and expiring them independently makes data unavailable. Compaction already reclaims dead segments.
 
@@ -459,7 +459,7 @@ See [SMITHDB.md](SMITHDB.md) for the per-stage validation steps.
 
 ### Sizing
 
-At chart defaults the three cache workloads request 4 CPU each and 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage, so one `n2-standard-16` with 3 Local SSDs holds all three with headroom. The values overlay in `helm/values/examples/` carries scheduling only and leaves sizing to the chart; if you override the resource requests upward, raise `smithdb_instance_store_local_ssd_count` to match or replicas will sit Pending.
+At chart defaults the three cache workloads request 4 CPU each and 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage, so one `n2-standard-16` with the default 2 Local SSDs (750 GB raw) holds all three with headroom. The values overlay in `helm/values/examples/` carries scheduling only and leaves sizing to the chart; if you override the resource requests upward, raise `smithdb_instance_store_local_ssd_count` to match or replicas will sit Pending. Legal counts for N2 at 12-20 vCPU are 2, 4, 8, 16 and 24 - not 3.
 
 ---
 

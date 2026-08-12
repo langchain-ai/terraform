@@ -43,35 +43,139 @@ point them at the LangSmith application database or blob-storage bucket.
 
 ## Metastore TLS on GCP
 
-SmithDB 0.16 cannot verify a Cloud SQL certificate, so TLS has to come off the
-metastore hop:
+### Why a direct TLS connection fails
+
+SmithDB 0.16 cannot verify a Cloud SQL certificate. Point it straight at an
+`ENCRYPTED_ONLY` instance with `smithdb_metastore_use_ssl = true` and the query,
+ingestion, and compaction pods crashloop on
+`InvalidCertificate(UnknownIssuer)`.
+
+Cloud SQL presents a per-instance self-signed CA and the services verify the
+chain against the public trust store, so validation cannot succeed. The service
+config exposes a single `use_ssl` boolean with no CA path and no
+encrypt-without-verify mode, and injecting the CA would not help either: the
+server certificate carries no IP SAN while SmithDB connects to the private IP,
+so verification would fail on the hostname instead.
+
+The metastore migration hook is the one component unaffected, because it
+connects through libpq with `sslmode=require`, which encrypts without verifying.
+Expect the hook to succeed while every service fails against the same database.
+That asymmetry is diagnostic, not a sign the database is misconfigured.
+
+Two modes work around this. Both keep the instance itself at
+`ssl_mode = "ENCRYPTED_ONLY"` or better.
+
+### Mode 1: Cloud SQL Auth Proxy sidecar (production)
+
+```hcl
+smithdb_metastore_use_auth_proxy = true
+smithdb_metastore_use_ssl        = false
+# Optional; defaults to a pinned tag.
+smithdb_auth_proxy_image         = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
+```
+
+A Cloud SQL Auth Proxy sidecar runs in every SmithDB Pod. It authenticates to
+the Cloud SQL Admin API as the pod's Workload Identity principal, holds the TLS
+session to the instance, and serves plaintext on the Pod loopback. SmithDB
+connects to `127.0.0.1`, which is why `smithdb_metastore_use_ssl` must be
+`false` - the hop the proxy secures is the one leaving the Pod, and a TLS
+handshake against the loopback has no server to meet. Terraform rejects the two
+set together rather than letting it fail at connect time.
+
+```mermaid
+flowchart LR
+  subgraph pod [SmithDB Pod]
+    svc[SmithDB container]
+    proxy[cloud-sql-proxy sidecar]
+  end
+  svc -->|"127.0.0.1:5432 plaintext"| proxy
+  proxy -->|"IAM auth + TLS"| sql[("Cloud SQL metastore
+  ENCRYPTED_ONLY")]
+```
+
+Terraform does the rest: it grants the SmithDB service account
+`roles/cloudsql.client`, writes `127.0.0.1` into the `smithdb-metastore` secret's
+host key, and exposes the instance connection name.  `init-values.sh` reads
+those outputs and generates the sidecar into
+`langsmith-values-smithdb-overrides.yaml`. Nothing here needs hand-editing.
+
+The sidecar is emitted under `smithdb.commonInitContainers`, not under the
+per-component `smithdb.<service>.deployment.sidecars`. That distinction matters:
+`deployment.sidecars` exists, but the chart only wires it into the SmithDB
+Deployments, and the `metastore-migration` pre-install hook Job is not a
+Deployment. The hook runs before any Deployment exists, so a per-Deployment
+sidecar leaves the one component that must reach the metastore first with no
+proxy to connect through. `commonInitContainers` is injected into every SmithDB
+Deployment and both Jobs, the hook included.
+
+The container carries `restartPolicy: Always`, which makes it a native sidecar
+rather than an init container. In the hook Job that is what allows completion:
+the kubelet stops a native sidecar once the Job's main container exits, whereas
+a plain init container would block the Job from ever starting its work and a
+non-native sidecar would hold the Job Running forever.
+
+Requires `smithdb_metastore_source = "create"`. The proxy takes the instance
+connection name as its only positional argument, and that is knowable only for
+an instance this module created. For an external instance, see below.
+
+### Mode 2: relaxed instance, no TLS (test and staging)
 
 ```hcl
 smithdb_metastore_ssl_mode = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
 smithdb_metastore_use_ssl  = false
 ```
 
-Without this, the query, ingestion, and compaction pods crashloop on
-`InvalidCertificate(UnknownIssuer)`. Cloud SQL presents a per-instance self-signed
-CA and the services verify the chain against the public trust store, so validation
-cannot succeed. The service config exposes a single `use_ssl` boolean with no CA
-path and no encrypt-without-verify mode, and injecting the CA would not help
-because the server certificate carries no IP SAN while SmithDB connects to the
-private IP - verification would fail on the hostname instead.
+Traffic stays on a private IP inside the VPC and never leaves it, which is
+acceptable for a test or staging stack. It is not a production posture: the
+metastore hop is unencrypted, and the instance accepts unencrypted connections
+from anything else that reaches it on the VPC. Prefer mode 1 anywhere the data
+matters.
 
-The metastore migration hook is the one component unaffected, because it connects
-through libpq with `sslmode=require`, which encrypts without verifying. Expect the
-hook to succeed while every service fails against the same database; that
-asymmetry is diagnostic, not a clue that the database is misconfigured.
+Revisit both once SmithDB accepts a CA bundle or a non-verifying SSL mode, at
+which point TLS can go back on directly and the sidecar becomes optional.
 
-Traffic stays on a private IP inside the VPC. That is acceptable for test and
-staging, not for production. For production, run a Cloud SQL Auth Proxy sidecar
-and keep `ssl_mode = "ENCRYPTED_ONLY"` on the instance: the proxy authenticates
-with IAM, terminates TLS itself, and exposes plaintext on the pod loopback, so the
-metastore host becomes `127.0.0.1` and `smithdb_metastore_use_ssl` stays `false`.
-The chart accepts sidecars at `smithdb.<service>.deployment.sidecars`, and the
-SmithDB GSA needs `roles/cloudsql.client`. Revisit once SmithDB accepts a CA
-bundle or a non-verifying SSL mode, at which point TLS can go back on directly.
+### AlloyDB
+
+AlloyDB is documented, not provisioned - this module creates Cloud SQL. Route it
+through the external metastore path and configure its proxy in the Helm values
+by hand:
+
+```hcl
+smithdb_metastore_source            = "external"
+smithdb_external_metastore_host     = "127.0.0.1"
+smithdb_external_metastore_database = "smithdb"
+smithdb_external_metastore_username = "smithdb"
+smithdb_metastore_use_ssl           = false
+```
+
+Then add the sidecar to `helm/values/langsmith-values-smithdb.yaml`, which
+`init-values.sh` copies once and leaves alone thereafter. The shape is identical
+to the Cloud SQL one, with the AlloyDB image and its fully qualified instance
+path as the positional argument:
+
+```yaml
+smithdb:
+  commonInitContainers:
+    - name: alloydb-auth-proxy
+      image: gcr.io/alloydb-connectors/alloydb-auth-proxy:1.15.2
+      restartPolicy: Always
+      args:
+        - "--address=127.0.0.1"
+        - "--port=5432"
+        - "--structured-logs"
+        - "--health-check"
+        - "--http-address=0.0.0.0"
+        - "--http-port=9090"
+        # Add --auto-iam-authn for AlloyDB IAM database authentication,
+        # and --psc or --public-ip when not on the default private IP path.
+        - "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
+```
+
+The chart ships this as `examples/smithdb_alloydb_auth_proxy.yaml`, including
+the probes and security context worth copying with it. The AlloyDB service
+account needs `roles/alloydb.client` rather than `roles/cloudsql.client`, and
+because the instance is external, Terraform grants neither - do it alongside
+whatever provisions the cluster.
 
 ## Deploy SmithDB services
 
@@ -171,11 +275,112 @@ check matters.
 ## Sizing
 
 At chart defaults the three cache workloads request 4 CPU each and 200Gi
-(query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage, so
-one `n2-standard-16` with 3 Local SSDs holds all three with headroom. If you
-override the resource requests upward in
-`helm/values/langsmith-values-smithdb.yaml`, raise
+(query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage.
+That is 12 CPU against the ~15.9 allocatable vCPU of an `n2-standard-16`, and
+roughly 430 GB allocatable ephemeral storage, which the default 2 Local SSDs
+(750 GB raw) cover with headroom. If you override the resource requests upward
+in `helm/values/langsmith-values-smithdb.yaml`, raise
 `smithdb_instance_store_local_ssd_count` to match, or replicas will sit Pending.
+
+The count is not free-form. Compute Engine accepts only specific Local SSD
+counts per machine type: for N2 at 12-20 vCPU, including the default
+`n2-standard-16`, the legal set is 2, 4, 8, 16 or 24. A value in between, such
+as 3, is rejected when the node pool is created - after the plan has passed, so
+it surfaces as an apply failure rather than a validation error. Terraform
+validates the variable against that set up front to keep the failure at plan
+time.
+
+## Provisioning node pools outside this module
+
+`enable_smithdb` creates both pools against the cluster this module manages, so
+nothing below is needed on that path. The snippets are the portable form of what
+the module builds, for running SmithDB on a GKE cluster provisioned elsewhere.
+Whatever creates the pools, they have to carry the labels and taints the
+generated Helm values select on, or the SmithDB pods sit Pending with no node to
+match.
+
+Cache pool. `ephemeral_storage_local_ssd_config` is the part that matters:
+
+```hcl
+resource "google_container_node_pool" "smithdb_instance_store" {
+  name     = "smithdb-lssd"
+  project  = var.project_id
+  location = var.region
+  cluster  = var.cluster_name
+
+  autoscaling {
+    min_node_count = 0
+    max_node_count = 3
+  }
+
+  node_config {
+    machine_type = "n2-standard-16"
+    disk_size_gb = 100
+    disk_type    = "pd-balanced"
+    image_type   = "COS_CONTAINERD"
+
+    # 2, 4, 8, 16 or 24 for N2 at 12-20 vCPU. Not 3.
+    ephemeral_storage_local_ssd_config {
+      local_ssd_count = 2
+    }
+
+    # Required, or the SmithDB pods cannot assume their GCP service account.
+    workload_metadata_config {
+      mode = "GKE_METADATA"
+    }
+
+    labels = {
+      "smithdb-local/instance-store" = "true"
+    }
+
+    taint {
+      key    = "smithdb-local/instance-store"
+      value  = "true"
+      effect = "NO_SCHEDULE"
+    }
+  }
+}
+```
+
+Compute pool, for `compaction` and `clusterManager`. Same shape with no Local
+SSD, `smithdb-local/compute` in place of `smithdb-local/instance-store`, and a
+smaller machine type such as `n2-standard-8`.
+
+The equivalent as a one-liner, useful for adding a pool to an existing cluster:
+
+```sh
+gcloud container node-pools create smithdb-lssd \
+  --cluster CLUSTER --region REGION --project PROJECT \
+  --machine-type n2-standard-16 \
+  --ephemeral-storage-local-ssd count=2 \
+  --enable-autoscaling --num-nodes 0 --min-nodes 0 --max-nodes 3 \
+  --workload-metadata=GKE_METADATA \
+  --node-labels smithdb-local/instance-store=true \
+  --node-taints smithdb-local/instance-store=true:NoSchedule
+```
+
+Two things are easy to get wrong here, and both fail quietly rather than loudly:
+
+1) Use the *ephemeral storage* Local SSD mode, not raw block
+(`--local-nvme-ssd-block` / `local_nvme_ssd_block_config`). Only the ephemeral
+storage mode combines the disks into the filesystem kubelet uses, which is what
+makes the capacity appear as node-allocatable `ephemeral-storage` and back
+`emptyDir`. With raw block the pods still schedule, but SmithDB's cache lands on
+the boot disk and everything is merely slow. `kubectl exec ... -- df -h /data`
+is how you tell the difference.
+
+2) `local_ssd_count` must be a member of the machine family's fixed set. It is
+validated at node pool creation, not at plan time, so an illegal count fails
+partway through an apply.
+
+Both pools can sit at zero when SmithDB is off; the taints keep other workloads
+away and the autoscaler brings them up when tolerating pods appear.
+
+On Autopilot there are no node pools to create, which is why `enable_smithdb`
+rejects `gke_use_autopilot` at plan time. Running SmithDB there means replacing
+the overlay's nodeSelector with Autopilot's own
+`cloud.google.com/gke-ephemeral-storage-local-ssd` selector and letting Google
+size the nodes. That path is untested here.
 
 ## Production notes
 

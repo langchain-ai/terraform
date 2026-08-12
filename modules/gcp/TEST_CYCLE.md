@@ -279,15 +279,25 @@ kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 ```
 
 Deploy with all three integration gates disabled first. Confirm the metastore
-migration Job completes - it connects with TLS, so a failure here usually means
-`smithdb_metastore_use_ssl` did not reach `smithdb.metastoreMigration.useSsl`.
+migration Job completes - it reads its own `smithdb.metastoreMigration.useSsl`
+leaf rather than the one the services use, so a failure here while the services
+are fine usually means the two disagree. With
+`smithdb_metastore_use_auth_proxy = true`, also confirm the hook Job carried the
+sidecar and still reached Complete:
+
+```bash
+kubectl get job -n langsmith -l app.kubernetes.io/component=langsmith-smithdb-metastore-migration
+kubectl get pod -n langsmith -l job-name=langsmith-smithdb-metastore-migration \
+  -o jsonpath='{.items[*].spec.initContainers[*].name}'
+```
+
 Then confirm SmithDB can write to the bucket before enabling ingestion,
 historical migration, or the query cutover.
 
 Render checks worth running before any apply, one per gate state:
 
 ```bash
-helm template langsmith langchain/langsmith --version "$CHART_VERSION" --devel -n langsmith \
+helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.16.0}" -n langsmith \
   -f helm/values/langsmith-values.yaml \
   -f helm/values/langsmith-values-smithdb.yaml \
   -f helm/values/langsmith-values-smithdb-overrides.yaml >/dev/null
