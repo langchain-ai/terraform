@@ -16,7 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
-# Normalise so the paths shown to the user are plain, not infra/scripts/../...
+# Normalize so the paths shown to the user are plain, not infra/scripts/../...
 INFRA_DIR="$(cd "$INFRA_DIR" && pwd)"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
 
@@ -1062,8 +1062,8 @@ _run_section_10() {
 # ═══════════════════════════════════════════════════════════════════════════
 # Startup — resume an interrupted run, or seed from an existing tfvars
 # ═══════════════════════════════════════════════════════════════════════════
-# Runs here, after every section default has been initialised above, so loaded
-# answers are not overwritten by the initialisers.
+# Runs here, after every section default has been initialized above, so loaded
+# answers are not overwritten by the initializers.
 
 TOTAL_SECTIONS=10
 SECTION=1
