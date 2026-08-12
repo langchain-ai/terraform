@@ -270,8 +270,8 @@ tmp, elig_path, is_caller = sys.argv[1:4]
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
 
-# checkAccess names the granting role by bare GUID. These four are the built-ins
-# that carry roleAssignments/write, verified against az role definition list;
+# checkAccess names the granting role by bare GUID. These are the built-ins
+# likely to appear on a decision here, verified against az role definition list;
 # anything else prints its GUID rather than a guess.
 ROLE_NAMES = {
     "8e3af657a8ff443ca75c2fe8c4bcb635": "Owner",
@@ -279,6 +279,15 @@ ROLE_NAMES = {
     "18d7d88dd35e4fb5a5c37773c20a72d9": "User Access Administrator",
     "f58310d9a9f6439a9e8df62e7b41a168": "Role Based Access Control Administrator",
 }
+
+# The built-ins that actually carry roleAssignments/write, which is the subset of
+# ROLE_NAMES worth naming in a remediation. Contributor is in the dict for
+# labelling only: its NotActions exclude Microsoft.Authorization/*/Write.
+ROLE_WRITE_CARRIERS = (
+    "Owner",
+    "User Access Administrator",
+    "Role Based Access Control Administrator",
+)
 
 # Assigned to the modules by name, so an ABAC condition that omits any of them
 # breaks apply even where roleAssignments/write is permitted.
@@ -314,6 +323,32 @@ def role_label(assignment):
     return "role %s" % (guid or "?")
 
 
+def deny_label(deny):
+    # The roleAssignment shape here was read off live responses; a populated
+    # denyAssignment was never one of them, because you cannot create a deny
+    # assignment to test with. Try the key names the RBAC APIs use elsewhere and
+    # stay useful if it is none of them: that a deny assignment exists at all is
+    # the finding.
+    return (deny.get("displayName") or deny.get("denyAssignmentName")
+            or deny.get("name") or deny.get("id") or "unnamed")
+
+
+def scope_list(scopes):
+    if len(scopes) == 1:
+        return scopes[0]
+    return "%s and %s" % (", ".join(scopes[:-1]), scopes[-1])
+
+
+def by_verdict(pairs):
+    # Every scope below the subscription inherits from it, so the same verdict
+    # normally comes back once per scope. Collapse identical verdicts and name
+    # the scopes together; only a real disagreement produces two findings.
+    grouped = {}
+    for key, scope in pairs:
+        grouped.setdefault(key, []).append(scope)
+    return grouped.items()
+
+
 try:
     with open(os.path.join(tmp, "scopes.txt")) as fh:
         scopes = [line.strip() for line in fh if line.strip()]
@@ -334,84 +369,89 @@ if not answered:
     print("unavailable")
     raise SystemExit(0)
 
-out = []
+lead, out = [], []
 if unanswered:
     out.append("warn checkAccess did not answer at %s, so nothing here speaks to what the "
                "deployment can do there." % ", ".join(unanswered))
 
-denied_write = False
+write_ok, write_no, delete_no, other = [], [], [], []
 for scope, decisions in answered:
+    other.append((", ".join(sorted({
+        decision.get("actionId") or "?" for decision in decisions
+        if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)
+        and decision.get("accessDecision") != "Allowed"})), scope))
     for decision in decisions:
-        if (decision.get("actionId") or "").lower() != ROLE_WRITE:
-            continue
-        assignment = decision.get("roleAssignment") or {}
-        deny = decision.get("denyAssignment") or {}
-        if decision.get("accessDecision") == "Allowed":
-            out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
-                       % (scope, role_label(assignment), assignment.get("scope") or "?"))
-            if assignment.get("condition"):
-                out.append("warn That grant carries an ABAC condition, so it permits only the roles "
-                           "the condition allows. The modules assign: %s. Condition: %s"
-                           % (ASSIGNED_ROLES, " ".join(assignment["condition"].split())[:240]))
-        else:
-            denied_write = True
-            if deny:
-                # The roleAssignment shape here was read off live responses; a
-                # populated denyAssignment was never one of them, because you
-                # cannot create a deny assignment to test with. Try the key names
-                # the RBAC APIs use elsewhere and stay useful if it is none of
-                # them: that a deny assignment exists at all is the finding.
-                name = (deny.get("displayName") or deny.get("denyAssignmentName")
-                        or deny.get("name") or deny.get("id") or "unnamed")
-                out.append("fail roleAssignments/write is denied at %s by deny assignment \"%s\". "
-                           "Deny assignments override every role assignment including Owner, so no "
-                           "role grant will fix this: it has to be removed, or this principal added "
-                           "to its exclusion list." % (scope, name))
+        action = (decision.get("actionId") or "").lower()
+        allowed = decision.get("accessDecision") == "Allowed"
+        if action == ROLE_WRITE:
+            assignment = decision.get("roleAssignment") or {}
+            if allowed:
+                write_ok.append(((role_label(assignment), assignment.get("scope") or "?",
+                                  " ".join((assignment.get("condition") or "").split())[:240]), scope))
             else:
-                out.append("fail roleAssignments/write is not permitted at %s. All eight role "
-                           "assignments in the Azure modules need it." % scope)
+                deny = decision.get("denyAssignment") or {}
+                write_no.append((deny_label(deny) if deny else "", scope))
+        elif action == ROLE_DELETE and not allowed:
+            delete_no.append(("", scope))
 
-for scope, decisions in answered:
-    refused = sorted({decision.get("actionId") or "?" for decision in decisions
-                      if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)
-                      and decision.get("accessDecision") != "Allowed"})
+# The PIM finding explains every roleAssignments/write refusal below it, and the
+# remedy is one click rather than a ticket, so it leads. Printed last it read as
+# a third independent blocker. Only the built-ins that carry the action are
+# named: the raw eligibility list runs a dozen roles that cannot help, and at
+# least one of those has been observed missing from the operator's own portal.
+if write_no:
+    if is_caller == "1":
+        eligible = sorted({
+            "%s at %s" % (name, (instance.get("properties") or {}).get("scope") or "?")
+            for instance in (load(elig_path, {}) or {}).get("value") or []
+            for name in [((((instance.get("properties") or {}).get("expandedProperties") or {})
+                           .get("roleDefinition") or {}).get("displayName"))]
+            if name in ROLE_WRITE_CARRIERS})
+        if eligible:
+            lead.append("fail Eligible in PIM but not active, and carries roleAssignments/write: "
+                        "%s. checkAccess reports what is active now, so activating one of these "
+                        "(portal: PIM -> My roles -> Activate) is what clears the refusals below. "
+                        "Activation is time-bound, so activate for longer than the apply will "
+                        "take." % "; ".join(eligible))
+    else:
+        lead.append("warn Terraform will authenticate as a principal other than the one running this "
+                    "script, so its PIM eligibilities cannot be read here. A role that is held but "
+                    "not activated looks exactly like a role that is not held.")
+
+for (role, granted_at, condition), scopes in by_verdict(write_ok):
+    out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
+               % (scope_list(scopes), role, granted_at))
+    if condition:
+        out.append("warn That grant carries an ABAC condition, so it permits only the roles "
+                   "the condition allows. The modules assign: %s. Condition: %s"
+                   % (ASSIGNED_ROLES, condition))
+
+for deny_name, scopes in by_verdict(write_no):
+    if deny_name:
+        out.append("fail roleAssignments/write is denied at %s by deny assignment \"%s\". "
+                   "Deny assignments override every role assignment including Owner, so no "
+                   "role grant will fix this: it has to be removed, or this principal added "
+                   "to its exclusion list." % (scope_list(scopes), deny_name))
+    else:
+        out.append("fail roleAssignments/write is not permitted at %s. The deployment grants roles "
+                   "to its own managed identities, so no part of it applies without this. Which "
+                   "roles depends on the components enabled; across all of them: %s."
+                   % (scope_list(scopes), ASSIGNED_ROLES))
+
+for refused, scopes in by_verdict(other):
     if refused:
         out.append("fail Not permitted at %s: %s. The deployment creates all of these."
-                   % (scope, ", ".join(refused)))
+                   % (scope_list(scopes), refused))
     else:
-        out.append("pass Every resource type the deployment creates is writable at %s" % scope)
+        out.append("pass Every resource type the deployment creates is writable at %s"
+                   % scope_list(scopes))
 
-    for decision in decisions:
-        if ((decision.get("actionId") or "").lower() == ROLE_DELETE
-                and decision.get("accessDecision") != "Allowed"):
-            out.append("warn roleAssignments/delete is not permitted at %s. Apply can create the "
-                       "eight assignments, but terraform destroy and any change that replaces one "
-                       "will fail." % scope)
+for _, scopes in by_verdict(delete_no):
+    out.append("warn roleAssignments/delete is not permitted at %s. Apply can create the role "
+               "assignments, but terraform destroy and any change that replaces one will fail."
+               % scope_list(scopes))
 
-# Only reached when the decisive action was refused, which is the one case where
-# an inactive PIM role is the likely explanation and the fix is a click, not a
-# ticket. Whether an eligible role carries the action is not knowable here, so
-# they are all listed rather than filtered on a guess.
-if denied_write:
-    if is_caller == "1":
-        eligible = []
-        for instance in (load(elig_path, {}) or {}).get("value") or []:
-            props = instance.get("properties") or {}
-            expanded = (props.get("expandedProperties") or {}).get("roleDefinition") or {}
-            if expanded.get("displayName"):
-                eligible.append("%s at %s" % (expanded["displayName"], props.get("scope") or "?"))
-        if eligible:
-            out.append("fail PIM holds these roles for this identity as eligible but not active: %s. "
-                       "checkAccess reports what is active now, so if one of them carries "
-                       "roleAssignments/write, activating it (portal: PIM -> My roles -> Activate) "
-                       "fixes this. Activation is time-bound, so activate for longer than the apply "
-                       "will take." % "; ".join(sorted(set(eligible))))
-    else:
-        out.append("warn Terraform will authenticate as a principal other than the one running this "
-                   "script, so its PIM eligibilities cannot be read here. A role that is held but "
-                   "not activated looks exactly like a role that is not held.")
-
-print("\n".join(out))
+print("\n".join(lead + out))
 PY
   )
 
