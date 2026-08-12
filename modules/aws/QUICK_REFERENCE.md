@@ -226,7 +226,7 @@ make apply   ARGS="-auto-approve"          # skip the approval prompt
 make destroy ARGS="-target=module.redis"   # destroy one module
 ```
 
-For any other subcommand, `make tf` runs against `infra/` and `make tf-app` against `app/`:
+For any other subcommand, `make tf` runs against `infra/`:
 
 ```bash
 make tf ARGS="output"
@@ -236,8 +236,6 @@ make tf ARGS="output -raw langsmith_irsa_role_arn"
 make tf ARGS="output -raw bucket_name"
 make tf ARGS="state list"
 make tf ARGS="validate"
-
-make tf-app ARGS="state list"
 ```
 
 `make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/aws/infra` if you prefer.

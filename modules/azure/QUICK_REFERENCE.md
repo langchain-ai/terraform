@@ -394,7 +394,7 @@ make destroy ARGS="-target=module.redis"     # destroy one module
 
 > `make apply` runs three targeted stages, and `ARGS` is passed to each of them. That suits flags like `-var`, `-parallelism`, and `-refresh=false`. To apply a saved plan or a single module, bypass the staging with `make tf ARGS="apply tfplan"`.
 
-For any other subcommand, `make tf` runs against `infra/` and `make tf-app` against `app/`:
+For any other subcommand, `make tf` runs against `infra/`:
 
 ```bash
 make tf ARGS="output"
@@ -403,8 +403,6 @@ make tf ARGS="output aks_cluster_name"
 make tf ARGS="output dns_nameservers"
 make tf ARGS="state list"
 make tf ARGS="validate"
-
-make tf-app ARGS="state list"
 ```
 
 `make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/azure/infra` if you prefer.
