@@ -404,7 +404,8 @@ _interactive_set() {
   if _secret_exists "$PICKED_KEY"; then
     local current
     current=$(_get_secret "$PICKED_KEY")
-    local masked="${current:0:4}$(printf '%*s' $(( ${#current} - 4 )) '' | tr ' ' '*')"
+    local masked
+    masked="${current:0:4}$(printf '%*s' $(( ${#current} - 4 )) '' | tr ' ' '*')"
     [[ ${#current} -le 4 ]] && masked="****"
     echo "  Current value: $masked"
   else

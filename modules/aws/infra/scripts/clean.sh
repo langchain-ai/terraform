@@ -35,8 +35,9 @@ echo "════════════════════════�
 echo "  LangSmith AWS — Clean local files"
 echo "══════════════════════════════════════════════════════"
 echo ""
-warn "This removes all local secrets and generated values files."
-warn "Run AFTER: make uninstall && terraform destroy"
+warn "This removes local generated files only; it does not delete AWS resources or SSM parameters."
+warn "Run AFTER: make uninstall && make destroy && make purge-secrets"
+info "To delete SSM parameters after Terraform has no managed resources, run: make purge-secrets"
 echo ""
 
 # Guard: if tfstate exists with tracked resources, abort unless forced.

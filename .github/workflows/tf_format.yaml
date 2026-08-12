@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
@@ -22,5 +22,7 @@ jobs:
       - name: Terraform Format Check
         run: terraform fmt -recursive -check
 
-      - name: Terraform Validate
-        run: terraform validate
+      # `terraform validate` used to run here against the repo root, which has
+      # no .tf files -- it reported "Success! The configuration is valid." on an
+      # empty directory and never validated anything. Real per-root validation
+      # lives in checks.yaml, which inits each root first.

@@ -157,7 +157,7 @@ output "bastion_ssh_command" {
   value       = var.create_bastion ? module.bastion[0].ssh_command : ""
 }
 
-# ── Ingress passthrough (read by pull-infra-outputs.sh) ──────────────────────
+# ── Ingress passthrough ───────────────────────────────────────────────────────
 output "dns_label" {
   description = "Azure Public IP DNS label passed through from var.dns_label"
   value       = var.dns_label

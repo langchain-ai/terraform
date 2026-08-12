@@ -31,15 +31,107 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.15.x, never auto-jump to 0.16.
+# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
 # Override with the CHART_VERSION env var for an exact patch if needed.
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+# An exported CHART_VERSION outlives the command that set it, so a value left over
+# from an earlier session silently wins over the pin. Say so rather than deploying
+# a different chart than the branch intends.
+if [[ -n "${CHART_VERSION:-}" ]]; then
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+fi
+CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+
+_chart_version_supports_sandboxes() {
+  local version
+  version="$(printf '%s' "$1" | tr -d '[:space:]')"
+  version="${version#\~>}"
+  version="${version#\~}"
+  version="${version#v}"
+
+  case "$version" in
+    0.1[6-9].*|0.[2-9][0-9].*|[1-9].*|[1-9][0-9]*.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+_validate_sandbox_values_file() {
+  local values_file="$1"
+
+  if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
+    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file"; then
+    echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
+    echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
+    exit 1
+  fi
+}
+
+# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
+# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
+# keys instead of rejecting them, so it renders cleanly while silently dropping
+# the external Insights Postgres/Redis wiring and falling back to in-cluster
+# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
+# rather than deploy a half-configured release.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$_chart_line" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
+  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+  exit 1
+fi
+# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
+# are on the 0.16 line but still drop the block silently.
+if [[ "$CHART_VERSION" == *-* ]]; then
+  _rc="${CHART_VERSION##*-rc.}"
+  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
+    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
+    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
+    exit 1
+  fi
+fi
+
+# Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
+# only creates an addon file when it is missing, so a values directory generated on the
+# 0.15 line keeps its stale copies and they get loaded here. The chart does reject them,
+# but its error names the key, not the generated file that carries it.
+_legacy_files=""
+for _vf in "$VALUES_DIR"/*.yaml; do
+  [[ -f "$_vf" ]] || continue
+  if awk '
+      /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+      top == "config"  && /^  (insights|polly):/ { found = 1 }
+      top == "backend" && /^  agentBootstrap:/   { found = 1 }
+      END { exit !found }
+    ' "$_vf"; then
+    _legacy_files+="         $(basename "$_vf")
+"
+  fi
+done
+if [[ -n "$_legacy_files" ]]; then
+  echo "ERROR: these values files use the chart 0.15 schema, which chart 0.16 rejects:" >&2
+  printf '%s' "$_legacy_files" >&2
+  echo "       config.insights, config.polly and backend.agentBootstrap were removed." >&2
+  echo "       init-values.sh only creates an addon file when it is missing, so delete the" >&2
+  echo "       files listed above and re-run 'make init-values' to regenerate them." >&2
+  exit 1
+fi
 
 # ── Resolve environment from terraform.tfvars ─────────────────────────────────
 _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+_enable_sandboxes=false
+_tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
+    echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
+fi
 
 if [[ -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -53,6 +145,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: $ENV_FILE not found." >&2
   echo "Run: make init-values  (or: ./helm/scripts/init-values.sh)" >&2
   exit 1
+fi
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _validate_sandbox_values_file "$ENV_FILE"
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────
@@ -89,8 +185,20 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   _require_env "LANGSMITH_LICENSE_KEY"
   _require_env "LANGSMITH_ADMIN_PASSWORD"
   _require_env "LANGSMITH_ADMIN_EMAIL"
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    _require_env "TF_VAR_sandbox_callback_signing_jwk"
+  fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+  _sandbox_secret_literals=()
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _sandbox_secret_literals=(
+      --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+
+  # shellcheck disable=SC2154  # TF_VAR_* exported by setup-env.sh; _require_env above asserts them
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
     --from-literal=langsmith_license_key="${LANGSMITH_LICENSE_KEY}" \
@@ -98,6 +206,7 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
+    "${_sandbox_secret_literals[@]}" \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
@@ -116,6 +225,8 @@ _enable_polly=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
+_enable_sandboxes=false
+_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
@@ -123,6 +234,23 @@ _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
+_tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
+_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+
+# Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the bundled
+# agent-bootstrap Job, so config.agentBuilder on its own now renders the tool/trigger
+# servers and the UI nav item but no agent runtime behind them. The two paths also
+# manage the same data with different schemas, so they must not run together.
+if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+  echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
+  echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
+  exit 1
+fi
+if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
+  echo "WARNING: enable_agent_builder without enable_fleet deploys the Agent Builder UI and its" >&2
+  echo "         tool/trigger servers, but chart 0.16 removed the bundled agent-bootstrap Job that" >&2
+  echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
+fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
@@ -244,14 +372,27 @@ else
   echo "  ○ sizing: chart defaults (sizing_profile = default)"
 fi
 
+# SmithDB overlay + env overrides — layered last so object-store, identity, and
+# staged LangSmith integration gates win over base/sizing defaults.
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if [[ -f "$_smithdb_base" && -f "$_smithdb_overrides" ]]; then
+    VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+    echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml (chart line: ${CHART_VERSION})"
+  else
+    echo "  ✗ SmithDB values missing (enable_smithdb = true but files not found — run: make init-values)"
+    exit 1
+  fi
+fi
+
 # ── Pre-deploy hostname check ────────────────────────────────────────────────
 # On upgrades verify config.hostname matches the external entry hostname.
 # The entry point is the ALB in all modes, but in classic ALB Ingress mode that
 # ALB is controller-owned and its DNS is read from the Ingress status (single
 # best-effort attempt here — on a first deploy the Ingress doesn't exist yet and
 # there is nothing to sync). A stale hostname causes the operator to set
-# unreachable agent endpoints, which keeps the bootstrap hook stuck at DEPLOYING
-# and times out the release.
+# unreachable agent endpoints, which keeps agent deployments stuck at DEPLOYING.
 _live_lb=""
 _live_lb=$(_resolve_entry_hostname 1) || true
 if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
@@ -313,9 +454,9 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo ""
 fi
 
-# Ensure langsmith-ksa service account exists before Helm runs the bootstrap hook.
-# The hook deploys operator-managed agent pods that reference this SA. It must exist
-# before the post-install/post-upgrade hook fires — not after Helm returns.
+# Ensure langsmith-ksa service account exists before Helm runs its post-install hooks.
+# Operator-managed agent pods reference this SA, so it must exist before the
+# post-install/post-upgrade hooks fire — not after Helm returns.
 # Source the IRSA ARN from the overrides file (written by init-values.sh) so this
 # works on fresh clusters where langsmith-platform-backend doesn't exist yet.
 _irsa_arn_pre=$(grep -m1 'eks.amazonaws.com/role-arn' "${ENV_FILE}" 2>/dev/null \
@@ -328,10 +469,9 @@ if [[ -n "$_irsa_arn_pre" ]]; then
     eks.amazonaws.com/role-arn="$_irsa_arn_pre" --overwrite
 fi
 
-# Pre-delete any completed/failed bootstrap job from a previous deploy.
-# The bootstrap job is a post-upgrade hook — if a previous run left it in a
-# completed or failed state Helm treats it as blocking and times out the release.
-# Deleting it here lets Helm create a fresh job on every upgrade without error.
+# Chart 0.16 removed the bundled agent-bootstrap Job. Helm no longer owns it, so an
+# upgrade from 0.15 strands the old Completed job in the namespace. Deleting it here
+# clears that orphan on the first 0.16 deploy and is a no-op on a fresh install.
 kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
   --ignore-not-found=true 2>/dev/null || true
 
@@ -342,20 +482,39 @@ if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|be
   _devel_flag="--devel"
 fi
 
-# Helm timeout is configurable (migration issue #2). Chart 0.15 with all features
-# enabled (Insights + Deployments + Fleet) regularly exceeds the old hardcoded 20m
-# on the first upgrade because of sequential stateful rollouts + bootstrap jobs.
+# Helm timeout is configurable (migration issue #2). With all features enabled
+# (Insights + Deployments + Fleet) the first upgrade regularly exceeds the old
+# hardcoded 20m because of sequential stateful rollouts and migration jobs.
 _helm_timeout="${HELM_TIMEOUT:-30m}"
 
 # Deploy with --server-side=false to avoid SSA field ownership conflicts with the
 # ALB ingress controller. Helm 3.14+ defaults to server-side apply, which fights
 # with the controller over .spec.rules ownership. Client-side apply sidesteps this.
 #
-# We intentionally do NOT use --wait here. The chart's post-install bootstrap job
-# deploys operator-managed agents (clio, polly, agent-builder) which can take 10+
-# minutes on a cold cluster with autoscaling. Using --wait causes the release to go
-# 'failed' if the job exceeds the timeout — even though all workloads are healthy.
+# We intentionally do NOT use --wait here. The chart's post-install hooks and the
+# operator's agent pods can take 10+ minutes to settle on a cold cluster with
+# autoscaling. Using --wait causes the release to go 'failed' if a hook exceeds the
+# timeout — even though all workloads are healthy.
 # Instead, we do our own readiness check below.
+# Resolve the pin to a concrete version and print it. Without this the only place
+# the installed version shows up is `helm list`, after the release is already out.
+_chart_metadata=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
+echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+if [[ -z "$_resolved_chart" ]]; then
+  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+  exit 1
+fi
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the Sandbox image." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag"
+fi
+
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -371,7 +530,7 @@ echo ""
 
 # ── Wait for core components to be ready ────────────────────────────────────
 # Instead of --wait (which blocks on hooks), check that the core deployments
-# are available. This decouples app readiness from the bootstrap job.
+# are available. This decouples app readiness from the chart's hooks.
 _core_deployments=(
   "${RELEASE_NAME}-frontend"
   "${RELEASE_NAME}-backend"
@@ -400,6 +559,13 @@ for dep in "${_core_deployments[@]}"; do
     _all_ready=false
   fi
 done
+
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+    _all_ready=false
+  fi
+fi
 
 if [[ "$_all_ready" == "true" ]]; then
   echo "All core deployments ready."
