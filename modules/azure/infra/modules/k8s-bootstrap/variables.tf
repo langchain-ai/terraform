@@ -75,7 +75,7 @@ variable "use_external_redis" {
 
 variable "redis_connection_url" {
   type        = string
-  description = "Redis connection URL (rediss://:key@host:6380). Required when use_external_redis = true"
+  description = "Redis connection URL (rediss://:key@host:10000). Required when use_external_redis = true"
   sensitive   = true
   default     = ""
 }
@@ -109,8 +109,14 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress)."
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
   default     = "nginx"
+}
+
+variable "agic_subnet_cidrs" {
+  type        = list(string)
+  description = "Address prefixes of the Application Gateway subnet, allowed through the NetworkPolicy by IP range. Only used when ingress_controller = 'agic'."
+  default     = []
 }
 
 variable "tls_certificate_source" {

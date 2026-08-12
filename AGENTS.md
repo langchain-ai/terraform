@@ -58,6 +58,9 @@ before the PR does, not a separate standard.
   `agents/check.sh` rather than the workflow. A new root under an existing
   `modules/<provider>/` needs no workflow edit; a brand-new provider directory
   needs a `matrix.provider` entry in `.github/workflows/checks.yaml`.
+- **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
+  initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
+  forms slip in from model output unnoticed.
 - Read-only cloud commands (`get`/`describe`/`list`) are fine unprompted.
   Anything mutating — `apply`, `plan` against real state, cloud-CLI writes —
   needs explicit approval first.

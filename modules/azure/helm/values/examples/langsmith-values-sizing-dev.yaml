@@ -154,7 +154,7 @@ fleetTriggerServer:
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # These apply when using in-cluster postgres, redis, and clickhouse.
-# If pointing at managed services (Azure DB for PostgreSQL, Azure Cache for Redis),
+# If pointing at managed services (Azure DB for PostgreSQL, Azure Managed Redis),
 # these blocks are ignored — the StatefulSets won't be created.
 
 postgres:
