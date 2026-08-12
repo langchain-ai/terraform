@@ -58,6 +58,11 @@ before the PR does, not a separate standard.
   `agents/check.sh` rather than the workflow. A new root under an existing
   `modules/<provider>/` needs no workflow edit; a brand-new provider directory
   needs a `matrix.provider` entry in `.github/workflows/checks.yaml`.
+- **Prefer one PR over several.** Check `gh pr list` before opening a new PR: if
+  an open one already touches the same files or subject, add the change there
+  rather than stacking another PR beside it (ask first when the branch isn't
+  yours). Batch small related fixes together. Open a separate PR only when the
+  changes need to be reviewed, merged, or reverted independently.
 - Read-only cloud commands (`get`/`describe`/`list`) are fine unprompted.
   Anything mutating — `apply`, `plan` against real state, cloud-CLI writes —
   needs explicit approval first.
