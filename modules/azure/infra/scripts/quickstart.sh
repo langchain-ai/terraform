@@ -188,7 +188,7 @@ _name_length_errors() {
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
 _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
-COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
@@ -260,7 +260,7 @@ _load_tfvars() {
   # elsewhere: dropping it would leave NAME_PREFIX at its "dev" default and
   # regenerate a tfvars naming a different set of resources than the one this
   # deployment already owns. Same back-compat as _common.sh's _name_prefix.
-  for v in subscription_id identifier name_prefix location owner cost_center \
+  for v in subscription_id identifier name_prefix location owner environment cost_center \
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
@@ -273,6 +273,7 @@ _load_tfvars() {
       identifier | name_prefix)  NAME_PREFIX="${_TF_VAL#-}" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
+      environment)               ENVIRONMENT="$_TF_VAL" ;;
       cost_center)               COST_CENTER="$_TF_VAL" ;;
       default_node_pool_vm_size) NODE_VM_SIZE="$_TF_VAL" ;;
       ingress_controller)        INGRESS_CONTROLLER="$_TF_VAL" ;;
@@ -390,13 +391,16 @@ LOCATION="eastus"
 # renames Postgres, Redis, Storage and Key Vault, which Terraform executes as
 # destroy-and-recreate.
 UNIQUE_NAMES="true"
-OWNER="platform-team"
+# Left blank on purpose. The module omits the tag entirely when it is empty, and
+# an unanswered "platform-team" is a worse answer than no tag at all.
+OWNER=""
+ENVIRONMENT=""
 COST_CENTER=""
 
 _run_section_2() {
   _section "2. Subscription & Naming"
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
-  _hint "and becomes the 'environment' tag. Write it without a hyphen — we add the separator."
+  _hint "and is the default 'environment' tag. Write it without a hyphen — we add the separator."
   _hint "Example: prod → ls-rg-prod, ls-aks-prod, ls-kv-prod-<hash>"
   _hint "Postgres, Redis, Storage and Key Vault names must be unique across all of Azure,"
   _hint "so those four get a hash of your subscription appended. Keep it under ~12 chars."
@@ -465,10 +469,20 @@ _run_section_2() {
   _ask "Azure region" "$LOCATION"
   LOCATION="$_REPLY"
 
+  # These three are Azure tags and nothing else: they name no resource and grant
+  # no one access. "Owner tag" read like it might do the latter.
+  echo ""
+  _hint "The last three answers are Azure tags, used for cost reporting and policy."
+  _hint "None of them grants access or appears in a resource name. Blank omits the tag."
+  _hint "The environment tag defaults to the deployment name — set it only when the"
+  _hint "deployment name carries more (name \"prod-eastus\", environment tag \"prod\")."
+  _ask "Environment tag (blank = the deployment name)" "$ENVIRONMENT"
+  ENVIRONMENT="$_REPLY"
+
   _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
   OWNER="$_REPLY"
 
-  _ask "Cost center tag (leave blank to skip)" "$COST_CENTER"
+  _ask "Cost center tag (billing code)" "$COST_CENTER"
   COST_CENTER="$_REPLY"
 
   echo ""
@@ -1267,6 +1281,11 @@ while true; do
   printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
+  # An unanswered environment tag falls back to the deployment name, and to "dev"
+  # when there is no deployment name either, so show what the tag will say.
+  printf "  %-24s %s\n" "   Environment tag:" "${ENVIRONMENT:-${NAME_PREFIX:-dev}}"
+  [[ -n "$OWNER" ]]       && printf "  %-24s %s\n" "   Owner tag:"       "$OWNER"
+  [[ -n "$COST_CENTER" ]] && printf "  %-24s %s\n" "   Cost center tag:" "$COST_CENTER"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
   if [[ "$CREATE_VNET" == "false" ]]; then
     printf "  %-24s %s\n" "   VNet ID:"           "$VNET_ID"
@@ -1364,14 +1383,15 @@ cat > "$OUTPUT" << TFVARS
 subscription_id = "${SUBSCRIPTION_ID}"
 name_prefix     = "${NAME_PREFIX}"
 location        = "${LOCATION}"
-# environment tag defaults to name_prefix. Uncomment to tag it differently:
-# environment   = "${NAME_PREFIX}"
 
 # Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
 # Key Vault) so they cannot collide with another LangSmith deployment.
 unique_resource_names = ${UNIQUE_NAMES}
 TFVARS
 
+# Tags are written only when answered: the module omits an empty owner or
+# cost_center tag, and an empty environment falls back to the deployment name.
+[[ -n "$ENVIRONMENT" ]] && echo "environment     = \"${ENVIRONMENT}\"" >> "$OUTPUT"
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
 [[ -n "$COST_CENTER" ]] && echo "cost_center     = \"${COST_CENTER}\"" >> "$OUTPUT"
 
