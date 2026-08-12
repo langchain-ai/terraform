@@ -536,8 +536,17 @@ variable "letsencrypt_email" {
 
 variable "langsmith_domain" {
   type        = string
-  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in Helm values and ingress TLS configuration."
+  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in Helm values and ingress TLS configuration. Required for DNS-01."
   default     = ""
+
+  # DNS-01 proves ownership through TXT records in a zone Terraform creates, so
+  # there is nothing to prove without a domain: the DNS module takes an empty
+  # zone name and the certificate never issues. The dns_label path produces an
+  # Azure-owned cloudapp.azure.com name, which is HTTP-01 only.
+  validation {
+    condition     = var.langsmith_domain != "" || !(var.tls_certificate_source == "dns01" || var.create_dns_zone)
+    error_message = "langsmith_domain is required when tls_certificate_source = \"dns01\" or create_dns_zone = true. dns_label cannot stand in for it — Azure owns that zone, so cert-manager cannot write the challenge record."
+  }
 }
 
 variable "langsmith_helm_chart_version" {

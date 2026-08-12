@@ -725,13 +725,16 @@ _run_section_6() {
   _hint "None          — HTTP only. Fastest setup, zero cert config. Good for dev/internal."
   _hint "              URL: http://<label>.<region>.cloudapp.azure.com"
   _hint ""
-  _hint "Let's Encrypt — Free HTTPS via ACME HTTP-01 challenge. Requires a public DNS label."
+  _hint "Both HTTPS options are free certificates from Let's Encrypt. What differs is how"
+  _hint "Let's Encrypt proves you control the name, and both register an ACME account."
+  _hint ""
+  _hint "HTTP-01       — Let's Encrypt fetches a token over port 80. Needs a public DNS label."
   _hint "              Works with: nginx, istio (self-managed), envoy-gateway."
   _hint "              Does NOT work with istio-addon or agic (no IngressClass / path rewrite)."
   _hint ""
-  _hint "DNS-01        — HTTPS via ACME DNS-01 challenge. Works with ALL controllers."
+  _hint "DNS-01        — cert-manager writes a TXT record to Azure DNS. No HTTP port needed,"
+  _hint "              so it works with ALL controllers."
   _hint "              Requires a custom domain and an Azure DNS zone (NS delegation)."
-  _hint "              cert-manager writes TXT records to Azure DNS — no HTTP port needed."
   _hint "              Best for: private clusters, firewalled environments, istio-addon."
   _hint ""
   _hint "Existing      — Bring a pre-issued K8s TLS secret (manual cert management)."
@@ -740,10 +743,10 @@ _run_section_6() {
   _answered 6 && tls_choice="$(_index_of "$TLS_SOURCE" none letsencrypt dns01 existing)"
   _ask_choice --default "$tls_choice" \
     "TLS certificate source:" \
-    "None          — HTTP only (quickstart default, zero setup)" \
-    "Let's Encrypt — HTTPS via HTTP-01 (nginx, istio, envoy-gateway only)" \
-    "DNS-01        — HTTPS via DNS-01 (all controllers, requires custom domain)" \
-    "Existing      — bring your own K8s TLS secret"
+    "None                    — HTTP only (quickstart default, zero setup)" \
+    "Let's Encrypt (HTTP-01) — nginx, istio, envoy-gateway only" \
+    "Let's Encrypt (DNS-01)  — all controllers, requires a custom domain" \
+    "Existing                — bring your own K8s TLS secret"
 
   case "$_CHOICE" in
     1) TLS_SOURCE="none" ;;
@@ -791,34 +794,47 @@ _run_section_6() {
   # DNS hostname setup
   if [[ "$TLS_SOURCE" != "none" && "$TLS_SOURCE" != "existing" ]]; then
     echo ""
-    _hint "How do you want to expose the LangSmith URL?"
-    _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
-    _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
-    _hint "                    Only usable with Let's Encrypt (HTTP-01)."
-    _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
-    _hint "                    Required for DNS-01. Works with all controllers."
-    _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
-    echo ""
+    # DNS-01 has no DNS-label path at all: cert-manager has to write a TXT record
+    # into the zone, and Azure owns cloudapp.azure.com. Offering the choice here
+    # offered an answer that left langsmith_domain empty and the cert unissuable.
+    local want_domain=false
+    [[ "$TLS_SOURCE" == "dns01" ]] && want_domain=true
 
-    local dns_choice=""
-    _answered 6 && { [[ -n "$LANGSMITH_DOMAIN" ]] && dns_choice=2 || dns_choice=1; }
-    _ask_choice --default "$dns_choice" \
-      "DNS approach:" \
-      "Azure public IP DNS label — simplest, free subdomain" \
-      "Custom domain — your own domain (required for DNS-01)"
+    if [[ "$want_domain" == "false" ]]; then
+      _hint "How do you want to expose the LangSmith URL?"
+      _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
+      _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
+      _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
+      _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
+      echo ""
 
-    if [[ "$_CHOICE" == "1" ]]; then
-      LANGSMITH_DOMAIN=""
-      _ask_dns_label
-    else
-      DNS_LABEL=""
-      _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
-      _ask "Custom domain" "$LANGSMITH_DOMAIN"
-      LANGSMITH_DOMAIN="$_REPLY"
+      local dns_choice=""
+      _answered 6 && { [[ -n "$LANGSMITH_DOMAIN" ]] && dns_choice=2 || dns_choice=1; }
+      _ask_choice --default "$dns_choice" \
+        "DNS approach:" \
+        "Azure public IP DNS label — simplest, free subdomain" \
+        "Custom domain — your own domain"
+      [[ "$_CHOICE" == "2" ]] && want_domain=true
     fi
 
-    _hint "Let's Encrypt requires an email for your ACME account (cert expiry notifications)."
-    _ask "Email for Let's Encrypt / ACME registration" "$LE_EMAIL"
+    if [[ "$want_domain" == "true" ]]; then
+      DNS_LABEL=""
+      echo ""
+      _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
+      while true; do
+        _ask "Custom domain" "$LANGSMITH_DOMAIN"
+        LANGSMITH_DOMAIN="$_REPLY"
+        [[ -n "$LANGSMITH_DOMAIN" ]] && break
+        _red "  ERROR: a domain is required here — the certificate is issued for this name."
+      done
+    else
+      LANGSMITH_DOMAIN=""
+      _ask_dns_label
+    fi
+
+    _hint "Both challenge types register an ACME account with Let's Encrypt, which needs"
+    _hint "an email. Used for expiry notices only."
+    _ask "Email for the ACME account" "$LE_EMAIL"
     LE_EMAIL="$_REPLY"
 
   elif [[ "$TLS_SOURCE" == "none" ]]; then
@@ -1168,7 +1184,12 @@ while true; do
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
   [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
   [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
-  printf "  %-24s %s\n" "6. TLS:"             "$TLS_SOURCE"
+  # Both HTTPS values are Let's Encrypt, which "letsencrypt" and "dns01" alone
+  # hide — the review screen is the last place that misreading can be caught.
+  _TLS_REVIEW="$TLS_SOURCE"
+  [[ "$TLS_SOURCE" == "letsencrypt" ]] && _TLS_REVIEW="letsencrypt  (Let's Encrypt, HTTP-01 challenge)"
+  [[ "$TLS_SOURCE" == "dns01" ]]       && _TLS_REVIEW="dns01  (Let's Encrypt, DNS-01 challenge)"
+  printf "  %-24s %s\n" "6. TLS:"             "$_TLS_REVIEW"
   [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
   [[ -n "$LE_EMAIL" ]]         && printf "  %-24s %s\n" "   ACME email:"   "$LE_EMAIL"

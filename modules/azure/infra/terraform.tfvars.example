@@ -136,7 +136,7 @@ tls_certificate_source = "none"
 # tls_certificate_source = "letsencrypt"
 # letsencrypt_email      = "you@example.com"
 
-# Option C: Custom domain + DNS-01 — all controllers, works behind firewalls
+# Option C: Custom domain + Let's Encrypt DNS-01 — all controllers, works behind firewalls
 #   Requires: Azure DNS zone + NS delegation at registrar (one-time setup).
 #   → https://langsmith.example.com
 # tls_certificate_source = "dns01"
