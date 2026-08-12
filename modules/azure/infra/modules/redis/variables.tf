@@ -8,6 +8,12 @@ variable "location" {
   description = "Location of the Redis instance"
 }
 
+variable "cluster_location" {
+  type        = string
+  description = "Region for the AMR cluster itself. Defaults to var.location. Set this only when AMR has no capacity in the deployment's region — the private endpoint stays in var.location either way, because it must be co-regional with its subnet."
+  default     = null
+}
+
 variable "resource_group_name" {
   type        = string
   description = "Resource group name (for the private endpoint + DNS zone)"
@@ -43,6 +49,14 @@ variable "high_availability" {
   type        = bool
   description = "Zone-redundant HA (primary + replica across nodes). Required for the AMR SLA. NOT supported on the smallest (B0) SKU — keep false there."
   default     = false
+
+  # Cross-variable validation (Terraform >= 1.9). On the child variable rather than
+  # the root one so it is only evaluated when this module is instantiated, which is
+  # when redis_source = "external" and these two values actually matter.
+  validation {
+    condition     = !(var.high_availability && var.amr_sku == "Balanced_B0")
+    error_message = "Balanced_B0 cannot run high availability. Use Balanced_B1 or larger, or set redis_high_availability = false."
+  }
 }
 
 variable "tags" {
