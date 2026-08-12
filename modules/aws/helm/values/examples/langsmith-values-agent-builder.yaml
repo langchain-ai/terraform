@@ -17,26 +17,20 @@ config:
     # Store:    aws ssm put-parameter --name "/langsmith/{prefix}-{env}/agent-builder-encryption-key" \
     #             --value "<key>" --type SecureString
     # deploy.sh adds this key to the langsmith-config ExternalSecret automatically.
-    #
-    # Agent worker pod resources (applied to operator-managed agent deployments).
-    # Chart defaults are 4096/8192 MiB — oversized for dev/POC.
-    # These control the server container in each LGP pod (agent-builder, clio, polly).
-    agent:
-      resources:
-        cpu: 1
-        cpuLimit: 2
-        memoryMb: 512
-        memoryLimitMb: 1024
 
-backend:
-  agentBootstrap:
-    # Required: runs the post-install/post-upgrade job that creates the langsmith-agent-builder-config
-    # ConfigMap and registers Agent Builder as an LGP deployment. Without this the Agent Builder
-    # nav item will not appear in the UI.
-    enabled: true
+# config.agentBuilder.agent.resources used to size the operator-managed agent pods,
+# via the agent-bootstrap Job that registered them. Chart 0.16 removed that Job. The
+# key survives in the chart's own defaults but no template reads it, so setting it
+# here sizes nothing. Agent sizing now belongs to the standalone agent that owns the
+# workload — see langsmith-values-fleet.yaml.
+#
+# For the same reason config.agentBuilder on its own gives you the UI nav item and
+# the tool/trigger servers below with no agent runtime behind them. Fleet is the
+# supported path: set enable_fleet = true instead of enable_agent_builder.
 
 # Chart v0.15 renamed agentBuilderToolServer/agentBuilderTriggerServer to
-# fleetToolServer/fleetTriggerServer. The underlying images are unchanged.
+# fleetToolServer/fleetTriggerServer. Both now run on the consolidated
+# images.backendImage (chart 0.16.0-rc.17).
 fleetToolServer:
   enabled: true
 

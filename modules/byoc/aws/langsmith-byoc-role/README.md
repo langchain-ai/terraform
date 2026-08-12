@@ -12,7 +12,7 @@ This module creates two roles:
 ## Prerequisites
 
 1. An AWS account where the LangSmith data plane will live, and AWS credentials with permission to create IAM roles and policies in it.
-2. Terraform `>= 1.5` and the AWS provider `~> 6.0`.
+2. Terraform `>= 1.11.0` and the AWS provider `~> 6.0`.
 3. The `control_plane_reconcile_role_arn` provided by LangChain.
 4. An `external_id` value that you generate and provide to LangChain at data plane creation time. It is used in the trust policy `sts:ExternalId` condition.
 5. For break-glass access, the LangChain engineer Identity Store user IDs and LangChain email addresses provided by LangChain.

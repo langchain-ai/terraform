@@ -21,16 +21,15 @@ Full topology: all passes (2–4), AKS namespaces, pod names, external managed s
 
 ### Pass 5 — Insights (verified)
 
-No new diagram — Pass 5 adds `config.insights.enabled: true` only. Clio deploys lazily as a dynamic LangGraph deployment via the operator on first UI invocation. Pod topology at deploy time is identical to Pass 4.
+No new diagram — Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
 
 ### Pass 4 — Agent Builder Containers (verified)
 
 **[LangSmith Azure — Pass 4 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
 
-Adds to Pass 3 — 3 static + 4 dynamic pods:
+Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
 - `langsmith-agent-builder-trigger-server` — webhooks + scheduled triggers (WI)
-- `langsmith-agent-bootstrap` — one-time Job (Completed), registers bundled Agent Builder agent
 - `agent-builder-<hash>` + `queue` + `redis` + `lg-<hash>-0` — operator-managed Agent Builder agent deployment (dynamic)
 
 ### Pass 3 — LangGraph Platform Containers (verified)
@@ -68,14 +67,9 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 ## Deployment Paths
 
-### Pass 2 — Two ways to deploy the Helm chart
+### Pass 2 — Deploy the Helm chart
 
-| Path | How | When to use |
-|------|-----|-------------|
-| **Helm path** | `make init-values && make deploy` | Default. Shell script, interactive, reads TF outputs dynamically. Best for first deploys and day-2 re-deploys. |
-| **Terraform path** | `make init-app && make apply-app` | Declarative. K8s secrets + langsmith-ksa SA + Helm release in Terraform state. Best for GitOps/CI pipelines. |
-
-The Terraform path uses the `app/` module. `make init-app` calls `app/scripts/pull-infra-outputs.sh` to read all infra outputs and write them into `app/infra.auto.tfvars.json`.
+`make init-values && make deploy` — shell script, interactive, reads TF outputs dynamically.
 
 ### Ingress Options
 

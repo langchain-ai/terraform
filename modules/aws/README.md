@@ -2,9 +2,7 @@
 
 Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the default LangSmith chart line (`~0.15.1` = latest `0.15.x`). Features with a higher minimum chart line require setting a compatible chart version explicitly. See [Versioning and releases](../../README.md#versioning-and-releases).
-
-> **Sandboxes need the `v0.16.*` module line.** `enable_sandboxes = true` requires LangSmith chart `0.16.0` or newer, and this line pins `~0.15.1`. `deploy.sh` refuses to run unless you name a 0.16 chart explicitly, and doing so pairs a 0.16 chart with values still on the pre-0.16 schema, which is not a supported combination. Deploy sandboxes from a `v0.16.*` tag instead.
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -15,7 +13,7 @@ This directory contains the Terraform configuration to deploy LangSmith on AWS. 
 | Pass | What | How | Time |
 |------|------|-----|------|
 | **Pass 1** | VPC, EKS cluster, RDS, ElastiCache, S3, ALB, IRSA, ESO | `make apply` | ~20–25 min |
-| **Pass 2** | LangSmith Helm chart + ESO wiring | `make init-values` → `make deploy` (scripts) or `make apply-app` (Terraform) | ~10 min |
+| **Pass 2** | LangSmith Helm chart + ESO wiring | `make init-values` → `make deploy` | ~10 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
 
@@ -41,7 +39,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 brew install awscli
 aws --version
 
-# Terraform (>= 1.5)
+# Terraform (>= 1.11.0)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 
@@ -154,39 +152,30 @@ aws/
 │       ├── cloudtrail/     ← CloudTrail trail to S3 (optional)
 │       ├── waf/            ← WAFv2 Web ACL attached to ALB (optional)
 │       └── firewall/       ← AWS Network Firewall, FQDN-based egress filtering (optional)
-├── helm/                   ← Pass 2 option A: script-driven Helm deploy
-│   ├── scripts/
-│   │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
-│   │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
-│   │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
-│   │   ├── preflight-check.sh      ← Pre-deploy validation
-│   │   └── uninstall.sh            ← Helm uninstall + cleanup
-│   └── values/
-│       ├── examples/                                    ← Reference templates (init-values.sh copies from here)
-│       │   ├── langsmith-values.yaml                    ← Base AWS values
-│       │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
-│       │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
-│       │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
-│       │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
-│       │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
-│       │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
-│       │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
-│       │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
-│       │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
-│       │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
-│       ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
-│       ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
-│       ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
-│       └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
-└── app/                    ← Pass 2 option B: Terraform-managed Helm deploy
-    ├── main.tf             ← Providers, ESO resources, helm_release
-    ├── variables.tf        ← Infra inputs (auto-populated) + app config
-    ├── locals.tf           ← Variable resolution + validation
-    ├── outputs.tf          ← LangSmith URL, release status
-    ├── versions.tf
-    ├── terraform.tfvars.example
-    └── scripts/
-        └── pull-infra-outputs.sh  ← Reads infra outputs → infra.auto.tfvars.json
+└── helm/                   ← Pass 2: script-driven Helm deploy
+    ├── scripts/
+    │   ├── deploy.sh               ← Helm deploy orchestrator (ESO wiring, values layering)
+    │   ├── apply-eso.sh            ← Apply ESO ClusterSecretStore + ExternalSecret (standalone)
+    │   ├── init-values.sh          ← Generate values-overrides.yaml from Terraform outputs
+    │   ├── preflight-check.sh      ← Pre-deploy validation
+    │   └── uninstall.sh            ← Helm uninstall + cleanup
+    └── values/
+        ├── examples/                                    ← Reference templates (init-values.sh copies from here)
+        │   ├── langsmith-values.yaml                    ← Base AWS values
+        │   ├── langsmith-values-sizing-production.yaml        ← Production sizing (multi-replica, HPA)
+        │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
+        │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
+        │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
+        │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
+        │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
+        │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+        │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
+        │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
+        │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
+        ├── langsmith-values.yaml                        ← Active base (created by init-values.sh)
+        ├── langsmith-values-overrides.yaml              ← Active overrides (auto-generated)
+        ├── dataplane-rbac.yaml                          ← Active RBAC manifest (copy from examples/)
+        └── langsmith-values-*.yaml                      ← Active sizing/addon files (based on choices)
 ```
 
 ---
@@ -236,20 +225,6 @@ acm_certificate_arn    = "arn:aws:acm:us-west-2:<account-id>:certificate/<cert-i
 # LangSmith domain (leave empty to use ALB DNS name)
 langsmith_domain = "langsmith.<your-domain>"
 ```
-
-**Sandbox Redis behavior:** When `enable_sandboxes = true`, Terraform creates a
-dedicated ElastiCache Redis instance for JuiceFS sandbox metadata and configures
-that dedicated instance with `maxmemory-policy=noeviction`. The main LangSmith
-Redis keeps its normal eviction policy. Terraform writes the JuiceFS Redis
-connection URL into the precreated Kubernetes CSI config Secret and Helm values
-reference only that Secret name. The dedicated JuiceFS Redis uses its own
-ElastiCache AUTH token, generated by `setup-env.sh` and stored in SSM Parameter
-Store as `sandbox-juicefs-redis-auth-token`, matching the main LangSmith Redis
-secret-management pattern. That token is consumed by Terraform when creating the
-ElastiCache replication group and CSI config Secret, so it is sensitive but still
-present in Terraform state. The default JuiceFS Redis node type is
-`cache.m6g.large`; use `cache.r7g.xlarge` or larger for SaaS-like production
-scale.
 
 ### Terraform state backend (recommended for production)
 
@@ -306,8 +281,6 @@ kubectl get pods -n kube-system
 
 ## Pass 2 — LangSmith Application
 
-Two paths — pick one:
-
 ### Fast Path — Single Command Deploy
 
 If `source infra/scripts/setup-env.sh` and `make quickstart` have already been run, you can chain all of Pass 1 and Pass 2 in one command:
@@ -322,10 +295,6 @@ make quickdeploy-auto
 
 `make quickdeploy` gates on secrets being loaded and `terraform.tfvars` existing, then runs: `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` in sequence. If any step fails it exits with instructions to retry that step individually.
 
-### Option A: Script-driven Helm deploy (recommended)
-
-Best for: most deployments. Interactive prompts guide you through sizing and product choices.
-
 ```bash
 cd terraform/aws
 
@@ -334,44 +303,6 @@ make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
 `init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
-
-### Option B: Terraform-managed Helm deploy
-
-Best for: teams that want the full deployment in Terraform state, or "bring your own infra" scenarios.
-
-```bash
-cd terraform/aws
-
-# Generate Helm values files from templates (required — the app module reads these)
-make init-values
-
-# Pull infra outputs into app/infra.auto.tfvars.json
-make init-app
-
-# Configure app-specific settings
-cp app/terraform.tfvars.example app/terraform.tfvars
-# Edit app/terraform.tfvars — set admin_email, sizing, feature toggles
-
-# Deploy
-make plan-app
-make apply-app
-```
-
-> **Important:** `make init-values` is required before `make plan-app`. The app module reads YAML values files from `helm/values/` — `init-values` copies them from `helm/values/examples/` based on your sizing and product choices.
-
-The `app/` module manages the ESO ClusterSecretStore, ExternalSecret, and `helm_release` in Terraform. Feature toggles are variables:
-
-```hcl
-admin_email          = "admin@example.com"
-sizing               = "production"   # production | production-large | dev | none
-enable_agent_deploys = true
-enable_agent_builder = true
-enable_insights      = true
-enable_polly         = true
-clickhouse_host      = "clickhouse.example.com"
-```
-
-For "bring your own infra" — skip `make init-app` and set all variables manually in `app/terraform.tfvars`.
 
 ---
 
@@ -557,7 +488,6 @@ For each secret it follows this priority order:
 |---|---|---|
 | `postgres-password` | You enter it | Terraform sets RDS with this password |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
-| `sandbox-juicefs-redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | Required when `enable_sandboxes = true` |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
 | `langsmith-license-key` | You enter it | From your LangChain account |
@@ -719,13 +649,13 @@ The sizing file is always loaded last so it can override replicas/resources set 
 
 **Step 7 — Broken release recovery.** Checks the current Helm release status. If `pending-upgrade` (left by a Ctrl+C'd upgrade), rolls back automatically. If `failed` (common after a first deploy timeout), logs a warning and proceeds — Helm upgrade works fine on a failed release.
 
-**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the post-install bootstrap job can take 10+ minutes while agent pods spin up on new nodes.
+**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the chart's post-install hooks and the operator's agent pods can take 10+ minutes to settle on new nodes.
 
 **Step 9 — Core readiness.** Polls each core deployment with `kubectl rollout status --timeout=5m`:
 - `langsmith-frontend`, `langsmith-backend`, `langsmith-platform-backend`, `langsmith-ingest-queue`, `langsmith-queue`
 - Plus `langsmith-host-backend`, `langsmith-listener`, `langsmith-operator` if Deployments is enabled
 
-**Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and the bootstrap job hangs.
+**Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and stay unschedulable.
 
 **Step 11 — Frontend restart.** Restarts the frontend deployment to pick up the latest ConfigMap. Then prints the ALB hostname and port-forward instructions.
 
@@ -769,7 +699,7 @@ make status          # full check
 make status-quick    # skip SSM + K8s queries (faster, for quick credential checks)
 ```
 
-**The 10 sections it checks:**
+**The 9 sections it checks:**
 
 | # | Check | What it looks at |
 |---|---|---|
@@ -782,7 +712,6 @@ make status-quick    # skip SSM + K8s queries (faster, for quick credential chec
 | 7 | **Helm Values** | `langsmith-values-overrides.yaml` exists; hostname is populated; addon files present |
 | 8 | **Kubernetes Resources** | Namespace exists; ESO `ClusterSecretStore` and `ExternalSecret` are deployed and synced; `langsmith-config` secret exists |
 | 9 | **Helm Release** | Release status (`deployed`, `failed`, `pending-upgrade`); pod count |
-| 10 | **Terraform Helm App** | `app/` Terraform module state (alternative Pass 2 path only) |
 
 ---
 
@@ -791,21 +720,6 @@ make status-quick    # skip SSM + K8s queries (faster, for quick credential chec
 **When to use:** To remove the LangSmith Helm release (keeps infrastructure intact).
 
 Runs `helm/scripts/uninstall.sh`. Uninstalls the `langsmith` Helm release and cleans up associated Kubernetes resources (ESO objects, service accounts). Does **not** destroy Terraform infrastructure (VPC, EKS, RDS, Redis, S3).
-
----
-
-### `make init-app` / `make plan-app` / `make apply-app` / `make destroy-app`
-
-**When to use:** Pass 2 Option B — managing the Helm deploy via Terraform instead of scripts.
-
-These targets use the `app/` Terraform module which manages the ESO resources and `helm_release` resource inside Terraform state.
-
-- `make init-app` — pulls live Terraform outputs from `infra/` into `app/infra.auto.tfvars.json`
-- `make plan-app` — runs `init-app` then `terraform plan` in `app/`
-- `make apply-app` — applies the Helm release via Terraform
-- `make destroy-app` — destroys just the Helm release (keeps infra)
-
-> Requires `make init-values` first — the app module reads YAML values files from `helm/values/`.
 
 ---
 
@@ -986,13 +900,11 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `postgres_password` | `""` | when external | RDS password — use `TF_VAR_postgres_password` |
 | `postgres_iam_database_authentication_enabled` | `true` | no | Enable IAM database authentication on RDS |
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
+| `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
-| `sandbox_juicefs_redis_instance_type` | `cache.m6g.large` | no | ElastiCache node type for dedicated JuiceFS metadata Redis |
-| `sandbox_juicefs_redis_auth_token` | `""` | when sandboxes enabled | ElastiCache auth token for dedicated JuiceFS metadata Redis — use `TF_VAR_sandbox_juicefs_redis_auth_token` |
-| `sandbox_juicefs_redis_snapshot_retention_limit` | `7` | no | Days to retain automated snapshots for dedicated JuiceFS metadata Redis |
 | `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
@@ -1025,6 +937,13 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
 | `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
+| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 requires an explicit compatible chart version. See [SMITHDB.md](SMITHDB.md). |
+| `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
+| `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
+| `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
+| `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
+| `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
+| `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
 | `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |
@@ -1036,18 +955,11 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 
 ## Teardown
 
-### If deployed via scripts (Option A)
+### Uninstall the Helm release
 
 ```bash
 cd terraform/aws
 make uninstall
-```
-
-### If deployed via Terraform (Option B)
-
-```bash
-cd terraform/aws
-make destroy-app
 ```
 
 ### Destroy infrastructure

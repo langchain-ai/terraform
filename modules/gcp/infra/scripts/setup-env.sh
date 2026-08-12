@@ -63,14 +63,13 @@ export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
 _sm_prefix="langsmith-${_name_prefix}-${_environment}"
 
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
-for _precheck_var in TF_VAR_langsmith_license_key; do
-  if [[ -n "$(printenv "$_precheck_var")" ]]; then
-    echo "WARNING: $_precheck_var is already set in the environment."
-    echo "         setup-env.sh will skip re-prompting and will NOT write to Secret Manager for this key."
-    echo "         To rotate or re-store: unset $_precheck_var && source infra/scripts/setup-env.sh"
-    echo ""
-  fi
-done
+_precheck_var="TF_VAR_langsmith_license_key"
+if [[ -n "$(printenv "$_precheck_var")" ]]; then
+  echo "WARNING: $_precheck_var is already set in the environment."
+  echo "         setup-env.sh will skip re-prompting and will NOT write to Secret Manager for this key."
+  echo "         To rotate or re-store: unset $_precheck_var && source infra/scripts/setup-env.sh"
+  echo ""
+fi
 
 # ── Safe Secret Manager write ─────────────────────────────────────────────────
 # Creates a new secret version (or the secret itself if it doesn't exist yet).

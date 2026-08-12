@@ -284,8 +284,6 @@ _ask_choice "ClickHouse:" \
 
 CH_SOURCE="in-cluster"
 CH_HOST=""
-CH_PASSWORD=""
-CH_TLS="true"
 [[ "$_CHOICE" == "2" ]] && CH_SOURCE="langsmith-managed"
 
 if [[ "$PROFILE" == "prod" && "$CH_SOURCE" == "in-cluster" ]]; then
@@ -298,8 +296,12 @@ if [[ "$CH_SOURCE" != "in-cluster" ]]; then
   echo ""
   _ask "ClickHouse host" ""
   CH_HOST="$_REPLY"
-  _ask "ClickHouse password (or set TF_VAR_clickhouse_password later)" ""
-  CH_PASSWORD="$_REPLY"
+  # Not prompted for: a password belongs in the environment, not in tfvars.
+  # infra/main.tf requires it whenever clickhouse_source != "in-cluster", so
+  # apply hard-fails without it. Keep this loud.
+  echo ""
+  _yellow "REQUIRED"; printf ": export TF_VAR_clickhouse_password before running apply.\n"
+  printf "  clickhouse_source=%s has no default password.\n" "$CH_SOURCE"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -143,6 +143,13 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **IRSA**: Yes — SSM read permissions (separate `eso` role, not the LangSmith IRSA role)
 - **Objects**: `ClusterSecretStore` + `ExternalSecret` applied in `deploy.sh` (after ESO CRDs exist)
 
+### SmithDB (optional)
+- **What**: In-chart trace ingestion/query services used alongside ClickHouse in LangSmith v16
+- **Cloud dependencies**: Dedicated PostgreSQL 18, dedicated S3, and SmithDB-specific IRSA
+- **Scheduling**: Karpenter local-NVMe pool for cache-heavy workloads and a compute pool for support workloads
+- **Network**: Same-region S3 traffic uses the shared Gateway VPC endpoint
+- **Rollout**: Ingestion, migration, and query integration default off and are enabled in separate stages
+
 ---
 
 ## IRSA Role Summary
@@ -151,3 +158,4 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 |------|-----------|---------|-------------|
 | `langsmith_irsa_role` | `modules/eks` | `backend`, `platform-backend`, `queue`, `ingest-queue` | S3 get/put/delete on LangSmith bucket |
 | `aws_iam_role.eso` | `aws/infra/main.tf` | ESO controller pod | SSM `GetParameter`, `GetParameters` on `/langsmith/*` |
+| `smithdb` IRSA role | `modules/smithdb` | SmithDB service account | Dedicated SmithDB bucket access and optional KMS data-key operations |

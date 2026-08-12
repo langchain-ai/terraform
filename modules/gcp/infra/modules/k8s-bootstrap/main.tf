@@ -205,6 +205,46 @@ resource "kubernetes_resource_quota" "langsmith" {
   }
 }
 
+# GKE configures the apiserver's ResourceQuota admission plugin with
+# limitedResources over the PriorityClass scope, so a pod requesting
+# system-node-critical or system-cluster-critical is admitted only where a
+# quota with a matching scopeSelector already exists — which is how GKE keeps
+# those classes inside kube-system (see its own gcp-critical-pods quota).
+#
+# The JuiceFS CSI driver the sandbox feature depends on uses both: the
+# juicefs-csi-node DaemonSet is system-node-critical and the
+# juicefs-csi-controller StatefulSet is system-cluster-critical. Without this
+# quota neither is ever created — the DaemonSet reports desired N, current 0
+# with the rejection recorded only on the controller object, csi.juicefs.com
+# never registers on any node, and sandbox-host sits in ContainerCreating on a
+# FailedMount that names a missing CSI driver rather than a quota.
+#
+# The pod ceiling matches GKE's own quota for these classes: this object exists
+# to grant the capability, not to cap it. The unscoped langsmith-quota above
+# still counts these pods against the namespace CPU and memory budget.
+resource "kubernetes_resource_quota_v1" "langsmith_critical_pods" {
+  count = var.allow_critical_priority_pods ? 1 : 0
+
+  metadata {
+    name      = "langsmith-critical-pods"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    hard = {
+      pods = "1G"
+    }
+
+    scope_selector {
+      match_expression {
+        scope_name = "PriorityClass"
+        operator   = "In"
+        values     = ["system-node-critical", "system-cluster-critical"]
+      }
+    }
+  }
+}
+
 # ResourceQuota request tracking requires every admitted container to declare
 # requests. Supply conservative defaults for third-party sandbox containers that
 # omit them, but deliberately do not inject limits: sandbox-host creates per-VM

@@ -99,7 +99,6 @@ WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_man
 NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-RG_NAME=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || RG_NAME=""
 # AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
 REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
 
@@ -212,12 +211,14 @@ _enable_deployments=$(_parse_tfvar "enable_deployments") || _enable_deployments=
 _enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_builder="false"
 _enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
 _enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
+_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
 
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
 info "enable_deployments   = $_enable_deployments"
 info "enable_agent_builder = $_enable_agent_builder"
 info "enable_insights      = $_enable_insights"
+info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 echo ""
 echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
@@ -456,6 +457,16 @@ else
   echo "istioGateway:"
   echo "  enabled: false"
 fi)
+
+# Chart 0.16 ships insights.enabled and polly.enabled as true. This module sets
+# config.existingSecretName, so the chart finds an encryption key and deploys both
+# agents without complaint — a base install would quietly grow workloads nobody
+# asked for. Make the terraform enable_* flags authoritative. The addon overlays
+# load after this file, so an enabled feature still turns itself back on.
+insights:
+  enabled: ${_enable_insights}
+polly:
+  enabled: ${_enable_polly}
 EOF
 
 pass "Generated: ${OUT_FILE}"
@@ -525,7 +536,6 @@ INSIGHTS_EOF
   pass "Generated: langsmith-values-insights.yaml"
 fi
 
-_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
 [[ "$_enable_polly"         == "true" ]] && _copy_addon "polly"
 
 # Patch tlsEnabled in agent-deploys — derive from tls_certificate_source.

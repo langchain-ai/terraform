@@ -157,6 +157,44 @@ output "langsmith_irsa_role_arn" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB (populated only when enable_smithdb = true)
+#------------------------------------------------------------------------------
+output "enable_smithdb" {
+  description = "Whether SmithDB cloud dependencies were provisioned"
+  value       = var.enable_smithdb
+}
+
+output "smithdb_object_store_bucket" {
+  description = "SmithDB object-store S3 bucket name (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
+}
+
+output "smithdb_s3_vpc_endpoint_id" {
+  description = "S3 Gateway VPC endpoint used by SmithDB object-store traffic"
+  value       = var.enable_smithdb ? module.storage.s3_vpc_endpoint_id : null
+}
+
+output "smithdb_irsa_role_arn" {
+  description = "IAM role ARN for the SmithDB service account, IRSA (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].irsa_role_arn : null
+}
+
+output "smithdb_metastore_host" {
+  description = "SmithDB metastore Postgres hostname (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_host : null
+}
+
+output "smithdb_metastore_port" {
+  description = "SmithDB metastore Postgres port (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_port : null
+}
+
+output "smithdb_metastore_use_ssl" {
+  description = "Whether the SmithDB metastore connection uses SSL"
+  value       = var.smithdb_metastore_use_ssl
+}
+
+#------------------------------------------------------------------------------
 # ALB
 #------------------------------------------------------------------------------
 output "alb_arn" {
@@ -305,6 +343,7 @@ output "resource_summary" {
     agent_builder   = var.enable_agent_builder
     insights        = var.enable_insights
     polly           = var.enable_polly
+    smithdb         = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
   }
 }
 
@@ -359,19 +398,10 @@ ${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
 DNS
   : local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
 
-    2. Deploy LangSmith (pick one):
-
-       Option A — Helm scripts (recommended):
-         cd terraform/aws
-         make init-values
-         make deploy
-
-       Option B — Terraform app module:
-         cd terraform/aws
-         make init-app
-         cp app/terraform.tfvars.example app/terraform.tfvars
-         make plan-app
-         make apply-app
+    2. Deploy LangSmith:
+       cd terraform/aws
+       make init-values
+       make deploy
 
     3. Access LangSmith:
        https://${var.langsmith_domain}

@@ -559,13 +559,13 @@ fi
 # ── Cleanup trap (only registered when creating real resources) ───────────────
 cleanup() {
   info "Cleaning up test resources..."
-  for i in {1..3}; do
+  for _ in {1..3}; do
     [[ -n "${TEST_SG_ID:-}" ]] && aws ec2 delete-security-group --group-id "$TEST_SG_ID" --region "$REGION" 2>/dev/null && break || sleep 2
   done
-  for i in {1..3}; do
+  for _ in {1..3}; do
     [[ -n "${TEST_SUBNET_ID:-}" ]] && aws ec2 delete-subnet --subnet-id "$TEST_SUBNET_ID" --region "$REGION" 2>/dev/null && break || sleep 2
   done
-  for i in {1..3}; do
+  for _ in {1..3}; do
     [[ -n "${TEST_VPC_ID:-}" ]] && aws ec2 delete-vpc --vpc-id "$TEST_VPC_ID" --region "$REGION" 2>/dev/null && break || sleep 2
   done
   [[ -n "${TEST_ROLE_NAME:-}" ]] && aws iam delete-role --role-name "$TEST_ROLE_NAME" 2>/dev/null || true

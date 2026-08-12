@@ -124,6 +124,56 @@ Validated: full pass 2–5 deploy (production sizing, all addons) ran successful
 
 ---
 
+### LocationIsOfferRestricted — Postgres Flexible Server blocked in the region
+
+**Symptom:** AKS and the ingress controller create successfully, then Postgres fails several minutes into the apply:
+
+```text
+Error: creating Flexible Server ...: polling after CreateOrUpdate: polling failed:
+Status: "LocationIsOfferRestricted"
+Message: "Subscriptions are restricted from provisioning in location 'eastus'.
+Try again in a different location."
+```
+
+**Cause:** This is a subscription offer-type restriction, not regional capacity and not a configuration error. Azure blocks certain offer types (Free Trial, Azure Pass, Visual Studio and MSDN credit, some sponsored and CSP subscriptions) from provisioning PostgreSQL Flexible Server in high-demand regions. The error text points at the region, which sends most people hunting for a new one, but the subscription is what determines the outcome.
+
+Check the offer type:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/${SUB}?api-version=2022-12-01" \
+  --query "subscriptionPolicies.quotaId" -o tsv
+```
+
+`PayAsYouGo_*` and `EnterpriseAgreement_*` are unrestricted. `FreeTrial_*`, `MSDN_*`, `MSDNDevTest_*`, `VisualStudio_*`, `AzurePass_*`, `MPN_*`, and `SponsoredMS_*` are the restricted families. `make preflight` reports this before the apply starts.
+
+**Fixes, in order of preference:**
+
+1. **Convert the subscription to Pay-As-You-Go.** For a trial or credit-based subscription this removes the restriction outright, with no ticket and no configuration change.
+2. **Request an exemption** at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), quota type "Azure Database for PostgreSQL Flexible Server". Requests for offer restrictions are frequently approved the same day, and the region and SKU stay as configured.
+3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation.
+4. **Use in-cluster Postgres** for a dev or demo deployment. Set `postgres_source = "in-cluster"` and the Helm chart runs its own Postgres pod, so nothing is provisioned through the PostgreSQL resource provider. Not suitable for production.
+5. **Change the region.** Set `location` in `terraform.tfvars`. Because Postgres uses a delegated subnet it must sit in the same region as the VNet, so the whole deployment moves. Any resources already created are destroyed and recreated.
+
+---
+
+### AuthorizationFailed on roleAssignments/write
+
+**Symptom:** Resources create normally, then a role assignment fails with 403:
+
+```text
+Error: unexpected status 403 (403 Forbidden) with error: AuthorizationFailed:
+The client '<user>' with object id '<oid>' does not have authorization to
+perform action 'Microsoft.Authorization/roleAssignments/write' over scope '<scope>'
+```
+
+**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates eight of them.
+
+**Fix:** Grant `Role Based Access Control Administrator` at subscription scope, or `Owner` in place of both roles. When one role assignment succeeds and another on the same scope fails, an ABAC condition is restricting which role definitions the identity may grant. For the full permission inventory, the `checkAccess` probe, and how to read the condition, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+---
+
 ### Istio addon revision not supported
 
 **Symptom:**
@@ -514,10 +564,10 @@ Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmi
 
 **Cause:** LangSmith DB migrations are one-way (Alembic forward-only). A newer chart version applies schema migrations that older chart versions don't know about. Downgrading the chart leaves the DB at a revision the older app image can't locate.
 
-**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy:
+**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy. It must be on the chart 0.16 line — `deploy.sh` rejects anything else, because these values use the 0.16 schema:
 ```hcl
 # terraform.tfvars
-langsmith_helm_chart_version = "0.14.0"   # pin to working version
+langsmith_helm_chart_version = "0.16.0"   # pin to working version
 ```
 ```bash
 make init-values && make deploy
@@ -633,9 +683,9 @@ Browser console shows `POST http://localhost:8123/threads net::ERR_FAILED` and a
 **Cause:** Two separate issues can produce this:
 
 **A — Frontend pod started before `langsmith-polly-config` was created.**
-The bootstrap job creates a ConfigMap `langsmith-polly-config` with `VITE_POLLY_DEPLOYMENT_URL` after Polly is registered. The frontend mounts this via `envFrom` — but env vars from ConfigMap are loaded at pod start, not watched dynamically. If the frontend pod was running before the bootstrap job completed, it has `VITE_SELF_HOSTED_POLLY_ENABLED=true` but no URL, so Polly defaults to `localhost:8123`.
+The ConfigMap `langsmith-polly-config` carrying `VITE_POLLY_DEPLOYMENT_URL` is written once Polly is registered. The frontend mounts this via `envFrom` — but env vars from ConfigMap are loaded at pod start, not watched dynamically. If the frontend pod was already running at that point, it has `VITE_SELF_HOSTED_POLLY_ENABLED=true` but no URL, so Polly defaults to `localhost:8123`.
 
-**Fix:** Roll the frontend after any `agentBootstrap` run that registers Polly for the first time:
+**Fix:** Roll the frontend the first time Polly is registered:
 ```bash
 kubectl rollout restart deployment langsmith-frontend -n langsmith
 ```
@@ -646,7 +696,7 @@ kubectl exec -n langsmith deploy/langsmith-frontend -- env | grep POLLY
 ```
 
 **B — `LANGCHAIN_ENDPOINT` set in `polly.agent.extraEnv`.**
-`LANGCHAIN_ENDPOINT` is a reserved variable. Setting it in `polly.agent.extraEnv` causes the bootstrap job to fail registering Polly with `400 Bad Request: 'LANGCHAIN_ENDPOINT' is reserved`. Polly is never created, so no URL ends up in the ConfigMap.
+`LANGCHAIN_ENDPOINT` is a reserved variable. Setting it in `polly.agent.extraEnv` makes registering Polly fail with `400 Bad Request: 'LANGCHAIN_ENDPOINT' is reserved`. Polly is never created, so no URL ends up in the ConfigMap.
 
 **Fix:** Remove the `polly.agent.extraEnv` block entirely. The operator injects `LANGCHAIN_ENDPOINT` automatically pointing to `langsmith-frontend:80/api/v1`, which correctly routes to the legacy backend. Do not attempt to override it.
 
@@ -684,7 +734,7 @@ Then re-run helm upgrade.
 Changing `deployments_encryption_key`, `agent_builder_encryption_key`, or `insights_encryption_key` after their first use permanently corrupts the data they protect. There is no recovery path.
 
 - Do not rotate these keys.
-- Do not set `config.agentBuilder.encryptionKey` or `config.insights.encryptionKey` inline in `values-overrides.yaml` — the chart reads them from `langsmith-config-secret` via `existingSecretName`. Setting inline overrides the secret reference.
+- Do not set `config.agentBuilder.encryptionKey` or `insights.encryptionKey` inline in `values-overrides.yaml` — the chart reads them from `langsmith-config-secret` via `existingSecretName`. Setting inline overrides the secret reference.
 
 ---
 
@@ -835,27 +885,22 @@ make destroy
 
 ---
 
-### `langsmith-agent-bootstrap` hook times out on first Pass 3–5 deploy
+### Orphaned `langsmith-agent-bootstrap` Job after upgrading to chart 0.16
 
-**Symptom:**
-```
-Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmith-agent-bootstrap
-not ready. status: InProgress, message: Job in progress
-context deadline exceeded
-```
-The job log shows agents progressing through `QUEUED → AWAITING_DEPLOY → DEPLOYING` but never reaching `HEALTHY` within the 20-minute helm timeout.
+**Symptom:** A Completed `langsmith-agent-bootstrap` Job lingers in the namespace after
+upgrading from chart 0.15, and `helm uninstall` leaves it behind.
 
-**Cause:** On a cold cluster (all agent images pulling for the first time), the three LGP agents (`agent-builder`, `clio`, `smith-polly`) can take longer than 20 minutes to reach HEALTHY status. The Helm post-upgrade hook waits synchronously.
+**Cause:** Chart 0.16 removed the bundled agent-bootstrap Job, so Helm no longer owns the
+object created by the previous 0.15 release.
 
-**This is not a failure** — the resources ARE applied. The release is marked `failed` but the agents continue deploying. Re-run once agents are healthy:
+**Effect:** None — it blocks nothing. Delete it to keep the namespace clean:
 
 ```bash
-# Wait for agents to finish (watch pod count stabilise)
-kubectl get pods -n langsmith -w | grep -E "agent-builder|clio|smith-polly"
-
-# Re-deploy — bootstrap hook completes immediately since agents are already HEALTHY
-make deploy
+kubectl delete job langsmith-agent-bootstrap -n langsmith --ignore-not-found
 ```
+
+The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
+[MIGRATION-0.15-to-0.16.md](../../MIGRATION-0.15-to-0.16.md).
 
 ---
 
