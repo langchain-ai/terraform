@@ -40,19 +40,6 @@ resource "azapi_resource" "amr" {
   # azapi's bundled schema lags behind AMR (Balanced SKU / highAvailability).
   # The body matches what `az redisenterprise create` accepts — let ARM validate at apply.
   schema_validation_enabled = false
-
-  # HA (zone redundancy) is unsupported on the smallest (B0) SKU. This check was
-  # a cross-variable validation block on redis_high_availability (Terraform >= 1.9),
-  # moved here to keep the module floor at 1.5. Fires at plan time instead of
-  # validate time, but only when AMR is actually provisioned (redis_source =
-  # "external"), which is the only case where these values matter. When the floor
-  # is bumped to >= 1.9, move this back to a validation block on the variable.
-  lifecycle {
-    precondition {
-      condition     = !(var.high_availability && var.amr_sku == "Balanced_B0")
-      error_message = "Balanced_B0 cannot run high availability. Use Balanced_B1 or larger, or set redis_high_availability = false."
-    }
-  }
 }
 
 # AMR database — OSS clustering policy, TLS (Encrypted) on port 10000, key auth on.

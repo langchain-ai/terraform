@@ -49,6 +49,14 @@ variable "high_availability" {
   type        = bool
   description = "Zone-redundant HA (primary + replica across nodes). Required for the AMR SLA. NOT supported on the smallest (B0) SKU — keep false there."
   default     = false
+
+  # Cross-variable validation (Terraform >= 1.9). On the child variable rather than
+  # the root one so it is only evaluated when this module is instantiated, which is
+  # when redis_source = "external" and these two values actually matter.
+  validation {
+    condition     = !(var.high_availability && var.amr_sku == "Balanced_B0")
+    error_message = "Balanced_B0 cannot run high availability. Use Balanced_B1 or larger, or set redis_high_availability = false."
+  }
 }
 
 variable "tags" {
