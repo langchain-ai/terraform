@@ -56,7 +56,7 @@ variable "namespace" {
 
 variable "release_name" {
   type        = string
-  description = "Helm release name. The SmithDB service account is <release_name>-langsmith-smithdb (see the fullname note in main.tf)."
+  description = "Helm release name. The SmithDB service account is langsmith-smithdb when the release name already contains 'langsmith', and <release_name>-langsmith-smithdb otherwise (see the fullname note in main.tf)."
   default     = "langsmith"
 }
 
