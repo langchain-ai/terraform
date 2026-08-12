@@ -274,6 +274,15 @@ if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ]];
     case " ${CONDITIONAL_PERMISSIONS[*]-} " in *" $_p "*) ;; *) CONDITIONAL_PERMISSIONS+=("$_p") ;; esac
   done
 fi
+# Granting roles/cloudsql.client to the SmithDB service account is a
+# project-level IAM policy write, which setIamPolicy covers. The apply fails at
+# that binding, well after the instance exists, without it.
+if [[ "$ENABLE_SMITHDB" == "true" && "$(_tfvar "smithdb_metastore_use_auth_proxy")" == "true" ]]; then
+  case " ${CONDITIONAL_PERMISSIONS[*]-} " in
+    *" resourcemanager.projects.setIamPolicy "*) ;;
+    *) CONDITIONAL_PERMISSIONS+=("resourcemanager.projects.setIamPolicy") ;;
+  esac
+fi
 
 # The ${arr[@]+...} guard is required: bash 3.2, which is what macOS ships as
 # /bin/bash, treats expansion of an empty array as an unbound variable under
@@ -402,7 +411,9 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   _cm_type=$(_tfvar "smithdb_compute_machine_type");         _cm_type="${_cm_type:-n2-standard-8}"
   _is_max=$(_tfvar "smithdb_instance_store_max_nodes");      _is_max="${_is_max:-3}"
   _cm_max=$(_tfvar "smithdb_compute_max_nodes");             _cm_max="${_cm_max:-3}"
-  _ssd_count=$(_tfvar "smithdb_instance_store_local_ssd_count"); _ssd_count="${_ssd_count:-3}"
+  # Fallbacks must track the Terraform defaults in infra/variables.tf, or an
+  # unset tfvar is checked against a quota figure the apply will never request.
+  _ssd_count=$(_tfvar "smithdb_instance_store_local_ssd_count"); _ssd_count="${_ssd_count:-2}"
 
   # Counts entries in the smithdb_node_locations list; unset means the pools span
   # every zone the region has, which is 3 for all current regions.

@@ -112,6 +112,12 @@ variable "metastore_deletion_protection" {
   default     = true
 }
 
+variable "metastore_use_auth_proxy" {
+  type        = bool
+  description = "Run a Cloud SQL Auth Proxy sidecar in every SmithDB Pod and connect through it on the Pod loopback. Grants the SmithDB service account roles/cloudsql.client. Requires metastore_source = 'create'."
+  default     = false
+}
+
 variable "metastore_ssl_mode" {
   type        = string
   description = "Cloud SQL SSL enforcement for the metastore. ENCRYPTED_ONLY requires TLS on every connection."
@@ -180,6 +186,12 @@ variable "bucket_kms_key" {
   type        = string
   description = "Cloud KMS key for CMEK on the object-store bucket. Empty uses Google-managed encryption."
   default     = ""
+}
+
+variable "bucket_versioning_enabled" {
+  type        = bool
+  description = "Enable object versioning on the SmithDB object-store bucket."
+  default     = false
 }
 
 variable "bucket_force_destroy" {

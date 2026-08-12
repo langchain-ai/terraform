@@ -172,6 +172,9 @@ SMITHDB_METASTORE_PORT="5432"
 SMITHDB_METASTORE_USE_SSL="true"
 SMITHDB_SECRET_NAME="smithdb-metastore"
 SMITHDB_TASKDB_SECRET_NAME="smithdb-taskdb"
+SMITHDB_USE_AUTH_PROXY="false"
+SMITHDB_CONNECTION_NAME=""
+SMITHDB_AUTH_PROXY_IMAGE=""
 if [[ "$_enable_smithdb" == "true" ]]; then
   SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
   SMITHDB_GSA=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_gsa_email 2>/dev/null) || SMITHDB_GSA=""
@@ -179,15 +182,29 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   SMITHDB_METASTORE_USE_SSL=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null) || SMITHDB_METASTORE_USE_SSL="true"
   SMITHDB_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_secret_name 2>/dev/null) || SMITHDB_SECRET_NAME="smithdb-metastore"
   SMITHDB_TASKDB_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_taskdb_secret_name 2>/dev/null) || SMITHDB_TASKDB_SECRET_NAME="smithdb-taskdb"
+  SMITHDB_USE_AUTH_PROXY=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_auth_proxy 2>/dev/null) || SMITHDB_USE_AUTH_PROXY="false"
+  SMITHDB_CONNECTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_connection_name 2>/dev/null) || SMITHDB_CONNECTION_NAME=""
+  SMITHDB_AUTH_PROXY_IMAGE=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_auth_proxy_image 2>/dev/null) || SMITHDB_AUTH_PROXY_IMAGE=""
 
   echo "  smithdb_object_store_bucket   = ${SMITHDB_BUCKET:-(not available)}"
   echo "  smithdb_gsa_email             = ${SMITHDB_GSA:-(not available)}"
   echo "  smithdb_metastore_port        = $SMITHDB_METASTORE_PORT (useSsl: $SMITHDB_METASTORE_USE_SSL)"
+  echo "  smithdb auth proxy            = $SMITHDB_USE_AUTH_PROXY${SMITHDB_CONNECTION_NAME:+ ($SMITHDB_CONNECTION_NAME)}"
   echo "  smithdb gates                 = ingestion:$_smithdb_ingestion_enabled migration:$_smithdb_migration_enabled query:$_smithdb_query_enabled"
 
   if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_GSA" ]]; then
     echo "ERROR: enable_smithdb = true but the SmithDB Terraform outputs are missing." >&2
     echo "       Run 'terraform apply' in infra/ before init-values.sh." >&2
+    exit 1
+  fi
+
+  # The connection name is the proxy's only positional argument. Without it the
+  # sidecar would render with no target and every SmithDB pod would come up with
+  # a proxy that exits immediately.
+  if [[ "$SMITHDB_USE_AUTH_PROXY" == "true" && -z "$SMITHDB_CONNECTION_NAME" ]]; then
+    echo "ERROR: smithdb_metastore_use_auth_proxy = true but smithdb_metastore_connection_name is empty." >&2
+    echo "       That output is null for an external metastore. Re-apply infra/, or configure" >&2
+    echo "       the proxy sidecar by hand — see the metastore TLS section of SMITHDB.md." >&2
     exit 1
   fi
 fi
@@ -631,6 +648,76 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     echo "  ○ langsmith-values-smithdb.yaml already exists — left as-is"
   fi
 
+  # Cloud SQL Auth Proxy sidecar. commonInitContainers rather than the
+  # per-component deployment.sidecars key: the chart injects this one into every
+  # SmithDB Deployment *and* both Jobs, including the metastore-migration
+  # pre-install hook, which is the component that would otherwise have no proxy
+  # to connect through. restartPolicy: Always makes it a native sidecar, so the
+  # kubelet stops it once the Job's main container exits and the hook can
+  # actually complete - a plain init container would never return, and a plain
+  # sidecar in a Job would hold it Running forever.
+  _smithdb_proxy_block=""
+  if [[ "$SMITHDB_USE_AUTH_PROXY" == "true" ]]; then
+    _smithdb_proxy_block=$(cat << PROXYYAML
+
+  commonInitContainers:
+    - name: cloud-sql-proxy
+      image: "${SMITHDB_AUTH_PROXY_IMAGE}"
+      imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      args:
+        - "--address=127.0.0.1"
+        - "--port=${SMITHDB_METASTORE_PORT}"
+        - "--structured-logs"
+        - "--health-check"
+        - "--http-address=0.0.0.0"
+        - "--http-port=9090"
+        - "${SMITHDB_CONNECTION_NAME}"
+      ports:
+        - name: proxy-health
+          containerPort: 9090
+          protocol: TCP
+      startupProbe:
+        httpGet:
+          path: /startup
+          port: proxy-health
+        failureThreshold: 30
+        periodSeconds: 2
+        timeoutSeconds: 1
+      readinessProbe:
+        httpGet:
+          path: /readiness
+          port: proxy-health
+        periodSeconds: 10
+        timeoutSeconds: 1
+      livenessProbe:
+        httpGet:
+          path: /liveness
+          port: proxy-health
+        periodSeconds: 10
+        timeoutSeconds: 1
+      # A native sidecar's requests are added to the Pod total rather than
+      # merged into the init-container maximum, so this lands against the
+      # namespace ResourceQuota once per SmithDB Pod. Both are set because the
+      # quota rejects any container that omits limits.
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "512Mi"
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+PROXYYAML
+    )
+  fi
+
   cat > "$_smithdb_overrides_file" << SMITHDBYAML
 # Auto-generated by init-values.sh — do not edit manually.
 # Re-run init-values.sh to refresh from Terraform outputs.
@@ -647,7 +734,7 @@ smithdb:
       # Workload Identity — binds the chart's SmithDB service account to the
       # dedicated GCP service account that holds objectAdmin on the bucket below.
       iam.gke.io/gcp-service-account: "${SMITHDB_GSA}"
-
+${_smithdb_proxy_block}
   config:
     existingSecretName: "${SMITHDB_SECRET_NAME}"
     objectStore:
@@ -659,12 +746,14 @@ smithdb:
       databaseSecretKey: "smithdb_metastore_db_name"
       usernameSecretKey: "smithdb_metastore_db_username"
       passwordSecretKey: "smithdb_metastore_db_password"
+      # hostSecretKey resolves to 127.0.0.1 when the Auth Proxy is on, so the
+      # same mapping covers both modes.
       port: "${SMITHDB_METASTORE_PORT}"
       useSsl: ${SMITHDB_METASTORE_USE_SSL}
 
   # The migration Job reads its own useSsl leaf, which the chart defaults to
-  # false. Cloud SQL is created with ssl_mode = ENCRYPTED_ONLY, so leaving this
-  # unset makes the pre-install hook fail on connect.
+  # false, so it has to be set alongside the one above or the two modes disagree
+  # and the pre-install hook fails on connect while the services are fine.
   metastoreMigration:
     useSsl: ${SMITHDB_METASTORE_USE_SSL}
 

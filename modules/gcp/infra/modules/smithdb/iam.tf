@@ -45,3 +45,18 @@ resource "google_service_account_iam_member" "workload_identity_principal" {
 data "google_project" "current" {
   project_id = var.project_id
 }
+
+# The Cloud SQL Auth Proxy authenticates to the Cloud SQL Admin API as the pod's
+# Workload Identity principal, so the proxy path needs this role on top of the
+# bucket grant above. Cloud SQL has no per-instance IAM binding - roles/cloudsql
+# .client is only grantable at the project level - so this is the tightest
+# scope available. It confers connection rights, not data access: the database
+# password in the smithdb-metastore secret is still what authenticates the
+# session.
+resource "google_project_iam_member" "smithdb_cloudsql_client" {
+  count = var.metastore_use_auth_proxy ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${local.gsa_email}"
+}

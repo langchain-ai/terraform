@@ -345,8 +345,23 @@ output "smithdb_metastore_port" {
 }
 
 output "smithdb_metastore_use_ssl" {
-  description = "Whether SmithDB connects to the metastore over TLS"
+  description = "Whether SmithDB connects to the metastore over TLS directly"
   value       = var.smithdb_metastore_use_ssl
+}
+
+output "smithdb_metastore_use_auth_proxy" {
+  description = "Whether SmithDB reaches the metastore through a Cloud SQL Auth Proxy sidecar on the Pod loopback"
+  value       = var.smithdb_metastore_use_auth_proxy
+}
+
+output "smithdb_metastore_connection_name" {
+  description = "Cloud SQL connection name (PROJECT:REGION:INSTANCE) for the SmithDB metastore. The positional argument for the Auth Proxy sidecar; null for an external metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_connection_name : null
+}
+
+output "smithdb_auth_proxy_image" {
+  description = "Pinned Cloud SQL Auth Proxy image the generated SmithDB values use for the sidecar"
+  value       = var.smithdb_auth_proxy_image
 }
 
 output "smithdb_metastore_secret_name" {

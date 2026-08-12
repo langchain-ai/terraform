@@ -155,6 +155,21 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
     }
 
+    # The proxy takes the instance's connection name as its only positional
+    # argument, and that is knowable only for an instance this module created.
+    precondition {
+      condition     = !var.smithdb_metastore_use_auth_proxy || var.smithdb_metastore_source == "create"
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_source = 'create'. For an external instance, including AlloyDB, configure the proxy sidecar directly in the Helm values - see the metastore TLS section of SMITHDB.md."
+    }
+
+    # The hop the proxy terminates is the one to Cloud SQL. SmithDB's own hop is
+    # to 127.0.0.1 inside the Pod, where a TLS handshake has no server to meet
+    # and the connection fails outright rather than degrading.
+    precondition {
+      condition     = !var.smithdb_metastore_use_auth_proxy || !var.smithdb_metastore_use_ssl
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_use_ssl = false. The proxy holds the TLS session to Cloud SQL; the SmithDB-to-proxy hop is Pod loopback and is plaintext by design."
+    }
+
     precondition {
       condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
@@ -481,6 +496,7 @@ module "smithdb" {
 
   metastore_deletion_protection = var.smithdb_metastore_deletion_protection
   metastore_ssl_mode            = var.smithdb_metastore_ssl_mode
+  metastore_use_auth_proxy      = var.smithdb_metastore_use_auth_proxy
   metastore_master_username     = var.smithdb_metastore_master_username
   metastore_master_password     = var.smithdb_metastore_master_password
 
@@ -491,9 +507,10 @@ module "smithdb" {
   external_metastore_password = var.smithdb_external_metastore_password
 
   # Object store
-  bucket_name          = local.smithdb_bucket_name
-  bucket_kms_key       = var.smithdb_bucket_kms_key
-  bucket_force_destroy = var.smithdb_bucket_force_destroy
+  bucket_name               = local.smithdb_bucket_name
+  bucket_kms_key            = var.smithdb_bucket_kms_key
+  bucket_versioning_enabled = var.smithdb_bucket_versioning_enabled
+  bucket_force_destroy      = var.smithdb_bucket_force_destroy
 
   service_account_email = var.smithdb_service_account_email
 
@@ -841,8 +858,12 @@ resource "kubernetes_secret" "smithdb_metastore" {
     namespace = var.langsmith_namespace
   }
 
+  # With the Auth Proxy the SmithDB containers dial the sidecar on the Pod
+  # loopback, not the instance's private IP. Everything else is unchanged: the
+  # proxy authenticates the transport, the password still authenticates the
+  # database session.
   data = {
-    smithdb_metastore_db_host     = module.smithdb[0].metastore_host
+    smithdb_metastore_db_host     = var.smithdb_metastore_use_auth_proxy ? "127.0.0.1" : module.smithdb[0].metastore_host
     smithdb_metastore_db_name     = module.smithdb[0].metastore_database
     smithdb_metastore_db_username = module.smithdb[0].metastore_username
     smithdb_metastore_db_password = module.smithdb[0].metastore_password

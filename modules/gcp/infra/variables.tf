@@ -949,6 +949,11 @@ variable "smithdb_metastore_database_version" {
   type        = string
   description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 17 or later."
   default     = "POSTGRES_18"
+
+  validation {
+    condition     = can(regex("^POSTGRES_(1[7-9]|[2-9][0-9])$", var.smithdb_metastore_database_version))
+    error_message = "SmithDB requires Postgres 17 or later, e.g. POSTGRES_17 or POSTGRES_18."
+  }
 }
 
 variable "smithdb_metastore_tier" {
@@ -979,12 +984,34 @@ variable "smithdb_metastore_ssl_mode" {
   type        = string
   description = "Cloud SQL SSL enforcement for the SmithDB metastore. ENCRYPTED_ONLY requires TLS on every connection."
   default     = "ENCRYPTED_ONLY"
+
+  validation {
+    condition     = contains(["ALLOW_UNENCRYPTED_AND_ENCRYPTED", "ENCRYPTED_ONLY", "TRUSTED_CLIENT_CERTIFICATE_REQUIRED"], var.smithdb_metastore_ssl_mode)
+    error_message = "smithdb_metastore_ssl_mode must be one of ALLOW_UNENCRYPTED_AND_ENCRYPTED, ENCRYPTED_ONLY, TRUSTED_CLIENT_CERTIFICATE_REQUIRED."
+  }
 }
 
 variable "smithdb_metastore_use_ssl" {
   type        = bool
-  description = "Tell SmithDB to connect to the metastore over TLS. Keep true with ENCRYPTED_ONLY. Set false when an AlloyDB Auth Proxy sidecar terminates TLS on the pod loopback."
+  description = "Tell SmithDB to connect to the metastore over TLS directly. Keep true with ENCRYPTED_ONLY when not using the Auth Proxy. Set false when smithdb_metastore_use_auth_proxy = true, because the proxy terminates TLS and the SmithDB hop is loopback."
   default     = true
+}
+
+variable "smithdb_metastore_use_auth_proxy" {
+  type        = bool
+  description = "Run a Cloud SQL Auth Proxy sidecar in every SmithDB Pod and connect through it on 127.0.0.1. The proxy holds the TLS session to Cloud SQL, so the instance stays at ENCRYPTED_ONLY while SmithDB itself speaks plaintext over the Pod loopback. Requires smithdb_metastore_source = 'create' and smithdb_metastore_use_ssl = false."
+  default     = false
+}
+
+variable "smithdb_auth_proxy_image" {
+  type        = string
+  description = "Cloud SQL Auth Proxy image for the sidecar. Pin an exact tag; a floating tag would change the proxy under a running release."
+  default     = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
+
+  validation {
+    condition     = can(regex(":[^:/]+$", var.smithdb_auth_proxy_image))
+    error_message = "smithdb_auth_proxy_image must carry an explicit tag or digest, e.g. gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0."
+  }
 }
 
 variable "smithdb_metastore_master_username" {
@@ -1042,6 +1069,12 @@ variable "smithdb_bucket_kms_key" {
   type        = string
   description = "Cloud KMS key for CMEK on the SmithDB bucket. Empty uses Google-managed encryption."
   default     = ""
+}
+
+variable "smithdb_bucket_versioning_enabled" {
+  type        = bool
+  description = "Enable object versioning on the SmithDB object-store bucket. Off by default: SmithDB never overwrites a segment in place, so versioning only retains a noncurrent copy of everything compaction deletes."
+  default     = false
 }
 
 variable "smithdb_bucket_force_destroy" {

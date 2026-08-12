@@ -413,6 +413,27 @@ enable_smithdb = false
 # smithdb_metastore_high_availability   = false
 # smithdb_metastore_use_ssl             = true
 
+# --- Metastore TLS ----------------------------------------------------------
+# Two supported modes. Both keep the instance at ssl_mode = ENCRYPTED_ONLY.
+#
+# 1) Auth Proxy (recommended). A Cloud SQL Auth Proxy sidecar runs in every
+#    SmithDB Pod and holds the TLS session to Cloud SQL; SmithDB dials it on
+#    127.0.0.1, so its own hop is plaintext by design and use_ssl must be false.
+#    Terraform grants the SmithDB service account roles/cloudsql.client and
+#    points the secret's host key at the loopback. Requires source = "create".
+# smithdb_metastore_use_auth_proxy      = true
+# smithdb_metastore_use_ssl             = false
+# Pin the tag. A floating one would change the proxy under a running release.
+# smithdb_auth_proxy_image              = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
+#
+# 2) Direct TLS. SmithDB does not trust the Cloud SQL server CA, so a direct
+#    connection to an ENCRYPTED_ONLY instance fails the handshake. Reaching it
+#    without the proxy means relaxing the instance and turning TLS off, which
+#    is a test/staging posture only:
+# smithdb_metastore_ssl_mode            = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+# smithdb_metastore_use_ssl             = false
+# See the metastore TLS section of SMITHDB.md.
+
 # Teardown controls. Protection covers both Terraform and the Cloud SQL API, so
 # a destroy fails until it is false and that change has been applied. Keep both
 # at the production values below; flip them for a disposable dev/test stack that
@@ -438,6 +459,11 @@ enable_smithdb = false
 # service agent roles/cloudkms.cryptoKeyEncrypterDecrypter on the key — if the
 # key lives in another project, that project's IAM policy must allow it.
 # smithdb_bucket_kms_key = ""
+# Object versioning, off by default. SmithDB never overwrites a segment in
+# place, so versioning retains a noncurrent copy of everything compaction
+# deletes rather than protecting against overwrite. Enable only where a
+# retention policy demands it, and add a noncurrent-age lifecycle rule.
+# smithdb_bucket_versioning_enabled = false
 
 # --- Node pools -------------------------------------------------------------
 # The cache pool uses GKE's Local SSD-backed *ephemeral storage* mode, which is
