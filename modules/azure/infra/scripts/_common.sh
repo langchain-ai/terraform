@@ -63,13 +63,15 @@ _name_suffix() {
 # independently before, so they all went looking for the wrong vault the moment
 # the naming scheme changed. Keep this in step with main.tf.
 _derive_kv_name() {
-  local explicit suffix sub hash
+  local explicit suffix sub hash base
   explicit=$(_parse_tfvar keyvault_name || true)
   if [[ -n "$explicit" ]]; then
     echo "$explicit"
     return 0
   fi
   suffix=$(_name_suffix || true)
+  # name_base overrides the ls/langsmith switch outright, same as main.tf.
+  base=$(_parse_tfvar name_base || true)
   if _tfvar_is_true unique_resource_names; then
     sub=$(_parse_tfvar subscription_id || true)
     if command -v shasum &>/dev/null; then
@@ -77,9 +79,9 @@ _derive_kv_name() {
     else
       hash=$(printf '%s' "${sub}${suffix}" | sha256sum | cut -c1-6)
     fi
-    echo "ls-kv${suffix}-${hash}"
+    echo "${base:-ls}-kv${suffix}-${hash}"
   else
-    echo "langsmith-kv${suffix}"
+    echo "${base:-langsmith}-kv${suffix}"
   fi
 }
 
