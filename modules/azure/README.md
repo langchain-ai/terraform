@@ -713,6 +713,34 @@ availability APIs before you apply. Redis is the exception: Azure exposes no
 working name-availability endpoint for Managed Redis, so a cross-tenant Redis
 collision only surfaces at apply time.
 
+### Naming standards
+
+A corporate naming standard usually wants its own prefix on everything rather
+than per-resource surgery, which is what `name_base` is for. It replaces the
+`ls`/`langsmith` switch in every derived name:
+
+```hcl
+name_base = "mycorp"   # mycorp-rg-dev, mycorp-aks-dev, mycorp-kv-dev-a1b2c3, ...
+```
+
+The regional names take individual overrides too, for a standard the derivation
+cannot produce:
+
+```hcl
+resource_group_name = "rg-langsmith-prod-eastus"
+vnet_name           = "vnet-langsmith-prod"
+cluster_name        = "aks-langsmith-prod"
+```
+
+`vnet_name` applies only when Terraform creates the network; under
+[bring your own VNet](#bring-your-own-vnet) the name comes from `vnet_id`.
+
+None of these are asked by `quickstart.sh` — set them in `terraform.tfvars`
+before the first apply. Changing one afterwards renames the resource, which
+Terraform carries out as destroy-and-recreate. `name_base` also stays inside the
+24-character Storage and Key Vault ceiling, so it is capped at 12 characters and
+eats into what `name_prefix` can be.
+
 ---
 
 ## Bring your own VNet

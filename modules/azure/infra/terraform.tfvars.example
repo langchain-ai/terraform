@@ -23,6 +23,15 @@ location    = "eastus"
 # which Terraform executes as destroy-and-recreate.
 unique_resource_names = true
 
+# Naming standard overrides. name_base replaces the "ls"/"langsmith" prefix on
+# every derived name at once; the three below name one resource each. All are
+# creation-time only — changing one after an apply renames the resource, which
+# Terraform executes as destroy-and-recreate. The wizard does not ask for these.
+# name_base           = "mycorp"                   # mycorp-rg-prod, mycorp-aks-prod, ... (max 12 chars)
+# resource_group_name = "rg-langsmith-prod-eastus"
+# vnet_name           = "vnet-langsmith-prod"      # ignored when create_vnet = false
+# cluster_name        = "aks-langsmith-prod"
+
 # Optional tags for cost allocation and compliance
 # environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"

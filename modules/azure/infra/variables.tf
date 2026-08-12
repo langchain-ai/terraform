@@ -49,7 +49,50 @@ variable "unique_resource_names" {
 
 # ── Explicit name overrides ───────────────────────────────────────────────────
 # Each defaults to "" meaning "derive it". Set one to pin an existing resource's
-# name, or to work around a collision without renaming the whole deployment.
+# name, to work around a collision without renaming the whole deployment, or to
+# meet a naming standard the derivation does not produce.
+#
+# Changing any of these after an apply renames the resource, which Terraform
+# executes as destroy-and-recreate. Set them on a first deployment.
+
+variable "name_base" {
+  type        = string
+  description = "First segment of every derived resource name, before the resource word (\"ls-rg-prod\", \"langsmith-rg-prod\"). Empty uses \"ls\" when unique_resource_names is true and \"langsmith\" when it is false. A corporate prefix set here reaches every resource at once, which is usually what a naming standard asks for; the per-resource overrides below are for pinning one name."
+  default     = ""
+
+  # Same rule as name_prefix, and for the same reason: this segment leads every
+  # name, so Key Vault's "must start with a letter" is the binding constraint.
+  validation {
+    condition     = var.name_base == "" || can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)*$", var.name_base))
+    error_message = "name_base must start with a lowercase letter and contain only lowercase letters, digits, and non-repeating internal hyphens."
+  }
+
+  # Storage and Key Vault cap at 24 chars including the resource word, the
+  # name_prefix, and a 7-char hash. Anything long enough to matter fails the
+  # preconditions in main.tf with a count; this catches the extreme case early.
+  validation {
+    condition     = length(var.name_base) <= 12
+    error_message = "name_base must be 12 characters or fewer. Storage account and Key Vault names cap at 24 including the resource word, the name_prefix suffix, and the uniqueness hash."
+  }
+}
+
+variable "resource_group_name" {
+  type        = string
+  description = "Name for the resource group every LangSmith resource lands in. Unique within the subscription, 1-90 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "vnet_name" {
+  type        = string
+  description = "Name for the VNet Terraform creates. Unique within the resource group, 2-64 chars. Ignored when create_vnet = false, where vnet_id names the network instead. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "cluster_name" {
+  type        = string
+  description = "Name for the AKS cluster. Unique within the resource group, 1-63 chars. Empty derives from the naming scheme."
+  default     = ""
+}
 
 variable "postgres_name" {
   type        = string

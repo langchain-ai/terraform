@@ -653,6 +653,7 @@ else
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
   UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+  NAME_BASE_SET=$(_tfvar name_base || echo "")
 
   # Recompute exactly what main.tf's locals derive, so the check covers the names
   # Terraform will actually request. name_prefix may carry a leading hyphen or
@@ -674,6 +675,9 @@ else
     UNIQ_SUFFIX=""
     warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
   fi
+
+  # An explicit name_base replaces the switch above, same as local.name_base.
+  [ -n "$NAME_BASE_SET" ] && NAME_BASE="$NAME_BASE_SET"
 
   PG_NAME=$(_tfvar postgres_name || echo "${NAME_BASE}-postgres${NAME_SUFFIX}${UNIQ_SUFFIX}")
   REDIS_NAME=$(_tfvar redis_name || echo "${NAME_BASE}-redis${NAME_SUFFIX}${UNIQ_SUFFIX}")

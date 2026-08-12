@@ -38,13 +38,17 @@ locals {
   #
   # sha256 of subscription_id + name_suffix rather than the random provider: the
   # value is derived, so repeat applies are stable and nothing is kept in state.
-  name_base   = var.unique_resource_names ? "ls" : "langsmith"
+  # var.name_base overrides the switch outright, for a corporate naming standard
+  # that wants its own prefix on every resource.
+  name_base   = var.name_base != "" ? var.name_base : (var.unique_resource_names ? "ls" : "langsmith")
   uniq_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.name_suffix}"), 0, 6)}" : ""
 
-  # Regional names — unique within the subscription, so no hash needed.
-  resource_group_name = "${local.name_base}-rg${local.name_suffix}"
-  vnet_name           = "${local.name_base}-vnet${local.name_suffix}"
-  aks_name            = "${local.name_base}-aks${local.name_suffix}"
+  # Regional names — unique within the subscription, so no hash needed. Each
+  # takes an override for a naming standard the derivation cannot produce;
+  # changing one after an apply is a destroy and recreate.
+  resource_group_name = var.resource_group_name != "" ? var.resource_group_name : "${local.name_base}-rg${local.name_suffix}"
+  vnet_name           = var.vnet_name != "" ? var.vnet_name : "${local.name_base}-vnet${local.name_suffix}"
+  aks_name            = var.cluster_name != "" ? var.cluster_name : "${local.name_base}-aks${local.name_suffix}"
 
   # Globally-unique names — hashed, and each takes an explicit override so a
   # single colliding name can be pinned without renaming the whole deployment.
