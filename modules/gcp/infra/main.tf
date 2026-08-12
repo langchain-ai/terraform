@@ -714,6 +714,7 @@ module "ingress" {
   count  = var.install_ingress ? 1 : 0
 
   ingress_type        = var.ingress_type
+  gke_gateway_class   = var.gke_gateway_class
   langsmith_domain    = var.langsmith_domain
   langsmith_namespace = var.langsmith_namespace
 
