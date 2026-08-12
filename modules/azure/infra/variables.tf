@@ -266,7 +266,7 @@ variable "postgres_sku_name" {
 
 variable "redis_source" {
   type        = string
-  description = "Redis deployment type. 'external' provisions Azure Cache for Redis (private VNet). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
+  description = "Redis deployment type. 'external' provisions Azure Managed Redis (private VNet). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
   default     = "external"
 
   validation {

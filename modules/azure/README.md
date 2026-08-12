@@ -26,7 +26,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | Azure DB for PostgreSQL (private) | Azure Cache for Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+| **Production** | Azure DB for PostgreSQL (private) | Azure Managed Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
 >
@@ -345,7 +345,7 @@ Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if ne
 - VNet + subnets (AKS, Postgres, Redis) + private DNS zones
 - AKS cluster + node pools + OIDC issuer + managed identity + Workload Identity federated credentials
 - Azure DB for PostgreSQL Flexible Server (if `postgres_source = "external"`)
-- Azure Cache for Redis Premium (if `redis_source = "external"`)
+- Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + all 10 application secrets
 - cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)
@@ -646,7 +646,7 @@ azure/
 | `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete) + all application secrets. |
 | `postgres` | optional | Azure DB for PostgreSQL Flexible Server. Enabled when `postgres_source = "external"`. Multi-AZ standby supported. |
-| `redis` | optional | Azure Cache for Redis Premium. Enabled when `redis_source = "external"`. |
+| `redis` | optional | Azure Managed Redis. Enabled when `redis_source = "external"`. |
 | `dns` | optional | Azure DNS zone + A record. Required for DNS-01 cert issuance (`tls_certificate_source = "dns01"`). |
 | `waf` | optional | Azure WAF policy (OWASP 3.2 + bot protection). Use `agw_sku_tier = "WAF_v2"` with AGIC for integrated WAF — no separate module needed. |
 | `diagnostics` | optional | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. |

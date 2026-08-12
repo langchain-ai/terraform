@@ -223,7 +223,7 @@ location        = "eastus"        # Azure region
 
 # ── Data sources ──────────────────────────────────────────────────────────────
 postgres_source   = "external"    # Azure DB for PostgreSQL Flexible Server
-redis_source      = "external"    # Azure Cache for Redis Premium
+redis_source      = "external"    # Azure Managed Redis
 clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 
 # ── AKS ───────────────────────────────────────────────────────────────────────

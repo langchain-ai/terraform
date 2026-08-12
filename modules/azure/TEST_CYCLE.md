@@ -109,7 +109,7 @@ Review the plan. Expected resource categories:
 - Azure Blob storage account + container
 - Azure Key Vault + all application secrets
 - Azure DB for PostgreSQL Flexible Server + private endpoint
-- Azure Cache for Redis Premium + private endpoint
+- Azure Managed Redis + private endpoint
 - cert-manager, KEDA, NGINX ingress Helm releases
 - Kubernetes namespace `langsmith`, K8s ServiceAccount
 
