@@ -38,6 +38,30 @@ output "resource_group_name" {
   value       = azurerm_resource_group.resource_group.name
 }
 
+# ── Networking ────────────────────────────────────────────────────────────────
+# Resolved IDs, whether Terraform created the subnet or the operator supplied it.
+# When create_vnet = false these tell you what Terraform carved out of your VNet.
+
+output "vnet_id" {
+  description = "Resource ID of the VNet LangSmith is deployed into"
+  value       = local.vnet_id
+}
+
+output "aks_subnet_id" {
+  description = "Resource ID of the subnet holding the AKS nodes and pods"
+  value       = local.aks_subnet_id
+}
+
+output "postgres_subnet_id" {
+  description = "Resource ID of the delegated Postgres subnet (null when postgres_source = 'in-cluster')"
+  value       = local.postgres_subnet_id
+}
+
+output "redis_subnet_id" {
+  description = "Resource ID of the subnet holding the Redis private endpoint (null when redis_source = 'in-cluster')"
+  value       = local.redis_subnet_id
+}
+
 # ── AKS cluster ───────────────────────────────────────────────────────────────
 
 output "aks_cluster_name" {

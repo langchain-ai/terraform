@@ -13,6 +13,58 @@ Issues, gotchas, and fixes. Updated as deployments are validated.
 
 ## Pass 1 — Infrastructure
 
+### Resource name is already taken globally
+
+**Symptom — Redis:**
+```
+Error: creating Redis Enterprise "langsmith-redis-dev": unexpected status 400
+The name 'langsmith-redis-dev' is not available.
+```
+
+**Symptom — Storage or Key Vault:** `StorageAccountAlreadyTaken`, or `VaultAlreadyExists`
+on `langsmith-kv-dev`.
+
+**Cause:** Postgres, Redis, Storage and Key Vault names live in a namespace
+shared by every Azure tenant — they become public DNS names like
+`langsmith-postgres-dev.postgres.database.azure.com`. The legacy naming scheme
+derives them from `name_prefix` alone, so every deployment of this module that
+uses the same `name_prefix` asks for the same name. Somebody else already has it.
+
+**Fix — new deployment:** set `unique_resource_names = true` in `terraform.tfvars`.
+Every `terraform.tfvars.*` template and `quickstart.sh` already do. This appends a
+per-subscription hash to the four global names. Refer to
+[Resource naming](README.md#resource-naming).
+
+**Fix — existing deployment** (do *not* flip `unique_resource_names`, it renames and
+therefore destroys and recreates everything): pin just the colliding name.
+
+```hcl
+redis_name = "langsmith-redis-mycorp-dev"
+```
+
+The available overrides are `postgres_name`, `redis_name`, `storage_account_name`,
+and `keyvault_name`.
+
+A soft-deleted Key Vault holds its name for the duration of the retention window,
+so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destroy`:
+
+```bash
+az keyvault list-deleted --query "[].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table
+az keyvault purge --name langsmith-kv-dev   # only if you are certain
+```
+
+**Catch it before applying:** `make preflight` checks Postgres, Storage, Key Vault
+and `dns_label` against Azure's availability APIs.
+
+> Redis has no pre-check. Azure exposes no working `CheckNameAvailability`
+> endpoint for `Microsoft.Cache/redisEnterprise` — the subscription-scoped
+> endpoint rejects the type and the location-scoped one rejects every region. So
+> preflight can only report whether the name already exists in *your*
+> subscription. A cross-tenant Redis collision surfaces at apply time; the hashed
+> name is what makes it unlikely.
+
+---
+
 ### K8sVersionNotSupported — version is LTS-only
 
 **Symptom:**
@@ -236,13 +288,13 @@ Re-run `make apply` — no more diff.
 terraform -chdir=infra state rm module.keyvault.azurerm_key_vault.langsmith
 
 # 2. Permanently purge the soft-deleted KV (irreversible!)
-az keyvault purge --name langsmith-kv<identifier> --location eastus
+az keyvault purge --name langsmith-kv-<name_prefix> --location eastus
 
 # 3. Re-apply — Terraform creates a fresh KV with purge_protection = false
 make apply
 ```
 
-**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `identifier` suffix for a fresh clean deploy.
+**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `name_prefix` for a fresh clean deploy.
 
 ---
 
@@ -262,15 +314,15 @@ This error only occurs if you are using an older copy of `setup-env.sh` or manua
 ```bash
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.deployments_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-deployments-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-deployments-encryption-key --query id -o tsv)"
 
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.agent_builder_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
 
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.insights_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-insights-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-insights-encryption-key --query id -o tsv)"
 
 terraform apply
 ```
@@ -840,16 +892,16 @@ All Azure resources (AKS, VNet, Key Vault, Storage, etc.) are still running but 
 **Recovery when tfstate is gone:**
 ```bash
 # Delete the entire resource group directly — removes everything in one shot
-az group delete --name langsmith-rg<identifier> --yes --no-wait
+az group delete --name langsmith-rg-<name_prefix> --yes --no-wait
 
 # Watch until deletion completes
-az group show --name langsmith-rg<identifier> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
+az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
 # Once you see "ResourceGroupNotFound", all resources are deleted
 ```
 
-> **Key Vault soft-delete after forced deletion:** If you reuse the same `identifier`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
+> **Key Vault soft-delete after forced deletion:** If you reuse the same `name_prefix`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
 > ```bash
-> az keyvault purge --name langsmith-kv<identifier> --location <region>
+> az keyvault purge --name langsmith-kv-<name_prefix> --location <region>
 > ```
 
 ---

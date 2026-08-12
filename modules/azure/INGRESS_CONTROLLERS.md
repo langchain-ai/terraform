@@ -141,7 +141,7 @@ in `values-overrides.yaml`. Required for chart validation — no manual steps ne
 ```hcl
 # HTTP-only (validated)
 ingress_controller     = "agic"
-agw_sku_tier           = "Standard_v2"    # or "WAF_v2" for built-in WAF
+agw_sku_tier           = "Standard_v2"    # create_waf = true forces WAF_v2
 dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 ```
@@ -161,7 +161,11 @@ create_dns_zone        = true
 - AKS provisions `IngressClass` named `azure-application-gateway`
 - AGIC watches `Ingress` resources and programs AGW routing rules
 - cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
-- Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor on VNet
+- Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor
+  on the VNet (see `agic_network_contributor_scope` below to narrow that one)
+- The namespace NetworkPolicy admits the gateway by the address range of its subnet. In Azure CNI
+  mode AGW connects to pod IPs from that subnet rather than from a namespace, so unlike every other
+  controller here there is no source namespace to allow
 
 **RBAC timing — known issue:** The AKS AGIC addon creates its managed identity during cluster
 provisioning, but the identity requires ~5 minutes to register in Azure AD before role assignments
@@ -169,10 +173,65 @@ take effect. Terraform adds a `time_sleep` of 300s between cluster creation and 
 creation to prevent the AGIC controller from entering CrashLoopBackOff with persistent 403 errors.
 Without this delay, AGIC fails immediately and requires `az aks update` to trigger reconciliation.
 
-**Enable WAF:** set `agw_sku_tier = "WAF_v2"` — built into AGW, no separate WAF module needed.
+**Narrowing the Network Contributor grant:** by default AGIC's identity gets Network Contributor on
+the whole VNet. That role is `Microsoft.Network/*` with no exclusions, so at VNet scope the identity
+can write to every subnet in it, including which NSG or route table each one carries. AGIC needs
+`subnets/join/action` and `subnets/read` on one subnet, and Azure documents those as assignable on
+the virtual network *or subnet*.
 
-> **AGIC requires full cluster rebuild** to enable — the AGW subnet must be provisioned at
-> VNet creation time and cannot be added to an existing VNet.
+When Terraform creates the VNet this costs nothing, since it is a VNet you own. Bringing your own is
+different, and there `agic_network_contributor_scope` has two better answers:
+
+```hcl
+agic_network_contributor_scope = "subnet"   # grant only on the AGW subnet
+agic_network_contributor_scope = "none"     # create the assignment yourself, out of band
+```
+
+Use `none` when your network team will not delegate `Microsoft.Authorization/roleAssignments/write`
+on their VNet. Terraform then skips the assignment, and AGIC returns 403 until someone grants the
+add-on identity (`ingressapplicationgateway-<cluster>`, in the `MC_` resource group) the join
+permission on the gateway subnet.
+
+The default is `vnet` rather than the least-privilege option because a role assignment's scope cannot
+be edited in place. Switching an existing deployment to `subnet` plans a destroy and create of the
+assignment, and AGIC can return 403 until the new one propagates. Prefer setting it correctly on a
+new deployment.
+
+**Enable WAF:** set `create_waf = true`. Terraform creates the WAF policy, attaches it to the
+gateway, and moves the gateway to `WAF_v2` — the only tier Azure permits a policy association on.
+Setting `agw_sku_tier = "WAF_v2"` on its own buys the tier without a policy, so nothing is inspected.
+
+The policy starts in `Detection` mode: matches are logged, nothing is blocked. OWASP CRS flags SQL
+and script fragments that appear legitimately in prompts and traces, so read
+`ApplicationGatewayFirewallLog` first, add exclusions for what it gets wrong, then set
+`waf_mode = "Prevention"`. Body-size enforcement is off for the same reason — batched run payloads
+exceed the 128 KB inspection limit, and Prevention mode blocks over-size requests outright.
+
+Set `create_diagnostics = true` alongside it. Terraform then sends that log to the Log Analytics
+workspace it creates, and it is queryable without further setup:
+
+```kusto
+AzureDiagnostics
+| where Category == "ApplicationGatewayFirewallLog"
+| summarize count() by ruleId_s, action_s, requestUri_s
+| order by count_ desc
+```
+
+In Detection mode every entry reads `action_s == "Detected"`, which Azure documents as the only action
+that mode produces. Each rule ID and URI pair above is a candidate exclusion.
+
+`create_diagnostics` defaults to `false`, and leaving it off is the one way to end up with a WAF you
+cannot tune. Azure keeps a resource log only while a diagnostic setting routes it somewhere, so the
+WAF still matches traffic, metrics still show match counts, and nothing tells you which request or
+which pattern tripped a rule. That detail is exactly what an exclusion is written from. Note it cuts
+both ways: the firewall log records the matched part of a request in plain text, and the access log
+records request URIs, so both land in your workspace under `log_retention_days`.
+
+> **Enabling AGIC updates the cluster in place.** The add-on is an argument on the cluster
+> resource, so pointing an existing deployment at `agic` adds the gateway, the add-on and its
+> three role assignments without replacing the cluster or anything running on it. The gateway
+> does need a subnet to itself: Terraform carves one out of a VNet it owns, and
+> `agic_subnet_id` names an existing one in a VNet it does not.
 
 ---
 

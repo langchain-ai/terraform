@@ -11,19 +11,26 @@
 subscription_id = "your-azure-subscription-id"   # az account show --query id -o tsv
 
 # ── Naming ────────────────────────────────────────────────────────────────────
-# Suffix appended to every resource name to distinguish deployments.
-# Must start with a hyphen or be empty. Examples: "-prod", "-staging", "-dz"
-identifier  = "-prod"
-environment = "dev"    # dev | staging | prod
+# Name of this deployment. Appended to every resource name and used as the
+# 'environment' tag. No leading hyphen — Terraform adds the separator, so
+# "prod" gives langsmith-rg-prod. Examples: "prod", "staging", "dz"
+name_prefix = "prod"
 location    = "eastus"
 
+# Give the globally-unique names (Postgres, Redis, Storage, Key Vault) a
+# per-subscription hash so they cannot collide with another LangSmith deployment.
+# On an EXISTING deployment leave this false — flipping it renames every resource,
+# which Terraform executes as destroy-and-recreate.
+unique_resource_names = true
+
 # Optional tags for cost allocation and compliance
+# environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"
 # cost_center = "engineering"
 
 # ── Sources — external managed services ───────────────────────────────────────
 postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
-redis_source      = "external"    # "external" = Azure Cache for Redis Premium
+redis_source      = "external"    # "external" = Azure Managed Redis
 clickhouse_source = "in-cluster"  # ClickHouse always in-cluster (dev/POC)
                                   # Production: use LangChain Managed ClickHouse
 
@@ -79,8 +86,9 @@ additional_node_pools = {
 # "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
 # "istio"         — Istio via Helm (self-managed)
 # "agic"          — Application Gateway Ingress Controller (enterprise Azure, native WAF)
-#                   Provisions App Gateway v2 + dedicated /24 subnet + AGIC Helm chart
-#                   Use agw_sku_tier = "WAF_v2" to enable WAF on the gateway
+#                   Provisions App Gateway v2 + a dedicated /24 subnet, and enables the
+#                   AKS ingress-appgw add-on (Microsoft deprecated the AGIC Helm chart)
+#                   Set create_waf = true for a WAF; it moves the gateway to WAF_v2
 # "envoy-gateway" — Envoy Gateway via Helm (Gateway API native, uses Gateway/HTTPRoute)
 # "none"          — skip (bring your own)
 ingress_controller = "nginx"
@@ -90,8 +98,11 @@ ingress_controller = "nginx"
 # istio_addon_revision = "asm-1-27"
 
 # AGIC options — only used when ingress_controller = "agic"
-# agw_sku_tier            = "Standard_v2"   # or "WAF_v2" to enable WAF on the App Gateway
+# agw_sku_tier            = "Standard_v2"   # create_waf = true forces WAF_v2
 # agic_subnet_address_prefix = ["10.0.96.0/24"]  # must not overlap other subnets
+# Scope of AGIC's Network Contributor grant: "vnet" (default), "subnet", or "none".
+# Prefer "subnet" in a VNet you do not own — it is all AGIC needs. See INGRESS_CONTROLLERS.md.
+# agic_network_contributor_scope = "subnet"
 
 # ── DNS + TLS ─────────────────────────────────────────────────────────────────
 # Azure Public IP DNS label — free Azure subdomain, no domain registration needed.
@@ -176,11 +187,66 @@ sizing_profile = "production"
 # postgres_geo_redundant_backup        = true             # geo-redundant backups
 
 # ── Networking (optional — override only if reusing existing VNet) ─────────────
+# Set create_vnet = false and give the VNet you want LangSmith to deploy into.
+# Each subnet is then independent: supply an ID to reuse a subnet you already
+# have, or leave it out and Terraform creates that subnet inside your VNet from
+# the matching address prefix. Terraform applies the settings each service
+# needs — the Postgres subnet gets the Microsoft.DBforPostgreSQL/flexibleServers
+# delegation, the AKS subnet gets the Storage and Key Vault service endpoints,
+# and the Redis subnet gets no delegation (it holds a private endpoint, and a
+# delegated subnet would reject it).
+#
 # create_vnet          = false
-# vnet_id              = "/subscriptions/.../virtualNetworks/my-vnet"
-# aks_subnet_id        = "/subscriptions/.../subnets/aks"
-# postgres_subnet_id   = "/subscriptions/.../subnets/postgres"
-# redis_subnet_id      = "/subscriptions/.../subnets/redis"
+# vnet_id              = "/subscriptions/.../resourceGroups/net-rg/providers/Microsoft.Network/virtualNetworks/my-vnet"
+#
+# Reuse subnets you already have. Give three different subnets — sharing one
+# fails during apply, since the Postgres subnet is delegated and Azure allows no
+# other resource type inside a delegated subnet.
+# An existing Postgres subnet must already carry the flexibleServers delegation
+# and hold nothing else. An existing AKS subnet must carry both the
+# Microsoft.Storage and Microsoft.KeyVault service endpoints, since the storage
+# and Key Vault firewalls allowlist it by ID and Azure rejects a subnet rule
+# without the matching endpoint. It must also be big enough for the node pools
+# below: Azure CNI draws node and pod IPs from it, 764 addresses at the
+# defaults, so a /22 or larger. Terraform checks all of this at plan time, which
+# means plan needs read access to whichever subnets you supply here.
+# aks_subnet_id        = "/subscriptions/.../virtualNetworks/my-vnet/subnets/aks"
+# postgres_subnet_id   = "/subscriptions/.../virtualNetworks/my-vnet/subnets/postgres"
+# redis_subnet_id      = "/subscriptions/.../virtualNetworks/my-vnet/subnets/redis"
+#
+# Have Terraform add the two service endpoints to the AKS subnet above rather
+# than fail the plan when they are missing. It patches that one property and
+# leaves the rest of the subnet alone, but it needs write access on the subnet,
+# so leave this off if a network team owns it and only granted read, or if their
+# tooling sets the endpoints too. Otherwise add them yourself, repeating any
+# already there since the flag replaces the whole list:
+#   az network vnet subnet update --ids <subnet-id> \
+#     --service-endpoints Microsoft.Storage Microsoft.KeyVault
+# manage_byo_subnet_service_endpoints = true
+#
+# Or omit an ID above and set its prefix here to have Terraform carve it out.
+# These defaults are sized for the 10.0.0.0/17 VNet Terraform builds, so treat
+# them as a starting point. Plan reads your VNet and rejects a prefix outside its
+# address space, but cannot tell whether one collides with a subnet that already
+# exists there, so pick ranges you know are free.
+# aks_subnet_address_prefix      = ["10.0.0.0/19"]
+# postgres_subnet_address_prefix = ["10.0.32.0/20"]
+# redis_subnet_address_prefix    = ["10.0.48.0/20"]
+#
+# Required when create_vnet = false. Kubernetes assigns ClusterIPs from this
+# range, and AKS requires one that nothing on or connected to your VNet uses.
+# The 10.0.64.0/20 default only avoids the VNet Terraform builds, and an overlap
+# with your own space can be accepted at cluster creation and break later, so
+# pick a range outside your VNet entirely — plan rejects one that overlaps it,
+# though peered networks are on you. aks_dns_service_ip is derived from it.
+# aks_service_cidr     = "10.100.0.0/20"
+#
+# create_bastion and ingress_controller = "agic" each need a subnet to
+# themselves. Terraform carves those only out of a VNet it owns, so on this path
+# you supply them; there is no prefix to carve from. Plan rejects either feature
+# with create_vnet = false and no subnet named here.
+# agic_subnet_id    = "/subscriptions/.../virtualNetworks/my-vnet/subnets/appgw"
+# bastion_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/AzureBastionSubnet"
 
 # ── Network hardening (production) ────────────────────────────────────────────
 # Storage / Key Vault / AKS default-deny firewalls. AKS pods are allowlisted

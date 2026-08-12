@@ -26,7 +26,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | Azure DB for PostgreSQL (private) | Azure Cache for Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+| **Production** | Azure DB for PostgreSQL (private) | Azure Managed Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
 >
@@ -128,6 +128,33 @@ make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
 For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
 For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
+### Naming your deployment
+
+One variable names the deployment. `name_prefix` is appended to every resource
+name and doubles as the `environment` tag, so `name_prefix = "prod"` gives
+`ls-rg-prod`, `ls-aks-prod`, `ls-kv-prod-<hash>` and tags everything
+`environment = prod`. Terraform inserts the separating hyphen, so write `prod`,
+not `-prod`. Keep it under about 12 characters; [Resource naming](#resource-naming)
+explains the ceiling and where the hash comes from.
+
+Set `environment` explicitly only when the tag needs to differ from the
+deployment name, e.g. `name_prefix = "prod-eastus"` with `environment = "prod"`.
+
+**Upgrading from a release that used `identifier`:** rename the variable and keep
+the value. `identifier = "-prod"` becomes `name_prefix = "prod"`; the leading
+hyphen is now optional, so `"-prod"` also works. Every resource name is
+unchanged, so `terraform plan` should report no changes to naming. Leaving
+`identifier` in `terraform.tfvars` fails the plan with a message pointing here
+rather than silently renaming your resources.
+
+The `environment` tag does change. It used to default to `dev` and accept only
+`dev`, `staging`, or `prod`; it now falls back to the deployment name and takes
+any value. A deployment that set `identifier = "-prod"` and never set
+`environment` re-tags from `dev` to `prod` on the next apply, and one named
+`myco` tags `environment = myco`. Terraform updates tags in place, so nothing is
+replaced, but cost allocation and Azure Policy rules keyed on the old value stop
+matching. Set `environment = "dev"` explicitly to keep the old tag.
+
 ---
 
 ## Deployment Passes
@@ -152,7 +179,7 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | `nginx` **(default)** | `ingress-nginx` Helm chart → Azure LB | Standard deployments. Simplest setup. Use this for quickstart. |
 | `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
-| `agic` | Azure Application Gateway v2 + AGIC Helm chart | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
+| `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 | `envoy-gateway` | `gateway-helm` OCI chart — Kubernetes Gateway API | Gateway API-native. Modern alternative to Ingress. |
 
 ---
@@ -216,14 +243,26 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 
 - Sections: profile → subscription/naming → networking → AKS sizing → ingress controller → DNS/TLS → backend services → Key Vault → sizing profile → security add-ons
 - Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
+- Between sections: `Enter` continues, `b` goes back a section, `r` jumps to the review summary, `q` saves and quits
 - After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
+- Answers are checkpointed to `infra/.quickstart-state` after every section, so quitting or losing the terminal costs at most the section you were on. The next run offers to resume, and every prompt is prefilled with your previous answer. The checkpoint is deleted once `terraform.tfvars` is written
+- Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
-- Validates identifier format (`-prod`, `-staging`, `-myco`)
+- Validates deployment name format (`prod`, `staging`, `myco`)
 - Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 
 > **Run this first** on a new deployment. After it completes, run `source infra/scripts/setup-env.sh` to set up secrets.
+
+---
+
+### `make test-quickstart` — Unit tests for the wizard's resume layer
+**Script:** `infra/scripts/test-quickstart-state.sh`
+
+Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, and seeding the wizard from an existing `terraform.tfvars`. Runs in a temp directory with no Azure calls and no prompts, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
+
+One check is worth knowing about when you rename a wizard variable: `_load_state` silently drops any key missing from `_STATE_KEYS`, so a rename that lands in `_load_tfvars` but not in the whitelist loses that answer on resume with no error. The test scrapes every variable `_load_tfvars` assigns and fails if one is not whitelisted.
 
 ---
 
@@ -245,7 +284,7 @@ make keyvault delete langsmith-deployments-encryption-key   # soft-delete (recov
 ```
 
 Key behaviors:
-- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `langsmith-kv{identifier}`
+- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `_derive_kv_name` in `infra/scripts/_common.sh`, which mirrors the naming scheme
 - `validate` — checks all 4 required secrets exist and are non-empty; validates admin password symbol requirement
 - `diff` — compares Key Vault values vs `langsmith-config-secret` K8s secret key-by-key
 - Warns on `langsmith-api-key-salt` and `langsmith-jwt-secret` (stable secrets — changing them invalidates all API keys / sessions)
@@ -259,7 +298,7 @@ Key behaviors:
 
 Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name from `identifier` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
+- Derives the Key Vault name via `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without
 - **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
 - **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
 - Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists
@@ -306,11 +345,11 @@ Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if ne
 - VNet + subnets (AKS, Postgres, Redis) + private DNS zones
 - AKS cluster + node pools + OIDC issuer + managed identity + Workload Identity federated credentials
 - Azure DB for PostgreSQL Flexible Server (if `postgres_source = "external"`)
-- Azure Cache for Redis Premium (if `redis_source = "external"`)
+- Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + all 10 application secrets
 - cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)
-- For `agic`: Application Gateway v2 + public IP + AGIC managed identity + Contributor/Reader role assignments + AGIC Helm chart
+- For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
 - For `envoy-gateway`: `envoyproxy/gateway-helm` in `envoy-gateway-system` namespace
 - `langsmith` namespace + `langsmith-sa` service account
 
@@ -373,10 +412,10 @@ Bridges Key Vault (Terraform's output) to Kubernetes (Helm's input). Safe to re-
 
 Translates Terraform outputs and `terraform.tfvars` flags into Helm values files. Re-running is safe — outputs are refreshed, existing hostname is preserved unless overridden.
 
-- Reads from `terraform.tfvars`: `identifier`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
+- Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
-- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure/application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
+- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
 - Generates `helm/values/values-overrides.yaml` with: hostname, auth config, Blob WI config, Postgres/Redis blocks, Workload Identity annotations for 5 service accounts, ingress/TLS block
 - Copies the selected sizing file from `examples/` into `helm/values/`
 - Copies addon files based on `enable_*` flags: `agent-deploys` (with `url` and `tlsEnabled` injected automatically), `agent-builder`, `insights` (minimal in-cluster file or full external example), `polly`
@@ -580,7 +619,6 @@ azure/
         ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
         └── examples/
             ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
-            ├── langsmith-values.yaml                     # Annotated reference
             ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
             ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
             ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
@@ -590,7 +628,7 @@ azure/
             ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
             ├── langsmith-values-insights.yaml                 # Pass 5 — Insights
             ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
-            ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)
+            ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure-application-gateway)
             ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
             ├── langsmith-values-ingress-envoy-gateway.yaml    # Ingress: Envoy Gateway (Gateway API)
             └── letsencrypt-issuer-dns01.yaml                  # cert-manager ClusterIssuer for DNS-01 TLS
@@ -602,13 +640,13 @@ azure/
 
 | Module | Required | Description |
 |--------|----------|-------------|
-| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. |
+| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete) + all application secrets. |
 | `postgres` | optional | Azure DB for PostgreSQL Flexible Server. Enabled when `postgres_source = "external"`. Multi-AZ standby supported. |
-| `redis` | optional | Azure Cache for Redis Premium. Enabled when `redis_source = "external"`. |
+| `redis` | optional | Azure Managed Redis. Enabled when `redis_source = "external"`. |
 | `dns` | optional | Azure DNS zone + A record. Required for DNS-01 cert issuance (`tls_certificate_source = "dns01"`). |
 | `waf` | optional | Azure WAF policy (OWASP 3.2 + bot protection). Use `agw_sku_tier = "WAF_v2"` with AGIC for integrated WAF — no separate module needed. |
 | `diagnostics` | optional | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. |
@@ -617,6 +655,209 @@ azure/
 > **Workload Identity** is centralized in `k8s-cluster`. Federated credentials for blob-accessing pods (backend, platform-backend, queue, ingest-queue, host-backend, listener, agent-builder-tool-server, agent-builder-trigger-server) are registered there. Adding a new pod that needs Blob access requires updating `service_accounts_for_workload_identity` in `k8s-cluster` and running `terraform apply -target=module.aks`.
 >
 > **AGIC Workload Identity** uses a separate managed identity (`<cluster>-agic-identity`) with Contributor on the App Gateway and Reader on the resource group. The federated credential binds to `system:serviceaccount:ingress-basic:ingress-azure`.
+
+---
+
+## Resource naming
+
+Most Azure resource names only need to be unique inside your resource group. Four
+do not: **PostgreSQL**, **Redis**, **Storage**, and **Key Vault** names live in a
+namespace shared by every Azure tenant, as does the public-IP `dns_label`. Two
+deployments that ask for the same name collide, and the second one fails partway
+through `terraform apply`.
+
+`unique_resource_names = true` (set in every `terraform.tfvars` template and by
+`quickstart.sh`) appends a 6-character hash derived from your subscription ID and
+`name_prefix`, and shortens the base from `langsmith-` to `ls-` to make room
+inside the 24-character Storage and Key Vault limits:
+
+| | `unique_resource_names = false` | `unique_resource_names = true` |
+|---|---|---|
+| Resource group | `langsmith-rg-dev` | `ls-rg-dev` |
+| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-a1b2c3` |
+| Redis | `langsmith-redis-dev` | `ls-redis-dev-a1b2c3` |
+| Storage | `langsmithblobdev` | `lsblobdeva1b2c3` |
+| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-a1b2c3` |
+
+The Storage row is the only one that looks different, and the hyphens are the
+reason. Azure Storage account names accept only lowercase letters and digits, so
+the module strips the hyphens from `ls-blob-dev-a1b2c3` before creating it. Every
+other name, including the blob container, keeps them.
+
+The hash is deterministic — the same subscription and `name_prefix` always produce
+the same name, so repeat applies are stable and no random values are stored.
+`a1b2c3` above stands in for it; yours differs.
+
+Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
+hyphens inside the same 24-character limit Storage has, so it runs out of room
+first. `terraform plan` reports the exact overage rather than letting Azure
+reject the name mid-apply.
+
+> **On an existing deployment, leave `unique_resource_names = false`.** Turning it
+> on renames every resource, which Terraform carries out as destroy-and-recreate:
+> Postgres and Storage would lose their data. It defaults to `false` so bumping to
+> a newer tag is a no-op.
+
+To pin one name, either to keep an existing resource or to dodge a collision
+without renaming the whole deployment, set it explicitly:
+
+```hcl
+postgres_name        = "langsmith-postgres-dev"
+redis_name           = "langsmith-redis-mycorp-dev"
+storage_account_name = "langsmithblobdev"
+keyvault_name        = "langsmith-kv-dev"
+```
+
+`make preflight` checks these four names plus `dns_label` against Azure's
+availability APIs before you apply. Redis is the exception: Azure exposes no
+working name-availability endpoint for Managed Redis, so a cross-tenant Redis
+collision only surfaces at apply time.
+
+---
+
+## Bring your own VNet
+
+By default Terraform creates the VNet and every subnet. To deploy into a VNet
+your network team already manages, set `create_vnet = false` and name it:
+
+```hcl
+create_vnet = false
+vnet_id     = "/subscriptions/<sub>/resourceGroups/net-rg/providers/Microsoft.Network/virtualNetworks/corp-vnet"
+```
+
+Each subnet is then independent. Supply an ID to reuse a subnet you already
+have, or leave it out and Terraform creates that subnet inside your VNet from
+the matching address prefix:
+
+```hcl
+# Reuse an existing Postgres subnet, let Terraform carve the other two.
+postgres_subnet_id             = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/pg"
+aks_subnet_address_prefix      = ["10.42.0.0/19"]
+redis_subnet_address_prefix    = ["10.42.32.0/20"]
+```
+
+Subnets Terraform creates land in the existing VNet's resource group, not the
+LangSmith one, and get the settings each service needs:
+
+| Subnet | What Terraform applies |
+|--------|------------------------|
+| AKS | `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, so the storage and Key Vault default-deny firewalls can allowlist the subnet |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers` — Flexible Server injects its NICs here, and no other resource may share the subnet |
+| Redis | No delegation. Azure Managed Redis is reached through a private endpoint placed in this subnet; a delegated subnet would reject it |
+
+The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
+builds, so they are a starting point rather than a default that fits your
+network. Plan reads your VNet and rejects a prefix that falls outside its
+address space, and rejects an AKS prefix too small for the node pools whether
+the subnet is one you supplied or one Terraform carves. What it cannot check is
+whether a prefix collides with a subnet that already exists in the VNet, because
+Azure's VNet read returns subnet names and not their ranges — so pick ranges you
+know are free.
+
+`aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
+it, and AKS requires a range that nothing on or connected to your VNet uses. The
+`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
+your own address space can be accepted when the cluster is created and break
+later, so plan makes you name one and rejects one that lands inside your VNet.
+Peered and on-premises ranges are still yours to keep clear of, since plan only
+sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
+automatically as the eleventh address unless you set one, and plan rejects a
+value outside the range — worth knowing if you set both by hand, because
+changing the range strands an address written against the old one.
+
+### What a subnet you supply must already have
+
+| Subnet | Requirement |
+|--------|-------------|
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
+| Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
+| AGIC | The subnet to itself. Application Gateway v2 shares with nothing, and Azure recommends a `/24`. Only needed when `ingress_controller = "agic"` |
+| Bastion | The name `AzureBastionSubnet`, exactly, and `/26` or larger. Azure refuses any other name. Only needed when `create_bastion = true` |
+
+Every subnet you supply must be a different subnet. Sharing one fails during
+apply, because the Postgres subnet is delegated and Azure permits nothing else
+inside a delegated subnet, and because Application Gateway and Bastion each
+require a subnet of their own.
+
+#### Letting Terraform add the AKS service endpoints
+
+The service endpoints are the one requirement on that list Terraform can satisfy
+for you. Set `manage_byo_subnet_service_endpoints = true` and it patches the two
+missing endpoints onto the subnet during apply, appending to whatever is already
+there rather than replacing the list, and the plan-time check stands down.
+
+It patches only that property. Address prefixes, delegations, and NSG and route
+table associations stay with whoever owns the subnet — `azurerm` has no
+standalone service-endpoint resource, so this goes through `azapi` rather than
+adopting the subnet into state and taking the rest of it along.
+
+Leave it off, which is the default, when the subnet belongs to a network team
+that granted read and not `Microsoft.Network/virtualNetworks/subnets/write`, or
+when their own tooling sets the endpoints and the two would rewrite the property
+against each other on every run. Add them yourself instead, repeating any already
+present since the flag replaces the whole list:
+
+```bash
+az network vnet subnet update --ids <subnet-id> \
+  --service-endpoints Microsoft.Storage Microsoft.KeyVault
+```
+
+`terraform destroy` leaves the endpoints on the subnet — `azapi_update_resource`
+performs no operation on delete, and the subnet was never Terraform's to revert.
+
+### What Terraform checks before applying
+
+These fail at plan time with an actionable message rather than partway through
+an apply:
+
+- `vnet_id` is present and is a well-formed VNet resource ID
+- every supplied subnet is a subnet of `vnet_id` — one in a different VNet would
+  be unreachable, since the private DNS zones are linked to `vnet_id`
+- every supplied subnet ID names a different subnet
+- a supplied Postgres subnet already carries the `flexibleServers` delegation
+- a supplied AKS subnet carries both service endpoints, unless
+  `manage_byo_subnet_service_endpoints` is on and Terraform is adding them
+- a supplied bastion subnet is named `AzureBastionSubnet`, which Azure requires
+  and a well-formed resource ID does not guarantee
+- `agic_subnet_id` is set when AGIC is on, and `bastion_subnet_id` when the
+  bastion is, since neither is carved inside a VNet you own
+- the AKS subnet has enough addresses for the configured node pools, whether you
+  supplied it or Terraform creates it. Undersizing is the one mistake that
+  survives apply: the cluster starts, and the autoscaler later stalls short of
+  `max_count` once the subnet runs dry
+- every prefix Terraform is about to carve sits inside your VNet's address
+  space. The defaults describe the VNet Terraform builds, so this is usually the
+  first thing to change on a network of your own
+- `aks_service_cidr` is set, and does not overlap your VNet's address space, and
+  `aks_dns_service_ip` sits inside it when you set one
+- subnet IDs are not set while `create_vnet = true`, where they would be ignored
+
+Whoever runs Terraform needs two kinds of access to the VNet, which normally
+lives in the network team's resource group rather than the LangSmith one:
+
+- **read** on `vnet_id` and on whichever subnets you supply, at plan time, for
+  the checks above
+- **`Microsoft.Network/virtualNetworks/subnets/write`** on `vnet_id` for every
+  subnet you leave Terraform to create. This is the larger ask of a network
+  team, and it fails at apply rather than at plan, so settle it first
+
+### AGIC and the bastion are supply-only here
+
+`create_bastion = true` and `ingress_controller = "agic"` each need a subnet to
+themselves. Terraform carves those two only out of a VNet it owns, so on this
+path you name subnets that already exist:
+
+```hcl
+agic_subnet_id    = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/appgw"
+bastion_subnet_id = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/AzureBastionSubnet"
+```
+
+Unlike the other three there is no carve fallback, so plan rejects either
+feature when `create_vnet = false` and its subnet ID is empty. Application
+Gateway v2 wants the subnet to itself and Azure recommends a `/24`. Azure Bastion
+requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger;
+plan checks the name, and Azure enforces the size at apply.
 
 ---
 
