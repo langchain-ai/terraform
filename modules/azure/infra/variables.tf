@@ -321,9 +321,11 @@ variable "istio_addon_revision" {
   default     = "asm-1-27"
 }
 
+# No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
+# terraform.tfvars for the ClusterIssuer it applies, so the declaration has to stay.
 variable "letsencrypt_email" {
   type        = string
-  description = "Email address for Let's Encrypt certificate notifications. Required when tls_certificate_source = 'letsencrypt'."
+  description = "Email address for Let's Encrypt certificate notifications. Required when tls_certificate_source is 'letsencrypt' or 'dns01'."
   default     = ""
 }
 

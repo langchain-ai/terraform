@@ -270,8 +270,8 @@ cd terraform/azure
 make init
 
 # Apply — creates all Azure resources
-# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Run apply directly — it handles the ordering in three targeted stages automatically.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 # Light deploy takes 8–12 minutes (dominated by AKS cluster provisioning).
 make apply
 ```

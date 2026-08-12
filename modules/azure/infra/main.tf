@@ -280,8 +280,8 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 1.6: ACME_EMAIL=... bash helm/scripts/apply-cluster-issuers.sh
 #   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
+#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -328,13 +328,24 @@ module "k8s_bootstrap" {
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
-  # TLS / cert-manager
+  # TLS / cert-manager. The ClusterIssuers themselves are applied by
+  # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
+  # subscription_id straight from terraform.tfvars.
   tls_certificate_source          = var.tls_certificate_source
-  letsencrypt_email               = var.letsencrypt_email
   cert_manager_identity_client_id = module.aks.cert_manager_identity_client_id
-  subscription_id                 = var.subscription_id
-  dns_zone_name                   = var.create_dns_zone ? var.langsmith_domain : ""
-  dns_resource_group_name         = azurerm_resource_group.resource_group.name
+}
+
+# The DNS-01 ClusterIssuer used to be a kubernetes_manifest in k8s-bootstrap, which
+# broke terraform plan on a fresh deploy: kubernetes_manifest opens an API connection
+# during plan and there is no cluster yet. deploy.sh already applied an identical
+# issuer, so the Terraform copy was dropped. Existing deployments keep the live
+# object; only the state entry goes.
+removed {
+  from = module.k8s_bootstrap.kubernetes_manifest.cluster_issuer_dns01
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
