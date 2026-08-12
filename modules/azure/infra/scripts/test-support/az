@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Stub `az` for exercising preflight.sh's RBAC block without a real subscription.
+# Fixtures come from $FIXTURE_DIR; anything unset falls back to a benign default.
+# Any invocation the script makes that is not handled here exits non-zero with a
+# STUB marker, so a call the tests do not model fails loudly instead of passing.
+set -uo pipefail
+
+FIX="${FIXTURE_DIR:?FIXTURE_DIR must be set}"
+ARGS="$*"
+
+emit_file() { if [ -f "$1" ]; then cat "$1"; else printf '%s' "$2"; fi; }
+
+# First existing file wins; an empty JSON array if none exist.
+pick() {
+  for candidate in "$@"; do
+    if [ -f "$candidate" ]; then cat "$candidate"; return 0; fi
+  done
+  printf '[]'
+}
+
+case "$ARGS" in
+  "version"*)
+    echo "2.88.0" ;;
+  "account show --query id"*)
+    emit_file "$FIX/sub_id" "11111111-1111-1111-1111-111111111111" ;;
+  "account show --query tenantId"*)
+    emit_file "$FIX/tenant_id" "22222222-2222-2222-2222-222222222222" ;;
+  "account show --query user.type"*)
+    emit_file "$FIX/user_type" "user" ;;
+  "account show --query user.name"*)
+    emit_file "$FIX/user_name" "app-id-here" ;;
+  "account show")
+    emit_file "$FIX/account.json" '{"name":"stub-sub","id":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222","user":{"name":"stub@example.com","type":"user"}}' ;;
+  "provider show"*)
+    echo "Registered" ;;
+  "ad signed-in-user show"*)
+    if [ -f "$FIX/no_graph" ]; then exit 1; fi
+    emit_file "$FIX/principal_id" "33333333-3333-3333-3333-333333333333" ;;
+  "ad sp show"*)
+    if [ -f "$FIX/no_graph" ]; then exit 1; fi
+    emit_file "$FIX/sp_principal_id" "44444444-4444-4444-4444-444444444444" ;;
+  *checkAccess*)
+    # Record the request so a test can assert which scopes were probed and which
+    # principal was named as the Subject.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    BODY_PATH=${ARGS#*--body @}
+    BODY_PATH=${BODY_PATH%% *}
+    if [ -f "$BODY_PATH" ]; then cp "$BODY_PATH" "$FIX/last_body.json"; fi
+
+    if [ -f "$FIX/ca_fail" ]; then exit 1; fi
+    case "$ARGS" in
+      *virtualNetworks*)
+        if [ -f "$FIX/ca_vnet_fail" ]; then exit 1; fi
+        pick "$FIX/ca_vnet.json" "$FIX/ca_all.json" ;;
+      *resourceGroups*)
+        if [ -f "$FIX/ca_rg_fail" ]; then exit 1; fi
+        pick "$FIX/ca_rg.json" "$FIX/ca_all.json" ;;
+      *)
+        if [ -f "$FIX/ca_sub_fail" ]; then exit 1; fi
+        pick "$FIX/ca_sub.json" "$FIX/ca_all.json" ;;
+    esac ;;
+  "role assignment list --scope"*)
+    # Only the fallback path reaches this, and only for the role-name list.
+    if [ -f "$FIX/assignments_fail" ]; then exit 1; fi
+    case "$ARGS" in
+      *roleDefinitionName*) emit_file "$FIX/held" "" ;;
+      *) echo "STUB: unexpected role assignment query: $ARGS" >&2; exit 1 ;;
+    esac ;;
+  *roleEligibilityScheduleInstances*)
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    emit_file "$FIX/eligibilities.json" '{"value":[]}' ;;
+  *)
+    echo "STUB: unhandled az invocation: $ARGS" >&2
+    exit 1 ;;
+esac

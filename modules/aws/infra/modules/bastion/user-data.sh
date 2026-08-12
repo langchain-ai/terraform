@@ -37,6 +37,7 @@ dnf install -y -q git
 dnf install -y -q jq
 
 # --- Pre-configure kubeconfig for the EKS cluster ---
+# shellcheck disable=SC2154  # cluster_name/region are templatefile() variables
 su - ec2-user -c "aws eks update-kubeconfig --name '${cluster_name}' --region '${region}'"
 
 # --- Set default region for AWS CLI ---

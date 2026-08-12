@@ -25,8 +25,14 @@ locals {
   nat_name    = "${local.base_name}-nat"
 
   # GKE
-  cluster_name   = "${local.base_name}-gke"
-  node_pool_name = "${local.base_name}-nodepool"
+  cluster_name                    = "${local.base_name}-gke"
+  node_pool_name                  = "${local.base_name}-nodepool"
+  sandbox_host_node_sa_account_id = "${local.base_name}-sbox-node"
+  sandbox_host_node_sa_project_roles = toset([
+    "roles/container.defaultNodeServiceAccount",
+    "roles/monitoring.metricWriter",
+    "roles/stackdriver.resourceMetadata.writer",
+  ])
 
   # Cloud SQL
   postgres_instance_name = "${local.base_name}-pg${local.suffix}"
@@ -34,7 +40,8 @@ locals {
   postgres_user_name     = "langsmith"
 
   # Redis
-  redis_instance_name = "${local.base_name}-redis${local.suffix}"
+  redis_instance_name                 = "${local.base_name}-redis${local.suffix}"
+  sandbox_juicefs_redis_instance_name = "${local.base_name}-jfs-redis${local.suffix}"
 
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
@@ -77,4 +84,3 @@ locals {
   # Feature Flags
   #----------------------------------------------------------------------------
 }
-

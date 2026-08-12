@@ -96,6 +96,14 @@ variable "location" {
 variable "subscription_id" {
   type        = string
   description = "The subscription id of the LangSmith deployment"
+
+  # A non-GUID value (e.g. the row number from `az account list -o table`) is
+  # only rejected once azurerm builds its authorizer, which reports it as an
+  # opaque auth failure. Catch the shape here instead.
+  validation {
+    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.subscription_id))
+    error_message = "subscription_id must be a GUID, not a subscription name or list index. Get it with: az account show --query id -o tsv"
+  }
 }
 
 variable "create_vnet" {
@@ -143,6 +151,12 @@ variable "postgres_source" {
     condition     = contains(["external", "in-cluster"], var.postgres_source)
     error_message = "postgres_source must be 'external' or 'in-cluster'."
   }
+}
+
+variable "postgres_sku_name" {
+  type        = string
+  description = "SKU for the PostgreSQL Flexible Server. Exposed because LocationIsOfferRestricted is sometimes scoped to a SKU family, so switching tiers can clear it without changing region."
+  default     = "GP_Standard_D2ds_v4"
 }
 
 variable "redis_source" {
@@ -332,7 +346,7 @@ variable "langsmith_domain" {
 
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Empty string = use latest available."
+  description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Must be on the chart 0.16 line — deploy.sh rejects anything else, because these values use the 0.16 schema. Empty string = use the pinned ~0.16.0 line default."
   default     = ""
 }
 
@@ -425,7 +439,7 @@ variable "langsmith_agent_builder_encryption_key" {
 
 variable "langsmith_insights_encryption_key" {
   type        = string
-  description = "Fernet key for Insights (Clio). Stored in Key Vault: langsmith-insights-encryption-key. Must stay stable — changing breaks existing insights data."
+  description = "Fernet key for Insights. Stored in Key Vault: langsmith-insights-encryption-key. Must stay stable — changing breaks existing insights data."
   sensitive   = true
   default     = ""
 }
@@ -550,7 +564,7 @@ variable "enable_agent_builder" {
 
 variable "enable_insights" {
   type        = bool
-  description = "Pass 5 — enable Insights / Clio. Read by deploy.sh — Terraform ignores this value."
+  description = "Pass 5 — enable Insights. Read by deploy.sh — Terraform ignores this value."
   default     = false
 }
 
