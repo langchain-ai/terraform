@@ -79,6 +79,8 @@ az account set --subscription <your-subscription-id>
 az account show   # verify correct subscription
 ```
 
+To deploy as a service principal instead, from CI or from a subscription that will not grant these roles to a user, see [Run as a service principal](PERMISSIONS.md#run-as-a-service-principal).
+
 ---
 
 ## Quick Start
