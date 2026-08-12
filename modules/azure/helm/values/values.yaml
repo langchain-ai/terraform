@@ -1,14 +1,12 @@
 # Azure base Helm values for LangSmith.
 #
-# Applied on every deploy, by BOTH deploy paths:
-#   - helm/scripts/deploy.sh   (shell path)  loads this as the base values file
-#   - app/main.tf              (Terraform)   loads this as the base values file
+# Applied on every deploy by helm/scripts/deploy.sh, which loads this as the base values file.
 #
 # Holds the Azure-native defaults that do NOT vary per deployment: the Azure Blob
 # Storage engine and auth/secret conventions. Everything that varies per
 # environment is layered on top:
 #   Hostname, admin email, storage account/container, Workload Identity client ID,
-#     ingress class + TLS  → values-overrides.yaml (shell) or app/locals.tf (Terraform)
+#     ingress class + TLS  → values-overrides.yaml
 #   External Postgres/Redis secret references          → same overrides layer
 #   Feature addon config (agent-deploys, insights)     → addon overlay files
 #   Resource sizing                                    → langsmith-values-sizing-*.yaml

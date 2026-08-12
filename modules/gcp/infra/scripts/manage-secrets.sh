@@ -429,7 +429,8 @@ _interactive_set() {
     local len="${#current}"
     local visible=4
     [[ $len -le 4 ]] && visible=0
-    local masked="${current:0:$visible}$(printf '%*s' $(( len - visible )) '' | tr ' ' '*')"
+    local masked
+    masked="${current:0:$visible}$(printf '%*s' $(( len - visible )) '' | tr ' ' '*')"
     echo "  Current value: $masked  ($len chars)"
   else
     echo "  Current value: $(_yellow "(not set)")"

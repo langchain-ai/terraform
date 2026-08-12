@@ -14,26 +14,12 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 |------|------|-----|------|
 | **Pass 1** | AKS cluster, Postgres, Redis, Blob, Key Vault, cert-manager, KEDA | `make apply` | ~15–20 min |
 | **Pass 1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` | ~2 min |
-| **Pass 2** | LangSmith Helm chart (~25 pods production) — **Helm path** | `make init-values` → `make deploy` | ~10 min |
-| **Pass 2** | LangSmith Helm chart (~25 pods production) — **Terraform path** | `make init-app` → `make apply-app` | ~10 min |
+| **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
-
-### Two Pass 2 paths
-
-| Path | When to use |
-|------|-------------|
-| **Helm path** (`make deploy`) | Default. Shell script with interactive output, kubeconfig refresh, pre-flight checks, and post-deploy status. Best for first-time deploys and day-2 re-deploys. |
-| **Terraform path** (`make apply-app`) | Declarative. Helm release + K8s secrets + Workload Identity SA managed in Terraform state. Best for GitOps workflows, CI/CD pipelines, and teams that want Helm in state. |
-
-> Which path you take limits the ingress and TLS combinations available, because some of that setup is imperative and only `deploy.sh` performs it. The Terraform path is complete for `nginx` and `agic`, and for `tls_certificate_source` of `none`, `existing`, or `dns01`. Use `make deploy` for:
->
-> - `istio`: needs its `IngressClass` created
-> - `istio-addon` and `envoy-gateway`: need the `GatewayClass` and `Gateway`, plus, for `envoy-gateway`, the Azure DNS label annotation on the load balancer that Envoy Gateway generates per Gateway. Without them the chart renders `HTTPRoute`s pointing at a Gateway that does not exist, and no public IP is ever created
-> - `letsencrypt` (HTTP-01): needs the `letsencrypt-prod` `ClusterIssuer`
 
 ### Two deployment tiers
 
@@ -206,7 +192,7 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 brew install azure-cli
 az --version
 
-# Terraform (>= 1.7 — `removed` blocks are used in the keyvault module)
+# Terraform (>= 1.11.0)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 
@@ -295,7 +281,7 @@ make k8s-secrets
 # 7. Generate Helm values from Terraform outputs
 make init-values
 
-# 8. Deploy LangSmith (~10 min) — Helm path
+# 8. Deploy LangSmith (~10 min)
 make deploy
 
 # 9. Check status
@@ -306,21 +292,6 @@ Or run everything after `make apply` in one shot:
 
 ```bash
 make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
-```
-
-**Terraform Helm path** (alternative to steps 5–7 above):
-
-```bash
-cp app/terraform.tfvars.example app/terraform.tfvars
-vi app/terraform.tfvars         # set admin_email at minimum
-make init-app                   # pulls infra outputs → app/infra.auto.tfvars.json + tf init
-make apply-app                  # helm release + K8s secrets + WI service account via Terraform
-```
-
-Or end-to-end with Terraform:
-
-```bash
-make deploy-all-tf   # apply → init-values → init-app → apply-app
 ```
 
 For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
@@ -361,8 +332,7 @@ matching. Set `environment = "dev"` explicitly to keep the old tag.
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA + ClusterIssuer | `make apply` |
 | **1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` |
-| **2 (Helm)** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
-| **2 (TF)** | LangSmith Helm via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
+| **2** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
 | **3** | + LangSmith Deployments (`enable_deployments = true`) — bump `min_count` to 5 first | `make apply && make init-values && make deploy` |
 | **4** | + Fleet (`enable_fleet = true`) — or the deprecated Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
 | **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
@@ -667,65 +637,8 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 
 ---
 
-### `make deploy-all` — Full deploy in one shot (Helm path)
+### `make deploy-all` — Full deploy in one shot
 Runs `apply → kubeconfig → k8s-secrets → init-values → deploy` in sequence. Use after `terraform.tfvars` is fully configured and `make init` has been run.
-
----
-
-### `make init-app` — Initialize the Terraform Helm module
-**Script:** `app/scripts/pull-infra-outputs.sh` + `terraform init`
-
-The entry point for the Terraform Helm path (Pass 2 via Terraform).
-
-- Runs `app/scripts/pull-infra-outputs.sh`:
-  - Reads 13 values from `terraform output` in `infra/`: cluster name, resource group, Key Vault name, storage account, storage container, Workload Identity client ID, namespace, TLS source, ingress controller, nginx DNS label, Front Door hostname, postgres source, redis source
-  - Reads subscription ID from `az account show`
-  - Writes all values into `app/infra.auto.tfvars.json` (gitignored) — consumed automatically by Terraform
-- Runs `terraform init -input=false` in `app/`
-
-> Run after `make apply`. Re-run after any infra changes to refresh `infra.auto.tfvars.json`.
-
----
-
-### `make plan-app` — Plan the Terraform Helm module
-Runs `init-app` then `terraform plan` in `app/`. Shows exactly what Kubernetes resources and Helm release values will be created or changed. Run before `make apply-app` to review the diff.
-
----
-
-### `make apply-app` — Deploy LangSmith via Terraform (Helm path)
-Runs `terraform apply` in `app/`. Creates or updates:
-
-- **`kubernetes_secret_v1.langsmith_config`** — reads 4–8 secrets from Key Vault and writes `langsmith-config-secret` directly into Kubernetes. Equivalent to `make k8s-secrets` but managed in Terraform state.
-- **`kubernetes_secret_v1.clickhouse`** — ClickHouse credentials secret (only when `enable_insights = true`)
-- **`kubernetes_service_account_v1.langsmith_ksa`** — `langsmith-ksa` service account with `azure.workload.identity/client-id` annotation (only when `enable_agent_deploys = true`)
-- **`helm_release.langsmith`** — Helm release using the same values chain as the shell path:
-  ```
-  values.yaml → overrides (yamlencode) → sizing file → addon files
-  ```
-- Runs 12 precondition checks before applying — fails fast with clear error messages if required variables are missing or dependencies are violated.
-
-Feature flags in `app/terraform.tfvars` (equivalent to shell path flags):
-
-```hcl
-sizing              = "production"   # minimum | dev | production | production-large
-enable_agent_deploys  = true         # Pass 3 — LangGraph Platform
-enable_fleet          = true         # Pass 4 — Fleet, standalone (chart v0.15+; requires agent_deploys; also set enable_fleet in the infra pass)
-enable_agent_builder  = false        # Pass 4 — Agent Builder, LEGACY (superseded by enable_fleet; mutually exclusive)
-enable_insights       = true         # Pass 5 — Insights / ClickHouse
-enable_polly          = true         # Pass 5 — Polly (requires agent_deploys)
-```
-
-> Prerequisites: `make init-app` must have run successfully; `app/terraform.tfvars` must have `admin_email` set.
-
----
-
-### `make destroy-app` — Destroy the Terraform Helm module
-Runs `terraform destroy` in `app/`. Removes the Helm release, K8s secrets, and the `langsmith-ksa` service account from Terraform state. Does **not** touch infra — run `make destroy` separately to remove AKS and Azure resources.
-
----
-
-### `make deploy-all-tf` — Full deploy via Terraform (end-to-end)
-Runs `apply → init-values → init-app → apply-app` in sequence. Combines Pass 1 infra and Pass 2 Terraform Helm into a single command. Use when you want the entire stack — from AKS to the running Helm release — managed by Terraform.
 
 ---
 
@@ -744,7 +657,7 @@ Runs `apply → init-values → init-app → apply-app` in sequence. Combines Pa
 ### `make status` / `make status-quick` — Health check
 **Script:** `infra/scripts/status.sh`
 
-Runs 10 checks and prints a pass/warn/fail for each:
+Runs 9 checks and prints a pass/warn/fail for each:
 
 1. **Terraform outputs** — reads cluster name, resource group, Key Vault name
 2. **Cluster connectivity** — `kubectl cluster-info`
@@ -755,7 +668,6 @@ Runs 10 checks and prints a pass/warn/fail for each:
 7. **Ingress + TLS** — ingress hosts and certificate Ready status
 8. **Key Vault secrets** — total secret count in the vault _(skipped with `--quick`)_
 9. **`langsmith-config-secret`** — key count; warns if fewer than 8 keys _(skipped with `--quick`)_
-10. **Terraform Helm App path** — checks `app/infra.auto.tfvars.json` and `app/` Terraform state; shows chart version if applied
 
 `make status-quick` skips sections 8 and 9 (no Key Vault API calls) — useful during rollouts when you just want pod counts.
 
@@ -888,45 +800,35 @@ azure/
 │       ├── _common.sh              # Shared helpers: _parse_tfvar, _tfvar_is_true, color output
 │       ├── setup-env.sh            # Bootstrap secrets → secrets.auto.tfvars
 │       ├── preflight.sh            # Pre-flight checks (az CLI, auth, providers, RBAC)
-│       ├── status.sh               # 10-section health check (supports --quick)
+│       ├── status.sh               # 9-section health check (supports --quick)
 │       ├── create-k8s-secrets.sh   # Key Vault → langsmith-config-secret
 │       └── clean.sh                # Remove all generated/sensitive local files after teardown
-├── app/                        # Pass 2 (Terraform path): Helm release managed by Terraform
-│   ├── main.tf                 # azurerm + kubernetes + helm providers; KV secrets; helm_release
-│   ├── variables.tf            # Infra inputs (from pull-infra-outputs.sh) + app config
-│   ├── locals.tf               # Hostname resolution, WI annotations, Helm overrides values
-│   ├── outputs.tf              # langsmith_url, release_name, release_status, chart_version
-│   ├── versions.tf             # azurerm ~> 3.0, helm ~> 2.16, kubernetes ~> 2.37
-│   ├── backend.tf.example      # Azure Blob backend template (copy to backend.tf)
-│   ├── terraform.tfvars.example
-│   ├── infra.auto.tfvars.json  # Generated by pull-infra-outputs.sh — gitignored
-│   └── scripts/
-│       └── pull-infra-outputs.sh   # Reads infra TF outputs → writes infra.auto.tfvars.json
-├── helm/                       # Pass 2 (Helm path): shell-script-based Helm deploy
-│   ├── scripts/
-│   │   ├── deploy.sh           # Helm values chain deploy (base + overrides + sizing + addons)
-│   │   ├── init-values.sh      # TF outputs → values-overrides.yaml; copies sizing + addon files
-│   │   ├── get-kubeconfig.sh   # az aks get-credentials wrapper
-│   │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
-│   │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
-│   └── values/
-│       ├── values.yaml                              # Azure base (NGINX, Blob WI, external secrets)
-│       ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
-│       └── examples/
-│           ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
-│           ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
-│           ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
-│           ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
-│           ├── langsmith-values-sizing-production-large.yaml  # High-volume (~1000 traces/sec)
-│           ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
-│           ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
-│           ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
-│           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights
-│           ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
-│           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure-application-gateway)
-│           ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
-│           ├── langsmith-values-ingress-envoy-gateway.yaml    # Ingress: Envoy Gateway (Gateway API)
-│           └── letsencrypt-issuer-dns01.yaml                  # cert-manager ClusterIssuer for DNS-01 TLS
+└── helm/                       # Pass 2: shell-script-based Helm deploy
+    ├── scripts/
+    │   ├── deploy.sh           # Helm values chain deploy (base + overrides + sizing + addons)
+    │   ├── init-values.sh      # TF outputs → values-overrides.yaml; copies sizing + addon files
+    │   ├── get-kubeconfig.sh   # az aks get-credentials wrapper
+    │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
+    │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
+    └── values/
+        ├── values.yaml                              # Azure base (NGINX, Blob WI, external secrets)
+        ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
+        └── examples/
+            ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
+            ├── langsmith-values.yaml                     # Annotated reference
+            ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
+            ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
+            ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
+            ├── langsmith-values-sizing-production-large.yaml  # High-volume (~1000 traces/sec)
+            ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
+            ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
+            ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
+            ├── langsmith-values-insights.yaml                 # Pass 5 — Insights
+            ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
+            ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)
+            ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
+            ├── langsmith-values-ingress-envoy-gateway.yaml    # Ingress: Envoy Gateway (Gateway API)
+            └── letsencrypt-issuer-dns01.yaml                  # cert-manager ClusterIssuer for DNS-01 TLS
 ```
 
 ---

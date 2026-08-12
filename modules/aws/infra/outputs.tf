@@ -398,19 +398,10 @@ ${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
 DNS
   : local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
 
-    2. Deploy LangSmith (pick one):
-
-       Option A — Helm scripts (recommended):
-         cd terraform/aws
-         make init-values
-         make deploy
-
-       Option B — Terraform app module:
-         cd terraform/aws
-         make init-app
-         cp app/terraform.tfvars.example app/terraform.tfvars
-         make plan-app
-         make apply-app
+    2. Deploy LangSmith:
+       cd terraform/aws
+       make init-values
+       make deploy
 
     3. Access LangSmith:
        https://${var.langsmith_domain}

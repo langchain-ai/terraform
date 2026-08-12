@@ -4,9 +4,7 @@
 # Pass 1 (infra):          make setup-env → make init → make plan → make apply
 # Pass 1.5 (secrets):      make seed-secrets → make kubeconfig → make k8s-secrets
 # Pass 2 (helm):           make init-values → make deploy
-# Pass 2 (terraform helm): make init-app → make apply-app
 # Full deploy (helm):      make deploy-all
-# Full deploy (terraform): make deploy-all-tf
 # Manage secrets:          make keyvault
 # Where am I?              make status
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
@@ -15,12 +13,10 @@
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
-        init-app plan-app apply-app destroy-app tf-app deploy-all-tf \
         clean clean-force
 
 INFRA_DIR := infra
 HELM_DIR  := helm
-APP_DIR   := app
 
 help: ## Show available targets
 	@echo ""
@@ -43,7 +39,6 @@ help: ## Show available targets
 	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
 	@echo "    make tf      ARGS=\"output keyvault_name\""
 	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
-	@echo "    make tf-app  ARGS=\"state list\"               # same, against app/"
 	@echo ""
 
 quickstart: ## Interactive setup wizard — generates terraform.tfvars
@@ -142,26 +137,6 @@ deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
 
-# ── Pass 2: App (Terraform Helm) ──────────────────────────────────────────────
-
-init-app: ## Pull infra outputs → app/infra.auto.tfvars.json, then terraform init (app)
-	$(APP_DIR)/scripts/pull-infra-outputs.sh
-	terraform -chdir=$(APP_DIR) init -input=false
-
-plan-app: init-app ## terraform plan (app) — auto-pulls infra outputs first
-	terraform -chdir=$(APP_DIR) plan $(ARGS)
-
-apply-app: ## terraform apply (app)
-	terraform -chdir=$(APP_DIR) apply $(ARGS)
-
-destroy-app: ## terraform destroy (app)
-	terraform -chdir=$(APP_DIR) destroy $(ARGS)
-
-tf-app: ## Any terraform command in app/ (make tf-app ARGS="output -json")
-	terraform -chdir=$(APP_DIR) $(ARGS)
-
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
 deploy-all: apply seed-secrets kubeconfig k8s-secrets init-values deploy ## Full deploy: infra → KV secrets → kubeconfig → K8s secrets → helm
-
-deploy-all-tf: apply seed-secrets init-values init-app apply-app ## Full Terraform deploy: infra apply → KV secrets → init-values → app init+apply

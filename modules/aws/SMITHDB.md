@@ -45,9 +45,6 @@ Infrastructure enablement does not upgrade the normal repository chart line:
 CHART_VERSION=0.16.21 make deploy
 ```
 
-For the Terraform app path, set an explicit stable `chart_version` of 0.16 or
-newer and `enable_smithdb = true` in `app/terraform.tfvars`.
-
 The generated values deploy SmithDB services with all LangSmith integration
 gates disabled:
 

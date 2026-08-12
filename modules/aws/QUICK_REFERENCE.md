@@ -249,11 +249,7 @@ make tf-app ARGS="state list"
 ```bash
 cd modules/aws
 
-# Option A: script-driven deploy
 make uninstall
-
-# Option B: Terraform-managed deploy
-make destroy-app
 
 # Then destroy infrastructure:
 # 1. Set postgres_deletion_protection = false in infra/terraform.tfvars

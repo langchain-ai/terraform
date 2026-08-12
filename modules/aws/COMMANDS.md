@@ -52,7 +52,7 @@ make apply   ARGS="-auto-approve"          # skip the approval prompt
 make destroy ARGS="-target=module.redis"   # destroy one module
 ```
 
-`make tf` and `make tf-app` take a full terraform command line, for anything the named targets don't cover:
+`make tf` takes a full terraform command line, for anything the named targets don't cover:
 
 ```bash
 make tf ARGS="output"
@@ -61,8 +61,6 @@ make tf ARGS="state list"
 make tf ARGS="state list module.eks"       # filter state to one module
 make tf ARGS="validate"
 make tf ARGS="providers"
-
-make tf-app ARGS="state list"
 ```
 
 `ARGS` set on the command line reaches every target in that invocation, including prerequisites — `make deploy-all ARGS="-auto-approve"` auto-approves the `apply` step. Combining it with `-target` on a combo target is not meaningful.
@@ -80,18 +78,6 @@ make tf-app ARGS="state list"
 
 ---
 
-## Terraform App (Pass 2 alt)
-
-| Command | Description |
-|---------|-------------|
-| `make init-app` | Pull live infra Terraform outputs into `app/infra.auto.tfvars.json` |
-| `make plan-app` | `terraform plan` for the `app/` module (auto-runs `init-app` first) |
-| `make apply-app` | Deploy LangSmith Helm release via Terraform (`app/` module) |
-| `make destroy-app` | Destroy the Helm release via Terraform; leaves infrastructure intact |
-| `make tf-app` | Run any other terraform subcommand against `app/` — `make tf-app ARGS="output -json"` |
-
----
-
 ## Fast Path
 
 | Command | Description |
@@ -99,7 +85,6 @@ make tf-app ARGS="state list"
 | `make quickdeploy` | Full deploy in one command — chains `terraform apply` → `kubeconfig` → `init-values` → `helm deploy` with gates; requires `source infra/scripts/setup-env.sh` + `make quickstart` first |
 | `make quickdeploy-auto` | Same as `quickdeploy` but non-interactive — passes `-auto-approve` to terraform; use in automation |
 | `make deploy-all` | `make apply` → `make kubeconfig` → `make init-values` → `make deploy` in sequence |
-| `make deploy-all-tf` | `make apply` → `make init-values` → Terraform `app/` plan+apply in sequence |
 
 ---
 

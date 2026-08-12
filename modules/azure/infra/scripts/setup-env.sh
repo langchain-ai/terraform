@@ -26,38 +26,67 @@ set -euo pipefail
 
 SECRETS_FILE="secrets.auto.tfvars"
 
+_REQUIRED_VARS="LANGSMITH_PG_PASSWORD LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_EMAIL"
+
+
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
-# If stdin is not a tty and the env var is not set, exit with a clear error
-# rather than silently storing empty/garbage values in secrets.auto.tfvars.
+# Prompt text goes to stderr: stdout is the return channel for the value, so
+# anything printed there is swallowed by the caller's command substitution.
 _prompt() {
   local env_var="$1"
   local prompt_text="$2"
+  local mode="${3:-}"   # "" = required secret | optional = may be left blank | visible = echo input
   local val="${!env_var:-}"
-  if [[ -z "$val" ]]; then
-    if [[ ! -t 0 ]]; then
-      echo "ERROR: setup-env.sh requires interactive input (stdin is not a tty)." >&2
-      echo "       Set env vars to skip prompts:" >&2
-      echo "         export LANGSMITH_PG_PASSWORD=..." >&2
-      echo "         export LANGSMITH_LICENSE_KEY=..." >&2
-      echo "         export LANGSMITH_ADMIN_EMAIL=..." >&2
-      echo "       Then re-run: make setup-env" >&2
-      exit 1
+  if [[ -z "$val" && -t 0 ]]; then
+    printf "%s: " "$prompt_text" >&2
+    if [[ "$mode" == "visible" ]]; then
+      read -r val || val=""   # Ctrl-D / EOF — handled by the empty check below
+    else
+      read -rs val || val=""
+      echo >&2                # -s also swallows the newline the user typed
     fi
-    printf "%s: " "$prompt_text"
-    read -rs val
-    echo
+  fi
+  if [[ -z "$val" && "$mode" != "optional" ]]; then
+    echo "ERROR: No value provided for $env_var." >&2
+    return 1
   fi
   echo "$val"
 }
+
+# ── Non-interactive guard ─────────────────────────────────────────────────────
+# A sandboxed shell (Cursor, CI, `make` under a pipe) has no tty, so prompting
+# is impossible. Checked here at top level, and reported on stdout: _prompt
+# cannot report anything itself because its stdout is captured by the caller,
+# and a harness that shows only stdout would otherwise display nothing at all.
+if [[ ! -t 0 ]]; then
+  _missing=""
+  for _v in $_REQUIRED_VARS; do
+    [[ -n "${!_v:-}" ]] || _missing="$_missing $_v"
+  done
+  if [[ -n "$_missing" ]]; then
+    echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
+    echo "       Missing:$_missing"
+    echo ""
+    echo "       Run it from a real terminal, or pre-set the values:"
+    for _v in $_missing; do
+      echo "         export $_v='<value>'"
+    done
+    echo ""
+    echo "       Then re-run: make setup-env"
+    exit 1
+  fi
+fi
 
 # ── Collect secrets ───────────────────────────────────────────────────────────
 echo ""
 echo "LangSmith — Terraform input bootstrap"
 echo ""
+echo "  Passwords are hidden as you type."
+echo ""
 
-pg_password=$(_prompt "LANGSMITH_PG_PASSWORD"  "PostgreSQL admin password  ")
-license_key=$(_prompt "LANGSMITH_LICENSE_KEY"  "LangSmith license key      ")
-admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL"  "Initial org admin email    ")
+pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "PostgreSQL admin password  ")
+license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "LangSmith license key      ")
+admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL" "Initial org admin email    " visible)
 
 # ── Write secrets.auto.tfvars ─────────────────────────────────────────────────
 cat > "$SECRETS_FILE" << EOF

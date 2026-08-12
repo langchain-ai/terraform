@@ -834,7 +834,7 @@ variable "langsmith_polly_encryption_key" {
 
 variable "sandbox_callback_signing_jwk" {
   type        = string
-  description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh and the app module when sandboxes are enabled."
+  description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh when sandboxes are enabled."
   sensitive   = true
   default     = ""
 }

@@ -35,7 +35,7 @@ Before starting, verify all of the following:
 ### Tools
 ```bash
 az --version          # Azure CLI — must be installed and logged in
-terraform --version   # >= 1.5
+terraform --version   # >= 1.11.0
 kubectl version       # any recent version
 helm version          # >= 3.x
 python3 --version     # for JSON parsing in scripts
@@ -229,16 +229,18 @@ The script prompts for:
 ```
 LangSmith — Terraform input bootstrap
 
+  Passwords are hidden as you type.
+
 PostgreSQL admin password  : ****
 LangSmith license key      : ****
-Initial org admin email    : ****
+Initial org admin email    : you@example.com
 
   Wrote secrets.auto.tfvars (chmod 600)
 ```
 
 The LangSmith app secrets — admin password, API key salt, JWT secret, and the four Fernet encryption keys — are deliberately absent. Terraform state holds every variable as plaintext, so those go straight into Key Vault in step 1d instead, after the vault exists.
 
-> **Important:** Set `LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, and `LANGSMITH_ADMIN_EMAIL` to run non-interactively (CI/CD). Without a tty and without these set, the script exits with an error rather than writing empty values.
+> **Important:** Set `LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, and `LANGSMITH_ADMIN_EMAIL` to run non-interactively — CI/CD, or a sandboxed shell such as Cursor's, where there is no terminal to prompt on. Without a tty and without these set, the script exits with a message naming what is missing rather than writing empty values.
 
 ---
 
