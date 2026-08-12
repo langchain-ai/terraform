@@ -585,7 +585,7 @@ kubectl describe certificate langsmith-tls -n langsmith
 # Events: ... clusterissuers.cert-manager.io "letsencrypt-prod" not found
 ```
 
-**Cause:** When `tls_certificate_source = "letsencrypt"` is set, the `k8s-bootstrap` module creates a `letsencrypt-prod` ClusterIssuer via `kubernetes_manifest`. If you deployed from an older version of the module (before `cluster_issuer_http01` was added), the ClusterIssuer was never created.
+**Cause:** `deploy.sh` applies the `letsencrypt-prod` ClusterIssuer when `tls_certificate_source` is `letsencrypt` or `dns01`. Terraform never creates it. You hit this when `make deploy` has not run yet, when `tls_certificate_source` was unset in tfvars at the time it ran, or when the `dns01` branch skipped the issuer because `langsmith_domain` was empty (`make deploy` prints a warning in that case).
 
 **Fix — apply it manually:**
 ```bash
