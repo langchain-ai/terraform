@@ -350,15 +350,6 @@ variable "tls_certificate_source" {
     condition     = contains(["none", "letsencrypt", "dns01", "existing"], var.tls_certificate_source)
     error_message = "tls_certificate_source must be 'none', 'letsencrypt', 'dns01', or 'existing'."
   }
-
-  # DNS-01 has no dns_label equivalent: cert-manager writes TXT records under a
-  # zone it has to be told by name. Left empty, langsmith_domain reaches the dns
-  # module as an empty zone name, and the deployment applies its way to a
-  # certificate that can never be issued.
-  validation {
-    condition     = var.tls_certificate_source != "dns01" || var.langsmith_domain != ""
-    error_message = "tls_certificate_source = \"dns01\" requires langsmith_domain. DNS-01 validates a real hostname, so there is no Azure public-IP DNS label equivalent. Set langsmith_domain, or use \"letsencrypt\" for HTTP-01."
-  }
 }
 
 variable "postgres_admin_username" {
