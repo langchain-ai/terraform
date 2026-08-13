@@ -559,6 +559,7 @@ module "aks" {
   subnet_id           = local.aks_subnet_id
   service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
+  kubernetes_version  = var.aks_kubernetes_version
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count
