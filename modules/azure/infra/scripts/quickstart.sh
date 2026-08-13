@@ -1565,11 +1565,12 @@ printf "     ${CYAN}make preflight${RESET}\n"
 echo ""
 printf "  4. Deploy infrastructure (~15–20 min):\n"
 printf "     ${CYAN}make init && make apply${RESET}\n"
-# make apply runs -auto-approve across three targeted stages, and make plan
-# cannot run before the cluster exists, so the summary above is the last look at
-# a first deployment before it is built.
-printf "     ${DIM}apply auto-approves. The summary above is the review — plan needs a cluster.${RESET}\n"
-printf "     ${DIM}Once it exists, run ${RESET}${CYAN}make plan${RESET}${DIM} before any later apply.${RESET}\n"
+# make apply runs -auto-approve across three targeted stages, so the summary
+# above is the last look at a first deployment before it is built. Deliberately
+# silent on whether make plan works beforehand: that depends on whether any
+# kubernetes_manifest is left in the config, which is in flux.
+printf "     ${DIM}apply auto-approves. The summary above is your review.${RESET}\n"
+printf "     ${DIM}Run ${RESET}${CYAN}make plan${RESET}${DIM} before any later apply.${RESET}\n"
 echo ""
 printf "  5. Get cluster credentials + create K8s secrets:\n"
 printf "     ${CYAN}make kubeconfig && make k8s-secrets${RESET}\n"
