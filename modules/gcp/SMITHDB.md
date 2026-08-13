@@ -99,6 +99,16 @@ host key, and exposes the instance connection name.  `init-values.sh` reads
 those outputs and generates the sidecar into
 `langsmith-values-smithdb-overrides.yaml`. Nothing here needs hand-editing.
 
+The generated args include `--private-ip`, which is not optional here. The Cloud
+SQL Auth Proxy dials the instance's public IP by default, and this module creates
+the metastore with `ipv4_enabled = false`, so without the flag the proxy starts
+cleanly, passes its health checks, accepts the loopback connection and only then
+fails the outbound dial with `instance does not have IP of type "PUBLIC"`. The
+SmithDB container sees a connection reset rather than a proxy that refused to
+start, which points the investigation at the wrong container. Note the asymmetry
+if you are comparing against the AlloyDB path below: `alloydb-auth-proxy`
+defaults to private IP and needs a flag for the public or PSC cases instead.
+
 The sidecar is emitted under `smithdb.commonInitContainers`, not under the
 per-component `smithdb.<service>.deployment.sidecars`. That distinction matters:
 `deployment.sidecars` exists, but the chart only wires it into the SmithDB

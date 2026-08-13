@@ -668,6 +668,13 @@ if [[ "$_enable_smithdb" == "true" ]]; then
       args:
         - "--address=127.0.0.1"
         - "--port=${SMITHDB_METASTORE_PORT}"
+        # The proxy dials the instance's PUBLIC IP unless told otherwise, and
+        # this module creates the metastore with ipv4_enabled = false. Without
+        # this flag the proxy starts, passes its health checks and accepts the
+        # local connection, then fails the dial with 'instance does not have IP
+        # of type "PUBLIC"' - so the failure surfaces as the SmithDB container
+        # getting its connection reset, not as a proxy that would not start.
+        - "--private-ip"
         - "--structured-logs"
         - "--health-check"
         - "--http-address=0.0.0.0"
