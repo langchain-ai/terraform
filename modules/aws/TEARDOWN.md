@@ -35,7 +35,7 @@ helm list -A
 kubectl get namespaces
 ```
 
-**Data warning:** Teardown permanently deletes the RDS instance, S3 bucket contents, and SSM parameters. Export any data you need to retain before proceeding.
+**Data warning:** Teardown permanently deletes the RDS instance and S3 bucket contents. `make purge-secrets` permanently deletes this deployment's SSM parameters. Export any data you need to retain before proceeding.
 
 ---
 
@@ -231,6 +231,19 @@ aws ec2 describe-vpcs \
 
 ---
 
+## A7 — Purge SSM Parameters and Local Files
+
+After `terraform destroy` succeeds and Terraform state has no managed resources, run this from `modules/aws/`:
+
+```bash
+make purge-secrets
+make clean
+```
+
+`make purge-secrets` displays the exact SSM prefix and region, then asks for confirmation before deletion. Run it only when the state-backed teardown above is complete.
+
+---
+
 # Option B: Teardown Without Terraform State
 
 Use this when Terraform state is lost (deleted, corrupted, or never configured a remote backend). Everything must be deleted manually via AWS CLI in reverse dependency order.
@@ -370,22 +383,60 @@ aws s3 rb s3://$PREFIX-traces
 
 ## B6 — Delete SSM Parameters
 
-```bash
-# List parameters first to confirm
-aws ssm describe-parameters --region $REGION \
-  --parameter-filters "Key=Name,Option=BeginsWith,Values=/langsmith/$PREFIX" \
-  --query 'Parameters[*].Name' --output json
+When Terraform reports no state file and no local state backup exists,
+`make purge-secrets` can remove the parameters after its typed-prefix confirmation.
+Use this manual fallback only when Terraform state cannot be read, and only after
+confirming that the deployment has been removed.
 
-# Delete all
-aws ssm delete-parameters --region $REGION --names \
-  "/langsmith/$PREFIX/agent-builder-encryption-key" \
-  "/langsmith/$PREFIX/insights-encryption-key" \
-  "/langsmith/$PREFIX/langsmith-admin-password" \
-  "/langsmith/$PREFIX/langsmith-api-key-salt" \
-  "/langsmith/$PREFIX/langsmith-jwt-secret" \
-  "/langsmith/$PREFIX/langsmith-license-key" \
-  "/langsmith/$PREFIX/postgres-password" \
-  "/langsmith/$PREFIX/redis-auth-token"
+```bash
+set -euo pipefail
+
+SSM_PREFIX="/langsmith/$PREFIX"
+if ! SSM_PARAMS=$(aws ssm get-parameters-by-path \
+  --region "$REGION" \
+  --path "$SSM_PREFIX/" \
+  --recursive \
+  --query 'Parameters[].Name' \
+  --output text); then
+  echo "Could not list SSM parameters under $SSM_PREFIX/" >&2
+  exit 1
+fi
+
+if [ -z "$SSM_PARAMS" ] || [ "$SSM_PARAMS" = "None" ]; then
+  echo "No SSM parameters found under $SSM_PREFIX/"
+  exit 0
+fi
+
+# AWS CLI text output can contain tabs and newlines across pages.
+PARAMETER_NAMES=()
+while IFS= read -r name; do
+  [ -n "$name" ] && PARAMETER_NAMES+=("$name")
+done < <(printf '%s\n' "$SSM_PARAMS" | tr '\t' '\n')
+
+echo "This permanently deletes ${#PARAMETER_NAMES[@]} SSM parameter(s)."
+printf "Type '%s/' in region '%s' to continue: " "$SSM_PREFIX" "$REGION"
+read -r CONFIRM
+if [ "$CONFIRM" != "$SSM_PREFIX/" ]; then
+  echo "Aborted."
+  exit 0
+fi
+
+# SSM accepts at most 10 names per delete-parameters call.
+for ((i=0; i<${#PARAMETER_NAMES[@]}; i+=10)); do
+  BATCH=("${PARAMETER_NAMES[@]:i:10}")
+  if ! INVALID_COUNT=$(aws ssm delete-parameters \
+    --region "$REGION" \
+    --names "${BATCH[@]}" \
+    --query 'length(InvalidParameters)' \
+    --output text); then
+    echo "SSM deletion failed for batch starting at parameter $i." >&2
+    exit 1
+  fi
+  if [ "$INVALID_COUNT" != "0" ]; then
+    echo "SSM reported $INVALID_COUNT invalid parameter(s); cleanup is incomplete." >&2
+    exit 1
+  fi
+done
 ```
 
 ## B7 — Delete ALBs and Target Groups
