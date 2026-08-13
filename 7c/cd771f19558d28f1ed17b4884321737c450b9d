@@ -1,0 +1,21 @@
+modules/gcp/SMITHDB.md
+  s_6e46f9c799feb2::t_4b6a1015f21e1d 102-111
+modules/gcp/helm/scripts/init-values.sh
+  s_6e46f9c799feb2::t_51cba890cbf539 671-677
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7ccd771f19558d28f1ed17b4884321737c450b9d",
+  "prompts": {},
+  "sessions": {
+    "s_6e46f9c799feb2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cc1d929e-8ca6-4ba5-9a9f-87fcd9a9d5b2",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
