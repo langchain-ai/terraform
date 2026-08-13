@@ -28,6 +28,10 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
 | **Production** | Azure DB for PostgreSQL (private) | Azure Managed Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
+Three variables pick the tier: `postgres_source`, `redis_source`, and
+`clickhouse_source`, each `"external"` or `"in-cluster"`. Postgres and Redis
+default to `external`, ClickHouse to `in-cluster`.
+
 > **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
 >
 > **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
@@ -128,7 +132,6 @@ make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
 ```
 
 For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
-For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
 ### Naming your deployment
 
@@ -912,10 +915,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Service Reference
 
 See [SERVICES.md](SERVICES.md) — what each pod does, what it depends on, and which pass enables it.
-
-## Light Deploy (Demo / POC)
-
-See [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — full guide for all-in-cluster deployment (no external Postgres/Redis), using Front Door for TLS.
 
 ## Troubleshooting
 

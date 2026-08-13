@@ -569,7 +569,7 @@ infra/scripts/_common.sh: No such file or directory
 
 **Cause:** These scripts are tracked in git but were untracked (`??`) files — meaning they existed locally but had never been committed. After a fresh clone or `git clean -f`, they are absent.
 
-**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, they can be recreated from the source in `BUILDING_LIGHT_LANGSMITH.md` or by cherry-picking the commit that adds them.
+**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, cherry-pick the commit that adds them.
 
 **Scripts that were added (now committed):**
 | Script | Purpose |
