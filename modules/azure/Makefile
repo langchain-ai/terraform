@@ -8,7 +8,7 @@
 # Manage secrets:          make keyvault
 # Where am I?              make status
 
-.PHONY: help quickstart setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart setup-env preflight keyvault status status-quick \
         init plan apply destroy \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -24,6 +24,9 @@ help: ## Show available targets
 quickstart: ## Interactive setup wizard — generates terraform.tfvars
 	$(INFRA_DIR)/scripts/quickstart.sh
 
+test-quickstart: ## Unit-test the quickstart wizard's resume layer (no Azure, no prompts)
+	$(INFRA_DIR)/scripts/test-quickstart-state.sh
+
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh
 
@@ -38,7 +41,7 @@ status-quick: ## Quick status check (skip Key Vault and K8s queries)
 setup-env: ## Bootstrap secrets → secrets.auto.tfvars (prompts on first run, reads KV on repeat)
 	cd $(INFRA_DIR) && bash scripts/setup-env.sh
 
-preflight: ## Run Azure pre-flight checks (login, providers, RBAC, terraform.tfvars)
+preflight: ## Run Azure pre-flight checks (login, providers, RBAC, terraform.tfvars, global name availability)
 	cd $(INFRA_DIR) && bash scripts/preflight.sh
 
 test-preflight: ## Run the pre-flight RBAC tests (stubbed az, no Azure account needed)

@@ -1,14 +1,72 @@
-# ── Deployment identifier ─────────────────────────────────────────────────────
+# ── Deployment name ───────────────────────────────────────────────────────────
 
+variable "name_prefix" {
+  type        = string
+  description = "Name of this deployment, appended to every resource name and used as the default 'environment' tag (e.g. \"prod\", \"staging\", \"dev-dz\"). Write it without a hyphen — Terraform inserts the separator, so \"prod\" gives langsmith-rg-prod. Empty means no suffix. Set in terraform.tfvars."
+  default     = ""
+
+  # Hyphens are allowed between alphanumerics only. A trailing or doubled hyphen
+  # would pass here and then fail mid-apply: Key Vault names must end in a
+  # letter or digit and reject consecutive hyphens, and AKS names must start and
+  # end alphanumeric. Cheaper to reject at plan than to read an Azure name error.
+  validation {
+    condition     = var.name_prefix == "" || can(regex("^-?[a-z0-9](-?[a-z0-9])*$", var.name_prefix))
+    error_message = "name_prefix must be empty, or lowercase letters and numbers separated by single hyphens (e.g. \"prod\", \"dev-dz\"). No trailing or doubled hyphen — Azure rejects the resulting Key Vault and AKS names. A leading hyphen is accepted and ignored."
+  }
+}
+
+# Replaced by name_prefix. Kept declared purely so an un-migrated
+# terraform.tfvars fails the plan with an explanation, rather than being
+# ignored as an undeclared variable — which would drop name_prefix to its
+# empty default and rename (destroy and recreate) every resource.
 variable "identifier" {
   type        = string
-  description = "Short suffix appended to every resource name to distinguish environments (e.g. \"-prod\", \"-staging\"). Must start with a hyphen or be empty. Set in terraform.tfvars."
+  description = "Removed — use name_prefix instead."
   default     = ""
 
   validation {
-    condition     = var.identifier == "" || can(regex("^-[a-z0-9][a-z0-9-]*$", var.identifier))
-    error_message = "identifier must be empty or a hyphen followed by lowercase letters/numbers/hyphens (e.g. \"-prod\", \"-dev-dz\")."
+    condition     = var.identifier == ""
+    error_message = "identifier has been replaced by name_prefix — rename the variable and keep the value: identifier = \"-prod\" becomes name_prefix = \"prod\" (the leading hyphen is now optional, so \"-prod\" also works). Resource names are unchanged by this migration."
   }
+}
+
+# ── Resource naming scheme ────────────────────────────────────────────────────
+# Redis, Postgres, Storage, and Key Vault names live in a GLOBAL Azure namespace
+# shared by every tenant. The legacy scheme ("langsmith-<resource><name_suffix>")
+# produces the same name for every deployment of this module, so two customers
+# both running name_prefix = "dev" collide and the second one fails mid-apply.
+#
+# unique_resource_names switches to "ls-<resource><name_suffix>-<hash>", where the
+# hash is derived from subscription + name_suffix: deterministic (stable across
+# applies, no random provider) and unique per subscription. The shorter "ls"
+# base is what buys back the characters the hash needs inside the 24-char
+# Storage and Key Vault limits.
+variable "unique_resource_names" {
+  type        = bool
+  description = "Use the collision-resistant naming scheme (ls- base + per-subscription hash on globally-unique names). Enabled in every terraform.tfvars template. Leave false on an existing deployment: turning it on renames every resource, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. Pin current names via postgres_name/redis_name/storage_account_name/keyvault_name instead."
+  default     = false
+}
+
+# ── Explicit name overrides ───────────────────────────────────────────────────
+# Each defaults to "" meaning "derive it". Set one to pin an existing resource's
+# name, or to work around a collision without renaming the whole deployment.
+
+variable "postgres_name" {
+  type        = string
+  description = "Name for the PostgreSQL Flexible Server. Globally unique (becomes <name>.postgres.database.azure.com), 3-63 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "redis_name" {
+  type        = string
+  description = "Name for the Azure Managed Redis cluster. Globally unique (becomes <name>.<region>.redisenterprise.cache.azure.net), 1-60 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "storage_account_name" {
+  type        = string
+  description = "Name for the blob Storage Account. Globally unique, 3-24 chars, lowercase alphanumeric only — hyphens are stripped before use. Empty derives from the naming scheme."
+  default     = ""
 }
 
 # ── Resource tagging ──────────────────────────────────────────────────────────
@@ -17,13 +75,8 @@ variable "identifier" {
 
 variable "environment" {
   type        = string
-  description = "Deployment environment. Used as the 'environment' tag on all resources."
-  default     = "dev"
-
-  validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be 'dev', 'staging', or 'prod'."
-  }
+  description = "Value of the 'environment' tag on all resources. Defaults to name_prefix — set this only when the tag needs to differ from the deployment name (e.g. name_prefix = \"prod-eastus\", environment = \"prod\")."
+  default     = ""
 }
 
 variable "owner" {
@@ -42,9 +95,9 @@ variable "cost_center" {
 
 variable "keyvault_name" {
   type        = string
-  description = "Name for the Azure Key Vault. Must be globally unique, 3-24 chars. Defaults to 'langsmith-kv<identifier>' which you may need to customize to avoid naming conflicts."
+  description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme."
   default     = ""
-  # When empty, main.tf computes: "langsmith-kv${local.identifier}"
+  # When empty, main.tf computes: "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
 }
 
 variable "keyvault_purge_protection" {
@@ -97,32 +150,95 @@ variable "subscription_id" {
 
 variable "create_vnet" {
   type        = bool
-  description = "Whether to create a new VNet. If false, you will need to provide a vnet id and subnet ids."
+  description = "Whether to create a new VNet. If false, vnet_id is required and each subnet is either supplied via its *_subnet_id variable or carved out of that VNet by Terraform."
   default     = true
 }
 
 variable "vnet_id" {
   type        = string
-  description = "The id of the existing VNet to use. If create_vnet is false, this is required."
+  description = "The id of the existing VNet to use. Required when create_vnet is false. Any subnet Terraform creates is placed in this VNet's resource group."
   default     = ""
+
+  validation {
+    condition     = var.vnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.vnet_id))
+    error_message = "vnet_id must be a full VNet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
+  }
 }
+
+# ── Bring-your-own subnets (optional, only when create_vnet = false) ──────────
+# Each subnet is independent. Supply an ID to reuse an existing subnet; leave it
+# empty and Terraform creates that subnet inside vnet_id using the matching
+# *_subnet_address_prefix, with the correct delegation applied.
+#
+# The IDs are matched against the full 11-segment shape, case-insensitively.
+# Anchoring both ends is what lets main.tf index the segments positionally to
+# locate a supplied subnet, and Azure treats resource IDs as case-insensitive.
 
 variable "aks_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the AKS cluster. If create_vnet is false, this is required."
+  description = "The id of an existing subnet to use for the AKS cluster. Leave empty to have Terraform create one in vnet_id using aks_subnet_address_prefix. An existing subnet must carry the Microsoft.Storage and Microsoft.KeyVault service endpoints: the blob storage firewall is always default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is absent. Terraform checks this at plan time, or adds them itself when manage_byo_subnet_service_endpoints is set."
   default     = ""
+
+  validation {
+    condition     = var.aks_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.aks_subnet_id))
+    error_message = "aks_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
 }
 
 variable "postgres_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the Postgres server. If create_vnet is false, this is required."
+  description = "The id of an existing subnet to use for the Postgres server. Leave empty to have Terraform create one in vnet_id using postgres_subnet_address_prefix. An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and hold no other resources. Terraform checks the delegation at plan time."
   default     = ""
+
+  validation {
+    condition     = var.postgres_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.postgres_subnet_id))
+    error_message = "postgres_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
 }
 
 variable "redis_subnet_id" {
   type        = string
-  description = "The id of the existing subnet to use for the Redis server. If create_vnet is false, this is required."
+  description = "The id of an existing subnet to use for the Redis private endpoint. Leave empty to have Terraform create one in vnet_id using redis_subnet_address_prefix. This subnet must NOT be delegated — Azure Managed Redis is reached through a private endpoint, and a delegated subnet would reject it."
   default     = ""
+
+  validation {
+    condition     = var.redis_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.redis_subnet_id))
+    error_message = "redis_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "agic_subnet_id" {
+  type        = string
+  description = "The id of an existing subnet for the Application Gateway, required when ingress_controller = \"agic\" and create_vnet = false. Unlike the three above there is no carve path: Terraform will not create an Application Gateway subnet inside a VNet it does not own. Application Gateway v2 needs the subnet to itself, and Azure recommends a /24."
+  default     = ""
+
+  validation {
+    condition     = var.agic_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.agic_subnet_id))
+    error_message = "agic_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "bastion_subnet_id" {
+  type        = string
+  description = "The id of an existing subnet for Azure Bastion, required when create_bastion = true and create_vnet = false. Azure requires the subnet be named exactly AzureBastionSubnet and be /26 or larger; Terraform checks the name at plan time. There is no carve path, for the same reason as agic_subnet_id."
+  default     = ""
+
+  validation {
+    condition     = var.bastion_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.bastion_subnet_id))
+    error_message = "bastion_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "manage_byo_subnet_service_endpoints" {
+  type        = bool
+  description = "Add the Microsoft.Storage and Microsoft.KeyVault service endpoints to the subnet given as aks_subnet_id, instead of failing the plan when they are missing. Terraform patches only that one property and leaves the rest of the subnet — address prefixes, delegations, NSG and route table associations — to whoever owns it. Needs Microsoft.Network/virtualNetworks/subnets/write on the subnet, so leave this false when it belongs to a network team that only granted read, or when their own tooling manages its endpoints and both would rewrite the property on every run."
+  default     = false
+}
+
+variable "aks_subnet_address_prefix" {
+  type        = list(string)
+  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. The default is sized for the VNet Terraform builds; under create_vnet = false it must fall inside your VNet's address space, which plan also checks."
+  default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
 variable "postgres_database_name" {
@@ -150,7 +266,7 @@ variable "postgres_sku_name" {
 
 variable "redis_source" {
   type        = string
-  description = "Redis deployment type. 'external' provisions Azure Cache for Redis (private VNet). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
+  description = "Redis deployment type. 'external' provisions Azure Managed Redis (private VNet). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
   default     = "external"
 
   validation {
@@ -172,13 +288,13 @@ variable "clickhouse_source" {
 
 variable "redis_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the Redis subnet. Can be disjoint IP ranges."
+  description = "Prefix for the Redis subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
   default     = ["10.0.48.0/20"] # 4k IP addresses
 }
 
 variable "postgres_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the Postgres subnet. Can be disjoint IP ranges."
+  description = "Prefix for the Postgres subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
   default     = ["10.0.32.0/20"] # 4k IP addresses
 }
 
@@ -252,16 +368,64 @@ variable "default_node_pool_max_pods" {
   default     = 60
 }
 
+# Both of these are empty by default rather than carrying the create-path value,
+# because 10.0.64.0/20 is only safe against the VNet Terraform builds. main.tf
+# fills them in for create_vnet = true and requires aks_service_cidr under
+# bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "The service CIDR of the AKS cluster"
-  default     = "10.0.64.0/20"
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Size it /20: the range is virtual, so a large one costs no address space, and /24 (Azure's floor) caps the cluster at 251 Services, which a Pass 4 deployment can reach because LangGraph Platform adds Services per deployment. Fixed on the cluster at creation — outgrowing it means rebuilding the cluster."
+  default     = ""
+
+  # Empty is the not-set sentinel main.tf falls back on, so it has to pass. Any
+  # other value is parsed here rather than in the locals: cidrhost() derives the
+  # CoreDNS address and the overlap bounds from it, and locals evaluate before
+  # preconditions, so a bad value fails as a function error that names neither
+  # the variable nor the fix.
+  #
+  # cidrnetmask() rather than cidrhost() because it is the CIDR function that
+  # rejects IPv6, which cidrhost() accepts and the overlap math cannot use — it
+  # splits the network address on "." and subtracts the prefix from 32, so an
+  # IPv6 range reaches tonumber() whole and fails as the same unattributable
+  # function error. Every other verdict is identical between the two.
+  validation {
+    condition     = var.aks_service_cidr == "" || can(cidrnetmask(var.aks_service_cidr))
+    error_message = "aks_service_cidr must be an IPv4 CIDR range such as 10.128.0.0/20, not a subnet resource ID. No subnet is created for this range — Kubernetes allocates ClusterIPs from it, so it must sit outside your VNet's address space."
+  }
+
+  # Host bits set is the value that parses and still sends Azure something other
+  # than what plan checked. Every CIDR function masks them off, so the overlap
+  # precondition and the derived CoreDNS address are computed against the network
+  # address while main.tf hands the cluster the literal string. Azure then either
+  # rejects it partway through apply or stores the masked form, and service_cidr
+  # forces replacement, so a stored mismatch reads as drift and proposes
+  # rebuilding the cluster on every later plan.
+  #
+  # try(..., true) rather than can(): a value that is not a CIDR at all already
+  # fails the check above, and failing both reports two errors for one typo.
+  validation {
+    condition     = var.aks_service_cidr == "" || try(var.aks_service_cidr == cidrsubnet(var.aks_service_cidr, 0, 0), true)
+    error_message = "aks_service_cidr (${var.aks_service_cidr}) has host bits set. Use ${try(cidrsubnet(var.aks_service_cidr, 0, 0), "the network address")}, the network address of that range. Terraform masks the host bits when it checks the range against your VNet, but sends the value as written to Azure, so the range checked and the range created are not the same one."
+  }
 }
 
 variable "aks_dns_service_ip" {
   type        = string
-  description = "The DNS service IP of the AKS cluster"
-  default     = "10.0.64.10"
+  description = "CoreDNS ClusterIP. Must sit inside aks_service_cidr, which plan checks. Defaults to the eleventh address of aks_service_cidr, which is the Azure convention (10.0.64.10 for the default range)."
+  default     = ""
+
+  # Shape only, for the ordering reason aks_service_cidr is checked here: the
+  # containment precondition reduces this to a number in the locals, locals
+  # evaluate first, and anything that is not four dotted octets fails there as a
+  # tonumber() error naming neither the variable nor the fix. Appending /32 is
+  # what makes cidrnetmask() a bare-address check — a value that already carries
+  # a prefix produces two and fails to parse. Containment itself needs
+  # aks_service_cidr, which a validation block cannot reach under this module's
+  # >= 1.5 floor, so it lives on validate_network instead.
+  validation {
+    condition     = var.aks_dns_service_ip == "" || can(cidrnetmask("${var.aks_dns_service_ip}/32"))
+    error_message = "aks_dns_service_ip must be a bare IPv4 address such as 10.128.0.10, with no prefix length. It is one ClusterIP taken out of aks_service_cidr, not a range."
+  }
 }
 
 variable "additional_node_pools" {
@@ -300,7 +464,7 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX via Helm. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on, recommended on Azure). 'agic' = Application Gateway Ingress Controller. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
+  description = "Ingress controller to install. 'nginx' = NGINX via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
   default     = "nginx"
 
   validation {
@@ -395,14 +559,14 @@ variable "langsmith_admin_email" {
 
 variable "create_waf" {
   type        = bool
-  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). Attach to Application Gateway or Front Door manually after creation."
+  description = "Deploy an Azure WAF policy (OWASP 3.2 + bot protection). With ingress_controller = 'agic' the policy is attached to the Application Gateway and forces its WAF_v2 tier. Any other ingress controller leaves the policy unattached, for a Front Door or a gateway you own to reference."
   default     = false
 }
 
 variable "waf_mode" {
   type        = string
-  description = "WAF enforcement mode: Detection (log only) or Prevention (block)"
-  default     = "Prevention"
+  description = "WAF enforcement mode: Detection (log only) or Prevention (block). Detection by default because OWASP CRS matches SQL and script fragments that appear legitimately in LangSmith prompts and traces. Review the firewall log for false positives, add exclusions, then switch to Prevention."
+  default     = "Detection"
 }
 
 # ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -544,12 +708,23 @@ variable "agic_subnet_address_prefix" {
 
 variable "agw_sku_tier" {
   type        = string
-  description = "Application Gateway SKU tier. 'Standard_v2' or 'WAF_v2' (enables WAF). Only used when ingress_controller = 'agic'."
+  description = "Application Gateway SKU tier. Only used when ingress_controller = 'agic'. To turn WAF on, set create_waf = true rather than setting this to 'WAF_v2': create_waf selects the tier and creates the policy, and Azure rejects a WAF_v2 gateway that has no policy attached."
   default     = "Standard_v2"
 
   validation {
     condition     = contains(["Standard_v2", "WAF_v2"], var.agw_sku_tier)
     error_message = "agw_sku_tier must be 'Standard_v2' or 'WAF_v2'."
+  }
+}
+
+variable "agic_network_contributor_scope" {
+  type        = string
+  description = "Where AGIC's identity gets Network Contributor. 'vnet' grants it on the whole virtual network, which is the default and what existing deployments have. 'subnet' grants it only on the Application Gateway subnet, which is all AGIC needs and the right choice for a VNet you do not own. 'none' skips the assignment for an operator who creates it themselves. Only used when ingress_controller = 'agic'."
+  default     = "vnet"
+
+  validation {
+    condition     = contains(["vnet", "subnet", "none"], var.agic_network_contributor_scope)
+    error_message = "agic_network_contributor_scope must be 'vnet', 'subnet' or 'none'."
   }
 }
 

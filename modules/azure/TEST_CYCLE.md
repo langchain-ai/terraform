@@ -33,8 +33,7 @@ Owner includes both. Contributor alone is insufficient — role assignments requ
 
 ```hcl
 subscription_id              = "your-azure-subscription-id"
-identifier                   = "-dev"
-environment                  = "dev"
+name_prefix                  = "dev"
 location                     = "eastus"
 aks_deletion_protection      = false   # required for clean terraform destroy after test
 postgres_deletion_protection = false   # required for clean terraform destroy after test
@@ -109,7 +108,7 @@ Review the plan. Expected resource categories:
 - Azure Blob storage account + container
 - Azure Key Vault, its RBAC role assignments, and two secrets (Postgres password, license key)
 - Azure DB for PostgreSQL Flexible Server + private endpoint
-- Azure Cache for Redis Premium + private endpoint
+- Azure Managed Redis + private endpoint
 - cert-manager, KEDA, NGINX ingress Helm releases
 - Kubernetes namespace `langsmith`, K8s ServiceAccount
 
@@ -216,11 +215,11 @@ terraform -chdir=infra output
 ```
 Expected key outputs:
 ```
-aks_cluster_name       = "langsmith-aks-<identifier>"
-keyvault_name          = "langsmith-kv-<identifier>"
+aks_cluster_name       = "langsmith-aks-<name_prefix>"
+keyvault_name          = "langsmith-kv-<name_prefix>"
 langsmith_url          = "https://<dns_label>.eastus.cloudapp.azure.com"
-resource_group_name    = "langsmith-rg-<identifier>"
-storage_account_name   = "langsmithblob<identifier>"
+resource_group_name    = "langsmith-rg-<name_prefix>"
+storage_account_name   = "langsmithblob<name_prefix>"
 ```
 
 ### Full health check
@@ -334,7 +333,7 @@ make clean
 
 > **`make clean` before `make destroy` = unrecoverable.** `make clean` deletes `terraform.tfstate`.
 > Without state, Terraform cannot destroy anything. You'll have to delete Azure resources manually:
-> `az group delete --name langsmith-rg-<identifier> --yes`
+> `az group delete --name langsmith-rg-<name_prefix> --yes`
 
 **Before destroy, verify these are set in `terraform.tfvars`:**
 - `aks_deletion_protection      = false`
@@ -346,17 +345,17 @@ that hold the subnet. Delete the LB manually from Azure Portal → Load Balancer
 `kubernetes` LB → delete, then re-run `make destroy`.
 
 **Key Vault soft-delete after destroy:** Even with `purge_protection = false`, Azure retains the
-Key Vault in soft-deleted state for 7 days. If you re-deploy with the same `identifier`:
+Key Vault in soft-deleted state for 7 days. If you re-deploy with the same `name_prefix`:
 ```bash
-az keyvault purge --name langsmith-kv-<identifier> --location <region>
+az keyvault purge --name langsmith-kv-<name_prefix> --location <region>
 ```
-Or use a different `identifier` suffix for the next deploy.
+Or use a different `name_prefix` for the next deploy.
 
 ---
 
 ## Key Vault Secret Reference
 
-Secrets stored in Azure Key Vault at `langsmith-kv<identifier>`:
+Secrets stored in Azure Key Vault at `langsmith-kv-<name_prefix>`:
 
 | Secret name | Auto-generated | Rotatable |
 |-------------|---------------|-----------|

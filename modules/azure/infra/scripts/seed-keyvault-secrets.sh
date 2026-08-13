@@ -45,12 +45,15 @@ INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # rules as this script.
 source "$SCRIPT_DIR/_common.sh"
 
-# ── Resolve Key Vault name from terraform output ───────────────────────────────
-if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  # fallback: read identifier from terraform.tfvars
-  _identifier=$(grep -E '^\s*identifier\s*=' "$INFRA_DIR/terraform.tfvars" \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' | tr -d '[:space:]') || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+# ── Resolve Key Vault name ─────────────────────────────────────────────────────
+# Priority: terraform output → derived from terraform.tfvars. The -n guard is not
+# redundant: `terraform output -raw` exits 0 against an empty state and prints its
+# "no outputs" warning to stdout, so an exit-code-only check assigns the warning
+# text as the vault name.
+if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
+  : # got it from terraform output
+else
+  KV_NAME=$(_derive_kv_name)
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 

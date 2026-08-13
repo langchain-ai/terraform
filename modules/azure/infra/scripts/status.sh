@@ -36,7 +36,7 @@ header "1. Configuration (terraform.tfvars)"
 
 if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   pass "terraform.tfvars exists"
-  _identifier=$(_read_tfvar identifier)
+  _name_prefix=$(_read_tfvar name_prefix)
   _environment=$(_read_tfvar environment)
   _location=$(_read_tfvar location)
   _subscription=$(_read_tfvar subscription_id)
@@ -44,10 +44,10 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _sizing=$(_read_tfvar sizing_profile)
-  _kv_name="langsmith-kv${_identifier}"
+  _kv_name=$(_derive_kv_name)
 
   if [[ -n "$_subscription" ]]; then
-    pass "Required fields: subscription_id set  identifier=${_identifier:-'(empty)'}  environment=${_environment:-dev}"
+    pass "Required fields: subscription_id set  name_prefix=${_name_prefix:-'(empty)'}  environment=${_environment:-${_name_prefix:-dev}}"
   else
     fail "Missing required field: subscription_id"
     action "Edit infra/terraform.tfvars — fill in subscription_id"
@@ -110,7 +110,7 @@ header "4. Key Vault Secrets (${_kv_name:-?})"
 if [[ "$QUICK" == "true" ]]; then
   skip "Skipped (--quick mode)"
 elif [[ -z "${_kv_name:-}" || "$_kv_name" == "langsmith-kv" ]]; then
-  skip "Cannot check — identifier not set in terraform.tfvars"
+  skip "Cannot check — name_prefix not set in terraform.tfvars"
 elif ! az keyvault show --name "$_kv_name" --output none 2>/dev/null; then
   skip "Key Vault '${_kv_name}' not found (created by terraform apply)"
   action "terraform -chdir=infra apply"
