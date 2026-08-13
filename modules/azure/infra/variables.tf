@@ -264,6 +264,24 @@ variable "postgres_sku_name" {
   default     = "GP_Standard_D2ds_v4"
 }
 
+variable "postgres_version" {
+  type        = string
+  description = "Major PostgreSQL version for the Flexible Server, 11 through 18. Raising this on an existing server runs an in-place major upgrade: irreversible, with downtime scaled to the instance size. Lowering it destroys and recreates the server. Run 'az postgres flexible-server list-skus -l <region>' to see what the subscription is offered."
+  default     = "16"
+}
+
+variable "postgres_storage_mb" {
+  type        = number
+  description = "Data disk size in MB. Auto-grow is off, so size upfront: 32768 = 32 GB, 65536 = 64 GB, 131072 = 128 GB."
+  default     = 32768
+}
+
+variable "postgres_storage_tier" {
+  type        = string
+  description = "Premium SSD tier for the data disk. The default tier tracks the disk size (32768 MB puts it at P4, 120 IOPS); raise it for more IOPS at the same size."
+  default     = "P4"
+}
+
 variable "redis_source" {
   type        = string
   description = "Redis deployment type. 'external' provisions Azure Managed Redis (private endpoint). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."

@@ -38,6 +38,16 @@ clickhouse_source = "in-cluster"  # ClickHouse always in-cluster (dev/POC)
 postgres_admin_username      = "langsmith"
 postgres_database_name       = "langsmith"    # database name on the server
 postgres_deletion_protection = false          # set true for production
+# Server sizing. Check what your subscription is actually offered before changing these:
+#   az postgres flexible-server list-skus -l <region> -o table
+# postgres_sku_name     = "GP_Standard_D2ds_v4"
+# postgres_version      = "16"      # see below before changing this on a live server
+# postgres_storage_mb   = 32768     # 32 GB, auto-grow is off, size upfront
+# postgres_storage_tier = "P4"      # raise for more IOPS at the same disk size
+#
+# Deployments created before postgres_version existed are running 14. They now plan an
+# in-place major upgrade to 16 on the next apply, which is irreversible and takes downtime.
+# Set postgres_version = "14" to stay put.
 
 # ── Redis (Azure Managed Redis / AMR) ─────────────────────────────────────────
 # redis_source = "external" provisions Azure Managed Redis (Microsoft.Cache/redisEnterprise,
