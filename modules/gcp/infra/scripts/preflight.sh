@@ -395,10 +395,13 @@ _check_quota() {
   fi
 }
 
-# vCPU count is the trailing number of the machine type; the family prefix maps to
-# the per-family quota metric. Both are best-effort — a type we cannot parse simply
-# drops out of the estimate rather than producing a bogus number.
-_vcpu_of()   { awk -v t="$1" 'BEGIN{ sub(/^.*-/, "", t); print (t ~ /^[0-9]+$/) ? t : 0 }'; }
+# vCPU count is the last numeric segment of the machine type, not the trailing one:
+# the bundled-Local-SSD types this module documents for the cache pool carry a
+# suffix after it (c3-standard-8-lssd, z3-highmem-88-standardlssd), and reading
+# only the trailing segment drops exactly those out of the CPU estimate. The
+# family prefix maps to the per-family quota metric. Both are best-effort — a type
+# with no numeric segment at all still drops out rather than inventing a number.
+_vcpu_of()   { awk -v t="$1" 'BEGIN{ n=split(t, a, "-"); for (i=n; i>=1; i--) if (a[i] ~ /^[0-9]+$/) { print a[i]; exit } print 0 }'; }
 _family_of() { awk -v t="$1" 'BEGIN{ sub(/-.*$/, "", t); print toupper(t) }'; }
 
 _check_quota "CPUS" 8 "any 2-node cluster"
@@ -427,6 +430,12 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   printf "\n"
   info "SmithDB is enabled — checking node pool quota at full autoscale (${_zones} zone(s))"
 
+  # Tally the pools per machine family before checking anything. Both pools
+  # default to N2, and a per-family quota is consumed by their sum, so checking
+  # each pool on its own passes wherever either fits alone — 48 and 24 both clear
+  # a 60 vCPU allowance that 72 does not. bash 3.2 has no associative arrays, so
+  # the tally is a plain "FAMILY need detail" list folded together by awk.
+  _fam_needs=""
   for _pool in "instance-store:$_is_type:$_is_max" "compute:$_cm_type:$_cm_max"; do
     _name="${_pool%%:*}"; _rest="${_pool#*:}"; _type="${_rest%%:*}"; _max="${_rest##*:}"
     _vcpu=$(_vcpu_of "$_type")
@@ -434,14 +443,36 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
       info "  Skipping $_name pool ($_type) — cannot infer vCPU count from the machine type"
       continue
     fi
-    _need=$(( _vcpu * _max * _zones ))
-    _check_quota "$(_family_of "$_type")_CPUS" "$_need" "SmithDB $_name pool at max ($_max x ${_zones}z x $_type)"
+    _fam_needs="${_fam_needs}$(_family_of "$_type") $(( _vcpu * _max * _zones )) ${_name}=${_max}x${_zones}z-${_type}
+"
   done
+
+  if [[ -n "$_fam_needs" ]]; then
+    while read -r _fam _need _detail; do
+      [[ -n "$_fam" ]] || continue
+      _check_quota "${_fam}_CPUS" "$_need" "SmithDB pools at max ($_detail)"
+    done <<< "$(awk '
+      NF {
+        if (!($1 in need)) { order[++n] = $1 }
+        need[$1] += $2
+        detail[$1] = (detail[$1] == "" ? $3 : detail[$1] " + " $3)
+      }
+      END { for (i = 1; i <= n; i++) { f = order[i]; print f, need[f], detail[f] } }
+    ' <<< "$_fam_needs")"
+  fi
 
   if [[ "$_ssd_count" != "0" ]]; then
     _ssd_need=$(( _ssd_count * 375 * _is_max * _zones ))
     _check_quota "LOCAL_SSD_TOTAL_GB" "$_ssd_need" "${_ssd_count} x 375GB per node on the instance-store pool"
   fi
+else
+  # Without this the run ends on "Preflight complete!" having silently skipped
+  # every SmithDB check, which reads as approval for something never examined.
+  # The aggregate CPUS check above says nothing about the per-family quota the
+  # SmithDB pools actually draw on.
+  printf "\n"
+  info "SmithDB is disabled — skipped its quota checks (N2_CPUS, LOCAL_SSD_TOTAL_GB)."
+  info "  Set enable_smithdb = true in terraform.tfvars and re-run to check them."
 fi
 
 # ── Cloud DNS zone check ──────────────────────────────────────────────────────
