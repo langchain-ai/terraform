@@ -1,0 +1,20 @@
+modules/gcp/infra/scripts/preflight.sh
+  s_6e46f9c799feb2::t_3a9f65638fb2a0 398-404
+  s_6e46f9c799feb2::t_462e220c09bd62 433-438,446-447,450-463,468-475
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "eebbdaa4d45325671a654f9d2bf5a79fdab8b5ad",
+  "prompts": {},
+  "sessions": {
+    "s_6e46f9c799feb2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "cc1d929e-8ca6-4ba5-9a9f-87fcd9a9d5b2",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
