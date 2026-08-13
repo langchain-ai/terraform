@@ -10,7 +10,7 @@
 #   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
-#   - infra/terraform.tfvars    → identifier, environment, location, tls_certificate_source,
+#   - infra/terraform.tfvars    → name_prefix, environment, location, tls_certificate_source,
 #                                 postgres_source, redis_source, sizing_profile
 #   - terraform output          → storage_account_name, storage_container_name,
 #                                 storage_account_k8s_managed_identity_client_id,
@@ -45,8 +45,8 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
-_identifier=$(_parse_tfvar "identifier") || _identifier=""
-_environment=$(_parse_tfvar "environment") || _environment="dev"
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
 _location=$(_parse_tfvar "location") || _location="eastus"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
@@ -70,7 +70,7 @@ _first_run="false"
 
 echo ""
 echo "Parsed terraform.tfvars:"
-info "identifier             = ${_identifier:-(empty)}"
+info "name_prefix            = ${_name_prefix:-(empty)}"
 info "environment            = $_environment"
 info "location               = $_location"
 info "tls_certificate_source = $_tls_source (protocol: $_protocol)"
@@ -99,7 +99,6 @@ WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_man
 NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-RG_NAME=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || RG_NAME=""
 # AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
 REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
 

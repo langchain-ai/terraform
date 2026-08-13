@@ -4,7 +4,6 @@
 # Pass 1 (infra):    make setup-env → make init → make plan → make apply
 # Pass 2 (tls):      make tls   (BYO ACM cert + Route53 A alias — when langsmith_domain is set)
 # Pass 2 (helm):     make init-values → make deploy
-# Pass 2 (tf):       make init-app → make plan-app → make apply-app
 # Secrets:           make secrets   (check SSM status + TF_VAR_* export guidance)
 # Fast deploy:       make quickdeploy   (chains apply → kubeconfig → init-values → deploy)
 # Post-infra check:  make preflight-post
@@ -14,14 +13,12 @@
 
 .PHONY: help quickstart status status-quick setup-env init plan apply destroy purge-secrets \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso uninstall clean deploy-all deploy-all-tf \
-        init-app plan-app apply-app destroy-app \
+        init-values deploy apply-eso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
 INFRA_DIR := infra
 HELM_DIR  := helm
-APP_DIR   := app
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -136,28 +133,9 @@ test-permutations: ## Run permutation tests sequentially on current cluster (ARG
 test-parallel: ## Run permutation tests in parallel across isolated clusters — your cluster untouched
 	$(INFRA_DIR)/scripts/test-orchestrator.sh $(ARGS)
 
-# ── Pass 2: Terraform Helm (alternative) ─────────────────────────────────────
-
-init-app: ## Pull infra outputs into app/infra.auto.tfvars.json
-	$(APP_DIR)/scripts/pull-infra-outputs.sh
-
-plan-app: init-app ## terraform plan (app) — auto-pulls infra outputs first
-	terraform -chdir=$(APP_DIR) init -input=false
-	terraform -chdir=$(APP_DIR) plan
-
-apply-app: ## terraform apply (app)
-	terraform -chdir=$(APP_DIR) apply
-
-destroy-app: ## terraform destroy (app)
-	terraform -chdir=$(APP_DIR) destroy
-
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
 deploy-all: apply kubeconfig init-values deploy ## Full deploy: infra apply → kubeconfig → init-values → helm deploy
-
-deploy-all-tf: apply init-values init-app ## Full deploy via Terraform: infra apply → init-values → app init+apply
-	terraform -chdir=$(APP_DIR) init -input=false
-	terraform -chdir=$(APP_DIR) apply
 
 quickdeploy: ## Full deploy in one command (must have run: source setup-env.sh + make quickstart)
 	$(INFRA_DIR)/scripts/quickdeploy.sh

@@ -13,6 +13,58 @@ Issues, gotchas, and fixes. Updated as deployments are validated.
 
 ## Pass 1 — Infrastructure
 
+### Resource name is already taken globally
+
+**Symptom — Redis:**
+```
+Error: creating Redis Enterprise "langsmith-redis-dev": unexpected status 400
+The name 'langsmith-redis-dev' is not available.
+```
+
+**Symptom — Storage or Key Vault:** `StorageAccountAlreadyTaken`, or `VaultAlreadyExists`
+on `langsmith-kv-dev`.
+
+**Cause:** Postgres, Redis, Storage and Key Vault names live in a namespace
+shared by every Azure tenant — they become public DNS names like
+`langsmith-postgres-dev.postgres.database.azure.com`. The legacy naming scheme
+derives them from `name_prefix` alone, so every deployment of this module that
+uses the same `name_prefix` asks for the same name. Somebody else already has it.
+
+**Fix — new deployment:** set `unique_resource_names = true` in `terraform.tfvars`.
+Every `terraform.tfvars.*` template and `quickstart.sh` already do. This appends a
+per-subscription hash to the four global names. Refer to
+[Resource naming](README.md#resource-naming).
+
+**Fix — existing deployment** (do *not* flip `unique_resource_names`, it renames and
+therefore destroys and recreates everything): pin just the colliding name.
+
+```hcl
+redis_name = "langsmith-redis-mycorp-dev"
+```
+
+The available overrides are `postgres_name`, `redis_name`, `storage_account_name`,
+and `keyvault_name`.
+
+A soft-deleted Key Vault holds its name for the duration of the retention window,
+so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destroy`:
+
+```bash
+az keyvault list-deleted --query "[].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table
+az keyvault purge --name langsmith-kv-dev   # only if you are certain
+```
+
+**Catch it before applying:** `make preflight` checks Postgres, Storage, Key Vault
+and `dns_label` against Azure's availability APIs.
+
+> Redis has no pre-check. Azure exposes no working `CheckNameAvailability`
+> endpoint for `Microsoft.Cache/redisEnterprise` — the subscription-scoped
+> endpoint rejects the type and the location-scoped one rejects every region. So
+> preflight can only report whether the name already exists in *your*
+> subscription. A cross-tenant Redis collision surfaces at apply time; the hashed
+> name is what makes it unlikely.
+
+---
+
 ### K8sVersionNotSupported — version is LTS-only
 
 **Symptom:**
@@ -124,6 +176,56 @@ Validated: full pass 2–5 deploy (production sizing, all addons) ran successful
 
 ---
 
+### LocationIsOfferRestricted — Postgres Flexible Server blocked in the region
+
+**Symptom:** AKS and the ingress controller create successfully, then Postgres fails several minutes into the apply:
+
+```text
+Error: creating Flexible Server ...: polling after CreateOrUpdate: polling failed:
+Status: "LocationIsOfferRestricted"
+Message: "Subscriptions are restricted from provisioning in location 'eastus'.
+Try again in a different location."
+```
+
+**Cause:** This is a subscription offer-type restriction, not regional capacity and not a configuration error. Azure blocks certain offer types (Free Trial, Azure Pass, Visual Studio and MSDN credit, some sponsored and CSP subscriptions) from provisioning PostgreSQL Flexible Server in high-demand regions. The error text points at the region, which sends most people hunting for a new one, but the subscription is what determines the outcome.
+
+Check the offer type:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+az rest --method get \
+  --url "https://management.azure.com/subscriptions/${SUB}?api-version=2022-12-01" \
+  --query "subscriptionPolicies.quotaId" -o tsv
+```
+
+`PayAsYouGo_*` and `EnterpriseAgreement_*` are unrestricted. `FreeTrial_*`, `MSDN_*`, `MSDNDevTest_*`, `VisualStudio_*`, `AzurePass_*`, `MPN_*`, and `SponsoredMS_*` are the restricted families. `make preflight` reports this before the apply starts.
+
+**Fixes, in order of preference:**
+
+1. **Convert the subscription to Pay-As-You-Go.** For a trial or credit-based subscription this removes the restriction outright, with no ticket and no configuration change.
+2. **Request an exemption** at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), quota type "Azure Database for PostgreSQL Flexible Server". Requests for offer restrictions are frequently approved the same day, and the region and SKU stay as configured.
+3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation.
+4. **Use in-cluster Postgres** for a dev or demo deployment. Set `postgres_source = "in-cluster"` and the Helm chart runs its own Postgres pod, so nothing is provisioned through the PostgreSQL resource provider. Not suitable for production.
+5. **Change the region.** Set `location` in `terraform.tfvars`. Because Postgres uses a delegated subnet it must sit in the same region as the VNet, so the whole deployment moves. Any resources already created are destroyed and recreated.
+
+---
+
+### AuthorizationFailed on roleAssignments/write
+
+**Symptom:** Resources create normally, then a role assignment fails with 403:
+
+```text
+Error: unexpected status 403 (403 Forbidden) with error: AuthorizationFailed:
+The client '<user>' with object id '<oid>' does not have authorization to
+perform action 'Microsoft.Authorization/roleAssignments/write' over scope '<scope>'
+```
+
+**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates eight of them.
+
+**Fix:** Grant `Role Based Access Control Administrator` at subscription scope, or `Owner` in place of both roles. When one role assignment succeeds and another on the same scope fails, an ABAC condition is restricting which role definitions the identity may grant. For the full permission inventory, the `checkAccess` probe, and how to read the condition, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+---
+
 ### Istio addon revision not supported
 
 **Symptom:**
@@ -186,13 +288,13 @@ Re-run `make apply` — no more diff.
 terraform -chdir=infra state rm module.keyvault.azurerm_key_vault.langsmith
 
 # 2. Permanently purge the soft-deleted KV (irreversible!)
-az keyvault purge --name langsmith-kv<identifier> --location eastus
+az keyvault purge --name langsmith-kv-<name_prefix> --location eastus
 
 # 3. Re-apply — Terraform creates a fresh KV with purge_protection = false
 make apply
 ```
 
-**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `identifier` suffix for a fresh clean deploy.
+**Note on teardown**: If `keyvault_purge_protection = true` is set, `terraform destroy` will delete the KV but it will remain in soft-deleted state for 90 days. You cannot reuse the same Key Vault name until either the 90 days expire or you manually purge it. Use a different `name_prefix` for a fresh clean deploy.
 
 ---
 
@@ -212,15 +314,15 @@ This error only occurs if you are using an older copy of `setup-env.sh` or manua
 ```bash
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.deployments_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-deployments-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-deployments-encryption-key --query id -o tsv)"
 
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.agent_builder_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
 
 terraform import \
   'module.keyvault.azurerm_key_vault_secret.insights_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv<identifier> --name langsmith-insights-encryption-key --query id -o tsv)"
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-insights-encryption-key --query id -o tsv)"
 
 terraform apply
 ```
@@ -790,16 +892,16 @@ All Azure resources (AKS, VNet, Key Vault, Storage, etc.) are still running but 
 **Recovery when tfstate is gone:**
 ```bash
 # Delete the entire resource group directly — removes everything in one shot
-az group delete --name langsmith-rg<identifier> --yes --no-wait
+az group delete --name langsmith-rg-<name_prefix> --yes --no-wait
 
 # Watch until deletion completes
-az group show --name langsmith-rg<identifier> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
+az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningState|ResourceGroupNotFound"
 # Once you see "ResourceGroupNotFound", all resources are deleted
 ```
 
-> **Key Vault soft-delete after forced deletion:** If you reuse the same `identifier`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
+> **Key Vault soft-delete after forced deletion:** If you reuse the same `name_prefix`, Azure will recover the soft-deleted Key Vault on the next `terraform apply`. If `keyvault_purge_protection = false`, purge it first:
 > ```bash
-> az keyvault purge --name langsmith-kv<identifier> --location <region>
+> az keyvault purge --name langsmith-kv-<name_prefix> --location <region>
 > ```
 
 ---

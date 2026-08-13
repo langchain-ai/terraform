@@ -11,6 +11,8 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _name_suffix              — Resource-name suffix derived from name_prefix
+#   _derive_kv_name           — Key Vault name, mirroring local.keyvault_name
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -42,6 +44,43 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Resource-name suffix, mirroring local.name_suffix in main.tf.
+# name_prefix carries no hyphen ("prod") but every derived name needs one
+# ("langsmith-kv-prod"), so the separator is added here. Falls back to the
+# retired `identifier` key, hyphen and all, so these scripts can still resolve
+# names for a deployment whose tfvars predates the rename.
+# Returns 1 when neither key is set — callers treat that as "no suffix".
+_name_suffix() {
+  local val
+  val=$(_parse_tfvar "name_prefix") || val=$(_parse_tfvar "identifier") || return 1
+  printf -- '-%s' "${val#-}"
+}
+
+# Key Vault name, mirroring local.keyvault_name in main.tf including the
+# unique_resource_names hash. Four scripts need this name and each derived it
+# independently before, so they all went looking for the wrong vault the moment
+# the naming scheme changed. Keep this in step with main.tf.
+_derive_kv_name() {
+  local explicit suffix sub hash
+  explicit=$(_parse_tfvar keyvault_name || true)
+  if [[ -n "$explicit" ]]; then
+    echo "$explicit"
+    return 0
+  fi
+  suffix=$(_name_suffix || true)
+  if _tfvar_is_true unique_resource_names; then
+    sub=$(_parse_tfvar subscription_id || true)
+    if command -v shasum &>/dev/null; then
+      hash=$(printf '%s' "${sub}${suffix}" | shasum -a 256 | cut -c1-6)
+    else
+      hash=$(printf '%s' "${sub}${suffix}" | sha256sum | cut -c1-6)
+    fi
+    echo "ls-kv${suffix}-${hash}"
+  else
+    echo "langsmith-kv${suffix}"
+  fi
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────

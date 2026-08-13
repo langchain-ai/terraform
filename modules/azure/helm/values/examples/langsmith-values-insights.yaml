@@ -13,8 +13,9 @@
 #   - ClickHouse must be reachable from the AKS cluster
 #
 # NOTE: chart 0.15.1 removed config.insights → top-level insights block (migrated below).
-# The external-ClickHouse path below has NOT been validated on 0.15.x (only in-cluster was) —
-# verify the clickhouse block against the 0.15.x insights schema before using.
+# Chart 0.16 keeps that block. The external-ClickHouse path below has NOT been validated
+# on 0.16 (only in-cluster was), so verify the clickhouse block against the 0.16 insights
+# schema before using.
 
 insights:
   enabled: true

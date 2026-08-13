@@ -22,7 +22,6 @@ source "$SCRIPT_DIR/_common.sh"
 AWS_DIR="$INFRA_DIR/.."
 HELM_DIR="$AWS_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
-APP_DIR="$AWS_DIR/app"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -424,33 +423,6 @@ else
       skip "No ingress found"
     fi
   fi
-fi
-
-# ── Alternative: Terraform Helm (app/) ──────────────────────────────────────
-header "10. Terraform Helm App (alternative path)"
-
-if [[ -d "$APP_DIR" ]]; then
-  if [[ -f "$APP_DIR/infra.auto.tfvars.json" ]]; then
-    pass "infra.auto.tfvars.json exists (make init-app was run)"
-  else
-    skip "infra.auto.tfvars.json — not generated"
-    action "make init-app  (if using Terraform Helm path instead of scripts)"
-  fi
-
-  _app_output=""
-  if [[ -d "$APP_DIR/.terraform" ]]; then
-    _app_output=$(terraform -chdir="$APP_DIR" output -json 2>/dev/null) || _app_output=""
-  fi
-
-  if [[ -n "$_app_output" ]] && echo "$_app_output" | grep -q '"value"'; then
-    pass "app/ terraform — applied"
-  elif [[ -d "$APP_DIR/.terraform" ]]; then
-    skip "app/ terraform — initialized but not applied"
-  else
-    skip "app/ terraform — not initialized"
-  fi
-else
-  skip "app/ directory not present"
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────

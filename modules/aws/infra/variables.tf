@@ -727,7 +727,7 @@ variable "enable_standalone_insights" {
 
 variable "enable_usage_telemetry" {
   type        = bool
-  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED). Parsed by init-values.sh and the app module."
+  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED). Parsed by init-values.sh."
   default     = false
 }
 

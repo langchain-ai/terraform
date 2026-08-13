@@ -614,7 +614,7 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     _eg_svc_name=$(kubectl get svc -n "envoy-gateway-system" \
       -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
@@ -640,7 +640,7 @@ if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; t
   _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
-  for i in $(seq 1 18); do
+  for _ in $(seq 1 18); do
     if kubectl get secret langsmith-tls -n "$_istio_ns" &>/dev/null 2>&1; then
       _cert_ready=true; break
     fi
@@ -672,7 +672,7 @@ if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
 
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false
-  for i in $(seq 1 18); do
+  for _ in $(seq 1 18); do
     if kubectl get secret langsmith-tls -n "$_namespace" &>/dev/null 2>&1; then
       _cert_ready=true
       break
