@@ -10,6 +10,7 @@
 #
 # Provides:
 #   _parse_tfvar <key>              — Read a value from terraform.tfvars
+#   _parse_tfvar_quoted <key> <f>   — Read a quoted value, spaces intact, from <f>
 #   _tfvar_is_true <key>            — Return 0 if tfvar == true
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
@@ -38,6 +39,22 @@ _parse_tfvar() {
     # Unquoted value: key = true / key = 42 / key = {}
     val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
   fi
+  [[ -n "$val" ]] || return 1
+  echo "$val"
+}
+
+# Read one quoted scalar out of a tfvars file, preserving spaces inside the
+# value. _parse_tfvar runs its result through `tr -d '[:space:]'`, which is right
+# for a region or a resource name and silently mangles a password that contains a
+# space. The file defaults to terraform.tfvars and is resolved against INFRA_DIR
+# unless absolute, so callers can read secrets.auto.tfvars the same way.
+_parse_tfvar_quoted() {
+  local key="$1"
+  local file="${2:-terraform.tfvars}"
+  [[ "$file" == /* ]] || file="${INFRA_DIR:-$(pwd)}/$file"
+  local val
+  val=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*\$/\1/p" \
+    "$file" 2>/dev/null | head -1)
   [[ -n "$val" ]] || return 1
   echo "$val"
 }

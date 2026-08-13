@@ -38,7 +38,7 @@ status-quick: ## Quick status check (skip Key Vault and K8s queries)
 
 # ── Pass 1: Infrastructure ────────────────────────────────────────────────────
 
-setup-env: ## Bootstrap secrets → secrets.auto.tfvars (prompts on first run, reads KV on repeat)
+setup-env: ## Bootstrap secrets → secrets.auto.tfvars (re-runs offer the previous values as defaults)
 	cd $(INFRA_DIR) && bash scripts/setup-env.sh
 
 preflight: ## Run Azure pre-flight checks (login, providers, RBAC, terraform.tfvars, global name availability)

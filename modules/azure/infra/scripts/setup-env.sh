@@ -13,6 +13,9 @@ set -euo pipefail
 # Writes the values Terraform itself needs to secrets.auto.tfvars (gitignored).
 # Terraform picks this file up automatically — no shell session coupling needed.
 #
+# Safe to re-run: every prompt offers the value already in the file as its
+# default, so changing one value does not mean retyping the other two.
+#
 # Only two secrets reach Terraform, because Terraform needs them to build
 # something and would hold them in state either way:
 #   postgres_admin_password — Terraform creates the Postgres flexible server
@@ -41,15 +44,43 @@ _kv_name=$(_derive_kv_name)
 # LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.
 _REQUIRED_VARS="LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_EMAIL"
 
+# ── Values from the previous run ──────────────────────────────────────────────
+# Read back what we wrote last time so every prompt can offer it as the default.
+# _parse_tfvar_quoted rather than _parse_tfvar: the latter strips spaces inside
+# the value, which would hand back a password the operator never set.
+_prev_pg=""
+_prev_license=""
+_prev_email=""
+if [[ -f "$SECRETS_FILE" ]]; then
+  _prev_pg=$(_parse_tfvar_quoted postgres_admin_password "$SECRETS_FILE") || _prev_pg=""
+  _prev_license=$(_parse_tfvar_quoted langsmith_license_key "$SECRETS_FILE") || _prev_license=""
+  _prev_email=$(_parse_tfvar_quoted langsmith_admin_email "$SECRETS_FILE") || _prev_email=""
+fi
+
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # Prompt text goes to stderr: stdout is the return channel for the value, so
 # anything printed there is swallowed by the caller's command substitution.
+#
+# The fourth argument is the value from the previous run. When it is set, Enter
+# keeps it. When it is not, a blank answer to a required prompt re-asks instead
+# of aborting, which used to throw away the answers already given.
 _prompt() {
   local env_var="$1"
   local prompt_text="$2"
   local mode="${3:-}"   # "" = required secret | optional = may be left blank | visible = echo input
+  local current="${4:-}"
   local val="${!env_var:-}"
-  if [[ -z "$val" && -t 0 ]]; then
+  local attempt=0
+
+  if [[ -n "$val" ]]; then
+    echo "$val"
+    return 0
+  fi
+
+  # Bounded: on EOF (Ctrl-D, or a harness that closed stdin) read fails every
+  # time and returns nothing, so an unbounded loop would spin forever.
+  while [[ -t 0 ]] && [[ $attempt -lt 3 ]]; do
+    attempt=$((attempt + 1))
     printf "%s: " "$prompt_text" >&2
     if [[ "$mode" == "visible" ]]; then
       read -r val || val=""   # Ctrl-D / EOF — handled by the empty check below
@@ -57,12 +88,38 @@ _prompt() {
       read -rs val || val=""
       echo >&2                # -s also swallows the newline the user typed
     fi
+    if [[ -n "$val" ]]; then
+      break
+    fi
+    # Blank answer: keep the previous run's value, let an optional prompt
+    # through, or re-ask. Only a required prompt with nothing to keep re-asks.
+    if [[ -n "$current" || "$mode" == "optional" ]]; then
+      break
+    fi
+    echo "  $env_var cannot be empty." >&2
+  done
+
+  # Reached by Enter on a prompt that had a previous value, and by a run with no
+  # tty at all: the loop above never executes there, so this is what keeps
+  # `make setup-env` working under a pipe once secrets.auto.tfvars exists.
+  if [[ -z "$val" ]]; then
+    val="$current"
   fi
+
   if [[ -z "$val" && "$mode" != "optional" ]]; then
     echo "ERROR: No value provided for $env_var." >&2
     return 1
   fi
   echo "$val"
+}
+
+# Enough of a kept secret to recognize it, never the whole thing.
+_mask_tail() {
+  if [[ ${#1} -ge 8 ]]; then
+    printf '****%s' "${1: -4}"
+  else
+    printf '****'
+  fi
 }
 
 # ── Non-interactive guard ─────────────────────────────────────────────────────
@@ -73,7 +130,15 @@ _prompt() {
 if [[ ! -t 0 ]]; then
   _missing=""
   for _v in $_REQUIRED_VARS; do
-    [[ -n "${!_v:-}" ]] || _missing="$_missing $_v"
+    if [[ -n "${!_v:-}" ]]; then
+      continue
+    fi
+    # A value already in $SECRETS_FILE needs no prompt — the re-run keeps it.
+    case "$_v" in
+      LANGSMITH_LICENSE_KEY) if [[ -n "$_prev_license" ]]; then continue; fi ;;
+      LANGSMITH_ADMIN_EMAIL) if [[ -n "$_prev_email" ]]; then continue; fi ;;
+    esac
+    _missing="$_missing $_v"
   done
   if [[ -n "$_missing" ]]; then
     echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
@@ -123,6 +188,23 @@ _kv_probe() {
   [[ "$_kv_reachable" == "yes" ]]
 }
 
+# ── Read one secret out of Key Vault ──────────────────────────────────────────
+# Status 1 and no output when the vault is unreachable or the secret is absent;
+# the caller decides what to do about it. Probe at top level before calling this
+# from a command substitution, or the cached result is lost with the subshell.
+_kv_read() {
+  local kv_secret_name="$1"
+  local val=""
+  if _kv_probe; then
+    val=$(_az keyvault secret show \
+      --vault-name "$_kv_name" \
+      --name "$kv_secret_name" \
+      --query value -o tsv 2>/dev/null) || val=""
+  fi
+  [[ -n "$val" ]] || return 1
+  echo "$val"
+}
+
 # ── Stable secret: read from Key Vault or local fallback, generate if missing ──
 # Priority: Key Vault (written by Terraform) → local fallback file → generate fresh
 # Never writes to Key Vault directly — Terraform owns all KV writes.
@@ -133,12 +215,7 @@ _kv_secret() {
   local val=""
 
   # 1. Read from Key Vault (available after terraform apply)
-  if _kv_probe; then
-    val=$(_az keyvault secret show \
-      --vault-name "$_kv_name" \
-      --name "$kv_secret_name" \
-      --query value -o tsv 2>/dev/null) || val=""
-  fi
+  val=$(_kv_read "$kv_secret_name") || val=""
 
   # 2. Fall back to local file (before first apply, or on a machine without KV access)
   if [[ -z "$val" && -f "$fallback_file" ]]; then
@@ -174,14 +251,50 @@ echo ""
 echo "LangSmith — Terraform input bootstrap"
 echo "  name_prefix : ${_name_prefix:-(empty)}"
 echo "  key_vault   : $_kv_name"
-echo ""
-echo "  Passwords are hidden as you type. Press Enter on the PostgreSQL prompt"
-echo "  to have one generated for you — this script prints where to view it."
+if [[ -f "$SECRETS_FILE" ]]; then
+  echo ""
+  echo "  Found $SECRETS_FILE — its values are offered as the defaults below."
+fi
+
+# Terraform writes langsmith-license-key into the vault, so the key survives a
+# deleted secrets.auto.tfvars or a fresh checkout. Probed here at top level, not
+# inside the command substitution below, so every later caller reuses the result.
+if [[ -z "${LANGSMITH_LICENSE_KEY:-}" && -z "$_prev_license" ]]; then
+  _kv_probe || true
+  _prev_license=$(_kv_read "langsmith-license-key") || _prev_license=""
+  if [[ -n "$_prev_license" ]]; then
+    echo "  Read the license key from Key Vault."
+  fi
+fi
+
+_pg_prompt="PostgreSQL admin password (Enter = generate)"
+_license_prompt="LangSmith license key      "
+_email_prompt="Initial org admin email    "
+if [[ -n "$_prev_pg" ]]; then
+  _pg_prompt="PostgreSQL admin password (Enter = keep current)"
+fi
+if [[ -n "$_prev_license" ]]; then
+  _license_prompt="LangSmith license key      [$(_mask_tail "$_prev_license")]"
+fi
+if [[ -n "$_prev_email" ]]; then
+  _email_prompt="Initial org admin email    [$_prev_email]"
+fi
+
+if [[ -t 0 ]]; then
+  echo ""
+  if [[ -n "$_prev_pg$_prev_license$_prev_email" ]]; then
+    echo "  Passwords are hidden as you type. A value in brackets is the one from"
+    echo "  the previous run — press Enter to keep it."
+  else
+    echo "  Passwords are hidden as you type. Press Enter on the PostgreSQL prompt"
+    echo "  to have one generated for you — this script prints where to view it."
+  fi
+fi
 echo ""
 
-pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "PostgreSQL admin password (Enter = generate)" optional)
-license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "LangSmith license key      ")
-admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL" "Initial org admin email    " visible)
+pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "$_pg_prompt" optional "$_prev_pg")
+license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "$_license_prompt" "" "$_prev_license")
+admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL" "$_email_prompt" visible "$_prev_email")
 
 echo ""
 _kv_probe || true   # once, in the parent shell — result is reused by every _kv_secret call
@@ -199,7 +312,7 @@ fi
 # ── Write secrets.auto.tfvars ─────────────────────────────────────────────────
 cat > "$SECRETS_FILE" << EOF
 # Auto-generated by setup-env.sh — DO NOT COMMIT
-# Re-run ./setup-env.sh to refresh secrets from Key Vault.
+# Re-run ./setup-env.sh to change a value; it offers these as the defaults.
 
 postgres_admin_password = "$pg_password"
 langsmith_license_key   = "$license_key"

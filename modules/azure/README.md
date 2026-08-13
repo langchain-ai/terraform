@@ -318,6 +318,7 @@ Collects the values Terraform itself needs and writes them to `infra/secrets.aut
 
 - Prompts for the PostgreSQL admin password, the LangSmith license key, and the admin email
 - Skips any prompt whose env var is already set (`LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_EMAIL`)
+- On a re-run, offers the value already in `secrets.auto.tfvars` as each default — press Enter to keep it. Secrets are shown as their last four characters only. If the file is gone, the license key comes back from Key Vault
 
 Only two secrets reach Terraform, because Terraform needs them to build something and would hold them in state either way: the Postgres password (it creates the flexible server) and the license key (the `k8s_bootstrap` module creates the `langsmith-license` K8s secret from it). Everything else is seeded by `make seed-secrets`.
 
