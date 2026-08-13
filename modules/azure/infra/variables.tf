@@ -247,6 +247,30 @@ variable "postgres_database_name" {
   default     = "langsmith"
 }
 
+variable "postgres_version" {
+  type        = string
+  description = "PostgreSQL version for the Flexible Server"
+  default     = "16"
+}
+
+variable "postgres_storage_gb" {
+  type        = number
+  description = "Storage size in GB for the PostgreSQL Flexible Server"
+  default     = 32
+}
+
+variable "postgres_storage_tier" {
+  type        = string
+  description = "Storage tier for the PostgreSQL Flexible Server"
+  default     = "P4"
+}
+
+variable "postgres_backup_retention_days" {
+  type        = number
+  description = "Backup retention period in days for the PostgreSQL Flexible Server"
+  default     = 7
+}
+
 variable "postgres_source" {
   type        = string
   description = "PostgreSQL deployment type. 'external' provisions Azure Database for PostgreSQL Flexible Server (private VNet). 'in-cluster' uses the chart-managed in-cluster Postgres pod (dev/demo only)."
