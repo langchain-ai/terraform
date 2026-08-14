@@ -75,8 +75,8 @@ if [[ -f "$_secrets_file" ]]; then
   [[ -n "$_pg_pw" ]] && pass "postgres_admin_password is set" || fail "postgres_admin_password is empty"
 else
   fail "secrets.auto.tfvars not found"
-  action "bash infra/setup-env.sh"
-  set_next "bash infra/setup-env.sh"
+  action "make setup-env"
+  set_next "make setup-env"
 fi
 
 # ── 3. Azure Credentials ──────────────────────────────────────────────────────
@@ -113,8 +113,8 @@ elif [[ -z "${_kv_name:-}" || "$_kv_name" == "langsmith-kv" ]]; then
   skip "Cannot check — name_prefix not set in terraform.tfvars"
 elif ! az keyvault show --name "$_kv_name" --output none 2>/dev/null; then
   skip "Key Vault '${_kv_name}' not found (created by terraform apply)"
-  action "terraform -chdir=infra apply"
-  set_next "terraform -chdir=infra apply"
+  action "make apply"
+  set_next "make apply"
 else
   _required_kv_secrets=(
     langsmith-license-key

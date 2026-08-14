@@ -292,9 +292,16 @@ postgres_standby_availability_zone   = "2"
 postgres_geo_redundant_backup        = true
 ```
 
-**Expected plan**: AKS node pool zones updated; PostgreSQL HA mode set to `ZoneRedundant`.
+**Expected plan**: PostgreSQL HA mode set to `ZoneRedundant`.
 
 > Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+> Set `availability_zones` before the first apply. On an existing cluster the
+> AKS node pool keeps the zones it was created with: the module ignores zone
+> changes so the provider cannot cycle the system node pool out from under
+> running pods. Plan reports the mismatch as a `Check block assertion failed`
+> warning naming both the live and the requested zones, and exits 0. Expect that
+> warning here rather than a node pool change.
 
 ---
 
@@ -302,8 +309,7 @@ postgres_geo_redundant_backup        = true
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| `make plan` fails on fresh deploy | `cannot create REST client: no client config` on `kubernetes_manifest.cluster_issuer_http01` | Expected — the Kubernetes provider can't connect during plan because the cluster doesn't exist yet. Skip `make plan` on a fresh deploy and run `make apply` directly. `make apply` handles this with a three-stage apply. |
-| `kubernetes_manifest` ClusterIssuer fails during apply | `API did not recognize GroupVersionKind: no matches for kind "ClusterIssuer"` | cert-manager CRDs not registered yet. Fixed by `make apply` Stage 2 (installs cert-manager first) before Stage 3 applies the ClusterIssuer. If you ran a plain `terraform apply`, run `make apply` again — it will pick up from the correct stage. |
+| `letsencrypt-prod` ClusterIssuer missing after apply | `clusterissuers.cert-manager.io "letsencrypt-prod" not found` on the langsmith-tls certificate | Terraform does not create the issuer. `make deploy` applies it, so run Pass 2 before checking the certificate. See TROUBLESHOOTING.md. |
 | vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv3Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv3 → Request 32. Or: `az quota update --resource-name standardDSv3Family ...` See TROUBLESHOOTING.md. |
 | `max_pods` too low — autoscaler backoff | `pod didn't trigger scale-up: in backoff after failed scale-up` | Set `default_node_pool_max_pods = 60` **before** first apply — this field is immutable. With 30 pods/node, Pass 2's ~37 pods trigger autoscaler which hits quota. |
 | `default_node_pool_min_count = 1` causes pod pending | All 14+ vCPU of Pass 2 must schedule but only 1 node starts | Set `default_node_pool_min_count = 3` — autoscaler waits for pending pods before adding nodes, causing initial deploy to stall. |

@@ -183,13 +183,46 @@ resource "azurerm_kubernetes_cluster" "main" {
   lifecycle {
     # upgrade_settings change during rolling node upgrades; ignore to prevent
     # drift between Terraform state and live cluster configuration.
-    # zones: AKS does not support changing zones on an existing node pool —
-    # it is only applied at creation time. Ignoring prevents forced recreation
-    # when availability_zones is set on an existing cluster.
+    #
+    # zones: azurerm ~> 4.0 does support re-zoning an existing default node
+    # pool. It is one of the cycleNodePoolProperties, so a change is applied by
+    # cycling the system node pool through temporary_name_for_rotation (set to
+    # "defaulttmp" above) rather than by recreating the cluster. We suppress it
+    # deliberately: the provider's cycle does not cordon and drain, so it hard-
+    # disrupts every pod on the system pool. Editing one tfvars line should not
+    # do that unannounced. The check block below reports the resulting drift.
     ignore_changes = [
       default_node_pool[0].upgrade_settings,
       default_node_pool[0].zones,
     ]
+  }
+}
+
+# ignore_changes on default_node_pool[0].zones makes an availability_zones edit
+# a silent no-op: the plan comes back clean and the node pool stays put. Surface
+# that as a warning on every plan so a requested zone change is never mistaken
+# for an applied one.
+#
+# A check block rather than a postcondition on purpose. A failing postcondition
+# aborts planning even when the cluster has no planned changes, so a deployment
+# already sitting in this state cannot apply anything at all until it is
+# resolved. The drift is worth reporting, not worth blocking unrelated work.
+check "aks_node_pool_zone_drift" {
+  assert {
+    condition = toset(azurerm_kubernetes_cluster.main.default_node_pool[0].zones) == toset(var.availability_zones)
+    error_message = join("", [
+      "AKS node pool zones are [",
+      join(",", sort(tolist(azurerm_kubernetes_cluster.main.default_node_pool[0].zones))),
+      "] but availability_zones requests [",
+      join(",", sort(var.availability_zones)),
+      "]. This module ignores zone changes on an existing node pool, so the ",
+      "request was discarded and the live zones above are what you have. To ",
+      "make it take effect, either revert availability_zones to the live value, ",
+      "or drop default_node_pool[0].zones from the ignore_changes block in ",
+      "modules/k8s-cluster/main.tf and apply during a maintenance window. That ",
+      "cycles the system node pool, which does not cordon and drain and will ",
+      "disrupt every pod running on it.",
+    ])
   }
 }
 

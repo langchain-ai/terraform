@@ -30,8 +30,8 @@ make setup-env
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
-# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it runs three targeted stages automatically.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 make init
 make apply
 
@@ -376,6 +376,36 @@ langsmith-standalone-polly-queue-xxxxx             1/1     Running     0        
 > **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
 
 > **Pin `--version` in Helm.** Without it, `helm upgrade` pulls latest which may silently apply DB migrations or toggle feature flags.
+
+---
+
+## Terraform Commands
+
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
+
+```bash
+cd modules/azure
+
+make init    ARGS="-upgrade"                 # re-resolve provider versions
+make plan    ARGS="-target=module.aks"       # plan one module
+make plan    ARGS="-out=tfplan"              # save a plan file
+make destroy ARGS="-target=module.redis"     # destroy one module
+```
+
+> `make apply` runs three targeted stages, and `ARGS` is passed to each of them. That suits flags like `-var`, `-parallelism`, and `-refresh=false`. To apply a saved plan or a single module, bypass the staging with `make tf ARGS="apply tfplan"`.
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output keyvault_name"
+make tf ARGS="output aks_cluster_name"
+make tf ARGS="output dns_nameservers"
+make tf ARGS="state list"
+make tf ARGS="validate"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/azure/infra` if you prefer.
 
 ---
 

@@ -311,10 +311,10 @@ module "vnet" {
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
-  # Both are carved only out of a VNet Terraform owns. Under bring-your-own the
-  # operator supplies the subnet instead, and local.*_subnet_id selects it.
-  enable_bastion     = var.create_bastion && var.create_vnet
-  availability_zones = var.availability_zones
+  # The bastion and AGIC subnets below are carved only out of a VNet Terraform
+  # owns. Under bring-your-own the operator supplies the subnet instead, and
+  # local.*_subnet_id selects it.
+  enable_bastion = var.create_bastion && var.create_vnet
 
   # AGIC subnet: provisioned only when ingress_controller = "agic"
   enable_agic                = var.ingress_controller == "agic" && var.create_vnet
@@ -627,6 +627,10 @@ module "postgres" {
   database_name  = var.postgres_database_name
   sku_name       = var.postgres_sku_name
 
+  postgres_version = var.postgres_version
+  storage_mb       = var.postgres_storage_mb
+  storage_tier     = var.postgres_storage_tier
+
   availability_zone            = var.availability_zones[0]
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
@@ -652,6 +656,8 @@ module "redis" {
   subnet_id           = local.redis_subnet_id                    # private endpoint goes here
   vnet_id             = local.vnet_id                            # private DNS zone link
   amr_sku             = var.amr_sku
+  high_availability   = var.redis_high_availability
+  cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
 }
@@ -740,8 +746,8 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 1.6: ACME_EMAIL=... bash helm/scripts/apply-cluster-issuers.sh
 #   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
+#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -794,13 +800,24 @@ module "k8s_bootstrap" {
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
-  # TLS / cert-manager
+  # TLS / cert-manager. The ClusterIssuers themselves are applied by
+  # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
+  # subscription_id straight from terraform.tfvars.
   tls_certificate_source          = var.tls_certificate_source
-  letsencrypt_email               = var.letsencrypt_email
   cert_manager_identity_client_id = module.aks.cert_manager_identity_client_id
-  subscription_id                 = var.subscription_id
-  dns_zone_name                   = var.create_dns_zone ? var.langsmith_domain : ""
-  dns_resource_group_name         = azurerm_resource_group.resource_group.name
+}
+
+# The DNS-01 ClusterIssuer used to be a kubernetes_manifest in k8s-bootstrap, which
+# broke terraform plan on a fresh deploy: kubernetes_manifest opens an API connection
+# during plan and there is no cluster yet. deploy.sh already applied an identical
+# issuer, so the Terraform copy was dropped. Existing deployments keep the live
+# object; only the state entry goes.
+removed {
+  from = module.k8s_bootstrap.kubernetes_manifest.cluster_issuer_dns01
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
