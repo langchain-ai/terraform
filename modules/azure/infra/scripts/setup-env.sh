@@ -32,14 +32,29 @@ set -euo pipefail
 SECRETS_FILE="secrets.auto.tfvars"
 
 # ── Resolve the Key Vault name ────────────────────────────────────────────────
-# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix,
-# an explicit keyvault_name, and the unique_resource_names hash. Deriving it here
-# by hand is how this script and three others drifted apart.
+# Priority: terraform output → _derive_kv_name. Same order as manage-keyvault.sh.
+#
+# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix, an
+# explicit keyvault_name, and the unique_resource_names hash. Deriving it here by
+# hand is how this script and three others drifted apart. It still cannot cover
+# create_keyvault = false, where the name is the customer's and nothing in
+# terraform.tfvars derives it, so the output wins when there is one. Reading the
+# wrong vault fails silently: _kv_secret below falls through to the local file, then
+# to generating a fresh value. A machine without those files would mint a new
+# api_key_salt and jwt_secret, and Terraform would write them over the live ones.
+#
+# `terraform output -raw` exits 0 and prints its "No outputs found" warning on
+# stdout when there is no state, so the guard checks the shape of what came back
+# rather than the exit code. Key Vault names are alphanumerics and hyphens, which
+# the warning is not. Before the first apply that leaves the derivation.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 _name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
-_kv_name=$(_derive_kv_name)
+_kv_name=$(terraform output -raw keyvault_name 2>/dev/null || true)
+case "$_kv_name" in
+  "" | *[![:alnum:]-]*) _kv_name=$(_derive_kv_name) ;;
+esac
 
 # LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.
 _REQUIRED_VARS="LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_EMAIL"

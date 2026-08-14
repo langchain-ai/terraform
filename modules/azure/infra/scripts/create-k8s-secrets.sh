@@ -122,8 +122,8 @@ else
 fi
 # Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
 # (clickhouse_source = "in-cluster"). The chart manages the connection internally.
-# For external ClickHouse, create the secret manually and set
-# clickhouse.external.existingSecretName in langsmith-values-insights.yaml.
+# For external ClickHouse, init-values.sh prompts for the connection and creates
+# that secret, and writes clickhouse.external into values-overrides.yaml.
 
 echo ""
 echo "Next: fill values-overrides.yaml and run helm upgrade --install"
