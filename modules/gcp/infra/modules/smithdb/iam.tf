@@ -28,6 +28,33 @@ resource "google_storage_bucket_iam_member" "smithdb_object_admin" {
   member = "serviceAccount:${local.gsa_email}"
 }
 
+# The historical backfill is the one SmithDB workload that reads outside its own
+# bucket: it pulls the run inputs, outputs and errors that LangSmith offloaded to
+# the traces bucket, then rewrites them into .vortex segments. Without this grant
+# the Job starts, plans its tasks, and then fails every task on a 403 from the
+# traces bucket - and because the failures are recorded as non-retryable in the
+# taskdb, progress simply stops at 0% with the Job still reporting Running.
+#
+# objectViewer, not objectAdmin: the backfill only reads that bucket. It writes
+# exclusively to the SmithDB bucket above.
+#
+# Only created with the migration gate, so the steady-state install keeps a
+# service account that can reach nothing but its own bucket.
+resource "google_storage_bucket_iam_member" "smithdb_traces_object_viewer" {
+  count = var.migration_enabled && var.traces_bucket_name != "" ? 1 : 0
+
+  bucket = var.traces_bucket_name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${local.gsa_email}"
+
+  lifecycle {
+    precondition {
+      condition     = !var.migration_enabled || var.traces_bucket_name != ""
+      error_message = "smithdb_migration_enabled is true but no traces bucket name reached the SmithDB module, so the backfill would fail every task on a 403 reading run payloads. This is wired by the root module; if you call modules/smithdb directly, pass traces_bucket_name."
+    }
+  }
+}
+
 # Both member forms, matching modules/iam: the legacy serviceAccount: form and
 # the principal:// form used by newer GKE Workload Identity paths.
 resource "google_service_account_iam_member" "workload_identity" {

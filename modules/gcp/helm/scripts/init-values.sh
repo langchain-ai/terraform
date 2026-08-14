@@ -771,6 +771,34 @@ ${_smithdb_proxy_block}
       postgres:
         auth:
           existingSecretName: "${SMITHDB_TASKDB_SECRET_NAME}"
+    deployment:
+      # Source blob store for the backfill: the traces bucket holding the run
+      # payloads LangSmith offloaded out of ClickHouse.
+      #
+      # This has to be overridden because the chart hardcodes
+      # BLOB_STORE_DEFAULT__TYPE to s3 for every blob-storage engine, including
+      # GCS, and then wires the credentials to blob_storage_access_key and
+      # blob_storage_secret_access_key. On GCP those keys are empty by design -
+      # LangSmith uses native GCS with Workload Identity - so the backfill signs
+      # its reads AWS4-style with an empty secret and every GET comes back 403
+      # SignatureDoesNotMatch from storage.googleapis.com. The Job stays Running
+      # while each task fails, and the taskdb records the failures as
+      # non-retryable, so progress sits at 0% with no obvious cause.
+      #
+      # These three land after the chart's own entries in the container's env
+      # list, and Kubernetes takes the last value when a name repeats, so the
+      # native GCS provider wins. It needs no credential fields and authenticates
+      # as the pod's Workload Identity principal, which modules/smithdb grants
+      # objectViewer on this bucket when smithdb_migration_enabled is true.
+      extraEnv:
+        - name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE
+          value: "gcs"
+        - name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__BUCKET
+          value: "${BUCKET_NAME}"
+        # The payload keys recorded in ClickHouse are absolute within the bucket,
+        # so the source store takes no prefix.
+        - name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__ROOT_FOLDER
+          value: "/"
 
   langsmith:
     ingestion:

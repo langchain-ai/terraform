@@ -193,15 +193,31 @@ resource "kubernetes_secret" "tls_certificate" {
 # Resource Quotas
 #------------------------------------------------------------------------------
 locals {
+  # Base figures sized for LangSmith itself. Optional features that add large
+  # pods contribute through the resource_quota_extra_* variables rather than by
+  # editing these, so a plain install keeps the exact same quota it always had.
+  langsmith_resource_quota_base_cpu       = 50
+  langsmith_resource_quota_base_memory_gi = 120
+  langsmith_resource_quota_base_pods      = 100
+
+  # The limits side is not simply twice the requests side, so carry it as its own
+  # pair of figures rather than deriving it.
+  langsmith_resource_quota_base_limit_cpu       = 100
+  langsmith_resource_quota_base_limit_memory_gi = 200
+
   langsmith_resource_quota_requests = {
-    "requests.cpu"    = "50"
-    "requests.memory" = "120Gi"
-    "pods"            = "100"
+    "requests.cpu"    = tostring(local.langsmith_resource_quota_base_cpu + var.resource_quota_extra_cpu)
+    "requests.memory" = "${local.langsmith_resource_quota_base_memory_gi + var.resource_quota_extra_memory_gi}Gi"
+    "pods"            = tostring(local.langsmith_resource_quota_base_pods + var.resource_quota_extra_pods)
   }
 
+  # The headroom is doubled on the limits side. SmithDB sets requests equal to
+  # limits, so the requests side binds first, but a feature admitted on requests
+  # must not then be rejected on limits. Doubling also keeps the same 2x
+  # requests-to-limits ratio the base figures use.
   langsmith_resource_quota_limits = {
-    "limits.cpu"    = "100"
-    "limits.memory" = "200Gi"
+    "limits.cpu"    = tostring(local.langsmith_resource_quota_base_limit_cpu + (var.resource_quota_extra_cpu * 2))
+    "limits.memory" = "${local.langsmith_resource_quota_base_limit_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
   }
 
   langsmith_resource_quota_hard = merge(

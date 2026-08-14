@@ -43,6 +43,39 @@ variable "resource_quota_include_limits" {
   default     = true
 }
 
+variable "resource_quota_extra_cpu" {
+  description = "Additional CPU added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. The root uses this to make room for optional features that add large pods, so the base figures stay the same for a plain install. Zero keeps the base quota."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 200
+    error_message = "resource_quota_extra_cpu must be between 0 and 200. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
+  }
+}
+
+variable "resource_quota_extra_memory_gi" {
+  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. Counterpart to resource_quota_extra_cpu."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 400
+    error_message = "resource_quota_extra_memory_gi must be between 0 and 400."
+  }
+}
+
+variable "resource_quota_extra_pods" {
+  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
+    error_message = "resource_quota_extra_pods must be between 0 and 400."
+  }
+}
+
 variable "allow_critical_priority_pods" {
   description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the JuiceFS CSI driver the sandbox feature depends on: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Leave false when sandboxes are disabled."
   type        = bool

@@ -259,6 +259,9 @@ The separate `metastore-migration` Helm hook stays unpinned on the core pool by
 design - it runs before any SmithDB pod exists, so nothing would trigger a scale-up
 from zero.
 
+The backfill also reads outside its own bucket, which is covered under
+"Backfill access to the traces bucket" below.
+
 4) `smithdb_query_enabled = true`. Reads move to SmithDB.
 
 Follow the installation guide provided by LangChain for the validation steps at
@@ -281,6 +284,111 @@ Local SSD only backs the cache because the node pool uses GKE's Local SSD-backed
 *ephemeral storage* mode. With raw block Local SSD the `emptyDir` would silently
 fall back to the boot disk and cache I/O would be slow, which is why the `df -h`
 check matters.
+
+Segments land at the bucket root under `<tenant-id>/<session-id>/`. There is no
+`smithdb/` prefix, even though the chart sets a `ROOT_FOLDER` of `smithdb` on the
+GCS object store, so list the whole bucket rather than a prefix.
+
+## Backfill access to the traces bucket
+
+The historical backfill is the one SmithDB workload that reads outside its own
+bucket. LangSmith offloads large run payloads - inputs, outputs and errors - to
+the traces bucket and keeps only a key in ClickHouse, so the backfill has to
+fetch those objects to rewrite them into `.vortex` segments.
+
+Two pieces make that work, and the module handles both when
+`smithdb_migration_enabled = true`:
+
+1) `modules/smithdb` grants the SmithDB service account
+`roles/storage.objectViewer` on the traces bucket. Read-only, bucket-scoped, and
+only created with the migration gate, so a steady-state install keeps a service
+account that can reach nothing but its own bucket.
+
+2) `init-values.sh` points the Job's source blob store at native GCS through
+`smithdb.migration.deployment.extraEnv`:
+
+```yaml
+- name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE
+  value: "gcs"
+- name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__BUCKET
+  value: "<traces bucket>"
+- name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__ROOT_FOLDER
+  value: "/"
+```
+
+The override is needed because the chart hardcodes
+`SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE` to `s3` for every blob-storage
+engine, GCS included, then wires the credentials to `blob_storage_access_key` and
+`blob_storage_secret_access_key`. On GCP those two are empty by design, because
+LangSmith uses native GCS with Workload Identity. The backfill therefore signs
+its reads AWS4-style with an empty secret, and `storage.googleapis.com` answers
+every GET with `403 SignatureDoesNotMatch`.
+
+That failure is easy to misread. The Job reports `Running`, the pod stays
+`2/2 Running`, the metastore and the Auth Proxy are both healthy, and the only
+symptom is that planned-row progress never leaves 0%. Check the task state
+rather than the pod phase:
+
+```sh
+POD=$(kubectl get pod -n langsmith -l job-name=langsmith-smithdb-migration \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl exec -n langsmith "$POD" -c migration -- \
+  ./smithdb migrate --self-hosted diagnose status
+kubectl exec -n langsmith "$POD" -c migration -- \
+  ./smithdb migrate --self-hosted diagnose failures
+```
+
+Failures are recorded as non-retryable, so they survive a Job restart. After
+fixing access, reset them or the tasks stay failed:
+
+```sh
+kubectl exec -n langsmith "$POD" -c migration -- \
+  ./smithdb migrate --self-hosted diagnose retry-failed --all --yes
+```
+
+Do not solve this with a GCS HMAC key. It works, but it puts a long-lived static
+credential into Terraform state and into a Kubernetes Secret, for a bucket the
+pod can already reach through its own identity.
+
+A task whose window covers the last hour or so stays `pending` rather than being
+claimed. That is the worker pool's recent-runs safety delay, not a fault.
+
+## Namespace quota headroom
+
+`modules/k8s-bootstrap` puts a `ResourceQuota` on the LangSmith namespace, and
+SmithDB does not fit inside the base figures. The root adds headroom
+automatically from `enable_smithdb` and `smithdb_migration_enabled`, so there is
+nothing to set by hand:
+
+| Configuration | requests.cpu | requests.memory | pods |
+| --- | --- | --- | --- |
+| LangSmith only | 50 | 120Gi | 100 |
+| SmithDB services | 70 | 158Gi | 112 |
+| SmithDB plus backfill | 79 | 176Gi | 120 |
+
+The headroom covers steady-state SmithDB (14.25 CPU / 28.25Gi across five
+Deployments), one Auth Proxy sidecar per pod, a rolling-update surge allowance
+for one extra copy of the largest pod, and the backfill Job's 8 CPU / 16Gi.
+
+The surge allowance matters more than it looks. Without it an upgrade wedges
+rather than failing: the replacement pod is refused on quota, so the old pod
+never terminates, and Helm waits on a rollout that cannot progress. Neither the
+`FailedCreate` event on the ReplicaSet nor the Job that reports `Running` with no
+pod names SmithDB or the quota as the cause.
+
+To check headroom on a live cluster:
+
+```sh
+kubectl get resourcequota langsmith-quota -n langsmith
+kubectl describe resourcequota langsmith-quota -n langsmith
+```
+
+If the extra room is not wanted - a shared cluster with its own governance, for
+example - `resource_quota_extra_cpu`, `resource_quota_extra_memory_gi` and
+`resource_quota_extra_pods` on `modules/k8s-bootstrap` accept explicit figures.
+Both are bounded: a namespace quota is a guardrail against a runaway HPA, so it
+is not meant to be raised until every pod fits.
 
 ## Sizing
 

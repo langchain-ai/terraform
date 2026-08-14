@@ -200,6 +200,18 @@ variable "bucket_force_destroy" {
   default     = false
 }
 
+variable "traces_bucket_name" {
+  type        = string
+  description = "Name of the LangSmith traces bucket holding the offloaded run payloads. Read by the historical backfill only, and only when migration_enabled is true. Leave empty when the backfill is not in use."
+  default     = ""
+}
+
+variable "migration_enabled" {
+  type        = bool
+  description = "Whether the historical ClickHouse-to-SmithDB backfill is enabled. Grants the SmithDB service account read access to the traces bucket, which the backfill needs to fetch run payloads. Does not deploy the Job itself - that is a Helm gate."
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # Workload Identity
 #------------------------------------------------------------------------------

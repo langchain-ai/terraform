@@ -512,6 +512,12 @@ module "smithdb" {
   bucket_versioning_enabled = var.smithdb_bucket_versioning_enabled
   bucket_force_destroy      = var.smithdb_bucket_force_destroy
 
+  # The backfill reads offloaded run payloads out of the traces bucket, so it
+  # needs a read grant there. Passed unconditionally; the module only creates the
+  # binding when the migration gate is on.
+  traces_bucket_name = module.storage.bucket_name
+  migration_enabled  = var.smithdb_migration_enabled
+
   service_account_email = var.smithdb_service_account_email
 
   depends_on = [module.networking, google_project_service.apis]
@@ -654,6 +660,13 @@ module "k8s_bootstrap" {
   default_container_requests = (
     var.enable_sandboxes ? var.sandbox_default_container_requests : {}
   )
+
+  # SmithDB does not fit inside the base namespace quota, and the failure mode is
+  # opaque: a ReplicaSet reports FailedCreate and the backfill Job reports Running
+  # with no pod, neither of which names SmithDB. Size the headroom here instead.
+  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
+  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
+  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
 
   # The JuiceFS CSI driver runs at system-node-critical / system-cluster-critical,
   # which GKE admits only into a namespace holding a PriorityClass-scoped quota.
