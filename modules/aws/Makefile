@@ -23,7 +23,7 @@ HELM_DIR  := helm
 
 help: ## Show available targets
 	@echo ""
-	@echo "  \033[1mUsage:\033[0m make <target> [ARGS=\"<extra terraform flags>\"]"
+	@echo "  \033[1mUsage:\033[0m make <target> [ARGS=\"<extra flags>\"]"
 	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -40,6 +40,9 @@ help: ## Show available targets
 	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
 	@echo "    make tf      ARGS=\"output -raw cluster_name\""
 	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
+	@echo ""
+	@echo "  \033[1mThe test targets take ARGS too, as a test subset — not terraform flags:\033[0m"
+	@echo "    make test-permutations ARGS=\"1 2 5\"          # run permutations 1, 2 and 5"
 	@echo ""
 
 status: ## Check deployment state and show what to run next
