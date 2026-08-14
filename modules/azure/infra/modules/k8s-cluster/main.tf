@@ -360,12 +360,16 @@ resource "azurerm_kubernetes_cluster" "main" {
 # aborts planning even when the cluster has no planned changes, so a deployment
 # already sitting in this state cannot apply anything at all until it is
 # resolved. The drift is worth reporting, not worth blocking unrelated work.
+#
+# The condition is a ternary, not a length() guard joined with &&, because &&
+# evaluates both sides below Terraform 1.14 and the indexed reference errors
+# under create_cluster = false, where the resource has no instances.
 check "aks_node_pool_zone_drift" {
   assert {
-    condition = toset(azurerm_kubernetes_cluster.main.default_node_pool[0].zones) == toset(var.availability_zones)
+    condition = length(azurerm_kubernetes_cluster.main) == 0 ? true : toset(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones) == toset(var.availability_zones)
     error_message = join("", [
       "AKS node pool zones are [",
-      join(",", sort(tolist(azurerm_kubernetes_cluster.main.default_node_pool[0].zones))),
+      join(",", sort(tolist(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones))),
       "] but availability_zones requests [",
       join(",", sort(var.availability_zones)),
       "]. This module ignores zone changes on an existing node pool, so the ",
