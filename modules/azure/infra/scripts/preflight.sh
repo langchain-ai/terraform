@@ -259,7 +259,10 @@ ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    # redisEnterprise, not redis: the module creates Azure Managed Redis, and the
+    # two resource types carry separate permissions. Probing Microsoft.Cache/redis
+    # passed on a permission the apply never uses and missed the one it does.
+    "Microsoft.Cache/redisEnterprise/write",
 ]
 
 print(json.dumps({
