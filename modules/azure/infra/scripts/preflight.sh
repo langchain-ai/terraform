@@ -14,7 +14,8 @@
 #   4. The identity Terraform will use can write role assignments
 #   5. Subscription offer type is not blocked from provisioning Postgres
 #   6. Regional vCPU quota covers the configured Postgres SKU family
-#   7. terraform.tfvars exists with required fields populated
+#   7. terraform.tfvars exists with required fields populated, and any cluster or
+#      Key Vault it attaches to rather than creates is really there
 #   8. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
 #
 # Run before: terraform init / terraform apply
@@ -721,6 +722,10 @@ elif printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
 fi
 
 # ── 7. terraform.tfvars ───────────────────────────────────────────────────────
+# Declared before the file check so section 8 can read them either way: with no
+# tfvars both sections skip, and greenfield is the default the module assumes.
+CREATE_CLUSTER="true"
+CREATE_KEYVAULT="true"
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
 if [ ! -f "$TFVARS" ]; then
@@ -753,6 +758,44 @@ else
       fail "secrets.auto.tfvars: langsmith_license_key is empty — re-run ./setup-env.sh"
     else
       pass "secrets.auto.tfvars: langsmith_license_key is set"
+    fi
+  fi
+
+  # Attach mode. create_cluster / create_keyvault = false point the deployment at
+  # a resource the customer's platform team owns, named by an existing_* pair.
+  # The modules have preconditions for the unset case, but a name that is set and
+  # wrong reaches Azure as a 404 partway through the apply, and no precondition
+  # can catch that. Both names are quoted into az argv, never a URL or a shell
+  # string, so no shape check is imposed — resource group names legitimately
+  # carry underscores and periods that a resource-name pattern would reject.
+  CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
+  CREATE_KEYVAULT=$(_tfvar create_keyvault || echo "true")
+
+  if [ "$CREATE_CLUSTER" = "false" ]; then
+    EXISTING_AKS=$(_tfvar existing_cluster_name || echo "")
+    EXISTING_AKS_RG=$(_tfvar existing_cluster_resource_group_name || echo "")
+    if [ -z "$EXISTING_AKS" ] || [ -z "$EXISTING_AKS_RG" ]; then
+      fail "create_cluster = false requires both existing_cluster_name and existing_cluster_resource_group_name"
+    elif [ -z "${SUB_ID:-}" ]; then
+      warn "create_cluster = false — cannot confirm cluster '${EXISTING_AKS}' exists without an active az login"
+    elif az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --only-show-errors -o none 2>/dev/null; then
+      pass "Attaching to AKS cluster '${EXISTING_AKS}' in resource group '${EXISTING_AKS_RG}'"
+    else
+      fail "AKS cluster '${EXISTING_AKS}' not found in resource group '${EXISTING_AKS_RG}' — check both names and the subscription"
+    fi
+  fi
+
+  if [ "$CREATE_KEYVAULT" = "false" ]; then
+    EXISTING_KV=$(_tfvar existing_keyvault_name || echo "")
+    EXISTING_KV_RG=$(_tfvar existing_keyvault_resource_group_name || echo "")
+    if [ -z "$EXISTING_KV" ] || [ -z "$EXISTING_KV_RG" ]; then
+      fail "create_keyvault = false requires both existing_keyvault_name and existing_keyvault_resource_group_name"
+    elif [ -z "${SUB_ID:-}" ]; then
+      warn "create_keyvault = false — cannot confirm vault '${EXISTING_KV}' exists without an active az login"
+    elif az keyvault show -n "$EXISTING_KV" -g "$EXISTING_KV_RG" --only-show-errors -o none 2>/dev/null; then
+      pass "Attaching to Key Vault '${EXISTING_KV}' in resource group '${EXISTING_KV_RG}'"
+    else
+      fail "Key Vault '${EXISTING_KV}' not found in resource group '${EXISTING_KV_RG}' — check both names and the subscription"
     fi
   fi
 fi
@@ -871,10 +914,17 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable" \
     24 "Shorten var.name_prefix or set var.storage_account_name explicitly."
 
-  _check_name "Key Vault" "$KV_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
-    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable" \
-    24 "Shorten var.name_prefix or set var.keyvault_name explicitly."
+  # With create_keyvault = false the vault already exists and is meant to, so
+  # checkNameAvailability reports it taken and the run fails on the very setup it
+  # was configured for. Section 7 confirms that vault instead.
+  if [ "$CREATE_KEYVAULT" = "false" ]; then
+    pass "create_keyvault = false — no Key Vault name to reserve"
+  else
+    _check_name "Key Vault" "$KV_NAME" \
+      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+      "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable" \
+      24 "Shorten var.name_prefix or set var.keyvault_name explicitly."
+  fi
 
   if [ -n "$DNS_LABEL" ]; then
     _check_name "Public IP DNS label" "$DNS_LABEL" \

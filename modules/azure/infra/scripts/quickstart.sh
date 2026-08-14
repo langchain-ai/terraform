@@ -1297,7 +1297,26 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
     1) _load_tfvars
        ANSWERED="1 2 3 4 5 6 7 8 9 10"
        printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
-    2) PRESERVE_UNKNOWN="false" ;;
+    2) PRESERVE_UNKNOWN="false"
+       # The wizard never writes create_cluster or create_keyvault, so both ride
+       # through a re-run as preserved unknown keys — except on this branch,
+       # which drops them. That is not one more discarded hand-edit: it turns an
+       # attached deployment back into a greenfield one, and the next plan builds
+       # a second cluster and vault beside the ones already in use.
+       _attached=""
+       if grep -qE '^[[:space:]]*create_cluster[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="an AKS cluster"
+       fi
+       if grep -qE '^[[:space:]]*create_keyvault[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="${_attached:+${_attached} and }a Key Vault"
+       fi
+       if [[ -n "$_attached" ]]; then
+         echo ""
+         _yellow "NOTE"; printf ": that file attaches to %s you already own.\n" "$_attached"
+         printf "  Starting fresh drops those settings, and the next plan creates new ones\n"
+         printf "  instead of reusing yours. To keep attaching, copy them back from\n"
+         printf "  %s.bak when the wizard finishes.\n" "$OUTPUT"
+       fi ;;
     3) echo "Aborted."; exit 0 ;;
   esac
 fi
