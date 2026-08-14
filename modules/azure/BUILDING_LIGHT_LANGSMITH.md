@@ -162,7 +162,7 @@ cost_center = "engineering"       # any string — for resource tagging
 # No Azure DB for PostgreSQL, no Azure Cache for Redis are provisioned.
 postgres_source   = "in-cluster"
 redis_source      = "in-cluster"
-clickhouse_source = "in-cluster"  # ClickHouse is always in-cluster regardless
+clickhouse_source = "in-cluster"  # chart-managed StatefulSet — right choice for a light install
 
 # ── AKS cluster sizing ─────────────────────────────────────────────────────────
 # Standard_DS4_v2 = 8 vCPU, 28 GB RAM per node
@@ -270,8 +270,8 @@ cd terraform/azure
 make init
 
 # Apply — creates all Azure resources
-# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Run apply directly — it handles the ordering in three targeted stages automatically.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 # Light deploy takes 8–12 minutes (dominated by AKS cluster provisioning).
 make apply
 ```
