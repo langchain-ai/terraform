@@ -311,8 +311,9 @@ module "vnet" {
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
-  # Both are carved only out of a VNet Terraform owns. Under bring-your-own the
-  # operator supplies the subnet instead, and local.*_subnet_id selects it.
+  # The bastion and AGIC subnets below are carved only out of a VNet Terraform
+  # owns. Under bring-your-own the operator supplies the subnet instead, and
+  # local.*_subnet_id selects it.
   enable_bastion = var.create_bastion && var.create_vnet
 
   # AGIC subnet: provisioned only when ingress_controller = "agic"

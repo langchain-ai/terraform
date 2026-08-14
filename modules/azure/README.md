@@ -873,6 +873,15 @@ postgres_high_availability_mode = "ZoneRedundant"
 
 Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
 
+Set `availability_zones` before the first apply. The AKS node pool keeps the
+zones it was created with: `azurerm` re-zones a default node pool by cycling the
+system node pool, and that cycle does not cordon and drain, so the module ignores
+zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
+mismatch as a `Check block assertion failed` warning naming both the live and the
+requested zones. To re-zone an existing cluster on purpose, remove
+`default_node_pool[0].zones` from the `ignore_changes` block in
+`infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
+
 ---
 
 ## Architecture

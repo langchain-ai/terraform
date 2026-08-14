@@ -275,9 +275,16 @@ postgres_standby_availability_zone   = "2"
 postgres_geo_redundant_backup        = true
 ```
 
-**Expected plan**: AKS node pool zones updated; PostgreSQL HA mode set to `ZoneRedundant`.
+**Expected plan**: PostgreSQL HA mode set to `ZoneRedundant`.
 
 > Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+> Set `availability_zones` before the first apply. On an existing cluster the
+> AKS node pool keeps the zones it was created with: the module ignores zone
+> changes so the provider cannot cycle the system node pool out from under
+> running pods. Plan reports the mismatch as a `Check block assertion failed`
+> warning naming both the live and the requested zones, and exits 0. Expect that
+> warning here rather than a node pool change.
 
 ---
 
