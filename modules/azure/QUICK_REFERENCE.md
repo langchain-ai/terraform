@@ -21,8 +21,8 @@ cd modules/azure
 # 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
 make quickstart
 
-# 2. Bootstrap secrets — prompts for passwords + license key on first run,
-#    reads silently from Key Vault on every subsequent run
+# 2. Bootstrap Terraform inputs — prompts for the Postgres password,
+#    license key, and admin email
 make setup-env
 
 # 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC,
@@ -35,26 +35,30 @@ make preflight
 make init
 make apply
 
-# 5. Get cluster credentials
+# 5. Write the LangSmith app secrets into Key Vault (prompts for the admin
+#    password, generates the rest). Never overwrites — safe to re-run.
+make seed-secrets
+
+# 6. Get cluster credentials
 make kubeconfig
 
-# 6. Create K8s secrets from Key Vault (langsmith-config-secret)
+# 7. Create K8s secrets from Key Vault (langsmith-config-secret)
 make k8s-secrets
 
-# 7. Generate Helm values from Terraform outputs
+# 8. Generate Helm values from Terraform outputs
 make init-values
 
-# 8. Deploy LangSmith (~10 min)
+# 9. Deploy LangSmith (~10 min)
 make deploy
 
-# 9. Check status
+# 10. Check status
 make status
 ```
 
 Or run everything after `make apply` in one shot:
 
 ```bash
-make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
+make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
 ```
 
 **Prefer editing over the wizard?** Copy the example and fill in manually:
@@ -259,21 +263,24 @@ sizing_profile = "production"
 
 ## secrets.auto.tfvars
 
-`setup-env.sh` generates this file — never commit it. Contains:
+`setup-env.sh` generates this file — never commit it. It holds only the values
+Terraform needs in order to build something, because every variable Terraform
+reads ends up as plaintext in state:
 
 ```hcl
-postgres_admin_password                = "..."
-langsmith_license_key                  = "..."
-langsmith_admin_password               = "..."
-langsmith_api_key_salt                 = "..."
-langsmith_jwt_secret                   = "..."
-langsmith_deployments_encryption_key   = "..."
-langsmith_agent_builder_encryption_key = "..."
-langsmith_insights_encryption_key      = "..."
-langsmith_polly_encryption_key         = "..."
+postgres_admin_password = "..."   # Terraform creates the Postgres server
+langsmith_license_key   = "..."   # k8s-bootstrap builds the langsmith-license secret
+langsmith_admin_email   = "..."   # initial org admin address
 ```
 
-On subsequent runs `setup-env.sh` reads from Key Vault — no re-entry needed.
+The LangSmith app secrets are not here and have no Terraform variable. `make
+seed-secrets` writes them directly to Key Vault after apply (step 5 of
+[First-Time Setup](#first-time-setup)).
+
+Upgrading from a release before this split? Your existing `secrets.auto.tfvars`
+still lists the seven removed variables. Terraform prints a
+`Value for undeclared variable` warning for each and otherwise ignores them;
+delete those lines to quiet it. The secrets already in Key Vault are untouched.
 
 ---
 
