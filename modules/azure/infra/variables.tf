@@ -560,18 +560,6 @@ variable "additional_node_pools" {
   }
 }
 
-variable "aks_deletion_protection" {
-  type        = bool
-  description = "Prevent accidental AKS cluster deletion. Set false for dev/test environments where you need to destroy and recreate."
-  default     = true
-}
-
-variable "postgres_deletion_protection" {
-  type        = bool
-  description = "Prevent accidental PostgreSQL server deletion. Set false for dev/test environments."
-  default     = true
-}
-
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
