@@ -191,12 +191,14 @@ _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
-NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
+NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
 PG_DELETION_PROTECTION AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
 BLOB_TTL_ENABLED BLOB_TTL_SHORT_DAYS BLOB_TTL_LONG_DAYS
-CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
+CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION
+ENABLE_DEPLOYMENTS ENABLE_AGENT_BUILDER ENABLE_INSIGHTS ENABLE_POLLY
+PRESERVE_UNKNOWN"
 
 # Sections the user has actually been through. Profile-driven defaults apply
 # only to sections still unanswered, so going back to switch dev→prod never
@@ -234,15 +236,23 @@ _load_state() {
 }
 
 # Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
-# inside the value (_common.sh's _parse_tfvar strips them).
+# inside the value (_common.sh's _parse_tfvar strips them). A trailing comment
+# is allowed: the writer puts one on amr_sku, and without this that line is the
+# one setting a re-run cannot read back.
 _tfvar() {
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\"[[:space:]]*\(#.*\)\{0,1\}\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
 # Read a list-valued tfvar back as its whole assignment line, which is the form
 # the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
 _tfvar_line() {
   sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Whether a key is assigned at all, which _tfvar cannot report: an absent key
+# and one assigned "" both come back as the empty string.
+_tfvar_set() {
+  grep -qE "^[[:space:]]*$1[[:space:]]*=" "$OUTPUT" 2>/dev/null
 }
 
 # Seed the wizard from a terraform.tfvars written by an earlier run, so a
@@ -255,12 +265,22 @@ _load_tfvars() {
   _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
   [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
 
-  # `identifier` is read before `name_prefix` so that a tfvars carrying both
-  # lets the current key win. Accepting the retired key matters more here than
-  # elsewhere: dropping it would leave NAME_PREFIX at its "dev" default and
-  # regenerate a tfvars naming a different set of resources than the one this
-  # deployment already owns. Same back-compat as _common.sh's _name_prefix.
-  for v in subscription_id identifier name_prefix location owner environment cost_center \
+  # name_prefix is read on its own because it is the one key whose empty value
+  # is an answer: "" is the "none" choice, and _tfvar reports it exactly like an
+  # absent key. Falling through to the "dev" initializer there would regenerate
+  # a tfvars naming a different set of resources than the one this deployment
+  # already owns, which Terraform executes as destroy-and-recreate. `identifier`
+  # is the retired spelling, checked second so the current key wins when a
+  # tfvars carries both. Same back-compat as _common.sh's _name_prefix.
+  for v in name_prefix identifier; do
+    if _tfvar_set "$v"; then
+      _TF_VAL=$(_tfvar "$v")
+      NAME_PREFIX="${_TF_VAL#-}"
+      break
+    fi
+  done
+
+  for v in subscription_id location owner environment cost_center \
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
@@ -270,7 +290,6 @@ _load_tfvars() {
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
-      identifier | name_prefix)  NAME_PREFIX="${_TF_VAL#-}" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       environment)               ENVIRONMENT="$_TF_VAL" ;;
@@ -295,6 +314,15 @@ _load_tfvars() {
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
   _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar default_node_pool_max_pods)  && NODE_MAX_PODS="$_TF_VAL"
+  # The wizard never asks about the feature flags — the generated file says to
+  # edit them there and re-run `make init-values`. Reading them back is what
+  # makes that true: the writer emits all four every time, so an unloaded flag
+  # is written false and silently turns off a pass that is already deployed.
+  _TF_VAL=$(_parse_tfvar enable_deployments)   && ENABLE_DEPLOYMENTS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_agent_builder) && ENABLE_AGENT_BUILDER="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_insights)      && ENABLE_INSIGHTS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_polly)         && ENABLE_POLLY="$_TF_VAL"
   # Absent means an existing deployment predating the hash, or one that opted
   # out. Either way it stays off — the writer must not turn it on underneath a
   # deployment whose resources are already named.
@@ -698,7 +726,7 @@ _run_section_4() {
   _hint "Max pods per node multiplies the AKS subnet requirement, at"
   _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
   _hint "lower it if your subnet is fixed and tight."
-  _ask_int "Max pods per node" "60"
+  _ask_int "Max pods per node" "$NODE_MAX_PODS"
   NODE_MAX_PODS="$_REPLY"
 
   AKS_DELETION_PROTECTION="false"
@@ -799,8 +827,11 @@ CREATE_DNS_ZONE="false"
 # name. Asking here means the operator picks a free one instead of hitting
 # DnsRecordCreateConflict at apply.
 _ask_dns_label() {
+  # A label already in use is the answer to keep — the suggestion is only for a
+  # deployment that has not claimed one yet. Reoffering the derived name would
+  # move the FQDN operators have already handed out.
   _ask "DNS label — must be unique across the whole $LOCATION region (e.g. langsmith-prod)" \
-    "langsmith${NAME_PREFIX:+-$NAME_PREFIX}"
+    "${DNS_LABEL:-langsmith${NAME_PREFIX:+-$NAME_PREFIX}}"
   DNS_LABEL="$_REPLY"
 }
 
@@ -1021,7 +1052,7 @@ _run_section_7() {
     echo ""
     _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
     _hint "if the region reports AllocationFailed."
-    _ask "Azure Managed Redis SKU" "Balanced_B0"
+    _ask "Azure Managed Redis SKU" "$AMR_SKU"
     AMR_SKU="$_REPLY"
   fi
 
@@ -1092,6 +1123,13 @@ _run_section_8() {
 
 # -- 9. Sizing Profile -------------------------------------------------------
 SIZING_PROFILE="dev"
+# Not prompted anywhere: a first deployment is Pass 1/2 only, and the later
+# passes are turned on by editing the generated file. Held as variables so a
+# re-run writes back what is already deployed instead of a hardcoded false.
+ENABLE_DEPLOYMENTS="false"
+ENABLE_AGENT_BUILDER="false"
+ENABLE_INSIGHTS="false"
+ENABLE_POLLY="false"
 
 _run_section_9() {
   _section "9. Sizing Profile"
@@ -1194,6 +1232,11 @@ _run_section_10() {
 
 TOTAL_SECTIONS=10
 SECTION=1
+# Whether settings the wizard cannot ask about survive the rewrite. Set before
+# the checkpoint is read so a resumed run keeps the answer it was given, and
+# true by default so a checkpoint written by an older version of this script
+# does not delete them.
+PRESERVE_UNKNOWN="true"
 
 if [[ -f "$STATE_FILE" ]]; then
   echo ""
@@ -1223,13 +1266,13 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
   _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
   _ask_choice "What would you like to do?" \
     "Edit it     — load its values as answers, change what you need" \
-    "Start fresh — ignore it and answer every question again (overwrites on save)" \
+    "Start fresh — ignore it and answer every question again (discards hand-edits too)" \
     "Quit        — leave it untouched"
   case "$_CHOICE" in
     1) _load_tfvars
        ANSWERED="1 2 3 4 5 6 7 8 9 10"
        printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
-    2) : ;;
+    2) PRESERVE_UNKNOWN="false" ;;
     3) echo "Aborted."; exit 0 ;;
   esac
 fi
@@ -1373,6 +1416,77 @@ done
 
 _section "Generating terraform.tfvars"
 
+# Every key the writer below can emit, across all of its branches. Anything else
+# in an existing terraform.tfvars was put there by hand — a pinned resource
+# name, a tuned SKU, an authorized-IP range — and the rewrite would destroy it,
+# so those lines are carried across instead. `identifier` is on the list as the
+# retired spelling of name_prefix: it has already been read back, and carrying
+# it forward would leave two keys naming the deployment.
+_WRITER_KEYS="subscription_id identifier name_prefix location unique_resource_names
+environment owner cost_center
+create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
+aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
+aks_service_cidr agic_subnet_id bastion_subnet_id
+default_node_pool_vm_size default_node_pool_min_count default_node_pool_max_count
+default_node_pool_max_pods aks_deletion_protection
+ingress_controller istio_addon_revision agw_sku_tier
+tls_certificate_source dns_label langsmith_domain letsencrypt_email create_dns_zone
+postgres_source redis_source clickhouse_source
+postgres_admin_username postgres_database_name postgres_deletion_protection
+amr_sku keyvault_purge_protection
+blob_ttl_enabled blob_ttl_short_days blob_ttl_long_days
+langsmith_namespace langsmith_release_name sizing_profile
+enable_deployments enable_agent_builder enable_insights enable_polly
+create_waf create_diagnostics create_bastion"
+
+PRESERVED=""
+PRESERVED_PARTIAL=""
+if [[ -f "$OUTPUT" ]]; then
+  # The rewrite truncates, so the previous file is only recoverable from here.
+  cp "$OUTPUT" "$OUTPUT.bak"
+  if [[ "$PRESERVE_UNKNOWN" != "false" ]]; then
+    _depth=0
+    while IFS= read -r _line; do
+      # Brackets inside a string or a comment do not open a block, so take them
+      # out before counting. Without this, `foo = "a { b"` swallows the rest of
+      # the file.
+      _bare=$(printf '%s' "$_line" | sed 's/"[^"]*"//g; s/#.*//')
+      # The closing brace needs the backslash: an unescaped one inside a bracket
+      # expression still ends the ${...} expansion.
+      _open="${_bare//[^\[{]/}"
+      _close="${_bare//[^]\}]/}"
+      _delta=$(( ${#_open} - ${#_close} ))
+
+      # Inside a value that opened on an earlier line. Its inner lines look like
+      # assignments themselves (`foo = "bar"` inside a map), so they have to be
+      # consumed here rather than treated as settings of their own.
+      if (( _depth > 0 )); then
+        _depth=$(( _depth + _delta ))
+        (( _depth < 0 )) && _depth=0
+        continue
+      fi
+      _depth=$_delta
+      (( _depth < 0 )) && _depth=0
+
+      [[ "$_line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*= ]] || continue
+      _key="${BASH_REMATCH[1]}"
+      _known=false
+      for _k in $_WRITER_KEYS; do
+        [[ "$_k" == "$_key" ]] && { _known=true; break; }
+      done
+      [[ "$_known" == "true" ]] && continue
+      # Only a value that closes on its own line can be copied verbatim. A list
+      # or map spanning several lines would arrive as a fragment, which is worse
+      # than naming it and leaving the operator to paste it back from the .bak.
+      if [[ "$_line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(\"[^\"]*\"|\[[^][]*\]|\{[^{}]*\}|[A-Za-z0-9._-]+)[[:space:]]*(#.*)?$ ]]; then
+        PRESERVED="${PRESERVED}${_line}"$'\n'
+      else
+        PRESERVED_PARTIAL="${PRESERVED_PARTIAL} ${_key}"
+      fi
+    done < "$OUTPUT"
+  fi
+fi
+
 cat > "$OUTPUT" << TFVARS
 # Generated by quickstart.sh on $(date -u +"%Y-%m-%d %H:%M UTC")
 # Profile: ${PROFILE}
@@ -1513,16 +1627,16 @@ langsmith_release_name = "langsmith"
 sizing_profile = "${SIZING_PROFILE}"
 
 # Pass 3 — LangGraph Platform (required before agent_builder, insights, polly)
-enable_deployments   = false
+enable_deployments   = ${ENABLE_DEPLOYMENTS}
 
 # Pass 4 — Agent Builder UI
-enable_agent_builder = false
+enable_agent_builder = ${ENABLE_AGENT_BUILDER}
 
 # Pass 5 — Insights (ClickHouse-backed analytics)
-enable_insights      = false
+enable_insights      = ${ENABLE_INSIGHTS}
 
 # Pass 5 — Polly
-enable_polly         = false
+enable_polly         = ${ENABLE_POLLY}
 TFVARS
 
 HAS_SECURITY=false
@@ -1541,6 +1655,20 @@ TFVARS
   printf "%b" "$SECURITY_BLOCK" >> "$OUTPUT"
 fi
 
+if [[ -n "$PRESERVED" ]]; then
+  # Quoted delimiter and a literal printf: these lines come out of a file on
+  # disk and are never expanded on the way through.
+  cat >> "$OUTPUT" << 'TFVARS'
+
+#------------------------------------------------------------------------------
+# Kept from your previous terraform.tfvars
+# The wizard does not ask about these, so it carries them across a rewrite
+# rather than dropping them. Edit or delete them by hand.
+#------------------------------------------------------------------------------
+TFVARS
+  printf '%s' "$PRESERVED" >> "$OUTPUT"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Done
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1551,6 +1679,14 @@ rm -f "$STATE_FILE"
 
 echo ""
 printf "  $(_green "✔")  Written to: $(_bold "$OUTPUT")\n"
+[[ -f "$OUTPUT.bak" ]] && printf "     Previous file: $(_bold "$OUTPUT.bak")\n"
+if [[ -n "$PRESERVED_PARTIAL" ]]; then
+  echo ""
+  _yellow "  WARNING"
+  printf ": these were set in the previous file, span more than one line,\n"
+  printf "  and were not carried over:%s\n" "$PRESERVED_PARTIAL"
+  printf "  Copy them back from %s if you still need them.\n" "$OUTPUT.bak"
+fi
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
 echo ""
