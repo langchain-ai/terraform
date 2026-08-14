@@ -19,6 +19,12 @@ variable "cert_manager_principal_id" {
   default     = ""
 }
 
+variable "grant_cert_manager_dns" {
+  type        = bool
+  description = "Whether to grant cert-manager DNS Zone Contributor on this zone. Separate from cert_manager_principal_id because that value is unknown until the identity is created, and an unknown count argument fails the plan."
+  default     = false
+}
+
 variable "tags" {
   type        = map(string)
   description = "Common Azure resource tags"

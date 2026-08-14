@@ -112,6 +112,11 @@ locals {
 # This grants the person running `terraform apply` full secret management rights.
 # For CI/CD pipelines, replace the object_id with a dedicated service principal.
 #
+# principal_type is a variable here, unlike the managed-identity grant below:
+# this principal is a user for an interactive `az login` and a service principal
+# in CI, so no literal is correct for both. Null (the default) omits the field
+# and lets Azure infer it — see var.terraform_principal_type.
+#
 # Skipped by default on a customer-owned vault, where creating it means calling
 # Microsoft.Authorization/roleAssignments/write against a resource the platform
 # team owns — the call such a team most often denies. The deployer exists before
@@ -120,9 +125,9 @@ locals {
 #
 # Gated separately from the managed-identity grant below, because a subscription
 # that delegates roleAssignments/write through an ABAC condition on principalType
-# rejects this request and permits that one: a user deployer cannot create this.
-# Turning it off is how such a deployment proceeds on a vault Terraform creates,
-# with the grant made out of band beforehand.
+# rejects this request and permits that one. Set terraform_principal_type first;
+# turning the assignment off is what gets a deployment through when the grant has
+# to be made out of band anyway.
 
 resource "azurerm_role_assignment" "terraform_kv_admin" {
   count = var.manage_terraform_admin_assignment ? 1 : 0
@@ -130,10 +135,14 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
+  principal_type       = var.terraform_principal_type
 }
 
 # ── RBAC: Pod managed identity ─────────────────────────────────────────────────
 # "Key Vault Secrets User" allows: read (get) secrets only.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 #
 # Nobody can pre-grant this one: the identity is created by the k8s-cluster
 # module partway through the same apply, so there is no object ID to grant to
@@ -150,6 +159,7 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.managed_identity_principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 # ── Wait for RBAC propagation ──────────────────────────────────────────────────

@@ -320,7 +320,7 @@ storage_account_k8s_managed_identity_client_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxx
 | Error | Cause | Fix |
 |---|---|---|
 | `KeyVault name 'langsmith-kv-demo' is already in use` | Name taken by another subscription (KV names are globally unique) | Change `name_prefix` or set `keyvault_name = "my-unique-kv-name"` in tfvars |
-| `AuthorizationFailed` on role assignment | Missing User Access Administrator role | Get Owner or User Access Admin on the subscription |
+| `AuthorizationFailed` on role assignment | Missing User Access Administrator role, or a subscription that delegates `roleAssignments/write` behind an ABAC condition on `principalType` | Get Owner or User Access Admin. If you already have UAA, set `terraform_principal_type` (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)) |
 | `QuotaExceeded` for Standard_DS4_v2 | vCPU quota too low | File a quota increase in the Azure portal for the region |
 | `InvalidResourceReference` on VNet/subnet | Race condition | Re-run `terraform apply` — Terraform usually resolves on retry |
 | Timeout on cert-manager or KEDA | Slow image pull | Re-run `terraform apply` — Helm releases are idempotent |
