@@ -58,6 +58,12 @@ export TF_VAR_name_prefix="${_name_prefix}"
 
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 
+# Variables that could not be resolved from the environment or SSM, collected by
+# _ssm_secret and reported together at the end. _ssm_secret runs in this shell
+# (its values come back via export, not command substitution), so the append
+# inside it is visible here.
+_missing_vars=""
+
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
 # _ssm_secret short-circuits (step 0) when a variable is already exported.
 # If LANGSMITH_LICENSE_KEY or LANGSMITH_ADMIN_PASSWORD are set from a prior
@@ -71,6 +77,25 @@ for _precheck_var in LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
     echo ""
   fi
 done
+
+# ── Bounded AWS CLI calls ─────────────────────────────────────────────────────
+# Bounded by timeout(1) when available so a sandbox with blocked egress fails
+# fast instead of stalling on a full TCP timeout. timeout is not in the macOS
+# base install, and gtimeout is the Homebrew coreutils name; run bare if neither.
+_timeout_bin=""
+for _t in timeout gtimeout; do
+  if command -v "$_t" >/dev/null 2>&1; then _timeout_bin="$_t"; break; fi
+done
+# Named _aws_bounded, not _aws: this script is sourced, and _aws is the zsh
+# completion function for the aws command — defining it here would replace the
+# completion for the rest of the caller's shell session.
+_aws_bounded() {
+  if [[ -n "$_timeout_bin" ]]; then
+    "$_timeout_bin" 30 aws "$@"
+  else
+    aws "$@"
+  fi
+}
 
 # ── Safe SSM write ────────────────────────────────────────────────────────────
 # Writes a value to SSM via a JSON file to avoid shell expansion issues with
@@ -95,7 +120,7 @@ _ssm_put_safe() {
   fi
 
   local _rc=0
-  aws ssm put-parameter \
+  _aws_bounded ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${_tmpjson}" \
     --output text >/dev/null 2>&1 || _rc=$?
@@ -131,7 +156,7 @@ _ssm_secret() {
   #    Without this backfill, pre-exported vars silently skip the SSM write, leaving
   #    ESO unable to sync the secret into the K8s langsmith-config secret.
   if [[ -n "$(printenv "$varname")" ]]; then
-    if ! aws ssm get-parameter --region "$AWS_REGION" --name "$_path" \
+    if ! _aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
         --query Parameter.Name --output text &>/dev/null; then
       echo "  $varname is set in env but missing from SSM — backfilling → $_path"
       if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
@@ -143,7 +168,7 @@ _ssm_secret() {
   fi
 
   # 1. Try SSM Parameter Store
-  val=$(aws ssm get-parameter \
+  val=$(_aws_bounded ssm get-parameter \
     --region "$AWS_REGION" \
     --name "$_path" \
     --with-decryption \
@@ -187,12 +212,16 @@ _ssm_secret() {
         return 1
       fi
     else
-      # Non-interactive (CI, piped stdin, redirected) — cannot prompt
-      echo "  ERROR: $varname is required but not set and no interactive terminal available." >&2
-      echo "         Pre-export it before sourcing this script:" >&2
-      echo "           export $varname='<value>'" >&2
-      echo "         Or populate SSM directly:" >&2
-      echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'" >&2
+      # Non-interactive (CI, piped stdin, redirected) — cannot prompt.
+      # Reported on stdout, not stderr: a sandboxed shell that surfaces only
+      # stdout (Cursor's agent shell) shows nothing at all otherwise, so the
+      # script looks like it exited without a reason.
+      echo "  ERROR: $varname is required but not set and no interactive terminal available."
+      echo "         Pre-export it before sourcing this script:"
+      echo "           export $varname='<value>'"
+      echo "         Or populate SSM directly:"
+      echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'"
+      _missing_vars="$_missing_vars $varname"
       return 1
     fi
 
@@ -336,6 +365,27 @@ _ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_k
 
 _ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
+
+# ── Non-interactive failure ───────────────────────────────────────────────────
+# Only populated when stdin is not a tty and a secret was in neither the
+# environment nor SSM. Reported here, once, on stdout — and before the summary,
+# which would otherwise claim the environment was set up successfully.
+if [[ -n "$_missing_vars" ]]; then
+  echo ""
+  echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
+  echo "       Missing:$_missing_vars"
+  echo ""
+  echo "       Run it from a real terminal, or pre-set the values:"
+  # Split on spaces with tr rather than an unquoted expansion: this script is
+  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
+  # print every name on a single bogus export line.
+  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
+    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
+  done
+  echo ""
+  echo "       Then re-run: source infra/scripts/setup-env.sh"
+  return 1
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
