@@ -379,6 +379,11 @@ def deny_label(deny):
             or deny.get("name") or deny.get("id") or "unnamed")
 
 
+def scope_label(expanded, props):
+    return ((expanded.get("scope") or {}).get("displayName")
+            or props.get("scope") or "?")
+
+
 def scope_list(scopes):
     if len(scopes) == 1:
         return scopes[0]
@@ -447,12 +452,18 @@ for scope, decisions in answered:
 # least one of those has been observed missing from the operator's own portal.
 if write_no:
     if is_caller == "1":
-        eligible = sorted({
-            "%s at %s" % (name, (instance.get("properties") or {}).get("scope") or "?")
-            for instance in (load(elig_path, {}) or {}).get("value") or []
-            for name in [((((instance.get("properties") or {}).get("expandedProperties") or {})
-                           .get("roleDefinition") or {}).get("displayName"))]
-            if name in ROLE_WRITE_CARRIERS})
+        eligible = set()
+        for instance in (load(elig_path, {}) or {}).get("value") or []:
+            props = instance.get("properties") or {}
+            expanded = props.get("expandedProperties") or {}
+            name = (expanded.get("roleDefinition") or {}).get("displayName")
+            if name not in ROLE_WRITE_CARRIERS:
+                continue
+            # The subscription or resource group name, to match how the role is
+            # named in the same sentence. The raw ARM path only when ARM did not
+            # expand it.
+            eligible.add("%s at %s" % (name, scope_label(expanded, props)))
+        eligible = sorted(eligible)
         if eligible:
             lead.append("fail Eligible in PIM but not active, and carries roleAssignments/write: "
                         "%s. checkAccess reports what is active now, so activating one of these "
@@ -532,9 +543,31 @@ EOF
 import json, re, sys
 from datetime import datetime, timezone
 
-# An apply that creates AKS and a Postgres flexible server takes 20-25 minutes,
-# so anything under this is a window that will lapse mid-run.
+# An apply that creates AKS and a Postgres flexible server runs 20-25 minutes.
+# Warning at 45 leaves room for a retry or a slow region rather than asserting
+# the apply cannot finish, which is not true of every window under this.
 WARN_MINUTES = 45
+APPLY_MINUTES = "20-25 minutes"
+
+# The built-ins carrying something the deployment needs. Any other activation
+# can lapse mid-apply without consequence, and the activated list runs to a
+# dozen roles: reporting all of them buries the one that matters.
+APPLY_ROLES = (
+    "Owner",
+    "Contributor",
+    "User Access Administrator",
+    "Role Based Access Control Administrator",
+)
+
+
+def scope_list(scopes):
+    # One activation covers every scope beneath it, so the same expiry normally
+    # comes back once per scope. Collapse them and name the scopes together.
+    scopes = sorted(set(scopes))
+    if len(scopes) == 1:
+        return scopes[0]
+    return "%s and %s" % (", ".join(scopes[:-1]), scopes[-1])
+
 
 try:
     with open(sys.argv[1]) as fh:
@@ -543,12 +576,16 @@ except (OSError, ValueError):
     raise SystemExit(0)
 
 now = datetime.now(timezone.utc)
-out = []
+found = {}
 for instance in data.get("value") or []:
     props = instance.get("properties") or {}
     end = props.get("endDateTime")
     if not end:
         continue  # a permanent assignment has nothing to expire
+    expanded = props.get("expandedProperties") or {}
+    role = (expanded.get("roleDefinition") or {}).get("displayName") or ""
+    if role not in APPLY_ROLES:
+        continue
     # ARM returns UTC here. Parsed by pattern rather than fromisoformat, which
     # rejects the 7-digit fractional seconds Azure sometimes emits.
     stamp = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})", end)
@@ -558,15 +595,32 @@ for instance in data.get("value") or []:
     left = int((expires - now).total_seconds() // 60)
     if left <= 0:
         continue
-    role = (((props.get("expandedProperties") or {}).get("roleDefinition") or {})
-            .get("displayName") or "a role")
-    where = props.get("scope") or "?"
-    if left <= WARN_MINUTES:
-        out.append("warn PIM activation of %s at %s expires in %d minutes. Apply takes longer than "
-                   "that, and once it lapses the next plan 403s on reads while refreshing state. "
-                   "Re-activate for a longer window before applying." % (role, where, left))
+    # This endpoint returns admin-granted assignments that happen to expire
+    # alongside genuine PIM activations, and both carry an endDateTime. Only
+    # assignmentType separates them, and it changes the remedy: an activation is
+    # yours to extend, an assignment is not. Absent, assume the activation it
+    # usually is rather than sending the operator to an admin who cannot help.
+    assigned = props.get("assignmentType") == "Assigned"
+    # The subscription or resource group name, to match how the role is named in
+    # the same sentence. The raw ARM path only when ARM did not expand it.
+    where = (expanded.get("scope") or {}).get("displayName") or props.get("scope") or "?"
+    found.setdefault((left, role, assigned), []).append(where)
+
+out = []
+for (left, role, assigned), scopes in sorted(found.items()):
+    if assigned:
+        subject = "Time-bound assignment of %s at %s" % (role, scope_list(scopes))
+        remedy = ("It is an assignment rather than a PIM activation, so it is not yours to "
+                  "extend: ask whoever granted it for a longer window.")
     else:
-        out.append("pass PIM activation of %s at %s has %dh%02dm left" % (role, where, left // 60, left % 60))
+        subject = "PIM activation of %s at %s" % (role, scope_list(scopes))
+        remedy = "Re-activate for a longer window before applying."
+    if left <= WARN_MINUTES:
+        out.append("warn %s expires in %d minutes. The apply runs %s, so that leaves no margin, "
+                   "and once it lapses the next plan 403s on reads while refreshing state. %s"
+                   % (subject, left, APPLY_MINUTES, remedy))
+    else:
+        out.append("pass %s has %dh%02dm left" % (subject, left // 60, left % 60))
 
 print("\n".join(out))
 PY
