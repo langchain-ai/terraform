@@ -90,8 +90,17 @@ variable "vnet_name" {
 
 variable "cluster_name" {
   type        = string
-  description = "Name for the AKS cluster. Unique within the resource group, 1-63 chars. Empty derives from the naming scheme."
+  description = "Name for the AKS cluster this module creates. Unique within the resource group, 1-63 chars. Empty derives from the naming scheme. To attach to a cluster you already own, set create_cluster = false and existing_cluster_name instead."
   default     = ""
+
+  # Both variables name a cluster, and main.tf can only honor one: cluster_name
+  # names the cluster this module creates, existing_cluster_name identifies one
+  # it looks up. Setting the wrong one for the mode is a config an operator can
+  # write and Terraform would otherwise accept, discarding it without a word.
+  validation {
+    condition     = var.cluster_name == "" || var.create_cluster
+    error_message = "cluster_name applies only when this module creates the cluster, and create_cluster is false. Set existing_cluster_name to name the cluster to attach to, and leave cluster_name empty."
+  }
 }
 
 variable "postgres_name" {
@@ -141,6 +150,14 @@ variable "keyvault_name" {
   description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme. Only used when create_keyvault = true."
   default     = ""
   # When empty, main.tf computes: "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
+
+  # "Only used when create_keyvault = true" was already the rule, in prose. This
+  # enforces it, so the ignored setting fails at plan instead of at whatever
+  # point the operator notices the vault is not the one they named.
+  validation {
+    condition     = var.keyvault_name == "" || var.create_keyvault
+    error_message = "keyvault_name applies only when this module creates the Key Vault, and create_keyvault is false. Set existing_keyvault_name to name the vault to attach to, and leave keyvault_name empty."
+  }
 }
 
 variable "create_keyvault" {
@@ -153,6 +170,11 @@ variable "existing_keyvault_name" {
   type        = string
   description = "Name of the pre-existing Key Vault to attach to. Required when create_keyvault = false; leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
+
+  validation {
+    condition     = var.existing_keyvault_name == "" || !var.create_keyvault
+    error_message = "existing_keyvault_name applies only when attaching to a Key Vault you already own, and create_keyvault is true. Set create_keyvault = false to attach, or use keyvault_name to pin the name of the vault this module creates."
+  }
 }
 
 variable "existing_keyvault_resource_group_name" {
@@ -261,6 +283,11 @@ variable "existing_cluster_name" {
   type        = string
   description = "Name of the pre-existing AKS cluster to attach to. Required when create_cluster = false, leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
+
+  validation {
+    condition     = var.existing_cluster_name == "" || !var.create_cluster
+    error_message = "existing_cluster_name applies only when attaching to a cluster you already own, and create_cluster is true. Set create_cluster = false to attach, or use cluster_name to pin the name of the cluster this module creates."
+  }
 }
 
 variable "existing_cluster_resource_group_name" {
@@ -465,12 +492,32 @@ variable "blob_ttl_short_days" {
   type        = number
   description = "The number of days to keep short-lived blobs"
   default     = 14
+
+  # The wizard asks for this now, so it takes whatever an operator types. Azure
+  # wants a whole number of days and rejects anything else when the lifecycle
+  # policy is written — after the storage account already exists.
+  validation {
+    condition     = var.blob_ttl_short_days >= 1 && floor(var.blob_ttl_short_days) == var.blob_ttl_short_days
+    error_message = "blob_ttl_short_days must be a whole number of days, 1 or greater."
+  }
 }
 
 variable "blob_ttl_long_days" {
   type        = number
   description = "The number of days to keep long-lived blobs"
   default     = 400
+
+  validation {
+    condition     = var.blob_ttl_long_days >= 1 && floor(var.blob_ttl_long_days) == var.blob_ttl_long_days
+    error_message = "blob_ttl_long_days must be a whole number of days, 1 or greater."
+  }
+
+  # Separate lifecycle rules on separate blob prefixes, so Azure accepts the
+  # inverted pair and silently deletes the data meant to be kept longest first.
+  validation {
+    condition     = var.blob_ttl_long_days >= var.blob_ttl_short_days
+    error_message = "blob_ttl_long_days must be greater than or equal to blob_ttl_short_days — long-lived blobs cannot be deleted sooner than short-lived ones."
+  }
 }
 
 variable "storage_allowed_ips" {
