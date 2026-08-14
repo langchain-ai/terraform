@@ -73,7 +73,7 @@ After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_a
 
 We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation.
 
-By default, the Crossplane role can delete LangSmith bootstrap secrets and JuiceFS Redis users so failed provisioning can roll back cleanly. Set `allow_delete_permissions = true` before teardown to grant the broader resource deletion permissions.
+By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions.
 
 ### Enabling break-glass assume-role access
 
