@@ -665,7 +665,7 @@ module "postgres" {
   sku_name       = var.postgres_sku_name
 
   postgres_version      = var.postgres_version
-  storage_mb            = var.postgres_storage_gb * 1024
+  storage_mb            = var.postgres_storage_mb
   storage_tier          = var.postgres_storage_tier
   backup_retention_days = var.postgres_backup_retention_days
 
