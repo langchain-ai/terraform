@@ -750,25 +750,35 @@ Multiple pods fail with `CreateContainerConfigError` immediately after enabling 
 
 **Cause:** `langsmith-values-insights.yaml` (copied from the AWS-oriented example) sets `clickhouse.external.enabled: true` with `existingSecretName: langsmith-clickhouse`. This overrides the in-cluster ClickHouse configuration and expects an external secret that doesn't exist.
 
-**Fix:** `init-values.sh` now generates a minimal insights file when `clickhouse_source = "in-cluster"`:
+**Fix:** `init-values.sh` no longer puts any ClickHouse configuration in the insights file. The generated file only enables the feature:
 ```yaml
-config:
-  insights:
-    enabled: true
-# No clickhouse.external block — chart uses in-cluster ClickHouse
+insights:
+  enabled: true
 ```
 
 If you have this issue on an existing deployment, overwrite the file and redeploy:
 ```bash
 cat > helm/values/langsmith-values-insights.yaml << 'EOF'
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 EOF
 make deploy
 ```
 
-For **external ClickHouse** (production with LangChain managed ClickHouse), the full configuration is in `helm/values/examples/langsmith-values-insights.yaml`.
+For **external ClickHouse**, set `clickhouse_source = "external"` in `terraform.tfvars` and re-run `make init-values`. That writes the `clickhouse.external` block into `values-overrides.yaml` and prompts for the connection details to create the `langsmith-clickhouse` secret.
+
+The same symptom appears when the secret exists but is missing a key. The chart reads all seven through `secretKeyRef` with `optional: false`:
+
+```
+clickhouse_host  clickhouse_port  clickhouse_native_port  clickhouse_user
+clickhouse_password  clickhouse_db  clickhouse_tls
+```
+
+`clickhouse_native_port` is the one most often left out of a hand-rolled secret. To list the keys present without exposing their values:
+
+```bash
+kubectl get secret langsmith-clickhouse -n langsmith -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}'
+```
 
 ---
 
