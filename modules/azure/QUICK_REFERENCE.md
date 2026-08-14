@@ -25,12 +25,13 @@ make quickstart
 #    reads silently from Key Vault on every subsequent run
 make setup-env
 
-# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC, quotas)
+# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC,
+#    quotas, and that the globally-unique resource names are still free)
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
-# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it runs three targeted stages automatically.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 make init
 make apply
 
@@ -60,7 +61,7 @@ make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
 
 ```bash
 cp infra/terraform.tfvars.example infra/terraform.tfvars
-vi infra/terraform.tfvars   # required: subscription_id, identifier, location
+vi infra/terraform.tfvars   # required: subscription_id, name_prefix, location
 # then continue from step 2 above
 ```
 
@@ -217,12 +218,12 @@ Then re-run `make init-values && make deploy`.
 ```hcl
 # ── Required ──────────────────────────────────────────────────────────────────
 subscription_id = ""              # az account show --query id -o tsv
-identifier      = "-prod"         # suffix appended to every resource name
+name_prefix     = "prod"          # appended to every resource name (no leading hyphen)
 location        = "eastus"        # Azure region
 
 # ── Data sources ──────────────────────────────────────────────────────────────
 postgres_source   = "external"    # Azure DB for PostgreSQL Flexible Server
-redis_source      = "external"    # Azure Cache for Redis Premium
+redis_source      = "external"    # Azure Managed Redis
 clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 
 # ── AKS ───────────────────────────────────────────────────────────────────────
@@ -368,6 +369,36 @@ langsmith-standalone-polly-queue-xxxxx             1/1     Running     0        
 > **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
 
 > **Pin `--version` in Helm.** Without it, `helm upgrade` pulls latest which may silently apply DB migrations or toggle feature flags.
+
+---
+
+## Terraform Commands
+
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
+
+```bash
+cd modules/azure
+
+make init    ARGS="-upgrade"                 # re-resolve provider versions
+make plan    ARGS="-target=module.aks"       # plan one module
+make plan    ARGS="-out=tfplan"              # save a plan file
+make destroy ARGS="-target=module.redis"     # destroy one module
+```
+
+> `make apply` runs three targeted stages, and `ARGS` is passed to each of them. That suits flags like `-var`, `-parallelism`, and `-refresh=false`. To apply a saved plan or a single module, bypass the staging with `make tf ARGS="apply tfplan"`.
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output keyvault_name"
+make tf ARGS="output aks_cluster_name"
+make tf ARGS="output dns_nameservers"
+make tf ARGS="state list"
+make tf ARGS="validate"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/azure/infra` if you prefer.
 
 ---
 

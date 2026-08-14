@@ -54,7 +54,7 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
 - 1 StatefulSet: clickhouse (large node pool, 500Gi PVC)
 - 3 completed Jobs: backend-migrations, backend-ch-migrations, backend-auth-bootstrap
-- External: Azure DB for PostgreSQL (subnet-postgres), Azure Cache for Redis Premium (subnet-redis)
+- External: Azure DB for PostgreSQL (subnet-postgres), Azure Managed Redis (subnet-redis)
 - WI pods (4): backend, platform-backend, queue, ingest-queue
 
 ### Light Deploy (All In-Cluster)
@@ -120,7 +120,7 @@ AKS Cluster
 
 Azure Managed Services
 ├── Azure DB for PostgreSQL Flexible Server (private VNet)
-├── Azure Cache for Redis Premium (private VNet)
+├── Azure Managed Redis (private VNet)
 ├── Azure Blob Storage (Workload Identity — no static keys)
 └── Azure Key Vault
 ```
@@ -132,7 +132,7 @@ Azure Managed Services
 ### Light deploy (`postgres_source = "in-cluster"`, `redis_source = "in-cluster"`)
 
 ```
-langsmith-vnet<identifier>
+langsmith-vnet-<name_prefix>
 └── subnet-0    (AKS nodes only)
     ↳ No Postgres/Redis subnets created — chart-managed pods handle both
 ```
@@ -140,13 +140,34 @@ langsmith-vnet<identifier>
 ### Production (`postgres_source = "external"`, `redis_source = "external"`)
 
 ```
-langsmith-vnet<identifier>
+langsmith-vnet-<name_prefix>
 ├── subnet-0              (AKS nodes)
 ├── subnet-postgres       (Azure DB for PostgreSQL Flexible Server)
-└── subnet-redis          (Azure Cache for Redis Premium)
+└── subnet-redis          (Azure Managed Redis)
 ```
 
 All subnets are private. Postgres and Redis are accessible only from within the VNet via private DNS resolution. No public endpoints.
+
+### Bring your own VNet (`create_vnet = false`)
+
+```
+<your existing VNet>
+├── <existing subnet>                    supplied via aks_subnet_id / postgres_subnet_id / redis_subnet_id
+└── langsmith-vnet-<name_prefix>-subnet-*  created by Terraform for whichever IDs you left out
+```
+
+Each subnet is independently either supplied or created, so a VNet where the
+network team owns only some of the subnets still works. Subnets Terraform
+creates go into the existing VNet's resource group, and carry the same settings
+as the create path: the Storage and Key Vault service endpoints on the AKS
+subnet, the `Microsoft.DBforPostgreSQL/flexibleServers` delegation on the
+Postgres subnet, and no delegation on the Redis subnet, which holds the Azure
+Managed Redis private endpoint.
+
+The Application Gateway and bastion subnets are the exception: Terraform carves
+those only out of a VNet it owns, so on this path they are supplied through
+`agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
+See [README.md](README.md#bring-your-own-vnet).
 
 ---
 

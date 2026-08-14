@@ -20,6 +20,9 @@
 #   clickhouse_password  clickhouse_db  clickhouse_tls
 #
 # NOTE: chart 0.15.1 removed config.insights → top-level insights block (migrated below).
+# Chart 0.16 keeps that block. The external-ClickHouse path has NOT been validated on 0.16
+# (only in-cluster was), so check the clickhouse block init-values.sh writes into
+# values-overrides.yaml against the 0.16 insights schema before using it.
 
 insights:
   enabled: true

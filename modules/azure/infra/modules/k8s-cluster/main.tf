@@ -183,13 +183,46 @@ resource "azurerm_kubernetes_cluster" "main" {
   lifecycle {
     # upgrade_settings change during rolling node upgrades; ignore to prevent
     # drift between Terraform state and live cluster configuration.
-    # zones: AKS does not support changing zones on an existing node pool —
-    # it is only applied at creation time. Ignoring prevents forced recreation
-    # when availability_zones is set on an existing cluster.
+    #
+    # zones: azurerm ~> 4.0 does support re-zoning an existing default node
+    # pool. It is one of the cycleNodePoolProperties, so a change is applied by
+    # cycling the system node pool through temporary_name_for_rotation (set to
+    # "defaulttmp" above) rather than by recreating the cluster. We suppress it
+    # deliberately: the provider's cycle does not cordon and drain, so it hard-
+    # disrupts every pod on the system pool. Editing one tfvars line should not
+    # do that unannounced. The check block below reports the resulting drift.
     ignore_changes = [
       default_node_pool[0].upgrade_settings,
       default_node_pool[0].zones,
     ]
+  }
+}
+
+# ignore_changes on default_node_pool[0].zones makes an availability_zones edit
+# a silent no-op: the plan comes back clean and the node pool stays put. Surface
+# that as a warning on every plan so a requested zone change is never mistaken
+# for an applied one.
+#
+# A check block rather than a postcondition on purpose. A failing postcondition
+# aborts planning even when the cluster has no planned changes, so a deployment
+# already sitting in this state cannot apply anything at all until it is
+# resolved. The drift is worth reporting, not worth blocking unrelated work.
+check "aks_node_pool_zone_drift" {
+  assert {
+    condition = toset(azurerm_kubernetes_cluster.main.default_node_pool[0].zones) == toset(var.availability_zones)
+    error_message = join("", [
+      "AKS node pool zones are [",
+      join(",", sort(tolist(azurerm_kubernetes_cluster.main.default_node_pool[0].zones))),
+      "] but availability_zones requests [",
+      join(",", sort(var.availability_zones)),
+      "]. This module ignores zone changes on an existing node pool, so the ",
+      "request was discarded and the live zones above are what you have. To ",
+      "make it take effect, either revert availability_zones to the live value, ",
+      "or drop default_node_pool[0].zones from the ignore_changes block in ",
+      "modules/k8s-cluster/main.tf and apply during a maintenance window. That ",
+      "cycles the system node pool, which does not cordon and drain and will ",
+      "disrupt every pod running on it.",
+    ])
   }
 }
 
@@ -380,8 +413,8 @@ resource "helm_release" "istio_gateway" {
 }
 
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
-# Provisions an Azure Application Gateway v2 and installs the AGIC Helm chart.
-# AGIC watches Kubernetes Ingress resources with ingressClassName: azure/application-gateway
+# Provisions an Azure Application Gateway v2 and enables the AKS ingress-appgw add-on.
+# AGIC watches Kubernetes Ingress resources with ingressClassName: azure-application-gateway
 # and programs AGW routing rules dynamically. Auth uses Workload Identity (ARM auth).
 #
 # Prerequisites: agic_subnet_id must point to a dedicated /24+ subnet in the same VNet.
@@ -411,6 +444,12 @@ resource "azurerm_application_gateway" "agw" {
   resource_group_name = var.resource_group_name
   location            = var.location
   tags                = merge(var.tags, { module = "aks", component = "agic" })
+
+  # Attached only when the caller passes a policy, which it does with the
+  # WAF_v2 tier. Azure supports policy associations on no other tier, and the
+  # provider does not check the pair, so a Standard_v2 gateway with a policy
+  # plans clean and fails at apply.
+  firewall_policy_id = var.firewall_policy_id
 
   sku {
     name     = var.agw_sku_tier
@@ -468,6 +507,16 @@ resource "azurerm_application_gateway" "agw" {
   }
 
   lifecycle {
+    # Azure rejects a WAF_v2 gateway that has no policy attached, with
+    # ApplicationGatewayFirewallNotConfiguredForSelectedSku. There is no mode
+    # where the tier runs without one, so catch the pair here rather than 15
+    # minutes into an apply. Deliberately not a silent downgrade to Standard_v2:
+    # an operator who asked for WAF should not end up with no firewall.
+    precondition {
+      condition     = var.agw_sku_tier != "WAF_v2" || var.firewall_policy_id != null
+      error_message = "agw_sku_tier is WAF_v2 but no WAF policy was supplied. Set create_waf = true, which creates the policy and selects the WAF_v2 tier for you, or set agw_sku_tier = \"Standard_v2\"."
+    }
+
     # AGIC manages these resources after initial creation.
     # Ignoring prevents Terraform from overwriting AGIC-programmed routing rules
     # on every subsequent apply.
@@ -495,7 +544,8 @@ resource "azurerm_application_gateway" "agw" {
 # assigned explicitly. Three permissions are required:
 #   1. Reader on the resource group (discover AGW and related resources)
 #   2. Contributor on the Application Gateway (update routing rules)
-#   3. Network Contributor on the VNet (subnet join action for AGW subnet)
+#   3. Network Contributor for the subnet join action on the AGW subnet, at VNet
+#      scope by default and narrowed by agic_network_contributor_scope
 #
 # The add-on identity object_id is exposed via:
 #   azurerm_kubernetes_cluster.main.ingress_application_gateway[0]
@@ -528,9 +578,19 @@ resource "azurerm_role_assignment" "agic_agw_contributor" {
   depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
 
+# Network Contributor is Microsoft.Network/* with no NotActions, so at VNet scope
+# this identity can write to every subnet in the VNet, including which NSG or
+# route table each one carries. AGIC needs subnets/join/action and subnets/read on
+# one subnet, and Azure documents those as assignable "on the virtual network or
+# subnet", so 'subnet' is sufficient and is what a VNet you do not own should get.
+#
+# The default stays 'vnet' because scope is ForceNew: narrowing it destroys and
+# recreates the assignment, which is a non-empty plan and a window of 403s for
+# every deployment already running. 'none' leaves the grant to an operator whose
+# network team will not delegate roleAssignments/write on their VNet.
 resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
-  scope                = local.agic_vnet_id
+  count                = var.ingress_controller == "agic" && var.agic_network_contributor_scope != "none" ? 1 : 0
+  scope                = var.agic_network_contributor_scope == "subnet" ? var.agic_subnet_id : local.agic_vnet_id
   role_definition_name = "Network Contributor"
   principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
   depends_on           = [time_sleep.agic_identity_propagation]

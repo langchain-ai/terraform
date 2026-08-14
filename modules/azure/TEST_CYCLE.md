@@ -33,8 +33,7 @@ Owner includes both. Contributor alone is insufficient — role assignments requ
 
 ```hcl
 subscription_id              = "your-azure-subscription-id"
-identifier                   = "-dev"
-environment                  = "dev"
+name_prefix                  = "dev"
 location                     = "eastus"
 aks_deletion_protection      = false   # required for clean terraform destroy after test
 postgres_deletion_protection = false   # required for clean terraform destroy after test
@@ -68,7 +67,7 @@ Confirm the subscription ID and name match the target deployment.
 make setup-env
 ```
 This script:
-- Reads `identifier` and `environment` from `terraform.tfvars` to build Key Vault name
+- Reads `name_prefix` from `terraform.tfvars` to build Key Vault name
 - Prompts for new values on first run: `postgres_password`, `license_key`, `admin_password`, `admin_email`
 - Auto-generates stable secrets on first run: `api_key_salt`, `jwt_secret`, Fernet keys
 - Writes `secrets.auto.tfvars` — automatically loaded by Terraform
@@ -110,7 +109,7 @@ Review the plan. Expected resource categories:
 - Azure Blob storage account + container
 - Azure Key Vault + all application secrets
 - Azure DB for PostgreSQL Flexible Server + private endpoint
-- Azure Cache for Redis Premium + private endpoint
+- Azure Managed Redis + private endpoint
 - cert-manager, KEDA, NGINX ingress Helm releases
 - Kubernetes namespace `langsmith`, K8s ServiceAccount
 
@@ -199,11 +198,11 @@ terraform -chdir=infra output
 ```
 Expected key outputs:
 ```
-aks_cluster_name       = "langsmith-aks-<identifier>"
-keyvault_name          = "langsmith-kv-<identifier>"
+aks_cluster_name       = "langsmith-aks-<name_prefix>"
+keyvault_name          = "langsmith-kv-<name_prefix>"
 langsmith_url          = "https://<dns_label>.eastus.cloudapp.azure.com"
-resource_group_name    = "langsmith-rg-<identifier>"
-storage_account_name   = "langsmithblob<identifier>"
+resource_group_name    = "langsmith-rg-<name_prefix>"
+storage_account_name   = "langsmithblob<name_prefix>"
 ```
 
 ### Full health check
@@ -276,9 +275,16 @@ postgres_standby_availability_zone   = "2"
 postgres_geo_redundant_backup        = true
 ```
 
-**Expected plan**: AKS node pool zones updated; PostgreSQL HA mode set to `ZoneRedundant`.
+**Expected plan**: PostgreSQL HA mode set to `ZoneRedundant`.
 
 > Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+> Set `availability_zones` before the first apply. On an existing cluster the
+> AKS node pool keeps the zones it was created with: the module ignores zone
+> changes so the provider cannot cycle the system node pool out from under
+> running pods. Plan reports the mismatch as a `Check block assertion failed`
+> warning naming both the live and the requested zones, and exits 0. Expect that
+> warning here rather than a node pool change.
 
 ---
 
@@ -286,8 +292,7 @@ postgres_geo_redundant_backup        = true
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| `make plan` fails on fresh deploy | `cannot create REST client: no client config` on `kubernetes_manifest.cluster_issuer_http01` | Expected — the Kubernetes provider can't connect during plan because the cluster doesn't exist yet. Skip `make plan` on a fresh deploy and run `make apply` directly. `make apply` handles this with a three-stage apply. |
-| `kubernetes_manifest` ClusterIssuer fails during apply | `API did not recognize GroupVersionKind: no matches for kind "ClusterIssuer"` | cert-manager CRDs not registered yet. Fixed by `make apply` Stage 2 (installs cert-manager first) before Stage 3 applies the ClusterIssuer. If you ran a plain `terraform apply`, run `make apply` again — it will pick up from the correct stage. |
+| `letsencrypt-prod` ClusterIssuer missing after apply | `clusterissuers.cert-manager.io "letsencrypt-prod" not found` on the langsmith-tls certificate | Terraform does not create the issuer. `make deploy` applies it, so run Pass 2 before checking the certificate. See TROUBLESHOOTING.md. |
 | vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv3Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv3 → Request 32. Or: `az quota update --resource-name standardDSv3Family ...` See TROUBLESHOOTING.md. |
 | `max_pods` too low — autoscaler backoff | `pod didn't trigger scale-up: in backoff after failed scale-up` | Set `default_node_pool_max_pods = 60` **before** first apply — this field is immutable. With 30 pods/node, Pass 2's ~37 pods trigger autoscaler which hits quota. |
 | `default_node_pool_min_count = 1` causes pod pending | All 14+ vCPU of Pass 2 must schedule but only 1 node starts | Set `default_node_pool_min_count = 3` — autoscaler waits for pending pods before adding nodes, causing initial deploy to stall. |
@@ -317,7 +322,7 @@ make clean
 
 > **`make clean` before `make destroy` = unrecoverable.** `make clean` deletes `terraform.tfstate`.
 > Without state, Terraform cannot destroy anything. You'll have to delete Azure resources manually:
-> `az group delete --name langsmith-rg-<identifier> --yes`
+> `az group delete --name langsmith-rg-<name_prefix> --yes`
 
 **Before destroy, verify these are set in `terraform.tfvars`:**
 - `aks_deletion_protection      = false`
@@ -329,17 +334,17 @@ that hold the subnet. Delete the LB manually from Azure Portal → Load Balancer
 `kubernetes` LB → delete, then re-run `make destroy`.
 
 **Key Vault soft-delete after destroy:** Even with `purge_protection = false`, Azure retains the
-Key Vault in soft-deleted state for 7 days. If you re-deploy with the same `identifier`:
+Key Vault in soft-deleted state for 7 days. If you re-deploy with the same `name_prefix`:
 ```bash
-az keyvault purge --name langsmith-kv-<identifier> --location <region>
+az keyvault purge --name langsmith-kv-<name_prefix> --location <region>
 ```
-Or use a different `identifier` suffix for the next deploy.
+Or use a different `name_prefix` for the next deploy.
 
 ---
 
 ## Key Vault Secret Reference
 
-Secrets stored in Azure Key Vault at `langsmith-kv<identifier>`:
+Secrets stored in Azure Key Vault at `langsmith-kv-<name_prefix>`:
 
 | Secret name | Auto-generated | Rotatable |
 |-------------|---------------|-----------|
