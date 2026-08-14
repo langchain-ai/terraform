@@ -40,8 +40,10 @@ unique_resource_names = true
 # ── Sources — external managed services ───────────────────────────────────────
 postgres_source   = "external"    # "external" = Azure DB for PostgreSQL Flexible Server
 redis_source      = "external"    # "external" = Azure Managed Redis
-clickhouse_source = "in-cluster"  # ClickHouse always in-cluster (dev/POC)
-                                  # Production: use LangChain Managed ClickHouse
+clickhouse_source = "in-cluster"  # "in-cluster" = chart-managed StatefulSet (dev/POC)
+                                  # "external"   = LangChain Managed ClickHouse, Altinity,
+                                  #                or any reachable ClickHouse. init-values.sh
+                                  #                prompts for the connection details.
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 postgres_admin_username      = "langsmith"
@@ -166,6 +168,15 @@ keyvault_purge_protection = false   # set true for production
 
 # Optional: override the generated Key Vault name (must be globally unique, 3–24 chars)
 # keyvault_name = "my-langsmith-kv"
+
+# Optional: attach to a Key Vault the customer already owns instead of creating one.
+# Terraform writes its nine secrets into it and changes nothing else about the vault,
+# so the settings above are ignored. Requires a vault in Azure RBAC mode with
+# Key Vault Secrets Officer already granted to the deployer. See the README section
+# "Deploying against an existing Key Vault" for the full prerequisites.
+# create_keyvault                       = false
+# existing_keyvault_name                = "customer-platform-kv"
+# existing_keyvault_resource_group_name = "customer-platform-rg"
 
 # ── Blob storage ──────────────────────────────────────────────────────────────
 blob_ttl_enabled    = true

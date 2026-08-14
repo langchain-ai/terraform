@@ -138,9 +138,39 @@ variable "cost_center" {
 
 variable "keyvault_name" {
   type        = string
-  description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme."
+  description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme. Only used when create_keyvault = true."
   default     = ""
   # When empty, main.tf computes: "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
+}
+
+variable "create_keyvault" {
+  type        = bool
+  description = "Whether to create a new Key Vault. Set false to attach to a pre-existing one — provide existing_keyvault_name and existing_keyvault_resource_group_name. Terraform then writes its secrets into that vault and changes nothing else about it: the vault's auth mode, network rules, and retention settings stay as its owner configured them, and keyvault_default_action, keyvault_allowed_ips, and keyvault_purge_protection are ignored."
+  default     = true
+}
+
+variable "existing_keyvault_name" {
+  type        = string
+  description = "Name of the pre-existing Key Vault to attach to. Required when create_keyvault = false; leaving it empty fails the plan rather than falling back to a derived name."
+  default     = ""
+}
+
+variable "existing_keyvault_resource_group_name" {
+  type        = string
+  description = "Resource group containing the pre-existing Key Vault. Required when create_keyvault = false. No default is derived: the only name this module could guess is langsmith-rg<identifier>, the resource group it creates, which is not where a vault the customer's platform team owns lives."
+  default     = ""
+}
+
+variable "keyvault_manage_terraform_admin_assignment" {
+  type        = bool
+  description = "Whether Terraform creates the deployer's 'Key Vault Secrets Officer' grant. Leave null to follow create_keyvault, so a vault Terraform creates gets the grant and a customer-owned vault does not. Creating it on someone else's vault means calling Microsoft.Authorization/roleAssignments/write against a resource their platform team owns, which is the call such a team most often denies. Set false on a vault Terraform creates when the grant already exists, or when the subscription delegates roleAssignments/write through an ABAC condition that permits only principalType ServicePrincipal and apply runs as a user — that request is rejected either way. A tenant admin must then grant the deployer Key Vault Secrets Officer on the vault or its resource group before apply, or the secret writes fail with 403."
+  default     = null
+}
+
+variable "keyvault_manage_managed_identity_assignment" {
+  type        = bool
+  description = "Whether Terraform creates the pod managed identity's 'Key Vault Secrets User' grant. Leave null to follow create_keyvault, so a vault Terraform creates gets the grant and a customer-owned vault does not. Separate from keyvault_manage_terraform_admin_assignment because this principal is always a service principal, so an ABAC condition on principalType that rejects a user deployer still permits this one. Nobody can pre-grant it, because the identity is created partway through the same apply, so leave it null or true unless the vault's owner has agreed to add it by hand."
+  default     = null
 }
 
 variable "keyvault_purge_protection" {
@@ -195,6 +225,43 @@ variable "create_vnet" {
   type        = bool
   description = "Whether to create a new VNet. If false, vnet_id is required and each subnet is either supplied via its *_subnet_id variable or carved out of that VNet by Terraform."
   default     = true
+}
+
+# ── Bring-your-own AKS cluster ────────────────────────────────────────────────
+# Set create_cluster = false to deploy onto a cluster the customer already runs.
+# Terraform still provisions Key Vault, Storage, Managed Identities, and
+# federated credentials — it just reads the cluster instead of creating it.
+# create_vnet = false is required: the cluster's nodes already run in an existing
+# subnet, and a subnet Terraform carves could never be one of them, so supply
+# vnet_id and the subnet ids. Prerequisites on the existing cluster:
+#   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
+#     --enable-workload-identity) — required for the federated credentials below.
+#   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
+#   • Local accounts NOT disabled — the kubernetes/helm providers authenticate via
+#     the cluster's kube_config, which Azure returns empty for AAD-only clusters.
+
+variable "create_cluster" {
+  type        = bool
+  description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster — provide existing_cluster_name (and existing_cluster_resource_group_name if it lives outside the resource group this module creates)."
+  default     = true
+}
+
+variable "existing_cluster_name" {
+  type        = string
+  description = "Name of the pre-existing AKS cluster to attach to. Required when create_cluster = false, leaving it empty fails the plan rather than falling back to a derived name."
+  default     = ""
+}
+
+variable "existing_cluster_resource_group_name" {
+  type        = string
+  description = "Resource group containing the pre-existing AKS cluster. Required when create_cluster = false. No default is derived: the only name this module could guess is langsmith-rg<identifier>, the resource group it creates for Key Vault and Storage, which is not where a cluster the customer's platform team owns lives."
+  default     = ""
+}
+
+variable "existing_cluster_node_pools_managed" {
+  type        = bool
+  description = "Whether Terraform should add the additional node pools (e.g. the 'large' pool for ClickHouse) to a pre-existing cluster. Defaults to false, so attaching to a customer's cluster changes nothing about it: the cluster's own pools run every workload, and you must confirm they have capacity for ClickHouse and LangGraph. Terraform never adopts existing pools, it only ever adds new ones, so setting this true adds a pool alongside the customer's rather than taking over theirs. Only used when create_cluster = false."
+  default     = false
 }
 
 variable "vnet_id" {

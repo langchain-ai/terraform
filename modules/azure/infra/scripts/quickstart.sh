@@ -1005,7 +1005,7 @@ _run_section_7() {
   _hint "              Automated backups, geo-redundancy, independent scaling."
   _hint "              Recommended for production and long-running POCs."
   _hint ""
-  _hint "ClickHouse  — always in-cluster for self-hosted (single StatefulSet, no backups)."
+  _hint "ClickHouse  — in-cluster is a single StatefulSet with no backups."
   _hint "              For production traces, use LangChain Managed ClickHouse instead."
 
   if [[ "$PROFILE" == "prod" ]]; then
