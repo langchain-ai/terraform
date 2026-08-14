@@ -627,6 +627,10 @@ module "postgres" {
   database_name  = var.postgres_database_name
   sku_name       = var.postgres_sku_name
 
+  postgres_version = var.postgres_version
+  storage_mb       = var.postgres_storage_mb
+  storage_tier     = var.postgres_storage_tier
+
   availability_zone            = var.availability_zones[0]
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
@@ -652,6 +656,8 @@ module "redis" {
   subnet_id           = local.redis_subnet_id                    # private endpoint goes here
   vnet_id             = local.vnet_id                            # private DNS zone link
   amr_sku             = var.amr_sku
+  high_availability   = var.redis_high_availability
+  cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
 }
