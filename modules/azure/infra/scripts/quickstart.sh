@@ -146,6 +146,10 @@ _derive_names() {
   else
     base="langsmith"
   fi
+  # name_base replaces the default base for every derived name. The hash still
+  # tracks unique_resource_names, because those are separate decisions in
+  # main.tf: one picks the leading segment, the other adds the uniqueness suffix.
+  [[ -n "$NAME_BASE" ]] && base="$NAME_BASE"
   _RG_NAME="${base}-rg${suffix}"
   _AKS_NAME="${base}-aks${suffix}"
   _KV_NAME="${base}-kv${suffix}${uniq}"
@@ -187,7 +191,7 @@ _name_length_errors() {
 
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
-_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE LOCATION OWNER
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
@@ -285,11 +289,12 @@ _load_tfvars() {
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
            sizing_profile postgres_admin_username postgres_database_name \
-           amr_sku; do
+           amr_sku name_base; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
+      name_base)                 NAME_BASE="$_TF_VAL" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       environment)               ENVIRONMENT="$_TF_VAL" ;;
@@ -422,6 +427,11 @@ LOCATION="eastus"
 # renames Postgres, Redis, Storage and Key Vault, which Terraform executes as
 # destroy-and-recreate.
 UNIQUE_NAMES="true"
+# The wizard never asks for name_base — it is a naming-standard knob set by hand
+# in tfvars — but it has to be read, because every name the wizard previews and
+# length-checks is built from it. Empty means the derivation picks the default
+# base, matching the locals in main.tf.
+NAME_BASE=""
 # Left blank on purpose. The module omits the tag entirely when it is empty, and
 # an unanswered "platform-team" is a worse answer than no tag at all.
 OWNER=""
@@ -432,7 +442,12 @@ _run_section_2() {
   _section "2. Subscription & Naming"
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
   _hint "and is the default 'environment' tag. Write it without a hyphen — we add the separator."
-  _hint "Example: prod → ls-rg-prod, ls-aks-prod, ls-kv-prod-<hash>"
+  # Built from the same base the derivation uses, so a tfvars carrying name_base
+  # gets an example matching the names it will actually see below.
+  _EG_BASE="ls"
+  [[ "$UNIQUE_NAMES" == "true" ]] || _EG_BASE="langsmith"
+  [[ -n "$NAME_BASE" ]] && _EG_BASE="$NAME_BASE"
+  _hint "Example: prod → ${_EG_BASE}-rg-prod, ${_EG_BASE}-aks-prod, ${_EG_BASE}-kv-prod-<hash>"
   _hint "Postgres, Redis, Storage and Key Vault names must be unique across all of Azure,"
   _hint "so those four get a hash of your subscription appended. Keep it under ~12 chars."
   _hint "Changing it later creates entirely new resources — choose something stable."
