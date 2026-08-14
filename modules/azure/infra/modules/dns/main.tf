@@ -38,9 +38,13 @@ resource "azurerm_dns_a_record" "langsmith" {
 # cert-manager needs DNS Zone Contributor to create/delete TXT records
 # for ACME DNS-01 challenge verification.
 # Scoped to this specific zone — cert-manager cannot modify other zones.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 resource "azurerm_role_assignment" "cert_manager_dns" {
-  count                = var.cert_manager_principal_id != "" ? 1 : 0
+  count                = var.grant_cert_manager_dns ? 1 : 0
   scope                = azurerm_dns_zone.main.id
   role_definition_name = "DNS Zone Contributor"
   principal_id         = var.cert_manager_principal_id
+  principal_type       = "ServicePrincipal"
 }

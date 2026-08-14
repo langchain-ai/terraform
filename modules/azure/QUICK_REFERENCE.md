@@ -21,63 +21,52 @@ cd modules/azure
 # 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
 make quickstart
 
-# 2. Bootstrap secrets — prompts for passwords + license key on first run,
-#    reads silently from Key Vault on every subsequent run
+# 2. Bootstrap Terraform inputs — prompts for the Postgres password,
+#    license key, and admin email
 make setup-env
 
-# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC, quotas)
+# 3. Check prerequisites (az CLI logged in, resource providers registered, RBAC,
+#    quotas, and that the globally-unique resource names are still free)
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
-# Note: make plan fails on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it runs three targeted stages automatically.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 make init
 make apply
 
-# 5. Get cluster credentials
+# 5. Write the LangSmith app secrets into Key Vault (prompts for the admin
+#    password, generates the rest). Never overwrites — safe to re-run.
+make seed-secrets
+
+# 6. Get cluster credentials
 make kubeconfig
 
-# 6. Create K8s secrets from Key Vault (langsmith-config-secret)
+# 7. Create K8s secrets from Key Vault (langsmith-config-secret)
 make k8s-secrets
 
-# 7. Generate Helm values from Terraform outputs
+# 8. Generate Helm values from Terraform outputs
 make init-values
 
-# 8. Deploy LangSmith (~10 min)
+# 9. Deploy LangSmith (~10 min)
 make deploy
 
-# 9. Check status
+# 10. Check status
 make status
 ```
 
 Or run everything after `make apply` in one shot:
 
 ```bash
-make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
+make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
 ```
 
 **Prefer editing over the wizard?** Copy the example and fill in manually:
 
 ```bash
 cp infra/terraform.tfvars.example infra/terraform.tfvars
-vi infra/terraform.tfvars   # required: subscription_id, identifier, location
+vi infra/terraform.tfvars   # required: subscription_id, name_prefix, location
 # then continue from step 2 above
-```
-
-**Terraform Helm path** (alternative Pass 2 — Helm release managed in Terraform state):
-
-```bash
-# After make apply, instead of make kubeconfig → make k8s-secrets → make deploy:
-cp app/terraform.tfvars.example app/terraform.tfvars
-vi app/terraform.tfvars   # set admin_email at minimum
-make init-app             # pulls infra outputs into app/infra.auto.tfvars.json + tf init
-make apply-app            # creates K8s secrets + langsmith-ksa SA + Helm release via Terraform
-```
-
-Or end-to-end via Terraform:
-
-```bash
-make deploy-all-tf   # apply → init-values → init-app → apply-app
 ```
 
 ---
@@ -91,23 +80,17 @@ make status
 # Quick status (skip Key Vault + K8s queries)
 make status-quick
 
-# Re-deploy after changing Helm values or upgrading chart version (Helm path)
+# Re-deploy after changing Helm values or upgrading chart version
 make deploy
 
-# Re-generate Helm values after Terraform changes (Helm path)
+# Re-generate Helm values after Terraform changes
 make init-values
 
 # Update kubeconfig for the AKS cluster
 make kubeconfig
 
-# Re-create langsmith-config-secret from Key Vault (Helm path)
+# Re-create langsmith-config-secret from Key Vault
 make k8s-secrets
-
-# Re-apply Helm release changes (Terraform path)
-make apply-app
-
-# Re-pull infra outputs after infra changes (Terraform path)
-make init-app
 ```
 
 ---
@@ -149,7 +132,7 @@ kubectl get crd | grep langchain      # operator CRDs registered
 
 **Prerequisite:** Pass 3 healthy — `listener` and `operator` pods Running.
 
-Agent Builder adds `agent-builder-tool-server`, `agent-builder-trigger-server`, and an `agentBootstrap` Job that registers the built-in Polly agent URL in a ConfigMap.
+Agent Builder adds `agent-builder-tool-server` and `agent-builder-trigger-server`. Chart 0.16 removed the `agentBootstrap` Job that used to register the built-in Polly agent URL in a ConfigMap; the standalone `polly` deployment handles that now.
 
 ```bash
 # infra/terraform.tfvars
@@ -165,22 +148,16 @@ make deploy
 
 ```bash
 kubectl get pods -n langsmith | grep agent-builder
-# Expected: tool-server Running, trigger-server Running, agentBootstrap Completed
+# Expected: tool-server Running, trigger-server Running
 
-kubectl get pods -n langsmith | grep -E "tool-server|trigger-server|Bootstrap"
-```
-
-**Watchout:** The `agentBootstrap` Job creates the `langsmith-polly-config` ConfigMap that the frontend reads for the Polly UI. If the frontend was already running when bootstrap completed, roll it:
-
-```bash
-kubectl rollout restart deployment langsmith-frontend -n langsmith
+kubectl get pods -n langsmith | grep -E "tool-server|trigger-server"
 ```
 
 ---
 
 ## Pass 5 — Insights + Polly
 
-**Prerequisite:** Pass 4 healthy — Agent Builder pods Running, `agentBootstrap` Completed.
+**Prerequisite:** Pass 4 healthy — Agent Builder pods Running.
 
 Insights enables ClickHouse-backed trace analytics. Polly is the AI eval/monitoring agent (requires Deployments + Agent Builder). Enable both together.
 
@@ -198,9 +175,11 @@ make deploy
 **Verify:**
 
 ```bash
-kubectl get pods -n langsmith | grep -E "clickhouse|polly|clio"
-# ClickHouse already running from Pass 2; Insights operator deploys clio pods
-kubectl get pods -n langsmith -w     # watch for new clio/analytics pods to come up
+kubectl get pods -n langsmith | grep -E "clickhouse|polly|insights"
+# ClickHouse already running from Pass 2. On chart 0.16 Insights and Polly are
+# static Deployments (standalone-insights-*, standalone-polly-*), not agent pods
+# the operator spawns lazily on first use.
+kubectl get pods -n langsmith -w     # watch the standalone-insights/-polly pods come up
 ```
 
 **Watchouts:**
@@ -231,11 +210,10 @@ Then re-run `make init-values && make deploy`.
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA | `make apply` |
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
-| **2 (Helm)** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
-| **2 (TF)** | Same via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
+| **2** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **3** | LangSmith Deployments — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
-| **4** | Agent Builder — tool-server, trigger-server, agentBootstrap job | `make init-values && make deploy` |
-| **5** | Insights + Polly — clio analytics pods, Polly eval agent | `make init-values && make deploy` |
+| **4** | Agent Builder — tool-server, trigger-server | `make init-values && make deploy` |
+| **5** | Insights + Polly — standalone-insights and standalone-polly api-server + queue pods | `make init-values && make deploy` |
 
 ---
 
@@ -244,12 +222,12 @@ Then re-run `make init-values && make deploy`.
 ```hcl
 # ── Required ──────────────────────────────────────────────────────────────────
 subscription_id = ""              # az account show --query id -o tsv
-identifier      = "-prod"         # suffix appended to every resource name
+name_prefix     = "prod"          # appended to every resource name (no leading hyphen)
 location        = "eastus"        # Azure region
 
 # ── Data sources ──────────────────────────────────────────────────────────────
 postgres_source   = "external"    # Azure DB for PostgreSQL Flexible Server
-redis_source      = "external"    # Azure Cache for Redis Premium
+redis_source      = "external"    # Azure Managed Redis
 clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 
 # ── AKS ───────────────────────────────────────────────────────────────────────
@@ -283,44 +261,26 @@ sizing_profile = "production"
 
 ---
 
-## app/terraform.tfvars (Terraform Helm path)
-
-Only needed when using `make apply-app`. Infrastructure values are auto-populated by `make init-app`. You only need to set app-specific config:
-
-```hcl
-# ── Required ──────────────────────────────────────────────────────────────────
-admin_email = "you@example.com"
-
-# ── Optional ──────────────────────────────────────────────────────────────────
-# sizing = "production"          # minimum | dev | production | production-large
-# chart_version = "0.7.0"        # pin version; empty = latest
-
-# ── Feature toggles ───────────────────────────────────────────────────────────
-# enable_agent_deploys = true    # Pass 3 — LangSmith Deployments
-# enable_agent_builder = true    # Pass 4 — Agent Builder (requires agent_deploys)
-# enable_insights      = true    # Pass 5 — Insights (requires clickhouse_host)
-# enable_polly         = true    # Pass 5 — Polly (requires agent_deploys)
-```
-
----
-
 ## secrets.auto.tfvars
 
-`setup-env.sh` generates this file — never commit it. Contains:
+`setup-env.sh` generates this file — never commit it. It holds only the values
+Terraform needs in order to build something, because every variable Terraform
+reads ends up as plaintext in state:
 
 ```hcl
-postgres_admin_password                = "..."
-langsmith_license_key                  = "..."
-langsmith_admin_password               = "..."
-langsmith_api_key_salt                 = "..."
-langsmith_jwt_secret                   = "..."
-langsmith_deployments_encryption_key   = "..."
-langsmith_agent_builder_encryption_key = "..."
-langsmith_insights_encryption_key      = "..."
-langsmith_polly_encryption_key         = "..."
+postgres_admin_password = "..."   # Terraform creates the Postgres server
+langsmith_license_key   = "..."   # k8s-bootstrap builds the langsmith-license secret
+langsmith_admin_email   = "..."   # initial org admin address
 ```
 
-On subsequent runs `setup-env.sh` reads from Key Vault — no re-entry needed.
+The LangSmith app secrets are not here and have no Terraform variable. `make
+seed-secrets` writes them directly to Key Vault after apply (step 5 of
+[First-Time Setup](#first-time-setup)).
+
+Upgrading from a release before this split? Your existing `secrets.auto.tfvars`
+still lists the seven removed variables. Terraform prints a
+`Value for undeclared variable` warning for each and otherwise ignores them;
+delete those lines to quiet it. The secrets already in Key Vault are untouched.
 
 ---
 
@@ -379,13 +339,14 @@ langsmith-operator-xxxxxxxxx-xxxxx                 1/1     Running     0        
 ```
 langsmith-agent-builder-tool-server-xxxxx          1/1     Running     0          5m
 langsmith-agent-builder-trigger-server-xxxxx       1/1     Running     0          5m
-langsmith-agent-builder-bootstrap-xxxxx            0/1     Completed   0          5m
 ```
 
 **Pass 5 adds** (after `enable_insights = true`, `enable_polly = true`):
 ```
-langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0          5m   # Insights analytics
-# Polly agent pod appears in langsmith ns after agentBootstrap registers it
+langsmith-standalone-insights-api-server-xxxxx     1/1     Running     0          5m   # Insights analytics
+langsmith-standalone-insights-queue-xxxxx          1/1     Running     0          5m
+langsmith-standalone-polly-api-server-xxxxx        1/1     Running     0          5m
+langsmith-standalone-polly-queue-xxxxx             1/1     Running     0          5m
 ```
 
 ---
@@ -400,7 +361,7 @@ langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0        
 
 > **`insights_encryption_key` and `polly_encryption_key` must never change** after first enable — changing either breaks existing encrypted data permanently.
 
-> **Roll frontend after first Polly enable.** The `agentBootstrap` job creates `langsmith-polly-config` ConfigMap with `VITE_POLLY_DEPLOYMENT_URL` after Polly registers. If the frontend pod was running before bootstrap completed, Polly shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
+> **Roll frontend after first Polly enable.** The `langsmith-polly-config` ConfigMap carrying `VITE_POLLY_DEPLOYMENT_URL` is written once Polly registers. The frontend loads it via `envFrom` at pod start, so a frontend pod that was already running shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
 
 > **Uninstall Helm BEFORE `terraform destroy`.** The Azure Load Balancer created by NGINX blocks VNet deletion. Run `helm uninstall langsmith -n langsmith --wait` first.
 
@@ -415,6 +376,36 @@ langsmith-clio-xxxxxxxxx-xxxxx                     1/1     Running     0        
 > **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
 
 > **Pin `--version` in Helm.** Without it, `helm upgrade` pulls latest which may silently apply DB migrations or toggle feature flags.
+
+---
+
+## Terraform Commands
+
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
+
+```bash
+cd modules/azure
+
+make init    ARGS="-upgrade"                 # re-resolve provider versions
+make plan    ARGS="-target=module.aks"       # plan one module
+make plan    ARGS="-out=tfplan"              # save a plan file
+make destroy ARGS="-target=module.redis"     # destroy one module
+```
+
+> `make apply` runs three targeted stages, and `ARGS` is passed to each of them. That suits flags like `-var`, `-parallelism`, and `-refresh=false`. To apply a saved plan or a single module, bypass the staging with `make tf ARGS="apply tfplan"`.
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output keyvault_name"
+make tf ARGS="output aks_cluster_name"
+make tf ARGS="output dns_nameservers"
+make tf ARGS="state list"
+make tf ARGS="validate"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/azure/infra` if you prefer.
 
 ---
 

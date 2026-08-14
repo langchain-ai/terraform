@@ -2,22 +2,24 @@
 # Module: waf
 # Purpose: Azure Web Application Firewall policy for LangSmith ingress.
 #
-# Attaches OWASP 3.2 managed rules + bot protection to block common attacks
-# (SQLi, XSS, Log4Shell, Spring4Shell) before they reach the NGINX ingress.
+# OWASP 3.2 managed rules + bot protection against common attacks (SQLi, XSS,
+# Log4Shell, Spring4Shell) at the edge, before traffic reaches the ingress.
 #
-# Deployment options:
-#   Option A (default): WAF policy only — attach to an existing Application
-#                       Gateway or Azure Front Door manually.
-#   Option B: Set create_application_gateway = true to provision an
-#             Application Gateway v2 WAF SKU (replaces NGINX as ingress).
-#             Requires a dedicated /24 subnet (pass app_gateway_subnet_id).
+# This module only creates the policy. Who attaches it depends on the ingress:
+#   ingress_controller = "agic": the root module passes this policy to the
+#     Application Gateway and moves it to WAF_v2, the one tier Azure allows a
+#     policy association on.
+#   any other controller: nothing references the policy. It exists for an Azure
+#     Front Door or a gateway you own to point at, and inspects nothing until
+#     something does.
 #
-# Cost estimate (Option A — policy only): ~$0/mo (policy is free until attached)
-# Cost estimate (Option B — App Gateway):  ~$250/mo (WAF_v2 fixed fee)
+# Cost: the policy itself is free. A WAF_v2 gateway is ~$250/mo over Standard_v2,
+# so create_waf with AGIC changes the gateway's bill.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # WAF Policy with OWASP 3.2 + Bot Manager rules.
-# Prevention mode: blocks matching requests (use Detection for initial rollout).
+# Detection mode by default: matches are logged, not blocked. Switch to
+# Prevention once the firewall log is clean of false positives.
 resource "azurerm_web_application_firewall_policy" "waf" {
   name                = var.name
   resource_group_name = var.resource_group_name
@@ -30,6 +32,15 @@ resource "azurerm_web_application_firewall_policy" "waf" {
     request_body_check          = true
     file_upload_limit_in_mb     = 100
     max_request_body_size_in_kb = 128
+
+    # LangSmith's primary data path is batched run payloads, which routinely
+    # exceed the 128 KB body limit. Left enforcing, Azure blocks an over-size
+    # request outright in Prevention mode, so trace ingestion fails. Off, the WAF
+    # inspects what fits and passes the request rather than rejecting it for
+    # size — rules still apply to headers, cookies, the URI, and the inspected
+    # portion of the body. CRS 3.2 is what makes this separable from
+    # request_body_check.
+    request_body_enforcement = false
   }
 
   # OWASP Core Rule Set 3.2 — covers SQLi, XSS, path traversal, RFI/LFI,

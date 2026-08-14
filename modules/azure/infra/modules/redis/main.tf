@@ -20,7 +20,7 @@
 resource "azapi_resource" "amr" {
   type      = "Microsoft.Cache/redisEnterprise@2025-07-01"
   name      = var.name
-  location  = var.location
+  location  = coalesce(var.cluster_location, var.location)
   parent_id = var.resource_group_id
 
   body = {
@@ -37,8 +37,8 @@ resource "azapi_resource" "amr" {
   response_export_values = ["properties.hostName"]
   tags                   = merge(var.tags, { module = "redis" })
 
-  # azapi's bundled schema lags behind AMR (Balanced SKU / highAvailability). The
-  # body matches what `az redisenterprise create` accepts — let ARM validate at apply.
+  # azapi's bundled schema lags behind AMR (Balanced SKU / highAvailability).
+  # The body matches what `az redisenterprise create` accepts — let ARM validate at apply.
   schema_validation_enabled = false
 }
 

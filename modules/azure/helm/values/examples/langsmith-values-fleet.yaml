@@ -25,8 +25,9 @@
 #   - enable_deployments = true (host-backend serves Fleet's OAuth provider/token endpoints)
 #   - postgres_source = "external" in terraform.tfvars
 #   - A 'langsmith_fleet' database — created automatically by terraform apply
-#   - TF_VAR_langsmith_agent_builder_encryption_key set (see infra/scripts/setup-env.sh)
-#     (shared with the legacy enable_agent_builder path — same key, same data)
+#   - langsmith-agent-builder-encryption-key present in Key Vault (seeded by
+#     `make seed-secrets`; shared with the legacy enable_agent_builder path —
+#     same key, same data)
 #
 # Enable via: enable_fleet = true in terraform.tfvars
 

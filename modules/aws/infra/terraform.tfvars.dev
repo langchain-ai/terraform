@@ -54,7 +54,11 @@ postgres_storage_gb    = 20
 postgres_max_storage_gb = 50
 
 # Deletion protection OFF so you can `terraform destroy` without extra steps.
+# Final snapshots are also skipped for this dev profile.
 postgres_deletion_protection = false
+postgres_skip_final_snapshot = true
+smithdb_metastore_deletion_protection = false
+smithdb_metastore_skip_final_snapshot = true
 
 redis_source        = "external"
 redis_instance_type = "cache.t3.medium"    # 2 vCPU, 3 GB — fine for dev

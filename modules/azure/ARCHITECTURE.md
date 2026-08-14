@@ -21,16 +21,15 @@ Full topology: all passes (2–4), AKS namespaces, pod names, external managed s
 
 ### Pass 5 — Insights (verified)
 
-No new diagram — Pass 5 adds `config.insights.enabled: true` only. Clio deploys lazily as a dynamic LangGraph deployment via the operator on first UI invocation. Pod topology at deploy time is identical to Pass 4.
+No new diagram — Pass 5 adds `insights.enabled: true` only. On chart 0.16 Insights runs as the standalone `engineInsightsAgent` deployment (an api-server and a queue pod) rather than an operator-managed LangGraph deployment created on first UI invocation.
 
 ### Pass 4 — Agent Builder Containers (verified)
 
 **[LangSmith Azure — Pass 4 Platform Containers (v0.13.28)](https://app.eraser.io/workspace/BdnsvoccuOm7wh2dLyKi)**
 
-Adds to Pass 3 — 3 static + 4 dynamic pods:
+Adds to Pass 3 — 2 static + 4 dynamic pods:
 - `langsmith-agent-builder-tool-server` — MCP tool execution (WI)
 - `langsmith-agent-builder-trigger-server` — webhooks + scheduled triggers (WI)
-- `langsmith-agent-bootstrap` — one-time Job (Completed), registers bundled Agent Builder agent
 - `agent-builder-<hash>` + `queue` + `redis` + `lg-<hash>-0` — operator-managed Agent Builder agent deployment (dynamic)
 
 ### Pass 3 — LangGraph Platform Containers (verified)
@@ -55,7 +54,7 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 - 7 Deployments: frontend, backend (×3), platform-backend, playground, ace-backend, queue (×3), ingest-queue (×3)
 - 1 StatefulSet: clickhouse (large node pool, 500Gi PVC)
 - 3 completed Jobs: backend-migrations, backend-ch-migrations, backend-auth-bootstrap
-- External: Azure DB for PostgreSQL (subnet-postgres), Azure Cache for Redis Premium (subnet-redis)
+- External: Azure DB for PostgreSQL (subnet-postgres), Azure Managed Redis (subnet-redis)
 - WI pods (4): backend, platform-backend, queue, ingest-queue
 
 ### Light Deploy (All In-Cluster)
@@ -68,14 +67,9 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 ## Deployment Paths
 
-### Pass 2 — Two ways to deploy the Helm chart
+### Pass 2 — Deploy the Helm chart
 
-| Path | How | When to use |
-|------|-----|-------------|
-| **Helm path** | `make init-values && make deploy` | Default. Shell script, interactive, reads TF outputs dynamically. Best for first deploys and day-2 re-deploys. |
-| **Terraform path** | `make init-app && make apply-app` | Declarative. K8s secrets + langsmith-ksa SA + Helm release in Terraform state. Best for GitOps/CI pipelines. |
-
-The Terraform path uses the `app/` module. `make init-app` calls `app/scripts/pull-infra-outputs.sh` to read all infra outputs and write them into `app/infra.auto.tfvars.json`.
+`make init-values && make deploy` — shell script, interactive, reads TF outputs dynamically.
 
 ### Ingress Options
 
@@ -126,7 +120,7 @@ AKS Cluster
 
 Azure Managed Services
 ├── Azure DB for PostgreSQL Flexible Server (private VNet)
-├── Azure Cache for Redis Premium (private VNet)
+├── Azure Managed Redis (private VNet)
 ├── Azure Blob Storage (Workload Identity — no static keys)
 └── Azure Key Vault
 ```
@@ -138,7 +132,7 @@ Azure Managed Services
 ### Light deploy (`postgres_source = "in-cluster"`, `redis_source = "in-cluster"`)
 
 ```
-langsmith-vnet<identifier>
+langsmith-vnet-<name_prefix>
 └── subnet-0    (AKS nodes only)
     ↳ No Postgres/Redis subnets created — chart-managed pods handle both
 ```
@@ -146,38 +140,73 @@ langsmith-vnet<identifier>
 ### Production (`postgres_source = "external"`, `redis_source = "external"`)
 
 ```
-langsmith-vnet<identifier>
+langsmith-vnet-<name_prefix>
 ├── subnet-0              (AKS nodes)
 ├── subnet-postgres       (Azure DB for PostgreSQL Flexible Server)
-└── subnet-redis          (Azure Cache for Redis Premium)
+└── subnet-redis          (Azure Managed Redis)
 ```
 
 All subnets are private. Postgres and Redis are accessible only from within the VNet via private DNS resolution. No public endpoints.
+
+### Bring your own VNet (`create_vnet = false`)
+
+```
+<your existing VNet>
+├── <existing subnet>                    supplied via aks_subnet_id / postgres_subnet_id / redis_subnet_id
+└── langsmith-vnet-<name_prefix>-subnet-*  created by Terraform for whichever IDs you left out
+```
+
+Each subnet is independently either supplied or created, so a VNet where the
+network team owns only some of the subnets still works. Subnets Terraform
+creates go into the existing VNet's resource group, and carry the same settings
+as the create path: the Storage and Key Vault service endpoints on the AKS
+subnet, the `Microsoft.DBforPostgreSQL/flexibleServers` delegation on the
+Postgres subnet, and no delegation on the Redis subnet, which holds the Azure
+Managed Redis private endpoint.
+
+The Application Gateway and bastion subnets are the exception: Terraform carves
+those only out of a VNet it owns, so on this path they are supplied through
+`agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
+See [README.md](README.md#bring-your-own-vnet).
 
 ---
 
 ## Secret Flow
 
+Terraform state stores variable values as plaintext, and `sensitive = true` only
+suppresses CLI output — it does not keep a value out of the state file. So the
+LangSmith application secrets never pass through a Terraform variable. Only the
+two values Terraform needs in order to build something reach it at all.
+
 ```
 Pass 1 — Infrastructure
 
-  ./setup-env.sh   (read-only against Key Vault — never writes to KV directly)
-    First run:  prompts for postgres password, license key, admin password
-                generates api_key_salt, jwt_secret, Fernet keys
-                Key Vault does not exist yet → writes to local dot-files + secrets.auto.tfvars
-    Subsequent: Key Vault exists → reads all secrets from KV → writes to secrets.auto.tfvars
-                no prompts, no generation, no KV writes
-    Output:     secrets.auto.tfvars  (gitignored, chmod 600)
-                Terraform picks this up automatically — no shell session coupling
+  ./setup-env.sh   (never reads or writes Key Vault)
+    Prompts for the values Terraform itself needs:
+      postgres_admin_password — Terraform creates the Postgres flexible server
+      langsmith_license_key   — k8s-bootstrap builds the langsmith-license secret
+      langsmith_admin_email   — the initial org admin address
+    Output: secrets.auto.tfvars  (gitignored, chmod 600)
+            Terraform picks this up automatically — no shell session coupling
 
   terraform apply
-    Reads:  terraform.tfvars (non-sensitive config)
-            secrets.auto.tfvars (sensitive values — sole input for KV secret creation)
-    Creates: Azure Key Vault + all secrets stored as KV secrets (Terraform is the sole KV writer)
+    Reads:   terraform.tfvars (non-sensitive config)
+             secrets.auto.tfvars
+    Creates: Key Vault, its network ACLs and RBAC role assignments, and the two
+             KV secrets above
+
+  ./scripts/seed-keyvault-secrets.sh   (make seed-secrets)
+    Writes the LangSmith app secrets straight to Key Vault over the az CLI:
+      langsmith-admin-password                — prompted, or $LANGSMITH_ADMIN_PASSWORD
+      langsmith-api-key-salt                  — generated
+      langsmith-jwt-secret                    — generated
+      langsmith-deployments-encryption-key    — generated (Fernet)
+      langsmith-agent-builder-encryption-key  — generated (Fernet)
+      langsmith-insights-encryption-key       — generated (Fernet)
+      langsmith-polly-encryption-key          — generated (Fernet)
+    Write-once — an existing secret is never overwritten, so it is safe to re-run.
 
 Pass 2 — Application
-
-  ./setup-env.sh   (re-run on any machine to refresh secrets.auto.tfvars from Key Vault)
 
   kubectl create secret generic langsmith-config-secret
     Reads:  Key Vault secrets + terraform outputs (postgres/redis URLs, blob account)
@@ -189,7 +218,11 @@ Pass 2 — Application
     no secrets inline in any YAML file
 ```
 
-**Key rule:** `secrets.auto.tfvars` is never committed. It is regenerated from Key Vault on any machine by running `./setup-env.sh`. Terraform is the sole writer to Key Vault — `setup-env.sh` only reads from it after the first apply.
+**Key rules:**
+
+- `secrets.auto.tfvars` is never committed. Re-run `./setup-env.sh` on any machine to recreate it.
+- The seven app secrets exist only in Key Vault — there is no second copy to restore from. Rotating one is destructive: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable.
+- This matches the other two clouds. The AWS module's script writes SSM Parameter Store; the GCP module's writes Secret Manager. Terraform owns the vault and its access control, never its contents.
 
 ---
 

@@ -22,7 +22,6 @@ source "$SCRIPT_DIR/_common.sh"
 AWS_DIR="$INFRA_DIR/.."
 HELM_DIR="$AWS_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
-APP_DIR="$AWS_DIR/app"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -83,6 +82,13 @@ for var in TF_VAR_name_prefix TF_VAR_environment TF_VAR_region \
   _check_var "$var" || _env_ok=false
 done
 
+if _tfvar_is_true "enable_sandboxes"; then
+  for var in TF_VAR_sandbox_juicefs_redis_auth_token \
+             TF_VAR_sandbox_callback_signing_jwk; do
+    _check_var "$var" || _env_ok=false
+  done
+fi
+
 if [[ "$_env_ok" == "false" ]]; then
   action "source infra/scripts/setup-env.sh"
   set_next "source infra/scripts/setup-env.sh"
@@ -126,6 +132,13 @@ else
     deployments-encryption-key
   )
 
+  if _tfvar_is_true "enable_sandboxes"; then
+    _required_params+=(
+      sandbox-juicefs-redis-auth-token
+      sandbox-callback-signing-jwk
+    )
+  fi
+
   for param in "${_required_params[@]}"; do
     if aws ssm get-parameter --name "${_ssm_prefix}/${param}" \
         --query Parameter.Name --output text &>/dev/null; then
@@ -168,8 +181,8 @@ if [[ -d "$INFRA_DIR/.terraform" ]]; then
   pass "terraform init — done"
 else
   fail "terraform init — not run"
-  action "terraform -chdir=infra init"
-  set_next "terraform -chdir=infra init"
+  action "make init"
+  set_next "make init"
 fi
 
 # Use terraform output (fast, no state lock) instead of state list (slow, locks)
@@ -208,9 +221,9 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"cluster_name"'; then
 else
   fail "terraform output — empty (no state file or state is elsewhere)"
   info "If infra was applied from another machine, you need to configure the backend"
-  info "or run 'terraform -chdir=infra init' to reconnect to remote state."
-  action "terraform -chdir=infra init  (if using a remote backend)"
-  action "terraform -chdir=infra apply  (if starting fresh)"
+  info "or run 'make init' to reconnect to remote state."
+  action "make init  (if using a remote backend)"
+  action "make apply  (if starting fresh)"
   set_next "Resolve terraform state — see section 5"
 fi
 
@@ -359,20 +372,20 @@ else
       action "helm rollback langsmith -n ${_NAMESPACE}"
     elif [[ "$_helm_status" == "pending-install" ]]; then
       fail "Helm release: langsmith — stuck in pending-install (interrupted install)"
-      action "helm uninstall langsmith -n ${_NAMESPACE}  then re-run ./helm/scripts/deploy.sh"
+      action "helm uninstall langsmith -n ${_NAMESPACE}  then re-run make deploy"
     elif [[ "$_helm_status" == "failed" ]]; then
       warn "Helm release: langsmith — status 'failed' (likely a prior --wait timeout)"
       info "Pods may still be running — Helm marks the release failed if --wait times out"
       [[ -n "$_helm_version" ]] && info "Chart: ${_helm_version}"
-      action "Re-run ./helm/scripts/deploy.sh  (upgrades over the failed release)"
+      action "Re-run make deploy  (upgrades over the failed release)"
     else
       warn "Helm release: langsmith — status: ${_helm_status}"
-      action "./helm/scripts/deploy.sh"
+      action "make deploy"
     fi
   else
     skip "Helm release: langsmith — not installed"
-    action "./helm/scripts/deploy.sh"
-    set_next "./helm/scripts/deploy.sh"
+    action "make deploy"
+    set_next "make deploy"
   fi
 
   # Pod health
@@ -405,38 +418,11 @@ else
     _ingress_exists=$(kubectl get ingress -n "$_NAMESPACE" langsmith-ingress &>/dev/null && echo "yes" || echo "no")
     if [[ "$_ingress_exists" == "yes" ]]; then
       warn "Ingress exists but ALB hostname not yet assigned (~2 min to provision)"
-      action "Wait 2 min, then re-run ./helm/scripts/deploy.sh to pick up the hostname"
+      action "Wait 2 min, then re-run make deploy to pick up the hostname"
     else
       skip "No ingress found"
     fi
   fi
-fi
-
-# ── Alternative: Terraform Helm (app/) ──────────────────────────────────────
-header "10. Terraform Helm App (alternative path)"
-
-if [[ -d "$APP_DIR" ]]; then
-  if [[ -f "$APP_DIR/infra.auto.tfvars.json" ]]; then
-    pass "infra.auto.tfvars.json exists (make init-app was run)"
-  else
-    skip "infra.auto.tfvars.json — not generated"
-    action "make init-app  (if using Terraform Helm path instead of scripts)"
-  fi
-
-  _app_output=""
-  if [[ -d "$APP_DIR/.terraform" ]]; then
-    _app_output=$(terraform -chdir="$APP_DIR" output -json 2>/dev/null) || _app_output=""
-  fi
-
-  if [[ -n "$_app_output" ]] && echo "$_app_output" | grep -q '"value"'; then
-    pass "app/ terraform — applied"
-  elif [[ -d "$APP_DIR/.terraform" ]]; then
-    skip "app/ terraform — initialized but not applied"
-  else
-    skip "app/ terraform — not initialized"
-  fi
-else
-  skip "app/ directory not present"
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────────────

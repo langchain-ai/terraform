@@ -58,6 +58,12 @@ export TF_VAR_name_prefix="${_name_prefix}"
 
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 
+# Variables that could not be resolved from the environment or SSM, collected by
+# _ssm_secret and reported together at the end. _ssm_secret runs in this shell
+# (its values come back via export, not command substitution), so the append
+# inside it is visible here.
+_missing_vars=""
+
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
 # _ssm_secret short-circuits (step 0) when a variable is already exported.
 # If LANGSMITH_LICENSE_KEY or LANGSMITH_ADMIN_PASSWORD are set from a prior
@@ -71,6 +77,25 @@ for _precheck_var in LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
     echo ""
   fi
 done
+
+# ── Bounded AWS CLI calls ─────────────────────────────────────────────────────
+# Bounded by timeout(1) when available so a sandbox with blocked egress fails
+# fast instead of stalling on a full TCP timeout. timeout is not in the macOS
+# base install, and gtimeout is the Homebrew coreutils name; run bare if neither.
+_timeout_bin=""
+for _t in timeout gtimeout; do
+  if command -v "$_t" >/dev/null 2>&1; then _timeout_bin="$_t"; break; fi
+done
+# Named _aws_bounded, not _aws: this script is sourced, and _aws is the zsh
+# completion function for the aws command — defining it here would replace the
+# completion for the rest of the caller's shell session.
+_aws_bounded() {
+  if [[ -n "$_timeout_bin" ]]; then
+    "$_timeout_bin" 30 aws "$@"
+  else
+    aws "$@"
+  fi
+}
 
 # ── Safe SSM write ────────────────────────────────────────────────────────────
 # Writes a value to SSM via a JSON file to avoid shell expansion issues with
@@ -95,7 +120,7 @@ _ssm_put_safe() {
   fi
 
   local _rc=0
-  aws ssm put-parameter \
+  _aws_bounded ssm put-parameter \
     --region "$AWS_REGION" \
     --cli-input-json "file://${_tmpjson}" \
     --output text >/dev/null 2>&1 || _rc=$?
@@ -131,7 +156,7 @@ _ssm_secret() {
   #    Without this backfill, pre-exported vars silently skip the SSM write, leaving
   #    ESO unable to sync the secret into the K8s langsmith-config secret.
   if [[ -n "$(printenv "$varname")" ]]; then
-    if ! aws ssm get-parameter --region "$AWS_REGION" --name "$_path" \
+    if ! _aws_bounded ssm get-parameter --region "$AWS_REGION" --name "$_path" \
         --query Parameter.Name --output text &>/dev/null; then
       echo "  $varname is set in env but missing from SSM — backfilling → $_path"
       if ! _ssm_put_safe "$_path" "$(printenv "$varname")"; then
@@ -143,7 +168,7 @@ _ssm_secret() {
   fi
 
   # 1. Try SSM Parameter Store
-  val=$(aws ssm get-parameter \
+  val=$(_aws_bounded ssm get-parameter \
     --region "$AWS_REGION" \
     --name "$_path" \
     --with-decryption \
@@ -187,12 +212,16 @@ _ssm_secret() {
         return 1
       fi
     else
-      # Non-interactive (CI, piped stdin, redirected) — cannot prompt
-      echo "  ERROR: $varname is required but not set and no interactive terminal available." >&2
-      echo "         Pre-export it before sourcing this script:" >&2
-      echo "           export $varname='<value>'" >&2
-      echo "         Or populate SSM directly:" >&2
-      echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'" >&2
+      # Non-interactive (CI, piped stdin, redirected) — cannot prompt.
+      # Reported on stdout, not stderr: a sandboxed shell that surfaces only
+      # stdout (Cursor's agent shell) shows nothing at all otherwise, so the
+      # script looks like it exited without a reason.
+      echo "  ERROR: $varname is required but not set and no interactive terminal available."
+      echo "         Pre-export it before sourcing this script:"
+      echo "           export $varname='<value>'"
+      echo "         Or populate SSM directly:"
+      echo "           ./infra/scripts/manage-ssm.sh set $ssm_name '<value>'"
+      _missing_vars="$_missing_vars $varname"
       return 1
     fi
 
@@ -212,6 +241,51 @@ _ssm_secret() {
   export "$varname"="$val"
 }
 
+_b64url_nopad() {
+  base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+_ed25519_private_jwk_gen() {
+  local _tmpdir _key _priv_der _pub_der _d _x _kid
+  _tmpdir="$(mktemp -d)" || return 1
+  _key="${_tmpdir}/ed25519.pem"
+  _priv_der="${_tmpdir}/private.der"
+  _pub_der="${_tmpdir}/public.der"
+
+  if ! openssl genpkey -algorithm ED25519 -out "$_key" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  chmod 600 "$_key"
+
+  if ! openssl pkey -in "$_key" -outform DER -out "$_priv_der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+  if ! openssl pkey -in "$_key" -pubout -outform DER -out "$_pub_der" >/dev/null 2>&1; then
+    rm -rf "$_tmpdir"
+    return 1
+  fi
+
+  _d="$(tail -c 32 "$_priv_der" | _b64url_nopad)" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+  _x="$(tail -c 32 "$_pub_der" | _b64url_nopad)" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+  rm -rf "$_tmpdir"
+
+  if [[ -z "$_d" || -z "$_x" ]]; then
+    return 1
+  fi
+
+  _kid="sandbox-callback-$(openssl rand -hex 8)"
+  printf '{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig","kid":"%s","x":"%s","d":"%s"}\n' \
+    "$_kid" "$_x" "$_d"
+}
+
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 
@@ -223,6 +297,11 @@ _ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_pass
 _ssm_secret "redis-auth-token" "" "TF_VAR_redis_auth_token" \
   "openssl rand -hex 32" "" "true"
 
+# ── Sandbox JuiceFS Redis auth token ──────────────────────────────────────────
+# ElastiCache auth tokens must be printable ASCII — use hex, not base64.
+_ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
+  "openssl rand -hex 32" "" "true"
+
 # ── Stable auto-generated secrets (must never change after first deployment) ──
 # Changing api_key_salt invalidates ALL existing API keys.
 # Changing jwt_secret invalidates ALL active user sessions.
@@ -231,6 +310,9 @@ _ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "TF_VAR_langsmi
 
 _ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32" "" "true"
+
+_ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
+  "_ed25519_private_jwk_gen" "" "true"
 
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
 _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
@@ -284,6 +366,27 @@ _ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_k
 _ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
 
+# ── Non-interactive failure ───────────────────────────────────────────────────
+# Only populated when stdin is not a tty and a secret was in neither the
+# environment nor SSM. Reported here, once, on stdout — and before the summary,
+# which would otherwise claim the environment was set up successfully.
+if [[ -n "$_missing_vars" ]]; then
+  echo ""
+  echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
+  echo "       Missing:$_missing_vars"
+  echo ""
+  echo "       Run it from a real terminal, or pre-set the values:"
+  # Split on spaces with tr rather than an unquoted expansion: this script is
+  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
+  # print every name on a single bogus export line.
+  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
+    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
+  done
+  echo ""
+  echo "       Then re-run: source infra/scripts/setup-env.sh"
+  return 1
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "Terraform environment variables set."
@@ -294,8 +397,10 @@ echo "  region            = $AWS_REGION"
 echo "  postgres_username = $TF_VAR_postgres_username"
 echo "  postgres_password = (hidden — SSM: ${_ssm_prefix}/postgres-password)"
 echo "  redis_auth_token  = (hidden — SSM: ${_ssm_prefix}/redis-auth-token)"
+echo "  juicefs_redis     = (hidden — SSM: ${_ssm_prefix}/sandbox-juicefs-redis-auth-token)"
 echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-salt)"
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
+echo "  sandbox_cb_jwk    = (hidden — SSM: ${_ssm_prefix}/sandbox-callback-signing-jwk)"
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
 echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"

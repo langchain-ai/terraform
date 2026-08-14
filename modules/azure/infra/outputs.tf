@@ -38,6 +38,30 @@ output "resource_group_name" {
   value       = azurerm_resource_group.resource_group.name
 }
 
+# ── Networking ────────────────────────────────────────────────────────────────
+# Resolved IDs, whether Terraform created the subnet or the operator supplied it.
+# When create_vnet = false these tell you what Terraform carved out of your VNet.
+
+output "vnet_id" {
+  description = "Resource ID of the VNet LangSmith is deployed into"
+  value       = local.vnet_id
+}
+
+output "aks_subnet_id" {
+  description = "Resource ID of the subnet holding the AKS nodes and pods"
+  value       = local.aks_subnet_id
+}
+
+output "postgres_subnet_id" {
+  description = "Resource ID of the delegated Postgres subnet (null when postgres_source = 'in-cluster')"
+  value       = local.postgres_subnet_id
+}
+
+output "redis_subnet_id" {
+  description = "Resource ID of the subnet holding the Redis private endpoint (null when redis_source = 'in-cluster')"
+  value       = local.redis_subnet_id
+}
+
 # ── AKS cluster ───────────────────────────────────────────────────────────────
 
 output "aks_cluster_name" {
@@ -95,7 +119,11 @@ output "langsmith_namespace" {
 
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  value       = "az aks get-credentials --resource-group ${azurerm_resource_group.resource_group.name} --name ${module.aks.cluster_name} --overwrite-existing"
+  # A pre-existing cluster lives in its own resource group, not the one this module
+  # creates for Key Vault and Storage, so the created group would name a resource
+  # group that does not contain the cluster. existing_cluster_resource_group_name is
+  # required when create_cluster = false, so this branch is never blank.
+  value = "az aks get-credentials --resource-group ${var.create_cluster ? azurerm_resource_group.resource_group.name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -133,7 +161,7 @@ output "bastion_ssh_command" {
   value       = var.create_bastion ? module.bastion[0].ssh_command : ""
 }
 
-# ── Ingress passthrough (read by pull-infra-outputs.sh) ──────────────────────
+# ── Ingress passthrough ───────────────────────────────────────────────────────
 output "dns_label" {
   description = "Azure Public IP DNS label passed through from var.dns_label"
   value       = var.dns_label

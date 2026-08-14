@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.15.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.15.1` = latest `0.15.x`, never `0.16`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -13,32 +13,137 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | Pass | What | How | Time |
 |------|------|-----|------|
 | **Pass 1** | AKS cluster, Postgres, Redis, Blob, Key Vault, cert-manager, KEDA | `make apply` | ~15–20 min |
-| **Pass 1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` | ~2 min |
-| **Pass 2** | LangSmith Helm chart (~25 pods production) — **Helm path** | `make init-values` → `make deploy` | ~10 min |
-| **Pass 2** | LangSmith Helm chart (~25 pods production) — **Terraform path** | `make init-app` → `make apply-app` | ~10 min |
+| **Pass 1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` | ~2 min |
+| **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
 
-### Two Pass 2 paths
-
-| Path | When to use |
-|------|-------------|
-| **Helm path** (`make deploy`) | Default. Shell script with interactive output, kubeconfig refresh, pre-flight checks, and post-deploy status. Best for first-time deploys and day-2 re-deploys. |
-| **Terraform path** (`make apply-app`) | Declarative. Helm release + K8s secrets + Workload Identity SA managed in Terraform state. Best for GitOps workflows, CI/CD pipelines, and teams that want Helm in state. |
-
 ### Two deployment tiers
 
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | Azure DB for PostgreSQL (private) | Azure Cache for Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+| **Production** | Azure DB for PostgreSQL (private) | Azure Managed Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
 >
 > **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
+
+### Deploying onto an existing AKS cluster
+
+Set `create_cluster = false` to attach to a cluster the customer already runs. Terraform still provisions Key Vault, Blob storage, Managed Identities, and the Workload Identity federated credentials — it reads the cluster instead of creating it, and never modifies or destroys it.
+
+```hcl
+create_cluster                       = false
+existing_cluster_name                = "customer-aks-cluster"
+existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
+
+# Required, not optional: the cluster's nodes already run in an existing subnet,
+# and a subnet Terraform carves could never be one of them.
+create_vnet        = false
+aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
+postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
+redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
+```
+
+Cluster prerequisites — verify before applying:
+
+```bash
+az aks show --name <cluster> --resource-group <rg> \
+  --query "{oidc:oidcIssuerProfile.enabled, wi:securityProfile.workloadIdentity.enabled, localAccounts:disableLocalAccounts}"
+```
+
+| Requirement | Why | Fix |
+|---|---|---|
+| OIDC issuer + Workload Identity enabled | Federated credentials trust the cluster's OIDC issuer; without it pods can't reach Blob or Key Vault | `az aks update -n <cluster> -g <rg> --enable-oidc-issuer --enable-workload-identity` (in-place, no recreate) |
+| Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
+| API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
+
+`aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts.
+
+Attaching adds no node pools by default, so the cluster's own pools run every workload and you must confirm they have capacity for ClickHouse and LangGraph. Set `existing_cluster_node_pools_managed = true` to have Terraform add the `large` pool for ClickHouse alongside the customer's pools. Terraform never adopts existing pools, only adds new ones.
+
+That subnet also needs the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints. The Blob and Key Vault firewalls allowlist it by subnet ID, which only matches when a service endpoint keeps the traffic on the Azure backbone instead of NATing it out to a public IP. Without them Azure rejects the firewall rule and the apply fails naming the subnet. Terraform enables both on the subnets it creates, so this applies to any `create_vnet = false` deployment, not only an existing cluster:
+
+```bash
+# The update replaces the endpoint list rather than appending, so check first
+# and repeat anything already there.
+az network vnet subnet show --ids <aks-subnet-id> --query "serviceEndpoints[].service"
+
+az network vnet subnet update --ids <aks-subnet-id> \
+  --service-endpoints Microsoft.Storage Microsoft.KeyVault
+```
+
+Terraform also warns when `location` doesn't match the cluster's region, since Key Vault, Blob, PostgreSQL, and Redis are created in `location` and pod traffic to them would cross regions.
+
+These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
+
+- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
+- `aks_service_cidr`, `aks_dns_service_ip`
+- `aks_authorized_ip_ranges`
+- `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
+
+`istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
+
+`agic` works on an attached cluster, but the add-on is a prerequisite rather than something Terraform turns on. Enable it against your own Application Gateway before applying:
+
+```bash
+az aks enable-addons --name <cluster> --resource-group <cluster-rg> \
+  --addons ingress-appgw --appgw-id <application-gateway-resource-id>
+```
+
+Terraform then creates no Application Gateway, no public IP, and no role assignments: the gateway is yours, and `az aks enable-addons` grants the add-on identity its roles as part of enabling. The plan fails if the add-on isn't enabled.
+
+What the plan cannot check is whether the add-on identity actually holds those roles, because ARM has no way to list role assignments by principal from Terraform. If `az aks enable-addons` ran without RBAC write on the gateway's scopes, it enables the add-on and skips the grants, and AGIC then 403s at runtime against a green apply. Confirm all three before deploying:
+
+```bash
+AGIC_ID=$(az aks show --name <cluster> --resource-group <cluster-rg> \
+  --query "addonProfiles.ingressApplicationGateway.identity.objectId" -o tsv)
+az role assignment list --assignee "$AGIC_ID" --all \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+Expect `Reader` on the gateway's resource group, `Contributor` on the Application Gateway, and `Network Contributor` on its VNet.
+
+### Deploying against an existing Key Vault
+
+Set `create_keyvault = false` to write LangSmith's secrets into a Key Vault the customer already owns. Terraform reads the vault, writes its nine secrets, and changes nothing else about it: the auth mode, network rules, retention, and purge protection stay as the vault's owner configured them, and `keyvault_default_action`, `keyvault_allowed_ips`, and `keyvault_purge_protection` are ignored.
+
+```hcl
+create_keyvault                       = false
+existing_keyvault_name                = "customer-platform-kv"
+existing_keyvault_resource_group_name = "customer-platform-rg"
+```
+
+Vault prerequisites, all answerable from one command:
+
+```bash
+az keyvault show --name <vault> --query "{rbac:properties.enableRbacAuthorization, \
+  purgeProtection:properties.enablePurgeProtection, \
+  softDeleteDays:properties.softDeleteRetentionInDays, \
+  networkDefaultAction:properties.networkAcls.defaultAction, resourceGroup:resourceGroup}"
+```
+
+| Requirement | Why | Fix |
+|---|---|---|
+| Azure RBAC authorization, not access policies | Terraform grants access with `azurerm_role_assignment`, which grants nothing on an access-policy vault while the apply still reports success | Migrate the vault to RBAC or pick a different one. The plan fails naming this rather than applying |
+| Deployer already holds Key Vault Secrets Officer | Terraform writes the nine secrets through the data plane, and it does not create its own grant on a vault it doesn't own | Have the vault's owner grant it on the vault or its resource group before apply, or set `keyvault_manage_terraform_admin_assignment = true` if the deployer has `roleAssignments/write` on the vault |
+| Apply host's IP allowlisted, if the vault firewall is on | A vault with `default_action = Deny` accepts the role assignment and then rejects the secret writes partway through apply, with an error that reads nothing like a permissions error | Add the apply host's egress IP to the vault firewall, or add the AKS subnet with the `Microsoft.KeyVault` service endpoint |
+| Purge protection off, on any vault you intend to tear down | Destroying the deployment soft-deletes the nine secrets, reserving their names for the vault's retention window. Purging early needs a permission the deployer won't have on a vault someone else owns, so the next apply blocks until the window passes | Leave purge protection off on dev vaults |
+
+Both role assignments follow `create_keyvault`, so neither is attempted on a vault Terraform doesn't own:
+
+- `keyvault_manage_terraform_admin_assignment` grants the deployer Key Vault Secrets Officer. Pre-grant it, per the table above.
+- `keyvault_manage_managed_identity_assignment` grants the pod identity Key Vault Secrets User. Nobody can pre-grant this one, because the identity is created partway through the same apply. Skipping it costs nothing today: secrets reach pods through the `langsmith-config-secret` that `make k8s-secrets` writes, and nothing reads the vault from inside the cluster. It would matter to a future CSI Secrets Store path.
+
+Terraform writes no diagnostic setting on an attached vault, since `enable_keyvault_diag` follows `create_keyvault` too, and a vault owned by a platform team almost certainly collects AuditEvent already.
+
+`keyvault_name` is ignored when attaching. `existing_keyvault_name` is the name, with no fallback: leaving it empty fails the plan instead of quietly deriving `langsmith-kv{identifier}` and creating a vault nobody asked for.
+
+> **Attach to a vault dedicated to this deployment.** Microsoft recommends [one vault per application, per environment, and per region](https://learn.microsoft.com/en-us/azure/key-vault/general/secure-key-vault), because grouping unrelated secrets into one vault widens the blast radius of a compromise, and vault-level RBAC is what grants read access to every secret in it. A vault shared with the customer's other applications adds two failures this module can't prevent: secret names like `postgres-admin-password` colliding with theirs, where a write lands as a new version and breaks their app silently, and a `terraform destroy` that deletes secrets belonging to something else.
 
 ---
 
@@ -51,7 +156,7 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 brew install azure-cli
 az --version
 
-# Terraform (>= 1.5)
+# Terraform (>= 1.11.0)
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 terraform version
 
@@ -71,9 +176,15 @@ The identity running Terraform needs the following roles on the subscription:
 | Role | Purpose |
 |------|---------|
 | `Contributor` | Create and manage all Azure resources |
-| `User Access Administrator` | Create role assignments for Key Vault, Blob, cert-manager managed identities |
+| `Role Based Access Control Administrator` | Create role assignments for Key Vault, Blob, and cert-manager managed identities |
 
-Owner includes both. Contributor alone is insufficient (role assignments require UAA).
+`Owner` covers both. `User Access Administrator` works in place of `Role Based Access Control Administrator` but grants more than the deployment needs. Contributor alone is insufficient: the deployment creates eight role assignments and fails partway through without one of the role-assignment roles.
+
+Holding the role is not the same as being able to use it. A PIM-eligible role grants nothing until it is activated, an ABAC condition on the grant can restrict which roles you may assign, and a deny assignment from a landing zone or managed application overrides every grant including Owner. `make preflight` reports all three, so run it rather than reasoning from the role list in the portal.
+
+For the full permission inventory, the role assignments the deployment creates, and how to restrict which roles the deployer may assign, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present, and the fix is to set `terraform_principal_type` rather than to request more access. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ### Authenticate
 
@@ -82,6 +193,21 @@ az login
 az account set --subscription <your-subscription-id>
 az account show   # verify correct subscription
 ```
+
+---
+
+## Upgrading an existing deployment
+
+The LangSmith application secrets used to be Terraform-managed, which persisted their plaintext in Terraform state. They are now written directly to Key Vault by `make seed-secrets`, and Terraform manages only the vault and its RBAC.
+
+If you deployed before this change:
+
+1. **Upgrade Terraform to >= 1.11.** That is the floor for every module in this repo; the keyvault module also needs the `removed` blocks it added in 1.7.
+2. **Run `make apply`.** The `removed` blocks drop the seven secrets from state with `destroy = false`, so the values stay in Key Vault and running pods are unaffected. Nothing is deleted.
+3. **Run `make clean`** whenever you next tear down, or delete `infra/.api_key_salt`, `infra/.jwt_secret`, `infra/.deployments_key`, `infra/.agent_builder_key`, `infra/.insights_key`, and `infra/.polly_key` by hand. `setup-env.sh` no longer writes these plaintext files, but existing ones are not removed automatically.
+4. **Rotate at your discretion.** Values that were in Terraform state are still valid and nothing forces a rotation, but anyone who could read your state file has seen them. Rotate with `make keyvault set <name> <value>` followed by `make k8s-secrets`, keeping in mind that rotating the API key salt invalidates every API key, the JWT secret drops every session, and a Fernet key makes existing encrypted data unreadable.
+
+`make seed-secrets` is a no-op on an already-populated vault, so running it on an upgraded deployment is safe.
 
 ---
 
@@ -97,55 +223,70 @@ make quickstart
 # cp infra/terraform.tfvars.example infra/terraform.tfvars
 # vi infra/terraform.tfvars
 
-# 2. Bootstrap secrets (prompts on first run, reads from Key Vault on repeat)
+# 2. Bootstrap Terraform inputs (Postgres password, license key, admin email)
 make setup-env
 
 # 3. Check prerequisites
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
-# Note: make plan will fail on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it handles the ordering in three stages.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 make init
 make apply
 
-# 5. Get cluster credentials + K8s secrets
+# 5. Seed the LangSmith app secrets into Key Vault (prompts for the admin password)
+make seed-secrets
+
+# 6. Get cluster credentials + K8s secrets
 make kubeconfig
 make k8s-secrets
 
-# 6. Generate Helm values from Terraform outputs
+# 7. Generate Helm values from Terraform outputs
 make init-values
 
-# 7. Deploy LangSmith (~10 min) — Helm path
+# 8. Deploy LangSmith (~10 min)
 make deploy
 
-# 8. Check status
+# 9. Check status
 make status
 ```
 
 Or run everything after `make apply` in one shot:
 
 ```bash
-make deploy-all   # kubeconfig → k8s-secrets → init-values → deploy
-```
-
-**Terraform Helm path** (alternative to steps 5–7 above):
-
-```bash
-cp app/terraform.tfvars.example app/terraform.tfvars
-vi app/terraform.tfvars         # set admin_email at minimum
-make init-app                   # pulls infra outputs → app/infra.auto.tfvars.json + tf init
-make apply-app                  # helm release + K8s secrets + WI service account via Terraform
-```
-
-Or end-to-end with Terraform:
-
-```bash
-make deploy-all-tf   # apply → init-values → init-app → apply-app
+make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
 ```
 
 For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
 For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
+
+### Naming your deployment
+
+One variable names the deployment. `name_prefix` is appended to every resource
+name and doubles as the `environment` tag, so `name_prefix = "prod"` gives
+`ls-rg-prod`, `ls-aks-prod`, `ls-kv-prod-<hash>` and tags everything
+`environment = prod`. Terraform inserts the separating hyphen, so write `prod`,
+not `-prod`. Keep it under about 12 characters; [Resource naming](#resource-naming)
+explains the ceiling and where the hash comes from.
+
+Set `environment` explicitly only when the tag needs to differ from the
+deployment name, e.g. `name_prefix = "prod-eastus"` with `environment = "prod"`.
+
+**Upgrading from a release that used `identifier`:** rename the variable and keep
+the value. `identifier = "-prod"` becomes `name_prefix = "prod"`; the leading
+hyphen is now optional, so `"-prod"` also works. Every resource name is
+unchanged, so `terraform plan` should report no changes to naming. Leaving
+`identifier` in `terraform.tfvars` fails the plan with a message pointing here
+rather than silently renaming your resources.
+
+The `environment` tag does change. It used to default to `dev` and accept only
+`dev`, `staging`, or `prod`; it now falls back to the deployment name and takes
+any value. A deployment that set `identifier = "-prod"` and never set
+`environment` re-tags from `dev` to `prod` on the next apply, and one named
+`myco` tags `environment = myco`. Terraform updates tags in place, so nothing is
+replaced, but cost allocation and Azure Policy rules keyed on the old value stop
+matching. Set `environment = "dev"` explicitly to keep the old tag.
 
 ---
 
@@ -154,9 +295,8 @@ For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LI
 | Pass | What | Make target |
 |------|------|-------------|
 | **1** | AKS + Postgres + Redis + Blob + Key Vault + cert-manager + KEDA + ClusterIssuer | `make apply` |
-| **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
-| **2 (Helm)** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
-| **2 (TF)** | LangSmith Helm via Terraform — secrets + SA + Helm release in state | `make init-app && make apply-app` |
+| **1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` |
+| **2** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
 | **3** | + LangSmith Deployments (`enable_deployments = true`) — bump `min_count` to 5 first | `make apply && make init-values && make deploy` |
 | **4** | + Fleet (`enable_fleet = true`) — or the deprecated Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
 | **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
@@ -172,7 +312,7 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 | `nginx` **(default)** | `ingress-nginx` Helm chart → Azure LB | Standard deployments. Simplest setup. Use this for quickstart. |
 | `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
-| `agic` | Azure Application Gateway v2 + AGIC Helm chart | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
+| `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
 | `envoy-gateway` | `gateway-helm` OCI chart — Kubernetes Gateway API | Gateway API-native. Modern alternative to Ingress. |
 
 ---
@@ -236,14 +376,26 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 
 - Sections: profile → subscription/naming → networking → AKS sizing → ingress controller → DNS/TLS → backend services → Key Vault → sizing profile → security add-ons
 - Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
+- Between sections: `Enter` continues, `b` goes back a section, `r` jumps to the review summary, `q` saves and quits
 - After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
+- Answers are checkpointed to `infra/.quickstart-state` after every section, so quitting or losing the terminal costs at most the section you were on. The next run offers to resume, and every prompt is prefilled with your previous answer. The checkpoint is deleted once `terraform.tfvars` is written
+- Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
-- Validates identifier format (`-prod`, `-staging`, `-myco`)
+- Validates deployment name format (`prod`, `staging`, `myco`)
 - Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 
 > **Run this first** on a new deployment. After it completes, run `source infra/scripts/setup-env.sh` to set up secrets.
+
+---
+
+### `make test-quickstart` — Unit tests for the wizard's resume layer
+**Script:** `infra/scripts/test-quickstart-state.sh`
+
+Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, and seeding the wizard from an existing `terraform.tfvars`. Runs in a temp directory with no Azure calls and no prompts, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
+
+One check is worth knowing about when you rename a wizard variable: `_load_state` silently drops any key missing from `_STATE_KEYS`, so a rename that lands in `_load_tfvars` but not in the whitelist loses that answer on resume with no error. The test scrapes every variable `_load_tfvars` assigns and fails if one is not whitelisted.
 
 ---
 
@@ -265,7 +417,7 @@ make keyvault delete langsmith-deployments-encryption-key   # soft-delete (recov
 ```
 
 Key behaviors:
-- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `langsmith-kv{identifier}`
+- Resolves Key Vault name from `terraform output keyvault_name` → falls back to `_derive_kv_name` in `infra/scripts/_common.sh`, which mirrors the naming scheme
 - `validate` — checks all 4 required secrets exist and are non-empty; validates admin password symbol requirement
 - `diff` — compares Key Vault values vs `langsmith-config-secret` K8s secret key-by-key
 - Warns on `langsmith-api-key-salt` and `langsmith-jwt-secret` (stable secrets — changing them invalidates all API keys / sessions)
@@ -274,18 +426,46 @@ Key behaviors:
 
 ---
 
-### `make setup-env` — Bootstrap secrets
+### `make setup-env` — Bootstrap Terraform inputs
 **Script:** `infra/scripts/setup-env.sh`
 
-Collects all sensitive values and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
+Collects the values Terraform itself needs and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
-- Derives the Key Vault name from `identifier` in `terraform.tfvars` (e.g. `langsmith-kv-demo`)
-- **First run:** prompts for PostgreSQL password, LangSmith license key, admin password, and admin email
-- **Subsequent runs:** reads all values silently from Azure Key Vault — no prompts
-- Stable secrets (API key salt, JWT secret, 4 Fernet encryption keys): reads from Key Vault → falls back to local dot-files → generates fresh if neither exists
-- **Read-only against Key Vault** — never writes to KV directly. Terraform is the sole Key Vault writer; `setup-env.sh` only reads from it
+- Prompts for the PostgreSQL admin password, the LangSmith license key, and the admin email
+- Skips any prompt whose env var is already set (`LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_EMAIL`)
+- On a re-run, offers the value already in `secrets.auto.tfvars` as each default — press Enter to keep it. Secrets are shown as their last four characters only. If the file is gone, the license key comes back from Key Vault
+- Resolves the Key Vault name from `terraform output keyvault_name`, falling back before the first apply to `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without. The output is what covers `create_keyvault = false`, where the name is the customer's and nothing derives it
+- **Read-only against Key Vault** — never writes to it. `make seed-secrets` is the only writer
 
-> Run this before `make plan` or `make apply`. Re-run any time to rotate credentials.
+Only two secrets reach Terraform, because Terraform needs them to build something and would hold them in state either way: the Postgres password (it creates the flexible server) and the license key (the `k8s_bootstrap` module creates the `langsmith-license` K8s secret from it). Everything else is seeded by `make seed-secrets`.
+
+> Run this before `make plan` or `make apply`.
+
+---
+
+### `make seed-secrets` — Write app secrets into Key Vault
+**Script:** `infra/scripts/seed-keyvault-secrets.sh`
+
+Writes the LangSmith application secrets directly into Key Vault via `az`, after `make apply` has created the vault. These never pass through Terraform, so they never land in Terraform state — the same split the AWS module uses with SSM and the GCP module uses with Secret Manager.
+
+Seeds seven secrets:
+
+| Secret | Source |
+|---|---|
+| `langsmith-admin-password` | Prompted, or `$LANGSMITH_ADMIN_PASSWORD` |
+| `langsmith-api-key-salt` | Generated (`openssl rand -base64 32`) |
+| `langsmith-jwt-secret` | Generated (`openssl rand -base64 32`) |
+| `langsmith-deployments-encryption-key` | Generated (Fernet) |
+| `langsmith-agent-builder-encryption-key` | Generated (Fernet) |
+| `langsmith-insights-encryption-key` | Generated (Fernet) |
+| `langsmith-polly-encryption-key` | Generated (Fernet) |
+
+- **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable. Rotate deliberately with `make keyvault` instead.
+- **Validates the admin password before storing it:** min 12 characters, with a lowercase letter, an uppercase letter, and a symbol from ``!#$%()+,-./:?@[\]^_{~}``. The Helm chart's auth-bootstrap job rejects a password without a symbol, and it fails ~10 minutes into the release rather than at the point you typed it.
+- Requires the **Key Vault Secrets Officer** role on the vault, which `make apply` grants to the deployer identity.
+- Set `LANGSMITH_ADMIN_PASSWORD` to run it non-interactively (CI); it exits with a clear error if the password is unset and stdin is not a tty.
+
+> Run this between `make apply` and `make k8s-secrets`. `make deploy-all` includes it.
 
 ---
 
@@ -297,12 +477,16 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Checks `az` CLI version and confirms you are logged in
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
-- Checks RBAC: requires **Contributor** + **User Access Administrator** (or **Owner**) at subscription scope — needed for role assignments in the Key Vault, storage, and WAF modules
+- Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
+- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write` and eight resource-creation actions are permitted. `roleAssignments/write` is what the eight role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
+- Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
 - Verifies `terraform.tfvars` exists with `location` and `subscription_id` set
 - Verifies `secrets.auto.tfvars` exists and has a non-empty `langsmith_license_key`
 - Checks that `terraform`, `kubectl`, and `helm` binaries are on PATH
 
 > Safe to run at any time with no side effects.
+
+The RBAC verdict comes from `Microsoft.Authorization/checkAccess`, the call the portal's Access control blade makes. It is a preview API with no published specification, so if it stops answering, preflight says so and drops back to checking for Owner or User Access Administrator by name. That fallback cannot see deny assignments, ABAC conditions, or custom roles, so a clean result on it is weaker than a clean result on the primary path. The script tells you which one you got.
 
 ---
 
@@ -322,11 +506,11 @@ Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if ne
 - VNet + subnets (AKS, Postgres, Redis) + private DNS zones
 - AKS cluster + node pools + OIDC issuer + managed identity + Workload Identity federated credentials
 - Azure DB for PostgreSQL Flexible Server (if `postgres_source = "external"`)
-- Azure Cache for Redis Premium (if `redis_source = "external"`)
+- Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
-- Azure Key Vault (RBAC mode, soft-delete) + all 10 application secrets
+- Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The seven LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
 - cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)
-- For `agic`: Application Gateway v2 + public IP + AGIC managed identity + Contributor/Reader role assignments + AGIC Helm chart
+- For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
 - For `envoy-gateway`: `envoyproxy/gateway-helm` in `envoy-gateway-system` namespace
 - `langsmith` namespace + `langsmith-sa` service account
 
@@ -348,7 +532,7 @@ Runs `terraform destroy -auto-approve` in `infra/`. Same as `make destroy` but s
 Prompts for confirmation, then removes all generated and sensitive local files. Safe to run after a full teardown.
 
 - Removes `infra/terraform.tfvars` and `infra/secrets.auto.tfvars`
-- Removes temporary dot-files written by `setup-env.sh` (`.api_key_salt`, `.jwt_secret`, `.deployments_key`, etc.)
+- Removes the legacy plaintext dot-files (`.api_key_salt`, `.jwt_secret`, `.deployments_key`, etc.). `setup-env.sh` no longer writes these, but deployments created before the Key Vault seeding change still have them on disk
 - Removes `infra/terraform.tfstate` and `terraform.tfstate.backup` (only present when not using remote backend)
 - Removes `helm/values/values-overrides.yaml` and all `helm/values/langsmith-values-*.yaml` (generated by `make init-values`)
 - Keeps `terraform.tfvars.example`, `helm/values/examples/`, and `.terraform/` cache
@@ -389,10 +573,10 @@ Bridges Key Vault (Terraform's output) to Kubernetes (Helm's input). Safe to re-
 
 Translates Terraform outputs and `terraform.tfvars` flags into Helm values files. Re-running is safe — outputs are refreshed, existing hostname is preserved unless overridden.
 
-- Reads from `terraform.tfvars`: `identifier`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
+- Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
-- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure/application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
+- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
 - Generates `helm/values/values-overrides.yaml` with: hostname, auth config, Blob WI config, Postgres/Redis blocks, Workload Identity annotations for 5 service accounts, ingress/TLS block
 - Copies the selected sizing file from `examples/` into `helm/values/`
 - Copies addon files based on `enable_*` flags: `agent-deploys` (with `url` and `tlsEnabled` injected automatically), `agent-builder`, `insights` (minimal in-cluster file or full external example), `polly`
@@ -420,65 +604,8 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 
 ---
 
-### `make deploy-all` — Full deploy in one shot (Helm path)
+### `make deploy-all` — Full deploy in one shot
 Runs `apply → kubeconfig → k8s-secrets → init-values → deploy` in sequence. Use after `terraform.tfvars` is fully configured and `make init` has been run.
-
----
-
-### `make init-app` — Initialize the Terraform Helm module
-**Script:** `app/scripts/pull-infra-outputs.sh` + `terraform init`
-
-The entry point for the Terraform Helm path (Pass 2 via Terraform).
-
-- Runs `app/scripts/pull-infra-outputs.sh`:
-  - Reads 13 values from `terraform output` in `infra/`: cluster name, resource group, Key Vault name, storage account, storage container, Workload Identity client ID, namespace, TLS source, ingress controller, nginx DNS label, Front Door hostname, postgres source, redis source
-  - Reads subscription ID from `az account show`
-  - Writes all values into `app/infra.auto.tfvars.json` (gitignored) — consumed automatically by Terraform
-- Runs `terraform init -input=false` in `app/`
-
-> Run after `make apply`. Re-run after any infra changes to refresh `infra.auto.tfvars.json`.
-
----
-
-### `make plan-app` — Plan the Terraform Helm module
-Runs `init-app` then `terraform plan` in `app/`. Shows exactly what Kubernetes resources and Helm release values will be created or changed. Run before `make apply-app` to review the diff.
-
----
-
-### `make apply-app` — Deploy LangSmith via Terraform (Helm path)
-Runs `terraform apply` in `app/`. Creates or updates:
-
-- **`kubernetes_secret_v1.langsmith_config`** — reads 4–8 secrets from Key Vault and writes `langsmith-config-secret` directly into Kubernetes. Equivalent to `make k8s-secrets` but managed in Terraform state.
-- **`kubernetes_secret_v1.clickhouse`** — ClickHouse credentials secret (only when `enable_insights = true`)
-- **`kubernetes_service_account_v1.langsmith_ksa`** — `langsmith-ksa` service account with `azure.workload.identity/client-id` annotation (only when `enable_agent_deploys = true`)
-- **`helm_release.langsmith`** — Helm release using the same values chain as the shell path:
-  ```
-  langsmith-values.yaml → overrides (yamlencode) → sizing file → addon files
-  ```
-- Runs 12 precondition checks before applying — fails fast with clear error messages if required variables are missing or dependencies are violated.
-
-Feature flags in `app/terraform.tfvars` (equivalent to shell path flags):
-
-```hcl
-sizing              = "production"   # minimum | dev | production | production-large
-enable_agent_deploys  = true         # Pass 3 — LangGraph Platform
-enable_fleet          = true         # Pass 4 — Fleet, standalone (chart v0.15+; requires agent_deploys; also set enable_fleet in the infra pass)
-enable_agent_builder  = false        # Pass 4 — Agent Builder, LEGACY (superseded by enable_fleet; mutually exclusive)
-enable_insights       = true         # Pass 5 — Insights / ClickHouse
-enable_polly          = true         # Pass 5 — Polly (requires agent_deploys)
-```
-
-> Prerequisites: `make init-app` must have run successfully; `app/terraform.tfvars` must have `admin_email` set.
-
----
-
-### `make destroy-app` — Destroy the Terraform Helm module
-Runs `terraform destroy` in `app/`. Removes the Helm release, K8s secrets, and the `langsmith-ksa` service account from Terraform state. Does **not** touch infra — run `make destroy` separately to remove AKS and Azure resources.
-
----
-
-### `make deploy-all-tf` — Full deploy via Terraform (end-to-end)
-Runs `apply → init-values → init-app → apply-app` in sequence. Combines Pass 1 infra and Pass 2 Terraform Helm into a single command. Use when you want the entire stack — from AKS to the running Helm release — managed by Terraform.
 
 ---
 
@@ -497,7 +624,7 @@ Runs `apply → init-values → init-app → apply-app` in sequence. Combines Pa
 ### `make status` / `make status-quick` — Health check
 **Script:** `infra/scripts/status.sh`
 
-Runs 10 checks and prints a pass/warn/fail for each:
+Runs 9 checks and prints a pass/warn/fail for each:
 
 1. **Terraform outputs** — reads cluster name, resource group, Key Vault name
 2. **Cluster connectivity** — `kubectl cluster-info`
@@ -508,7 +635,6 @@ Runs 10 checks and prints a pass/warn/fail for each:
 7. **Ingress + TLS** — ingress hosts and certificate Ready status
 8. **Key Vault secrets** — total secret count in the vault _(skipped with `--quick`)_
 9. **`langsmith-config-secret`** — key count; warns if fewer than 8 keys _(skipped with `--quick`)_
-10. **Terraform Helm App path** — checks `app/infra.auto.tfvars.json` and `app/` Terraform state; shows chart version if applied
 
 `make status-quick` skips sections 8 and 9 (no Key Vault API calls) — useful during rollouts when you just want pod counts.
 
@@ -523,7 +649,7 @@ sizing_profile       = "production"   # minimum | dev | production | production-
 enable_deployments   = true           # Pass 3 — LangSmith Deployments (listener + operator + host-backend)
 enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.15+; requires enable_deployments)
 enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
-enable_insights      = true           # Pass 5 — Insights / Clio (ClickHouse-backed analytics)
+enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
 ```
 
@@ -602,20 +728,22 @@ Enables standalone Fleet, the re-architected successor to Agent Builder (chart v
 
 **`langsmith-values-agent-builder.yaml`** — Pass 4 (`enable_agent_builder = true`) — **legacy, superseded by `enable_fleet`**
 
-Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Also enables `backend.agentBootstrap` — a post-install job that registers Agent Builder as an LGP deployment and creates the required ConfigMap. Without this job, the Agent Builder nav item does not appear in the UI. Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi.
+Enables the visual agent builder UI and its two supporting services: `fleetToolServer` (exposes the tool registry) and `fleetTriggerServer` (handles agent execution triggers). Sets conservative agent worker pod resources (1 CPU / 1 Gi) instead of the chart's default 4 CPU / 8 Gi. Chart 0.16 removed the `backend.agentBootstrap` job that used to register Agent Builder as an LGP deployment; the standalone `fleet` deployment replaces it.
 
 > Requires `enable_deployments = true`. Prefer `enable_fleet` for new deployments.
 
 **`langsmith-values-insights.yaml`** — Pass 5 (`enable_insights = true`)
 
-Enables ClickHouse-backed analytics in the Insights tab. The file generated depends on `clickhouse_source` in `terraform.tfvars`:
+Enables ClickHouse-backed analytics in the Insights tab. The file is the same either way — it only sets `insights.enabled: true`.
 
-- `in-cluster` → minimal file with just `config.insights.enabled: true`. The Helm chart manages ClickHouse internally. No external connection needed.
-- `external` → full file with `clickhouse.external.enabled: true` and a `langsmith-clickhouse` secret reference. You must create the secret and fill in the ClickHouse host/credentials before deploying.
+Where ClickHouse runs is a separate decision, made by `clickhouse_source` in `terraform.tfvars` and written into `values-overrides.yaml`, not this file:
+
+- `in-cluster` → the chart runs ClickHouse as a StatefulSet. Dev/POC only; the PVC is a zonal Azure managed disk, so the pod is pinned to one zone for the life of the volume.
+- `external` → the chart skips ClickHouse entirely and reads the connection from the `langsmith-clickhouse` secret. `init-values.sh` prompts for host/ports/user/password/db/tls and creates that secret; `deploy.sh` refuses to deploy if it is missing a key.
 
 **`langsmith-values-polly.yaml`** — Pass 5 (`enable_polly = true`)
 
-Enables Polly, the AI-powered evaluation and monitoring agent. Polly runs as an LGP deployment (operator-managed pod). Sets resource limits for Polly's agent worker (2 CPU / 4 Gi request, 4 CPU / 8 Gi limit, scales 1–5 replicas).
+Enables Polly, the AI-powered evaluation and monitoring agent. On chart 0.16 Polly runs as the standalone top-level `polly` deployment (an api-server and a queue pod), not an operator-managed LGP deployment. Sets resource limits for its api-server (2 CPU / 4 Gi request, 4 CPU / 8 Gi limit).
 
 > Requires `enable_deployments = true`.
 
@@ -639,46 +767,34 @@ azure/
 │       ├── _common.sh              # Shared helpers: _parse_tfvar, _tfvar_is_true, color output
 │       ├── setup-env.sh            # Bootstrap secrets → secrets.auto.tfvars
 │       ├── preflight.sh            # Pre-flight checks (az CLI, auth, providers, RBAC)
-│       ├── status.sh               # 10-section health check (supports --quick)
+│       ├── status.sh               # 9-section health check (supports --quick)
 │       ├── create-k8s-secrets.sh   # Key Vault → langsmith-config-secret
 │       └── clean.sh                # Remove all generated/sensitive local files after teardown
-├── app/                        # Pass 2 (Terraform path): Helm release managed by Terraform
-│   ├── main.tf                 # azurerm + kubernetes + helm providers; KV secrets; helm_release
-│   ├── variables.tf            # Infra inputs (from pull-infra-outputs.sh) + app config
-│   ├── locals.tf               # Hostname resolution, WI annotations, Helm overrides values
-│   ├── outputs.tf              # langsmith_url, release_name, release_status, chart_version
-│   ├── versions.tf             # azurerm ~> 3.0, helm ~> 2.16, kubernetes ~> 2.37
-│   ├── backend.tf.example      # Azure Blob backend template (copy to backend.tf)
-│   ├── terraform.tfvars.example
-│   ├── infra.auto.tfvars.json  # Generated by pull-infra-outputs.sh — gitignored
-│   └── scripts/
-│       └── pull-infra-outputs.sh   # Reads infra TF outputs → writes infra.auto.tfvars.json
-├── helm/                       # Pass 2 (Helm path): shell-script-based Helm deploy
-│   ├── scripts/
-│   │   ├── deploy.sh           # Helm values chain deploy (base + overrides + sizing + addons)
-│   │   ├── init-values.sh      # TF outputs → values-overrides.yaml; copies sizing + addon files
-│   │   ├── get-kubeconfig.sh   # az aks get-credentials wrapper
-│   │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
-│   │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
-│   └── values/
-│       ├── values.yaml                              # Azure base (NGINX, Blob WI, external secrets)
-│       ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
-│       └── examples/
-│           ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
-│           ├── langsmith-values.yaml                     # Annotated reference
-│           ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
-│           ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
-│           ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
-│           ├── langsmith-values-sizing-production-large.yaml  # High-volume (~1000 traces/sec)
-│           ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
-│           ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
-│           ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
-│           ├── langsmith-values-insights.yaml                 # Pass 5 — Insights / Clio
-│           ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
-│           ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure/application-gateway)
-│           ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
-│           ├── langsmith-values-ingress-envoy-gateway.yaml    # Ingress: Envoy Gateway (Gateway API)
-│           └── letsencrypt-issuer-dns01.yaml                  # cert-manager ClusterIssuer for DNS-01 TLS
+└── helm/                       # Pass 2: shell-script-based Helm deploy
+    ├── scripts/
+    │   ├── deploy.sh           # Helm values chain deploy (base + overrides + sizing + addons)
+    │   ├── init-values.sh      # TF outputs → values-overrides.yaml; copies sizing + addon files
+    │   ├── get-kubeconfig.sh   # az aks get-credentials wrapper
+    │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
+    │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
+    └── values/
+        ├── values.yaml                              # Azure base (NGINX, Blob WI, external secrets)
+        ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
+        └── examples/
+            ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
+            ├── langsmith-values-sizing-minimum.yaml      # Absolute minimum resources
+            ├── langsmith-values-sizing-dev.yaml          # Dev / CI sizing
+            ├── langsmith-values-sizing-production.yaml   # Production (multi-replica + HPA)
+            ├── langsmith-values-sizing-production-large.yaml  # High-volume (~1000 traces/sec)
+            ├── langsmith-values-agent-deploys.yaml            # Pass 3 — LangGraph Platform
+            ├── langsmith-values-agent-builder.yaml            # Pass 4 — Agent Builder (legacy)
+            ├── langsmith-values-fleet.yaml                    # Pass 4 — Fleet (standalone, chart v0.15+)
+            ├── langsmith-values-insights.yaml                 # Pass 5 — Insights
+            ├── langsmith-values-polly.yaml                    # Pass 5 — Polly
+            ├── langsmith-values-ingress-agic.yaml             # Ingress: AGIC (azure-application-gateway)
+            ├── langsmith-values-ingress-istio.yaml            # Ingress: Istio / istio-addon
+            ├── langsmith-values-ingress-envoy-gateway.yaml    # Ingress: Envoy Gateway (Gateway API)
+            └── letsencrypt-issuer-dns01.yaml                  # cert-manager ClusterIssuer for DNS-01 TLS
 ```
 
 ---
@@ -687,13 +803,13 @@ azure/
 
 | Module | Required | Description |
 |--------|----------|-------------|
-| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. |
+| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Not zonal — an Azure subnet spans every zone in its region. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
-| `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete) + all application secrets. |
+| `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete), its network ACLs and role assignments, and the two secrets Terraform needs (Postgres password, license key). The LangSmith app secrets are seeded by `make seed-secrets`, not Terraform. |
 | `postgres` | optional | Azure DB for PostgreSQL Flexible Server. Enabled when `postgres_source = "external"`. Multi-AZ standby supported. |
-| `redis` | optional | Azure Cache for Redis Premium. Enabled when `redis_source = "external"`. |
+| `redis` | optional | Azure Managed Redis. Enabled when `redis_source = "external"`. |
 | `dns` | optional | Azure DNS zone + A record. Required for DNS-01 cert issuance (`tls_certificate_source = "dns01"`). |
 | `waf` | optional | Azure WAF policy (OWASP 3.2 + bot protection). Use `agw_sku_tier = "WAF_v2"` with AGIC for integrated WAF — no separate module needed. |
 | `diagnostics` | optional | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. |
@@ -702,6 +818,209 @@ azure/
 > **Workload Identity** is centralized in `k8s-cluster`. Federated credentials for blob-accessing pods (backend, platform-backend, queue, ingest-queue, host-backend, listener, agent-builder-tool-server, agent-builder-trigger-server) are registered there. Adding a new pod that needs Blob access requires updating `service_accounts_for_workload_identity` in `k8s-cluster` and running `terraform apply -target=module.aks`.
 >
 > **AGIC Workload Identity** uses a separate managed identity (`<cluster>-agic-identity`) with Contributor on the App Gateway and Reader on the resource group. The federated credential binds to `system:serviceaccount:ingress-basic:ingress-azure`.
+
+---
+
+## Resource naming
+
+Most Azure resource names only need to be unique inside your resource group. Four
+do not: **PostgreSQL**, **Redis**, **Storage**, and **Key Vault** names live in a
+namespace shared by every Azure tenant, as does the public-IP `dns_label`. Two
+deployments that ask for the same name collide, and the second one fails partway
+through `terraform apply`.
+
+`unique_resource_names = true` (set in every `terraform.tfvars` template and by
+`quickstart.sh`) appends a 6-character hash derived from your subscription ID and
+`name_prefix`, and shortens the base from `langsmith-` to `ls-` to make room
+inside the 24-character Storage and Key Vault limits:
+
+| | `unique_resource_names = false` | `unique_resource_names = true` |
+|---|---|---|
+| Resource group | `langsmith-rg-dev` | `ls-rg-dev` |
+| Postgres | `langsmith-postgres-dev` | `ls-postgres-dev-a1b2c3` |
+| Redis | `langsmith-redis-dev` | `ls-redis-dev-a1b2c3` |
+| Storage | `langsmithblobdev` | `lsblobdeva1b2c3` |
+| Key Vault | `langsmith-kv-dev` | `ls-kv-dev-a1b2c3` |
+
+The Storage row is the only one that looks different, and the hyphens are the
+reason. Azure Storage account names accept only lowercase letters and digits, so
+the module strips the hyphens from `ls-blob-dev-a1b2c3` before creating it. Every
+other name, including the blob container, keeps them.
+
+The hash is deterministic — the same subscription and `name_prefix` always produce
+the same name, so repeat applies are stable and no random values are stored.
+`a1b2c3` above stands in for it; yours differs.
+
+Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
+hyphens inside the same 24-character limit Storage has, so it runs out of room
+first. `terraform plan` reports the exact overage rather than letting Azure
+reject the name mid-apply.
+
+> **On an existing deployment, leave `unique_resource_names = false`.** Turning it
+> on renames every resource, which Terraform carries out as destroy-and-recreate:
+> Postgres and Storage would lose their data. It defaults to `false` so bumping to
+> a newer tag is a no-op.
+
+To pin one name, either to keep an existing resource or to dodge a collision
+without renaming the whole deployment, set it explicitly:
+
+```hcl
+postgres_name        = "langsmith-postgres-dev"
+redis_name           = "langsmith-redis-mycorp-dev"
+storage_account_name = "langsmithblobdev"
+keyvault_name        = "langsmith-kv-dev"
+```
+
+`make preflight` checks these four names plus `dns_label` against Azure's
+availability APIs before you apply. Redis is the exception: Azure exposes no
+working name-availability endpoint for Managed Redis, so a cross-tenant Redis
+collision only surfaces at apply time.
+
+---
+
+## Bring your own VNet
+
+By default Terraform creates the VNet and every subnet. To deploy into a VNet
+your network team already manages, set `create_vnet = false` and name it:
+
+```hcl
+create_vnet = false
+vnet_id     = "/subscriptions/<sub>/resourceGroups/net-rg/providers/Microsoft.Network/virtualNetworks/corp-vnet"
+```
+
+Each subnet is then independent. Supply an ID to reuse a subnet you already
+have, or leave it out and Terraform creates that subnet inside your VNet from
+the matching address prefix:
+
+```hcl
+# Reuse an existing Postgres subnet, let Terraform carve the other two.
+postgres_subnet_id             = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/pg"
+aks_subnet_address_prefix      = ["10.42.0.0/19"]
+redis_subnet_address_prefix    = ["10.42.32.0/20"]
+```
+
+Subnets Terraform creates land in the existing VNet's resource group, not the
+LangSmith one, and get the settings each service needs:
+
+| Subnet | What Terraform applies |
+|--------|------------------------|
+| AKS | `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, so the storage and Key Vault default-deny firewalls can allowlist the subnet |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers` — Flexible Server injects its NICs here, and no other resource may share the subnet |
+| Redis | No delegation. Azure Managed Redis is reached through a private endpoint placed in this subnet; a delegated subnet would reject it |
+
+The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
+builds, so they are a starting point rather than a default that fits your
+network. Plan reads your VNet and rejects a prefix that falls outside its
+address space, and rejects an AKS prefix too small for the node pools whether
+the subnet is one you supplied or one Terraform carves. What it cannot check is
+whether a prefix collides with a subnet that already exists in the VNet, because
+Azure's VNet read returns subnet names and not their ranges — so pick ranges you
+know are free.
+
+`aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
+it, and AKS requires a range that nothing on or connected to your VNet uses. The
+`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
+your own address space can be accepted when the cluster is created and break
+later, so plan makes you name one and rejects one that lands inside your VNet.
+Peered and on-premises ranges are still yours to keep clear of, since plan only
+sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
+automatically as the eleventh address unless you set one, and plan rejects a
+value outside the range — worth knowing if you set both by hand, because
+changing the range strands an address written against the old one.
+
+### What a subnet you supply must already have
+
+| Subnet | Requirement |
+|--------|-------------|
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
+| Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
+| Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
+| AGIC | The subnet to itself. Application Gateway v2 shares with nothing, and Azure recommends a `/24`. Only needed when `ingress_controller = "agic"` |
+| Bastion | The name `AzureBastionSubnet`, exactly, and `/26` or larger. Azure refuses any other name. Only needed when `create_bastion = true` |
+
+Every subnet you supply must be a different subnet. Sharing one fails during
+apply, because the Postgres subnet is delegated and Azure permits nothing else
+inside a delegated subnet, and because Application Gateway and Bastion each
+require a subnet of their own.
+
+#### Letting Terraform add the AKS service endpoints
+
+The service endpoints are the one requirement on that list Terraform can satisfy
+for you. Set `manage_byo_subnet_service_endpoints = true` and it patches the two
+missing endpoints onto the subnet during apply, appending to whatever is already
+there rather than replacing the list, and the plan-time check stands down.
+
+It patches only that property. Address prefixes, delegations, and NSG and route
+table associations stay with whoever owns the subnet — `azurerm` has no
+standalone service-endpoint resource, so this goes through `azapi` rather than
+adopting the subnet into state and taking the rest of it along.
+
+Leave it off, which is the default, when the subnet belongs to a network team
+that granted read and not `Microsoft.Network/virtualNetworks/subnets/write`, or
+when their own tooling sets the endpoints and the two would rewrite the property
+against each other on every run. Add them yourself instead, repeating any already
+present since the flag replaces the whole list:
+
+```bash
+az network vnet subnet update --ids <subnet-id> \
+  --service-endpoints Microsoft.Storage Microsoft.KeyVault
+```
+
+`terraform destroy` leaves the endpoints on the subnet — `azapi_update_resource`
+performs no operation on delete, and the subnet was never Terraform's to revert.
+
+### What Terraform checks before applying
+
+These fail at plan time with an actionable message rather than partway through
+an apply:
+
+- `vnet_id` is present and is a well-formed VNet resource ID
+- every supplied subnet is a subnet of `vnet_id` — one in a different VNet would
+  be unreachable, since the private DNS zones are linked to `vnet_id`
+- every supplied subnet ID names a different subnet
+- a supplied Postgres subnet already carries the `flexibleServers` delegation
+- a supplied AKS subnet carries both service endpoints, unless
+  `manage_byo_subnet_service_endpoints` is on and Terraform is adding them
+- a supplied bastion subnet is named `AzureBastionSubnet`, which Azure requires
+  and a well-formed resource ID does not guarantee
+- `agic_subnet_id` is set when AGIC is on, and `bastion_subnet_id` when the
+  bastion is, since neither is carved inside a VNet you own
+- the AKS subnet has enough addresses for the configured node pools, whether you
+  supplied it or Terraform creates it. Undersizing is the one mistake that
+  survives apply: the cluster starts, and the autoscaler later stalls short of
+  `max_count` once the subnet runs dry
+- every prefix Terraform is about to carve sits inside your VNet's address
+  space. The defaults describe the VNet Terraform builds, so this is usually the
+  first thing to change on a network of your own
+- `aks_service_cidr` is set, and does not overlap your VNet's address space, and
+  `aks_dns_service_ip` sits inside it when you set one
+- subnet IDs are not set while `create_vnet = true`, where they would be ignored
+
+Whoever runs Terraform needs two kinds of access to the VNet, which normally
+lives in the network team's resource group rather than the LangSmith one:
+
+- **read** on `vnet_id` and on whichever subnets you supply, at plan time, for
+  the checks above
+- **`Microsoft.Network/virtualNetworks/subnets/write`** on `vnet_id` for every
+  subnet you leave Terraform to create. This is the larger ask of a network
+  team, and it fails at apply rather than at plan, so settle it first
+
+### AGIC and the bastion are supply-only here
+
+`create_bastion = true` and `ingress_controller = "agic"` each need a subnet to
+themselves. Terraform carves those two only out of a VNet it owns, so on this
+path you name subnets that already exist:
+
+```hcl
+agic_subnet_id    = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/appgw"
+bastion_subnet_id = "/subscriptions/.../virtualNetworks/corp-vnet/subnets/AzureBastionSubnet"
+```
+
+Unlike the other three there is no carve fallback, so plan rejects either
+feature when `create_vnet = false` and its subnet ID is empty. Application
+Gateway v2 wants the subnet to itself and Azure recommends a `/24`. Azure Bastion
+requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger;
+plan checks the name, and Azure enforces the size at apply.
 
 ---
 
@@ -716,6 +1035,15 @@ postgres_high_availability_mode = "ZoneRedundant"
 ```
 
 Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+Set `availability_zones` before the first apply. The AKS node pool keeps the
+zones it was created with: `azurerm` re-zones a default node pool by cycling the
+system node pool, and that cycle does not cordon and drain, so the module ignores
+zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
+mismatch as a `Check block assertion failed` warning naming both the live and the
+requested zones. To re-zone an existing cluster on purpose, remove
+`default_node_pool[0].zones` from the `ignore_changes` block in
+`infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
 
 ---
 

@@ -4,28 +4,46 @@
 # Pass 1 (infra):    make setup-env → make init → make plan → make apply
 # Pass 2 (tls):      make tls   (BYO ACM cert + Route53 A alias — when langsmith_domain is set)
 # Pass 2 (helm):     make init-values → make deploy
-# Pass 2 (tf):       make init-app → make plan-app → make apply-app
 # Secrets:           make secrets   (check SSM status + TF_VAR_* export guidance)
 # Fast deploy:       make quickdeploy   (chains apply → kubeconfig → init-values → deploy)
 # Post-infra check:  make preflight-post
 # Full deploy:       make deploy-all
-# Teardown:          make uninstall → make destroy → make clean
+# Teardown:          make uninstall → make destroy → make purge-secrets → make clean
 # Where am I?        make status
+# Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart status status-quick setup-env init plan apply destroy \
+.PHONY: help quickstart status status-quick setup-env init plan apply destroy purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso uninstall clean deploy-all deploy-all-tf \
-        init-app plan-app apply-app destroy-app \
+        init-values deploy apply-eso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
 INFRA_DIR := infra
 HELM_DIR  := helm
-APP_DIR   := app
 
 help: ## Show available targets
+	@echo ""
+	@echo "  \033[1mUsage:\033[0m make <target> [ARGS=\"<extra flags>\"]"
+	@echo ""
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  \033[1mARGS is appended to the terraform command:\033[0m"
+	@echo "    make init    ARGS=\"-upgrade\"                 # re-resolve provider versions"
+	@echo "    make plan    ARGS=\"-target=module.eks\"       # plan one module"
+	@echo "    make plan    ARGS=\"-out=tfplan\"              # save a plan file"
+	@echo "    make apply   ARGS=\"tfplan\"                   # apply that saved plan"
+	@echo "    make apply   ARGS=\"-auto-approve\"            # skip the approval prompt"
+	@echo "    make destroy ARGS=\"-target=module.redis\"     # destroy one module"
+	@echo ""
+	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
+	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
+	@echo "    make tf      ARGS=\"output -raw cluster_name\""
+	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
+	@echo ""
+	@echo "  \033[1mThe test targets take ARGS too, as a test subset — not terraform flags:\033[0m"
+	@echo "    make test-permutations ARGS=\"1 2 5\"          # run permutations 1, 2 and 5"
+	@echo ""
 
 status: ## Check deployment state and show what to run next
 	$(INFRA_DIR)/scripts/status.sh
@@ -54,16 +72,22 @@ setup-env: ## Set up secrets in SSM (prints the source command you need to run)
 	@echo ""
 
 init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init
+	terraform -chdir=$(INFRA_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra)
-	terraform -chdir=$(INFRA_DIR) plan
+	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra)
-	terraform -chdir=$(INFRA_DIR) apply
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
-	terraform -chdir=$(INFRA_DIR) destroy
+	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+
+tf: ## Any terraform command in infra/ (make tf ARGS="state list")
+	terraform -chdir=$(INFRA_DIR) $(ARGS)
+
+purge-secrets: ## Delete SSM secrets after Terraform has no managed resources
+	$(INFRA_DIR)/scripts/purge-secrets.sh
 
 preflight: ## Run infra preflight checks
 	$(INFRA_DIR)/scripts/preflight.sh
@@ -115,7 +139,7 @@ apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
 
-clean: ## Remove all local generated/sensitive files (run after terraform destroy)
+clean: ## Remove local generated files (run after make destroy and make purge-secrets)
 	$(INFRA_DIR)/scripts/clean.sh
 
 test-e2e: ## Run E2E gateway tests (ALB or Envoy Gateway)
@@ -127,28 +151,9 @@ test-permutations: ## Run permutation tests sequentially on current cluster (ARG
 test-parallel: ## Run permutation tests in parallel across isolated clusters — your cluster untouched
 	$(INFRA_DIR)/scripts/test-orchestrator.sh $(ARGS)
 
-# ── Pass 2: Terraform Helm (alternative) ─────────────────────────────────────
-
-init-app: ## Pull infra outputs into app/infra.auto.tfvars.json
-	$(APP_DIR)/scripts/pull-infra-outputs.sh
-
-plan-app: init-app ## terraform plan (app) — auto-pulls infra outputs first
-	terraform -chdir=$(APP_DIR) init -input=false
-	terraform -chdir=$(APP_DIR) plan
-
-apply-app: ## terraform apply (app)
-	terraform -chdir=$(APP_DIR) apply
-
-destroy-app: ## terraform destroy (app)
-	terraform -chdir=$(APP_DIR) destroy
-
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 
 deploy-all: apply kubeconfig init-values deploy ## Full deploy: infra apply → kubeconfig → init-values → helm deploy
-
-deploy-all-tf: apply init-values init-app ## Full deploy via Terraform: infra apply → init-values → app init+apply
-	terraform -chdir=$(APP_DIR) init -input=false
-	terraform -chdir=$(APP_DIR) apply
 
 quickdeploy: ## Full deploy in one command (must have run: source setup-env.sh + make quickstart)
 	$(INFRA_DIR)/scripts/quickdeploy.sh

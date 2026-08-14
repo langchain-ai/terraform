@@ -13,7 +13,7 @@
 #   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
 #   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
 #   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
-#   7. langsmith-values-insights.yaml            — Insights/Clio (if enable_insights = true)
+#   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -279,9 +279,36 @@ else
   pass "langsmith-config-secret exists"
 fi
 
-# Note: langsmith-clickhouse secret not checked here — in-cluster ClickHouse
-# is managed by the chart. External ClickHouse requires a separate secret;
-# see langsmith-values-insights.yaml for instructions.
+# ── Ensure langsmith-clickhouse secret exists (external ClickHouse only) ──
+# With clickhouse_source = "external" the chart skips its own ClickHouse
+# StatefulSet and resolves all seven connection fields through secretKeyRef with
+# optional=false. A missing secret or a missing key strands every LangSmith pod
+# in CreateContainerConfigError, so fail here where the cause is still legible.
+_clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
+if [[ "$_clickhouse_source" == "external" ]]; then
+  info "Verifying langsmith-clickhouse secret..."
+  # go-template over key names only — secret values never leave the API server.
+  _ch_keys=$(kubectl get secret langsmith-clickhouse -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _ch_keys=""
+  if [[ -z "$_ch_keys" ]]; then
+    fail "clickhouse_source = \"external\" but secret langsmith-clickhouse is missing in namespace $NAMESPACE."
+    action "Run: make init-values   (prompts for the connection and creates the secret)"
+    exit 1
+  fi
+  _ch_missing=""
+  for _ch_key in clickhouse_host clickhouse_port clickhouse_native_port \
+                 clickhouse_user clickhouse_password clickhouse_db clickhouse_tls; do
+    grep -qx "$_ch_key" <<< "$_ch_keys" || _ch_missing="${_ch_missing} ${_ch_key}"
+  done
+  if [[ -n "$_ch_missing" ]]; then
+    fail "Secret langsmith-clickhouse is missing required keys:${_ch_missing}"
+    action "kubectl delete secret langsmith-clickhouse -n $NAMESPACE && make init-values"
+    exit 1
+  fi
+  pass "langsmith-clickhouse secret exists with all required keys"
+else
+  skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
+fi
 
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
 _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
@@ -393,12 +420,70 @@ echo ""
 
 # ── Chart version ─────────────────────────────────────────────────────────
 # Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
-# We pin the chart *line* (~0.15.1 => latest 0.15.x, never 0.16) so an
+# We pin the chart *line* (~0.16.0 => latest 0.16.x, never 0.17) so an
 # un-pinned deploy can't silently jump a breaking minor.
+# An exported CHART_VERSION outlives the command that set it, so a value left over
+# from an earlier session silently wins over the pin. Say so rather than deploying
+# a different chart than the branch intends.
+if [[ -n "${CHART_VERSION:-}" ]]; then
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-~0.15.1}"
+CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+
+# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
+# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
+# keys instead of rejecting them, so it renders cleanly while silently dropping
+# the external Insights Postgres/Redis wiring and falling back to in-cluster
+# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
+# rather than deploy a half-configured release.
+_chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "$_chart_line" != "0.16" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
+  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+  exit 1
+fi
+# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
+# are on the 0.16 line but still drop the block silently.
+if [[ "$CHART_VERSION" == *-* ]]; then
+  _rc="${CHART_VERSION##*-rc.}"
+  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
+    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
+    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
+    exit 1
+  fi
+fi
+
+# Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
+# only creates an addon file when it is missing, so a values directory generated on the
+# 0.15 line keeps its stale copies and they get loaded here. The chart does reject them,
+# but its error names the key, not the generated file that carries it.
+_legacy_files=""
+for _vf in "$VALUES_DIR"/*.yaml; do
+  [[ -f "$_vf" ]] || continue
+  if awk '
+      /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+      top == "config"  && /^  (insights|polly):/ { found = 1 }
+      top == "backend" && /^  agentBootstrap:/   { found = 1 }
+      END { exit !found }
+    ' "$_vf"; then
+    _legacy_files+="         $(basename "$_vf")
+"
+  fi
+done
+if [[ -n "$_legacy_files" ]]; then
+  echo "ERROR: these values files use the chart 0.15 schema, which chart 0.16 rejects:" >&2
+  printf '%s' "$_legacy_files" >&2
+  echo "       config.insights, config.polly and backend.agentBootstrap were removed." >&2
+  echo "       init-values.sh only creates an addon file when it is missing, so delete the" >&2
+  echo "       files listed above and re-run 'make init-values' to regenerate them." >&2
+  exit 1
+fi
 
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
@@ -493,6 +578,16 @@ echo ""
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain &>/dev/null
 
+# Resolve the pin to a concrete version and print it. Without this the only place
+# the installed version shows up is `helm list`, after the release is already out.
+_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+  | awk '/^version:/{print $2}') || _resolved_chart=""
+echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+if [[ -z "$_resolved_chart" ]]; then
+  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+  exit 1
+fi
+
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -546,7 +641,7 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     _eg_svc_name=$(kubectl get svc -n "envoy-gateway-system" \
       -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
@@ -572,7 +667,7 @@ if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; t
   _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
-  for i in $(seq 1 18); do
+  for _ in $(seq 1 18); do
     if kubectl get secret langsmith-tls -n "$_istio_ns" &>/dev/null 2>&1; then
       _cert_ready=true; break
     fi
@@ -604,7 +699,7 @@ if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
 
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false
-  for i in $(seq 1 18); do
+  for _ in $(seq 1 18); do
     if kubectl get secret langsmith-tls -n "$_namespace" &>/dev/null 2>&1; then
       _cert_ready=true
       break

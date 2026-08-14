@@ -96,7 +96,7 @@ enable_standalone_insights = true   # standalone Insights     (replaces enable_i
 enable_usage_telemetry = true
 ```
 
-> **Chart v0.15+:** `config.agentBuilder.*`, `config.polly.*`, and `config.insights.*` are deprecated in favor of the top-level standalone blocks. Use the standalone flags above instead.
+> **Chart 0.16:** `config.polly.*` and `config.insights.*` are rejected outright — the chart fails the release if either key is present at all. `config.agentBuilder.*` still gates the Agent Builder UI and its tool/trigger servers, but no longer deploys an agent runtime. Use the standalone flags above.
 
 To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
 
@@ -258,9 +258,9 @@ kubectl get pods -n langsmith | grep -E "fleet|tool-server|trigger-server"
 
 **Prerequisite:** Pass 2 healthy. Does **not** require Pass 3 or Pass 4.
 
-In chart v0.15+, Polly and Insights run as standalone microservices with dedicated Cloud SQL and Memorystore provisioned by Terraform. The bundled `config.polly.*` and `config.insights.*` paths are deprecated in favor of the top-level standalone blocks.
+In chart 0.15+, Polly and Insights run as standalone microservices with dedicated Cloud SQL and Memorystore provisioned by Terraform. The bundled `config.polly.*` and `config.insights.*` paths were removed; the top-level `polly` and `insights` blocks are the only supported path.
 
-> **Chart v0.15+.** `config.polly.*` and `config.insights.*` are deprecated — use the top-level `polly.*` and `insights.*` blocks via the standalone flags below instead.
+> **Chart 0.16.** `config.polly.*` and `config.insights.*` are rejected — use the top-level `polly.*` and `insights.*` blocks via the standalone flags below instead.
 
 **Step 1 — enable flags in `infra/terraform.tfvars`:**
 
@@ -343,7 +343,7 @@ langsmith-standalone-insights-queue-xxx        1/1  Running    0
 
 > **Encryption keys must never change after first enable.** `polly_encryption_key` and `insights_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
 
-> **Chart v0.15+ schema change.** `config.agentBuilder.*`, `config.polly.*`, and `config.insights.*` are deprecated. Use the top-level `fleet.*`, `polly.*`, and `insights.*` standalone blocks instead — enabled via `enable_fleet`, `enable_standalone_polly`, and `enable_standalone_insights`.
+> **Chart 0.16 schema change.** `config.polly.*` and `config.insights.*` are rejected, and `config.agentBuilder.*` no longer deploys an agent runtime now that the bundled bootstrap Job is gone. Use the top-level `fleet.*`, `polly.*`, and `insights.*` standalone blocks instead — enabled via `enable_fleet`, `enable_standalone_polly`, and `enable_standalone_insights`.
 
 > **Envoy Gateway IP changes on teardown.** GCP releases the external IP when the Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
 
@@ -444,33 +444,32 @@ gcloud secrets versions access latest --secret=<secret-id> --project <project-id
 
 ## Terraform Commands
 
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
+
 ```bash
-# Initialize
-terraform init
+cd modules/gcp
 
-# Plan
-terraform plan -var-file=terraform.tfvars
-
-# Apply
-terraform apply -var-file=terraform.tfvars
-
-# Target a specific module
-terraform apply -var-file=terraform.tfvars -target=module.networking
-
-# Show all outputs
-terraform output
-
-# Show a specific output
-terraform output -raw cluster_name
-terraform output -raw storage_bucket_name
-
-# Show resource state
-terraform state list
-terraform state show module.gke_cluster
-
-# Refresh state
-terraform refresh -var-file=terraform.tfvars
+make init    ARGS="-upgrade"                     # re-resolve provider versions
+make plan    ARGS="-target=module.gke_cluster"   # plan one module
+make plan    ARGS="-out=tfplan"                  # save a plan file
+make apply   ARGS="tfplan"                       # apply that saved plan
+make apply   ARGS="-auto-approve"                # skip the approval prompt
+make destroy ARGS="-target=module.redis"         # destroy one module
 ```
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output -raw cluster_name"
+make tf ARGS="output -raw storage_bucket_name"
+make tf ARGS="state list"
+make tf ARGS="state list module.gke_cluster"   # filter state to one module
+make tf ARGS="validate"
+make tf ARGS="refresh"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/gcp/infra` if you prefer.
 
 ---
 

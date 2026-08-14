@@ -50,7 +50,7 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### `langsmith-clickhouse`
 - **What**: Columnar database — trace spans, run metadata, eval results
-- **Type**: StatefulSet · 500Gi PVC · large node pool (requires 15Gi RAM)
+- **Type**: StatefulSet · large node pool · CPU/RAM scale by sizing profile (see [SIZING.md](helm/values/examples/SIZING.md))
 - **Notes**: In-cluster is for dev/POC only (single pod, no replication, no backups). For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ### One-time Jobs (Pass 2)
@@ -67,15 +67,15 @@ All passes verified during production deploy (external Postgres + Redis).
 ### Azure DB for PostgreSQL Flexible Server
 - **What**: Relational DB — orgs, users, projects, API keys, settings
 - **Version**: PostgreSQL ≥ 14 required (Azure Flexible Server defaults to 16)
-- **Extensions**: `btree_gin`, `btree_gist`, `pgcrypto`, `citext`, `ltree`, `pg_trgm` — enabled automatically by the postgres module
+- **Extensions**: `pgcrypto`, `btree_gin`, `pg_trgm`, `btree_gist`, `citext`, `ltree` — enabled automatically by the postgres module
 - **Access**: Private VNet only (subnet-postgres) · SSL port 5432
 - **Secret**: `langsmith-postgres-secret` — created by Terraform k8s-bootstrap module
 
-### Azure Cache for Redis Premium
+### Azure Managed Redis (AMR)
 - **What**: Queue + cache — trace ingestion queue, pub/sub, short-lived cache
-- **Version**: Redis ≥ 5 required (Azure Cache for Redis Premium defaults to Redis 6)
+- **Version**: Redis ≥ 5 required (Azure Managed Redis runs the Redis Enterprise engine)
 - **Dedicated instance**: Each LangSmith installation must use its own dedicated Redis — shared instances cause deployment tasks to route incorrectly
-- **Access**: Private VNet only (subnet-redis) · TLS port 6380
+- **Access**: Private endpoint only (subnet-redis, private DNS zone) · TLS port 10000
 - **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module
 
 ### Azure Blob Storage
@@ -115,11 +115,6 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ## Pass 4 — Agent Builder
 
-### `langsmith-agent-bootstrap` (Job)
-- **What**: One-time Job that registers the bundled Agent Builder agent via the operator on first enable
-- **Runs**: Once on `helm upgrade` when `backend.agentBootstrap.enabled: true` — then Completed
-- **Effect**: Triggers operator to create the `agent-builder-<hash>` dynamic deployment (4 pods)
-
 ### `langsmith-agent-builder-tool-server`
 - **What**: MCP (Model Context Protocol) tool server — executes tools called by the Agent Builder agent
 - **Depends on**: `backend`, Blob Storage
@@ -130,7 +125,7 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Depends on**: `backend`, Redis
 - **WI**: Yes
 
-### Dynamic Agent Builder pods (operator-managed, created by `agentBootstrap` Job)
+### Dynamic Agent Builder pods (operator-managed)
 | Pod | What |
 |-----|------|
 | `agent-builder-<hash>` | Main Agent Builder agent — handles agent generation and assistants |
@@ -144,9 +139,9 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ## Pass 5 — Insights
 
-### Insights / Clio (dynamic)
+### Insights
 - **What**: AI-powered analytics — auto-summarizes traces, detects patterns, surfaces anomalies
-- **Deployment**: No static pods — Clio deploys lazily as a dynamic LangGraph deployment via the operator on first UI invocation
+- **Deployment**: Static pods on chart 0.16 — `standalone-insights-api-server` and `standalone-insights-queue`, running the combined `langsmith-insights-engine` image. This replaces the Clio deployment the operator used to spawn lazily on first UI invocation; chart 0.16 rejects the `langsmith-clio` image outright.
 - **Depends on**: ClickHouse (read-heavy), `backend`, Postgres
 - **Encryption key**: Read from `langsmith-config-secret` (`insights_encryption_key`)
 - **Warning**: Never change `insights_encryption_key` after first enable — permanently breaks existing insights data
@@ -172,4 +167,4 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ---
 
-*Updated after full production deploy: Passes 2–5 verified on chart v0.13.28 (appVersion 0.13.31).*
+*Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.16 line. Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*

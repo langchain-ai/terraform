@@ -32,12 +32,11 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+source "$SCRIPT_DIR/_common.sh"
+
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
 if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  # fallback: read identifier from terraform.tfvars
-  _identifier=$(grep -E '^\s*identifier\s*=' "$INFRA_DIR/terraform.tfvars" \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' | tr -d '[:space:]') || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+  KV_NAME=$(_derive_kv_name)
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 
@@ -123,8 +122,8 @@ else
 fi
 # Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
 # (clickhouse_source = "in-cluster"). The chart manages the connection internally.
-# For external ClickHouse, create the secret manually and set
-# clickhouse.external.existingSecretName in langsmith-values-insights.yaml.
+# For external ClickHouse, init-values.sh prompts for the connection and creates
+# that secret, and writes clickhouse.external into values-overrides.yaml.
 
 echo ""
 echo "Next: fill values-overrides.yaml and run helm upgrade --install"

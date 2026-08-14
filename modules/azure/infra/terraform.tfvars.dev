@@ -21,15 +21,20 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 #------------------------------------------------------------------------------
 # Naming
 #------------------------------------------------------------------------------
-identifier  = "-dev"
-environment = "dev"
+name_prefix = "dev"
 location    = "eastus"
+
+# Give the globally-unique names (Postgres, Redis, Storage, Key Vault) a
+# per-subscription hash so they cannot collide with another LangSmith deployment.
+# On an EXISTING deployment leave this false — flipping it renames every resource,
+# which Terraform executes as destroy-and-recreate.
+unique_resource_names = true
 
 #------------------------------------------------------------------------------
 # Sources
 #------------------------------------------------------------------------------
 postgres_source   = "external"     # Azure DB for PostgreSQL Flexible Server
-redis_source      = "external"     # Azure Cache for Redis
+redis_source      = "external"     # Azure Managed Redis
 clickhouse_source = "in-cluster"   # in-cluster for dev
 
 #------------------------------------------------------------------------------
@@ -40,9 +45,9 @@ postgres_database_name       = "langsmith"
 postgres_deletion_protection = false
 
 #------------------------------------------------------------------------------
-# Redis
+# Redis (Azure Managed Redis / AMR)
 #------------------------------------------------------------------------------
-redis_capacity = 1   # P1 = 6 GB RAM
+amr_sku = "Balanced_B1"   # Azure Managed Redis, 1 GB. Bump (Balanced_B3/B5/...) if the region reports AllocationFailed.
 
 #------------------------------------------------------------------------------
 # AKS — Standard_D8s_v3 (8 vCPU, 32 GiB), 3 nodes minimum

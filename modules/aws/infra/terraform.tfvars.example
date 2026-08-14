@@ -275,6 +275,9 @@ postgres_iam_database_authentication_enabled = true
 # otherwise the destroy will fail on the RDS instance.
 postgres_deletion_protection = true
 
+# Keep false to create a final snapshot; use true for disposable dev/test environments.
+postgres_skip_final_snapshot = false
+
 # Backup retention — days to keep automated snapshots. 0 disables backups.
 # postgres_backup_retention_period = 7
 
@@ -305,6 +308,49 @@ redis_instance_type = "cache.m6g.xlarge"
 #   export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
 # Or let setup-env.sh auto-generate one and store it in SSM:
 #   source ./setup-env.sh
+
+#------------------------------------------------------------------------------
+# SANDBOXES
+#------------------------------------------------------------------------------
+# Enables infrastructure prerequisites for LangSmith Sandboxes.
+#
+# Sandboxes use the sandbox-host architecture in the same EKS cluster and
+# namespace as LangSmith. This provisions a dedicated node group with the label
+# and taint expected by the Helm chart:
+#   sandbox.langsmith.com/host=true
+#
+# Requirements:
+#   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
+#     On AWS, use x86_64 EC2 bare metal instance types. The default is
+#     m5d.metal, which matches the tested live configuration and configures
+#     local NVMe instance store for swap and JuiceFS cache.
+#     Other example families include m6id.metal, m7i.metal-24xl, c6i.metal,
+#     c7i.metal-24xl, r6i.metal, and i4i.metal. If you choose an instance type
+#     without the same local instance-store layout, set
+#     sandbox_host_local_nvme_bootstrap_enabled = false or provide
+#     sandbox_host_node_group_overrides.
+#   - sandbox_host_local_nvme_expected_device_count is the number of local NVMe
+#     instance-store devices the selected instance type already exposes.
+#     Terraform does not attach these devices. Device 0 is used for swap and
+#     devices 1..N are mounted as JuiceFS cache directories. The default is 4,
+#     matching m5d.metal.
+#
+# enable_sandboxes = true
+# sandbox_juicefs_redis_instance_type = "cache.m6g.large"
+# sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
+# Do not put it in this file. Export it manually with:
+#   export TF_VAR_sandbox_juicefs_redis_auth_token="$(openssl rand -hex 32)"
+# Or let setup-env.sh auto-generate one and store it in SSM:
+#   source ./setup-env.sh
+# sandbox_juicefs_redis_snapshot_retention_limit = 7
+# sandbox_host_node_count = 1
+# sandbox_host_instance_types = ["m5d.metal"]
+# sandbox_host_local_nvme_bootstrap_enabled = true
+# sandbox_host_local_nvme_expected_device_count = 4
+#
+# Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
+# Requires wildcard DNS and TLS for *.<host>.
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
 
 #------------------------------------------------------------------------------
 # CLICKHOUSE
@@ -660,3 +706,66 @@ enable_usage_telemetry = false
 # langsmith_deployments_encryption_key   = ""   # set via TF_VAR or setup-env.sh
 # langsmith_agent_builder_encryption_key = ""   # set via TF_VAR or setup-env.sh
 # langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh
+
+#------------------------------------------------------------------------------
+# SMITHDB (chart 0.16+)
+#------------------------------------------------------------------------------
+# SmithDB is the in-chart columnar store/query engine used alongside ClickHouse
+# in LangSmith v16. It shares the LangSmith namespace and Helm release. Enabling
+# it provisions:
+#   - a dedicated metastore Postgres (RDS) — separate from the LangSmith app DB
+#   - a dedicated object-store S3 bucket for .vortex segments
+#   - an IRSA role for the SmithDB service account (S3 access, no static keys)
+#   - the Karpenter controller + SmithDB instance-store + compute NodePools
+#     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
+#
+# Pass 2 requires an explicit stable chart version of 0.16 or newer.
+# Infrastructure enablement never changes the normal chart line automatically.
+#
+# The generated values initially deploy SmithDB services with ingestion,
+# migration, and query integration disabled. Follow ../SMITHDB.md to enable each
+# stage after validation. Keep ClickHouse enabled throughout LangSmith v16.
+
+# enable_smithdb = false
+# smithdb_ingestion_enabled = false
+# smithdb_migration_enabled = false
+# smithdb_query_enabled     = false
+
+# ── Metastore (dedicated RDS Postgres; set source = "external" to bring your own)
+# smithdb_metastore_source          = "create"
+# smithdb_metastore_instance_class  = "db.m6g.large"
+# smithdb_metastore_engine_version  = "18"
+# smithdb_metastore_allocated_storage = 50
+# smithdb_metastore_multi_az        = false
+# smithdb_metastore_deletion_protection = true
+# smithdb_metastore_skip_final_snapshot = false
+# smithdb_metastore_use_ssl         = true
+# For an external metastore, set smithdb_metastore_source = "external" and:
+#   smithdb_external_metastore_host     = "my-pg.example.com"
+#   smithdb_external_metastore_username = "smithdb"
+#   export TF_VAR_smithdb_external_metastore_password="..."
+
+# ── Object store (S3) ─────────────────────────────────────────────────────────
+# A shared S3 Gateway endpoint is always associated with the VPC route tables.
+# smithdb_bucket_name           = ""
+# smithdb_s3_versioning_enabled = false
+# smithdb_s3_force_destroy      = false   # true only for throwaway test stacks
+
+# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
+# When enable_smithdb = true, the eks module installs the Karpenter controller
+# and this module creates two SmithDB pools:
+#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (no userdata needed)
+#   - compute: for compaction / cluster-manager / the metastore-migration job
+# Both amd64 and arm64 are supported; amd64 is the default so SmithDB matches
+# core LangSmith. For Graviton set smithdb_node_arch = "arm64".
+# Karpenter version MUST match eks_cluster_version (compatibility matrix:
+# https://karpenter.sh/docs/upgrading/compatibility/). K8s 1.34 -> >= 1.6,
+# 1.35 -> >= 1.9, 1.36 -> 1.13.
+# smithdb_karpenter_chart_version           = "1.6.3"
+# smithdb_node_arch                         = "amd64"
+# smithdb_capacity_type                     = ["on-demand"]
+# smithdb_instance_store_sizes              = ["4xlarge", "8xlarge"]
+# smithdb_instance_store_min_local_nvme_gib = 800
+# smithdb_instance_store_limits             = { cpu = 512, memory = "4096Gi" }
+# smithdb_compute_sizes                     = ["2xlarge", "4xlarge", "8xlarge"]
+# smithdb_compute_limits                    = { cpu = 256, memory = "1024Gi" }

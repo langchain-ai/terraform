@@ -75,7 +75,7 @@ variable "use_external_redis" {
 
 variable "redis_connection_url" {
   type        = string
-  description = "Redis connection URL (rediss://:key@host:6380). Required when use_external_redis = true"
+  description = "Redis connection URL (rediss://:key@host:10000). Required when use_external_redis = true"
   sensitive   = true
   default     = ""
 }
@@ -109,13 +109,19 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress)."
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
   default     = "nginx"
+}
+
+variable "agic_subnet_cidrs" {
+  type        = list(string)
+  description = "Address prefixes of the Application Gateway subnet, allowed through the NetworkPolicy by IP range. Only used when ingress_controller = 'agic'."
+  default     = []
 }
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager (ClusterIssuer created by apply-cluster-issuers.sh). 'dns01' = DNS-01 via Azure DNS + Workload Identity (ClusterIssuer created by Terraform). 'none' = skip."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via Azure DNS + Workload Identity. 'none' = skip. Both ClusterIssuers are created by helm/scripts/deploy.sh; this module only sets up cert-manager to support them."
   default     = "letsencrypt"
 
   validation {
@@ -124,33 +130,9 @@ variable "tls_certificate_source" {
   }
 }
 
-variable "letsencrypt_email" {
-  type        = string
-  description = "Email for Let's Encrypt certificate notifications. Required when tls_certificate_source = 'dns01'."
-  default     = ""
-}
-
 variable "cert_manager_identity_client_id" {
   type        = string
   description = "Client ID of the cert-manager Managed Identity. Required when tls_certificate_source = 'dns01'."
-  default     = ""
-}
-
-variable "dns_zone_name" {
-  type        = string
-  description = "Azure DNS zone name (e.g. langsmith.mycompany.com). Required when tls_certificate_source = 'dns01'."
-  default     = ""
-}
-
-variable "dns_resource_group_name" {
-  type        = string
-  description = "Resource group containing the Azure DNS zone. Required when tls_certificate_source = 'dns01'."
-  default     = ""
-}
-
-variable "subscription_id" {
-  type        = string
-  description = "Azure subscription ID. Required when tls_certificate_source = 'dns01' for the ClusterIssuer azureDNS config."
   default     = ""
 }
 
