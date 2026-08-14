@@ -906,9 +906,12 @@ cluster_name        = "aks-langsmith-prod"
 
 None of these are asked by `quickstart.sh` — set them in `terraform.tfvars`
 before the first apply. Changing one afterwards renames the resource, which
-Terraform carries out as destroy-and-recreate. `name_base` also stays inside the
-24-character Storage and Key Vault ceiling, so it is capped at 12 characters and
-eats into what `name_prefix` can be.
+Terraform carries out as destroy-and-recreate. `name_base` and `name_prefix`
+draw on the same 24-character Storage and Key Vault ceiling, so a long base
+leaves less for the deployment name. There is no fixed limit on either: the
+plan measures each assembled name against the ceiling that applies to it and
+names the one that is too long, so overriding `storage_account_name` and
+`keyvault_name` lifts the constraint they impose.
 
 ---
 

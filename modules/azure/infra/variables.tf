@@ -67,13 +67,10 @@ variable "name_base" {
     error_message = "name_base must start with a lowercase letter and contain only lowercase letters, digits, and non-repeating internal hyphens."
   }
 
-  # Storage and Key Vault cap at 24 chars including the resource word, the
-  # name_prefix, and a 7-char hash. Anything long enough to matter fails the
-  # preconditions in main.tf with a count; this catches the extreme case early.
-  validation {
-    condition     = length(var.name_base) <= 12
-    error_message = "name_base must be 12 characters or fewer. Storage account and Key Vault names cap at 24 including the resource word, the name_prefix suffix, and the uniqueness hash."
-  }
+  # No length rule here. A cap on this variable alone can only guess: it cannot
+  # see name_prefix, which counts against the same limit, and it cannot see the
+  # per-resource overrides that make the limit moot. The preconditions in main.tf
+  # measure the assembled name against the ceiling that actually applies to it.
 }
 
 variable "resource_group_name" {

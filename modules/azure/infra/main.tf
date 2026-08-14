@@ -295,6 +295,13 @@ resource "azurerm_resource_group" "resource_group" {
   # Key Vault binds first: it keeps its hyphens inside the same 24-char limit
   # Storage has, so a ~12-char name_prefix is the practical ceiling under
   # unique_resource_names.
+  #
+  # These five cover every name the module derives. AKS is the binding one of
+  # the three that carry no hash: "-vnet" is a character longer than "-aks"
+  # against a ceiling a character higher, so the two bust at the same base
+  # length, and the resource group's 90 is another 28 characters out. AKS
+  # matters once storage_account_name and keyvault_name are both overridden,
+  # which lifts the two 24-char limits that would otherwise fail first.
   lifecycle {
     precondition {
       condition     = length(replace(local.blob_name, "-", "")) >= 3 && length(replace(local.blob_name, "-", "")) <= 24
@@ -311,6 +318,10 @@ resource "azurerm_resource_group" "resource_group" {
     precondition {
       condition     = length(local.redis_name) <= 60
       error_message = "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly."
+    }
+    precondition {
+      condition     = length(local.aks_name) <= 63
+      error_message = "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly."
     }
   }
 }

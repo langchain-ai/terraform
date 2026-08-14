@@ -159,6 +159,15 @@ _derive_names() {
   # stripped form and that is also the name Azure ends up showing.
   _BLOB_NAME="${base}blob${suffix}${uniq}"
   _BLOB_NAME="${_BLOB_NAME//-/}"
+  # A pinned name wins outright, the way the locals in main.tf resolve it. This
+  # runs last so the override lands on the finished name, and it applies to the
+  # blob name after the hyphens are stripped — the pinned value is already the
+  # literal account name.
+  [[ -n "$CLUSTER_NAME" ]]         && _AKS_NAME="$CLUSTER_NAME"
+  [[ -n "$KEYVAULT_NAME" ]]        && _KV_NAME="$KEYVAULT_NAME"
+  [[ -n "$POSTGRES_NAME" ]]        && _PG_NAME="$POSTGRES_NAME"
+  [[ -n "$REDIS_NAME" ]]           && _REDIS_NAME="$REDIS_NAME"
+  [[ -n "$STORAGE_ACCOUNT_NAME" ]] && _BLOB_NAME="$STORAGE_ACCOUNT_NAME"
   # Not derived from name_base — the workspace name predates it and renaming a
   # Log Analytics workspace destroys the logs in it.
   _LAW_NAME="langsmith-logs${suffix}"
@@ -171,7 +180,8 @@ _name_length_errors() {
   for spec in "Storage account:${_BLOB_NAME}:24" \
     "Key Vault:${_KV_NAME}:24" \
     "Postgres:${_PG_NAME}:63" \
-    "Redis:${_REDIS_NAME}:60"; do
+    "Redis:${_REDIS_NAME}:60" \
+    "AKS cluster:${_AKS_NAME}:63"; do
     label="${spec%%:*}"
     name="${spec#*:}"
     max="${name##*:}"
@@ -192,6 +202,7 @@ _name_length_errors() {
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
 _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE LOCATION OWNER
+STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
@@ -289,12 +300,18 @@ _load_tfvars() {
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
            sizing_profile postgres_admin_username postgres_database_name \
-           amr_sku name_base; do
+           amr_sku name_base storage_account_name keyvault_name postgres_name \
+           redis_name cluster_name; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
       name_base)                 NAME_BASE="$_TF_VAL" ;;
+      storage_account_name)      STORAGE_ACCOUNT_NAME="$_TF_VAL" ;;
+      keyvault_name)             KEYVAULT_NAME="$_TF_VAL" ;;
+      postgres_name)             POSTGRES_NAME="$_TF_VAL" ;;
+      redis_name)                REDIS_NAME="$_TF_VAL" ;;
+      cluster_name)              CLUSTER_NAME="$_TF_VAL" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       environment)               ENVIRONMENT="$_TF_VAL" ;;
@@ -432,6 +449,16 @@ UNIQUE_NAMES="true"
 # length-checks is built from it. Empty means the derivation picks the default
 # base, matching the locals in main.tf.
 NAME_BASE=""
+
+# Same reason, one resource each. A pinned name replaces the derived one in
+# main.tf, so a length check that ignores these measures a string Terraform
+# throws away — and it fires on the deployment-name prompt, where it would
+# block a valid config and then advise setting the very variables it ignored.
+STORAGE_ACCOUNT_NAME=""
+KEYVAULT_NAME=""
+POSTGRES_NAME=""
+REDIS_NAME=""
+CLUSTER_NAME=""
 # Left blank on purpose. The module omits the tag entirely when it is empty, and
 # an unanswered "platform-team" is a worse answer than no tag at all.
 OWNER=""

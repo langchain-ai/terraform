@@ -27,7 +27,7 @@ unique_resource_names = true
 # every derived name at once; the three below name one resource each. All are
 # creation-time only — changing one after an apply renames the resource, which
 # Terraform executes as destroy-and-recreate. The wizard does not ask for these.
-# name_base           = "mycorp"                   # mycorp-rg-prod, mycorp-aks-prod, ... (max 12 chars)
+# name_base           = "mycorp"                   # mycorp-rg-prod, mycorp-aks-prod, ...
 # resource_group_name = "rg-langsmith-prod-eastus"
 # vnet_name           = "vnet-langsmith-prod"      # ignored when create_vnet = false
 # cluster_name        = "aks-langsmith-prod"
