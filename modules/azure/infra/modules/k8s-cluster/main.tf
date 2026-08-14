@@ -35,11 +35,15 @@ locals {
   # AGIC add-on identity — extracted from the cluster resource after apply.
   # Azure creates this identity automatically in the MC_ node resource group.
   # The identity needs 3 role assignments (see below).
+  # var.create_cluster is checked first so that with create_cluster = false the
+  # count = 0 resource is never indexed here — otherwise an "Invalid index" error
+  # would fire alongside (and obscure) the data source's precondition message.
   agic_addon_principal_id = (
+    var.create_cluster &&
     var.ingress_controller == "agic" &&
-    length(azurerm_kubernetes_cluster.main.ingress_application_gateway) > 0 &&
-    length(azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity) > 0
-  ) ? azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id : null
+    length(azurerm_kubernetes_cluster.main[0].ingress_application_gateway) > 0 &&
+    length(azurerm_kubernetes_cluster.main[0].ingress_application_gateway[0].ingress_application_gateway_identity) > 0
+  ) ? azurerm_kubernetes_cluster.main[0].ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id : null
 
   # Derive VNet resource ID from the AGIC subnet ID by stripping the /subnets/... suffix.
   # e.g. /subscriptions/.../virtualNetworks/langsmith-vnet-dz/subnets/langsmith-vnet-dz-subnet-agic
@@ -47,24 +51,173 @@ locals {
   agic_vnet_id = var.ingress_controller == "agic" && var.agic_subnet_id != "" ? (
     join("/subnets/", slice(split("/subnets/", var.agic_subnet_id), 0, 1))
   ) : ""
+
+  # Whether this module builds the AGIC stack (gateway, public IP, add-on identity
+  # role grants) or only consumes one that already exists. Enabling the add-on is an
+  # argument on the cluster resource, so on an attached cluster Terraform cannot turn
+  # it on and the customer enables it themselves against their own gateway. That makes
+  # the gateway and its RBAC grants theirs too: re-creating the grants here would
+  # collide with the ones az aks enable-addons already made (RoleAssignmentExists),
+  # and the gateway is not ours to manage. The postcondition below is what catches an
+  # attached cluster that never had the add-on turned on.
+  agic_managed = var.ingress_controller == "agic" && var.create_cluster
+
+  # Unified accessors so the rest of this module doesn't care whether the cluster
+  # was created here or already existed — resolves to the resource when
+  # create_cluster = true, or the read-only data source when false.
+  cluster_id              = var.create_cluster ? azurerm_kubernetes_cluster.main[0].id : data.azurerm_kubernetes_cluster.existing[0].id
+  cluster_name_actual     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].name : data.azurerm_kubernetes_cluster.existing[0].name
+  cluster_oidc_issuer_url = var.create_cluster ? azurerm_kubernetes_cluster.main[0].oidc_issuer_url : data.azurerm_kubernetes_cluster.existing[0].oidc_issuer_url
+  cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
+  cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
+
+  # var.location for a cluster created here, so the location check below is
+  # trivially satisfied and only has something to say under create_cluster = false.
+  cluster_location = var.create_cluster ? var.location : data.azurerm_kubernetes_cluster.existing[0].location
+}
+
+# Read-only lookup of a pre-existing AKS cluster (BYOC). Never creates, modifies,
+# or deletes the customer's cluster — Terraform only reads its attributes so the
+# Managed Identities/federated credentials/node pools below can attach to it.
+data "azurerm_kubernetes_cluster" "existing" {
+  count               = var.create_cluster ? 0 : 1
+  name                = var.cluster_name
+  resource_group_name = var.existing_cluster_resource_group_name
+
+  lifecycle {
+    precondition {
+      # Without this the lookup falls back to the derived "langsmith-aks<id>"
+      # name and Azure reports a missing cluster, which reads like a permissions
+      # or region problem rather than an unset variable.
+      condition     = var.cluster_name != ""
+      error_message = "create_cluster = false requires existing_cluster_name to be set to the name of the AKS cluster to attach to."
+    }
+
+    precondition {
+      # Not derived from resource_group_name. That is the resource group this
+      # module creates for Key Vault and Storage, which is not where a cluster
+      # the customer's platform team owns lives, so guessing it produces a
+      # "cluster not found" naming a resource group the operator never mentioned.
+      condition     = var.existing_cluster_resource_group_name != ""
+      error_message = "create_cluster = false requires existing_cluster_resource_group_name to be set to the resource group holding cluster '${var.cluster_name}'. Find it with: az aks list --query \"[?name=='${var.cluster_name}'].resourceGroup\" -o tsv"
+    }
+
+    precondition {
+      # 'istio-addon' (Azure Service Mesh) is configured through service_mesh_profile,
+      # an argument on the azurerm_kubernetes_cluster *resource* block. With
+      # create_cluster = false that resource doesn't exist in this module's state, so
+      # the mesh would silently never get configured rather than erroring. 'agic' is
+      # no longer rejected here: it needs the same resource-only argument to be turned
+      # on, but unlike the mesh it is usable on an attached cluster when the customer
+      # has already enabled the add-on, which the postcondition below checks for.
+      condition     = var.ingress_controller != "istio-addon"
+      error_message = "ingress_controller = 'istio-addon' requires create_cluster = true — Azure Service Mesh is configured through service_mesh_profile on a Terraform-owned cluster resource, and this module cannot enable it on a cluster it only reads. Use 'istio' for the self-managed Helm install, or 'nginx', 'agic', or 'envoy-gateway'."
+    }
+
+    precondition {
+      # A subnet Terraform is about to carve can never be one the cluster's nodes
+      # already run in, so the postcondition below could never pass. Catching the
+      # combination here names the real problem; left to the postcondition it
+      # reads as a subnet mismatch instead of an impossible configuration.
+      condition     = !var.create_vnet
+      error_message = "create_cluster = false requires create_vnet = false. An attached cluster's nodes already run in an existing subnet, and Terraform cannot carve a new one they belong to. Set create_vnet = false and supply vnet_id plus the subnet ids."
+    }
+
+    precondition {
+      # Under create_cluster = false there is nothing to derive this from, and the
+      # postcondition that would catch a blank value compares it against the
+      # cluster's agent pools — a comparison that reports a mismatch rather than
+      # an unset variable.
+      condition     = var.existing_cluster_subnet_id != ""
+      error_message = "create_cluster = false requires aks_subnet_id to be set to a subnet cluster '${var.cluster_name}' already runs nodes in. It also drives the Blob and Key Vault firewall allowlists, so it cannot be left for Terraform to derive."
+    }
+
+    postcondition {
+      # Federated credentials below use the cluster's OIDC issuer URL as their
+      # trust anchor. Without the issuer the URL is empty and every credential is
+      # created pointing at nothing — pods then fail to authenticate to Blob
+      # Storage/Key Vault at runtime, long after a "successful" apply.
+      condition     = self.oidc_issuer_enabled
+      error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+    }
+
+    postcondition {
+      # The root module feeds this same subnet to the default-deny Blob firewall
+      # and the Key Vault network ACLs, so it has to be a subnet the cluster's
+      # nodes actually run in. Point it anywhere else and apply succeeds, pods
+      # schedule, and every Blob write and Key Vault read 403s at runtime. It's
+      # also the only subnet an added node pool can join, since a node pool can
+      # only live in its cluster's VNet.
+      condition     = contains(compact(self.agent_pool_profile[*].vnet_subnet_id), var.existing_cluster_subnet_id)
+      error_message = "aks_subnet_id must be one of the subnets cluster '${var.cluster_name}' already runs nodes in, because it also drives the Blob and Key Vault firewall allowlists. Set aks_subnet_id to one of: [${join(", ", compact(self.agent_pool_profile[*].vnet_subnet_id))}]"
+    }
+
+    postcondition {
+      # Enabling ingress-appgw is an argument on the cluster resource, so on an
+      # attached cluster the add-on has to already be on. Without this the apply
+      # succeeds having created no gateway and no IngressClass, and the failure
+      # surfaces later as LangSmith Ingress objects that no controller ever picks up.
+      # This only proves the add-on exists. It cannot prove the add-on identity holds
+      # the three role assignments AGIC needs, because ARM has no way to list
+      # assignments by principal from Terraform — an under-permissioned identity still
+      # 403s at runtime, so the README documents how to verify the grants.
+      condition     = var.ingress_controller != "agic" || length(self.ingress_application_gateway) > 0
+      error_message = "ingress_controller = 'agic' on an attached cluster requires the ingress-appgw add-on to already be enabled on cluster '${var.cluster_name}', because Terraform can only enable it on a cluster it creates. Enable it against your Application Gateway first: az aks enable-addons --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --addons ingress-appgw --appgw-id <application-gateway-resource-id>"
+    }
+  }
+}
+
+# Workload Identity has to be enabled on top of the OIDC issuer — they're
+# separate AKS flags, so "issuer on, Workload Identity off" is a reachable state
+# that passes the check above, applies cleanly, and then leaves pods without a
+# projected service account token. The azurerm data source doesn't expose the
+# flag, so read the cluster's ARM properties directly. Read-only GET, no writes.
+data "azapi_resource" "existing_security_profile" {
+  count                  = var.create_cluster ? 0 : 1
+  type                   = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  resource_id            = data.azurerm_kubernetes_cluster.existing[0].id
+  response_export_values = ["properties.securityProfile.workloadIdentity.enabled"]
+
+  lifecycle {
+    postcondition {
+      condition     = try(self.output.properties.securityProfile.workloadIdentity.enabled, false)
+      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+    }
+  }
+}
+
+# Key Vault, Blob, PostgreSQL, and Redis are all created in var.location, which
+# nothing ties to the region the existing cluster runs in. A mismatch works, at
+# the cost of cross-region latency and egress on every trace write, so warn
+# rather than fail — a deliberate split-region deployment stays possible.
+check "existing_cluster_location" {
+  assert {
+    # Azure accepts both "East US" and "eastus" for the same region.
+    condition     = lower(replace(local.cluster_location, " ", "")) == lower(replace(var.location, " ", ""))
+    error_message = "Cluster '${var.cluster_name}' runs in ${local.cluster_location} but location is set to ${var.location}. Key Vault, Blob, PostgreSQL, and Redis will be created in ${var.location}, so pod traffic to them crosses regions."
+  }
 }
 
 # Helm provider uses the AKS cluster credentials to deploy charts
 # (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
-# Credentials come from the AKS resource itself — no external kubeconfig needed.
+# Credentials come from the AKS cluster (created here or pre-existing) —
+# no external kubeconfig needed.
 provider "helm" {
   kubernetes {
-    host                   = azurerm_kubernetes_cluster.main.kube_config[0].host
-    client_certificate     = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].client_certificate)
-    client_key             = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].client_key)
-    cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].cluster_ca_certificate)
+    host                   = local.cluster_kube_config[0].host
+    client_certificate     = base64decode(local.cluster_kube_config[0].client_certificate)
+    client_key             = base64decode(local.cluster_kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
   }
 }
 
 # The AKS cluster — the Kubernetes control plane + node pools.
 # All LangSmith application pods, supporting tools (cert-manager, KEDA),
 # and the ingress controller run here.
+# count = 0 when attaching to a pre-existing cluster (create_cluster = false);
+# see data.azurerm_kubernetes_cluster.existing above for that path.
 resource "azurerm_kubernetes_cluster" "main" {
+  count               = var.create_cluster ? 1 : 0
   name                = var.cluster_name
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -233,7 +386,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   for_each = var.additional_node_pools
 
   name                  = each.key
-  kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+  kubernetes_cluster_id = local.cluster_id
   vm_size               = each.value.vm_size
   auto_scaling_enabled  = true
   vnet_subnet_id        = var.subnet_id
@@ -283,7 +436,7 @@ resource "azurerm_federated_identity_credential" "cert_manager" {
   user_assigned_identity_id = azurerm_user_assigned_identity.cert_manager.id
 
   audience = ["api://AzureADTokenExchange"]
-  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  issuer   = local.cluster_oidc_issuer_url
   subject  = "system:serviceaccount:cert-manager:cert-manager"
 }
 
@@ -296,7 +449,7 @@ resource "azurerm_federated_identity_credential" "k8s_app" {
   user_assigned_identity_id = azurerm_user_assigned_identity.k8s_app.id
 
   audience = ["api://AzureADTokenExchange"]
-  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  issuer   = local.cluster_oidc_issuer_url
   subject  = "system:serviceaccount:${var.langsmith_namespace}:${each.value}"
 }
 
@@ -425,7 +578,7 @@ resource "helm_release" "istio_gateway" {
 # dns_label sets a DNS name: <dns_label>.<region>.cloudapp.azure.com on the AGW public IP.
 # For AGIC, the DNS label is set directly on the Azure public IP resource (not via K8s annotation).
 resource "azurerm_public_ip" "agw" {
-  count               = var.ingress_controller == "agic" ? 1 : 0
+  count               = local.agic_managed ? 1 : 0
   name                = "${var.cluster_name}-agw-pip"
   resource_group_name = var.resource_group_name
   location            = var.location
@@ -439,7 +592,7 @@ resource "azurerm_public_ip" "agw" {
 # The placeholder backend/listener/rule below satisfies the required AGW schema;
 # AGIC replaces them with actual LangSmith routing on first reconcile.
 resource "azurerm_application_gateway" "agw" {
-  count               = var.ingress_controller == "agic" ? 1 : 0
+  count               = local.agic_managed ? 1 : 0
   name                = "${var.cluster_name}-agw"
   resource_group_name = var.resource_group_name
   location            = var.location
@@ -557,24 +710,26 @@ resource "azurerm_application_gateway" "agw" {
 # persistent 403 errors from the AGIC controller even though the assignments exist in ARM.
 # A 5-minute wait after cluster creation allows Azure AD to fully register the identity.
 resource "time_sleep" "agic_identity_propagation" {
-  count           = var.ingress_controller == "agic" ? 1 : 0
+  count           = local.agic_managed ? 1 : 0
   create_duration = "300s"
   depends_on      = [azurerm_kubernetes_cluster.main]
 }
 
 resource "azurerm_role_assignment" "agic_rg_reader" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
+  count                = local.agic_managed ? 1 : 0
   scope                = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
   role_definition_name = "Reader"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
 
 resource "azurerm_role_assignment" "agic_agw_contributor" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
+  count                = local.agic_managed ? 1 : 0
   scope                = azurerm_application_gateway.agw[0].id
   role_definition_name = "Contributor"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
 
@@ -589,10 +744,11 @@ resource "azurerm_role_assignment" "agic_agw_contributor" {
 # every deployment already running. 'none' leaves the grant to an operator whose
 # network team will not delegate roleAssignments/write on their VNet.
 resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
-  count                = var.ingress_controller == "agic" && var.agic_network_contributor_scope != "none" ? 1 : 0
+  count                = local.agic_managed && var.agic_network_contributor_scope != "none" ? 1 : 0
   scope                = var.agic_network_contributor_scope == "subnet" ? var.agic_subnet_id : local.agic_vnet_id
   role_definition_name = "Network Contributor"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
 
