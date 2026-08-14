@@ -223,9 +223,38 @@ az rest --method get \
 
 1. **Convert the subscription to Pay-As-You-Go.** For a trial or credit-based subscription this removes the restriction outright, with no ticket and no configuration change.
 2. **Request an exemption** at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), quota type "Azure Database for PostgreSQL Flexible Server". Requests for offer restrictions are frequently approved the same day, and the region and SKU stay as configured.
-3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation.
+3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation. Check the family has quota before re-applying, because subscriptions frequently carry a limit of 0 on the v5 families and the retry then fails on quota instead. `make preflight` reports both.
 4. **Use in-cluster Postgres** for a dev or demo deployment. Set `postgres_source = "in-cluster"` and the Helm chart runs its own Postgres pod, so nothing is provisioned through the PostgreSQL resource provider. Not suitable for production.
 5. **Change the region.** Set `location` in `terraform.tfvars`. Because Postgres uses a delegated subnet it must sit in the same region as the VNet, so the whole deployment moves. Any resources already created are destroyed and recreated.
+
+---
+
+### Database SKU family has no quota in the region
+
+**Symptom:** the apply builds the resource group, VNet, and AKS, then fails on the Flexible Server with a quota error naming a vCPU family and the region, such as `standardDDSv5Family` in `eastus`.
+
+**Cause:** `az postgres flexible-server list-skus` reports what a region *offers*, which is a different question from what your subscription may *create*. Postgres Flexible Server draws on the `Microsoft.Compute` per-family vCPU quota, and a family whose limit is 0 refuses every size in it. Fresh subscriptions commonly ship the v5 families at 0 while older families have room, so a SKU that reads as available in the docs still fails.
+
+`Microsoft.DBforPostgreSQL` registers no quota resource type of its own and `az quota` rejects a DBforPostgreSQL scope, so Compute is the surface to query:
+
+```bash
+az vm list-usage -l eastus --only-show-errors --query "[?limit=='0'].name.value" -o tsv
+```
+
+`make preflight` maps the configured `postgres_sku_name` to its family and fails on this before the apply starts.
+
+**Fix:** request an increase at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), or set `postgres_sku_name` to a family that already has room. The quota-increase mechanics are the same as [vCPU quota exceeded](#vcpu-quota-exceeded--autoscaler-backoff-or-node-pool-rotation-fails) above.
+
+**Not the same as a capacity shortage.** Two failures read alike and have opposite fixes:
+
+| | Quota at 0 | `InsufficientCapacity` / `AllocationFailed` |
+|---|---|---|
+| What it means | Your subscription is not allowed this family here | Azure has no hardware for it here right now |
+| Visible before apply | Yes, `make preflight` catches it | No, only the create call reveals it |
+| Fix | Quota request, region and SKU unchanged | Move regions, or wait |
+| Changing SKU size | Helps, if another family has quota | Rarely helps, the shortage is regional |
+
+Azure Managed Redis has no quota surface and no capacity API at all, so only the second column applies to it. A region that offers `redisEnterprise` can still refuse the create, and the fallbacks are moving `location` or setting `redis_source = "in-cluster"` for a dev deployment. Bumping the AMR SKU does not clear a capacity refusal.
 
 ---
 

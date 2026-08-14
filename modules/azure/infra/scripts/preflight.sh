@@ -13,8 +13,9 @@
 #   3. Required resource providers are registered
 #   4. The identity Terraform will use can write role assignments
 #   5. Subscription offer type is not blocked from provisioning Postgres
-#   6. terraform.tfvars exists with required fields populated
-#   7. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#   6. Regional vCPU quota covers the configured Postgres SKU family
+#   7. terraform.tfvars exists with required fields populated
+#   8. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -45,6 +46,21 @@ _render() {
       *) [ -z "$line" ] || warn "$line" ;;
     esac
   done
+}
+
+TFVARS="${INFRA_DIR}/terraform.tfvars"
+
+# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
+# preflight.sh deliberately has no external sourcing. Returns 1 when the key is
+# absent, so callers pick their own default rather than inheriting an empty one.
+_tfvar() {
+  local raw val
+  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
+  [ -n "$raw" ] || return 1
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
+  [ -n "$val" ] || return 1
+  echo "$val"
 }
 
 echo ""
@@ -588,10 +604,125 @@ else
   esac
 fi
 
-# ── 6. terraform.tfvars ───────────────────────────────────────────────────────
+# ── 6. Regional quota for the database SKU family ─────────────────────────────
+# `az postgres flexible-server list-skus` reports what a region offers, not what
+# this subscription may create. A family whose quota limit is 0 fails the apply
+# with ErrCode_InsufficientVCPUQuota once AKS already exists, and clearing it
+# takes a quota request rather than a retry — so ask before the apply starts.
+#
+# Postgres Flexible Server draws on the Microsoft.Compute per-family vCPU quota.
+# Microsoft.DBforPostgreSQL registers no quota resource type and `az quota`
+# rejects a DBforPostgreSQL scope, so Compute is the only surface that answers.
+# Fresh subscriptions routinely ship the v5 families at 0, which is what makes
+# the LocationIsOfferRestricted workaround below (switch to GP_Standard_D2ds_v5)
+# capable of trading one mid-apply failure for a different one.
+echo ""
+echo "── Regional Quota ────────────────────────────────────"
+
+POSTGRES_SOURCE=$(_tfvar postgres_source || echo "external")
+REDIS_SOURCE=$(_tfvar redis_source || echo "external")
+QUOTA_LOCATION=$(_tfvar location || echo "eastus")
+POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
+
+# Every value here comes from terraform.tfvars, so with no file the defaults
+# above describe a region and SKU the operator never picked — and failing on
+# those would send someone to request quota they may not need. Section 7 is
+# where the missing file gets reported.
+#
+# Both values reach an az invocation, so each is held to the shape Azure accepts
+# and dropped if it does not fit. An unchecked value could retarget the query.
+if [ ! -f "$TFVARS" ]; then
+  warn "terraform.tfvars not found — skipping quota checks until a region and SKU are set"
+elif ! printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  warn "terraform.tfvars: location '${QUOTA_LOCATION}' is not a region name — skipping quota checks"
+elif [ "$POSTGRES_SOURCE" = "in-cluster" ]; then
+  pass "postgres_source = in-cluster — no Flexible Server quota required"
+elif ! printf '%s\n' "$POSTGRES_SKU" | grep -qE '^(B|GP|MO)_Standard_[A-Za-z0-9_]+$'; then
+  warn "terraform.tfvars: postgres_sku_name '${POSTGRES_SKU}' is not a Flexible Server SKU — skipping quota check"
+else
+  # Derive the quota family from the SKU name, then trust it only if the API
+  # reports a family by that name. B-series is the one family whose name is not
+  # a transform of the size (B1ms lands in standardBSFamily), so it is named
+  # outright. A derivation that misses degrades to a warn and never invents a
+  # failure. tr rather than ${var^^}: this file has to run on bash 3.2.
+  SIZE="${POSTGRES_SKU#*_}"
+  case "$SIZE" in
+    Standard_B*)
+      QUOTA_FAMILY="standardBSFamily"
+      ;;
+    *)
+      # Standard_D2ds_v4 -> letter D, suffix ds, version 4 -> standardDDSv4Family
+      SKU_LETTER=$(printf '%s\n' "$SIZE" | sed -n 's/^Standard_\([A-Za-z]\)[0-9].*/\1/p')
+      SKU_SUFFIX=$(printf '%s\n' "$SIZE" | sed -n 's/^Standard_[A-Za-z][0-9]*\([a-z]*\)_v[0-9]*$/\1/p')
+      SKU_VERSION=$(printf '%s\n' "$SIZE" | sed -n 's/.*_v\([0-9]*\)$/\1/p')
+      if [ -n "$SKU_LETTER" ] && [ -n "$SKU_VERSION" ]; then
+        QUOTA_FAMILY="standard$(printf '%s%s' "$SKU_LETTER" "$SKU_SUFFIX" | tr '[:lower:]' '[:upper:]')v${SKU_VERSION}Family"
+      else
+        QUOTA_FAMILY=""
+      fi
+      ;;
+  esac
+
+  # vCPU count is the leading digits of the size: Standard_D2ds_v4 needs 2.
+  SKU_VCPUS=$(printf '%s\n' "$SIZE" | sed -n 's/^Standard_[A-Za-z]\([0-9]*\).*/\1/p')
+
+  if [ -z "$QUOTA_FAMILY" ] || [ -z "$SKU_VCPUS" ]; then
+    warn "Could not map ${POSTGRES_SKU} to a quota family — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+  else
+    # QUOTA_FAMILY is alphanumeric by construction from the validated SKU above,
+    # so it is safe in the JMESPath filter. tsv keeps this jq-free; az is the
+    # only tool this section requires.
+    QUOTA_ROW=$(az vm list-usage -l "$QUOTA_LOCATION" --only-show-errors \
+      --query "[?name.value=='${QUOTA_FAMILY}'].[currentValue,limit]" -o tsv 2>/dev/null || echo "")
+
+    if [ -z "$QUOTA_ROW" ]; then
+      warn "${QUOTA_LOCATION} reports no ${QUOTA_FAMILY} quota entry — confirm ${POSTGRES_SKU} is offered there"
+      warn "  az postgres flexible-server list-skus -l ${QUOTA_LOCATION}"
+    else
+      QUOTA_USED=$(printf '%s\n' "$QUOTA_ROW" | head -1 | cut -f1)
+      QUOTA_LIMIT=$(printf '%s\n' "$QUOTA_ROW" | head -1 | cut -f2)
+      QUOTA_FREE=$((QUOTA_LIMIT - QUOTA_USED))
+
+      if [ "$QUOTA_LIMIT" -eq 0 ]; then
+        fail "${QUOTA_FAMILY} quota in ${QUOTA_LOCATION} is 0 — ${POSTGRES_SKU} cannot be created"
+        warn "  Request an increase at https://aka.ms/postgres-request-quota-increase, or"
+        warn "  choose a family that has quota: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+      elif [ "$QUOTA_FREE" -lt "$SKU_VCPUS" ]; then
+        fail "${QUOTA_FAMILY} quota in ${QUOTA_LOCATION}: ${QUOTA_FREE} of ${QUOTA_LIMIT} vCPUs free, ${POSTGRES_SKU} needs ${SKU_VCPUS}"
+      else
+        pass "${QUOTA_FAMILY} quota in ${QUOTA_LOCATION}: ${QUOTA_FREE} of ${QUOTA_LIMIT} vCPUs free (${POSTGRES_SKU} needs ${SKU_VCPUS})"
+      fi
+    fi
+  fi
+fi
+
+# Azure Managed Redis has neither a quota surface nor a capacity API: a region
+# that offers redisEnterprise can still refuse the create with
+# InsufficientCapacity, discoverable only by trying. Confirming the resource type
+# reaches the region is the whole of what is knowable before the apply. Provider
+# metadata returns display names ("East US"), so normalize before comparing.
+if [ ! -f "$TFVARS" ]; then
+  :   # already reported above
+elif [ "$REDIS_SOURCE" = "in-cluster" ]; then
+  pass "redis_source = in-cluster — no Managed Redis region check needed"
+elif printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  AMR_REGIONS=$(az provider show -n Microsoft.Cache \
+    --query "resourceTypes[?resourceType=='redisEnterprise'].locations | [0]" -o tsv 2>/dev/null \
+    | tr '[:upper:]' '[:lower:]' | tr -d ' ' || echo "")
+
+  if [ -z "$AMR_REGIONS" ]; then
+    warn "Could not read Microsoft.Cache regions — skipping the Managed Redis region check"
+  elif printf '%s\n' "$AMR_REGIONS" | grep -qx "$QUOTA_LOCATION"; then
+    pass "Azure Managed Redis is offered in ${QUOTA_LOCATION} (capacity is not queryable ahead of the apply)"
+  else
+    fail "Azure Managed Redis is not offered in ${QUOTA_LOCATION}"
+    warn "  Offered regions: $(printf '%s' "$AMR_REGIONS" | tr '\n' ' ')"
+  fi
+fi
+
+# ── 7. terraform.tfvars ───────────────────────────────────────────────────────
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
-TFVARS="${INFRA_DIR}/terraform.tfvars"
 if [ ! -f "$TFVARS" ]; then
   fail "terraform.tfvars not found. Copy the example: cp infra/terraform.tfvars.example infra/terraform.tfvars"
 else
@@ -626,7 +757,7 @@ else
   fi
 fi
 
-# ── 7. Globally-unique resource names ────────────────────────────────────────
+# ── 8. Globally-unique resource names ────────────────────────────────────────
 # Postgres, Redis, Storage, and Key Vault names live in a namespace shared by
 # every Azure tenant, as does the public-IP DNS label. A collision surfaces as a
 # raw Azure 400 partway through the apply, after the resource group, VNet, and
@@ -637,18 +768,6 @@ echo "── Global Name Availability ──────────────
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping name checks (need terraform.tfvars and an active az login)"
 else
-  # Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
-  # preflight.sh deliberately has no external sourcing.
-  _tfvar() {
-    local raw val
-    raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
-    [ -n "$raw" ] || return 1
-    val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-    [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
-    [ -n "$val" ] || return 1
-    echo "$val"
-  }
-
   NAME_PREFIX=$(_tfvar name_prefix || _tfvar identifier || echo "")
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
@@ -786,7 +905,7 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 fi
 
-# ── 8. Other tooling ──────────────────────────────────────────────────────────
+# ── 9. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do
