@@ -763,6 +763,10 @@ module "keyvault" {
   # all secrets so future CSI-driver integration requires no RBAC changes.
   managed_identity_principal_id = module.blob.k8s_managed_identity_principal_id
 
+  # Principal type of the apply identity for its Secrets Officer grant. Only
+  # needed where the subscription gates roleAssignments/write on principalType.
+  terraform_principal_type = var.terraform_principal_type
+
   # Network ACLs — default Allow keeps first-apply secret creation working.
   # Production deployments override keyvault_default_action = "Deny" and
   # populate keyvault_allowed_ips. The AKS subnet is always allowlisted so
@@ -946,5 +950,6 @@ module "dns" {
 
   # Grant cert-manager DNS Zone Contributor so it can create TXT records
   # for DNS-01 ACME challenges. Only needed when tls_certificate_source = "dns01".
+  grant_cert_manager_dns    = var.tls_certificate_source == "dns01"
   cert_manager_principal_id = var.tls_certificate_source == "dns01" ? module.aks.cert_manager_identity_principal_id : ""
 }
