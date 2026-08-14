@@ -74,7 +74,7 @@ plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.au
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra) — 3 stages: Azure infra → k8s bootstrap → ClusterIssuer (ARGS passed to each)
+apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
 	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
@@ -97,7 +97,7 @@ apply: ## terraform apply (infra) — 3 stages: Azure infra → k8s bootstrap �
 		-target=module.k8s_bootstrap.kubernetes_secret_v1.license \
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
-	@echo "→ Stage 3: ClusterIssuer + remaining resources (cert-manager CRDs now ready)..."
+	@echo "→ Stage 3: remaining resources (DNS zone, WAF, anything left in k8s bootstrap)..."
 	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation

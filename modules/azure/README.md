@@ -100,8 +100,8 @@ make setup-env
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
-# Note: make plan will fail on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it handles the ordering in three stages.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 make init
 make apply
 
