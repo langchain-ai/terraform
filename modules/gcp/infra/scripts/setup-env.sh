@@ -62,6 +62,12 @@ export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
 #   projects/{project_id}/secrets/langsmith-{name_prefix}-{environment}-{key}
 _sm_prefix="langsmith-${_name_prefix}-${_environment}"
 
+# Variables that could not be resolved from the environment or Secret Manager,
+# collected by _sm_secret and reported together at the end. _sm_secret runs in
+# this shell (its values come back via export, not command substitution), so the
+# append inside it is visible here.
+_missing_vars=""
+
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
 _precheck_var="TF_VAR_langsmith_license_key"
 if [[ -n "$(printenv "$_precheck_var")" ]]; then
@@ -71,6 +77,25 @@ if [[ -n "$(printenv "$_precheck_var")" ]]; then
   echo ""
 fi
 
+# ── Bounded gcloud calls ──────────────────────────────────────────────────────
+# Bounded by timeout(1) when available so a sandbox with blocked egress fails
+# fast instead of stalling on a full TCP timeout. timeout is not in the macOS
+# base install, and gtimeout is the Homebrew coreutils name; run bare if neither.
+_timeout_bin=""
+for _t in timeout gtimeout; do
+  if command -v "$_t" >/dev/null 2>&1; then _timeout_bin="$_t"; break; fi
+done
+# Named _gcloud_bounded, not _gcloud: this script is sourced, and _gcloud is the
+# zsh completion function name for the gcloud command — defining it here would
+# replace the completion for the rest of the caller's shell session.
+_gcloud_bounded() {
+  if [[ -n "$_timeout_bin" ]]; then
+    "$_timeout_bin" 30 gcloud "$@"
+  else
+    gcloud "$@"
+  fi
+}
+
 # ── Safe Secret Manager write ─────────────────────────────────────────────────
 # Creates a new secret version (or the secret itself if it doesn't exist yet).
 # Accepts value via stdin to avoid exposing it in the process list.
@@ -79,8 +104,8 @@ _sm_put() {
   local _secret_id="${_sm_prefix}-${_name}"
 
   # Create the secret resource if it doesn't exist
-  if ! gcloud secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
-    gcloud secrets create "$_secret_id" \
+  if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
+    _gcloud_bounded secrets create "$_secret_id" \
       --project="$_project_id" \
       --replication-policy="automatic" \
       --labels="managed-by=setup-env,langsmith-env=${_environment}" \
@@ -88,7 +113,7 @@ _sm_put() {
   fi
 
   # Add a new version with the value
-  printf '%s' "$_val" | gcloud secrets versions add "$_secret_id" \
+  printf '%s' "$_val" | _gcloud_bounded secrets versions add "$_secret_id" \
     --project="$_project_id" \
     --data-file=- \
     --quiet &>/dev/null
@@ -98,7 +123,7 @@ _sm_put() {
 _sm_get() {
   local _name="$1"
   local _secret_id="${_sm_prefix}-${_name}"
-  gcloud secrets versions access latest \
+  _gcloud_bounded secrets versions access latest \
     --secret="$_secret_id" \
     --project="$_project_id" \
     --quiet 2>/dev/null || true
@@ -126,7 +151,7 @@ _sm_secret() {
 
   # 0. Already exported in the environment — use as-is, backfill SM if missing.
   if [[ -n "$(printenv "$varname")" ]]; then
-    if ! gcloud secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
+    if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
       echo "  $varname is set in env but missing from Secret Manager — backfilling → ${_secret_id}"
       if ! _sm_put "$sm_name" "$(printenv "$varname")"; then
         echo "  WARNING: Secret Manager write failed for ${_secret_id}"
@@ -167,13 +192,17 @@ _sm_secret() {
         return 1
       fi
     else
-      # Non-interactive (CI, piped stdin, redirected) — cannot prompt
-      echo "  ERROR: $varname is required but not set and no interactive terminal available." >&2
-      echo "         Pre-export it before sourcing this script:" >&2
-      echo "           export $varname='<value>'" >&2
-      echo "         Or populate Secret Manager directly:" >&2
-      echo "           printf '%s' '<value>' | gcloud secrets versions add ${_secret_id} \\" >&2
-      echo "             --project=${_project_id} --data-file=-" >&2
+      # Non-interactive (CI, piped stdin, redirected) — cannot prompt.
+      # Reported on stdout, not stderr: a sandboxed shell that surfaces only
+      # stdout (Cursor's agent shell) shows nothing at all otherwise, so the
+      # script looks like it exited without a reason.
+      echo "  ERROR: $varname is required but not set and no interactive terminal available."
+      echo "         Pre-export it before sourcing this script:"
+      echo "           export $varname='<value>'"
+      echo "         Or populate Secret Manager directly:"
+      echo "           printf '%s' '<value>' | gcloud secrets versions add ${_secret_id} \\"
+      echo "             --project=${_project_id} --data-file=-"
+      _missing_vars="$_missing_vars $varname"
       return 1
     fi
 
@@ -275,6 +304,27 @@ _sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" 
 
 _sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
+
+# ── Non-interactive failure ───────────────────────────────────────────────────
+# Only populated when stdin is not a tty and a secret was in neither the
+# environment nor Secret Manager. Reported here, once, on stdout — and before the
+# summary, which would otherwise claim the environment was set up successfully.
+if [[ -n "$_missing_vars" ]]; then
+  echo ""
+  echo "ERROR: stdin is not a tty, so setup-env.sh cannot prompt for secrets."
+  echo "       Missing:$_missing_vars"
+  echo ""
+  echo "       Run it from a real terminal, or pre-set the values:"
+  # Split on spaces with tr rather than an unquoted expansion: this script is
+  # sourced, and zsh does not word-split, so `for _v in $_missing_vars` would
+  # print every name on a single bogus export line.
+  echo "$_missing_vars" | tr ' ' '\n' | while read -r _v; do
+    if [[ -n "$_v" ]]; then echo "         export $_v='<value>'"; fi
+  done
+  echo ""
+  echo "       Then re-run: source infra/scripts/setup-env.sh"
+  return 1
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

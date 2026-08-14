@@ -444,33 +444,32 @@ gcloud secrets versions access latest --secret=<secret-id> --project <project-id
 
 ## Terraform Commands
 
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
+
 ```bash
-# Initialize
-terraform init
+cd modules/gcp
 
-# Plan
-terraform plan -var-file=terraform.tfvars
-
-# Apply
-terraform apply -var-file=terraform.tfvars
-
-# Target a specific module
-terraform apply -var-file=terraform.tfvars -target=module.networking
-
-# Show all outputs
-terraform output
-
-# Show a specific output
-terraform output -raw cluster_name
-terraform output -raw storage_bucket_name
-
-# Show resource state
-terraform state list
-terraform state show module.gke_cluster
-
-# Refresh state
-terraform refresh -var-file=terraform.tfvars
+make init    ARGS="-upgrade"                     # re-resolve provider versions
+make plan    ARGS="-target=module.gke_cluster"   # plan one module
+make plan    ARGS="-out=tfplan"                  # save a plan file
+make apply   ARGS="tfplan"                       # apply that saved plan
+make apply   ARGS="-auto-approve"                # skip the approval prompt
+make destroy ARGS="-target=module.redis"         # destroy one module
 ```
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output -raw cluster_name"
+make tf ARGS="output -raw storage_bucket_name"
+make tf ARGS="state list"
+make tf ARGS="state list module.gke_cluster"   # filter state to one module
+make tf ARGS="validate"
+make tf ARGS="refresh"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/gcp/infra` if you prefer.
 
 ---
 

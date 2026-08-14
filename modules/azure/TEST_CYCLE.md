@@ -23,7 +23,7 @@ checklist below.
 | `Contributor` | Create and manage all Azure resources |
 | `User Access Administrator` | Create role assignments for Key Vault, Blob, cert-manager identities |
 
-Owner includes both. Contributor alone is insufficient — role assignments require UAA.
+Owner includes both. Contributor alone is insufficient — role assignments require UAA. If UAA is delegated through an ABAC condition on `principalType`, the apply fails with a generic 403 and needs `terraform_principal_type` set (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)).
 
 ---
 
@@ -62,23 +62,22 @@ az account show
 ```
 Confirm the subscription ID and name match the target deployment.
 
-### Step 1 — Secrets setup
+### Step 1 — Terraform input setup
 ```bash
 make setup-env
 ```
 This script:
-- Reads `name_prefix` from `terraform.tfvars` to build Key Vault name
-- Prompts for new values on first run: `postgres_password`, `license_key`, `admin_password`, `admin_email`
-- Auto-generates stable secrets on first run: `api_key_salt`, `jwt_secret`, Fernet keys
+- Prompts for `postgres_admin_password`, `langsmith_license_key`, `admin_email`
 - Writes `secrets.auto.tfvars` — automatically loaded by Terraform
 
-**Critical invariants — never violate on a live deployment:**
-- `api_key_salt` is write-once: rotating it invalidates all API keys
-- `jwt_secret` is write-once: rotating it invalidates all active user sessions
-- `admin_password` must meet Azure password complexity requirements
+Those three are the only secrets Terraform sees, because it needs them to build
+something. The LangSmith app secrets are seeded separately in Step 7 so their
+plaintext never lands in Terraform state.
 
 > **`secrets.auto.tfvars` is gitignored — never commit it.**
-> On subsequent runs, `setup-env` reads from Key Vault — no prompts.
+> Upgrading from a release before the secret split? The seven removed variables
+> still sitting in your file produce a `Value for undeclared variable` warning
+> each and are otherwise ignored. Delete those lines to quiet it.
 
 ### Step 2 — Preflight check
 ```bash
@@ -107,7 +106,7 @@ Review the plan. Expected resource categories:
 - VNet, subnets (main, postgres, redis), private DNS zones
 - AKS cluster, default node pool, large node pool, OIDC issuer, managed identity, federated credentials
 - Azure Blob storage account + container
-- Azure Key Vault + all application secrets
+- Azure Key Vault, its RBAC role assignments, and two secrets (Postgres password, license key)
 - Azure DB for PostgreSQL Flexible Server + private endpoint
 - Azure Managed Redis + private endpoint
 - cert-manager, KEDA, NGINX ingress Helm releases
@@ -122,6 +121,24 @@ make apply
 Typical duration: **15–25 min** (AKS cluster provisioning takes ~10–15 min; PostgreSQL and Redis add ~5 min each).
 
 If apply fails partway through, it is safe to re-run — Terraform is idempotent.
+
+### Step 7 — Seed Key Vault
+```bash
+make seed-secrets
+```
+Prompts for the initial LangSmith admin password (or reads
+`$LANGSMITH_ADMIN_PASSWORD`) and generates the API key salt, JWT secret, and the
+four Fernet encryption keys, writing all seven directly to Key Vault. Requires
+the Key Vault Secrets Officer role, which `make apply` grants to the deployer.
+
+**Critical invariants — never violate on a live deployment:**
+- Every seeded secret is write-once. The script skips any that already exists, so re-running it is safe and never rotates a value.
+- Rotating `langsmith-api-key-salt` invalidates all API keys.
+- Rotating `langsmith-jwt-secret` invalidates all active user sessions.
+- Rotating any Fernet key makes existing encrypted data unreadable.
+- The admin password needs 12+ characters with a lowercase letter, an uppercase letter, and a symbol. The script rejects a bad one up front; the chart's auth-bootstrap job would otherwise fail ~10 minutes into the release.
+
+Rotate deliberately via `make keyvault` when you actually intend to.
 
 ---
 
@@ -275,9 +292,16 @@ postgres_standby_availability_zone   = "2"
 postgres_geo_redundant_backup        = true
 ```
 
-**Expected plan**: AKS node pool zones updated; PostgreSQL HA mode set to `ZoneRedundant`.
+**Expected plan**: PostgreSQL HA mode set to `ZoneRedundant`.
 
 > Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+> Set `availability_zones` before the first apply. On an existing cluster the
+> AKS node pool keeps the zones it was created with: the module ignores zone
+> changes so the provider cannot cycle the system node pool out from under
+> running pods. Plan reports the mismatch as a `Check block assertion failed`
+> warning naming both the live and the requested zones, and exits 0. Expect that
+> warning here rather than a node pool change.
 
 ---
 
@@ -285,8 +309,7 @@ postgres_geo_redundant_backup        = true
 
 | Issue | Symptom | Fix |
 |-------|---------|-----|
-| `make plan` fails on fresh deploy | `cannot create REST client: no client config` on `kubernetes_manifest.cluster_issuer_http01` | Expected — the Kubernetes provider can't connect during plan because the cluster doesn't exist yet. Skip `make plan` on a fresh deploy and run `make apply` directly. `make apply` handles this with a three-stage apply. |
-| `kubernetes_manifest` ClusterIssuer fails during apply | `API did not recognize GroupVersionKind: no matches for kind "ClusterIssuer"` | cert-manager CRDs not registered yet. Fixed by `make apply` Stage 2 (installs cert-manager first) before Stage 3 applies the ClusterIssuer. If you ran a plain `terraform apply`, run `make apply` again — it will pick up from the correct stage. |
+| `letsencrypt-prod` ClusterIssuer missing after apply | `clusterissuers.cert-manager.io "letsencrypt-prod" not found` on the langsmith-tls certificate | Terraform does not create the issuer. `make deploy` applies it, so run Pass 2 before checking the certificate. See TROUBLESHOOTING.md. |
 | vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv3Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv3 → Request 32. Or: `az quota update --resource-name standardDSv3Family ...` See TROUBLESHOOTING.md. |
 | `max_pods` too low — autoscaler backoff | `pod didn't trigger scale-up: in backoff after failed scale-up` | Set `default_node_pool_max_pods = 60` **before** first apply — this field is immutable. With 30 pods/node, Pass 2's ~37 pods trigger autoscaler which hits quota. |
 | `default_node_pool_min_count = 1` causes pod pending | All 14+ vCPU of Pass 2 must schedule but only 1 node starts | Set `default_node_pool_min_count = 3` — autoscaler waits for pending pods before adding nodes, causing initial deploy to stall. |
