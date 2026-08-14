@@ -8,8 +8,10 @@
 #      "Key Vault Secrets Officer" role to create and update secrets.
 #   3. Grants the LangSmith pod managed identity "Key Vault Secrets User"
 #      so K8s pods can read secrets at runtime via Workload Identity.
-#   4. Stores all LangSmith secrets: passwords, salts, JWT secret, and
-#      Fernet encryption keys for optional features.
+#   4. Stores the two secrets Terraform already holds in state for another
+#      reason: the Postgres admin password and the LangSmith license key.
+#      The LangSmith app secrets are seeded post-apply by a script so they
+#      never enter Terraform state — see the Secrets section below.
 #
 # Security properties:
 #   • RBAC mode: access controlled by Azure role assignments, not vault-level
@@ -54,11 +56,12 @@ resource "azurerm_key_vault" "langsmith" {
   purge_protection_enabled = var.purge_protection_enabled
 
   # Network ACLs gate the data plane (azurerm_key_vault_secret etc.). Default
-  # is "Allow" because the first apply creates ~10 secrets via the data plane
-  # and would be 403'd under "Deny" without an operator-supplied IP allowlist.
-  # Production deployments override default_action = "Deny" plus allowed_ips /
-  # allowed_subnet_ids. AKS pods reach KV via the Microsoft.KeyVault service
-  # endpoint on the AKS subnet (see networking module).
+  # is "Allow" because both the first apply and seed-keyvault-secrets.sh write
+  # secrets via the data plane, and would be 403'd under "Deny" without an
+  # operator-supplied IP allowlist. Production deployments override
+  # default_action = "Deny" plus allowed_ips / allowed_subnet_ids. AKS pods
+  # reach KV via the Microsoft.KeyVault service endpoint on the AKS subnet
+  # (see networking module).
   network_acls {
     default_action             = var.network_default_action
     bypass                     = "AzureServices"
@@ -112,6 +115,11 @@ locals {
 # This grants the person running `terraform apply` full secret management rights.
 # For CI/CD pipelines, replace the object_id with a dedicated service principal.
 #
+# principal_type is a variable here, unlike the managed-identity grant below:
+# this principal is a user for an interactive `az login` and a service principal
+# in CI, so no literal is correct for both. Null (the default) omits the field
+# and lets Azure infer it — see var.terraform_principal_type.
+#
 # Skipped by default on a customer-owned vault, where creating it means calling
 # Microsoft.Authorization/roleAssignments/write against a resource the platform
 # team owns — the call such a team most often denies. The deployer exists before
@@ -120,9 +128,9 @@ locals {
 #
 # Gated separately from the managed-identity grant below, because a subscription
 # that delegates roleAssignments/write through an ABAC condition on principalType
-# rejects this request and permits that one: a user deployer cannot create this.
-# Turning it off is how such a deployment proceeds on a vault Terraform creates,
-# with the grant made out of band beforehand.
+# rejects this request and permits that one. Set terraform_principal_type first;
+# turning the assignment off is what gets a deployment through when the grant has
+# to be made out of band anyway.
 
 resource "azurerm_role_assignment" "terraform_kv_admin" {
   count = var.manage_terraform_admin_assignment ? 1 : 0
@@ -130,10 +138,14 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
+  principal_type       = var.terraform_principal_type
 }
 
 # ── RBAC: Pod managed identity ─────────────────────────────────────────────────
 # "Key Vault Secrets User" allows: read (get) secrets only.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 #
 # Nobody can pre-grant this one: the identity is created by the k8s-cluster
 # module partway through the same apply, so there is no object ID to grant to
@@ -150,6 +162,7 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.managed_identity_principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 # ── Wait for RBAC propagation ──────────────────────────────────────────────────
@@ -170,12 +183,21 @@ resource "time_sleep" "wait_for_rbac" {
 }
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
-# All sensitive values stored here survive rotation: each secret has full
-# version history, audit log, and can be read by any authorized principal
-# (setup-env.sh, CI/CD pipelines, future CSI driver).
+# Terraform stores only the secrets it already holds in state for another reason:
+#
+#   postgres-admin-password — Terraform creates the Postgres flexible server with
+#                             this value, so it is in state regardless.
+#   langsmith-license-key   — consumed by the k8s_bootstrap module to create the
+#                             langsmith-license K8s secret.
+#
+# The LangSmith application secrets (admin password, API key salt, JWT secret,
+# and the Fernet encryption keys) are deliberately NOT managed here. Terraform
+# would persist them in plaintext in state, so they are written directly to the
+# vault by infra/scripts/seed-keyvault-secrets.sh after apply — matching how the
+# AWS module writes SSM and the GCP module writes Secret Manager.
 #
 # Naming convention: kebab-case, matching the TF variable names.
-# setup-env.sh reads these by name: az keyvault secret show --name <name>
+# Scripts read these by name: az keyvault secret show --name <name>
 
 resource "azurerm_key_vault_secret" "postgres_admin_password" {
   name         = "postgres-admin-password"
@@ -183,50 +205,6 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
   key_vault_id = local.vault_id
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "postgres", module = "keyvault" })
-
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "langsmith_api_key_salt" {
-  name         = "langsmith-api-key-salt"
-  value        = var.langsmith_api_key_salt
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-
-  # CRITICAL: Changing this value invalidates ALL existing LangSmith API keys.
-  # The lifecycle ignore_changes ensures Terraform never updates this after creation
-  # even if the variable value changes. Rotate only deliberately via the CLI:
-  #   az keyvault secret set --vault-name <vault> --name langsmith-api-key-salt --value <new>
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  tags       = merge(var.tags, { component = "langsmith", stability = "critical", module = "keyvault" })
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "langsmith_jwt_secret" {
-  name         = "langsmith-jwt-secret"
-  value        = var.langsmith_jwt_secret
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-
-  # CRITICAL: Changing this invalidates all active LangSmith user sessions.
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  tags       = merge(var.tags, { component = "langsmith", stability = "critical", module = "keyvault" })
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "langsmith_admin_password" {
-  count        = var.langsmith_admin_password != "" ? 1 : 0
-  name         = "langsmith-admin-password"
-  value        = var.langsmith_admin_password
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-  tags         = merge(var.tags, { component = "langsmith", module = "keyvault" })
 
   depends_on = [time_sleep.wait_for_rbac]
 }
@@ -239,66 +217,5 @@ resource "azurerm_key_vault_secret" "langsmith_license_key" {
   content_type = "text/plain"
   tags         = merge(var.tags, { component = "langsmith", module = "keyvault" })
 
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "deployments_encryption_key" {
-  count        = var.langsmith_deployments_encryption_key != "" ? 1 : 0
-  name         = "langsmith-deployments-encryption-key"
-  value        = var.langsmith_deployments_encryption_key
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-
-  # CRITICAL: Changing this key corrupts all encrypted LangGraph deployment data.
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  tags       = merge(var.tags, { component = "deployments", stability = "critical", module = "keyvault" })
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "agent_builder_encryption_key" {
-  count        = var.langsmith_agent_builder_encryption_key != "" ? 1 : 0
-  name         = "langsmith-agent-builder-encryption-key"
-  value        = var.langsmith_agent_builder_encryption_key
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  tags       = merge(var.tags, { component = "agent-builder", stability = "critical", module = "keyvault" })
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "insights_encryption_key" {
-  count        = var.langsmith_insights_encryption_key != "" ? 1 : 0
-  name         = "langsmith-insights-encryption-key"
-  value        = var.langsmith_insights_encryption_key
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  tags       = merge(var.tags, { component = "insights", stability = "critical", module = "keyvault" })
-  depends_on = [time_sleep.wait_for_rbac]
-}
-
-resource "azurerm_key_vault_secret" "polly_encryption_key" {
-  count        = var.langsmith_polly_encryption_key != "" ? 1 : 0
-  name         = "langsmith-polly-encryption-key"
-  value        = var.langsmith_polly_encryption_key
-  key_vault_id = local.vault_id
-  content_type = "text/plain"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-
-  tags       = merge(var.tags, { component = "polly", stability = "critical", module = "keyvault" })
   depends_on = [time_sleep.wait_for_rbac]
 }

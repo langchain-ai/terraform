@@ -367,36 +367,76 @@ make apply
 
 ---
 
-### Key Vault secrets already exist but are not in Terraform state
+### Key Vault secret already exists but is not in Terraform state
 
 **Symptom:**
 ```
-Error: a resource with the ID "https://langsmith-kv-<id>.vault.azure.net/secrets/langsmith-deployments-encryption-key/..."
+Error: a resource with the ID "https://langsmith-kv-<id>.vault.azure.net/secrets/langsmith-license-key/..."
 already exists - to be managed via Terraform this resource needs to be imported into the State.
 ```
 
-**Cause:** Older versions of `setup-env.sh` wrote Fernet keys directly to Key Vault when KV already existed, which conflicted with Terraform trying to create the same secrets. Current `setup-env.sh` is read-only against Key Vault — Terraform is the sole writer.
+**Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
 
-This error only occurs if you are using an older copy of `setup-env.sh` or manually wrote secrets to Key Vault outside of Terraform.
-
-**Fix:** Import the three secrets into Terraform state, then re-run apply:
+**Fix:** Import the conflicting secret, then re-run apply:
 ```bash
-terraform import \
-  'module.keyvault.azurerm_key_vault_secret.deployments_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-deployments-encryption-key --query id -o tsv)"
+terraform -chdir=infra import \
+  'module.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]' \
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-license-key --query id -o tsv)"
 
-terraform import \
-  'module.keyvault.azurerm_key_vault_secret.agent_builder_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
-
-terraform import \
-  'module.keyvault.azurerm_key_vault_secret.insights_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-insights-encryption-key --query id -o tsv)"
-
-terraform apply
+make apply
 ```
 
-**Prevention:** On a brand-new environment this won't occur. Current `setup-env.sh` never writes to Key Vault — it only reads. On first run (no KV), secrets go to local dot-files and `secrets.auto.tfvars`; Terraform creates Key Vault and stores all secrets on `terraform apply`. On subsequent runs, `setup-env.sh` reads from KV to regenerate `secrets.auto.tfvars`.
+**Upgrading from a release before the secret split?** You will see the opposite of an error: the seven app-secret resources are dropped from state by `removed` blocks with `destroy = false`. The plan reports `0 to destroy` and says each "will no longer be managed by Terraform, but will not be destroyed". The secrets stay in Key Vault, untouched, with the same version IDs. Nothing to import and nothing to re-seed — `make seed-secrets` will report `skip (already set)` for all seven.
+
+The stale entries left in your `secrets.auto.tfvars` produce a `Value for undeclared variable` warning each. They are ignored; delete the lines to quiet it.
+
+---
+
+### AuthorizationFailed on roleAssignments/write — subscription gates principalType
+
+**Symptom:**
+```
+Error: unexpected status 403 (403 Forbidden) with error: AuthorizationFailed:
+The client 'you@example.com' with object id '<your-object-id>' does not have
+authorization to perform action 'Microsoft.Authorization/roleAssignments/write'
+over scope '/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/
+vaults/<vault>/providers/Microsoft.Authorization/roleAssignments/<guid>'
+or the scope is invalid.
+
+  with module.keyvault.azurerm_role_assignment.terraform_kv_admin,
+  on modules/keyvault/main.tf line 80
+```
+
+**Cause:** Two unrelated problems produce this identical message.
+
+Usually it means exactly what it says: the apply identity has no `User Access Administrator`. Confirm with `az role assignment list --assignee <your-object-id> --all -o table` and get UAA or Owner.
+
+If that listing already shows UAA (or a custom role granting `Microsoft.Authorization/roleAssignments/write`), the cause is different: the subscription delegates that permission behind an ABAC condition on `principalType`. Enterprises use this to let a deployer grant roles to managed identities without handing out blanket Owner. The condition is evaluated against the request, so a request that leaves `principalType` out fails it, and ARM returns the generic message above with no mention of the condition. Nothing in the error tells you a condition exists.
+
+**Fix:** Grants targeting managed identities already declare `principal_type = "ServicePrincipal"` and need no action. The exception is the apply identity's own `Key Vault Secrets Officer` grant, which cannot hardcode a value because that principal is a user under an interactive `az login` and a service principal in CI:
+
+```hcl
+# terraform.tfvars
+terraform_principal_type = "User"             # interactive az login
+terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
+```
+
+Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
+
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+
+```bash
+# Run by a subscription owner, who is not subject to the delegation condition
+RA_ID=$(az role assignment create --role "Key Vault Secrets Officer" \
+  --assignee-object-id <your-object-id> --assignee-principal-type User \
+  --scope "$(az keyvault show --name langsmith-kv<identifier> --query id -o tsv)" \
+  --query id -o tsv)
+
+terraform -chdir=infra import \
+  'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
+```
+
+**Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
 
 ---
 
@@ -404,11 +444,13 @@ terraform apply
 
 **Symptom:** apply gets past `azurerm_role_assignment` and fails on the first `azurerm_key_vault_secret`:
 ```
-Error: checking for presence of existing Secret "langsmith-api-key-salt"
+Error: checking for presence of existing Secret "postgres-admin-password"
 (Key Vault "https://customer-platform-kv.vault.azure.net/"): keyvault.BaseClient#GetSecret:
 Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
 Service returned an error. Status=403 Code="Forbidden"
 ```
+
+`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes the seven app secrets over the data plane too.
 
 **Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
 

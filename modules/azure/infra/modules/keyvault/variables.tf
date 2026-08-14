@@ -45,6 +45,17 @@ variable "managed_identity_principal_id" {
   description = "Principal ID of the user-assigned managed identity used by LangSmith K8s pods. Gets 'Key Vault Secrets User' role to read secrets at runtime."
 }
 
+variable "terraform_principal_type" {
+  type        = string
+  description = "Principal type of the identity running `terraform apply`, applied to its 'Key Vault Secrets Officer' grant. Null (default) omits the field and lets Azure infer it. Set \"User\" or \"ServicePrincipal\" only when the subscription delegates roleAssignments/write through an ABAC condition on principalType, which rejects requests that omit it."
+  default     = null
+
+  validation {
+    condition     = var.terraform_principal_type == null || contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
+    error_message = "terraform_principal_type must be 'User', 'Group', or 'ServicePrincipal'. Omit it entirely (or set null) to let Azure infer the type — an empty string is not a valid opt-out."
+  }
+}
+
 variable "manage_terraform_admin_assignment" {
   type        = bool
   description = "Whether this module creates the deployer's 'Key Vault Secrets Officer' grant. True is the behaviour this module has always had, so a caller that does not set it is unaffected. The root module passes create_keyvault, so a vault this module creates gets the grant and a customer-owned one does not, because creating it there means calling Microsoft.Authorization/roleAssignments/write on a resource the platform team owns. When false, the deployer must already hold read and write on secrets from a grant made outside this apply, or the secret writes fail with 403."
@@ -95,6 +106,9 @@ variable "allowed_subnet_ids" {
 }
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
+# Only secrets Terraform already holds for another reason. The LangSmith app
+# secrets are seeded post-apply by infra/scripts/seed-keyvault-secrets.sh so
+# they never land in Terraform state.
 
 variable "postgres_admin_password" {
   type        = string
@@ -102,56 +116,9 @@ variable "postgres_admin_password" {
   sensitive   = true
 }
 
-variable "langsmith_admin_password" {
-  type        = string
-  description = "LangSmith UI admin account password"
-  sensitive   = true
-  default     = ""
-}
-
 variable "langsmith_license_key" {
   type        = string
   description = "LangSmith enterprise license key"
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_api_key_salt" {
-  type        = string
-  description = "Salt used to hash LangSmith API keys. Keep stable — changing it invalidates all existing API keys."
-  sensitive   = true
-}
-
-variable "langsmith_jwt_secret" {
-  type        = string
-  description = "JWT signing secret for LangSmith sessions. Keep stable."
-  sensitive   = true
-}
-
-variable "langsmith_deployments_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for LangGraph Platform deployments. Empty = not stored."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_agent_builder_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for Agent Builder. Empty = not stored."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_insights_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for LangSmith Insights. Empty = not stored."
-  sensitive   = true
-  default     = ""
-}
-
-variable "langsmith_polly_encryption_key" {
-  type        = string
-  description = "Fernet encryption key for Polly agent. Empty = not stored."
   sensitive   = true
   default     = ""
 }

@@ -150,8 +150,8 @@ else
   done
 
   if [[ "$_kv_ok" == "false" ]]; then
-    action "make setup-env  (re-run after terraform apply)"
-    set_next "Resolve missing Key Vault secrets"
+    action "make seed-secrets  (writes the app secrets into Key Vault)"
+    set_next "make seed-secrets"
   fi
 fi
 
