@@ -106,8 +106,8 @@ make setup-env
 make preflight
 
 # 4. Deploy infrastructure (~15–20 min)
-# Note: make plan will fail on a fresh deploy (no cluster yet for kubernetes_manifest).
-# Skip plan and run apply directly — it handles the ordering in three stages.
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
 make init
 make apply
 
@@ -645,7 +645,7 @@ azure/
 
 | Module | Required | Description |
 |--------|----------|-------------|
-| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Multi-AZ zone pinning supported. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
+| `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Not zonal — an Azure subnet spans every zone in its region. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
 | `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
@@ -905,6 +905,15 @@ postgres_high_availability_mode = "ZoneRedundant"
 ```
 
 Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+Set `availability_zones` before the first apply. The AKS node pool keeps the
+zones it was created with: `azurerm` re-zones a default node pool by cycling the
+system node pool, and that cycle does not cordon and drain, so the module ignores
+zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
+mismatch as a `Check block assertion failed` warning naming both the live and the
+requested zones. To re-zone an existing cluster on purpose, remove
+`default_node_pool[0].zones` from the `ignore_changes` block in
+`infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
 
 ---
 

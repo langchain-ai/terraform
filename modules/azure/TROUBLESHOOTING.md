@@ -187,6 +187,25 @@ Message: "Subscriptions are restricted from provisioning in location 'eastus'.
 Try again in a different location."
 ```
 
+The same restriction also surfaces as a `ParameterOutOfRange` on a field the module does set correctly:
+
+```text
+Error: creating Flexible Server ...: unexpected status 400 (400 Bad Request) with error:
+ParameterOutOfRange: The value of the 'Version' should be in: [].
+```
+
+The list is empty, not missing your value. Azure enumerates no allowed versions for the subscription, region and SKU together, then reports the first field it cannot satisfy. Confirm with the capability API before changing anything:
+
+```bash
+az postgres flexible-server list-skus -l <region> -o table
+```
+
+Rows means the subscription can provision there and the problem is the specific SKU or version. No rows at all (only the pricing warning on stderr) means the whole offering is unavailable, which is this section. Rule out an unregistered provider first, since it produces the same empty list:
+
+```bash
+az provider show -n Microsoft.DBforPostgreSQL --query registrationState -o tsv
+```
+
 **Cause:** This is a subscription offer-type restriction, not regional capacity and not a configuration error. Azure blocks certain offer types (Free Trial, Azure Pass, Visual Studio and MSDN credit, some sponsored and CSP subscriptions) from provisioning PostgreSQL Flexible Server in high-demand regions. The error text points at the region, which sends most people hunting for a new one, but the subscription is what determines the outcome.
 
 Check the offer type:
@@ -524,7 +543,7 @@ kubectl describe certificate langsmith-tls -n langsmith
 # Events: ... clusterissuers.cert-manager.io "letsencrypt-prod" not found
 ```
 
-**Cause:** When `tls_certificate_source = "letsencrypt"` is set, the `k8s-bootstrap` module creates a `letsencrypt-prod` ClusterIssuer via `kubernetes_manifest`. If you deployed from an older version of the module (before `cluster_issuer_http01` was added), the ClusterIssuer was never created.
+**Cause:** `deploy.sh` applies the `letsencrypt-prod` ClusterIssuer when `tls_certificate_source` is `letsencrypt` or `dns01`. Terraform never creates it. You hit this when `make deploy` has not run yet, when `tls_certificate_source` was unset in tfvars at the time it ran, or when the `dns01` branch skipped the issuer because `langsmith_domain` was empty (`make deploy` prints a warning in that case).
 
 **Fix — apply it manually:**
 ```bash
