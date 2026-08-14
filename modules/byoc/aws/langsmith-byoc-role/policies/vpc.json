@@ -100,6 +100,7 @@
       "ec2:AssociateRouteTable",
       "ec2:DisassociateRouteTable",
       "ec2:CreateRoute",
+      "ec2:ReplaceRoute",
       "ec2:AuthorizeSecurityGroupIngress",
       "ec2:AuthorizeSecurityGroupEgress",
       "ec2:RevokeSecurityGroupIngress",
