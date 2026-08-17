@@ -452,6 +452,12 @@ variable "storage_allowed_ips" {
 # Official LangSmith minimum: 16 vCPU / 64 GiB cluster-wide.
 # See: https://docs.langchain.com/langsmith/kubernetes
 
+variable "aks_kubernetes_version" {
+  type        = string
+  description = "Kubernetes version for the AKS cluster"
+  default     = "1.35"
+}
+
 variable "default_node_pool_vm_size" {
   type        = string
   description = "VM size for the default AKS node pool. Standard_D8s_v3 (8 vCPU / 32 GiB) is the recommended baseline for Pass 2+ (external Postgres + Redis). Use Standard_D4s_v3 (4 vCPU / 16 GiB) only for light/demo deployments (in-cluster DBs). See sizing comment above."

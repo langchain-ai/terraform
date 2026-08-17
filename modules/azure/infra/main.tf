@@ -579,6 +579,7 @@ module "aks" {
   subnet_id           = local.aks_subnet_id
   service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
+  kubernetes_version  = var.aks_kubernetes_version
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
