@@ -46,7 +46,7 @@ RESOURCE_ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    "Microsoft.Cache/redisEnterprise/write",
 ]
 
 ABAC = (
@@ -171,8 +171,8 @@ CASES = [
     },
     {
         "name": "a refused resource write fails and names the action",
-        "ca_all": response(refuse_resources=("Microsoft.Cache/redis/write",)),
-        "expect": ["[✗] Not permitted at", "Microsoft.Cache/redis/write"],
+        "ca_all": response(refuse_resources=("Microsoft.Cache/redisEnterprise/write",)),
+        "expect": ["[✗] Not permitted at", "Microsoft.Cache/redisEnterprise/write"],
         "reject": ["[✗] roleAssignments/write"],
     },
     {
@@ -280,6 +280,47 @@ CASES = [
         "tfvars_identifier": '""',
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg/providers"],
+    },
+    {
+        # name_suffix_salt exists so a deployment whose four global names got
+        # burned can rotate them. Preflight has to mix it into the hash the same
+        # way local.uniq_suffix does, or bumping the salt leaves preflight
+        # checking the old names and reporting the collision it was bumped to
+        # escape. Redis is asserted because it is the one name printed in full.
+        "name": "name_suffix_salt rotates the derived global names",
+        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true\nname_suffix_salt = "2"',
+        "ca_all": ALL_GOOD,
+        "expect": ["ls-redis-prod-4352a7"],
+        "reject": ["ls-redis-prod-8a57d8"],
+    },
+    {
+        # The unsalted counterpart, pinning the default derivation so a change to
+        # the hash inputs cannot pass unnoticed.
+        "name": "an empty salt leaves the derived names unchanged",
+        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "ca_all": ALL_GOOD,
+        "expect": ["ls-redis-prod-8a57d8"],
+    },
+    {
+        # The redis module provisions Microsoft.Cache/redisEnterprise via azapi,
+        # not the classic Microsoft.Cache/redis. Asking about the classic action
+        # passed a principal that could not create the actual cluster.
+        "name": "Redis is checked as redisEnterprise, not as classic Azure Cache",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Cache/redisEnterprise/write"],
+        "reject_actions": ["Microsoft.Cache/redis/write"],
+    },
+    {
+        # The RBAC scope used to be hardcoded to "langsmith-rg" + the legacy
+        # identifier, so it asked about a resource group Terraform never creates
+        # once unique_resource_names moved the base to "ls". Both halves are
+        # asserted here: name_prefix wins over identifier, and the base follows
+        # unique_resource_names.
+        "name": "the resource group scope follows name_prefix and unique_resource_names",
+        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-prod/providers"],
+        "reject_calls": ["langsmith-rg"],
     },
     {
         "name": "a bring-your-own VNet is checked as its own scope",
@@ -403,6 +444,22 @@ def run_case(case, index):
             got = json.loads(body_path.read_text())["Subject"]["Attributes"]["ObjectId"]
             if got != case["assert_subject"]:
                 problems.append(f"Subject was {got}, expected {case['assert_subject']}")
+
+    # The stub answers from this file's own ACTIONS list rather than from the
+    # request, so nothing above notices when the script asks about an action the
+    # deployment never performs. These two read the body the script actually sent.
+    if "assert_actions" in case or "reject_actions" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            sent = {a["Id"] for a in json.loads(body_path.read_text())["Actions"]}
+            for action in case.get("assert_actions", []):
+                if action not in sent:
+                    problems.append(f"never asked about: {action}")
+            for action in case.get("reject_actions", []):
+                if action in sent:
+                    problems.append(f"unexpectedly asked about: {action}")
 
     if problems:
         rendered = [

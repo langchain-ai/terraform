@@ -23,6 +23,12 @@ location    = "eastus"
 # which Terraform executes as destroy-and-recreate.
 unique_resource_names = true
 
+# Bump this to rotate that hash when a failed apply burned the four global names
+# (a soft-deleted Key Vault holds its name for the whole retention window). Any
+# value that differs from the last one works. Same destroy-and-recreate warning as
+# above — before the first successful apply only.
+# name_suffix_salt = "2"
+
 # Optional tags for cost allocation and compliance
 # environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"

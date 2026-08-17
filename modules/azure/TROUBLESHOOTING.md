@@ -45,6 +45,20 @@ redis_name = "langsmith-redis-mycorp-dev"
 The available overrides are `postgres_name`, `redis_name`, `storage_account_name`,
 and `keyvault_name`.
 
+**Fix — a failed first apply burned the names.** The hash derives from your
+subscription and `name_prefix`, both fixed, so a retry asks for the same four
+names and hits the same collision. Bump the salt to rotate all four at once:
+
+```hcl
+name_suffix_salt = "2"
+```
+
+The resource group, VNet and AKS names do not carry the hash, so they stay put.
+Only do this before the first successful apply, or on a deployment you are willing
+to lose: on an existing one it renames Postgres, Redis, Storage and Key Vault,
+which Terraform executes as destroy-and-recreate. To dodge a single collision on a
+live deployment, pin that one name instead.
+
 A soft-deleted Key Vault holds its name for the duration of the retention window,
 so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destroy`:
 
@@ -52,6 +66,11 @@ so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destr
 az keyvault list-deleted --query "[].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table
 az keyvault purge --name langsmith-kv-dev   # only if you are certain
 ```
+
+Purging is the cleaner fix, because it frees the name rather than working around
+it. It fails when the vault was created with `keyvault_purge_protection = true`
+(the default), which holds the name for the full `soft_delete_retention_days`
+window — 90 days out of the box. Salt or pin the name in that case.
 
 **Catch it before applying:** `make preflight` checks Postgres, Storage, Key Vault
 and `dns_label` against Azure's availability APIs.

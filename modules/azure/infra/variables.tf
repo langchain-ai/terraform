@@ -47,6 +47,20 @@ variable "unique_resource_names" {
   default     = false
 }
 
+variable "name_suffix_salt" {
+  type        = string
+  description = "Rotation counter mixed into the per-subscription hash on the globally-unique names. Bump it (\"\" → \"2\" → \"3\") when a previous deployment burned those names: a soft-deleted Key Vault holds its name for the whole retention window, and Managed Redis exposes no way to check availability before applying. All four names rotate together; the resource group, VNet and AKS names are unaffected. DESTRUCTIVE on an existing deployment — changing it renames Postgres, Redis, Storage and Key Vault, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. To dodge a single collision instead, pin that one name below. No effect when unique_resource_names = false."
+  default     = ""
+
+  # Reaches Azure resource names that cap at 24 characters, so it is held to a
+  # short alphanumeric token rather than left free-form. It only needs to differ
+  # from the last value, never to mean anything.
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9]{0,8}$", var.name_suffix_salt))
+    error_message = "name_suffix_salt must be 0-8 alphanumeric characters (e.g. \"2\")."
+  }
+}
+
 # ── Explicit name overrides ───────────────────────────────────────────────────
 # Each defaults to "" meaning "derive it". Set one to pin an existing resource's
 # name, or to work around a collision without renaming the whole deployment.
