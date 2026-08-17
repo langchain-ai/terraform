@@ -143,7 +143,7 @@ _name_suffix() {
 # independently before, so they all went looking for the wrong vault the moment
 # the naming scheme changed. Keep this in step with main.tf.
 _derive_kv_name() {
-  local explicit suffix sub hash base
+  local explicit suffix sub salt hash base
   explicit=$(_parse_tfvar keyvault_name || true)
   if [[ -n "$explicit" ]]; then
     echo "$explicit"
@@ -154,10 +154,11 @@ _derive_kv_name() {
   base=$(_parse_tfvar name_base || true)
   if _tfvar_is_true unique_resource_names; then
     sub=$(_parse_tfvar subscription_id || true)
+    salt=$(_parse_tfvar name_suffix_salt || true)
     if command -v shasum &>/dev/null; then
-      hash=$(printf '%s' "${sub}${suffix}" | shasum -a 256 | cut -c1-6)
+      hash=$(printf '%s' "${sub}${suffix}${salt}" | shasum -a 256 | cut -c1-6)
     else
-      hash=$(printf '%s' "${sub}${suffix}" | sha256sum | cut -c1-6)
+      hash=$(printf '%s' "${sub}${suffix}${salt}" | sha256sum | cut -c1-6)
     fi
     echo "${base:-ls}-kv${suffix}-${hash}"
   else

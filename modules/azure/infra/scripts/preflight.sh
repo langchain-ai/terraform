@@ -120,6 +120,32 @@ for PROVIDER in "${REQUIRED_PROVIDERS[@]}"; do
   fi
 done
 
+# ── Derived resource names ────────────────────────────────────────────────────
+# Derived once for both the RBAC scope check and the global-name check; deriving
+# them separately is how RBAC drifted to a hardcoded "langsmith-rg".
+# Keep in sync with local.name_base / local.name_suffix in infra/main.tf.
+
+# identifier is name_prefix's legacy name. Track which one was read so a warning
+# names a key the user actually has.
+NAME_KEY="name_prefix"
+NAME_PREFIX=$(_tfvar name_prefix || echo "")
+if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_tfvar identifier); then
+  NAME_KEY="identifier"
+fi
+
+# The separator hyphen is optional; normalize as local.name_suffix does. Empty is
+# valid and means no suffix.
+NAME_SUFFIX=""
+[ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
+
+UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"; fi
+# name_base overrides the ls/langsmith switch outright, same as main.tf.
+NAME_BASE_SET=$(_tfvar name_base || echo "")
+[ -n "$NAME_BASE_SET" ] && NAME_BASE="$NAME_BASE_SET"
+
+RESOURCE_GROUP_NAME="${NAME_BASE}-rg${NAME_SUFFIX}"
+
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
 # provider reads its ARM_* environment variables before falling back to the CLI,
@@ -168,6 +194,13 @@ else
   PRINCIPAL_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
 fi
 
+# What terraform_principal_type has to be set to if an ABAC condition on
+# principalType forces the field to be sent explicitly.
+case "$PRINCIPAL_KIND" in
+*"service principal"* | *"managed identity"*) PRINCIPAL_TYPE_HINT="ServicePrincipal" ;;
+*) PRINCIPAL_TYPE_HINT="User" ;;
+esac
+
 if [ -n "$PRINCIPAL_ID" ]; then
   pass "Terraform will authenticate as ${PRINCIPAL_KIND} (object ID ${PRINCIPAL_ID})"
 else
@@ -210,27 +243,17 @@ else
   # Both values come out of terraform.tfvars and end up in a request URL, so each
   # is held to the pattern its Terraform variable already validates and dropped
   # if it does not fit. An unchecked value here could aim the request elsewhere.
-  TFVARS_FILE="${INFRA_DIR}/terraform.tfvars"
-
-  # An absent key is a valid answer (every variable read here has a default), so
-  # the trailing || true keeps a no-match grep from tripping set -e.
-  tfvar() {
-    [ -f "$TFVARS_FILE" ] || return 0
-    grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || true
-  }
-
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # printf adds the newline grep needs to see an empty identifier as a line to
-  # match rather than as no input at all. Empty is valid: it means no suffix.
-  IDENTIFIER=$(tfvar identifier)
-  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
+  # printf supplies the newline grep needs to match an empty suffix as a line
+  # rather than as no input. Empty is valid: no suffix.
+  if printf '%s\n' "$NAME_SUFFIX" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
+    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}")
   else
-    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
+    warn "terraform.tfvars: ${NAME_KEY} is not a valid resource-name suffix, so the deployment resource group was not checked"
   fi
 
-  EXISTING_VNET=$(tfvar vnet_id)
+  EXISTING_VNET=$(_tfvar vnet_id || echo "")
   if [ -n "$EXISTING_VNET" ]; then
     if printf '%s\n' "$EXISTING_VNET" \
       | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+$'; then
@@ -308,10 +331,11 @@ PY
   RBAC_VERDICT=$(python3 - \
     "$RBAC_TMP" \
     "${RBAC_TMP}/eligibilities.json" \
-    "$PRINCIPAL_IS_CALLER" <<'PY' || echo "unavailable"
+    "$PRINCIPAL_IS_CALLER" \
+    "$PRINCIPAL_TYPE_HINT" <<'PY' || echo "unavailable"
 import json, os, sys
 
-tmp, elig_path, is_caller = sys.argv[1:4]
+tmp, elig_path, is_caller, principal_type_hint = sys.argv[1:5]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
@@ -482,6 +506,15 @@ for (role, granted_at, condition), scopes in by_verdict(write_ok):
         out.append("warn That grant carries an ABAC condition, so it permits only the roles "
                    "the condition allows. The modules assign: %s. Condition: %s"
                    % (ASSIGNED_ROLES, condition))
+        # Terraform omits principal_type on the Key Vault Secrets Officer grant by
+        # default, and a condition testing principalType rejects a request that
+        # omits it as a plain AuthorizationFailed, which reads like a missing role
+        # rather than an unmet condition.
+        if "principaltype" in condition.lower():
+            out.append("warn The condition tests principalType. Set terraform_principal_type "
+                       "= \"%s\" in terraform.tfvars, or the Key Vault Secrets Officer grant "
+                       "fails at apply with a 403 that names no condition."
+                       % principal_type_hint)
 
 for deny_name, scopes in by_verdict(write_no):
     if deny_name:
@@ -868,35 +901,24 @@ echo "── Global Name Availability ──────────────
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping name checks (need terraform.tfvars and an active az login)"
 else
-  NAME_PREFIX=$(_tfvar name_prefix || _tfvar identifier || echo "")
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
-  UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
-  NAME_BASE_SET=$(_tfvar name_base || echo "")
 
-  # Recompute exactly what main.tf's locals derive, so the check covers the names
-  # Terraform will actually request. name_prefix may carry a leading hyphen or
-  # not; normalize the same way local.name_suffix does. Keep in sync with
-  # local.name_base / local.name_suffix / local.uniq_suffix in infra/main.tf.
-  NAME_SUFFIX=""
-  [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
-
+  # Only these four names carry the hash, so it is derived here rather than above.
+  # Keep in sync with local.uniq_suffix in infra/main.tf, salt included: omit the
+  # salt and preflight keeps checking the names it was bumped to escape.
+  SALT=$(_tfvar name_suffix_salt || echo "")
   if [ "$UNIQUE_NAMES" = "true" ]; then
-    NAME_BASE="ls"
     if command -v shasum &>/dev/null; then
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | shasum -a 256 | cut -c1-6)
+      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}${SALT}" | shasum -a 256 | cut -c1-6)
     else
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | sha256sum | cut -c1-6)
+      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}${SALT}" | sha256sum | cut -c1-6)
     fi
     UNIQ_SUFFIX="-${HASH}"
   else
-    NAME_BASE="langsmith"
     UNIQ_SUFFIX=""
     warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
   fi
-
-  # An explicit name_base replaces the switch above, same as local.name_base.
-  [ -n "$NAME_BASE_SET" ] && NAME_BASE="$NAME_BASE_SET"
 
   PG_NAME=$(_tfvar postgres_name || echo "${NAME_BASE}-postgres${NAME_SUFFIX}${UNIQ_SUFFIX}")
   REDIS_NAME=$(_tfvar redis_name || echo "${NAME_BASE}-redis${NAME_SUFFIX}${UNIQ_SUFFIX}")
