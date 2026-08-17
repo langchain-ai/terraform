@@ -19,6 +19,7 @@ variable "name_prefix" {
 # terraform.tfvars fails the plan with an explanation, rather than being
 # ignored as an undeclared variable — which would drop name_prefix to its
 # empty default and rename (destroy and recreate) every resource.
+# tflint-ignore: terraform_unused_declarations
 variable "identifier" {
   type        = string
   description = "Removed — use name_prefix instead."
@@ -354,7 +355,7 @@ variable "redis_subnet_id" {
 
 variable "agic_subnet_id" {
   type        = string
-  description = "The id of an existing subnet for the Application Gateway, required when ingress_controller = \"agic\" and create_vnet = false. Unlike the three above there is no carve path: Terraform will not create an Application Gateway subnet inside a VNet it does not own. Application Gateway v2 needs the subnet to itself, and Azure recommends a /24."
+  description = "The id of an existing subnet for the Application Gateway, required when ingress_controller = \"agic\" and create_vnet = false. Unlike the three above there is no carve path: Terraform will not create an Application Gateway subnet inside a VNet it does not own. Application Gateway v2 needs the subnet to itself, and Azure recommends a /24. It must also be delegated to Microsoft.Network/applicationGateways, or Azure rejects the gateway during apply; Terraform reads the delegation at plan time and warns when it is missing."
   default     = ""
 
   validation {
