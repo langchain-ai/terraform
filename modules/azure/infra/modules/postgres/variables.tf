@@ -47,6 +47,12 @@ variable "storage_tier" {
   default     = "P4"
 }
 
+variable "backup_retention_days" {
+  description = "The backup retention period in days"
+  type        = number
+  default     = 7
+}
+
 variable "sku_name" {
   description = "The SKU name of the database"
   type        = string

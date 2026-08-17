@@ -665,9 +665,10 @@ module "postgres" {
   database_name  = var.postgres_database_name
   sku_name       = var.postgres_sku_name
 
-  postgres_version = var.postgres_version
-  storage_mb       = var.postgres_storage_mb
-  storage_tier     = var.postgres_storage_tier
+  postgres_version      = var.postgres_version
+  storage_mb            = var.postgres_storage_mb
+  storage_tier          = var.postgres_storage_tier
+  backup_retention_days = var.postgres_backup_retention_days
 
   availability_zone            = var.availability_zones[0]
   standby_availability_zone    = var.postgres_standby_availability_zone
