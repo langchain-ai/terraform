@@ -391,6 +391,15 @@ data "azurerm_subnet" "byo_agic_subnet" {
   resource_group_name  = local.byo_agic_subnet_parts[4]
 }
 
+# Reads the same subnet again for its delegations, which azurerm_subnet does not
+# expose. Feeds the agic_subnet_delegation check below.
+data "azapi_resource" "byo_agic_subnet_delegations" {
+  count                  = local.byo_agic_subnet && var.ingress_controller == "agic" ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.agic_subnet_id
+  response_export_values = ["properties.delegations"]
+}
+
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
 # Only when manage_byo_subnet_service_endpoints is on. Reads the endpoints
 # already on the subnet so the patch below appends to them instead of replacing
@@ -564,6 +573,25 @@ resource "terraform_data" "validate_network" {
       condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || length(local.uncontained_prefixes) == 0
       error_message = "These subnet prefixes fall outside the address space of vnet_id (${join(", ", local.vnet_address_space)}): ${join(", ", local.uncontained_prefixes)}. Point each at a free range inside your VNet, or supply that subnet's ID to reuse a subnet that already exists."
     }
+  }
+}
+
+# Azure rejects a network-isolated Application Gateway in a subnet that carries no
+# delegation, with ApplicationGatewayNetworkIsolationRequiresSubnetDelegation. The
+# subnet Terraform creates is delegated (modules/networking/main.tf); a supplied
+# one belongs to the operator, so this reports rather than fixes.
+#
+# A check block, not a precondition: gateways created before Azure applied network
+# isolation keep running in an undelegated subnet, and a later apply does not
+# recreate them. Blocking the plan there would strand a deployment that works over
+# a requirement its gateway never had to meet.
+check "agic_subnet_delegation" {
+  assert {
+    condition = length(data.azapi_resource.byo_agic_subnet_delegations) == 0 || contains([
+      for d in try(data.azapi_resource.byo_agic_subnet_delegations[0].output.properties.delegations, []) :
+      try(d.properties.serviceName, "")
+    ], "Microsoft.Network/applicationGateways")
+    error_message = "The subnet given as agic_subnet_id is not delegated to Microsoft.Network/applicationGateways. Creating an Application Gateway there fails with ApplicationGatewayNetworkIsolationRequiresSubnetDelegation, partway through the apply. Have the subnet's owner add the delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) before applying: `az network vnet subnet update --ids ${var.agic_subnet_id} --delegations Microsoft.Network/applicationGateways`. Ignore this if the gateway already exists and runs — an existing one is not revalidated."
   }
 }
 
