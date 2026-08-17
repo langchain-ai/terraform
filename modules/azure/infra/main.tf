@@ -391,8 +391,7 @@ data "azurerm_subnet" "byo_agic_subnet" {
   resource_group_name  = local.byo_agic_subnet_parts[4]
 }
 
-# Reads the same subnet again for its delegations, which azurerm_subnet does not
-# expose. Feeds the agic_subnet_delegation check below.
+# azurerm_subnet does not expose delegations. Feeds the check below.
 data "azapi_resource" "byo_agic_subnet_delegations" {
   count                  = local.byo_agic_subnet && var.ingress_controller == "agic" ? 1 : 0
   type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
@@ -576,15 +575,9 @@ resource "terraform_data" "validate_network" {
   }
 }
 
-# Azure rejects a network-isolated Application Gateway in a subnet that carries no
-# delegation, with ApplicationGatewayNetworkIsolationRequiresSubnetDelegation. The
-# subnet Terraform creates is delegated (modules/networking/main.tf); a supplied
-# one belongs to the operator, so this reports rather than fixes.
-#
-# A check block, not a precondition: gateways created before Azure applied network
-# isolation keep running in an undelegated subnet, and a later apply does not
-# recreate them. Blocking the plan there would strand a deployment that works over
-# a requirement its gateway never had to meet.
+# A supplied subnet belongs to the operator, so report rather than fix. A check
+# and not a precondition, because a gateway created before Azure applied network
+# isolation keeps running undelegated and is never revalidated.
 check "agic_subnet_delegation" {
   assert {
     condition = length(data.azapi_resource.byo_agic_subnet_delegations) == 0 || contains([

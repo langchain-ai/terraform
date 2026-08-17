@@ -19,6 +19,7 @@ variable "name_prefix" {
 # terraform.tfvars fails the plan with an explanation, rather than being
 # ignored as an undeclared variable — which would drop name_prefix to its
 # empty default and rename (destroy and recreate) every resource.
+# tflint-ignore: terraform_unused_declarations
 variable "identifier" {
   type        = string
   description = "Removed — use name_prefix instead."

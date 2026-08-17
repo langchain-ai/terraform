@@ -122,15 +122,9 @@ resource "azurerm_subnet" "subnet_bastion" {
 # Azure Application Gateway v2 requires an exclusive subnet of at least /24.
 # No other resources (pods, VMs) may be placed in this subnet.
 #
-# Delegated to Microsoft.Network/applicationGateways. Azure applies network
-# isolation to new v2 gateways, and an isolated gateway is rejected outright in a
-# subnet that carries no delegation:
-#
-#   ApplicationGatewayNetworkIsolationRequiresSubnetDelegation: Application
-#   Gateway <id> with NetworkIsolation requires subnet delegation.
-#
-# The gateway is the only thing this module puts in the subnet, so delegating it
-# to the service costs nothing that was available before.
+# The delegation is required: Azure applies network isolation to new v2 gateways
+# and rejects an isolated gateway in an undelegated subnet with
+# ApplicationGatewayNetworkIsolationRequiresSubnetDelegation.
 resource "azurerm_subnet" "subnet_agic" {
   count                = var.enable_agic ? 1 : 0
   name                 = "${var.network_name}-subnet-agic"
