@@ -89,6 +89,48 @@ for PROVIDER in "${REQUIRED_PROVIDERS[@]}"; do
   fi
 done
 
+# ── Derived resource names ────────────────────────────────────────────────────
+# main.tf derives every resource name from name_prefix and unique_resource_names,
+# and two checks below need the result: the RBAC scope check wants the deployment
+# resource group, the global-name check wants Postgres, Redis, Storage and Key
+# Vault. Derived once here because the two sections used to derive separately and
+# drifted — RBAC was still asking about "langsmith-rg" long after
+# unique_resource_names moved the base to "ls".
+# Keep in sync with local.name_base / local.name_suffix in infra/main.tf.
+TFVARS="${INFRA_DIR}/terraform.tfvars"
+
+# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
+# preflight.sh deliberately has no external sourcing. Returns non-zero when the
+# key is absent or empty, so each caller supplies that variable's own default.
+_tfvar() {
+  local raw val
+  [ -f "$TFVARS" ] || return 1
+  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
+  [ -n "$raw" ] || return 1
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
+  [ -n "$val" ] || return 1
+  echo "$val"
+}
+
+# name_prefix is the current variable, identifier its legacy name. Remember which
+# one was read so a warning names a key the user actually has in their tfvars.
+NAME_KEY="name_prefix"
+NAME_PREFIX=$(_tfvar name_prefix || echo "")
+if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_tfvar identifier); then
+  NAME_KEY="identifier"
+fi
+
+# name_prefix may carry the separator hyphen or not; normalize the same way
+# local.name_suffix does. Empty is valid — it means no suffix at all.
+NAME_SUFFIX=""
+[ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
+
+UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"; fi
+
+RESOURCE_GROUP_NAME="${NAME_BASE}-rg${NAME_SUFFIX}"
+
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
 # provider reads its ARM_* environment variables before falling back to the CLI,
@@ -179,27 +221,19 @@ else
   # Both values come out of terraform.tfvars and end up in a request URL, so each
   # is held to the pattern its Terraform variable already validates and dropped
   # if it does not fit. An unchecked value here could aim the request elsewhere.
-  TFVARS_FILE="${INFRA_DIR}/terraform.tfvars"
-
-  # An absent key is a valid answer (every variable read here has a default), so
-  # the trailing || true keeps a no-match grep from tripping set -e.
-  tfvar() {
-    [ -f "$TFVARS_FILE" ] || return 0
-    grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || true
-  }
-
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # printf adds the newline grep needs to see an empty identifier as a line to
-  # match rather than as no input at all. Empty is valid: it means no suffix.
-  IDENTIFIER=$(tfvar identifier)
-  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
+  # RESOURCE_GROUP_NAME is derived above from the inputs main.tf uses, so this
+  # asks about the resource group Terraform will actually create rather than a
+  # hardcoded one. printf adds the newline grep needs to see an empty suffix as a
+  # line to match rather than as no input at all. Empty is valid: no suffix.
+  if printf '%s\n' "$NAME_SUFFIX" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
+    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}")
   else
-    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
+    warn "terraform.tfvars: ${NAME_KEY} is not a valid resource-name suffix, so the deployment resource group was not checked"
   fi
 
-  EXISTING_VNET=$(tfvar vnet_id)
+  EXISTING_VNET=$(_tfvar vnet_id || echo "")
   if [ -n "$EXISTING_VNET" ]; then
     if printf '%s\n' "$EXISTING_VNET" \
       | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+$'; then
@@ -225,7 +259,11 @@ ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    # Azure Managed Redis, which is what the redis module provisions via azapi
+    # (Microsoft.Cache/redisEnterprise@2025-07-01). Not Microsoft.Cache/redis —
+    # that is classic Azure Cache for Redis and is a separate RBAC action, so
+    # checking it would pass a principal that cannot create the actual cluster.
+    "Microsoft.Cache/redisEnterprise/write",
 ]
 
 print(json.dumps({
@@ -481,7 +519,6 @@ fi
 # ── 6. terraform.tfvars ───────────────────────────────────────────────────────
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
-TFVARS="${INFRA_DIR}/terraform.tfvars"
 if [ ! -f "$TFVARS" ]; then
   fail "terraform.tfvars not found. Copy the example: cp infra/terraform.tfvars.example infra/terraform.tfvars"
 else
@@ -515,18 +552,6 @@ else
     fi
   fi
 fi
-
-# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
-# preflight.sh deliberately has no external sourcing.
-_tfvar() {
-  local raw val
-  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
-  [ -n "$raw" ] || return 1
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
-  [ -n "$val" ] || return 1
-  echo "$val"
-}
 
 # ── 7. PostgreSQL regional capabilities ─────────────────────────────────────
 # The offer-type check above is only a heuristic. This command asks the
@@ -707,28 +732,24 @@ echo "── Global Name Availability ──────────────
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping name checks (need terraform.tfvars and an active az login)"
 else
-  NAME_PREFIX=$(_tfvar name_prefix || _tfvar identifier || echo "")
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
-  UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
 
-  # Recompute exactly what main.tf's locals derive, so the check covers the names
-  # Terraform will actually request. name_prefix may carry a leading hyphen or
-  # not; normalize the same way local.name_suffix does. Keep in sync with
-  # local.name_base / local.name_suffix / local.uniq_suffix in infra/main.tf.
-  NAME_SUFFIX=""
-  [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
-
+  # NAME_BASE and NAME_SUFFIX are derived above, alongside the resource group
+  # name. Only the per-subscription hash is local to this section, because only
+  # these four globally-unique names carry it. Keep in sync with
+  # local.uniq_suffix in infra/main.tf — name_suffix_salt included, or bumping
+  # the salt to dodge a collision would have preflight still checking the old
+  # names and reporting the collision it was bumped to escape.
+  SALT=$(_tfvar name_suffix_salt || echo "")
   if [ "$UNIQUE_NAMES" = "true" ]; then
-    NAME_BASE="ls"
     if command -v shasum &>/dev/null; then
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | shasum -a 256 | cut -c1-6)
+      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}${SALT}" | shasum -a 256 | cut -c1-6)
     else
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | sha256sum | cut -c1-6)
+      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}${SALT}" | sha256sum | cut -c1-6)
     fi
     UNIQ_SUFFIX="-${HASH}"
   else
-    NAME_BASE="langsmith"
     UNIQ_SUFFIX=""
     warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
   fi

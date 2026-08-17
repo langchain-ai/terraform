@@ -852,6 +852,14 @@ The hash is deterministic — the same subscription and `name_prefix` always pro
 the same name, so repeat applies are stable and no random values are stored.
 `a1b2c3` above stands in for it; yours differs.
 
+Determinism is what makes `name_suffix_salt` necessary. If a failed apply burns
+those four names — a Key Vault soft-deleted for its retention window, a Redis name
+Azure still holds — retrying asks for the same names and collides again. Set
+`name_suffix_salt = "2"` to rotate all four; the value only has to differ from the
+last one. The resource group, VNet and AKS names do not carry the hash and are
+unaffected. It carries the same warning as `unique_resource_names`: on an existing
+deployment this is destroy-and-recreate, so pin the single colliding name instead.
+
 Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
 hyphens inside the same 24-character limit Storage has, so it runs out of room
 first. `terraform plan` reports the exact overage rather than letting Azure
