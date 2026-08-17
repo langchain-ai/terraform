@@ -360,6 +360,12 @@ variable "postgres_storage_tier" {
   default     = "P4"
 }
 
+variable "postgres_backup_retention_days" {
+  type        = number
+  description = "Days of automated backups to retain, 7 through 35. Changing this applies in place with no downtime."
+  default     = 7
+}
+
 variable "redis_source" {
   type        = string
   description = "Redis deployment type. 'external' provisions Azure Managed Redis (private endpoint). 'in-cluster' uses the chart-managed in-cluster Redis pod (dev/demo only)."
@@ -451,6 +457,12 @@ variable "storage_allowed_ips" {
 #
 # Official LangSmith minimum: 16 vCPU / 64 GiB cluster-wide.
 # See: https://docs.langchain.com/langsmith/kubernetes
+
+variable "aks_kubernetes_version" {
+  type        = string
+  description = "Kubernetes version for the AKS cluster"
+  default     = "1.35"
+}
 
 variable "default_node_pool_vm_size" {
   type        = string
