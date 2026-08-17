@@ -49,7 +49,56 @@ variable "unique_resource_names" {
 
 # ── Explicit name overrides ───────────────────────────────────────────────────
 # Each defaults to "" meaning "derive it". Set one to pin an existing resource's
-# name, or to work around a collision without renaming the whole deployment.
+# name, to work around a collision without renaming the whole deployment, or to
+# meet a naming standard the derivation does not produce.
+#
+# Changing any of these after an apply renames the resource, which Terraform
+# executes as destroy-and-recreate. Set them on a first deployment.
+
+variable "name_base" {
+  type        = string
+  description = "First segment of every derived resource name, before the resource word (\"ls-rg-prod\", \"langsmith-rg-prod\"). Empty uses \"ls\" when unique_resource_names is true and \"langsmith\" when it is false. A corporate prefix set here reaches every resource at once, which is usually what a naming standard asks for; the per-resource overrides below are for pinning one name."
+  default     = ""
+
+  # Same rule as name_prefix, and for the same reason: this segment leads every
+  # name, so Key Vault's "must start with a letter" is the binding constraint.
+  validation {
+    condition     = var.name_base == "" || can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)*$", var.name_base))
+    error_message = "name_base must start with a lowercase letter and contain only lowercase letters, digits, and non-repeating internal hyphens."
+  }
+
+  # No length rule here. A cap on this variable alone can only guess: it cannot
+  # see name_prefix, which counts against the same limit, and it cannot see the
+  # per-resource overrides that make the limit moot. The preconditions in main.tf
+  # measure the assembled name against the ceiling that actually applies to it.
+}
+
+variable "resource_group_name" {
+  type        = string
+  description = "Name for the resource group every LangSmith resource lands in. Unique within the subscription, 1-90 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "vnet_name" {
+  type        = string
+  description = "Name for the VNet Terraform creates. Unique within the resource group, 2-64 chars. Ignored when create_vnet = false, where vnet_id names the network instead. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "cluster_name" {
+  type        = string
+  description = "Name for the AKS cluster this module creates. Unique within the resource group, 1-63 chars. Empty derives from the naming scheme. To attach to a cluster you already own, set create_cluster = false and existing_cluster_name instead."
+  default     = ""
+
+  # Both variables name a cluster, and main.tf can only honor one: cluster_name
+  # names the cluster this module creates, existing_cluster_name identifies one
+  # it looks up. Setting the wrong one for the mode is a config an operator can
+  # write and Terraform would otherwise accept, discarding it without a word.
+  validation {
+    condition     = var.cluster_name == "" || var.create_cluster
+    error_message = "cluster_name applies only when this module creates the cluster, and create_cluster is false. Set existing_cluster_name to name the cluster to attach to, and leave cluster_name empty."
+  }
+}
 
 variable "postgres_name" {
   type        = string
@@ -98,6 +147,14 @@ variable "keyvault_name" {
   description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme. Only used when create_keyvault = true."
   default     = ""
   # When empty, main.tf computes: "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
+
+  # "Only used when create_keyvault = true" was already the rule, in prose. This
+  # enforces it, so the ignored setting fails at plan instead of at whatever
+  # point the operator notices the vault is not the one they named.
+  validation {
+    condition     = var.keyvault_name == "" || var.create_keyvault
+    error_message = "keyvault_name applies only when this module creates the Key Vault, and create_keyvault is false. Set existing_keyvault_name to name the vault to attach to, and leave keyvault_name empty."
+  }
 }
 
 variable "create_keyvault" {
@@ -110,6 +167,11 @@ variable "existing_keyvault_name" {
   type        = string
   description = "Name of the pre-existing Key Vault to attach to. Required when create_keyvault = false; leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
+
+  validation {
+    condition     = var.existing_keyvault_name == "" || !var.create_keyvault
+    error_message = "existing_keyvault_name applies only when attaching to a Key Vault you already own, and create_keyvault is true. Set create_keyvault = false to attach, or use keyvault_name to pin the name of the vault this module creates."
+  }
 }
 
 variable "existing_keyvault_resource_group_name" {
@@ -218,6 +280,11 @@ variable "existing_cluster_name" {
   type        = string
   description = "Name of the pre-existing AKS cluster to attach to. Required when create_cluster = false, leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
+
+  validation {
+    condition     = var.existing_cluster_name == "" || !var.create_cluster
+    error_message = "existing_cluster_name applies only when attaching to a cluster you already own, and create_cluster is true. Set create_cluster = false to attach, or use cluster_name to pin the name of the cluster this module creates."
+  }
 }
 
 variable "existing_cluster_resource_group_name" {
@@ -428,12 +495,32 @@ variable "blob_ttl_short_days" {
   type        = number
   description = "The number of days to keep short-lived blobs"
   default     = 14
+
+  # The wizard asks for this now, so it takes whatever an operator types. Azure
+  # wants a whole number of days and rejects anything else when the lifecycle
+  # policy is written — after the storage account already exists.
+  validation {
+    condition     = var.blob_ttl_short_days >= 1 && floor(var.blob_ttl_short_days) == var.blob_ttl_short_days
+    error_message = "blob_ttl_short_days must be a whole number of days, 1 or greater."
+  }
 }
 
 variable "blob_ttl_long_days" {
   type        = number
   description = "The number of days to keep long-lived blobs"
   default     = 400
+
+  validation {
+    condition     = var.blob_ttl_long_days >= 1 && floor(var.blob_ttl_long_days) == var.blob_ttl_long_days
+    error_message = "blob_ttl_long_days must be a whole number of days, 1 or greater."
+  }
+
+  # Separate lifecycle rules on separate blob prefixes, so Azure accepts the
+  # inverted pair and silently deletes the data meant to be kept longest first.
+  validation {
+    condition     = var.blob_ttl_long_days >= var.blob_ttl_short_days
+    error_message = "blob_ttl_long_days must be greater than or equal to blob_ttl_short_days — long-lived blobs cannot be deleted sooner than short-lived ones."
+  }
 }
 
 variable "storage_allowed_ips" {
@@ -615,8 +702,17 @@ variable "letsencrypt_email" {
 
 variable "langsmith_domain" {
   type        = string
-  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in Helm values and ingress TLS configuration."
+  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in Helm values and ingress TLS configuration. Required for DNS-01."
   default     = ""
+
+  # DNS-01 proves ownership through TXT records in a zone Terraform creates, so
+  # there is nothing to prove without a domain: the DNS module takes an empty
+  # zone name and the certificate never issues. The dns_label path produces an
+  # Azure-owned cloudapp.azure.com name, which is HTTP-01 only.
+  validation {
+    condition     = var.langsmith_domain != "" || !(var.tls_certificate_source == "dns01" || var.create_dns_zone)
+    error_message = "langsmith_domain is required when tls_certificate_source = \"dns01\" or create_dns_zone = true. dns_label cannot stand in for it — Azure owns that zone, so cert-manager cannot write the challenge record."
+  }
 }
 
 variable "langsmith_helm_chart_version" {

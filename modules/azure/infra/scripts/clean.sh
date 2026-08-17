@@ -80,6 +80,10 @@ _rm() {
 # ── Terraform secrets and live config ─────────────────────────────────────────
 header "Terraform"
 _rm "$INFRA_DIR/terraform.tfvars"
+# The wizard copies the old config here before rewriting it. It carries the same
+# deployment details as terraform.tfvars, so leaving it behind leaves a stale
+# config in a directory clean.sh is meant to return to checkout state.
+_rm "$INFRA_DIR/terraform.tfvars.bak"
 _rm "$INFRA_DIR/secrets.auto.tfvars"
 
 # Temp secret files written by setup-env.sh before Key Vault exists
