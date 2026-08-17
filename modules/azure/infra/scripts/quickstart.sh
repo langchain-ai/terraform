@@ -309,8 +309,8 @@ PROFILE="dev"
 _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
-  _hint "Dev/POC:    smaller nodes, in-cluster services OK, no deletion protection."
-  _hint "Production: D8s_v3 nodes, external Postgres + Redis, deletion protection on."
+  _hint "Dev/POC:    smaller nodes, in-cluster services OK, Key Vault stays purgeable."
+  _hint "Production: D8s_v3 nodes, external Postgres + Redis, Key Vault purge protection."
 
   _hint "Changing this later leaves answers you have already given untouched —"
   _hint "it only affects the defaults of sections you have not filled in yet."
