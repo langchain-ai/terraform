@@ -39,12 +39,9 @@ locals {
   # sha256 of subscription_id + name_suffix rather than the random provider: the
   # value is derived, so repeat applies are stable and nothing is kept in state.
   #
-  # name_suffix_salt is the escape hatch that a derived hash otherwise lacks.
-  # Both inputs are fixed for a given deployment, so a burned name — a Key Vault
-  # soft-deleted for its retention window, a Redis name Azure still holds — would
-  # be unrecoverable without either renaming the whole deployment or pinning each
-  # name by hand. Bumping the salt rotates all four at once and leaves the
-  # regional names alone. Empty by default, so it changes no existing name.
+  # Both hash inputs are fixed for a deployment, so a burned name (a soft-deleted
+  # Key Vault, a Redis name Azure still holds) has no way out. Bumping
+  # name_suffix_salt rotates all four global names at once. Empty by default.
   name_base   = var.unique_resource_names ? "ls" : "langsmith"
   uniq_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.name_suffix}${var.name_suffix_salt}"), 0, 6)}" : ""
 

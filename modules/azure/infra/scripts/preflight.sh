@@ -90,18 +90,14 @@ for PROVIDER in "${REQUIRED_PROVIDERS[@]}"; do
 done
 
 # ── Derived resource names ────────────────────────────────────────────────────
-# main.tf derives every resource name from name_prefix and unique_resource_names,
-# and two checks below need the result: the RBAC scope check wants the deployment
-# resource group, the global-name check wants Postgres, Redis, Storage and Key
-# Vault. Derived once here because the two sections used to derive separately and
-# drifted — RBAC was still asking about "langsmith-rg" long after
-# unique_resource_names moved the base to "ls".
+# Derived once for both the RBAC scope check and the global-name check; deriving
+# them separately is how RBAC drifted to a hardcoded "langsmith-rg".
 # Keep in sync with local.name_base / local.name_suffix in infra/main.tf.
 TFVARS="${INFRA_DIR}/terraform.tfvars"
 
-# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
-# preflight.sh deliberately has no external sourcing. Returns non-zero when the
-# key is absent or empty, so each caller supplies that variable's own default.
+# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh, which
+# preflight.sh deliberately does not source. Non-zero when absent or empty, so
+# each caller supplies that variable's own default.
 _tfvar() {
   local raw val
   [ -f "$TFVARS" ] || return 1
@@ -113,16 +109,16 @@ _tfvar() {
   echo "$val"
 }
 
-# name_prefix is the current variable, identifier its legacy name. Remember which
-# one was read so a warning names a key the user actually has in their tfvars.
+# identifier is name_prefix's legacy name. Track which one was read so a warning
+# names a key the user actually has.
 NAME_KEY="name_prefix"
 NAME_PREFIX=$(_tfvar name_prefix || echo "")
 if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_tfvar identifier); then
   NAME_KEY="identifier"
 fi
 
-# name_prefix may carry the separator hyphen or not; normalize the same way
-# local.name_suffix does. Empty is valid — it means no suffix at all.
+# The separator hyphen is optional; normalize as local.name_suffix does. Empty is
+# valid and means no suffix.
 NAME_SUFFIX=""
 [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
 
@@ -179,6 +175,13 @@ else
   PRINCIPAL_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
 fi
 
+# What terraform_principal_type has to be set to if an ABAC condition on
+# principalType forces the field to be sent explicitly.
+case "$PRINCIPAL_KIND" in
+*"service principal"* | *"managed identity"*) PRINCIPAL_TYPE_HINT="ServicePrincipal" ;;
+*) PRINCIPAL_TYPE_HINT="User" ;;
+esac
+
 if [ -n "$PRINCIPAL_ID" ]; then
   pass "Terraform will authenticate as ${PRINCIPAL_KIND} (object ID ${PRINCIPAL_ID})"
 else
@@ -223,10 +226,8 @@ else
   # if it does not fit. An unchecked value here could aim the request elsewhere.
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # RESOURCE_GROUP_NAME is derived above from the inputs main.tf uses, so this
-  # asks about the resource group Terraform will actually create rather than a
-  # hardcoded one. printf adds the newline grep needs to see an empty suffix as a
-  # line to match rather than as no input at all. Empty is valid: no suffix.
+  # printf supplies the newline grep needs to match an empty suffix as a line
+  # rather than as no input. Empty is valid: no suffix.
   if printf '%s\n' "$NAME_SUFFIX" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
     SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}")
   else
@@ -259,10 +260,8 @@ ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    # Azure Managed Redis, which is what the redis module provisions via azapi
-    # (Microsoft.Cache/redisEnterprise@2025-07-01). Not Microsoft.Cache/redis —
-    # that is classic Azure Cache for Redis and is a separate RBAC action, so
-    # checking it would pass a principal that cannot create the actual cluster.
+    # redisEnterprise is Azure Managed Redis, what the module provisions.
+    # Microsoft.Cache/redis is classic Azure Cache and a separate RBAC action.
     "Microsoft.Cache/redisEnterprise/write",
 ]
 
@@ -301,10 +300,11 @@ PY
   RBAC_VERDICT=$(python3 - \
     "$RBAC_TMP" \
     "${RBAC_TMP}/eligibilities.json" \
-    "$PRINCIPAL_IS_CALLER" <<'PY' || echo "unavailable"
+    "$PRINCIPAL_IS_CALLER" \
+    "$PRINCIPAL_TYPE_HINT" <<'PY' || echo "unavailable"
 import json, os, sys
 
-tmp, elig_path, is_caller = sys.argv[1:4]
+tmp, elig_path, is_caller, principal_type_hint = sys.argv[1:5]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
@@ -389,9 +389,19 @@ for scope, decisions in answered:
             out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
                        % (scope, role_label(assignment), assignment.get("scope") or "?"))
             if assignment.get("condition"):
+                cond = " ".join(assignment["condition"].split())
                 out.append("warn That grant carries an ABAC condition, so it permits only the roles "
                            "the condition allows. The modules assign: %s. Condition: %s"
-                           % (ASSIGNED_ROLES, " ".join(assignment["condition"].split())[:240]))
+                           % (ASSIGNED_ROLES, cond[:240]))
+                # Terraform omits principal_type on the Key Vault Secrets Officer
+                # grant by default, and a condition testing principalType rejects
+                # a request that omits it as a plain AuthorizationFailed, which
+                # reads like a missing role rather than an unmet condition.
+                if "principaltype" in cond.lower():
+                    out.append("warn The condition tests principalType. Set terraform_principal_type "
+                               "= \"%s\" in terraform.tfvars, or the Key Vault Secrets Officer grant "
+                               "fails at apply with a 403 that names no condition."
+                               % principal_type_hint)
         else:
             denied_write = True
             if deny:
@@ -735,12 +745,9 @@ else
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
 
-  # NAME_BASE and NAME_SUFFIX are derived above, alongside the resource group
-  # name. Only the per-subscription hash is local to this section, because only
-  # these four globally-unique names carry it. Keep in sync with
-  # local.uniq_suffix in infra/main.tf — name_suffix_salt included, or bumping
-  # the salt to dodge a collision would have preflight still checking the old
-  # names and reporting the collision it was bumped to escape.
+  # Only these four names carry the hash, so it is derived here rather than above.
+  # Keep in sync with local.uniq_suffix in infra/main.tf, salt included: omit the
+  # salt and preflight keeps checking the names it was bumped to escape.
   SALT=$(_tfvar name_suffix_salt || echo "")
   if [ "$UNIQUE_NAMES" = "true" ]; then
     if command -v shasum &>/dev/null; then
