@@ -55,6 +55,24 @@ make destroy
 
 Runs `terraform destroy -auto-approve` from `azure/infra/`.
 
+**If you enabled deletion protection**, clear it first:
+
+```bash
+# in azure/infra/terraform.tfvars
+aks_deletion_protection      = false
+postgres_deletion_protection = false
+```
+
+Then `make apply` to drop the locks, and `make destroy`. Both default to `false`, so
+skip this unless you turned one on (`terraform.tfvars.production` sets both `true`).
+
+Terraform can usually delete the locks itself during destroy — they depend on the
+resources they protect, so destroy removes them first. Two cases where it cannot,
+and you must do the apply above: the identity running destroy lacks
+`Microsoft.Authorization/locks/write` (see [PERMISSIONS.md](PERMISSIONS.md)), or a
+lock exists in Azure but not in state. A lock also blocks the manual
+`az group delete` fallback outright.
+
 **Resources destroyed (~20–30 minutes):**
 - AKS cluster + all node pools
 - PostgreSQL Flexible Server + configuration + private DNS zone

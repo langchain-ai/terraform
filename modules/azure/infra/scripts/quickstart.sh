@@ -621,7 +621,13 @@ _run_section_4() {
   AKS_DELETION_PROTECTION="false"
   if [[ "$PROFILE" == "prod" ]]; then
     AKS_DELETION_PROTECTION="true"
-    _hint "Production: aks_deletion_protection = true (prevents accidental terraform destroy)."
+    _hint "Production: aks_deletion_protection = true. This puts a CanNotDelete"
+    _hint "management lock on the cluster, which needs the"
+    _hint "Microsoft.Authorization/locks/write permission — held by Owner and"
+    _hint "User Access Administrator only. Contributor is denied it, and Role"
+    _hint "Based Access Control Administrator does NOT grant it, so the"
+    _hint "Contributor + RBAC Administrator pairing cannot create this lock."
+    _hint "Set it false unless you have Owner or UAA, or the apply will fail."
   fi
 }
 
@@ -915,7 +921,13 @@ _run_section_7() {
 
   if [[ "$PG_SOURCE" == "external" ]]; then
     PG_DELETION_PROTECTION="false"
-    [[ "$PROFILE" == "prod" ]] && PG_DELETION_PROTECTION="true"
+    if [[ "$PROFILE" == "prod" ]]; then
+      PG_DELETION_PROTECTION="true"
+      _hint "Production: postgres_deletion_protection = true. Like the AKS lock,"
+      _hint "this needs Microsoft.Authorization/locks/write — Owner or User Access"
+      _hint "Administrator. Neither Contributor nor Role Based Access Control"
+      _hint "Administrator can create it; set it false in that case."
+    fi
   fi
 
   # Without this prompt every quickstart deployment silently took the Balanced_B0
@@ -1301,6 +1313,11 @@ default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
 default_node_pool_max_pods  = ${NODE_MAX_PODS}
+# CanNotDelete management lock on the cluster. Creating it needs
+# Microsoft.Authorization/locks/write, held only by Owner and User Access
+# Administrator. Contributor is denied it, and Role Based Access Control
+# Administrator does not grant it either.
+# To destroy: set false, apply to drop the lock, then destroy.
 aks_deletion_protection     = ${AKS_DELETION_PROTECTION}
 
 #------------------------------------------------------------------------------
@@ -1341,6 +1358,9 @@ if [[ "$PG_SOURCE" == "external" ]]; then
 # PostgreSQL Flexible Server
 postgres_admin_username      = "${PG_ADMIN_USER}"
 postgres_database_name       = "${PG_DB_NAME}"
+# CanNotDelete management lock on the server. Same permission requirement as
+# aks_deletion_protection above: Microsoft.Authorization/locks/write, which
+# Contributor does not have. To destroy: set false, apply, then destroy.
 postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 TFVARS
 fi

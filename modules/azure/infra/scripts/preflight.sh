@@ -11,7 +11,8 @@
 #   1. az CLI is installed and logged in
 #   2. Correct subscription is selected
 #   3. Required resource providers are registered
-#   4. The identity Terraform will use can write role assignments
+#   4. The identity Terraform will use can write role assignments, and management
+#      locks when either deletion_protection flag is on
 #   5. Subscription offer type is not blocked from provisioning Postgres
 #   6. terraform.tfvars exists with required fields populated
 #   7. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
@@ -187,6 +188,16 @@ else
     grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || true
   }
 
+  # tfvar() unquotes by cutting on the quote character, so a bool — which is not
+  # quoted — comes back as the whole line. Read the right-hand side instead. The
+  # result is only ever compared against the literal "true"; it reaches no URL,
+  # request body, or command line.
+  tfvar_bool() {
+    [ -f "$TFVARS_FILE" ] || return 0
+    grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 \
+      | sed -e 's/#.*//' -e 's/^[^=]*=//' -e 's/[[:space:]]//g' || true
+  }
+
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
   # printf adds the newline grep needs to see an empty identifier as a line to
@@ -208,11 +219,20 @@ else
     fi
   fi
 
+  # Management locks are a separate permission from role assignments, and the
+  # pairing PERMISSIONS.md recommends does not carry it, so the action is only
+  # worth asking about when the tfvars actually turn a lock on. Both variables
+  # default to false, so an absent key means no.
+  LOCKS_WANTED=0
+  case "$(tfvar_bool aks_deletion_protection),$(tfvar_bool postgres_deletion_protection)" in
+    *true*) LOCKS_WANTED=1 ;;
+  esac
+
   # roleAssignments/write is the action that decides; the rest are what a
   # principal without broad resource access trips over first. checkAccess batches,
   # so all of them cost one request per scope. The object ID goes through
   # json.dumps into a file rather than onto a command line.
-  python3 - "$PRINCIPAL_ID" > "${RBAC_TMP}/body.json" <<'PY'
+  python3 - "$PRINCIPAL_ID" "$LOCKS_WANTED" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
 ACTIONS = [
@@ -226,6 +246,11 @@ ACTIONS = [
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
     "Microsoft.Cache/redis/write",
 ]
+
+# Asked for only when a deletion_protection flag is on. The action is a literal
+# here; argv[2] decides whether it is sent, never what is sent.
+if sys.argv[2] == "1":
+    ACTIONS.append("Microsoft.Authorization/locks/write")
 
 print(json.dumps({
     "Subject": {"Attributes": {"ObjectId": sys.argv[1]}},
@@ -269,6 +294,9 @@ tmp, elig_path, is_caller = sys.argv[1:4]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
+# Present in the responses only when a deletion_protection flag is on, so the
+# absence of a decision for it is not a finding.
+LOCKS_WRITE = "microsoft.authorization/locks/write"
 
 # checkAccess names the granting role by bare GUID. These four are the built-ins
 # that carry roleAssignments/write, verified against az role definition list;
@@ -373,7 +401,8 @@ for scope, decisions in answered:
 
 for scope, decisions in answered:
     refused = sorted({decision.get("actionId") or "?" for decision in decisions
-                      if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)
+                      if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE,
+                                                                          LOCKS_WRITE)
                       and decision.get("accessDecision") != "Allowed"})
     if refused:
         out.append("fail Not permitted at %s: %s. The deployment creates all of these."
@@ -387,6 +416,19 @@ for scope, decisions in answered:
             out.append("warn roleAssignments/delete is not permitted at %s. Apply can create the "
                        "eight assignments, but terraform destroy and any change that replaces one "
                        "will fail." % scope)
+
+        if (decision.get("actionId") or "").lower() == LOCKS_WRITE:
+            if decision.get("accessDecision") == "Allowed":
+                out.append("pass locks/write permitted at %s, so the deletion_protection flags in "
+                           "terraform.tfvars can place their management locks" % scope)
+            else:
+                out.append("fail locks/write is not permitted at %s, and a deletion_protection flag "
+                           "is on in terraform.tfvars. The CanNotDelete locks it places need "
+                           "Microsoft.Authorization/locks/write, which only Owner and User Access "
+                           "Administrator carry — Contributor is denied it by NotActions, and Role "
+                           "Based Access Control Administrator covers roleAssignments only. Deploy "
+                           "as one of those two, or set aks_deletion_protection and "
+                           "postgres_deletion_protection false." % scope)
 
 # Only reached when the decisive action was refused, which is the one case where
 # an inactive PIM role is the likely explanation and the fix is a click, not a
@@ -432,6 +474,17 @@ PY
       *)
         fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
+
+    # Role Based Access Control Administrator satisfies the case above and still
+    # cannot place a lock, so the two verdicts are not the same question.
+    if [ "$LOCKS_WANTED" -eq 1 ]; then
+      case ",${HELD_FLAT}," in
+        *,Owner,*|*,"User Access Administrator",*)
+          pass "Holds a role carrying Microsoft.Authorization/locks/write, which the deletion_protection flags need" ;;
+        *)
+          warn "A deletion_protection flag is on in terraform.tfvars, and no Owner or User Access Administrator grant was found at or above the subscription. Only those two carry Microsoft.Authorization/locks/write. Roles held: ${HELD_FLAT}. Apply will build everything else and then fail on the lock." ;;
+      esac
+    fi
   else
     pass "checkAccess answered, so the verdicts below are this principal's effective access with deny assignments and ABAC conditions applied"
     while IFS= read -r LINE; do

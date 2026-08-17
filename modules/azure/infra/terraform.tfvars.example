@@ -39,7 +39,10 @@ clickhouse_source = "in-cluster"  # "in-cluster" = chart-managed StatefulSet (de
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 postgres_admin_username      = "langsmith"
 postgres_database_name       = "langsmith"    # database name on the server
-postgres_deletion_protection = false          # set true for production
+# true adds a CanNotDelete lock, which needs Microsoft.Authorization/locks/write.
+# Only Owner and User Access Administrator have it — not Contributor, and not
+# Role Based Access Control Administrator.
+postgres_deletion_protection = false
 # Server sizing. Check what your subscription is actually offered before changing these:
 #   az postgres flexible-server list-skus -l <region> -o table
 # postgres_sku_name     = "GP_Standard_D2ds_v4"
@@ -87,7 +90,9 @@ default_node_pool_vm_size   = "Standard_D8s_v3"  # 8 vCPU, 32 GiB
 default_node_pool_min_count = 3                   # minimum 3 for Pass 2 production
 default_node_pool_max_count = 10                  # autoscaler ceiling
 default_node_pool_max_pods  = 60                  # AKS default 30 is too low; Pass 2 needs ~32 pods
-aks_deletion_protection     = false               # set true for production
+# true adds a CanNotDelete lock (same Owner-or-UAA requirement as postgres above);
+# ignored when create_cluster = false. To destroy: set false, apply, then destroy
+aks_deletion_protection     = false
 
 # Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
 # ClickHouse production sizing requests 2 vCPU / 8 GiB — fits on the default pool.
