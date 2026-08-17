@@ -54,6 +54,14 @@ ABAC = (
     "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7}"
 )
 
+# The shape that fails apply while preflight passes: roleAssignments/write is
+# permitted, but only for a ServicePrincipal, so the Key Vault Secrets Officer
+# grant is refused for omitting principal_type rather than for lacking a role.
+ABAC_PRINCIPAL_TYPE = (
+    "@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'"
+)
+
 
 def granted(role_guid=OWNER_GUID, scope=SUB_SCOPE, condition=None, custom=False):
     return {
@@ -168,6 +176,19 @@ CASES = [
             "The modules assign: Storage Blob Data Contributor",
             "GuidEquals",
         ],
+    },
+    {
+        "name": "a principalType condition names terraform_principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "The condition tests principalType",
+            'terraform_principal_type = "User"',
+        ],
+    },
+    {
+        "name": "an ABAC condition on roles alone does not mention principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC)),
+        "reject": ["terraform_principal_type"],
     },
     {
         "name": "a refused resource write fails and names the action",
