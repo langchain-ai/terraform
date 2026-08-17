@@ -632,6 +632,24 @@ _subnet_review() {
   fi
 }
 
+# A subnet resource ID, lowercased first because Azure returns the provider
+# namespace and the resourceGroups segment in mixed case depending on the API.
+_valid_subnet_id() {
+  local lc
+  lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ "$lc" =~ ^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$ ]]
+}
+
+# An IPv4 CIDR, the only form the three *_subnet_address_prefix variables are
+# ever written with. Shape only: an out-of-range octet still fails at plan, where
+# Terraform's own message is clear. Checked here for the reason the IDs are —
+# it lands in double-quoted HCL, and none of the three variables carries a
+# validation block, so an empty or typo'd answer otherwise surfaces as a cidr
+# function error several steps later.
+_valid_cidr() {
+  [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]
+}
+
 _run_section_3() {
   _section "3. Networking"
   _hint "Most deployments use a new VNet — Terraform manages address space and subnets."
