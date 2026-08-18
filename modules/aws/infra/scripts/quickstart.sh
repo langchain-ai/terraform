@@ -193,8 +193,8 @@ if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
   printf "${BOLD}  LangSmith on AWS — terraform.tfvars already exists${RESET}\n"
   echo ""
   printf "  ${DIM}%s${RESET}\n" "$OUTPUT"
-  _ask_choice --default 1 "What would you like to do?" \
-    "Update — re-run wizard with current values as defaults (recommended)" \
+  _ask_choice "What would you like to do?" \
+    "Update — re-run wizard using the existing values" \
     "Start fresh — overwrite everything" \
     "Cancel"
   case "$_CHOICE" in
