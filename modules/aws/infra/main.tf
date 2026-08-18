@@ -105,12 +105,11 @@ resource "terraform_data" "validate_inputs" {
       error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
     }
 
-    # Standalone agent features (chart v0.15+) run their own api-server + queue against
-    # per-feature databases on the shared RDS/ElastiCache. They do NOT require
-    # enable_deployments, but they DO require external Postgres and Redis to exist.
+    # External Fleet storage uses a dedicated database and logical Redis index on
+    # the shared RDS and ElastiCache instances.
     precondition {
-      condition     = !var.enable_fleet || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_fleet requires postgres_source = \"external\" and redis_source = \"external\" (standalone Fleet uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
 
@@ -712,7 +711,7 @@ locals {
 resource "kubernetes_job_v1" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet
+      fleet    = var.enable_fleet && var.fleet_storage == "external"
       polly    = var.enable_standalone_polly
       insights = var.enable_standalone_insights
     } : k => v if v && var.postgres_source == "external"
@@ -781,7 +780,7 @@ resource "kubernetes_job_v1" "standalone_db" {
 # standalone fleet/polly/insights blocks read via existingSecretName.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -794,7 +793,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace

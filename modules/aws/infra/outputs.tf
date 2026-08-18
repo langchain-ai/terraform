@@ -292,6 +292,11 @@ output "enable_fleet" {
   value       = var.enable_fleet
 }
 
+output "fleet_storage" {
+  description = "Fleet storage location"
+  value       = var.fleet_storage
+}
+
 output "enable_insights" {
   description = "Whether Insights addon is enabled"
   value       = var.enable_insights
@@ -341,6 +346,7 @@ output "resource_summary" {
     firewall        = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
     deployments     = var.enable_deployments
     fleet           = var.enable_fleet
+    fleet_storage   = var.enable_fleet ? var.fleet_storage : "not enabled"
     insights        = var.enable_insights
     polly           = var.enable_polly
     smithdb         = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"

@@ -697,11 +697,15 @@ printf "  ${DIM}Optional addons — each requires the matching license entitleme
 
 _ex_deploys=$(_existing "enable_deployments" "false")
 _ex_fleet=$(_existing "enable_fleet" "false")
+_ex_fleet_storage=$(_existing "fleet_storage" "external")
+_ex_fleet_external="false"
+[[ "$_ex_fleet_storage" == "external" ]] && _ex_fleet_external="true"
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
+FLEET_STORAGE="$_ex_fleet_storage"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
 ENABLE_SANDBOXES="false"
 
@@ -716,12 +720,51 @@ else
   SMITHDB_SKIP_FINAL_SNAPSHOT="true"
 fi
 
+_select_feature_storage() {
+  local feature="$1" existing_enabled="$2" existing_external="$3"
+  local default=1 selected="in-cluster" current="in-cluster"
+
+  if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
+    default=2
+    current="external"
+  elif [[ "$existing_enabled" != "true" && "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
+    default=2
+  fi
+
+  _ask_choice --default "$default" "$feature storage (Postgres and Redis):" \
+    "In-cluster — dedicated pods with persistent volumes" \
+    "External — dedicated databases on the existing external services"
+  [[ "$_CHOICE" == "2" ]] && selected="external"
+
+  # Helm does not move feature data between database locations during an upgrade.
+  if [[ "$UPDATE_MODE" == "true" && "$existing_enabled" == "true" && "$selected" != "$current" ]]; then
+    _red "  ERROR: Changing $feature storage requires a separate data migration."
+    printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
+    exit 1
+  fi
+  if [[ "$selected" == "external" && ( "$PG_SOURCE" != "external" || "$REDIS_SOURCE" != "external" ) ]]; then
+    _red "  ERROR: External $feature storage requires external Postgres and Redis."
+    printf "  Re-run QuickStart and choose both external services in Section 5.\n"
+    exit 1
+  fi
+
+  [[ "$selected" == "external" ]]
+}
+
 _ask_yn "$(_feature_prompt "Enable LangSmith Deployments" "$_ex_deploys" " (listener + operator + host-backend)?")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
 _ask_yn "$(_feature_prompt "Enable Fleet" "$_ex_fleet" " (no-code agents; includes host-backend)?")" \
   "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_FLEET="true" || ENABLE_FLEET="false"
+
+if [[ "$ENABLE_FLEET" == "true" ]]; then
+  if _select_feature_storage "Fleet" "$_ex_fleet" "$_ex_fleet_external"; then
+    FLEET_STORAGE="external"
+  else
+    FLEET_STORAGE="in-cluster"
+  fi
+fi
 
 if [[ "$ENABLE_DEPLOYMENTS" == "true" ]]; then
   _ask_yn "$(_feature_prompt "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" "$_ex_polly")" \
@@ -952,6 +995,7 @@ sizing_profile = "${SIZING}"
 #------------------------------------------------------------------------------
 enable_deployments   = ${ENABLE_DEPLOYMENTS}
 enable_fleet         = ${ENABLE_FLEET}
+fleet_storage        = "${FLEET_STORAGE}"
 enable_insights      = ${ENABLE_INSIGHTS}
 enable_polly         = ${ENABLE_POLLY}
 
@@ -1011,6 +1055,7 @@ printf "  %-26s %s\n" "TLS:"          "$([[ "$CREATE_CERT_MANAGER" == "true" ]] 
 printf "  %-26s %s\n" "Sizing:"       "$SIZING"
 printf "  %-26s %s\n" "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
 printf "  %-26s %s\n" "Fleet:" "$ENABLE_FLEET"
+[[ "$ENABLE_FLEET" == "true" ]] && printf "  %-26s %s\n" "Fleet storage:" "$FLEET_STORAGE"
 [[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
 printf "  %-26s %s\n" "Sandboxes:" "$ENABLE_SANDBOXES"

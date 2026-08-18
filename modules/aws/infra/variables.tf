@@ -714,8 +714,19 @@ variable "enable_polly" {
 
 variable "enable_fleet" {
   type        = bool
-  description = "Enable Fleet and its required host-backend without enabling the listener or operator. Uses langsmith_agent_builder_encryption_key for historical compatibility. Requires postgres_source = redis_source = external."
+  description = "Enable Fleet and the host-backend it requires. Full LangSmith Deployments is optional."
   default     = false
+}
+
+variable "fleet_storage" {
+  type        = string
+  description = "Fleet storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.fleet_storage)
+    error_message = "fleet_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_standalone_polly" {

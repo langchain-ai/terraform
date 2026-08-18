@@ -242,6 +242,11 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 _tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
 
+_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
+if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
+  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
@@ -331,11 +336,24 @@ for entry in "${_addon_gate[@]}"; do
   fi
 done
 
-# Fleet always needs host-backend, including when Deployments is disabled.
-# Set it explicitly so a preserved values file from an older run cannot omit it.
+# Fleet always needs host-backend. Its storage mode must also override preserved
+# values files because init-values.sh intentionally does not replace them.
 if [[ "$_enable_fleet" == "true" ]]; then
   VALUES_ARGS+=(--set "hostBackend.enabled=true")
-  echo "  ✔ hostBackend.enabled=true (required by Fleet)"
+  if [[ "$_fleet_storage" == "external" ]]; then
+    VALUES_ARGS+=(
+      --set "fleet.postgres.external.enabled=true"
+      --set "fleet.postgres.external.existingSecretName=langsmith-fleet-postgres"
+      --set "fleet.redis.external.enabled=true"
+      --set "fleet.redis.external.existingSecretName=langsmith-fleet-redis"
+    )
+  else
+    VALUES_ARGS+=(
+      --set "fleet.postgres.external.enabled=false"
+      --set "fleet.redis.external.enabled=false"
+    )
+  fi
+  echo "  ✔ Fleet contract (host-backend; ${_fleet_storage} Postgres/Redis)"
 fi
 
 # Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).

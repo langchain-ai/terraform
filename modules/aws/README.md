@@ -631,7 +631,7 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads the supported `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; full LangSmith Deployments additionally enables the listener and operator.
+**Step 4 — Read feature flags.** Reads the supported `enable_*` flags from `terraform.tfvars`. Fleet can use chart-managed in-cluster Postgres and Redis or dedicated databases on the external services.
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
@@ -935,6 +935,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
 | `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
+| `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
 | `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |

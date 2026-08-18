@@ -115,6 +115,7 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 # infra/terraform.tfvars
 enable_deployments   = true    # Optional full Deployments: listener + operator
 enable_fleet         = true    # No-code agents; enables its required host-backend
+fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = true    # ClickHouse-backed analytics
 enable_polly         = true    # Polly AI eval/monitoring
 enable_usage_telemetry = false # Extended usage telemetry

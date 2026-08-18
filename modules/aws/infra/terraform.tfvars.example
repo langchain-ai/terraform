@@ -670,10 +670,12 @@ sizing_profile = "production"
 #
 #   enable_deployments   — LangSmith Deployments (listener, operator, host-backend)
 #   enable_fleet         — No-code agents; enables its required host-backend
+#   fleet_storage        — Fleet Postgres/Redis: "external" or "in-cluster"
 #   enable_insights      — ClickHouse-backed analytics dashboard
 #
 enable_deployments   = false
 enable_fleet         = false
+fleet_storage        = "external"
 enable_insights      = false
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.

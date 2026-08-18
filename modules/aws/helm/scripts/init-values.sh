@@ -263,6 +263,12 @@ _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
 
+_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
+if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
+  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
@@ -601,9 +607,29 @@ if [[ "$_enable_fleet" == "true" ]]; then
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
+  _fleet_storage_block=""
+  if [[ "$_fleet_storage" == "external" ]]; then
+    _fleet_storage_block="
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-fleet-postgres\"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-fleet-redis\""
+  else
+    _fleet_storage_block="
+  postgres:
+    external:
+      enabled: false
+  redis:
+    external:
+      enabled: false"
+  fi
   _standalone_block+="
 fleet:
-  encryptionKey: \"${_fleet_key}\"
+  encryptionKey: \"${_fleet_key}\"${_fleet_storage_block}
   apiServer:
     serviceAccount:
       annotations:
