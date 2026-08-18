@@ -348,7 +348,7 @@ if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
 fi
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
-# Fernet keys for Deployments, Fleet, Insights, and Polly addons.
+# Fernet keys for Deployments, Fleet, Insights, and LangSmith Chat (formerly Polly).
 # Auto-generated and stored in SSM on first run. Only created when the user
 # opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).

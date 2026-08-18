@@ -100,11 +100,6 @@ resource "terraform_data" "validate_inputs" {
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
 
-    precondition {
-      condition     = !var.enable_polly || var.enable_deployments
-      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
-    }
-
     # External Fleet storage uses a dedicated database and logical Redis index on
     # the shared RDS and ElastiCache instances.
     precondition {
@@ -112,15 +107,14 @@ resource "terraform_data" "validate_inputs" {
       error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
-
     precondition {
-      condition     = !var.enable_standalone_polly || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_polly requires postgres_source = \"external\" and redis_source = \"external\" (standalone Polly uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_standalone_insights || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_insights requires postgres_source = \"external\" and redis_source = \"external\" (standalone Insights uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
@@ -428,6 +422,11 @@ module "cert_manager" {
 # validated cert into the ALB HTTPS listener.
 
 locals {
+  insights_enabled          = var.enable_insights || var.enable_standalone_insights
+  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
+  polly_enabled             = var.enable_polly || var.enable_standalone_polly
+  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
 
@@ -712,8 +711,8 @@ resource "kubernetes_job_v1" "standalone_db" {
   for_each = {
     for k, v in {
       fleet    = var.enable_fleet && var.fleet_storage == "external"
-      polly    = var.enable_standalone_polly
-      insights = var.enable_standalone_insights
+      polly    = local.polly_external_storage
+      insights = local.insights_external_storage
     } : k => v if v && var.postgres_source == "external"
   }
 
@@ -806,7 +805,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -819,7 +818,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = var.enable_standalone_polly && var.redis_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -832,7 +831,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -845,7 +844,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace

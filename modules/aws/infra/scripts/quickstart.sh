@@ -700,13 +700,45 @@ _ex_fleet=$(_existing "enable_fleet" "false")
 _ex_fleet_storage=$(_existing "fleet_storage" "external")
 _ex_fleet_external="false"
 [[ "$_ex_fleet_storage" == "external" ]] && _ex_fleet_external="true"
-_ex_insights=$(_existing "enable_insights" "false")
-_ex_polly=$(_existing "enable_polly" "false")
+_ex_insights_primary=$(_existing "enable_insights" "false")
+_ex_standalone_insights=$(_existing "enable_standalone_insights" "false")
+_ex_insights_storage=$(_existing "insights_storage" "")
+_ex_insights_storage_known="false"
+[[ -n "$_ex_insights_storage" ]] && _ex_insights_storage_known="true"
+if [[ -z "$_ex_insights_storage" ]]; then
+  _ex_insights_storage="in-cluster"
+  [[ "$_ex_standalone_insights" == "true" ]] && _ex_insights_storage="external"
+fi
+_ex_insights_external="false"
+[[ "$_ex_insights_storage" == "external" ]] && _ex_insights_external="true"
+_ex_insights="false"
+[[ "$_ex_insights_primary" == "true" || "$_ex_standalone_insights" == "true" ]] && _ex_insights="true"
+_ex_insights_storage_guard="$_ex_insights"
+[[ "$_ex_insights_storage_known" == "true" ]] && _ex_insights_storage_guard="true"
+_ex_polly_primary=$(_existing "enable_polly" "false")
+_ex_standalone_polly=$(_existing "enable_standalone_polly" "false")
+_ex_polly_storage=$(_existing "polly_storage" "")
+_ex_polly_storage_known="false"
+[[ -n "$_ex_polly_storage" ]] && _ex_polly_storage_known="true"
+if [[ -z "$_ex_polly_storage" ]]; then
+  _ex_polly_storage="in-cluster"
+  [[ "$_ex_standalone_polly" == "true" ]] && _ex_polly_storage="external"
+fi
+_ex_polly_external="false"
+[[ "$_ex_polly_storage" == "external" ]] && _ex_polly_external="true"
+_ex_polly="false"
+[[ "$_ex_polly_primary" == "true" || "$_ex_standalone_polly" == "true" ]] && _ex_polly="true"
+_ex_polly_storage_guard="$_ex_polly"
+[[ "$_ex_polly_storage_known" == "true" ]] && _ex_polly_storage_guard="true"
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
 FLEET_STORAGE="$_ex_fleet_storage"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
+INSIGHTS_STORAGE="$_ex_insights_storage"
+POLLY_STORAGE="$_ex_polly_storage"
+ENABLE_INSIGHTS_PRIMARY="false"; ENABLE_POLLY_PRIMARY="false"
+ENABLE_STANDALONE_POLLY="false"; ENABLE_STANDALONE_INSIGHTS="false"
 ENABLE_SANDBOXES="false"
 
 if [[ "$PROFILE" == "prod" ]]; then
@@ -766,15 +798,43 @@ if [[ "$ENABLE_FLEET" == "true" ]]; then
   fi
 fi
 
-if [[ "$ENABLE_DEPLOYMENTS" == "true" ]]; then
-  _ask_yn "$(_feature_prompt "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" "$_ex_polly")" \
-    "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
-    && ENABLE_POLLY="true" || ENABLE_POLLY="false"
+_ask_yn "$(_feature_prompt "Enable LangSmith Chat (formerly Polly)" "$_ex_polly" " (chat for traces, threads, prompts, and experiments)?")" \
+  "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
+  && ENABLE_POLLY="true" || ENABLE_POLLY="false"
+
+ENABLE_POLLY_PRIMARY="$ENABLE_POLLY"
+if [[ "$UPDATE_MODE" == "true" && "$_ex_polly" == "true" && "$ENABLE_POLLY" == "true" ]]; then
+  ENABLE_POLLY_PRIMARY="$_ex_polly_primary"
+fi
+
+# Existing features keep their storage model. Newly enabled features follow the
+# selected storage location; external storage requires both services to be external.
+if [[ "$ENABLE_POLLY" == "true" ]]; then
+  if _select_feature_storage "LangSmith Chat" "$_ex_polly_storage_guard" "$_ex_polly_external"; then
+    POLLY_STORAGE="external"
+    ENABLE_STANDALONE_POLLY="true"
+  else
+    POLLY_STORAGE="in-cluster"
+  fi
 fi
 
 _ask_yn "$(_feature_prompt "Enable Insights (ClickHouse analytics dashboard)?" "$_ex_insights")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
+
+ENABLE_INSIGHTS_PRIMARY="$ENABLE_INSIGHTS"
+if [[ "$UPDATE_MODE" == "true" && "$_ex_insights" == "true" && "$ENABLE_INSIGHTS" == "true" ]]; then
+  ENABLE_INSIGHTS_PRIMARY="$_ex_insights_primary"
+fi
+
+if [[ "$ENABLE_INSIGHTS" == "true" ]]; then
+  if _select_feature_storage "Insights" "$_ex_insights_storage_guard" "$_ex_insights_external"; then
+    INSIGHTS_STORAGE="external"
+    ENABLE_STANDALONE_INSIGHTS="true"
+  else
+    INSIGHTS_STORAGE="in-cluster"
+  fi
+fi
 
 echo ""
 printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
@@ -996,8 +1056,12 @@ sizing_profile = "${SIZING}"
 enable_deployments   = ${ENABLE_DEPLOYMENTS}
 enable_fleet         = ${ENABLE_FLEET}
 fleet_storage        = "${FLEET_STORAGE}"
-enable_insights      = ${ENABLE_INSIGHTS}
-enable_polly         = ${ENABLE_POLLY}
+enable_insights      = ${ENABLE_INSIGHTS_PRIMARY}
+insights_storage     = "${INSIGHTS_STORAGE}"
+enable_polly         = ${ENABLE_POLLY_PRIMARY}
+polly_storage        = "${POLLY_STORAGE}"
+enable_standalone_polly = ${ENABLE_STANDALONE_POLLY}
+enable_standalone_insights = ${ENABLE_STANDALONE_INSIGHTS}
 
 enable_smithdb              = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled   = ${SMITHDB_INGESTION}
@@ -1056,8 +1120,9 @@ printf "  %-26s %s\n" "Sizing:"       "$SIZING"
 printf "  %-26s %s\n" "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
 printf "  %-26s %s\n" "Fleet:" "$ENABLE_FLEET"
 [[ "$ENABLE_FLEET" == "true" ]] && printf "  %-26s %s\n" "Fleet storage:" "$FLEET_STORAGE"
-[[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
+[[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "LangSmith Chat (formerly Polly):" "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
+[[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights storage:" "$INSIGHTS_STORAGE"
 printf "  %-26s %s\n" "Sandboxes:" "$ENABLE_SANDBOXES"
 printf "  %-26s %s\n" "SmithDB:" "$ENABLE_SMITHDB"
 

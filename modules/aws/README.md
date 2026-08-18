@@ -168,7 +168,7 @@ aws/
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
         │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
         │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
-        │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
+        │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
         │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
         │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
@@ -495,7 +495,7 @@ For each secret it follows this priority order:
 | `deployments-encryption-key` | Auto-generated (Fernet key) | For Deployments/LangGraph Platform feature |
 | `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Fleet; historical key name retained for compatibility |
 | `insights-encryption-key` | Auto-generated (Fernet key) | For Insights feature |
-| `polly-encryption-key` | Auto-generated (Fernet key) | For Polly AI eval feature |
+| `polly-encryption-key` | Auto-generated (Fernet key) | For LangSmith Chat (formerly Polly) |
 
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
@@ -640,6 +640,7 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
+-f langsmith-values-standalone-polly.yaml     (Chat external storage)
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
 -f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default, loaded LAST)
 ```
@@ -937,7 +938,9 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
 | `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
-| `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
+| `insights_storage` | `in-cluster` | no | Insights storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
+| `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
+| `polly_storage` | `in-cluster` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
 | `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 requires an explicit compatible chart version. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |

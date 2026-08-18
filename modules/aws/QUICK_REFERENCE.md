@@ -117,7 +117,9 @@ enable_deployments   = true    # Optional full Deployments: listener + operator
 enable_fleet         = true    # No-code agents; enables its required host-backend
 fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = true    # ClickHouse-backed analytics
-enable_polly         = true    # Polly AI eval/monitoring
+insights_storage     = "in-cluster" # Or "external"
+enable_polly         = true    # LangSmith Chat (formerly Polly)
+polly_storage        = "in-cluster" # Or "external"
 enable_usage_telemetry = false # Extended usage telemetry
 ```
 

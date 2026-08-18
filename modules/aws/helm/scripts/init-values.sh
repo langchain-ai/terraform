@@ -269,6 +269,34 @@ if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; t
   exit 1
 fi
 
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
+if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
+  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  _enable_polly=true
+  _polly_storage="external"
+elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
+  _enable_standalone_polly=true
+fi
+
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
+if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
+  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  _enable_insights=true
+  _insights_storage="external"
+elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
+  _enable_standalone_insights=true
+fi
+
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
@@ -380,20 +408,13 @@ else
   echo "  ✗ Insights (enable_insights = false)"
 fi
 
-# Polly
+# LangSmith Chat (formerly Polly)
+_polly_values_created=false
 if [[ "$_enable_polly" == "true" ]]; then
-  if [[ "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
   if [[ ! -f "$_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
-    echo "  ✔ Polly (created langsmith-values-polly.yaml)"
-  else
-    echo "  ✔ Polly (existing)"
+    _polly_values_created=true
   fi
-else
-  echo "  ✗ Polly (enable_polly = false)"
 fi
 
 # ── Fleet and external-storage overlays ─────────────────────────────────────
@@ -418,12 +439,8 @@ fi
 if [[ "$_enable_standalone_polly" == "true" ]]; then
   if [[ ! -f "$_standalone_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
-    echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
-  else
-    echo "  ✔ Standalone Polly (existing; encryptionKey in langsmith-values-overrides.yaml)"
+    _polly_values_created=true
   fi
-else
-  echo "  ✗ Standalone Polly (enable_standalone_polly = false)"
 fi
 
 if [[ "$_enable_standalone_insights" == "true" ]]; then
@@ -435,6 +452,18 @@ if [[ "$_enable_standalone_insights" == "true" ]]; then
   fi
 else
   echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
+fi
+
+if [[ "$_enable_polly" == "true" ]]; then
+  _polly_storage="in-cluster Postgres/Redis"
+  [[ "$_enable_standalone_polly" == "true" ]] && _polly_storage="external Postgres/Redis"
+  if [[ "$_polly_values_created" == "true" ]]; then
+    echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage; created required values files)"
+  else
+    echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage; values files already exist)"
+  fi
+else
+  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly and enable_standalone_polly are false)"
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -667,7 +696,7 @@ polly:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
-else
+elif [[ "$_enable_polly" != "true" ]]; then
   _standalone_block+="
 polly:
   enabled: false"
@@ -694,7 +723,7 @@ engineInsightsAgent:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
-else
+elif [[ "$_enable_insights" != "true" ]]; then
   _standalone_block+="
 insights:
   enabled: false"

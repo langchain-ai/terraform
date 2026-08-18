@@ -132,6 +132,14 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+_direct_polly_enabled=false
+if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
+  _direct_polly_enabled=true
+fi
+_direct_insights_enabled=false
+if _tfvar_is_true "enable_insights" || _tfvar_is_true "enable_standalone_insights"; then
+  _direct_insights_enabled=true
+fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
@@ -195,6 +203,12 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
+  if [[ "$_direct_polly_enabled" == "true" ]]; then
+    _require_env "TF_VAR_langsmith_polly_encryption_key"
+  fi
+  if [[ "$_direct_insights_enabled" == "true" ]]; then
+    _require_env "TF_VAR_langsmith_insights_encryption_key"
+  fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
   _sandbox_secret_literals=()
@@ -202,6 +216,20 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _sandbox_secret_literals=(
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+  _polly_secret_literals=()
+  if [[ "$_direct_polly_enabled" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _polly_secret_literals=(
+      --from-literal=polly_encryption_key="${TF_VAR_langsmith_polly_encryption_key}"
+    )
+  fi
+  _insights_secret_literals=()
+  if [[ "$_direct_insights_enabled" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _insights_secret_literals=(
+      --from-literal=insights_encryption_key="${TF_VAR_langsmith_insights_encryption_key}"
     )
   fi
 
@@ -214,6 +242,8 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
     "${_sandbox_secret_literals[@]}" \
+    "${_polly_secret_literals[@]}" \
+    "${_insights_secret_literals[@]}" \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
@@ -245,6 +275,81 @@ _tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
   echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
+if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
+  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  _enable_polly=true
+  _polly_storage="external"
+elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
+  _enable_standalone_polly=true
+fi
+
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
+if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
+  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  _enable_insights=true
+  _insights_storage="external"
+elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
+  _enable_standalone_insights=true
+fi
+
+_check_legacy_agent_release() {
+  local release_status installed_values
+  if ! release_status=$(_helm status "$RELEASE_NAME" -n "$NAMESPACE" 2>&1); then
+    if grep -qi 'release: not found' <<< "$release_status"; then
+      return 0
+    fi
+    echo "ERROR: could not determine whether the existing Helm release uses legacy add-on values." >&2
+    echo "       Check cluster access and Helm permissions before retrying." >&2
+    return 1
+  fi
+  if ! installed_values=$(_helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all 2>/dev/null); then
+    echo "ERROR: could not inspect the existing Helm release for legacy add-on values." >&2
+    echo "       Check cluster access and Helm permissions before retrying." >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$installed_values" | awk '
+    /^[^[:space:]]/ {
+      section = $0
+      sub(/:.*/, "", section)
+      in_polly = 0
+      in_insights = 0
+      in_bootstrap = 0
+    }
+    section == "config" && /^  polly:[[:space:]]*$/ { in_polly = 1; next }
+    section == "config" && /^  insights:[[:space:]]*$/ { in_insights = 1; next }
+    section == "backend" && /^  agentBootstrap:[[:space:]]*$/ { in_bootstrap = 1; next }
+    in_polly && /^  [^[:space:]]/ { in_polly = 0 }
+    in_insights && /^  [^[:space:]]/ { in_insights = 0 }
+    in_bootstrap && /^  [^[:space:]]/ { in_bootstrap = 0 }
+    (in_polly || in_insights || in_bootstrap) && /^    enabled:[[:space:]]*true[[:space:]]*$/ { found = 1 }
+    END { exit !found }
+  '; then
+    return 0
+  fi
+
+  echo "ERROR: the installed release uses the legacy agentBootstrap add-on model." >&2
+  echo "       Chart 0.15.1+ uses top-level Insights and Chat services instead." >&2
+  echo "       This upgrade is blocked to avoid silently moving or losing add-on data." >&2
+  echo "       Contact LangChain support for migration guidance before retrying:" >&2
+  echo "       https://support.langchain.com" >&2
+  return 1
+}
+
+if ! _check_legacy_agent_release; then
   exit 1
 fi
 
@@ -284,12 +389,6 @@ _resolve_entry_hostname() {
     terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null || true
   fi
 }
-
-# Validate addon dependencies
-if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
 
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
@@ -335,6 +434,56 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# The chart defaults Chat to enabled. Force the product and storage contract so
+# skipping a stale values file cannot enable Chat or select the wrong database.
+if [[ "$_enable_polly" == "true" ]]; then
+  VALUES_ARGS+=(--set "polly.enabled=true")
+  if [[ "$_polly_storage" == "external" ]]; then
+    VALUES_ARGS+=(
+      --set "polly.postgres.external.enabled=true"
+      --set "polly.postgres.external.existingSecretName=langsmith-polly-postgres"
+      --set "polly.redis.external.enabled=true"
+      --set "polly.redis.external.existingSecretName=langsmith-polly-redis"
+    )
+  else
+    VALUES_ARGS+=(
+      --set "polly.postgres.external.enabled=false"
+      --set "polly.postgres.external.existingSecretName="
+      --set "polly.redis.external.enabled=false"
+      --set "polly.redis.external.existingSecretName="
+    )
+  fi
+  echo "  ✔ LangSmith Chat contract (${_polly_storage} Postgres/Redis)"
+else
+  VALUES_ARGS+=(--set "polly.enabled=false")
+  echo "  ○ LangSmith Chat disabled"
+fi
+
+# Insights defaults to enabled in the chart. Force both its product flag and
+# shared Engine/Insights storage so stale values cannot redirect its data.
+if [[ "$_enable_insights" == "true" ]]; then
+  VALUES_ARGS+=(--set "insights.enabled=true")
+  if [[ "$_insights_storage" == "external" ]]; then
+    VALUES_ARGS+=(
+      --set "engineInsightsAgent.postgres.external.enabled=true"
+      --set "engineInsightsAgent.postgres.external.existingSecretName=langsmith-insights-postgres"
+      --set "engineInsightsAgent.redis.external.enabled=true"
+      --set "engineInsightsAgent.redis.external.existingSecretName=langsmith-insights-redis"
+    )
+  else
+    VALUES_ARGS+=(
+      --set "engineInsightsAgent.postgres.external.enabled=false"
+      --set "engineInsightsAgent.postgres.external.existingSecretName="
+      --set "engineInsightsAgent.redis.external.enabled=false"
+      --set "engineInsightsAgent.redis.external.existingSecretName="
+    )
+  fi
+  echo "  ✔ Insights contract (${_insights_storage} Postgres/Redis)"
+else
+  VALUES_ARGS+=(--set "insights.enabled=false")
+  echo "  ○ Insights disabled"
+fi
 
 # Fleet always needs host-backend. Its storage mode must also override preserved
 # values files because init-values.sh intentionally does not replace them.
@@ -556,8 +705,8 @@ fi
 # Standalone agent features (chart v0.15+). Deployment names derive from
 # <release>-<namePrefix>-<component>; namePrefix is standalone-{fleet,polly,insights}.
 [[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
-[[ "$_enable_standalone_polly" == "true" ]]    && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
-[[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
+[[ "$_enable_polly" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
+[[ "$_enable_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do

@@ -667,7 +667,7 @@ variable "langsmith_jwt_secret" {
 }
 
 #------------------------------------------------------------------------------
-# LangGraph Platform Features
+# LangSmith Features
 # Boolean flags that control which product addons are enabled in Helm (Pass 2).
 # deploy.sh reads these to decide which values overlay files to include.
 # Addons require the corresponding entitlement in your LangSmith license key.
@@ -706,10 +706,32 @@ variable "enable_insights" {
   default     = false
 }
 
+variable "insights_storage" {
+  type        = string
+  description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.insights_storage)
+    error_message = "insights_storage must be one of: external, in-cluster."
+  }
+}
+
 variable "enable_polly" {
   type        = bool
-  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  description = "Enable LangSmith Chat (formerly Polly) using the chart's top-level polly services. Does not require enable_deployments. Requires the LangSmith Chat entitlement in the license."
   default     = false
+}
+
+variable "polly_storage" {
+  type        = string
+  description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.polly_storage)
+    error_message = "polly_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_fleet" {
@@ -731,13 +753,13 @@ variable "fleet_storage" {
 
 variable "enable_standalone_polly" {
   type        = bool
-  description = "Enable Polly standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_polly_encryption_key. Requires postgres_source = redis_source = external."
+  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for LangSmith Chat (formerly Polly). Also enables Chat when enable_polly is false for backward compatibility. Requires postgres_source = redis_source = external."
   default     = false
 }
 
 variable "enable_standalone_insights" {
   type        = bool
-  description = "Enable Insights standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_insights_encryption_key. ClickHouse is still required via the existing insights flow. Requires postgres_source = redis_source = external."
+  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for Insights. Also enables Insights when enable_insights is false for backward compatibility. ClickHouse is still required. Requires postgres_source = redis_source = external."
   default     = false
 }
 
@@ -834,7 +856,7 @@ variable "langsmith_insights_encryption_key" {
 
 variable "langsmith_polly_encryption_key" {
   type        = string
-  description = "Fernet key for Polly. Generate once — changing breaks existing Polly encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
+  description = "Fernet key for LangSmith Chat (formerly Polly). Generate once — changing it breaks existing encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
   sensitive   = true
   default     = ""
 }
