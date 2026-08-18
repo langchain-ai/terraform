@@ -702,7 +702,7 @@ variable "enable_agent_builder" {
 
 variable "enable_insights" {
   type        = bool
-  description = "Enable Insights (ClickHouse-backed analytics). Requires Insights entitlement in license."
+  description = "Enable Insights for AI-powered trace analysis. Requires the Insights entitlement."
   default     = false
 }
 
@@ -874,7 +874,7 @@ variable "langsmith_polly_encryption_key" {
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Requires an explicit chart version of 0.16 or newer in Pass 2. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.16.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
   default     = false
 }
 

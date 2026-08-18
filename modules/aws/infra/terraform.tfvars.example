@@ -727,8 +727,8 @@ enable_usage_telemetry = false
 #   - the Karpenter controller + SmithDB instance-store + compute NodePools
 #     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
 #
-# Pass 2 requires an explicit stable chart version of 0.16 or newer.
-# Infrastructure enablement never changes the normal chart line automatically.
+# Pass 2 uses the repository's ~0.16.0 pin, which resolves to the latest
+# compatible 0.16.x chart unless CHART_VERSION explicitly overrides it.
 #
 # The generated values initially deploy SmithDB services with ingestion,
 # migration, and query integration disabled. Follow ../SMITHDB.md to enable each

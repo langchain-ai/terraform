@@ -244,7 +244,7 @@ fi
 
 _ask_choice --default "$_profile_default" "What kind of deployment is this?" \
   "Dev / POC  — minimal resources, in-cluster services OK" \
-  "Production — HA resources, external managed services"
+  "Production — HA resources, managed Postgres and Redis"
 
 PROFILE="dev"
 [[ "$_CHOICE" == "2" ]] && PROFILE="prod"
@@ -380,7 +380,7 @@ _ex_redis=$(_existing "redis_source" "")
 if [[ "$PROFILE" == "prod" ]]; then
   printf "  $(_dim "Production: external RDS + ElastiCache recommended.")\n"
   PG_SOURCE="external"; REDIS_SOURCE="external"
-  if ! _ask_yn "Use external PostgreSQL (RDS)?" "$([[ "$_ex_pg" != "in-cluster" ]] && echo "y" || echo "n")"; then
+  if ! _ask_yn "Use external Postgres (RDS)?" "$([[ "$_ex_pg" != "in-cluster" ]] && echo "y" || echo "n")"; then
     PG_SOURCE="in-cluster"
   fi
   if ! _ask_yn "Use external Redis (ElastiCache)?" "$([[ "$_ex_redis" != "in-cluster" ]] && echo "y" || echo "n")"; then
@@ -786,6 +786,7 @@ _select_feature_storage() {
 _ask_yn "$(_feature_prompt "Enable LangSmith Deployments" "$_ex_deploys" " (listener + operator + host-backend)?")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
+
 _ask_yn "$(_feature_prompt "Enable Fleet" "$_ex_fleet" " (no-code agents; includes host-backend)?")" \
   "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_FLEET="true" || ENABLE_FLEET="false"
@@ -818,7 +819,7 @@ if [[ "$ENABLE_POLLY" == "true" ]]; then
   fi
 fi
 
-_ask_yn "$(_feature_prompt "Enable Insights (ClickHouse analytics dashboard)?" "$_ex_insights")" \
+_ask_yn "$(_feature_prompt "Enable Insights" "$_ex_insights" " (AI-powered trace analysis for patterns and failure modes)?")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
 
@@ -840,7 +841,7 @@ echo ""
 printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
 printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
 printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
-if _ask_yn "$(_feature_prompt "Enable LangSmith Sandboxes?" "$_ex_sandboxes")" \
+if _ask_yn "$(_feature_prompt "Enable LangSmith Sandboxes" "$_ex_sandboxes" "?")" \
   "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SANDBOXES="true"
 fi
@@ -1110,7 +1111,7 @@ printf "  %-26s %s\n" "Name:"         "${NAME_PREFIX}-${ENVIRONMENT}"
 printf "  %-26s %s\n" "Region:"       "$REGION"
 printf "  %-26s %s\n" "VPC:"          "$([[ "$CREATE_VPC" == "true" ]] && echo "Terraform-managed" || echo "existing ($VPC_ID)")"
 printf "  %-26s %s\n" "EKS API:"      "$([[ "$EKS_PUBLIC" == "true" ]] && echo "public" || echo "private + bastion")"
-printf "  %-26s %s\n" "PostgreSQL:"   "$PG_SOURCE"
+printf "  %-26s %s\n" "Postgres:"     "$PG_SOURCE"
 printf "  %-26s %s\n" "Redis:"        "$REDIS_SOURCE"
 printf "  %-26s %s\n" "ClickHouse:"   "$CH_SOURCE"
 printf "  %-26s %s\n" "Gateway mode:" "$GATEWAY_MODE"
@@ -1182,12 +1183,6 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
 else
   printf "  4. Deploy LangSmith:\n"
   printf "     ${CYAN}make init-values && make deploy${RESET}\n"
-fi
-
-if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  echo ""
-  printf "  ${DIM}SmithDB requires an explicit stable chart version of 0.16 or newer:${RESET}\n"
-  printf "     ${CYAN}make init-values && CHART_VERSION=0.16.21 make deploy${RESET}\n"
 fi
 
 echo ""

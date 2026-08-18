@@ -950,7 +950,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
 | `polly_storage` | `in-cluster` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 requires an explicit compatible chart version. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.16.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
