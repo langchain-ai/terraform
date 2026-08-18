@@ -22,11 +22,11 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | Tier | Postgres | Redis | ClickHouse | Use case |
 |------|---------|-------|-----------|---------|
 | **Dev** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
-| **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
+| **Production** | RDS PostgreSQL (private) | ElastiCache Redis (private) | In-cluster ClickHouse | Scalable / persistent |
 
 > **Blob storage is always required.** Trace payloads must go to S3 — never to ClickHouse.
 >
-> **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
+> **In-cluster ClickHouse is recommended for production during the transition to SmithDB.** It runs as a single StatefulSet. Customers who prefer a managed ClickHouse lifecycle can use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ---
 

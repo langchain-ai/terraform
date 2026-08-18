@@ -631,7 +631,7 @@ variable "tags" {
 #------------------------------------------------------------------------------
 variable "clickhouse_source" {
   type        = string
-  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a pod via Helm (dev/POC only). 'external' for LangChain Managed ClickHouse (recommended for production) — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
+  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a StatefulSet via Helm and is recommended for production during the transition to SmithDB. 'external' uses LangChain Managed ClickHouse — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
   default     = "in-cluster"
 
   validation {
