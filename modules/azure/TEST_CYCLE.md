@@ -338,6 +338,14 @@ make clean
 > **`make clean` before `make destroy` = unrecoverable.** `make clean` deletes `terraform.tfstate`.
 > Without state, Terraform cannot destroy anything. You'll have to delete Azure resources manually:
 > `az group delete --name langsmith-rg-<name_prefix> --yes`
+>
+> A `CanNotDelete` lock blocks that group delete, and with the state gone Terraform cannot remove
+> the lock for you. Clear it by hand first:
+>
+> ```bash
+> az lock list --resource-group langsmith-rg-<name_prefix> -o table
+> az lock delete --ids <lock-id>
+> ```
 
 **Before destroy, verify this is set in `terraform.tfvars`:**
 - `keyvault_purge_protection    = false`
@@ -346,7 +354,7 @@ make clean
 deployment has no locks to clear. If you turned either on, set it back to `false` and run
 `make apply` to drop the lock before `make destroy`. Terraform can usually delete the lock itself
 during destroy, but not if the identity running destroy lacks `Microsoft.Authorization/locks/write`
-— and `az group delete`, the manual fallback below, is blocked outright while a lock exists.
+— and `az group delete`, the manual fallback above, is blocked outright while a lock exists.
 
 **If destroy hangs on the VNet**: the NGINX ingress controller may have created Azure LB rules
 that hold the subnet. Delete the LB manually from Azure Portal → Load Balancers → find the

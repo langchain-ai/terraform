@@ -267,12 +267,27 @@ else
 
   # Management locks are a separate permission from role assignments, and the
   # pairing PERMISSIONS.md recommends does not carry it, so the action is only
-  # worth asking about when the tfvars actually turn a lock on. Both variables
-  # default to false, so an absent key means no.
+  # worth asking about when the tfvars actually turn a lock on. Both flags default
+  # to false, so an absent key means no.
+  #
+  # The count gates in main.tf are mirrored here: the AKS lock is skipped when
+  # create_cluster = false and the Postgres lock when postgres_source is not
+  # "external". A flag whose gate is closed places no lock, so treating it as a
+  # missing permission would fail the run over nothing. Those two default to true
+  # and "external", so for them an absent key leaves the gate open.
   LOCKS_WANTED=0
-  case "$(_tfvar aks_deletion_protection || echo false),$(_tfvar postgres_deletion_protection || echo false)" in
-    *true*) LOCKS_WANTED=1 ;;
-  esac
+  # Each flag only places a lock where the module actually creates the resource,
+  # so the gates here mirror the count conditions on the two lock resources.
+  # The fallback in each substitution is that variable's Terraform default,
+  # which is what an absent key means.
+  if [ "$(_tfvar aks_deletion_protection || echo false)" = "true" ] \
+    && [ "$(_tfvar create_cluster || echo true)" != "false" ]; then
+    LOCKS_WANTED=1
+  fi
+  if [ "$(_tfvar postgres_deletion_protection || echo false)" = "true" ] \
+    && [ "$(_tfvar postgres_source || echo external)" != "in-cluster" ]; then
+    LOCKS_WANTED=1
+  fi
 
   # roleAssignments/write is the action that decides; the rest are what a
   # principal without broad resource access trips over first. resourceGroups/read

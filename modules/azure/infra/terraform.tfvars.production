@@ -76,6 +76,9 @@ default_node_pool_max_count = 10
 default_node_pool_max_pods  = 60
 # CanNotDelete management lock on the cluster. Same Owner-or-UAA requirement as
 # postgres_deletion_protection above. Ignored when create_cluster = false.
+# The lock is inherited by the cluster's node pools, so while it is on, editing
+# additional_node_pools below — removing one, or changing a vm_size — fails the
+# apply. Set false, apply, make the pool change, then set true again.
 # To destroy: set false, apply to drop the lock, then destroy.
 aks_deletion_protection     = true
 
