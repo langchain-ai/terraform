@@ -20,8 +20,14 @@
 #   - values/langsmith-values.yaml              (base — copied from examples/)
 #   - values/langsmith-values-overrides.yaml    (auto-generated: hostname, IRSA, S3)
 #   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
-#   - values/langsmith-values-agent-*.yaml      (based on product tier)
-#   - values/langsmith-values-insights.yaml     (if tier 4 chosen)
+#   - values/langsmith-values-agent-deploys.yaml (if Deployments is enabled)
+#   - values/langsmith-values-insights.yaml     (if Insights is enabled)
+#   - values/langsmith-values-polly.yaml        (if LangSmith Chat is enabled)
+#   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
+#   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
+#   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
+#   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
+#   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -308,10 +314,11 @@ echo "Product addons (from terraform.tfvars):"
 if [[ "$_enable_deployments" == "true" ]]; then
   if [[ ! -f "$_deploys_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-    echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
+    echo "  Created: langsmith-values-agent-deploys.yaml"
   else
-    echo "  ✔ Deployments (existing)"
+    echo "  Existing: langsmith-values-agent-deploys.yaml"
   fi
+  echo "  ✔ Deployments"
 else
   echo "  ✗ Deployments (enable_deployments = false)"
 fi
@@ -330,11 +337,10 @@ if [[ "$_enable_insights" == "true" ]]; then
 insights:
   enabled: true
 CHEOF
-      echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
+      echo "  Created: langsmith-values-insights.yaml"
     else
       # External ClickHouse: prompt for connection details on first creation.
       cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
-      echo "  ✔ Insights (created langsmith-values-insights.yaml)"
       echo ""
       echo "  Insights requires an external ClickHouse instance."
       printf "  ClickHouse host: "
@@ -383,7 +389,7 @@ clickhouse:
     tls: ${_ch_tls_val}
     existingSecretName: "langsmith-clickhouse"
 CHEOF
-      echo "  Updated: langsmith-values-insights.yaml"
+      echo "  Created: langsmith-values-insights.yaml"
       echo ""
       echo "  Creating langsmith-clickhouse K8s Secret..."
       echo "  (deploy.sh will re-apply this if the namespace is recreated)"
@@ -402,18 +408,17 @@ CHEOF
       fi
     fi
   else
-    echo "  ✔ Insights (existing)"
+    echo "  Existing: langsmith-values-insights.yaml"
   fi
-else
-  echo "  ✗ Insights (enable_insights = false)"
 fi
 
 # LangSmith Chat (formerly Polly)
-_polly_values_created=false
 if [[ "$_enable_polly" == "true" ]]; then
   if [[ ! -f "$_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
-    _polly_values_created=true
+    echo "  Created: langsmith-values-polly.yaml"
+  else
+    echo "  Existing: langsmith-values-polly.yaml"
   fi
 fi
 
@@ -428,10 +433,11 @@ _standalone_insights_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ ! -f "$_fleet_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
-    echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
+    echo "  Created: langsmith-values-fleet.yaml"
   else
-    echo "  ✔ Fleet (existing)"
+    echo "  Existing: langsmith-values-fleet.yaml"
   fi
+  echo "  ✔ Fleet"
 else
   echo "  ✗ Fleet (enable_fleet = false)"
 fi
@@ -439,31 +445,34 @@ fi
 if [[ "$_enable_standalone_polly" == "true" ]]; then
   if [[ ! -f "$_standalone_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
-    _polly_values_created=true
+    echo "  Created: langsmith-values-standalone-polly.yaml"
+  else
+    echo "  Existing: langsmith-values-standalone-polly.yaml"
   fi
 fi
 
 if [[ "$_enable_standalone_insights" == "true" ]]; then
   if [[ ! -f "$_standalone_insights_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_standalone_insights_file"
-    echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+    echo "  Created: langsmith-values-standalone-insights.yaml"
   else
-    echo "  ✔ Standalone Insights (existing; encryptionKey in langsmith-values-overrides.yaml)"
+    echo "  Existing: langsmith-values-standalone-insights.yaml"
   fi
-else
-  echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
 fi
 
 if [[ "$_enable_polly" == "true" ]]; then
   _polly_storage="in-cluster Postgres/Redis"
   [[ "$_enable_standalone_polly" == "true" ]] && _polly_storage="external Postgres/Redis"
-  if [[ "$_polly_values_created" == "true" ]]; then
-    echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage; created required values files)"
-  else
-    echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage; values files already exist)"
-  fi
+  echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage)"
 else
   echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly and enable_standalone_polly are false)"
+fi
+
+if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+  _insights_storage_label="${_insights_storage} Postgres/Redis"
+  echo "  ✔ Insights ($_insights_storage_label)"
+else
+  echo "  ✗ Insights (enable_insights and enable_standalone_insights are false)"
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then

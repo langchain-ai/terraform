@@ -10,12 +10,14 @@
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   4. langsmith-values-insights.yaml       — ClickHouse/Insights legacy (if enable_insights)
-#   5. langsmith-values-polly.yaml          — Polly legacy (if enable_polly)
-#   6. langsmith-values-fleet.yaml          — Fleet standalone v0.15+ (if enable_fleet)
-#   7. langsmith-values-standalone-polly.yaml    — Polly standalone v0.15+ (if enable_standalone_polly)
-#   8. langsmith-values-standalone-insights.yaml — Insights standalone v0.15+ (if enable_standalone_insights)
-#   9. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
+#   4. langsmith-values-insights.yaml       — Insights (if enable_insights)
+#   5. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
+#   6. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
+#   7. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
+#   8. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
+#   9. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
+#  10. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#  11. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -717,8 +719,9 @@ for dep in "${_core_deployments[@]}"; do
 done
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
-    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+  # Helm's fullname can include the chart name or an override, so select by the release labels.
+  if ! kubectl rollout status deployment -n "$NAMESPACE" -l "app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host for release ${RELEASE_NAME} not ready within 5m (sandbox-host nodes may still be starting)"
     _all_ready=false
   fi
 fi
