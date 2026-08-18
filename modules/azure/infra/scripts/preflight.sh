@@ -17,7 +17,8 @@
 #   6. Regional vCPU quota covers the configured Postgres SKU family
 #   7. terraform.tfvars exists with required fields populated, and any cluster or
 #      Key Vault it attaches to rather than creates is really there
-#   8. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#   8. The configured Postgres version and SKU are offered in the region
+#   9. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -938,7 +939,175 @@ else
   fi
 fi
 
-# ── 8. Globally-unique resource names ────────────────────────────────────────
+# ── 8. PostgreSQL regional capabilities ─────────────────────────────────────
+# The offer-type check above is only a heuristic. This command asks the
+# subscription-scoped capability API what can actually be created in the chosen
+# region, and also lets us check the exact version and SKU before apply.
+echo ""
+echo "── PostgreSQL Regional Availability ──────────────────"
+
+if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
+  warn "Skipping Postgres capability checks (need terraform.tfvars and an active az login)"
+else
+  LOCATION=$(_tfvar location || echo "")
+  POSTGRES_SOURCE=$(_tfvar postgres_source || echo "external")
+  POSTGRES_VERSION=$(_tfvar postgres_version || echo "16")
+  POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
+
+  if [ "$POSTGRES_SOURCE" = "in-cluster" ]; then
+    pass "postgres_source = in-cluster — no Flexible Server capability check needed"
+  elif [ -z "$LOCATION" ]; then
+    warn "terraform.tfvars: location is empty — skipping Postgres capability checks"
+  else
+    PG_CAPABILITIES_FILE="${RBAC_TMP}/postgres-capabilities.json"
+    PG_CAPABILITIES_STDERR="${RBAC_TMP}/postgres-capabilities.stderr"
+
+    if az postgres flexible-server list-skus -l "$LOCATION" -o json \
+      > "$PG_CAPABILITIES_FILE" 2> "$PG_CAPABILITIES_STDERR"; then
+      # Azure CLI always prints its pricing notice on stderr. Ignore only that
+      # known line; any other stderr makes the result uncertain, so do not turn
+      # it into an availability verdict.
+      PG_UNEXPECTED_STDERR=$(grep -Fv \
+        "For prices please refer to https://aka.ms/postgres-pricing" \
+        "$PG_CAPABILITIES_STDERR" || true)
+      if [ -n "$(printf '%s' "$PG_UNEXPECTED_STDERR" | tr -d '[:space:]')" ]; then
+        warn "Postgres list-skus wrote unexpected stderr — skipping regional availability, version, and SKU checks"
+      else
+        if ! PG_CAPABILITY_VERDICT=$(python3 - \
+          "$PG_CAPABILITIES_FILE" "$LOCATION" "$POSTGRES_VERSION" "$POSTGRES_SKU" <<'PY'
+import json
+import sys
+
+path, location, configured_version, configured_sku = sys.argv[1:5]
+
+try:
+    with open(path) as fh:
+        capabilities = json.load(fh)
+except (OSError, ValueError):
+    print("invalid")
+    raise SystemExit(0)
+
+if not isinstance(capabilities, list):
+    print("invalid")
+    raise SystemExit(0)
+if not capabilities:
+    print("empty")
+    raise SystemExit(0)
+
+versions = set()
+skus = set()
+sku_pairs = set()
+tier_prefixes = {
+    "Burstable": "B",
+    "GeneralPurpose": "GP",
+    "MemoryOptimized": "MO",
+}
+
+for capability in capabilities:
+    if not isinstance(capability, dict):
+        print("invalid")
+        raise SystemExit(0)
+    raw_versions = capability.get("supportedServerVersions")
+    editions = capability.get("supportedServerEditions")
+    if not isinstance(raw_versions, list) or not isinstance(editions, list):
+        print("invalid")
+        raise SystemExit(0)
+
+    for version in raw_versions:
+        if not isinstance(version, dict) or not isinstance(version.get("name"), str):
+            print("invalid")
+            raise SystemExit(0)
+        versions.add(version["name"])
+
+    for edition in editions:
+        if not isinstance(edition, dict):
+            print("invalid")
+            raise SystemExit(0)
+        tier = edition.get("name")
+        raw_skus = edition.get("supportedServerSkus")
+        if not isinstance(tier, str) or not isinstance(raw_skus, list):
+            print("invalid")
+            raise SystemExit(0)
+        for sku in raw_skus:
+            if not isinstance(sku, dict) or not isinstance(sku.get("name"), str):
+                print("invalid")
+                raise SystemExit(0)
+            name = sku["name"]
+            sku_pairs.add((tier.casefold(), name.casefold()))
+            prefix = tier_prefixes.get(tier)
+            skus.add("%s_%s" % (prefix, name) if prefix else "%s:%s" % (tier, name))
+
+if not versions or not skus:
+    print("invalid")
+    raise SystemExit(0)
+
+
+def version_key(value):
+    return (0, int(value)) if value.isdigit() else (1, value)
+
+
+def summarize(values, limit=8):
+    values = list(values)
+    if len(values) <= limit:
+        return ", ".join(values)
+    return "%s, ... (%d total)" % (", ".join(values[:limit]), len(values))
+
+
+sorted_versions = sorted(versions, key=version_key)
+sorted_skus = sorted(skus, key=str.casefold)
+print("pass Postgres capability API returned %d SKU(s) and %d version(s) in %s"
+      % (len(skus), len(versions), location))
+
+if configured_version in versions:
+    print("pass postgres_version '%s' is available in %s"
+          % (configured_version, location))
+else:
+    print("fail postgres_version '%s' is not available in %s. Available versions: %s"
+          % (configured_version, location, summarize(sorted_versions)))
+
+prefix, separator, raw_sku = configured_sku.partition("_")
+tier_by_prefix = {value: key for key, value in tier_prefixes.items()}
+configured_tier = tier_by_prefix.get(prefix)
+sku_available = bool(separator and configured_tier and
+                     (configured_tier.casefold(), raw_sku.casefold()) in sku_pairs)
+if sku_available:
+    print("pass postgres_sku_name '%s' is available in %s"
+          % (configured_sku, location))
+else:
+    print("fail postgres_sku_name '%s' is not available in %s. Available SKUs: %s"
+          % (configured_sku, location, summarize(sorted_skus)))
+PY
+        ); then
+          PG_CAPABILITY_VERDICT="invalid"
+        fi
+
+        case "$PG_CAPABILITY_VERDICT" in
+          empty)
+            fail "PostgreSQL Flexible Server is unavailable to the active subscription in ${LOCATION}: list-skus returned an empty array"
+            ;;
+          invalid)
+            warn "Postgres list-skus returned an unexpected response — skipping regional availability, version, and SKU checks"
+            ;;
+          *)
+            while IFS= read -r LINE; do
+              case "$LINE" in
+                pass\ *) pass "${LINE#pass }" ;;
+                fail\ *) fail "${LINE#fail }" ;;
+                *) [ -z "$LINE" ] || warn "$LINE" ;;
+              esac
+            done <<EOF
+$PG_CAPABILITY_VERDICT
+EOF
+            ;;
+        esac
+      fi
+    else
+      warn "Postgres list-skus failed — skipping regional availability, version, and SKU checks"
+    fi
+  fi
+fi
+
+# ── 9. Globally-unique resource names ────────────────────────────────────────
 # Postgres, Redis, Storage, and Key Vault names live in a namespace shared by
 # every Azure tenant, as does the public-IP DNS label. A collision surfaces as a
 # raw Azure 400 partway through the apply, after the resource group, VNet, and
@@ -1082,7 +1251,7 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 fi
 
-# ── 9. Other tooling ──────────────────────────────────────────────────────────
+# ── 10. Other tooling ─────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do

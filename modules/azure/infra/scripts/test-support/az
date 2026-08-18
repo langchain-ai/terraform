@@ -10,6 +10,29 @@ ARGS="$*"
 
 emit_file() { if [ -f "$1" ]; then cat "$1"; else printf '%s' "$2"; fi; }
 
+default_postgres_capabilities() {
+  cat <<'JSON'
+[
+  {
+    "name": "FlexibleServerCapabilities",
+    "supportedServerEditions": [
+      {
+        "name": "GeneralPurpose",
+        "supportedServerSkus": [
+          {"name": "Standard_D2ds_v4"},
+          {"name": "Standard_D4ds_v4"}
+        ]
+      }
+    ],
+    "supportedServerVersions": [
+      {"name": "14"},
+      {"name": "16"}
+    ]
+  }
+]
+JSON
+}
+
 # First existing file wins; an empty JSON array if none exist.
 pick() {
   for candidate in "$@"; do
@@ -69,6 +92,22 @@ case "$ARGS" in
   *roleEligibilityScheduleInstances*)
     printf '%s\n' "$ARGS" >> "$FIX/calls.log"
     emit_file "$FIX/eligibilities.json" '{"value":[]}' ;;
+  "postgres flexible-server list-skus -l "*)
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    echo "WARNING: For prices please refer to https://aka.ms/postgres-pricing" >&2
+    if [ -f "$FIX/pg_caps_fail" ]; then
+      echo "ERROR: AuthorizationFailed" >&2
+      exit 1
+    fi
+    if [ -f "$FIX/pg_caps.json" ]; then
+      cat "$FIX/pg_caps.json"
+    else
+      default_postgres_capabilities
+    fi
+    if [ -f "$FIX/pg_caps_stderr" ]; then
+      echo "ERROR: unexpected service response" >&2
+    fi
+    ;;
   *)
     echo "STUB: unhandled az invocation: $ARGS" >&2
     exit 1 ;;
