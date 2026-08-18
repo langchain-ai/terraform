@@ -691,13 +691,8 @@ variable "enable_deployments" {
 
 variable "enable_agent_builder" {
   type        = bool
-  description = "Deprecated compatibility input. Agent Builder is unsupported in chart v0.16; keep this false and migrate to Fleet."
+  description = "Deprecated compatibility input accepted for existing tfvars files. Ignored because chart v0.16 supports Fleet instead."
   default     = false
-
-  validation {
-    condition     = !var.enable_agent_builder
-    error_message = "enable_agent_builder = true is unsupported in chart v0.16. Follow the Fleet migration guide before continuing."
-  }
 }
 
 variable "enable_insights" {
@@ -709,7 +704,7 @@ variable "enable_insights" {
 variable "insights_storage" {
   type        = string
   description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "in-cluster"
+  default     = "external"
 
   validation {
     condition     = contains(["external", "in-cluster"], var.insights_storage)
@@ -726,7 +721,7 @@ variable "enable_polly" {
 variable "polly_storage" {
   type        = string
   description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "in-cluster"
+  default     = "external"
 
   validation {
     condition     = contains(["external", "in-cluster"], var.polly_storage)

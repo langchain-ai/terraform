@@ -15,7 +15,7 @@
 #
 # Update mode: when terraform.tfvars already exists, the wizard pre-fills
 # all answers from the existing file so you only need to change what you want.
-# Useful for switching gateway mode, enabling TLS, adding product features, etc.
+# The existing file is backed up before the generated replacement is written.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -185,15 +185,6 @@ _validate_conflicts() {
 FRESH=false
 for arg in "$@"; do [[ "$arg" == "--fresh" ]] && FRESH=true; done
 
-if [[ -f "$OUTPUT" ]]; then
-  _existing_agent_builder=$(_parse_tfvar "enable_agent_builder" 2>/dev/null || echo "false")
-  if [[ "$_existing_agent_builder" == "true" ]]; then
-    _yellow "WARNING"; printf ": Legacy enable_agent_builder = true configuration detected.\n"
-    printf "  QuickStart cannot migrate this deployment automatically. Follow the v0.16 Fleet migration guide before continuing:\n"
-    printf "  https://support.langchain.com/articles/8306585004-migrating-langsmith-deployments-control-plane-fleet-to-standalone-fleet\n"
-    exit 1
-  fi
-fi
 UPDATE_MODE=false
 SHOWED_EXISTING_FILE_PROMPT=false
 if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
@@ -389,7 +380,7 @@ if [[ "$PROFILE" == "prod" ]]; then
 else
   _backend_default=1; [[ "$_ex_pg" == "in-cluster" ]] && _backend_default=2
   _ask_choice --default "$_backend_default" "Backend services:" \
-    "All external — RDS + ElastiCache (recommended even for dev)" \
+    "All external (recommended) — RDS + ElastiCache, including for dev" \
     "All in-cluster — everything runs as pods (simplest)"
   if [[ "$_CHOICE" == "1" ]]; then
     PG_SOURCE="external"; REDIS_SOURCE="external"
@@ -429,7 +420,7 @@ echo ""
 _ex_ch=$(_existing "clickhouse_source" "")
 _ch_default=1; [[ "$_ex_ch" == "external" ]] && _ch_default=2
 _ask_choice --default "$_ch_default" "ClickHouse:" \
-  "In-cluster — default, including production" \
+  "In-cluster (recommended) — including production" \
   "External — managed separately"
 CH_SOURCE="in-cluster"; [[ "$_CHOICE" == "2" ]] && CH_SOURCE="external"
 
@@ -467,7 +458,7 @@ _gw_default=$(_quickstart_gateway_default \
   "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
 
 _ask_choice --default "$_gw_default" "Ingress / Gateway mode:" \
-  "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support (recommended for new configurations)" \
+  "Envoy Gateway (recommended) — Kubernetes Gateway API, HTTPRoutes, split dataplane support" \
   "ALB (Application Load Balancer) — standard, TLS via ACM or Let's Encrypt HTTP-01" \
   "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding (legacy, not recommended)" \
   "Istio Gateway — VirtualServices, split dataplane, TLS via Let's Encrypt DNS-01"
@@ -526,7 +517,7 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
   printf "  ${DIM}ALB only and cannot be used with Istio NLB.${RESET}\n"
   _tls_default_istio=2; [[ "$_ex_tls" == "none" || -z "$_ex_tls" ]] || _tls_default_istio=1
   _ask_choice --default "$_tls_default_istio" "TLS certificate (Istio mode):" \
-    "Let's Encrypt DNS-01 via Route 53 — fully automated, recommended" \
+    "Let's Encrypt DNS-01 (recommended) — fully automated via Route 53" \
     "None — HTTP only (useful for initial deploy, add TLS later)"
   case "$_CHOICE" in
     1) TLS_SOURCE="none"   ;; # tls_certificate_source stays "none"; cert-manager handles it
@@ -539,7 +530,7 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   printf "  ${DIM}Let's Encrypt is not shown because the automated DNS-01 path is Istio-only.${RESET}\n"
   _tls_default_envoy=2; [[ "$_ex_tls" == "acm" ]] && _tls_default_envoy=1
   _ask_choice --default "$_tls_default_envoy" "TLS certificate (Envoy mode):" \
-    "ACM — AWS Certificate Manager (TLS terminates at the ALB, recommended)" \
+    "ACM (recommended) — AWS Certificate Manager; TLS terminates at the ALB" \
     "None — HTTP only (useful for initial deploy, add TLS later)"
   case "$_CHOICE" in
     1) TLS_SOURCE="acm"  ;;
@@ -551,7 +542,7 @@ else
   [[ "$_ex_tls" == "acm" ]]        && _tls_default_alb=1
   [[ "$_ex_tls" == "letsencrypt" ]] && _tls_default_alb=2
   _ask_choice --default "$_tls_default_alb" "TLS certificate:" \
-    "ACM — AWS Certificate Manager (recommended for ALB)" \
+    "ACM (recommended) — AWS Certificate Manager for ALB" \
     "Let's Encrypt — auto-provisioned via cert-manager HTTP-01" \
     "None — HTTP only (not recommended for production)"
   TLS_MODE="$_CHOICE"
@@ -765,7 +756,7 @@ _select_feature_storage() {
 
   _ask_choice --default "$default" "$feature storage (Postgres and Redis):" \
     "In-cluster — dedicated pods with persistent volumes" \
-    "External — dedicated databases on the existing external services"
+    "External (recommended) — use the same RDS and ElastiCache as LangSmith; $feature gets a separate Postgres database and Redis index"
   [[ "$_CHOICE" == "2" ]] && selected="external"
 
   # Helm does not move feature data between database locations during an upgrade.
@@ -883,6 +874,11 @@ _pre_write_guard() {
 _pre_write_guard
 
 _section "Generating terraform.tfvars"
+
+if [[ -f "$OUTPUT" ]]; then
+  cp -p "$OUTPUT" "${OUTPUT}.backup"
+  printf "  $(_green "✔")  Backed up existing file to: $(_bold "${OUTPUT}.backup")\n"
+fi
 
 _tf_list() {
   local input="$1"

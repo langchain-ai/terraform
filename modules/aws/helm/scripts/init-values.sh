@@ -47,14 +47,6 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
-if _tfvar_is_true "enable_agent_builder"; then
-  echo "ERROR: Legacy enable_agent_builder = true configuration detected." >&2
-  echo "       init-values cannot migrate this deployment automatically or safely generate Fleet values." >&2
-  echo "       Follow the v0.16 Fleet migration guide before continuing:" >&2
-  echo "       https://support.langchain.com/articles/8306585004-migrating-langsmith-deployments-control-plane-fleet-to-standalone-fleet" >&2
-  exit 1
-fi
-
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
@@ -275,7 +267,7 @@ if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; t
   exit 1
 fi
 
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="external"
 if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
   echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
@@ -289,7 +281,7 @@ elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
   _enable_standalone_polly=true
 fi
 
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="external"
 if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
   echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1

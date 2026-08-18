@@ -30,14 +30,6 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 source "$INFRA_DIR/scripts/_common.sh"
 
-if _tfvar_is_true "enable_agent_builder"; then
-  echo "ERROR: Legacy enable_agent_builder = true configuration detected." >&2
-  echo "       deploy cannot migrate this deployment automatically or safely apply Fleet values." >&2
-  echo "       Follow the v0.16 Fleet migration guide before continuing:" >&2
-  echo "       https://support.langchain.com/articles/8306585004-migrating-langsmith-deployments-control-plane-fleet-to-standalone-fleet" >&2
-  exit 1
-fi
-
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 # Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
@@ -280,7 +272,7 @@ if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; t
   exit 1
 fi
 
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="external"
 if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
   echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
@@ -294,7 +286,7 @@ elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
   _enable_standalone_polly=true
 fi
 
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="external"
 if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
   echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
@@ -306,53 +298,6 @@ if [[ "$_enable_standalone_insights" == "true" ]]; then
   _insights_storage="external"
 elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
   _enable_standalone_insights=true
-fi
-
-_check_legacy_agent_release() {
-  local release_status installed_values
-  if ! release_status=$(_helm status "$RELEASE_NAME" -n "$NAMESPACE" 2>&1); then
-    if grep -qi 'release: not found' <<< "$release_status"; then
-      return 0
-    fi
-    echo "ERROR: could not determine whether the existing Helm release uses legacy add-on values." >&2
-    echo "       Check cluster access and Helm permissions before retrying." >&2
-    return 1
-  fi
-  if ! installed_values=$(_helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all 2>/dev/null); then
-    echo "ERROR: could not inspect the existing Helm release for legacy add-on values." >&2
-    echo "       Check cluster access and Helm permissions before retrying." >&2
-    return 1
-  fi
-  if ! printf '%s\n' "$installed_values" | awk '
-    /^[^[:space:]]/ {
-      section = $0
-      sub(/:.*/, "", section)
-      in_polly = 0
-      in_insights = 0
-      in_bootstrap = 0
-    }
-    section == "config" && /^  polly:[[:space:]]*$/ { in_polly = 1; next }
-    section == "config" && /^  insights:[[:space:]]*$/ { in_insights = 1; next }
-    section == "backend" && /^  agentBootstrap:[[:space:]]*$/ { in_bootstrap = 1; next }
-    in_polly && /^  [^[:space:]]/ { in_polly = 0 }
-    in_insights && /^  [^[:space:]]/ { in_insights = 0 }
-    in_bootstrap && /^  [^[:space:]]/ { in_bootstrap = 0 }
-    (in_polly || in_insights || in_bootstrap) && /^    enabled:[[:space:]]*true[[:space:]]*$/ { found = 1 }
-    END { exit !found }
-  '; then
-    return 0
-  fi
-
-  echo "ERROR: the installed release uses the legacy agentBootstrap add-on model." >&2
-  echo "       Chart 0.15.1+ uses top-level Insights and Chat services instead." >&2
-  echo "       This upgrade is blocked to avoid silently moving or losing add-on data." >&2
-  echo "       Contact LangChain support for migration guidance before retrying:" >&2
-  echo "       https://support.langchain.com" >&2
-  return 1
-}
-
-if ! _check_legacy_agent_release; then
-  exit 1
 fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
