@@ -459,6 +459,108 @@ if [[ "$_smithdb_migration_enabled" == "true" ]]; then
   fi
 fi
 
+# A Job's spec.template is immutable, and the backfill Job is a plain resource
+# rather than a Helm hook, so nothing recreates it on upgrade. Any change to its
+# pod template therefore fails the apply: a chart bump moving the Auth Proxy
+# image, a values change here, a different metastore secret. The API server
+# rejects it and Helm reports the whole PodSpec back as a single-line dump ending
+# in "field is immutable", which names neither the Job nor the fix.
+#
+# Compare the template Helm is about to send with the one on the cluster, and
+# stop first if they differ. Only the fields Helm controls are compared, because
+# the live object also carries controller-uid labels and API-server defaults that
+# would otherwise read as drift on every run.
+#
+# Deleting the Job is safe and is not the same as losing the backfill: task state
+# lives in the taskdb StatefulSet, which the chart keeps, so a fresh Job re-plans
+# and resumes. The delete is left to the operator rather than done here, because
+# it terminates a backfill that may be mid-flight.
+_migration_job="${RELEASE_NAME}-smithdb-migration"
+if [[ "$_smithdb_migration_enabled" == "true" ]] \
+  && kubectl get job "$_migration_job" -n "$NAMESPACE" >/dev/null 2>&1; then
+
+  _live_job=$(kubectl get job "$_migration_job" -n "$NAMESPACE" -o json 2>/dev/null) || _live_job=""
+  # helm template emits YAML, and kubectl converts it to JSON without needing a
+  # YAML library on the host. Both sides can fail for unrelated reasons, in which
+  # case the check is skipped rather than allowed to block a deploy.
+  _next_job=$(helm template "$RELEASE_NAME" langchain/langsmith \
+    --namespace "$NAMESPACE" \
+    ${CHART_VERSION:+--version "$CHART_VERSION"} \
+    ${_devel_flag} \
+    "${VALUES_ARGS[@]}" \
+    --show-only templates/smithdb/migration-job.yaml 2>/dev/null \
+    | kubectl create --dry-run=client -o json -f - 2>/dev/null) || _next_job=""
+
+  if [[ -n "$_live_job" && -n "$_next_job" ]]; then
+    _drift=$(LIVE_JOB="$_live_job" NEXT_JOB="$_next_job" python3 -c '
+import json, os
+
+def signature(pod):
+    """Just the parts Helm sets, keyed by container name."""
+    out = {}
+    for section in ("initContainers", "containers"):
+        for c in pod.get(section) or []:
+            env = {}
+            for e in c.get("env") or []:
+                value = e.get("value")
+                if value is None:
+                    src = e.get("valueFrom") or {}
+                    ref = (src.get("secretKeyRef") or src.get("configMapKeyRef")
+                           or src.get("fieldRef") or {})
+                    value = "ref:%s/%s" % (ref.get("name", ""),
+                                           ref.get("key") or ref.get("fieldPath", ""))
+                env[e["name"]] = value
+            out[c["name"]] = {
+                "image": c.get("image"),
+                "command": c.get("command"),
+                "args": c.get("args"),
+                "resources": c.get("resources"),
+                "env": env,
+            }
+    return out
+
+live = signature(json.loads(os.environ["LIVE_JOB"])["spec"]["template"]["spec"])
+nxt = signature(json.loads(os.environ["NEXT_JOB"])["spec"]["template"]["spec"])
+
+reasons = []
+for name in sorted(set(live) | set(nxt)):
+    if name not in live:
+        reasons.append("container %s is new" % name)
+        continue
+    if name not in nxt:
+        reasons.append("container %s is removed" % name)
+        continue
+    a, b = live[name], nxt[name]
+    if a["image"] != b["image"]:
+        reasons.append("%s image %s -> %s" % (name, a["image"], b["image"]))
+    for field in ("command", "args", "resources"):
+        if a[field] != b[field]:
+            reasons.append("%s %s changed" % (name, field))
+    changed = sorted(k for k in set(a["env"]) | set(b["env"])
+                     if a["env"].get(k) != b["env"].get(k))
+    if changed:
+        shown = ", ".join(changed[:4])
+        if len(changed) > 4:
+            shown += ", and %d more" % (len(changed) - 4)
+        reasons.append("%s env: %s" % (name, shown))
+
+print("\n".join("         - " + r for r in reasons))
+' 2>/dev/null) || _drift=""
+
+    if [[ -n "$_drift" ]]; then
+      echo "ERROR: the existing $_migration_job Job does not match what this deploy renders," >&2
+      echo "       and a Job's pod template cannot be changed in place:" >&2
+      echo "$_drift" >&2
+      echo "       Delete the Job, then deploy again. Backfill progress is kept in the" >&2
+      echo "       taskdb, so a fresh Job resumes rather than starting over:" >&2
+      echo "         kubectl delete job $_migration_job -n $NAMESPACE --cascade=foreground --wait=true" >&2
+      echo "       Failures already recorded are non-retryable and survive the delete:" >&2
+      echo "         ./smithdb migrate --self-hosted diagnose retry-failed --all --yes" >&2
+      exit 1
+    fi
+  fi
+fi
+
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \

@@ -352,6 +352,30 @@ pod can already reach through its own identity.
 A task whose window covers the last hour or so stays `pending` rather than being
 claimed. That is the worker pool's recent-runs safety delay, not a fault.
 
+## Upgrading with the backfill Job in place
+
+A Job's `spec.template` is immutable, and the backfill Job is a plain resource
+rather than a Helm hook, so nothing recreates it. Once it exists, any change to
+its pod template fails the upgrade - a chart bump moving the Auth Proxy image, a
+values change here, a different metastore secret. The API server rejects the
+apply and Helm prints the entire PodSpec on one line, ending in `field is
+immutable`. That message names neither the Job nor the remedy.
+
+`deploy.sh` compares the rendered template with the live one and stops first,
+naming what changed. Clear it by deleting the Job, then deploy again:
+
+```sh
+kubectl delete job langsmith-smithdb-migration -n langsmith \
+  --cascade=foreground --wait=true
+```
+
+Deleting the Job is not the same as losing the backfill. Task state lives in the
+taskdb StatefulSet, which the chart keeps, so a fresh Job re-plans and resumes.
+`--cascade=foreground` matters on a tight namespace quota: the old 8-CPU pod has
+to be gone before the new one can be admitted. The delete is left to the operator
+rather than done automatically, because it terminates a backfill that may be
+mid-flight.
+
 ## Namespace quota headroom
 
 `modules/k8s-bootstrap` puts a `ResourceQuota` on the LangSmith namespace, and
