@@ -286,7 +286,7 @@ else
 fi
 
 # Report addon files
-for addon in sizing-production sizing-production-large sizing-dev agent-deploys agent-builder insights; do
+for addon in sizing-production sizing-production-large sizing-dev agent-deploys insights; do
   f="$VALUES_DIR/langsmith-values-${addon}.yaml"
   if [[ -f "$f" ]]; then
     pass "langsmith-values-${addon}.yaml (addon)"

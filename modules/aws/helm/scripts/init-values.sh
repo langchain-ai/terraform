@@ -41,6 +41,14 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
+if _tfvar_is_true "enable_agent_builder"; then
+  echo "ERROR: Legacy enable_agent_builder = true configuration detected." >&2
+  echo "       init-values cannot migrate this deployment automatically or safely generate Fleet values." >&2
+  echo "       Follow the v0.16 Fleet migration guide before continuing:" >&2
+  echo "       https://support.langchain.com/articles/8306585004-migrating-langsmith-deployments-control-plane-fleet-to-standalone-fleet" >&2
+  exit 1
+fi
+
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment=""
 _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
@@ -235,12 +243,10 @@ echo ""
 
 # ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
-_builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
 _polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
 
 _enable_deployments=false
-_enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
@@ -249,7 +255,6 @@ _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
 _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
@@ -275,30 +280,6 @@ if [[ "$_enable_deployments" == "true" ]]; then
   fi
 else
   echo "  ✗ Deployments (enable_deployments = false)"
-fi
-
-# Agent Builder
-if [[ "$_enable_agent_builder" == "true" ]]; then
-  if [[ "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
-  # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
-  # bundled agent-bootstrap Job, so the two paths can no longer be combined and
-  # the legacy one has no agent runtime of its own.
-  if [[ "$_enable_fleet" == "true" ]]; then
-    echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
-    echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
-    exit 1
-  fi
-  if [[ ! -f "$_builder_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-    echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
-  else
-    echo "  ✔ Agent Builder (existing)"
-  fi
-else
-  echo "  ✗ Agent Builder (enable_agent_builder = false)"
 fi
 
 # Insights
@@ -409,7 +390,7 @@ else
   echo "  ✗ Polly (enable_polly = false)"
 fi
 
-# ── Standalone agent features (chart v0.15+): Fleet / Polly / Insights ───────
+# ── Fleet and external-storage overlays ─────────────────────────────────────
 # Top-level fleet:/polly:/insights: deployments wired to per-feature databases on
 # the shared RDS/ElastiCache (K8s Secrets created by Terraform). encryptionKey and
 # IRSA service-account annotations are injected into the overrides file below.
@@ -593,7 +574,7 @@ fi
 # that are OFF get an explicit `enabled: false` so the chart's top-level default
 # (polly/insights default to enabled: true) cannot silently turn them on
 # (migration issue #6).
-_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
+_fleet_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
 _polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
 _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
 
@@ -615,14 +596,14 @@ if [[ "$_enable_fleet" == "true" ]]; then
 fi
 
 if [[ "$_enable_fleet" == "true" ]]; then
-  if [[ -z "$_agent_builder_key" ]]; then
+  if [[ -z "$_fleet_key" ]]; then
     echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
   _standalone_block+="
 fleet:
-  encryptionKey: \"${_agent_builder_key}\"
+  encryptionKey: \"${_fleet_key}\"
   apiServer:
     serviceAccount:
       annotations:

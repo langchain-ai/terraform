@@ -10,13 +10,12 @@
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   4. langsmith-values-agent-builder.yaml  — Agent Builder legacy (if enable_agent_builder)
-#   5. langsmith-values-insights.yaml       — ClickHouse/Insights legacy (if enable_insights)
-#   6. langsmith-values-polly.yaml          — Polly legacy (if enable_polly)
-#   7. langsmith-values-fleet.yaml          — Fleet standalone v0.15+ (if enable_fleet)
-#   8. langsmith-values-standalone-polly.yaml    — Polly standalone v0.15+ (if enable_standalone_polly)
-#   9. langsmith-values-standalone-insights.yaml — Insights standalone v0.15+ (if enable_standalone_insights)
-#  10. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
+#   4. langsmith-values-insights.yaml       — ClickHouse/Insights legacy (if enable_insights)
+#   5. langsmith-values-polly.yaml          — Polly legacy (if enable_polly)
+#   6. langsmith-values-fleet.yaml          — Fleet standalone v0.15+ (if enable_fleet)
+#   7. langsmith-values-standalone-polly.yaml    — Polly standalone v0.15+ (if enable_standalone_polly)
+#   8. langsmith-values-standalone-insights.yaml — Insights standalone v0.15+ (if enable_standalone_insights)
+#   9. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -28,6 +27,14 @@ HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 source "$INFRA_DIR/scripts/_common.sh"
+
+if _tfvar_is_true "enable_agent_builder"; then
+  echo "ERROR: Legacy enable_agent_builder = true configuration detected." >&2
+  echo "       deploy cannot migrate this deployment automatically or safely apply Fleet values." >&2
+  echo "       Follow the v0.16 Fleet migration guide before continuing:" >&2
+  echo "       https://support.langchain.com/articles/8306585004-migrating-langsmith-deployments-control-plane-fleet-to-standalone-fleet" >&2
+  exit 1
+fi
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -219,7 +226,6 @@ echo ""
 
 # ── Read feature flags from terraform.tfvars ─────────────────────────────────
 _enable_deployments=false
-_enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
@@ -228,7 +234,6 @@ _enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
@@ -237,20 +242,6 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 _tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
 
-# Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the bundled
-# agent-bootstrap Job, so config.agentBuilder on its own now renders the tool/trigger
-# servers and the UI nav item but no agent runtime behind them. The two paths also
-# manage the same data with different schemas, so they must not run together.
-if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
-  echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
-  echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
-  exit 1
-fi
-if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
-  echo "WARNING: enable_agent_builder without enable_fleet deploys the Agent Builder UI and its" >&2
-  echo "         tool/trigger servers, but chart 0.16 removed the bundled agent-bootstrap Job that" >&2
-  echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
-fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
@@ -290,19 +281,8 @@ _resolve_entry_hostname() {
 }
 
 # Validate addon dependencies
-if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
 if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
   echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
-# Standalone Fleet's chat UI resolves OAuth provider/token connections via host-backend,
-# which only exists when Deployments is enabled. (Standalone Polly/Insights do not need it.)
-if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_fleet requires enable_deployments = true in terraform.tfvars." >&2
-  echo "       The Fleet chat UI needs host-backend (Deployments) for OAuth provider/token endpoints." >&2
   exit 1
 fi
 
@@ -323,7 +303,6 @@ echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
-  "agent-builder:agent_builder:$_enable_agent_builder"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "fleet:fleet:$_enable_fleet"
@@ -351,6 +330,13 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# Fleet always needs host-backend, including when Deployments is disabled.
+# Set it explicitly so a preserved values file from an older run cannot omit it.
+if [[ "$_enable_fleet" == "true" ]]; then
+  VALUES_ARGS+=(--set "hostBackend.enabled=true")
+  echo "  ✔ hostBackend.enabled=true (required by Fleet)"
+fi
 
 # Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).
 if [[ "$_sizing_profile" != "default" ]]; then
@@ -545,6 +531,9 @@ if [[ "$_enable_deployments" == "true" ]]; then
     "${RELEASE_NAME}-listener"
     "${RELEASE_NAME}-operator"
   )
+fi
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  _core_deployments+=("${RELEASE_NAME}-host-backend")
 fi
 # Standalone agent features (chart v0.15+). Deployment names derive from
 # <release>-<namePrefix>-<component>; namePrefix is standalone-{fleet,polly,insights}.

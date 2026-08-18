@@ -185,6 +185,15 @@ _validate_conflicts() {
 FRESH=false
 for arg in "$@"; do [[ "$arg" == "--fresh" ]] && FRESH=true; done
 
+if [[ -f "$OUTPUT" ]]; then
+  _existing_agent_builder=$(_parse_tfvar "enable_agent_builder" 2>/dev/null || echo "false")
+  if [[ "$_existing_agent_builder" == "true" ]]; then
+    _yellow "WARNING"; printf ": Legacy enable_agent_builder = true configuration detected.\n"
+    printf "  QuickStart cannot migrate this deployment automatically. Follow the v0.16 Fleet migration guide before continuing:\n"
+    printf "  https://support.langchain.com/articles/8306585004-migrating-langsmith-deployments-control-plane-fleet-to-standalone-fleet\n"
+    exit 1
+  fi
+fi
 UPDATE_MODE=false
 SHOWED_EXISTING_FILE_PROMPT=false
 if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
@@ -687,12 +696,12 @@ echo ""
 printf "  ${DIM}Optional addons — each requires the matching license entitlement.${RESET}\n"
 
 _ex_deploys=$(_existing "enable_deployments" "false")
-_ex_ab=$(_existing "enable_agent_builder" "false")
+_ex_fleet=$(_existing "enable_fleet" "false")
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
-ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
+ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
 ENABLE_SANDBOXES="false"
 
@@ -707,14 +716,14 @@ else
   SMITHDB_SKIP_FINAL_SNAPSHOT="true"
 fi
 
-_ask_yn "$(_feature_prompt "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" "$_ex_deploys")" \
+_ask_yn "$(_feature_prompt "Enable LangSmith Deployments" "$_ex_deploys" " (listener + operator + host-backend)?")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
+_ask_yn "$(_feature_prompt "Enable Fleet" "$_ex_fleet" " (no-code agents; includes host-backend)?")" \
+  "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
+  && ENABLE_FLEET="true" || ENABLE_FLEET="false"
 
 if [[ "$ENABLE_DEPLOYMENTS" == "true" ]]; then
-  _ask_yn "$(_feature_prompt "  ↳ Enable Agent Builder (visual agent UI, requires Deployments)?" "$_ex_ab")" \
-    "$([[ "$_ex_ab" == "true" ]] && echo "y" || echo "n")" \
-    && ENABLE_AGENT_BUILDER="true" || ENABLE_AGENT_BUILDER="false"
   _ask_yn "$(_feature_prompt "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" "$_ex_polly")" \
     "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
     && ENABLE_POLLY="true" || ENABLE_POLLY="false"
@@ -942,7 +951,7 @@ sizing_profile = "${SIZING}"
 # deploy.sh reads these flags to select the right Helm values overlays.
 #------------------------------------------------------------------------------
 enable_deployments   = ${ENABLE_DEPLOYMENTS}
-enable_agent_builder = ${ENABLE_AGENT_BUILDER}
+enable_fleet         = ${ENABLE_FLEET}
 enable_insights      = ${ENABLE_INSIGHTS}
 enable_polly         = ${ENABLE_POLLY}
 
@@ -1000,8 +1009,8 @@ printf "  %-26s %s\n" "Gateway mode:" "$GATEWAY_MODE"
 printf "  %-26s %s\n" "TLS:"          "$([[ "$CREATE_CERT_MANAGER" == "true" ]] && echo "Let's Encrypt DNS-01 (Route 53)" || echo "$TLS_SOURCE")"
 [[ -n "$DOMAIN" ]] && printf "  %-26s %s\n" "Domain:" "$DOMAIN"
 printf "  %-26s %s\n" "Sizing:"       "$SIZING"
-printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
-[[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
+printf "  %-26s %s\n" "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
+printf "  %-26s %s\n" "Fleet:" "$ENABLE_FLEET"
 [[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
 printf "  %-26s %s\n" "Sandboxes:" "$ENABLE_SANDBOXES"

@@ -166,7 +166,7 @@ aws/
         │   ├── langsmith-values-sizing-production-large.yaml ← Production large (high-volume, wider HPA)
         │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
-        │   ├── langsmith-values-agent-builder.yaml      ← Agent Builder
+        │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
         │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
         │   ├── langsmith-values-polly.yaml              ← Polly AI eval/monitoring
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
@@ -493,7 +493,7 @@ For each secret it follows this priority order:
 | `langsmith-license-key` | You enter it | From your LangChain account |
 | `langsmith-admin-password` | You enter it | Min 12 chars; must include a lowercase letter, an uppercase letter, and a symbol (`!#$%()+,-./:?@[\]^_{~}`) |
 | `deployments-encryption-key` | Auto-generated (Fernet key) | For Deployments/LangGraph Platform feature |
-| `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Agent Builder feature |
+| `agent-builder-encryption-key` | Auto-generated (Fernet key) | For Fleet; historical key name retained for compatibility |
 | `insights-encryption-key` | Auto-generated (Fernet key) | For Insights feature |
 | `polly-encryption-key` | Auto-generated (Fernet key) | For Polly AI eval feature |
 
@@ -610,7 +610,7 @@ Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and
 3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
 4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
    - `enable_deployments = true` → copies `langsmith-values-agent-deploys.yaml`
-   - `enable_agent_builder = true` → copies `langsmith-values-agent-builder.yaml`
+   - `enable_fleet = true` → copies `langsmith-values-fleet.yaml`
    - `enable_insights = true` → copies `langsmith-values-insights.yaml`
    - `enable_polly = true` → copies `langsmith-values-polly.yaml`
 5. Copies the appropriate sizing file if `sizing_profile` is set
@@ -631,16 +631,16 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads `enable_deployments`, `enable_agent_builder`, `enable_insights`, `enable_polly` from `terraform.tfvars`. Validates addon dependencies (agent_builder and polly require deployments).
+**Step 4 — Read feature flags.** Reads the supported `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; full LangSmith Deployments additionally enables the listener and operator.
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
 -f langsmith-values.yaml                      (base — always)
 -f langsmith-values-overrides.yaml            (your env — always)
 -f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
--f langsmith-values-agent-builder.yaml        (enable_agent_builder = true)
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
+-f langsmith-values-fleet.yaml                (enable_fleet = true)
 -f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default, loaded LAST)
 ```
 The sizing file is always loaded last so it can override replicas/resources set by addon files.
@@ -653,7 +653,8 @@ The sizing file is always loaded last so it can override replicas/resources set 
 
 **Step 9 — Core readiness.** Polls each core deployment with `kubectl rollout status --timeout=5m`:
 - `langsmith-frontend`, `langsmith-backend`, `langsmith-platform-backend`, `langsmith-ingest-queue`, `langsmith-queue`
-- Plus `langsmith-host-backend`, `langsmith-listener`, `langsmith-operator` if Deployments is enabled
+- Plus `langsmith-host-backend` if Fleet or Deployments is enabled
+- Plus `langsmith-listener` and `langsmith-operator` if Deployments is enabled
 
 **Step 10 — IRSA annotation for `langsmith-ksa`.** The `langsmith-ksa` service account is created by the operator at runtime (not part of the Helm release). It's used by all operator-spawned agent deployment pods. After every deploy, `deploy.sh` ensures this SA exists and carries the IRSA role ARN annotation — without it, new agent pod revisions can't access S3/SSM and stay unschedulable.
 
@@ -932,8 +933,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `firewall_allowed_fqdns` | `["beacon.langchain.com"]` | no | Domains allowed for outbound internet traffic when `create_firewall = true`. Matched against TLS SNI (HTTPS) and HTTP Host header. All other destinations are dropped. |
 | `firewall_subnet_cidr` | `"10.0.64.0/21"` | no | CIDR for the firewall subnet. Must not overlap with private (10.0.0.0/21–10.0.32.0/21) or public (10.0.40.0/21–10.0.56.0/21) subnets. |
 | `sizing_profile` | `default` | no | Helm sizing: `production`, `production-large`, `dev`, `minimum`, `default` |
-| `enable_deployments` | `false` | no | Enable LangGraph Platform (listener, operator, host-backend) |
-| `enable_agent_builder` | `false` | no | Enable Agent Builder (requires `enable_deployments`) |
+| `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
+| `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
 | `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
 | `enable_polly` | `false` | no | Enable Polly AI eval/monitoring (requires `enable_deployments`) |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
@@ -945,7 +946,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
 | `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
 | `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
-| `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Agent Builder |
+| `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
 | `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |
 | `owner` | `""` | no | Owner tag applied to all resources |
 | `cost_center` | `""` | no | Cost center tag for billing |

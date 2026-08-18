@@ -113,8 +113,8 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 
 ```hcl
 # infra/terraform.tfvars
-enable_deployments   = true    # LangGraph Platform (required for Agent Builder and Polly)
-enable_agent_builder = true    # Agent Builder UI
+enable_deployments   = true    # Optional full Deployments: listener + operator
+enable_fleet         = true    # No-code agents; enables its required host-backend
 enable_insights      = true    # ClickHouse-backed analytics
 enable_polly         = true    # Polly AI eval/monitoring
 enable_usage_telemetry = false # Extended usage telemetry

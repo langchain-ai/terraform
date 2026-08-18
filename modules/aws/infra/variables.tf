@@ -685,14 +685,19 @@ variable "sizing_profile" {
 
 variable "enable_deployments" {
   type        = bool
-  description = "Enable LangGraph Platform Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
+  description = "Enable LangSmith Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
   default     = false
 }
 
 variable "enable_agent_builder" {
   type        = bool
-  description = "Enable Agent Builder (visual agent building UI). Requires enable_deployments = true and Agent Builder entitlement in license."
+  description = "Deprecated compatibility input. Agent Builder is unsupported in chart v0.16; keep this false and migrate to Fleet."
   default     = false
+
+  validation {
+    condition     = !var.enable_agent_builder
+    error_message = "enable_agent_builder = true is unsupported in chart v0.16. Follow the Fleet migration guide before continuing."
+  }
 }
 
 variable "enable_insights" {
@@ -709,7 +714,7 @@ variable "enable_polly" {
 
 variable "enable_fleet" {
   type        = bool
-  description = "Enable Fleet standalone deployment (chart v0.15+). Requires enable_deployments = true (the Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed with Deployments). Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder. Requires postgres_source = redis_source = external."
+  description = "Enable Fleet and its required host-backend without enabling the listener or operator. Uses langsmith_agent_builder_encryption_key for historical compatibility. Requires postgres_source = redis_source = external."
   default     = false
 }
 
@@ -804,7 +809,7 @@ variable "langsmith_deployments_encryption_key" {
 
 variable "langsmith_agent_builder_encryption_key" {
   type        = string
-  description = "Fernet key for Agent Builder. Generate once and keep stable. Store in SSM: /langsmith/{base_name}/agent-builder-encryption-key."
+  description = "Fernet key for Fleet. The historical variable and SSM parameter names are retained for compatibility. Generate once and keep stable. Store in SSM: /langsmith/{base_name}/agent-builder-encryption-key."
   sensitive   = true
   default     = ""
 }
