@@ -58,9 +58,13 @@ _ask_yn() {
 }
 
 _feature_prompt() {
-  local prompt="$1" enabled="$2"
+  local label="$1" enabled="$2" detail="${3:-}"
   local state="disabled"; [[ "$enabled" == "true" ]] && state="enabled"
-  printf '%s [%s]' "$prompt" "$state"
+  if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+    printf '%s [%s]%s' "$label" "$state" "$detail"
+  else
+    printf '%s%s' "$label" "$detail"
+  fi
 }
 
 _ask_choice() {
@@ -109,6 +113,10 @@ _section() { echo ""; printf "${BOLD}── %s ──${RESET}\n" "$1"; }
 _existing() {
   local key="$1" fallback="${2:-}"
   local val
+  if [[ "${UPDATE_MODE:-false}" != "true" ]]; then
+    echo "$fallback"
+    return
+  fi
   val=$(_parse_tfvar "$key" 2>/dev/null) || val="$fallback"
   echo "$val"
 }
@@ -178,12 +186,13 @@ FRESH=false
 for arg in "$@"; do [[ "$arg" == "--fresh" ]] && FRESH=true; done
 
 UPDATE_MODE=false
+SHOWED_EXISTING_FILE_PROMPT=false
 if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
+  SHOWED_EXISTING_FILE_PROMPT=true
   echo ""
   printf "${BOLD}  LangSmith on AWS — terraform.tfvars already exists${RESET}\n"
   echo ""
   printf "  ${DIM}%s${RESET}\n" "$OUTPUT"
-  echo ""
   _ask_choice --default 1 "What would you like to do?" \
     "Update — re-run wizard with current values as defaults (recommended)" \
     "Start fresh — overwrite everything" \
@@ -202,12 +211,13 @@ fi
 
 # ── Banner ───────────────────────────────────────────────────────────────────
 
-echo ""
-printf "${BOLD}  LangSmith on AWS — Quickstart Setup${RESET}\n"
-if [[ "$UPDATE_MODE" == "true" ]]; then
-  printf "${DIM}  Updating terraform.tfvars — existing values shown as defaults.${RESET}\n"
-else
+if [[ "$SHOWED_EXISTING_FILE_PROMPT" != "true" ]]; then
+  echo ""
+  printf "${BOLD}  LangSmith on AWS — Quickstart Setup${RESET}\n"
   printf "${DIM}  Generates terraform.tfvars for your deployment.${RESET}\n"
+elif [[ "$UPDATE_MODE" != "true" ]]; then
+  echo ""
+  printf "${DIM}  Starting fresh — existing terraform.tfvars will be replaced.${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -271,10 +281,25 @@ _existing_create_vpc=$(_existing "create_vpc" "true")
 CREATE_VPC="true"
 VPC_ID=""; VPC_CIDR=""; PRIVATE_SUBNETS=""; PUBLIC_SUBNETS=""
 
-if _ask_yn "Create a new VPC?" "$([[ "$_existing_create_vpc" == "true" ]] && echo "y" || echo "n")"; then
+if [[ "$UPDATE_MODE" == "true" ]]; then
+  if [[ "$_existing_create_vpc" == "true" ]]; then
+    CREATE_VPC="true"
+    printf "  ${DIM}Keeping the current Terraform-managed VPC.${RESET}\n"
+  else
+    CREATE_VPC="false"
+    VPC_ID="$(_existing "vpc_id" "")"
+    VPC_CIDR="$(_existing "vpc_cidr_block" "")"
+    PRIVATE_SUBNETS="$(_existing "private_subnets" "")"
+    PUBLIC_SUBNETS="$(_existing "public_subnets" "")"
+    printf "  ${DIM}Keeping the current existing VPC and subnet IDs.${RESET}\n"
+  fi
+elif _ask_yn "Create a new VPC?" "$([[ "$_existing_create_vpc" == "true" ]] && echo "y" || echo "n")"; then
   CREATE_VPC="true"
 else
   CREATE_VPC="false"
+fi
+
+if [[ "$CREATE_VPC" == "false" && "$UPDATE_MODE" != "true" ]]; then
   echo ""
   printf "  ${DIM}Bring Your Own VPC — provide existing resource IDs${RESET}\n"
   _ask "VPC ID"            "$(_existing "vpc_id" "")"
@@ -285,10 +310,11 @@ else
   PRIVATE_SUBNETS="$_REPLY"
   _ask "Public subnet IDs (comma-separated)"  "$(_existing "public_subnets" "")"
   PUBLIC_SUBNETS="$_REPLY"
-  if [[ -z "$PUBLIC_SUBNETS" ]]; then
-    ALB_SCHEME="internal"
-    printf '\n  %sNo public subnets — alb_scheme will be set to "internal"%s\n' "$DIM" "$RESET"
-  fi
+fi
+
+if [[ "$CREATE_VPC" == "false" && -z "$PUBLIC_SUBNETS" ]]; then
+  ALB_SCHEME="internal"
+  printf '\n  %sNo public subnets — alb_scheme will be set to "internal"%s\n' "$DIM" "$RESET"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -392,15 +418,25 @@ fi
 
 echo ""
 _ex_ch=$(_existing "clickhouse_source" "")
-_ch_default=1; [[ "$_ex_ch" == "external" || "$PROFILE" == "prod" ]] && _ch_default=2
+_ch_default=1; [[ "$_ex_ch" == "external" ]] && _ch_default=2
 _ask_choice --default "$_ch_default" "ClickHouse:" \
-  "In-cluster — single pod, dev/POC only" \
-  "External — LangChain Managed ClickHouse (production)"
+  "In-cluster — default, including production" \
+  "External — managed separately"
 CH_SOURCE="in-cluster"; [[ "$_CHOICE" == "2" ]] && CH_SOURCE="external"
-if [[ "$PROFILE" == "prod" && "$CH_SOURCE" == "in-cluster" ]]; then
-  echo ""
-  _yellow "NOTE"; printf ": In-cluster ClickHouse is not production-grade.\n"
-  printf "  Docs: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse\n"
+
+_ex_smithdb=$(_existing "enable_smithdb" "false")
+_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
+_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
+_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
+ENABLE_SMITHDB="false"
+SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+
+if _ask_yn "$(_feature_prompt "Enable SmithDB" "$_ex_smithdb" " (purpose-built database for LangSmith run and trace data)?")" \
+  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
+  ENABLE_SMITHDB="true"
+  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
+  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
+  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -625,6 +661,7 @@ printf "  ${DIM}Controls resource requests, replica counts, and HPA ranges for L
 
 _ex_sizing=$(_existing "sizing_profile" "")
 _size_default=1
+[[ "$PROFILE" == "prod" ]]                  && _size_default=2
 [[ "$_ex_sizing" == "production" ]]       && _size_default=2
 [[ "$_ex_sizing" == "production-large" ]] && _size_default=3
 [[ "$PROFILE" == "dev" ]]                 && _size_default=1
@@ -654,16 +691,11 @@ _ex_ab=$(_existing "enable_agent_builder" "false")
 _ex_insights=$(_existing "enable_insights" "false")
 _ex_polly=$(_existing "enable_polly" "false")
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
-_ex_smithdb=$(_existing "enable_smithdb" "false")
-_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
-_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
 ENABLE_SANDBOXES="false"
-ENABLE_SMITHDB="false"
-SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+
 if [[ "$PROFILE" == "prod" ]]; then
   SMITHDB_DELETION_PROTECTION="true"
   SMITHDB_SKIP_FINAL_SNAPSHOT="false"
@@ -691,14 +723,6 @@ fi
 _ask_yn "$(_feature_prompt "Enable Insights (ClickHouse analytics dashboard)?" "$_ex_insights")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
-
-if _ask_yn "$(_feature_prompt "Enable SmithDB (columnar trace store, needs local-NVMe nodes via Karpenter)?" "$_ex_smithdb")" \
-  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
-  ENABLE_SMITHDB="true"
-  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
-  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
-fi
 
 echo ""
 printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
@@ -967,7 +991,7 @@ echo ""
 printf "  %-26s %s\n" "Profile:"      "$PROFILE"
 printf "  %-26s %s\n" "Name:"         "${NAME_PREFIX}-${ENVIRONMENT}"
 printf "  %-26s %s\n" "Region:"       "$REGION"
-printf "  %-26s %s\n" "VPC:"          "$([[ "$CREATE_VPC" == "true" ]] && echo "new" || echo "existing ($VPC_ID)")"
+printf "  %-26s %s\n" "VPC:"          "$([[ "$CREATE_VPC" == "true" ]] && echo "Terraform-managed" || echo "existing ($VPC_ID)")"
 printf "  %-26s %s\n" "EKS API:"      "$([[ "$EKS_PUBLIC" == "true" ]] && echo "public" || echo "private + bastion")"
 printf "  %-26s %s\n" "PostgreSQL:"   "$PG_SOURCE"
 printf "  %-26s %s\n" "Redis:"        "$REDIS_SOURCE"
