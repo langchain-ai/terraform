@@ -42,7 +42,14 @@ clickhouse_source = "in-cluster"   # use LangChain Managed ClickHouse for full p
 #------------------------------------------------------------------------------
 postgres_admin_username      = "langsmith"
 postgres_database_name       = "langsmith"
-postgres_deletion_protection = true   # must set false before terraform destroy
+# CanNotDelete management lock on the server. Creating it needs
+# Microsoft.Authorization/locks/write, held ONLY by Owner and User Access
+# Administrator. Contributor is denied it, and Role Based Access Control
+# Administrator does not grant it — so the Contributor + RBAC Administrator
+# pairing PERMISSIONS.md recommends will fail the apply here. Set this false
+# unless you deploy as Owner or UAA.
+# To destroy: set false, apply to drop the lock, then destroy.
+postgres_deletion_protection = true
 
 #------------------------------------------------------------------------------
 # Redis (Azure Managed Redis / AMR)
@@ -67,7 +74,10 @@ default_node_pool_vm_size   = "Standard_D8s_v3"
 default_node_pool_min_count = 3     # minimum 3 for Pass 2; set 5 for Pass 3+
 default_node_pool_max_count = 10
 default_node_pool_max_pods  = 60
-aks_deletion_protection     = true   # must set false before terraform destroy
+# CanNotDelete management lock on the cluster. Same Owner-or-UAA requirement as
+# postgres_deletion_protection above. Ignored when create_cluster = false.
+# To destroy: set false, apply to drop the lock, then destroy.
+aks_deletion_protection     = true
 
 # Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
 additional_node_pools = {

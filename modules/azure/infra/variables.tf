@@ -669,14 +669,14 @@ variable "additional_node_pools" {
 
 variable "aks_deletion_protection" {
   type        = bool
-  description = "Prevent accidental AKS cluster deletion. Set false for dev/test environments where you need to destroy and recreate."
-  default     = true
+  description = "Place a CanNotDelete management lock on the AKS cluster. Blocks out-of-band deletion — portal, az CLI, az group delete — but not terraform destroy from this configuration, which drops the lock before the cluster. Ignored when create_cluster = false, since the cluster then belongs to you rather than this module. Requires Microsoft.Authorization/locks/write, held only by Owner and User Access Administrator. Contributor is denied it, and Role Based Access Control Administrator does not grant it either — so the Contributor + RBAC Administrator pairing PERMISSIONS.md recommends cannot enable this. Reliable teardown: set false, apply to drop the lock, then destroy."
+  default     = false
 }
 
 variable "postgres_deletion_protection" {
   type        = bool
-  description = "Prevent accidental PostgreSQL server deletion. Set false for dev/test environments."
-  default     = true
+  description = "Place a CanNotDelete management lock on the PostgreSQL Flexible Server. Blocks out-of-band deletion — portal, az CLI, az group delete — but not terraform destroy from this configuration, which drops the lock before the server. Requires Microsoft.Authorization/locks/write, held only by Owner and User Access Administrator. Contributor is denied it, and Role Based Access Control Administrator does not grant it either — so the Contributor + RBAC Administrator pairing PERMISSIONS.md recommends cannot enable this. Reliable teardown: set false, apply to drop the lock, then destroy."
+  default     = false
 }
 
 variable "langsmith_namespace" {

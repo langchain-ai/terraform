@@ -1001,3 +1001,53 @@ module "dns" {
   grant_cert_manager_dns    = var.tls_certificate_source == "dns01"
   cert_manager_principal_id = var.tls_certificate_source == "dns01" ? module.aks.cert_manager_identity_principal_id : ""
 }
+
+# ── Deletion protection (optional) ────────────────────────────────────────────
+# Azure has no per-resource deletion_protection attribute the way AWS RDS and
+# GCP do; the azurerm schema exposes nothing of the kind on either
+# azurerm_kubernetes_cluster or azurerm_postgresql_flexible_server. The native
+# equivalent is a management lock at CanNotDelete, which rejects delete calls
+# against the resource and everything beneath it until the lock itself is gone.
+#
+# Creating or removing a lock requires Microsoft.Authorization/locks/write, held
+# by Owner and User Access Administrator and nothing else in play here:
+#   - Contributor is explicitly denied it. Its NotActions list
+#     Microsoft.Authorization/*/Write.
+#   - Role Based Access Control Administrator does NOT grant it either. That role
+#     covers Microsoft.Authorization/roleAssignments/{write,delete} only.
+#
+# That last one is the trap: PERMISSIONS.md recommends Contributor + RBAC
+# Administrator as the least-privilege pairing, and that pairing can create every
+# other resource here but not these locks. An identity that can already apply
+# this module is not guaranteed to be able to turn these flags on, which is why
+# both default to false rather than true.
+#
+# What this does and does not stop: the lock guards the out-of-band paths —
+# portal delete, `az` CLI, `az group delete` on the whole resource group. It does
+# NOT stop `terraform destroy` from this configuration. The lock's scope
+# references the resource id, so destroy reverses that edge and removes the lock
+# before the resource it protects.
+#
+# Two cases where a destroy does fail on the lock: the identity running it lacks
+# locks/write (the lock was created by an Owner, the destroy runs as a
+# Contributor), or the lock is in Azure but not in state. The reliable teardown
+# either way is to set the flag false, apply to drop the lock, then destroy.
+
+resource "azurerm_management_lock" "aks" {
+  # Only lock a cluster this module created. When create_cluster = false,
+  # module.aks.cluster_id points at the customer's pre-existing cluster, and
+  # locking it would change a resource we do not own.
+  count      = var.create_cluster && var.aks_deletion_protection ? 1 : 0
+  name       = "${local.aks_name}-no-delete"
+  scope      = module.aks.cluster_id
+  lock_level = "CanNotDelete"
+  notes      = "Managed by Terraform (aks_deletion_protection). Set the variable false and apply before destroying."
+}
+
+resource "azurerm_management_lock" "postgres" {
+  count      = var.postgres_source == "external" && var.postgres_deletion_protection ? 1 : 0
+  name       = "${local.postgres_name}-no-delete"
+  scope      = module.postgres[0].postgres_id
+  lock_level = "CanNotDelete"
+  notes      = "Managed by Terraform (postgres_deletion_protection). Set the variable false and apply before destroying."
+}

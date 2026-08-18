@@ -11,7 +11,8 @@
 #   1. az CLI is installed and logged in
 #   2. Correct subscription is selected
 #   3. Required resource providers are registered
-#   4. The identity Terraform will use can write role assignments
+#   4. The identity Terraform will use can write role assignments, and management
+#      locks when either deletion_protection flag is on
 #   5. Subscription offer type is not blocked from provisioning Postgres
 #   6. Regional vCPU quota covers the configured Postgres SKU family
 #   7. terraform.tfvars exists with required fields populated, and any cluster or
@@ -263,13 +264,22 @@ else
     fi
   fi
 
+  # Management locks are a separate permission from role assignments, and the
+  # pairing PERMISSIONS.md recommends does not carry it, so the action is only
+  # worth asking about when the tfvars actually turn a lock on. Both variables
+  # default to false, so an absent key means no.
+  LOCKS_WANTED=0
+  case "$(_tfvar aks_deletion_protection || echo false),$(_tfvar postgres_deletion_protection || echo false)" in
+    *true*) LOCKS_WANTED=1 ;;
+  esac
+
   # roleAssignments/write is the action that decides; the rest are what a
   # principal without broad resource access trips over first. resourceGroups/read
   # is what plan exercises before any of the writes — refresh reads everything
   # already in state — so a run against an applied deployment fails there first.
   # checkAccess batches, so all of them cost one request per scope. The object ID
   # goes through json.dumps into a file rather than onto a command line.
-  python3 - "$PRINCIPAL_ID" > "${RBAC_TMP}/body.json" <<'PY'
+  python3 - "$PRINCIPAL_ID" "$LOCKS_WANTED" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
 ACTIONS = [
@@ -287,6 +297,11 @@ ACTIONS = [
     # passed on a permission the apply never uses and missed the one it does.
     "Microsoft.Cache/redisEnterprise/write",
 ]
+
+# Asked for only when a deletion_protection flag is on. The action is a literal
+# here; argv[2] decides whether it is sent, never what is sent.
+if sys.argv[2] == "1":
+    ACTIONS.append("Microsoft.Authorization/locks/write")
 
 print(json.dumps({
     "Subject": {"Attributes": {"ObjectId": sys.argv[1]}},
@@ -339,6 +354,9 @@ tmp, elig_path, is_caller, principal_type_hint = sys.argv[1:5]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
+# Present in the responses only when a deletion_protection flag is on, so the
+# absence of a decision for it is not a finding.
+LOCKS_WRITE = "microsoft.authorization/locks/write"
 
 # checkAccess names the granting role by bare GUID. These are the built-ins
 # likely to appear on a decision here, verified against az role definition list;
@@ -449,11 +467,15 @@ if unanswered:
     out.append("warn checkAccess did not answer at %s, so nothing here speaks to what the "
                "deployment can do there." % ", ".join(unanswered))
 
-write_ok, write_no, delete_no, other = [], [], [], []
+write_ok, write_no, delete_no, locks_ok, locks_no, other = [], [], [], [], [], []
 for scope, decisions in answered:
+    # locks/write is excluded alongside the two role actions because all three
+    # get a verdict of their own below. It is also the one action here the
+    # deployment does not always need, so the generic "needs all of these"
+    # wording would be wrong about it.
     other.append((", ".join(sorted({
         decision.get("actionId") or "?" for decision in decisions
-        if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE)
+        if (decision.get("actionId") or "").lower() not in (ROLE_WRITE, ROLE_DELETE, LOCKS_WRITE)
         and decision.get("accessDecision") != "Allowed"})), scope))
     for decision in decisions:
         action = (decision.get("actionId") or "").lower()
@@ -468,6 +490,8 @@ for scope, decisions in answered:
                 write_no.append((deny_label(deny) if deny else "", scope))
         elif action == ROLE_DELETE and not allowed:
             delete_no.append(("", scope))
+        elif action == LOCKS_WRITE:
+            (locks_ok if allowed else locks_no).append(("", scope))
 
 # The PIM finding explains every roleAssignments/write refusal below it, and the
 # remedy is one click rather than a ticket, so it leads. Printed last it read as
@@ -541,6 +565,19 @@ for _, scopes in by_verdict(delete_no):
                "assignments, but terraform destroy and any change that replaces one will fail."
                % scope_list(scopes))
 
+for _, scopes in by_verdict(locks_ok):
+    out.append("pass locks/write permitted at %s, so the deletion_protection flags in "
+               "terraform.tfvars can place their management locks" % scope_list(scopes))
+
+for _, scopes in by_verdict(locks_no):
+    out.append("fail locks/write is not permitted at %s, and a deletion_protection flag is on in "
+               "terraform.tfvars. The CanNotDelete locks it places need "
+               "Microsoft.Authorization/locks/write, which only Owner and User Access "
+               "Administrator carry — Contributor is denied it by NotActions, and Role Based "
+               "Access Control Administrator covers roleAssignments only. Deploy as one of those "
+               "two, or set aks_deletion_protection and postgres_deletion_protection false."
+               % scope_list(scopes))
+
 print("\n".join(lead + out))
 PY
   )
@@ -562,6 +599,17 @@ PY
       *)
         fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
+
+    # Role Based Access Control Administrator satisfies the case above and still
+    # cannot place a lock, so the two verdicts are not the same question.
+    if [ "$LOCKS_WANTED" -eq 1 ]; then
+      case ",${HELD_FLAT}," in
+        *,Owner,*|*,"User Access Administrator",*)
+          pass "Holds a role carrying Microsoft.Authorization/locks/write, which the deletion_protection flags need" ;;
+        *)
+          warn "A deletion_protection flag is on in terraform.tfvars, and no Owner or User Access Administrator grant was found at or above the subscription. Only those two carry Microsoft.Authorization/locks/write. Roles held: ${HELD_FLAT}. Apply will build everything else and then fail on the lock." ;;
+      esac
+    fi
   else
     pass "checkAccess answered, so the verdicts below are this principal's effective access with deny assignments and ABAC conditions applied"
     _render <<EOF

@@ -16,6 +16,21 @@ Resource group scope is enough only if the resource group already exists and you
 
 `Role Based Access Control Administrator` is the narrower of the two role-assignment roles. It grants `Microsoft.Authorization/roleAssignments/write` without the broader access-management rights that `User Access Administrator` carries.
 
+### Deletion protection needs Owner or UAA
+
+`aks_deletion_protection` and `postgres_deletion_protection` place Azure management locks, which need `Microsoft.Authorization/locks/write`. That permission is the one place the least-privilege pairing above falls short:
+
+| Role | `locks/write` | Why |
+|------|--------------|-----|
+| `Owner` | yes | `*` |
+| `User Access Administrator` | yes | `Microsoft.Authorization/*` |
+| `Role Based Access Control Administrator` | **no** | grants `roleAssignments/write` and `roleAssignments/delete` only |
+| `Contributor` | **no** | NotActions denies `Microsoft.Authorization/*/Write` |
+
+So `Contributor` + `Role Based Access Control Administrator` can build every resource in this deployment except these locks. Both variables default to `false`, so that pairing works out of the box. If you set either to `true` — `terraform.tfvars.production` does — deploy as `Owner` or `Contributor` + `User Access Administrator`, or the apply fails when it reaches the lock.
+
+`make preflight` reads both flags from `terraform.tfvars` and checks `locks/write` only when one of them is on, so this failure surfaces before the apply rather than partway through it.
+
 ## Run as a service principal
 
 The deploying identity does not have to be your `az login` user. Two routes make it a service principal, and they are not interchangeable.
