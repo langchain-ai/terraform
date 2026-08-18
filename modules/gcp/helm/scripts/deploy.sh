@@ -433,6 +433,32 @@ if [[ -z "$_resolved_chart" ]]; then
   exit 1
 fi
 
+# The historical backfill reads the LangSmith traces bucket, and before chart
+# 0.16.6 the migration Job asked for the s3 provider whatever
+# config.blobStorage.engine said. On GCP that means AWS4-signing every read with
+# the empty blob_storage_access_key, so storage.googleapis.com answers 403
+# SignatureDoesNotMatch. The Job still reports Running while every task fails and
+# the taskdb marks those failures non-retryable, so the visible symptom is
+# planned-row progress stuck at 0% with nothing naming the chart version.
+#
+# This module used to carry a values override for that. It does not any more, so
+# refuse the combination rather than let it fail in a way nobody attributes to a
+# pinned patch. Only this one gate is affected; the others work on any 0.16 patch,
+# which is why the check sits here rather than beside the chart-line guard above.
+if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+  _mig_patch="${_resolved_chart#0.16.}"
+  _mig_patch="${_mig_patch%%-*}"
+  if [[ "$_mig_patch" =~ ^[0-9]+$ && "$_mig_patch" -lt 6 ]]; then
+    echo "ERROR: smithdb_migration_enabled = true needs chart 0.16.6 or newer; resolved $_resolved_chart." >&2
+    echo "       Earlier patches point the backfill's source blob store at s3 even when" >&2
+    echo "       config.blobStorage.engine is GCS, so every read of the traces bucket fails" >&2
+    echo "       with 403 SignatureDoesNotMatch while the Job still reports Running." >&2
+    echo "       Leave CHART_VERSION unset to take the latest 0.16.x, or name 0.16.6+:" >&2
+    echo "         CHART_VERSION=0.16.6 make deploy" >&2
+    exit 1
+  fi
+fi
+
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \

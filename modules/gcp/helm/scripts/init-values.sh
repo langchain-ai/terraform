@@ -766,39 +766,24 @@ ${_smithdb_proxy_block}
 
   # The chart refuses to render with the migration gate on unless taskdb has a
   # credential, so always point it at the Terraform-created secret.
+  #
+  # The backfill's *source* blob store - the traces bucket holding the run
+  # payloads LangSmith offloaded out of ClickHouse - needs nothing here. From
+  # chart 0.16.6 the migration Job follows config.blobStorage.engine, so a GCS
+  # engine renders the native GCS provider, which takes no credential fields and
+  # authenticates as the Pod's Workload Identity principal. deploy.sh refuses to
+  # deploy an older patch with this gate on, because chart 0.16.5 and earlier
+  # asked for s3 regardless of engine and failed every read on GCP.
+  #
+  # What the source store does need is the read grant, and that is Terraform's
+  # side: modules/smithdb holds roles/storage.objectViewer on the traces bucket
+  # while smithdb_migration_enabled is true. Helm cannot create a GCP IAM
+  # binding, so the chart fix alone is not sufficient.
   migration:
     taskdb:
       postgres:
         auth:
           existingSecretName: "${SMITHDB_TASKDB_SECRET_NAME}"
-    deployment:
-      # Source blob store for the backfill: the traces bucket holding the run
-      # payloads LangSmith offloaded out of ClickHouse.
-      #
-      # This has to be overridden because the chart hardcodes
-      # BLOB_STORE_DEFAULT__TYPE to s3 for every blob-storage engine, including
-      # GCS, and then wires the credentials to blob_storage_access_key and
-      # blob_storage_secret_access_key. On GCP those keys are empty by design -
-      # LangSmith uses native GCS with Workload Identity - so the backfill signs
-      # its reads AWS4-style with an empty secret and every GET comes back 403
-      # SignatureDoesNotMatch from storage.googleapis.com. The Job stays Running
-      # while each task fails, and the taskdb records the failures as
-      # non-retryable, so progress sits at 0% with no obvious cause.
-      #
-      # These three land after the chart's own entries in the container's env
-      # list, and Kubernetes takes the last value when a name repeats, so the
-      # native GCS provider wins. It needs no credential fields and authenticates
-      # as the pod's Workload Identity principal, which modules/smithdb grants
-      # objectViewer on this bucket when smithdb_migration_enabled is true.
-      extraEnv:
-        - name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE
-          value: "gcs"
-        - name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__BUCKET
-          value: "${BUCKET_NAME}"
-        # The payload keys recorded in ClickHouse are absolute within the bucket,
-        # so the source store takes no prefix.
-        - name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__ROOT_FOLDER
-          value: "/"
 
   langsmith:
     ingestion:

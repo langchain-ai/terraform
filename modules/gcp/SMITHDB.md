@@ -204,7 +204,11 @@ make deploy
 SmithDB needs chart 0.16 or newer. `deploy.sh` already pins the 0.16 line and
 refuses anything off it, so there is nothing SmithDB-specific to set. To name an
 exact patch rather than the latest on the line, pass `CHART_VERSION=0.16.3`.
-Check what is published with:
+
+The historical backfill needs 0.16.6 or newer, which is where the migration Job
+started following `config.blobStorage.engine` for its source blob store.
+`deploy.sh` rejects an earlier patch when `smithdb_migration_enabled` is true. The
+other two gates work on any patch of the line. Check what is published with:
 
 ```sh
 helm search repo langchain/langsmith --versions
@@ -296,37 +300,31 @@ bucket. LangSmith offloads large run payloads - inputs, outputs and errors - to
 the traces bucket and keeps only a key in ClickHouse, so the backfill has to
 fetch those objects to rewrite them into `.vortex` segments.
 
-Two pieces make that work, and the module handles both when
-`smithdb_migration_enabled = true`:
+Two pieces make that work, and they sit on opposite sides of the boundary:
 
-1) `modules/smithdb` grants the SmithDB service account
-`roles/storage.objectViewer` on the traces bucket. Read-only, bucket-scoped, and
-only created with the migration gate, so a steady-state install keeps a service
-account that can reach nothing but its own bucket.
+1) The chart selects the provider. From chart 0.16.6 the migration Job follows
+`config.blobStorage.engine`, so a GCS engine renders
+`SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE: gcs` with a bucket and a root
+folder and no credential fields at all. The Job then authenticates as the Pod's
+Workload Identity principal. Nothing is needed in the values files for this.
 
-2) `init-values.sh` points the Job's source blob store at native GCS through
-`smithdb.migration.deployment.extraEnv`:
+2) Terraform grants the access. `modules/smithdb` holds
+`roles/storage.objectViewer` for the SmithDB service account on the traces
+bucket. Read-only, bucket-scoped, and created only with the migration gate, so a
+steady-state install keeps a service account that can reach nothing but its own
+bucket. Helm cannot create a GCP IAM binding, so the chart behaviour alone is not
+sufficient - the grant has to live here.
 
-```yaml
-- name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE
-  value: "gcs"
-- name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__BUCKET
-  value: "<traces bucket>"
-- name: SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__GCS__ROOT_FOLDER
-  value: "/"
-```
+Chart 0.16.5 and earlier asked for the `s3` provider whatever the engine said,
+and wired the credentials to `blob_storage_access_key` and
+`blob_storage_secret_access_key`. On GCP those two are empty by design, so the
+backfill AWS4-signed every read with an empty secret and `storage.googleapis.com`
+answered `403 SignatureDoesNotMatch`. `deploy.sh` refuses to deploy a patch below
+0.16.6 while `smithdb_migration_enabled` is true, rather than let that resurface.
 
-The override is needed because the chart hardcodes
-`SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE` to `s3` for every blob-storage
-engine, GCS included, then wires the credentials to `blob_storage_access_key` and
-`blob_storage_secret_access_key`. On GCP those two are empty by design, because
-LangSmith uses native GCS with Workload Identity. The backfill therefore signs
-its reads AWS4-style with an empty secret, and `storage.googleapis.com` answers
-every GET with `403 SignatureDoesNotMatch`.
-
-That failure is easy to misread. The Job reports `Running`, the pod stays
-`2/2 Running`, the metastore and the Auth Proxy are both healthy, and the only
-symptom is that planned-row progress never leaves 0%. Check the task state
+Either way, a failure here is easy to misread. The Job reports `Running`, the pod
+stays `2/2 Running`, the metastore and the Auth Proxy are both healthy, and the
+only symptom is that planned-row progress never leaves 0%. Check the task state
 rather than the pod phase:
 
 ```sh
