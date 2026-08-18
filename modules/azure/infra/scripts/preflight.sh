@@ -189,13 +189,14 @@ else
   }
 
   # tfvar() unquotes by cutting on the quote character, so a bool — which is not
-  # quoted — comes back as the whole line. Read the right-hand side instead. The
-  # result is only ever compared against the literal "true"; it reaches no URL,
-  # request body, or command line.
+  # quoted — comes back as the whole line. Read the right-hand side instead, and
+  # drop quotes on the way out, because Terraform accepts "true" for a bool
+  # variable. The result is only ever compared against a literal; it reaches no
+  # URL, request body, or command line.
   tfvar_bool() {
     [ -f "$TFVARS_FILE" ] || return 0
     grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 \
-      | sed -e 's/#.*//' -e 's/^[^=]*=//' -e 's/[[:space:]]//g' || true
+      | sed -e 's/#.*//' -e 's/^[^=]*=//' -e 's/"//g' -e 's/[[:space:]]//g' || true
   }
 
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
@@ -221,12 +222,23 @@ else
 
   # Management locks are a separate permission from role assignments, and the
   # pairing PERMISSIONS.md recommends does not carry it, so the action is only
-  # worth asking about when the tfvars actually turn a lock on. Both variables
-  # default to false, so an absent key means no.
+  # worth asking about when the tfvars actually turn a lock on. Both flags default
+  # to false, so an absent key means no.
+  #
+  # The count gates in main.tf are mirrored here: the AKS lock is skipped when
+  # create_cluster = false and the Postgres lock when postgres_source is not
+  # "external". A flag whose gate is closed places no lock, so treating it as a
+  # missing permission would fail the run over nothing. Those two default to true
+  # and "external", so for them an absent key leaves the gate open.
   LOCKS_WANTED=0
-  case "$(tfvar_bool aks_deletion_protection),$(tfvar_bool postgres_deletion_protection)" in
-    *true*) LOCKS_WANTED=1 ;;
-  esac
+  if [ "$(tfvar_bool aks_deletion_protection)" = "true" ] \
+    && [ "$(tfvar_bool create_cluster)" != "false" ]; then
+    LOCKS_WANTED=1
+  fi
+  if [ "$(tfvar_bool postgres_deletion_protection)" = "true" ] \
+    && [ "$(tfvar postgres_source)" != "in-cluster" ]; then
+    LOCKS_WANTED=1
+  fi
 
   # roleAssignments/write is the action that decides; the rest are what a
   # principal without broad resource access trips over first. checkAccess batches,

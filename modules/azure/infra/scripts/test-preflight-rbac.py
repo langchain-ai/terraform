@@ -39,6 +39,7 @@ CUSTOM_GUID = "aaaaaaaabbbbccccddddeeeeeeeeeeee"
 
 ROLE_WRITE = "Microsoft.Authorization/roleAssignments/write"
 ROLE_DELETE = "Microsoft.Authorization/roleAssignments/delete"
+LOCKS_WRITE = "Microsoft.Authorization/locks/write"
 RESOURCE_ACTIONS = [
     "Microsoft.Resources/subscriptions/resourceGroups/write",
     "Microsoft.ContainerService/managedClusters/write",
@@ -86,8 +87,13 @@ def response(
     assignment=None,
     deny=None,
     refuse_resources=(),
+    locks=None,
 ):
-    """A full nine-action checkAccess response for one scope."""
+    """A full nine-action checkAccess response for one scope.
+
+    locks=True or False adds the tenth decision, which preflight asks for only
+    when a deletion_protection flag is on and its count gate is open.
+    """
     assignment = assignment if assignment is not None else granted()
     out = [
         decision(ROLE_WRITE, write, assignment, deny),
@@ -96,6 +102,8 @@ def response(
     for action in RESOURCE_ACTIONS:
         allowed = resources and action not in refuse_resources
         out.append(decision(action, allowed, assignment))
+    if locks is not None:
+        out.append(decision(LOCKS_WRITE, locks, assignment))
     return out
 
 
@@ -304,6 +312,40 @@ CASES = [
         "reject": ["[✗] roleAssignments/write"],
     },
     {
+        "name": "a deletion_protection flag asks for locks/write and passes when it is permitted",
+        "tfvars_extra": "aks_deletion_protection = true",
+        "ca_all": response(locks=True),
+        "expect": [f"[✓] locks/write permitted at {SUB_SCOPE}"],
+        "assert_actions": [LOCKS_WRITE],
+        "reject": ["[✗]"],
+    },
+    {
+        "name": "locks/write refused fails on its own without failing the resource verdict",
+        "tfvars_extra": "postgres_deletion_protection = true",
+        "ca_all": response(locks=False),
+        "expect": [
+            f"[✗] locks/write is not permitted at {SUB_SCOPE}",
+            "only Owner and User Access Administrator carry",
+            f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}",
+        ],
+        "reject": ["[✗] Not permitted at"],
+    },
+    {
+        "name": "postgres_source in-cluster closes the gate, so locks/write is never asked",
+        "tfvars_extra": 'postgres_deletion_protection = true\npostgres_source = "in-cluster"',
+        "ca_all": ALL_GOOD,
+        "expect": [f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}"],
+        "reject": ["locks/write"],
+        "assert_actions_absent": [LOCKS_WRITE],
+    },
+    {
+        "name": "create_cluster false closes the AKS gate, so locks/write is never asked",
+        "tfvars_extra": "aks_deletion_protection = true\ncreate_cluster = false",
+        "ca_all": ALL_GOOD,
+        "reject": ["locks/write"],
+        "assert_actions_absent": [LOCKS_WRITE],
+    },
+    {
         "name": "an ARM_SUBSCRIPTION_ID mismatch fails before any verdict is trusted",
         "env": {"ARM_SUBSCRIPTION_ID": "99999999-9999-9999-9999-999999999999"},
         "ca_all": ALL_GOOD,
@@ -403,6 +445,19 @@ def run_case(case, index):
             got = json.loads(body_path.read_text())["Subject"]["Attributes"]["ObjectId"]
             if got != case["assert_subject"]:
                 problems.append(f"Subject was {got}, expected {case['assert_subject']}")
+
+    if "assert_actions" in case or "assert_actions_absent" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            sent = {action["Id"] for action in json.loads(body_path.read_text())["Actions"]}
+            for action in case.get("assert_actions", []):
+                if action not in sent:
+                    problems.append(f"action not requested: {action}")
+            for action in case.get("assert_actions_absent", []):
+                if action in sent:
+                    problems.append(f"action unexpectedly requested: {action}")
 
     if problems:
         rendered = [
