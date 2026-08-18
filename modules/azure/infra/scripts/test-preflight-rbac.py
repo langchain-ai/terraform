@@ -120,6 +120,22 @@ def eligibility(role, scope=SUB_SCOPE):
 
 DENY = {"id": "deny-1", "displayName": "Landing zone RBAC lock"}
 
+# What checkNameAvailability returns for a name that exists — byte-identical
+# whether the resource belongs to this deployment or to a stranger's tenant.
+TAKEN = {
+    "nameAvailable": False,
+    "available": False,
+    "reason": "AlreadyExists",
+    "message": "The specified name is already in use.",
+}
+
+# The names the default fixture derives (identifier "-dev", no hash).
+PG = "langsmith-postgres-dev"
+BLOB = "langsmithblobdev"
+KV = "langsmith-kv-dev"
+REDIS = "langsmith-redis-dev"
+DNS = "langsmith-dev-ls"
+
 ALL_GOOD = response()
 
 CASES = [
@@ -459,6 +475,79 @@ CASES = [
         "reject": ["[✗] roleAssignments/write"],
     },
     {
+        # checkNameAvailability answers a global question and has no ownership
+        # dimension, so every name a deployment already created comes back
+        # taken. Reading Terraform state first is what stops the second
+        # `make preflight` of a live deployment from failing on its own
+        # resources. The DNS label is included because it lives under a
+        # different state attribute than the other three.
+        "name": "names this deployment already created are not collisions",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "tfstate_names": [PG, BLOB, KV],
+        "tfstate_dns_labels": [DNS],
+        "expect": [
+            f"[✓] Postgres: '{PG}' is already deployed and tracked in Terraform state",
+            f"[✓] Storage account: '{BLOB}' is already deployed",
+            f"[✓] Key Vault: '{KV}' is already deployed",
+            f"[✓] Public IP DNS label: '{DNS}' is already deployed",
+        ],
+        "reject": ["ALREADY TAKEN"],
+    },
+    {
+        "name": "a taken name with no state behind it still fails",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "expect": [
+            f"[✗] Postgres: '{PG}' is ALREADY TAKEN globally",
+            f"[✗] Key Vault: '{KV}' is ALREADY TAKEN globally",
+        ],
+        "reject": ["tracked in Terraform state"],
+    },
+    {
+        # State exempts a name, not the run: a half-built deployment must still
+        # fail on the names it has not created yet.
+        "name": "state exempts only the names it actually holds",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "tfstate_names": [PG],
+        "expect": [
+            f"[✓] Postgres: '{PG}' is already deployed",
+            f"[✗] Key Vault: '{KV}' is ALREADY TAKEN globally",
+        ],
+    },
+    {
+        # A soft-deleted vault is ours and still holds the name, but it is in
+        # neither Terraform state nor `az keyvault list`, so state cannot see it
+        # and the generic "already in use" names no remedy.
+        "name": "a soft-deleted Key Vault is named as such, with the remedy",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "kv_deleted": 1,
+        "expect": [
+            f"[✗] Key Vault: '{KV}' is soft-deleted",
+            f"az keyvault recover --name {KV}",
+        ],
+        "reject": [f"Key Vault: '{KV}' is ALREADY TAKEN"],
+    },
+    {
+        # Redis has no working CheckNameAvailability, so it is checked against
+        # the subscription instead — which was equally blind to ownership.
+        "name": "a Redis left over from a failed apply still fails",
+        "ca_all": ALL_GOOD,
+        "redis_hit": 1,
+        "expect": [f"[✗] Redis: '{REDIS}' already exists in this subscription"],
+    },
+    {
+        "name": "a Redis that Terraform already manages does not",
+        "ca_all": ALL_GOOD,
+        "redis_hit": 1,
+        "tfstate_names": [REDIS],
+        "expect": [f"[✓] Redis: '{REDIS}' is already deployed and tracked in Terraform state"],
+        "reject": ["[✗] Redis"],
+    },
+    {
         "name": "an ARM_SUBSCRIPTION_ID mismatch fails before any verdict is trusted",
         "env": {"ARM_SUBSCRIPTION_ID": "99999999-9999-9999-9999-999999999999"},
         "ca_all": ALL_GOOD,
@@ -508,6 +597,26 @@ def build_case(case, index):
         (fixture / "held").write_text(case["held"])
     if "pg_caps_raw" in case:
         (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
+    if "name_availability" in case:
+        (fixture / "name_availability.json").write_text(json.dumps(case["name_availability"]))
+    for key in ("kv_deleted", "redis_hit"):
+        if key in case:
+            (fixture / key).write_text(str(case[key]))
+
+    # Preflight reads the local state file when no backend is initialised, which
+    # is the state a customer running `make preflight` before `make init` is in.
+    if "tfstate_names" in case or "tfstate_dns_labels" in case:
+        resources = [
+            {"type": "stub", "instances": [{"attributes": {"name": value}}]}
+            for value in case.get("tfstate_names", [])
+        ] + [
+            {"type": "azurerm_public_ip",
+             "instances": [{"attributes": {"domain_name_label": value}}]}
+            for value in case.get("tfstate_dns_labels", [])
+        ]
+        (infra / "terraform.tfstate").write_text(
+            json.dumps({"version": 4, "resources": resources})
+        )
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
                  "assignments_fail", "pg_caps_fail", "pg_caps_stderr"):

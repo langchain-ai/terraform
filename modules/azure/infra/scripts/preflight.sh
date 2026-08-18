@@ -735,7 +735,8 @@ fi
 # Postgres, Redis, Storage, and Key Vault names live in a namespace shared by
 # every Azure tenant, as does the public-IP DNS label. A collision surfaces as a
 # raw Azure 400 partway through the apply, after the resource group, VNet, and
-# AKS already exist — so check up front instead.
+# AKS already exist — so check up front instead. A name this deployment already
+# owns is not a collision, so the answer is read against Terraform state first.
 echo ""
 echo "── Global Name Availability ──────────────────────────"
 
@@ -773,6 +774,36 @@ else
     echo "$1" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$'
   }
 
+  # checkNameAvailability answers a global question and carries no notion of
+  # ownership: a resource this deployment created reports "taken" exactly like
+  # one a stranger holds, so re-running preflight against a live deployment
+  # fails on its own resources. Terraform state is the oracle for which it is.
+  # Preflight runs before `terraform init`, so `state pull` only answers once a
+  # backend is initialised — fall back to the local state file, and treat no
+  # state at all as the first run, where every name genuinely has to be free.
+  STATE_JSON=$(terraform -chdir="$INFRA_DIR" state pull </dev/null 2>/dev/null || true)
+  if [ -z "$STATE_JSON" ] && [ -f "${INFRA_DIR}/terraform.tfstate" ]; then
+    STATE_JSON=$(cat "${INFRA_DIR}/terraform.tfstate")
+  fi
+  STATE_NAMES=$(printf '%s' "$STATE_JSON" | python3 -c "
+import json, sys
+try:
+    state = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for res in state.get('resources', []):
+    for inst in res.get('instances', []):
+        attrs = inst.get('attributes') or {}
+        for key in ('name', 'domain_name_label'):
+            value = attrs.get(key)
+            if isinstance(value, str) and value:
+                print(value)
+" 2>/dev/null || true)
+
+  _in_state() {
+    [ -n "$STATE_NAMES" ] && printf '%s\n' "$STATE_NAMES" | grep -qxF "$1"
+  }
+
   # _check_name <label> <name> <url> <json-body> <availability-field>
   # A definitive "taken" fails the run. Anything else (auth blip, api-version
   # drift, unparseable body) only warns — preflight must never block a deploy
@@ -801,7 +832,12 @@ m = (json.load(sys.stdin).get('message', '') or '').strip()
 print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null || echo "")
     case "$avail" in
       True)  pass "${label}: '${name}' is available" ;;
-      False) fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+      False)
+        if _in_state "$name"; then
+          pass "${label}: '${name}' is already deployed and tracked in Terraform state"
+        else
+          fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}"
+        fi ;;
       *)     warn "${label}: '${name}' — unexpected API response; collision would surface during apply" ;;
     esac
   }
@@ -814,9 +850,21 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
     "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable"
 
-  _check_name "Key Vault" "$KV_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
-    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+  # A soft-deleted vault holds its name for the whole retention window while
+  # appearing in neither Terraform state nor `az keyvault list`, so the generic
+  # "already in use" message is the only signal and it names no remedy.
+  KV_DELETED=0
+  if _name_is_safe "$KV_NAME"; then
+    KV_DELETED=$(az keyvault list-deleted --query "length([?name=='${KV_NAME}'])" -o tsv 2>/dev/null || echo "0")
+    echo "$KV_DELETED" | grep -qE '^[0-9]+$' || KV_DELETED=0
+  fi
+  if [ "$KV_DELETED" -gt "0" ]; then
+    fail "Key Vault: '${KV_NAME}' is soft-deleted, which still reserves the name. Recover it (az keyvault recover --name ${KV_NAME}) or purge it (az keyvault purge --name ${KV_NAME})."
+  else
+    _check_name "Key Vault" "$KV_NAME" \
+      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+      "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+  fi
 
   if [ -n "$DNS_LABEL" ]; then
     _check_name "Public IP DNS label" "$DNS_LABEL" \
@@ -837,7 +885,11 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     REDIS_HIT=$(az redisenterprise list --query "length([?name=='${REDIS_NAME}'])" -o tsv 2>/dev/null || echo "0")
     echo "$REDIS_HIT" | grep -qE '^[0-9]+$' || REDIS_HIT=0
     if [ "$REDIS_HIT" -gt "0" ]; then
-      fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+      if _in_state "$REDIS_NAME"; then
+        pass "Redis: '${REDIS_NAME}' is already deployed and tracked in Terraform state"
+      else
+        fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+      fi
     else
       warn "Redis: '${REDIS_NAME}' not present in this subscription (Azure exposes no global name check for Managed Redis)"
     fi
