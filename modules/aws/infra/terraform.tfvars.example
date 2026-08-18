@@ -191,7 +191,7 @@ enable_public_eks_cluster = false
 # min_size guidance:
 #   3  — base LangSmith with no addons. Enough to schedule all core pods
 #         without waiting for the autoscaler to provision new nodes.
-#   6  — recommended if you plan to enable Deployments and/or
+#   6  — recommended if you plan to enable Fleet, Deployments, and/or
 #         Insights from the start. All workloads schedule immediately.
 #  10  — max_size ceiling for autoscaler. Adjust based on expected load.
 #
@@ -539,7 +539,7 @@ langsmith_namespace = "langsmith"
 #   Envoy Gateway (default)
 #     enable_envoy_gateway = true
 #     enable_istio_gateway = false
-#     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
+#     → Chart creates one HTTPRoute (Gateway API); Envoy Gateway proxies traffic.
 #       Supports split dataplane routing across namespaces.
 #
 #   Istio Gateway
@@ -668,22 +668,21 @@ sizing_profile = "production"
 #
 # For a base LangSmith deployment, leave these flags false.
 #
-#   enable_deployments   — LangSmith Deployments (listener, operator, host-backend)
-#   enable_fleet         — No-code agents; enables its required host-backend
-#   fleet_storage        — Fleet Postgres/Redis: "external" or "in-cluster"
-#   enable_insights      — ClickHouse-backed analytics dashboard
-#   insights_storage     — Insights Postgres/Redis: "external" or "in-cluster"
-#   enable_polly         — LangSmith Chat (formerly Polly)
-#   polly_storage        — Chat Postgres/Redis: "external" or "in-cluster"
+#   enable_deployments — LangSmith Deployments (listener, operator, host-backend)
+#   enable_fleet       — No-code agents; enables its required host-backend
+#   fleet_storage      — Fleet Postgres/Redis: "external" or "in-cluster"
+#   enable_insights    — AI-powered trace analysis
+#   insights_storage   — Insights Postgres/Redis: "external" or "in-cluster"
+#   enable_polly       — LangSmith Chat (formerly Polly)
+#   polly_storage      — Chat Postgres/Redis: "external" or "in-cluster"
 #
 enable_deployments   = false
 enable_fleet         = false
-fleet_storage        = "external"
+fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = false
-insights_storage     = "in-cluster"
+insights_storage     = "in-cluster" # Or "external"
 enable_polly         = false
-polly_storage        = "in-cluster"
-enable_standalone_polly = false # Backward-compatible external-storage switch
+polly_storage        = "in-cluster" # Or "external"
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.
 # Default is off. Enable if you want to share usage data.

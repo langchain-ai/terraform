@@ -167,8 +167,11 @@ aws/
         │   ├── langsmith-values-sizing-dev.yaml              ← Dev sizing (single-replica, minimal)
         │   ├── langsmith-values-agent-deploys.yaml      ← Deployments feature
         │   ├── langsmith-values-fleet.yaml              ← Fleet and its required host-backend
-        │   ├── langsmith-values-insights.yaml           ← ClickHouse Insights
+        │   ├── langsmith-values-insights.yaml           ← Insights
         │   ├── langsmith-values-polly.yaml              ← LangSmith Chat (formerly Polly)
+        │   ├── langsmith-values-standalone-polly.yaml   ← Chat external-storage overlay
+        │   ├── langsmith-values-standalone-insights.yaml ← Insights external-storage overlay
+        │   ├── langsmith-values-smithdb.yaml            ← SmithDB base
         │   ├── langsmith-values-ingress-envoy-gateway.yaml ← Envoy Gateway (Gateway API) ingress overlay
         │   ├── langsmith-values-dataplane.yaml          ← langgraph-dataplane chart (separate namespace)
         │   └── dataplane-rbac.yaml                      ← RBAC: host-backend read access to dataplane namespace
@@ -631,7 +634,7 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads the supported `enable_*` flags from `terraform.tfvars`. Fleet can use chart-managed in-cluster Postgres and Redis or dedicated databases on the external services.
+**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet storage can run in-cluster or use the external Postgres and Redis services.
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
@@ -640,11 +643,16 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 -f langsmith-values-agent-deploys.yaml        (enable_deployments = true)
 -f langsmith-values-insights.yaml             (enable_insights = true)
 -f langsmith-values-polly.yaml                (enable_polly = true)
--f langsmith-values-standalone-polly.yaml     (Chat external storage)
 -f langsmith-values-fleet.yaml                (enable_fleet = true)
--f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default, loaded LAST)
+-f langsmith-values-standalone-polly.yaml     (enable_standalone_polly = true)
+-f langsmith-values-standalone-insights.yaml  (enable_standalone_insights = true)
+-f langsmith-values-sizing-{profile}.yaml     (if sizing_profile != default)
+-f langsmith-values-smithdb.yaml              (enable_smithdb = true)
+-f langsmith-values-smithdb-overrides.yaml    (enable_smithdb = true, loaded LAST)
 ```
-The sizing file is always loaded last so it can override replicas/resources set by addon files.
+The sizing file overrides replicas and resources set by add-on files. SmithDB
+loads afterward so its object-store, identity, and staged integration settings
+take final precedence.
 
 **Step 6 — Pre-deploy hostname check.** If the ingress already exists and `langsmith_domain` is not set, compares `config.hostname` in the overrides file against the live ALB hostname. Auto-updates it if stale (prevents agent deployments getting stuck in `DEPLOYING` state with the wrong endpoint URL).
 
@@ -937,7 +945,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_deployments` | `false` | no | Enable LangSmith Deployments (listener, operator, host-backend) |
 | `enable_fleet` | `false` | no | Enable Fleet and its required host-backend; full LangSmith Deployments is optional |
 | `fleet_storage` | `external` | no | Fleet storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
-| `enable_insights` | `false` | no | Enable ClickHouse-backed analytics |
+| `enable_insights` | `false` | no | Enable AI-powered trace analysis |
 | `insights_storage` | `in-cluster` | no | Insights storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
 | `polly_storage` | `in-cluster` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
