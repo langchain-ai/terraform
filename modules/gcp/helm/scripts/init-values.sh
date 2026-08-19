@@ -758,11 +758,12 @@ ${_smithdb_proxy_block}
       port: "${SMITHDB_METASTORE_PORT}"
       useSsl: ${SMITHDB_METASTORE_USE_SSL}
 
-  # The migration Job reads its own useSsl leaf, which the chart defaults to
-  # false, so it has to be set alongside the one above or the two modes disagree
-  # and the pre-install hook fails on connect while the services are fine.
-  metastoreMigration:
-    useSsl: ${SMITHDB_METASTORE_USE_SSL}
+  # The metastore-migration hook Job inherits this useSsl. The chart builds its
+  # env from the shared smithdb.serviceEnv helper, which reads
+  # config.metastore.useSsl for METASTORE__USE_SSL on every component, the Job
+  # included, so no separate metastoreMigration.useSsl leaf is needed - the chart
+  # does not read one. Earlier prereleases did, which is why this file used to set
+  # it; it is redundant on 0.16.6+.
 
   # The chart refuses to render with the migration gate on unless taskdb has a
   # credential, so always point it at the Terraform-created secret.

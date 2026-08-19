@@ -417,7 +417,7 @@ Setting `enable_smithdb = true` provisions four things:
 
 ### Requirements and constraints
 
-1) **Postgres 17 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, `smithdb_metastore_use_auth_proxy = true` runs a Cloud SQL Auth Proxy sidecar so the instance can stay `ENCRYPTED_ONLY`; AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
+1) **Postgres 18 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, `smithdb_metastore_use_auth_proxy = true` runs a Cloud SQL Auth Proxy sidecar so the instance can stay `ENCRYPTED_ONLY`; AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
 
 2) **A dedicated object-storage bucket, single-region, in the cluster's region.** Multi-region and dual-region buckets add replication cost and unpredictable tail latency on segment reads. The module deliberately creates no object-expiry lifecycle rules and no versioning: SmithDB owns the lifecycle of its own segments, and expiring them independently makes data unavailable. Compaction already reclaims dead segments.
 

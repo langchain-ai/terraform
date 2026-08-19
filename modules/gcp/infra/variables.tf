@@ -947,12 +947,12 @@ variable "smithdb_metastore_source" {
 
 variable "smithdb_metastore_database_version" {
   type        = string
-  description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 17 or later."
+  description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 18 or later."
   default     = "POSTGRES_18"
 
   validation {
-    condition     = can(regex("^POSTGRES_(1[7-9]|[2-9][0-9])$", var.smithdb_metastore_database_version))
-    error_message = "SmithDB requires Postgres 17 or later, e.g. POSTGRES_17 or POSTGRES_18."
+    condition     = can(regex("^POSTGRES_(1[89]|[2-9][0-9])$", var.smithdb_metastore_database_version))
+    error_message = "SmithDB requires Postgres 18 or later, e.g. POSTGRES_18."
   }
 }
 

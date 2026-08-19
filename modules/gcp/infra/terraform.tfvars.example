@@ -401,13 +401,13 @@ enable_smithdb = false
 
 # --- Metastore --------------------------------------------------------------
 # "create"   — dedicated Cloud SQL instance (default)
-# "external" — bring your own Postgres 17+; for AlloyDB, run the Auth Proxy as a
+# "external" — bring your own Postgres 18+; for AlloyDB, run the Auth Proxy as a
 #              sidecar via smithdb.commonInitContainers and point the host at
 #              127.0.0.1 with smithdb_metastore_use_ssl = false.
 # Must be a dedicated, empty database. Never point this at the LangSmith
 # operational Postgres.
 # smithdb_metastore_source              = "create"
-# smithdb_metastore_database_version    = "POSTGRES_18"  # SmithDB requires PG 17+
+# smithdb_metastore_database_version    = "POSTGRES_18"  # SmithDB requires PG 18+
 # smithdb_metastore_tier                = "db-custom-2-8192"
 # smithdb_metastore_disk_size           = 50
 # smithdb_metastore_high_availability   = false

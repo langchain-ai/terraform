@@ -64,7 +64,7 @@ variable "release_name" {
 # Metastore (Cloud SQL Postgres) — a dedicated, empty database per the SmithDB
 # supporting-infrastructure requirements. Never point this at the LangSmith
 # operational Postgres. Set metastore_source = external to bring your own
-# (AlloyDB via the Auth Proxy, or any reachable Postgres 17+).
+# (AlloyDB via the Auth Proxy, or any reachable Postgres 18+).
 #------------------------------------------------------------------------------
 variable "metastore_source" {
   type        = string
@@ -79,12 +79,12 @@ variable "metastore_source" {
 
 variable "metastore_database_version" {
   type        = string
-  description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 17 or later."
+  description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 18 or later."
   default     = "POSTGRES_18"
 
   validation {
-    condition     = can(regex("^POSTGRES_(1[7-9]|[2-9][0-9])$", var.metastore_database_version))
-    error_message = "SmithDB requires Postgres 17 or later, e.g. POSTGRES_17 or POSTGRES_18."
+    condition     = can(regex("^POSTGRES_(1[89]|[2-9][0-9])$", var.metastore_database_version))
+    error_message = "SmithDB requires Postgres 18 or later, e.g. POSTGRES_18."
   }
 }
 

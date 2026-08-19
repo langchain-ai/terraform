@@ -19,7 +19,7 @@ locals {
   ksa_name         = "${local.release_fullname}-smithdb"
 
   # Resolved metastore connection — from the created Cloud SQL instance or a BYO
-  # instance (AlloyDB via the Auth Proxy, or any reachable Postgres 17+).
+  # instance (AlloyDB via the Auth Proxy, or any reachable Postgres 18+).
   metastore_host     = local.create_metastore ? google_sql_database_instance.metastore[0].private_ip_address : var.external_metastore_host
   metastore_port     = local.create_metastore ? 5432 : var.external_metastore_port
   metastore_database = local.create_metastore ? google_sql_database.metastore[0].name : var.external_metastore_database
