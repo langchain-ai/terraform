@@ -54,6 +54,19 @@ ABAC = (
     "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7}"
 )
 
+# Two clauses, the second past the 240th character. A real subscription policy
+# runs this long, and the constraint that decides whether an apply can succeed
+# is as likely to sit in the tail as the head.
+ABAC_LONG = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7, "
+    "ba92f5b4-2d11-453d-a403-e96b0029c9fe}"
+    ")) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'}"
+    ")) OR (@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
 
 def granted(role_guid=OWNER_GUID, scope=SUB_SCOPE, condition=None, custom=False):
     return {
@@ -167,6 +180,14 @@ CASES = [
             "[!] That grant carries an ABAC condition",
             "The modules assign: Storage Blob Data Contributor",
             "GuidEquals",
+        ],
+    },
+    {
+        "name": "a long ABAC condition is reported past its 240th character",
+        "ca_all": response(assignment=granted(condition=ABAC_LONG)),
+        "expect": [
+            "[!] That grant carries an ABAC condition",
+            "PrincipalType",
         ],
     },
     {
