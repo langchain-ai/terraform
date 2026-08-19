@@ -1,6 +1,8 @@
 # LangSmith on AWS — Make Target Glossary
 
-All commands run from `terraform/aws/`. Run `make help` for a quick inline summary.
+All commands run from `modules/aws/`. Run `make help` for a quick inline summary.
+
+Every terraform-backed target accepts an `ARGS` variable that is appended to the terraform command — see [Terraform flags](#terraform-flags).
 
 ---
 
@@ -33,6 +35,35 @@ All commands run from `terraform/aws/`. Run `make help` for a quick inline summa
 | `make plan` | `terraform plan` — previews changes; review before every apply |
 | `make apply` | `terraform apply` — provisions VPC, EKS, RDS, ElastiCache, S3, ALB, IRSA (~20–25 min) |
 | `make destroy` | `terraform destroy` — tears down all infrastructure; run `make uninstall` first |
+| `make tf` | Run any other terraform subcommand against `infra/` — `make tf ARGS="state list"` |
+
+---
+
+## Terraform flags
+
+`ARGS` is appended verbatim to the terraform command, so you never have to leave `make` or remember `-chdir=infra`:
+
+```bash
+make init    ARGS="-upgrade"               # re-resolve provider versions
+make plan    ARGS="-target=module.eks"     # plan one module
+make plan    ARGS="-out=tfplan"            # save a plan file
+make apply   ARGS="tfplan"                 # apply that saved plan
+make apply   ARGS="-auto-approve"          # skip the approval prompt
+make destroy ARGS="-target=module.redis"   # destroy one module
+```
+
+`make tf` takes a full terraform command line, for anything the named targets don't cover:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output -raw cluster_name"
+make tf ARGS="state list"
+make tf ARGS="state list module.eks"       # filter state to one module
+make tf ARGS="validate"
+make tf ARGS="providers"
+```
+
+`ARGS` set on the command line reaches every target in that invocation, including prerequisites — `make deploy-all ARGS="-auto-approve"` auto-approves the `apply` step. Combining it with `-target` on a combo target is not meaningful.
 
 ---
 

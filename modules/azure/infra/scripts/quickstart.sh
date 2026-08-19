@@ -142,7 +142,7 @@ AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
 NODE_VM_SIZE NODE_MIN NODE_MAX AKS_DELETION_PROTECTION INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-PG_DELETION_PROTECTION AMR_SKU KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+PG_DELETION_PROTECTION AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -248,6 +248,9 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar unique_resource_names)       && UNIQUE_NAMES="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
+  # Written only when redis_source = "external", so an absent key means either
+  # in-cluster Redis or a tfvars predating the variable. false is right for both.
+  _TF_VAL=$(_parse_tfvar redis_high_availability)     && REDIS_HA="$_TF_VAL"
   # The add-ons are written only when true, so an absent key is genuinely false.
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
@@ -850,7 +853,8 @@ CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 PG_DELETION_PROTECTION="false"
-AMR_SKU="Balanced_B0"
+AMR_SKU="Balanced_B1"
+REDIS_HA="false"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -859,7 +863,7 @@ _run_section_7() {
   _hint "In-cluster  — runs as pods. Simple to deploy, but no backups, limited HA."
   _hint "              OK for dev/POC. Do NOT use for production workloads."
   _hint ""
-  _hint "External    — Azure managed services (Postgres Flexible Server, Cache for Redis)."
+  _hint "External    — Azure managed services (Postgres Flexible Server, Managed Redis)."
   _hint "              Automated backups, geo-redundancy, independent scaling."
   _hint "              Recommended for production and long-running POCs."
   _hint ""
@@ -880,10 +884,16 @@ _run_section_7() {
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Managed Redis)?" "$redis_yn"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis Balanced_B3 — 3 GB, HA)?" "$redis_yn"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
+      # Fresh run only: a re-entry has already parsed the operator's SKU and HA
+      # choice out of tfvars, and resetting here would discard it.
+      if ! _answered 7; then
+        AMR_SKU="Balanced_B3"
+        REDIS_HA="true"
+      fi
     fi
   else
     # No default until the section has been answered once — a fresh run still
@@ -914,8 +924,23 @@ _run_section_7() {
     echo ""
     _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
     _hint "if the region reports AllocationFailed."
-    _ask "Azure Managed Redis SKU" "Balanced_B0"
-    AMR_SKU="$_REPLY"
+    # Default to the SKU already chosen, never a literal: the prod branch above
+    # picks Balanced_B3 with HA on, and a hardcoded B0 default overwrites it into
+    # a pair the redis module rejects — so pressing Enter here failed plan.
+    while true; do
+      _ask "Azure Managed Redis SKU" "$AMR_SKU"
+      AMR_SKU="$_REPLY"
+      [[ "$AMR_SKU" == "Balanced_B0" && "$REDIS_HA" == "true" ]] || break
+      # amr_sku and redis_high_availability are written to tfvars independently,
+      # so the pair has to be checked at the prompt. Same two remedies the
+      # module's validation names, offered now instead of 20 lines into a plan.
+      echo ""
+      _yellow "NOTE"; printf ": Balanced_B0 cannot run zone-redundant HA.\n"
+      if _ask_yn "Turn Redis HA off and keep Balanced_B0?" "n"; then
+        REDIS_HA="false"
+        break
+      fi
+    done
   fi
 
   echo ""
@@ -1324,7 +1349,9 @@ if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
 # Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
-amr_sku = "${AMR_SKU}"   # Bump (Balanced_B1/B3/...) if the region reports AllocationFailed.
+# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity.
+amr_sku                 = "${AMR_SKU}"
+redis_high_availability = ${REDIS_HA}
 TFVARS
 fi
 

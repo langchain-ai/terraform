@@ -34,7 +34,7 @@ unique_resource_names = true
 # Sources
 #------------------------------------------------------------------------------
 postgres_source   = "external"     # Azure DB for PostgreSQL Flexible Server
-redis_source      = "external"     # Azure Cache for Redis
+redis_source      = "external"     # Azure Managed Redis
 clickhouse_source = "in-cluster"   # use LangChain Managed ClickHouse for full prod
 
 #------------------------------------------------------------------------------
@@ -47,7 +47,9 @@ postgres_deletion_protection = true   # must set false before terraform destroy
 #------------------------------------------------------------------------------
 # Redis (Azure Managed Redis / AMR)
 #------------------------------------------------------------------------------
-amr_sku = "Balanced_B0"   # smallest. Bump (Balanced_B1/B3/...) if the region reports AllocationFailed or under high write load.
+# Azure Managed Redis. B3 = 3 GB; increase (Balanced_B5/B10/...) for high write load.
+amr_sku                 = "Balanced_B3"
+redis_high_availability = true   # required for the AMR SLA; unsupported on Balanced_B0
 
 #------------------------------------------------------------------------------
 # AKS — Standard_D8s_v3 (8 vCPU, 32 GiB), 3 nodes minimum

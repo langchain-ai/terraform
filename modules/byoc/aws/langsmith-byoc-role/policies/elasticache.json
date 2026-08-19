@@ -136,6 +136,17 @@
     }
   },
   {
+    "Sid": "ElastiCacheJuiceFSUserDelete",
+    "Effect": "Allow",
+    "Action": ["elasticache:DeleteUser"],
+    "Resource": "arn:aws:elasticache:*:${account_id}:user:*-smith-juicefs-redis-user",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
     "Sid": "ElastiCacheCreateSnapshot",
     "Effect": "Allow",
     "Action": ["elasticache:CreateSnapshot"],

@@ -31,6 +31,8 @@ resource "azurerm_postgresql_flexible_server" "db" {
   storage_tier = var.storage_tier # P4 = premium SSD, consistent IOPS
   sku_name     = var.sku_name
 
+  backup_retention_days = var.backup_retention_days
+
   administrator_login    = var.admin_username
   administrator_password = var.admin_password
 

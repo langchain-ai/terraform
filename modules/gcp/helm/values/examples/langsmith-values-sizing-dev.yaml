@@ -72,13 +72,17 @@ platformBackend:
 playground:
   deployment:
     replicas: 1
+    # Memory tracks the chart default request of 1Gi. The 0.16 playground image
+    # needs well over 384Mi just to start, and the HPA on this deployment scales
+    # on memory at 80% of requests, so an undersized request both OOM-kills the
+    # container and drives it straight to maxReplicas while every pod crashloops.
     resources:
       requests:
-        cpu: "250m"
-        memory: "512Mi"
-      limits:
-        cpu: "1"
+        cpu: "100m"
         memory: "1Gi"
+      limits:
+        cpu: "500m"
+        memory: "2Gi"
 
 queue:
   deployment:
