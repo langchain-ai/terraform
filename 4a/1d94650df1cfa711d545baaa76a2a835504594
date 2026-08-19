@@ -1,0 +1,35 @@
+modules/aws/helm/scripts/uninstall.sh
+  s_c526cd2a10d768::t_a21a21bd5c25f0 174-175,179,183,186-192
+  s_c526cd2a10d768::t_589a43acf9ce19 113-117
+  s_c526cd2a10d768::t_52310907e5fb2c 193-214
+  s_c526cd2a10d768::t_a245361e948345 35-66,68
+  s_c526cd2a10d768::t_fd4a0c86245b9a 128-152
+  s_c526cd2a10d768::t_98b043b43c98a4 29-33
+  s_c526cd2a10d768::t_0834cf80ba7fae 28
+  s_c526cd2a10d768::t_cd8bbd2ffafe39 34
+  s_c526cd2a10d768::t_16678fe3d70fa8 67
+  s_c526cd2a10d768::t_23cdeb82fdd164 112
+  s_c526cd2a10d768::t_be6b9523a4833b 127
+  s_c526cd2a10d768::t_acc569b40ee3ed 153-154
+  s_c526cd2a10d768::t_091b5685bb6a99 215
+  s_c526cd2a10d768::t_142769baf87810 12-17
+modules/aws/TEARDOWN.md
+  s_c526cd2a10d768::t_24305c543fb432 78-84
+  s_c526cd2a10d768::t_0604680495f5af 85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4a1d94650df1cfa711d545baaa76a2a835504594",
+  "prompts": {},
+  "sessions": {
+    "s_c526cd2a10d768": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "2956b0e3-7f34-4748-a80b-e3d528c68c08",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
