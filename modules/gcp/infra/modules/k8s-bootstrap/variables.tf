@@ -5,6 +5,18 @@ variable "project_id" {
   type        = string
 }
 
+# Needed so the kubectl provisioners can fetch credentials for this specific
+# cluster rather than relying on the ambient kubeconfig context.
+variable "region" {
+  description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name of the GKE cluster being bootstrapped. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
 variable "environment" {
   description = "Environment name"
   type        = string
@@ -29,6 +41,39 @@ variable "resource_quota_include_limits" {
   description = "Include aggregate CPU and memory limits in the LangSmith namespace ResourceQuota. Disable for sandbox-host, whose Firecracker VMs use child cgroups beneath the pod cgroup."
   type        = bool
   default     = true
+}
+
+variable "resource_quota_extra_cpu" {
+  description = "Additional CPU added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. The root uses this to make room for optional features that add large pods, so the base figures stay the same for a plain install. Zero keeps the base quota."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 200
+    error_message = "resource_quota_extra_cpu must be between 0 and 200. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
+  }
+}
+
+variable "resource_quota_extra_memory_gi" {
+  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. Counterpart to resource_quota_extra_cpu."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 400
+    error_message = "resource_quota_extra_memory_gi must be between 0 and 400."
+  }
+}
+
+variable "resource_quota_extra_pods" {
+  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
+    error_message = "resource_quota_extra_pods must be between 0 and 400."
+  }
 }
 
 variable "allow_critical_priority_pods" {
