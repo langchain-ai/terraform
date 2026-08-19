@@ -182,6 +182,12 @@ case "$PRINCIPAL_KIND" in
 *) PRINCIPAL_TYPE_HINT="User" ;;
 esac
 
+# The deployer's own Key Vault Secrets Officer grant is the only role assignment
+# in the tree whose target is not a service principal, so it is the only one an
+# ABAC condition pinned to ServicePrincipal can reject. Mirrors main.tf: an
+# explicit value wins, null follows create_keyvault.
+KV_ADMIN_GRANT=$(_tfvar keyvault_manage_terraform_admin_assignment || _tfvar create_keyvault || echo "true")
+
 if [ -n "$PRINCIPAL_ID" ]; then
   pass "Terraform will authenticate as ${PRINCIPAL_KIND} (object ID ${PRINCIPAL_ID})"
 else
@@ -301,10 +307,11 @@ PY
     "$RBAC_TMP" \
     "${RBAC_TMP}/eligibilities.json" \
     "$PRINCIPAL_IS_CALLER" \
-    "$PRINCIPAL_TYPE_HINT" <<'PY' || echo "unavailable"
+    "$PRINCIPAL_TYPE_HINT" \
+    "$KV_ADMIN_GRANT" <<'PY' || echo "unavailable"
 import json, os, sys
 
-tmp, elig_path, is_caller, principal_type_hint = sys.argv[1:5]
+tmp, elig_path, is_caller, principal_type_hint, kv_admin_grant = sys.argv[1:6]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
@@ -353,6 +360,27 @@ def role_label(assignment):
     return "role %s" % (guid or "?")
 
 
+def pins_service_principal(condition):
+    """Whether an ABAC condition admits only ServicePrincipal targets for write.
+
+    Conditions are `!(ActionMatches{<action>}) OR <constraint>` clauses joined by
+    AND, so the constraint that applies to write is the text from that action up
+    to the next clause — a condition that pins the type on delete alone leaves
+    write unconstrained. Values are single-quoted, so matching the quoted literal
+    keeps a permissive {'ServicePrincipal', 'User'} from reading as a pin.
+    Anything this cannot parse falls through to the softer advice below rather
+    than telling the operator to turn off a grant that would have worked.
+    """
+    flat = " ".join(condition.split()).lower()
+    start = flat.find(ROLE_WRITE)
+    if start >= 0:
+        end = flat.find(" and ", start)
+        flat = flat[start:end if end > 0 else len(flat)]
+    return ("principaltype" in flat
+            and "'serviceprincipal'" in flat
+            and "'user'" not in flat)
+
+
 try:
     with open(os.path.join(tmp, "scopes.txt")) as fh:
         scopes = [line.strip() for line in fh if line.strip()]
@@ -398,10 +426,35 @@ for scope, decisions in answered:
                 # a request that omits it as a plain AuthorizationFailed, which
                 # reads like a missing role rather than an unmet condition.
                 if "principaltype" in cond.lower():
-                    out.append("warn The condition tests principalType. Set terraform_principal_type "
-                               "= \"%s\" in terraform.tfvars, or the Key Vault Secrets Officer grant "
-                               "fails at apply with a 403 that names no condition."
-                               % principal_type_hint)
+                    if pins_service_principal(cond) and principal_type_hint != "ServicePrincipal":
+                        # terraform_principal_type declares what the principal is,
+                        # it does not change it, and ARM resolves the real type
+                        # from the object ID regardless — so against this shape
+                        # every value of it is denied, including the one the
+                        # softer branch below recommends.
+                        if kv_admin_grant == "false":
+                            out.append("pass The condition admits only ServicePrincipal targets, which "
+                                       "this %s is not — but keyvault_manage_terraform_admin_assignment "
+                                       "is already false, so no request in the apply is subject to it."
+                                       % principal_type_hint.lower())
+                        else:
+                            out.append("fail The condition admits only ServicePrincipal targets, and "
+                                       "Terraform will authenticate as a %s. terraform_principal_type "
+                                       "declares the type rather than changing it, so no value of it "
+                                       "satisfies this condition. Set "
+                                       "keyvault_manage_terraform_admin_assignment = false in "
+                                       "terraform.tfvars and hold Key Vault Secrets Officer some other "
+                                       "way — a grant inherited from the subscription or resource "
+                                       "group is enough, and `az role assignment list --assignee "
+                                       "<object-id> --all` says whether you already do. Running apply "
+                                       "as a service principal is the other way out, and is what this "
+                                       "condition exists to require."
+                                       % principal_type_hint.lower())
+                    else:
+                        out.append("warn The condition tests principalType. Set terraform_principal_type "
+                                   "= \"%s\" in terraform.tfvars, or the Key Vault Secrets Officer grant "
+                                   "fails at apply with a 403 that names no condition."
+                                   % principal_type_hint)
         else:
             denied_write = True
             if deny:

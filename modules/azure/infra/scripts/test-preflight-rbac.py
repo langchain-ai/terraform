@@ -59,8 +59,26 @@ ABAC = (
 # permitted, but only for a ServicePrincipal, so the Key Vault Secrets Officer
 # grant is refused for omitting principal_type rather than for lacking a role.
 ABAC_PRINCIPAL_TYPE = (
-    "@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
-    "StringEqualsIgnoreCase 'ServicePrincipal'"
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# The same shape widened to admit human deployers. Here terraform_principal_type
+# is the right advice, so the pinned-condition verdict must not fire on it.
+ABAC_PRINCIPAL_TYPE_ANY = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "ForAnyOfAnyValues:StringEqualsIgnoreCase {'ServicePrincipal', 'User'}))"
+)
+
+# Pinned on delete only. Nothing constrains who a new assignment may target, so
+# the deployer's own grant goes through and only its removal is fenced.
+ABAC_PRINCIPAL_TYPE_DELETE_ONLY = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (%s)) AND "
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+    "(@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))" % ABAC
 )
 
 
@@ -287,12 +305,50 @@ CASES = [
         ],
     },
     {
-        "name": "a principalType condition names terraform_principal_type",
+        # The variable declares what the principal is; it cannot make a human into
+        # a service principal, so recommending it here sends the operator down a
+        # dead end that costs an apply to discover.
+        "name": "a condition pinned to ServicePrincipal does not recommend terraform_principal_type",
         "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "declares the type rather than changing it",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        "name": "a pinned condition is silent once the grant it rejects is turned off",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "tfvars_extra": "keyvault_manage_terraform_admin_assignment = false",
+        "expect": ["keyvault_manage_terraform_admin_assignment is already false"],
+        "reject": ["[✗] The condition admits only ServicePrincipal targets"],
+    },
+    {
+        # Nothing to work around: the request this deployer sends already matches.
+        "name": "a pinned condition is not a blocker for a service principal deployer",
+        "env": {"ARM_CLIENT_ID": "app-guid"},
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "The condition tests principalType",
+            'terraform_principal_type = "ServicePrincipal"',
+        ],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "a principalType condition that admits User names terraform_principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_ANY)),
         "expect": [
             "The condition tests principalType",
             'terraform_principal_type = "User"',
         ],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "a principalType condition on delete alone does not block the write",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_DELETE_ONLY)),
+        "expect": ["The condition tests principalType"],
+        "reject": ["The condition admits only ServicePrincipal targets"],
     },
     {
         "name": "an ABAC condition on roles alone does not mention principal_type",

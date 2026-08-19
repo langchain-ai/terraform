@@ -392,7 +392,22 @@ terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
 
 Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
 
-**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant. The variable declares what the principal is rather than changing it, and ARM resolves the real type from the object ID either way, so the request is rejected whatever it declares. Omitting it fails the same way: an ABAC comparison against an absent attribute is false.
+
+That grant exists only to give the apply identity data-plane rights on the vault, so the cheapest way through is to stop asking for it:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+```
+
+Check first that the identity holds `Key Vault Secrets Officer` or `Key Vault Administrator` some other way, since a grant at subscription or resource-group scope inherits down to the vault:
+
+```bash
+az role assignment list --assignee <your-object-id> --all -o table
+```
+
+If it holds neither, run the apply as a service principal, which is what the condition exists to require, or have a subscription owner create that one assignment out of band and import it:
 
 ```bash
 # Run by a subscription owner, who is not subject to the delegation condition
