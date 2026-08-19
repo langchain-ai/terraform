@@ -388,6 +388,18 @@ terraform -chdir=infra import \
   'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
 ```
 
+Or take Terraform out of the vault's data plane, which removes the reason that grant exists:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+keyvault_manage_secrets                    = false
+```
+
+Apply then touches only the vault's control plane, and `make seed-secrets` writes all nine secrets afterwards under your own credentials. This is the one route that needs no Key Vault role on the deployer, inherited or otherwise. Both flags are required together: the first is what stops the request the condition rejects, and the second is what makes the role that request was asking for unnecessary. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+
+It does not reduce the deployment's need for `roleAssignments/write`. The other seven assignments still run, so a subscription that delegates none of them fails at `Storage Blob Data Contributor` in the storage module instead.
+
 **Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
 
 ---
