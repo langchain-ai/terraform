@@ -437,8 +437,12 @@ for scope, decisions in answered:
         if action == ROLE_WRITE:
             assignment = decision.get("roleAssignment") or {}
             if allowed:
+                # Kept whole: this tuple is the grouping key, so two conditions
+                # that agree for 240 characters and diverge after would collapse
+                # into a single verdict that describes neither. Shortened at the
+                # point it is printed instead.
                 write_ok.append(((role_label(assignment), assignment.get("scope") or "?",
-                                  " ".join((assignment.get("condition") or "").split())[:240]), scope))
+                                  " ".join((assignment.get("condition") or "").split())), scope))
             else:
                 deny = decision.get("denyAssignment") or {}
                 write_no.append((deny_label(deny) if deny else "", scope))
@@ -481,7 +485,8 @@ for (role, granted_at, condition), scopes in by_verdict(write_ok):
     if condition:
         out.append("warn That grant carries an ABAC condition, so it permits only the roles "
                    "the condition allows. The modules assign: %s. Condition: %s"
-                   % (ASSIGNED_ROLES, condition))
+                   % (ASSIGNED_ROLES, condition if len(condition) <= 400
+                      else condition[:400] + " [...]"))
 
 for deny_name, scopes in by_verdict(write_no):
     if deny_name:
