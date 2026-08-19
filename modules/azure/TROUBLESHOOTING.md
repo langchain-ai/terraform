@@ -327,6 +327,8 @@ already exists - to be managed via Terraform this resource needs to be imported 
 
 **Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
 
+Seeding is the usual way in: `make seed-secrets` writes both of these too, so running it against a deployment that has not applied yet leaves Terraform to collide with what the script wrote. Setting `keyvault_manage_secrets = false` is the other resolution, and it makes the collision impossible rather than importing past it.
+
 **Fix:** Import the conflicting secret, then re-run apply:
 ```bash
 terraform -chdir=infra import \
@@ -429,6 +431,13 @@ az role assignment create --role "Key Vault Secrets Officer" \
 # 3. Propagation — confirm data-plane access directly, then re-run apply
 az keyvault secret list --vault-name <vault> --query "length(@)"
 ```
+
+**Fix, or take Terraform out of the data plane entirely:**
+```hcl
+keyvault_manage_secrets = false
+```
+
+Terraform then writes no secrets, so none of the three causes above can stop an apply. `make seed-secrets` writes all nine afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
 
 **Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 
