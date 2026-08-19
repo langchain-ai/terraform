@@ -244,7 +244,7 @@ variable "postgres_high_availability" {
 }
 
 variable "postgres_deletion_protection" {
-  description = "Enable deletion protection for Cloud SQL (recommended for production)"
+  description = "Prevent deletion of the LangSmith Cloud SQL instance, both from Terraform and from the Cloud SQL API. Keep true for production. Set false for dev/test environments that are destroyed and rebuilt, and apply that change before running destroy."
   type        = bool
   default     = true
 }
@@ -568,6 +568,12 @@ variable "langsmith_helm_chart_version" {
   default     = ""
 }
 
+variable "langsmith_release_name" {
+  description = "Helm release name for LangSmith. Must match what Pass 2 installs, because chart-created service account names derive from it (see the SmithDB Workload Identity binding)."
+  type        = string
+  default     = "langsmith"
+}
+
 #------------------------------------------------------------------------------
 # Optional GCP modules
 #------------------------------------------------------------------------------
@@ -884,4 +890,267 @@ variable "enable_usage_telemetry" {
   type        = bool
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)."
   default     = false
+}
+
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.16+, optional)
+#
+# SmithDB is the in-chart columnar store/query engine that runs alongside
+# ClickHouse. Enabling it provisions a dedicated Cloud SQL metastore, its own GCS
+# bucket, a Workload Identity service account, and two GKE node pools (one Local
+# SSD-backed for the cache). Off by default — no effect on existing deployments.
+#
+# Enabling the infrastructure never changes the chart line on its own: Pass 2
+# requires an explicit chart version, and every LangSmith integration gate below
+# starts disabled.
+#------------------------------------------------------------------------------
+variable "enable_smithdb" {
+  type        = bool
+  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, Local SSD + compute node pools). Requires an explicit chart version of 0.16 or newer in Pass 2, and GKE Standard rather than Autopilot."
+  default     = false
+}
+
+# --- Staged rollout gates ---------------------------------------------------
+# SmithDB services deploy fully detached from LangSmith. Each gate is a separate
+# validated stage: stand the services up, confirm they reach the metastore and
+# the bucket, then enable ingestion, then optionally backfill, then move reads.
+# Keep ClickHouse enabled throughout.
+variable "smithdb_ingestion_enabled" {
+  type        = bool
+  description = "Route new LangSmith writes to SmithDB as well as ClickHouse. Enable only after the SmithDB services pass readiness checks."
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  type        = bool
+  description = "Enable the historical ClickHouse-to-SmithDB migration integration. Requires smithdb_ingestion_enabled. Also spins up an in-chart taskdb Postgres for migration task state."
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  type        = bool
+  description = "Serve LangSmith UI and API reads from SmithDB. Requires smithdb_ingestion_enabled, and any historical migration you need, to be validated first."
+  default     = false
+}
+
+# --- Metastore --------------------------------------------------------------
+variable "smithdb_metastore_source" {
+  type        = string
+  description = "SmithDB metastore Postgres: 'create' (dedicated Cloud SQL instance) or 'external' (bring your own, e.g. AlloyDB behind the Auth Proxy). Must be a dedicated, empty database — never the LangSmith operational Postgres."
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "external"], var.smithdb_metastore_source)
+    error_message = "smithdb_metastore_source must be 'create' or 'external'."
+  }
+}
+
+variable "smithdb_metastore_database_version" {
+  type        = string
+  description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 18 or later."
+  default     = "POSTGRES_18"
+
+  validation {
+    condition     = can(regex("^POSTGRES_(1[89]|[2-9][0-9])$", var.smithdb_metastore_database_version))
+    error_message = "SmithDB requires Postgres 18 or later, e.g. POSTGRES_18."
+  }
+}
+
+variable "smithdb_metastore_tier" {
+  type        = string
+  description = "Cloud SQL machine tier for the SmithDB metastore."
+  default     = "db-custom-2-8192"
+}
+
+variable "smithdb_metastore_disk_size" {
+  type        = number
+  description = "Disk size in GB for the SmithDB metastore. Autoresize is on, so this is a floor."
+  default     = 50
+}
+
+variable "smithdb_metastore_high_availability" {
+  type        = bool
+  description = "Run the SmithDB metastore as a REGIONAL (HA) Cloud SQL instance."
+  default     = false
+}
+
+variable "smithdb_metastore_deletion_protection" {
+  type        = bool
+  description = "Prevent deletion of the SmithDB metastore instance, both from Terraform and from the Cloud SQL API. Keep true for production. Set false for dev/test environments that are destroyed and rebuilt, and apply that change before running destroy."
+  default     = true
+}
+
+variable "smithdb_metastore_ssl_mode" {
+  type        = string
+  description = "Cloud SQL SSL enforcement for the SmithDB metastore. ENCRYPTED_ONLY requires TLS on every connection."
+  default     = "ENCRYPTED_ONLY"
+
+  validation {
+    condition     = contains(["ALLOW_UNENCRYPTED_AND_ENCRYPTED", "ENCRYPTED_ONLY", "TRUSTED_CLIENT_CERTIFICATE_REQUIRED"], var.smithdb_metastore_ssl_mode)
+    error_message = "smithdb_metastore_ssl_mode must be one of ALLOW_UNENCRYPTED_AND_ENCRYPTED, ENCRYPTED_ONLY, TRUSTED_CLIENT_CERTIFICATE_REQUIRED."
+  }
+}
+
+variable "smithdb_metastore_use_ssl" {
+  type        = bool
+  description = "Tell SmithDB to connect to the metastore over TLS directly. Keep true with ENCRYPTED_ONLY when not using the Auth Proxy. Set false when smithdb_metastore_use_auth_proxy = true, because the proxy terminates TLS and the SmithDB hop is loopback."
+  default     = true
+}
+
+variable "smithdb_metastore_use_auth_proxy" {
+  type        = bool
+  description = "Run a Cloud SQL Auth Proxy sidecar in every SmithDB Pod and connect through it on 127.0.0.1. The proxy holds the TLS session to Cloud SQL, so the instance stays at ENCRYPTED_ONLY while SmithDB itself speaks plaintext over the Pod loopback. Requires smithdb_metastore_source = 'create' and smithdb_metastore_use_ssl = false."
+  default     = false
+}
+
+variable "smithdb_auth_proxy_image" {
+  type        = string
+  description = "Cloud SQL Auth Proxy image for the sidecar. Pin an exact tag; a floating tag would change the proxy under a running release."
+  default     = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
+
+  validation {
+    condition     = can(regex(":[^:/]+$", var.smithdb_auth_proxy_image))
+    error_message = "smithdb_auth_proxy_image must carry an explicit tag or digest, e.g. gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0."
+  }
+}
+
+variable "smithdb_metastore_master_username" {
+  type        = string
+  description = "Master username for the SmithDB metastore."
+  default     = "smithdb"
+}
+
+variable "smithdb_metastore_master_password" {
+  type        = string
+  description = "Master password for the SmithDB metastore. Leave null to auto-generate. Use TF_VAR_smithdb_metastore_master_password if setting explicitly."
+  default     = null
+  sensitive   = true
+}
+
+variable "smithdb_external_metastore_host" {
+  type        = string
+  description = "Hostname of an existing Postgres instance for the SmithDB metastore. Use 127.0.0.1 when fronting AlloyDB with the Auth Proxy sidecar."
+  default     = null
+}
+
+variable "smithdb_external_metastore_port" {
+  type        = number
+  description = "Port of the existing SmithDB metastore Postgres instance."
+  default     = 5432
+}
+
+variable "smithdb_external_metastore_database" {
+  type        = string
+  description = "Database name on the existing SmithDB metastore Postgres instance."
+  default     = "smithdb"
+}
+
+variable "smithdb_external_metastore_username" {
+  type        = string
+  description = "Username for the existing SmithDB metastore Postgres instance."
+  default     = null
+}
+
+variable "smithdb_external_metastore_password" {
+  type        = string
+  description = "Password for the existing SmithDB metastore. Empty when using AlloyDB IAM database authentication. Use TF_VAR_smithdb_external_metastore_password."
+  default     = null
+  sensitive   = true
+}
+
+# --- Object store -----------------------------------------------------------
+variable "smithdb_bucket_name" {
+  type        = string
+  description = "Name of the SmithDB object-store bucket. Empty auto-generates {project_id}-{prefix}-{env}-smithdb{suffix}. Single-region is strongly recommended to avoid replication cost and unpredictable tail latency."
+  default     = ""
+}
+
+variable "smithdb_bucket_kms_key" {
+  type        = string
+  description = "Cloud KMS key for CMEK on the SmithDB bucket. Empty uses Google-managed encryption."
+  default     = ""
+}
+
+variable "smithdb_bucket_versioning_enabled" {
+  type        = bool
+  description = "Enable object versioning on the SmithDB object-store bucket. Off by default: SmithDB never overwrites a segment in place, so versioning only retains a noncurrent copy of everything compaction deletes."
+  default     = false
+}
+
+variable "smithdb_bucket_force_destroy" {
+  type        = bool
+  description = "Allow Terraform to delete a non-empty SmithDB bucket on destroy. Set true only for test stacks."
+  default     = false
+}
+
+variable "smithdb_service_account_email" {
+  type        = string
+  description = "Existing GCP service account email for the SmithDB pods. Leave null to create a dedicated least-privilege one."
+  default     = null
+}
+
+# --- Node pools -------------------------------------------------------------
+variable "smithdb_node_locations" {
+  type        = list(string)
+  description = "Zones for the SmithDB node pools. Empty uses every zone in the region, which fails if the machine type or Local SSD count is unavailable in any of them. Pin this after verifying availability."
+  default     = []
+}
+
+variable "smithdb_instance_store_machine_type" {
+  type        = string
+  description = "Machine type for the Local SSD (cache) pool. N2/N2D take an explicit disk count; C3/C4/Z3 '-lssd' types bundle a fixed count and require smithdb_instance_store_local_ssd_count = 0. At chart defaults the three cache workloads request 4 CPU each, which fits within the ~15.9 allocatable vCPU of an n2-standard-16."
+  default     = "n2-standard-16"
+}
+
+variable "smithdb_instance_store_local_ssd_count" {
+  type        = number
+  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Compute Engine accepts only specific counts per machine type: N2 types with 12-20 vCPU, including the default n2-standard-16, take 2, 4, 8, 16 or 24. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), so a node holding all of them needs roughly 430 GB allocatable, which the default 2 disks (750 GB raw) covers with headroom. Step up to 4 if you raise the resource requests."
+  default     = 2
+
+  validation {
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.smithdb_instance_store_local_ssd_count)
+    error_message = "smithdb_instance_store_local_ssd_count must be one of 0, 1, 2, 4, 8, 16, 24. Counts in between (3, 5, 6, ...) are rejected by Compute Engine at node pool creation. For n2-standard-16, use 2, 4, 8, 16 or 24."
+  }
+}
+
+variable "smithdb_instance_store_disk_size" {
+  type        = number
+  description = "Boot disk size in GB for cache pool nodes. The cache itself lives on Local SSD."
+  default     = 100
+}
+
+variable "smithdb_instance_store_min_nodes" {
+  type        = number
+  description = "Minimum nodes per zone in the cache pool. 0 lets the autoscaler scale to zero when SmithDB is idle."
+  default     = 0
+}
+
+variable "smithdb_instance_store_max_nodes" {
+  type        = number
+  description = "Maximum nodes per zone in the cache pool."
+  default     = 3
+}
+
+variable "smithdb_compute_machine_type" {
+  type        = string
+  description = "Machine type for the SmithDB compute pool (compaction, clusterManager)."
+  default     = "n2-standard-8"
+}
+
+variable "smithdb_compute_disk_size" {
+  type        = number
+  description = "Boot disk size in GB for compute pool nodes."
+  default     = 100
+}
+
+variable "smithdb_compute_min_nodes" {
+  type        = number
+  description = "Minimum nodes per zone in the SmithDB compute pool."
+  default     = 0
+}
+
+variable "smithdb_compute_max_nodes" {
+  type        = number
+  description = "Maximum nodes per zone in the SmithDB compute pool."
+  default     = 3
 }

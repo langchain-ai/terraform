@@ -121,6 +121,14 @@ For GCS access using HMAC keys (S3-compatible API), create a service account key
 
 ---
 
+## Optional SmithDB path
+
+SmithDB stays disabled by default. When enabled, Pass 1 adds a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP, a dedicated GCS object store, a SmithDB-specific service account with its own Workload Identity binding scoped to that one bucket, and two GKE Standard node pools - one Local SSD-backed for the cache-heavy workloads and one for compute. Object-store traffic uses the subnet's Private Google Access rather than Cloud NAT.
+
+Pass 2 deploys the services on the pinned 0.16 chart line with ingestion, migration, and query integration all disabled. See [SMITHDB.md](SMITHDB.md).
+
+---
+
 ## Secret Manager Integration
 
 The `secrets` module (optional) stores Postgres and Redis credentials in GCP Secret Manager. These can be referenced in the `k8s-bootstrap` module to populate Kubernetes secrets without embedding plaintext values in Terraform state.

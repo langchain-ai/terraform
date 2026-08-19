@@ -1,5 +1,21 @@
 # K8s Bootstrap Module - Namespaces, Service Accounts, Secrets, and KEDA
 
+locals {
+  # The kubectl provisioners further down fetch their own cluster credentials
+  # instead of trusting the operator's current context, which may point at an
+  # unrelated cluster or be empty on a first run. The credentials land in a temp
+  # file that dies with the provisioner's shell, leaving ~/.kube/config alone.
+  # Deliberately no `set -e`: those scripts tolerate non-zero exits in their retry
+  # loops, so only the credential fetch is fail-fast.
+  kubectl_creds = <<-EOT
+    KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+    export KUBECONFIG
+    trap 'rm -f "$KUBECONFIG"' EXIT
+    gcloud container clusters get-credentials ${var.cluster_name} \
+      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+  EOT
+}
+
 #------------------------------------------------------------------------------
 # LangSmith Namespace
 #------------------------------------------------------------------------------
@@ -177,15 +193,31 @@ resource "kubernetes_secret" "tls_certificate" {
 # Resource Quotas
 #------------------------------------------------------------------------------
 locals {
+  # Base figures sized for LangSmith itself. Optional features that add large
+  # pods contribute through the resource_quota_extra_* variables rather than by
+  # editing these, so a plain install keeps the exact same quota it always had.
+  langsmith_resource_quota_base_cpu       = 50
+  langsmith_resource_quota_base_memory_gi = 120
+  langsmith_resource_quota_base_pods      = 100
+
+  # The limits side is not simply twice the requests side, so carry it as its own
+  # pair of figures rather than deriving it.
+  langsmith_resource_quota_base_limit_cpu       = 100
+  langsmith_resource_quota_base_limit_memory_gi = 200
+
   langsmith_resource_quota_requests = {
-    "requests.cpu"    = "50"
-    "requests.memory" = "120Gi"
-    "pods"            = "100"
+    "requests.cpu"    = tostring(local.langsmith_resource_quota_base_cpu + var.resource_quota_extra_cpu)
+    "requests.memory" = "${local.langsmith_resource_quota_base_memory_gi + var.resource_quota_extra_memory_gi}Gi"
+    "pods"            = tostring(local.langsmith_resource_quota_base_pods + var.resource_quota_extra_pods)
   }
 
+  # The headroom is doubled on the limits side. SmithDB sets requests equal to
+  # limits, so the requests side binds first, but a feature admitted on requests
+  # must not then be rejected on limits. Doubling also keeps the same 2x
+  # requests-to-limits ratio the base figures use.
   langsmith_resource_quota_limits = {
-    "limits.cpu"    = "100"
-    "limits.memory" = "200Gi"
+    "limits.cpu"    = tostring(local.langsmith_resource_quota_base_limit_cpu + (var.resource_quota_extra_cpu * 2))
+    "limits.memory" = "${local.langsmith_resource_quota_base_limit_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
   }
 
   langsmith_resource_quota_hard = merge(
@@ -524,6 +556,7 @@ resource "null_resource" "apply_letsencrypt_issuer" {
 
   provisioner "local-exec" {
     command    = <<-EOT
+      ${local.kubectl_creds}
       # Wait for cert-manager CRDs to be available
       for i in {1..30}; do
         if kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
@@ -600,6 +633,7 @@ resource "null_resource" "apply_certificate" {
 
   provisioner "local-exec" {
     command    = <<-EOT
+      ${local.kubectl_creds}
       # Wait for Certificate CRD to be available
       for i in {1..30}; do
         if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then

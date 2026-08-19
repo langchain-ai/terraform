@@ -44,6 +44,10 @@ environment                   = "dev"
 postgres_deletion_protection  = false           # required for clean terraform destroy after test
 gke_deletion_protection       = false           # required for clean terraform destroy after test
 tls_certificate_source        = "none"          # HTTP only — no cert-manager or Let's Encrypt needed
+
+# Required when testing SmithDB with a Terraform-created metastore
+smithdb_metastore_deletion_protection = false
+smithdb_bucket_force_destroy          = true
 ```
 
 All other defaults are fine for testing. A typical dev config:
@@ -260,6 +264,47 @@ terraform -chdir=infra output keda_installed   # true
 
 ---
 
+## SmithDB checks
+
+Plan three configurations: `enable_smithdb = false`, a managed Cloud SQL plus GCS
+metastore, and BYO PostgreSQL. For an applied environment, verify:
+
+```bash
+terraform -chdir=infra output smithdb_node_pools
+kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
+
+# The cache mount must be Local SSD, not the boot disk.
+kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
+```
+
+Deploy with all three integration gates disabled first. Confirm the metastore
+migration Job completes - it reads its own `smithdb.metastoreMigration.useSsl`
+leaf rather than the one the services use, so a failure here while the services
+are fine usually means the two disagree. With
+`smithdb_metastore_use_auth_proxy = true`, also confirm the hook Job carried the
+sidecar and still reached Complete:
+
+```bash
+kubectl get job -n langsmith -l app.kubernetes.io/component=langsmith-smithdb-metastore-migration
+kubectl get pod -n langsmith -l job-name=langsmith-smithdb-metastore-migration \
+  -o jsonpath='{.items[*].spec.initContainers[*].name}'
+```
+
+Then confirm SmithDB can write to the bucket before enabling ingestion,
+historical migration, or the query cutover.
+
+Render checks worth running before any apply, one per gate state:
+
+```bash
+helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.16.0}" -n langsmith \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-smithdb.yaml \
+  -f helm/values/langsmith-values-smithdb-overrides.yaml >/dev/null
+```
+
+---
+
 ## Teardown
 
 ```bash
@@ -277,6 +322,8 @@ terraform -chdir=infra destroy
 - `postgres_deletion_protection = false` is set in `terraform.tfvars`
 - `gke_deletion_protection = false` is set in `terraform.tfvars`
 - `redis_prevent_destroy = false` (default) in `terraform.tfvars`
+- With SmithDB enabled: `smithdb_metastore_deletion_protection = false` and `smithdb_bucket_force_destroy = true`
+- The tfvars change has been applied, not just edited — deletion protection is enforced by Cloud SQL, not only by Terraform
 
 **If destroy hangs on the VPC**: Envoy Gateway or other controllers may have created load balancer resources with forwarding rules attached to the VPC. Check GCP Console → Network Services → Load Balancing and delete any LangSmith-related forwarding rules manually, then re-run destroy.
 
