@@ -12,6 +12,16 @@
 #   ./infra/scripts/quickstart.sh
 #
 # Also available as: make quickstart
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -358,6 +368,18 @@ _section "6. Product Features (LangGraph Platform)"
 ENABLE_DEPLOYMENTS="false"
 ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"
+ENABLE_SMITHDB="false"
+
+# SmithDB teardown posture follows the same split as the LangSmith metastore:
+# production protects the data, a dev stack stays disposable so the test cycle
+# does not need manual gcloud steps between runs.
+if [[ "$PROFILE" == "prod" ]]; then
+  SMITHDB_DELETION_PROTECTION="true"
+  SMITHDB_BUCKET_FORCE_DESTROY="false"
+else
+  SMITHDB_DELETION_PROTECTION="false"
+  SMITHDB_BUCKET_FORCE_DESTROY="true"
+fi
 
 if [[ "$PROFILE" == "prod" ]]; then
   echo ""
@@ -372,6 +394,18 @@ if [[ "$PROFILE" == "prod" ]]; then
     && ENABLE_INSIGHTS="true" || true
 else
   printf "  $(_dim "Dev profile: all features disabled. Edit terraform.tfvars to enable.")\n"
+fi
+
+# SmithDB needs dedicated node pools with Local SSD, which Autopilot cannot
+# provide, so only offer it on Standard clusters.
+if [[ "$USE_AUTOPILOT" == "false" ]]; then
+  echo ""
+  _ask_yn "Enable SmithDB? (columnar trace store, needs Local SSD node pools)" "n" \
+    && ENABLE_SMITHDB="true" || true
+  if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+    printf "  $(_dim "SmithDB services deploy with all LangSmith integration gates off.")\n"
+    printf "  $(_dim "Advance smithdb_ingestion_enabled, then migration, then query, one stage at a time.")\n"
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -521,6 +555,22 @@ enable_agent_builder = ${ENABLE_AGENT_BUILDER}
 enable_insights      = ${ENABLE_INSIGHTS}
 
 #------------------------------------------------------------------------------
+# SmithDB
+# The three gates below are a staged rollout. Stand the services up first, then
+# enable ingestion, then any historical migration, then query — applying and
+# validating each stage on its own. ClickHouse stays enabled throughout.
+#------------------------------------------------------------------------------
+enable_smithdb            = ${ENABLE_SMITHDB}
+smithdb_ingestion_enabled = false
+smithdb_migration_enabled = false
+smithdb_query_enabled     = false
+
+# Teardown controls for the metastore and object store. Production keeps both
+# protected; a dev stack stays destroyable and rebuildable without manual steps.
+smithdb_metastore_deletion_protection = ${SMITHDB_DELETION_PROTECTION}
+smithdb_bucket_force_destroy          = ${SMITHDB_BUCKET_FORCE_DESTROY}
+
+#------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------
 labels = {}
@@ -546,6 +596,7 @@ printf "  %-22s %s\n" "ClickHouse:" "$CH_SOURCE"
 printf "  %-22s %s\n" "TLS:"        "$TLS_SOURCE"
 [[ -n "$DOMAIN" ]] && printf "  %-22s %s\n" "Domain:" "$DOMAIN"
 printf "  %-22s %s\n" "Features:"   "deployments=${ENABLE_DEPLOYMENTS}  agent_builder=${ENABLE_AGENT_BUILDER}  insights=${ENABLE_INSIGHTS}"
+printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
@@ -562,4 +613,10 @@ printf "     ${CYAN}make apply${RESET}\n"
 echo ""
 printf "  4. Deploy LangSmith:\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  echo ""
+  printf "  ${DIM}SmithDB needs chart 0.16 or newer, which the deploy pin already targets.${RESET}\n"
+  printf "  ${DIM}To name an exact patch instead:${RESET}\n"
+  printf "     ${CYAN}CHART_VERSION=0.16.3 make deploy${RESET}\n"
+fi
 echo ""

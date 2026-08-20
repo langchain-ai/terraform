@@ -579,6 +579,7 @@ module "aks" {
   subnet_id           = local.aks_subnet_id
   service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
+  kubernetes_version  = var.aks_kubernetes_version
 
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
@@ -664,9 +665,10 @@ module "postgres" {
   database_name  = var.postgres_database_name
   sku_name       = var.postgres_sku_name
 
-  postgres_version = var.postgres_version
-  storage_mb       = var.postgres_storage_mb
-  storage_tier     = var.postgres_storage_tier
+  postgres_version      = var.postgres_version
+  storage_mb            = var.postgres_storage_mb
+  storage_tier          = var.postgres_storage_tier
+  backup_retention_days = var.postgres_backup_retention_days
 
   availability_zone            = var.availability_zones[0]
   standby_availability_zone    = var.postgres_standby_availability_zone

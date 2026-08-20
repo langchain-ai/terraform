@@ -46,6 +46,50 @@ locals {
   # Storage
   bucket_name = "${var.project_id}-${local.base_name}-traces${local.suffix}"
 
+  # SmithDB (optional, enable_smithdb)
+  smithdb_name                    = "${local.base_name}-smithdb"
+  smithdb_metastore_instance_name = "${local.base_name}-smithdb-pg${local.suffix}"
+  smithdb_bucket_name             = var.smithdb_bucket_name != "" ? var.smithdb_bucket_name : "${var.project_id}-${local.base_name}-smithdb${local.suffix}"
+
+  # Namespace quota headroom for SmithDB. The chart sets SmithDB requests equal
+  # to limits, so these are exact rather than estimates.
+  #
+  # Steady state (chart 0.16.x defaults), per replica:
+  #   query 4 CPU / 8Gi, ingestion 4 / 8, compactionWorker 4 / 8,
+  #   compaction 2 / 4, clusterManager 250m / 256Mi   = 14.25 CPU / 28.25Gi
+  # Auth Proxy sidecar adds 100m / 128Mi to each of those five pods. A native
+  # sidecar counts toward the pod total rather than folding into the
+  # init-container maximum, so it is 500m / 640Mi, not zero.
+  #
+  # A rolling upgrade then needs a second copy of the largest pod alive at once
+  # while the old one drains, which is another 4.1 CPU / 8.125Gi. Without that
+  # surge allowance an upgrade wedges: the replacement pod is refused, so the
+  # old pod never terminates, and Helm waits on a rollout that cannot progress.
+  smithdb_quota_steady_cpu       = 15 # 14.25 steady + 0.5 sidecars, rounded up
+  smithdb_quota_steady_memory_gi = 29 # 28.25 steady + 0.625 sidecars, rounded up
+  smithdb_quota_surge_cpu        = 5  # one extra 4 CPU pod + its sidecar
+  smithdb_quota_surge_memory_gi  = 9  # one extra 8Gi pod + its sidecar
+
+  # The one-shot ClickHouse backfill Job: 8 CPU / 16Gi plus its own Auth Proxy
+  # sidecar. It also brings an in-chart taskdb Postgres StatefulSet.
+  smithdb_quota_migration_cpu       = 9
+  smithdb_quota_migration_memory_gi = 18
+
+  smithdb_quota_extra_cpu = var.enable_smithdb ? (
+    local.smithdb_quota_steady_cpu + local.smithdb_quota_surge_cpu +
+    (var.smithdb_migration_enabled ? local.smithdb_quota_migration_cpu : 0)
+  ) : 0
+
+  smithdb_quota_extra_memory_gi = var.enable_smithdb ? (
+    local.smithdb_quota_steady_memory_gi + local.smithdb_quota_surge_memory_gi +
+    (var.smithdb_migration_enabled ? local.smithdb_quota_migration_memory_gi : 0)
+  ) : 0
+
+  # Five SmithDB Deployments, the metastore migration hook, and during the
+  # backfill the migration Job plus its taskdb StatefulSet. Doubled to leave
+  # room for rolling-update surge across all of them.
+  smithdb_quota_extra_pods = var.enable_smithdb ? (var.smithdb_migration_enabled ? 20 : 12) : 0
+
   #----------------------------------------------------------------------------
   # Common Labels (applied to all resources)
   #----------------------------------------------------------------------------

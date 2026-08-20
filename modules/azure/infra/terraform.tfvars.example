@@ -45,6 +45,7 @@ postgres_database_name       = "langsmith"    # database name on the server
 # postgres_version      = "16"      # see below before changing this on a live server
 # postgres_storage_mb   = 32768     # 32 GB, auto-grow is off, size upfront
 # postgres_storage_tier = "P4"      # raise for more IOPS at the same disk size
+# postgres_backup_retention_days = 7  # days of automated backups to keep, 7 through 35
 #
 # Deployments created before postgres_version existed are running 14. They now plan an
 # in-place major upgrade to 16 on the next apply, which is irreversible and takes downtime.

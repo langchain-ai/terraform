@@ -136,6 +136,50 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null)
+      error_message = "smithdb_external_metastore_host and smithdb_external_metastore_username are required when smithdb_metastore_source = 'external'."
+    }
+
+    precondition {
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # The proxy takes the instance's connection name as its only positional
+    # argument, and that is knowable only for an instance this module created.
+    precondition {
+      condition     = !var.smithdb_metastore_use_auth_proxy || var.smithdb_metastore_source == "create"
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_source = 'create'. For an external instance, including AlloyDB, configure the proxy sidecar directly in the Helm values - see the metastore TLS section of SMITHDB.md."
+    }
+
+    # The hop the proxy terminates is the one to Cloud SQL. SmithDB's own hop is
+    # to 127.0.0.1 inside the Pod, where a TLS handshake has no server to meet
+    # and the connection fails outright rather than degrading.
+    precondition {
+      condition     = !var.smithdb_metastore_use_auth_proxy || !var.smithdb_metastore_use_ssl
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_use_ssl = false. The proxy holds the TLS session to Cloud SQL; the SmithDB-to-proxy hop is Pod loopback and is plaintext by design."
+    }
+
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # Autopilot manages node pools itself, so the dedicated Local SSD pools this
+    # module creates do not exist there and the overlay's nodeSelector would
+    # never match — SmithDB pods would sit Pending indefinitely. Autopilot needs
+    # the cloud.google.com/gke-ephemeral-storage-local-ssd nodeSelector instead.
+    precondition {
+      condition     = !var.enable_smithdb || !var.gke_use_autopilot
+      error_message = "enable_smithdb is not supported with gke_use_autopilot = true. SmithDB needs the dedicated Local SSD node pools this module creates on GKE Standard. See the SmithDB section of README.md."
+    }
+
+    precondition {
       condition     = !var.enable_sandboxes || !var.gke_use_autopilot
       error_message = "enable_sandboxes requires Standard GKE because sandbox-host needs a dedicated nested-virtualization node pool."
     }
@@ -225,8 +269,10 @@ module "networking" {
   services_cidr = var.services_cidr
 
   # Private service connection (requires servicenetworking.networksAdmin role).
-  # Memorystore also backs sandbox JuiceFS metadata when sandboxes are enabled.
-  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || var.enable_sandboxes
+  # Needed by external PostgreSQL and Redis, by the SmithDB metastore, which is
+  # private-IP only, and by the Memorystore instance backing sandbox JuiceFS
+  # metadata.
+  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || var.enable_sandboxes || (var.enable_smithdb && var.smithdb_metastore_source == "create")
 
   # Labels
   labels = local.common_labels
@@ -413,6 +459,100 @@ module "storage" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB Module (Optional, enable_smithdb)
+#
+# SmithDB is the in-chart columnar store/query engine (chart 0.16+). It needs
+# three things from the cloud: a dedicated Postgres metastore, its own object
+# store, and node-local SSD cache capacity. This module owns the first two plus
+# the Workload Identity binding; the node pools are in module.smithdb_nodes.
+#------------------------------------------------------------------------------
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name       = local.smithdb_name
+  project_id = var.project_id
+  region     = var.region
+  labels     = local.common_labels
+
+  namespace    = var.langsmith_namespace
+  release_name = var.langsmith_release_name
+
+  network_id                 = module.networking.vpc_id
+  private_network_connection = module.networking.private_service_connection
+
+  # Metastore — dedicated Cloud SQL instance, or bring your own (AlloyDB).
+  metastore_source            = var.smithdb_metastore_source
+  metastore_instance_name     = local.smithdb_metastore_instance_name
+  metastore_database_version  = var.smithdb_metastore_database_version
+  metastore_tier              = var.smithdb_metastore_tier
+  metastore_disk_size         = var.smithdb_metastore_disk_size
+  metastore_high_availability = var.smithdb_metastore_high_availability
+
+  metastore_deletion_protection = var.smithdb_metastore_deletion_protection
+  metastore_ssl_mode            = var.smithdb_metastore_ssl_mode
+  metastore_use_auth_proxy      = var.smithdb_metastore_use_auth_proxy
+  metastore_master_username     = var.smithdb_metastore_master_username
+  metastore_master_password     = var.smithdb_metastore_master_password
+
+  external_metastore_host     = var.smithdb_external_metastore_host
+  external_metastore_port     = var.smithdb_external_metastore_port
+  external_metastore_database = var.smithdb_external_metastore_database
+  external_metastore_username = var.smithdb_external_metastore_username
+  external_metastore_password = var.smithdb_external_metastore_password
+
+  # Object store
+  bucket_name               = local.smithdb_bucket_name
+  bucket_kms_key            = var.smithdb_bucket_kms_key
+  bucket_versioning_enabled = var.smithdb_bucket_versioning_enabled
+  bucket_force_destroy      = var.smithdb_bucket_force_destroy
+
+  # The backfill reads offloaded run payloads out of the traces bucket, so it
+  # needs a read grant there. Passed unconditionally; the module only creates the
+  # binding when the migration gate is on.
+  traces_bucket_name = module.storage.bucket_name
+  migration_enabled  = var.smithdb_migration_enabled
+
+  service_account_email = var.smithdb_service_account_email
+
+  depends_on = [module.networking, google_project_service.apis]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB Node Pools (Optional, enable_smithdb)
+# Local SSD-backed ephemeral storage for the SmithDB cache, plus a compute pool.
+# Not created on Autopilot, where Google manages node pools; see the SmithDB
+# section of README.md for the Autopilot path.
+#------------------------------------------------------------------------------
+module "smithdb_nodes" {
+  source = "./modules/smithdb-nodes"
+  count  = var.enable_smithdb && !var.gke_use_autopilot ? 1 : 0
+
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
+  name_prefix  = local.base_name
+
+  node_service_account_email = var.gke_node_service_account_email
+  node_locations             = var.smithdb_node_locations
+
+  instance_store_machine_type    = var.smithdb_instance_store_machine_type
+  instance_store_local_ssd_count = var.smithdb_instance_store_local_ssd_count
+  instance_store_disk_size_gb    = var.smithdb_instance_store_disk_size
+  instance_store_min_nodes       = var.smithdb_instance_store_min_nodes
+  instance_store_max_nodes       = var.smithdb_instance_store_max_nodes
+
+  compute_machine_type = var.smithdb_compute_machine_type
+  compute_disk_size_gb = var.smithdb_compute_disk_size
+  compute_min_nodes    = var.smithdb_compute_min_nodes
+  compute_max_nodes    = var.smithdb_compute_max_nodes
+
+  labels = local.common_labels
+
+  depends_on = [module.gke_cluster]
+}
+
+#------------------------------------------------------------------------------
 # IAM Module (Optional)
 #------------------------------------------------------------------------------
 module "iam" {
@@ -500,6 +640,10 @@ module "k8s_bootstrap" {
   project_id  = var.project_id
   environment = var.environment
 
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
+
   # Namespace configuration
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
@@ -511,6 +655,13 @@ module "k8s_bootstrap" {
   default_container_requests = (
     var.enable_sandboxes ? var.sandbox_default_container_requests : {}
   )
+
+  # SmithDB does not fit inside the base namespace quota, and the failure mode is
+  # opaque: a ReplicaSet reports FailedCreate and the backfill Job reports Running
+  # with no pod, neither of which names SmithDB. Size the headroom here instead.
+  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
+  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
+  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
 
   # The JuiceFS CSI driver runs at system-node-critical / system-cluster-critical,
   # which GKE admits only into a namespace holding a PriorityClass-scoped quota.
@@ -702,11 +853,62 @@ resource "kubernetes_secret" "standalone_insights_redis" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB metastore Secret (chart 0.16+)
+# Created here so it exists before Helm runs. The chart reads it through
+# smithdb.config.existingSecretName and the per-field *SecretKey mappings
+# generated into the SmithDB values overrides.
+#------------------------------------------------------------------------------
+resource "kubernetes_secret" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = var.langsmith_namespace
+  }
+
+  # With the Auth Proxy the SmithDB containers dial the sidecar on the Pod
+  # loopback, not the instance's private IP. Everything else is unchanged: the
+  # proxy authenticates the transport, the password still authenticates the
+  # database session.
+  data = {
+    smithdb_metastore_db_host     = var.smithdb_metastore_use_auth_proxy ? "127.0.0.1" : module.smithdb[0].metastore_host
+    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
+    smithdb_metastore_db_username = module.smithdb[0].metastore_username
+    smithdb_metastore_db_password = module.smithdb[0].metastore_password
+  }
+
+  depends_on = [module.k8s_bootstrap]
+}
+
+# Credential for the in-chart taskdb Postgres backing the historical
+# ClickHouse-to-SmithDB migration. Created unconditionally with SmithDB so that
+# smithdb_migration_enabled stays a values-only flip.
+resource "kubernetes_secret" "smithdb_taskdb" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-taskdb"
+    namespace = var.langsmith_namespace
+  }
+
+  data = {
+    postgres_password = module.smithdb[0].taskdb_password
+  }
+
+  depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
 # Ingress Module (Optional)
 #------------------------------------------------------------------------------
 module "ingress" {
   source = "./modules/ingress"
   count  = var.install_ingress ? 1 : 0
+
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
   langsmith_domain    = var.langsmith_domain
