@@ -794,9 +794,11 @@ variable "enable_agent_builder" {
   default     = false
 }
 
-# Unlike enable_deployments and enable_agent_builder above, no Terraform resource
-# reads this one — Insights needs no GCP-side infrastructure. helm/scripts/deploy.sh
-# and init-values.sh parse it out of terraform.tfvars to pick the values overlay.
+# No Terraform resource reads this one, and unlike enable_deployments and
+# enable_agent_builder above it is not referenced in a precondition either
+# (main.tf:114 and main.tf:134 are what keep those two out of this rule), so
+# tflint sees nothing using it. helm/scripts/deploy.sh and init-values.sh parse
+# it out of terraform.tfvars to pick the values overlay.
 # tflint-ignore: terraform_unused_declarations
 variable "enable_insights" {
   type        = bool

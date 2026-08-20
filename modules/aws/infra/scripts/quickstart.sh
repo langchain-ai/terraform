@@ -446,13 +446,14 @@ if [[ "$GATEWAY_MODE" == "nginx" ]]; then
   printf "  ${DIM}TLS terminates at the ALB. Supports ACM and Let's Encrypt HTTP-01.${RESET}\n"
 fi
 
-# For Istio: brief note. No input needed — the gateway chart's NLB scheme is a
-# post-deploy helm change, not something Terraform can set from here.
+# For Istio: brief note. No input needed, because the gateway service is
+# ClusterIP and the ALB in front of it is what decides public vs internal.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
   printf "  ${DIM}Istio: ALB → TargetGroupBinding → istio-ingressgateway pods → LangSmith.${RESET}\n"
-  printf "  ${DIM}The gateway chart provisions its own NLB too. On EKS it defaults to private subnets.${RESET}\n"
-  printf "  ${DIM}You can switch that NLB's scheme after deploy via helm upgrade — see example yaml.${RESET}\n"
+  printf "  ${DIM}Terraform installs the gateway chart with service.type=ClusterIP, so it${RESET}\n"
+  printf "  ${DIM}provisions no NLB of its own. alb_scheme is what makes this public or${RESET}\n"
+  printf "  ${DIM}internal (asked below on the prod profile; dev stays internet-facing).${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
