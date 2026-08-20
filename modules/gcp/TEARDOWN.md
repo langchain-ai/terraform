@@ -76,22 +76,34 @@ kubectl delete crd lgps.apps.langchain.ai
 
 ## A2 — Uninstall LangSmith Helm Release
 
+Use the provided script. The script removes the Helm release and operator-managed resources.
+
 ```bash
 cd terraform/gcp
 make uninstall
 ```
 
-Or manually:
+You can also run the same script directly:
 
 ```bash
-helm uninstall langsmith -n langsmith
-kubectl get pods -n langsmith   # verify all pods removed
+cd terraform/gcp
+./helm/scripts/uninstall.sh
 ```
 
-After uninstalling:
+**Sandboxes and JuiceFS:** The JuiceFS CSI driver is part of the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods.
+
+**In-cluster ClickHouse disks:** The `data-langsmith-clickhouse-*` claim uses the `premium-rwo` storage class. The GCE PD CSI driver provisions the Persistent Disk, so Terraform does not track it. The uninstall script keeps the claim by default to support a clean Helm reinstall.
+
+For full infrastructure teardown, delete the claim during uninstall. The CSI driver can then reclaim the disk before Terraform destroys GKE:
 
 ```bash
-# Delete the namespace if it wasn't removed automatically
+cd terraform/gcp
+DELETE_DATA_PVCS=true make uninstall
+```
+
+After a full teardown uninstall, delete the namespace if it still exists:
+
+```bash
 kubectl delete namespace langsmith
 ```
 
@@ -120,7 +132,9 @@ kubectl delete namespace envoy-gateway-system
 
 ## A4 — Handle KEDA ScaledObject Finalizers (if namespace stuck)
 
-If the `langsmith` namespace gets stuck in `Terminating`, KEDA ScaledObject finalizers are the likely cause — the KEDA controller is already gone so it can't clear them. Fix:
+If the `langsmith` namespace gets stuck in `Terminating` after A2, JuiceFS finalizers are the first cause to check (`kubectl get pods -n langsmith | grep juicefs`). Use the uninstall script on a current checkout rather than patching PVCs by hand.
+
+If JuiceFS is already gone, KEDA ScaledObject finalizers are the next cause — the KEDA controller is already gone so it cannot clear them. Fix:
 
 ```bash
 for obj in $(kubectl get scaledobjects -n langsmith -o name 2>/dev/null); do
@@ -265,6 +279,10 @@ gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX
 
 # Secret Manager
 gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith"
+
+# GCE Persistent Disks (in-cluster ClickHouse on premium-rwo is not in Terraform state)
+gcloud compute disks list --project "$PROJECT_ID" --filter="name~$PREFIX OR name~clickhouse" \
+  --format='value(name,zone,sizeGb,status)'
 ```
 
 ---
@@ -302,7 +320,7 @@ gcloud container clusters get-credentials "$PREFIX-gke-<suffix>" \
   --region "$REGION" --project "$PROJECT_ID"
 ```
 
-Then remove Kubernetes resources in order:
+Then remove Kubernetes resources in order. Do not run `helm uninstall langsmith` first when sandboxes are enabled. That removes the JuiceFS CSI controller while mount pods still hold `juicefs.com/finalizer`. Prefer the uninstall script, which deletes sandbox-host and JuiceFS claims first:
 
 ```bash
 # Delete LGP CRD (retained by resource policy)
@@ -311,8 +329,11 @@ kubectl delete crd lgps.apps.langchain.ai 2>/dev/null || true
 # Delete ScaledObjects before KEDA (clears finalizers)
 kubectl delete scaledobjects --all -A 2>/dev/null || true
 
-# Uninstall Helm releases
-helm uninstall langsmith -n langsmith 2>/dev/null || true
+# LangSmith release: use the script so JuiceFS volumes unmount while CSI is up.
+# DELETE_DATA_PVCS=true reclaims the in-cluster ClickHouse GCE PD.
+DELETE_DATA_PVCS=true ./helm/scripts/uninstall.sh
+
+# Remaining bootstrap releases
 helm uninstall cert-manager -n cert-manager 2>/dev/null || true
 helm uninstall keda -n keda 2>/dev/null || true
 helm uninstall envoy-gateway -n envoy-gateway-system 2>/dev/null || true
@@ -376,6 +397,14 @@ which appends a random suffix to instance names.
 
 ```bash
 gcloud redis instances delete "$PREFIX-redis-<suffix>" \
+  --region "$REGION" --project "$PROJECT_ID" --quiet
+```
+
+If sandboxes were enabled, a second instance exists for JuiceFS metadata (`$PREFIX-jfs-redis-<suffix>`). Delete that too:
+
+```bash
+gcloud redis instances list --region "$REGION" --project "$PROJECT_ID" --filter="name~$PREFIX"
+gcloud redis instances delete "$PREFIX-jfs-redis-<suffix>" \
   --region "$REGION" --project "$PROJECT_ID" --quiet
 ```
 
@@ -478,6 +507,9 @@ Several resources can be deleted in parallel since they have no dependencies on 
 ## Lessons Learned
 
 - **Always configure a remote backend** (GCS bucket) before `terraform apply` — local state is fragile and easily lost. See `backend.tf.example` in `infra/`.
+- **JuiceFS CSI lives in the LangSmith Helm release.** Uninstall the sandbox-host workload and JuiceFS claims before `helm uninstall`, or mount pods stay `Terminating` with `juicefs.com/finalizer` and namespace delete hangs. Use `./helm/scripts/uninstall.sh`.
+- **In-cluster ClickHouse uses a dynamically provisioned GCE PD** (`premium-rwo`). Terraform does not track it. Run `DELETE_DATA_PVCS=true make uninstall` before `terraform destroy`, or the disk is orphaned.
+- **Terraform validates `postgres_password` on destroy.** Source `infra/scripts/setup-env.sh` first. If the Secret Manager secret is already gone, set `export TF_VAR_postgres_password="any-placeholder"`.
 - **KEDA finalizers block namespace deletion** if the KEDA controller is uninstalled first — delete ScaledObjects before uninstalling KEDA, or patch out finalizers manually.
 - **The LGP CRD is kept by resource policy** — `helm uninstall` will not remove it; delete it manually with `kubectl delete crd lgps.apps.langchain.ai`.
 - **GKE deletion releases the external IP** — if you re-deploy, a new IP is issued. Update your DNS A record. To avoid this, use a static regional IP (not currently wired in this stack).
