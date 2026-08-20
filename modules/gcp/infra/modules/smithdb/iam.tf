@@ -40,8 +40,15 @@ resource "google_storage_bucket_iam_member" "smithdb_object_admin" {
 #
 # Only created with the migration gate, so the steady-state install keeps a
 # service account that can reach nothing but its own bucket.
+#
+# Gated on migration_enabled alone. The root module passes traces_bucket_name
+# from module.storage, so once the traces bucket leaves state that value is
+# unknown at plan time - and a count that compares it to "" is then unplannable,
+# which fails destroy with "Invalid count argument". The precondition below
+# carries the empty-name case instead, so an apply still cannot produce a
+# binding against an invalid bucket.
 resource "google_storage_bucket_iam_member" "smithdb_traces_object_viewer" {
-  count = var.migration_enabled && var.traces_bucket_name != "" ? 1 : 0
+  count = var.migration_enabled ? 1 : 0
 
   bucket = var.traces_bucket_name
   role   = "roles/storage.objectViewer"
