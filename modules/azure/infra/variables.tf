@@ -19,6 +19,7 @@ variable "name_prefix" {
 # terraform.tfvars fails the plan with an explanation, rather than being
 # ignored as an undeclared variable — which would drop name_prefix to its
 # empty default and rename (destroy and recreate) every resource.
+# tflint-ignore: terraform_unused_declarations
 variable "identifier" {
   type        = string
   description = "Removed — use name_prefix instead."
@@ -377,6 +378,13 @@ variable "redis_source" {
   }
 }
 
+# No Terraform resource reads this — where ClickHouse runs is a Helm-values
+# decision, and helm/scripts/init-values.sh parses it out of terraform.tfvars.
+# The declaration earns its place through the validation block: init-values.sh
+# tests only for "external" and treats everything else as in-cluster, so without
+# a plan-time check a typo would quietly deploy the chart's dev-grade ClickHouse
+# StatefulSet on a deployment that asked for a managed one.
+# tflint-ignore: terraform_unused_declarations
 variable "clickhouse_source" {
   type        = string
   description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a pod via Helm (dev/POC only). 'external' for LangChain Managed ClickHouse (recommended for production) — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
@@ -564,18 +572,6 @@ variable "additional_node_pools" {
   }
 }
 
-variable "aks_deletion_protection" {
-  type        = bool
-  description = "Prevent accidental AKS cluster deletion. Set false for dev/test environments where you need to destroy and recreate."
-  default     = true
-}
-
-variable "postgres_deletion_protection" {
-  type        = bool
-  description = "Prevent accidental PostgreSQL server deletion. Set false for dev/test environments."
-  default     = true
-}
-
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -607,6 +603,7 @@ variable "istio_addon_revision" {
 
 # No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
 # terraform.tfvars for the ClusterIssuer it applies, so the declaration has to stay.
+# tflint-ignore: terraform_unused_declarations
 variable "letsencrypt_email" {
   type        = string
   description = "Email address for Let's Encrypt certificate notifications. Required when tls_certificate_source is 'letsencrypt' or 'dns01'."
@@ -619,6 +616,9 @@ variable "langsmith_domain" {
   default     = ""
 }
 
+# No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
+# terraform.tfvars for the --version it passes to helm upgrade.
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
   description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Must be on the chart 0.16 line — deploy.sh rejects anything else, because these values use the 0.16 schema. Empty string = use the pinned ~0.16.0 line default."
@@ -770,30 +770,35 @@ variable "postgres_geo_redundant_backup" {
 # about undeclared variables in terraform.tfvars. They are read by
 # helm/scripts/init-values.sh and helm/scripts/deploy.sh.
 
+# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
   description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
   default     = "production"
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "enable_deployments" {
   type        = bool
   description = "Pass 3 — enable LangGraph Platform (hostBackend, listener, operator). Read by deploy.sh — Terraform ignores this value."
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "enable_agent_builder" {
   type        = bool
   description = "Pass 4 — enable Agent Builder UI. Read by deploy.sh — Terraform ignores this value."
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "enable_insights" {
   type        = bool
   description = "Pass 5 — enable Insights. Read by deploy.sh — Terraform ignores this value."
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "enable_polly" {
   type        = bool
   description = "Pass 5 — enable Polly AI eval agent. Read by deploy.sh — Terraform ignores this value."

@@ -35,8 +35,6 @@ Owner includes both. Contributor alone is insufficient — role assignments requ
 subscription_id              = "your-azure-subscription-id"
 name_prefix                  = "dev"
 location                     = "eastus"
-aks_deletion_protection      = false   # required for clean terraform destroy after test
-postgres_deletion_protection = false   # required for clean terraform destroy after test
 keyvault_purge_protection    = false   # required for clean terraform destroy after test
 dns_label              = "langsmith-test"
 tls_certificate_source       = "letsencrypt"
@@ -341,9 +339,7 @@ make clean
 > Without state, Terraform cannot destroy anything. You'll have to delete Azure resources manually:
 > `az group delete --name langsmith-rg-<name_prefix> --yes`
 
-**Before destroy, verify these are set in `terraform.tfvars`:**
-- `aks_deletion_protection      = false`
-- `postgres_deletion_protection = false`
+**Before destroy, verify this is set in `terraform.tfvars`:**
 - `keyvault_purge_protection    = false`
 
 **If destroy hangs on the VNet**: the NGINX ingress controller may have created Azure LB rules
