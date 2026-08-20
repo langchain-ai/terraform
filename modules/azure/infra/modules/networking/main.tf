@@ -93,6 +93,13 @@ resource "azurerm_subnet" "subnet_postgres" {
       ]
     }
   }
+
+  # The Postgres network-integration principal adds Microsoft.Storage here
+  # itself once the server is injected. service_endpoints is Optional and not
+  # Computed, so declaring nothing plans to strip it on every run.
+  lifecycle {
+    ignore_changes = [service_endpoints]
+  }
 }
 
 # Redis subnet — created only when create_redis_subnet = true.
@@ -142,5 +149,11 @@ resource "azurerm_subnet" "subnet_agic" {
         "Microsoft.Network/virtualNetworks/subnets/join/action",
       ]
     }
+  }
+
+  # Same precaution as subnet_postgres above, though Application Gateway has
+  # not been seen adding an endpoint.
+  lifecycle {
+    ignore_changes = [service_endpoints]
   }
 }
