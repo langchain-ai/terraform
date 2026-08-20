@@ -749,13 +749,19 @@ variable "ingress_ip" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones to deploy into. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone."
-  default     = ["1"]
+  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pool and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Applies at creation only."
+  default     = []
+}
+
+variable "postgres_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for PostgreSQL (primary + standby in different zones). Azure picks the standby zone unless postgres_standby_availability_zone names one. Requires a GeneralPurpose or MemoryOptimized SKU."
+  default     = false
 }
 
 variable "postgres_standby_availability_zone" {
   type        = string
-  description = "Standby AZ for Postgres HA (ZoneRedundant mode). Leave empty to disable HA standby."
+  description = "Pin the Postgres HA standby to a zone. Leave empty to let Azure choose. Setting this also turns HA on, for compatibility with configurations written before postgres_high_availability existed. Only pin the standby alongside a pinned availability_zones, so the primary cannot land in the same zone."
   default     = ""
 }
 

@@ -285,12 +285,15 @@ az vm list -g <resource-group> --query '[].name'
 
 ```hcl
 # terraform.tfvars
+postgres_high_availability           = true
 availability_zones                   = ["1", "2", "3"]
 postgres_standby_availability_zone   = "2"
 postgres_geo_redundant_backup        = true
 ```
 
-**Expected plan**: PostgreSQL HA mode set to `ZoneRedundant`.
+**Expected plan**: PostgreSQL HA mode set to `ZoneRedundant`, standby in zone 2.
+Dropping `postgres_standby_availability_zone` keeps HA and leaves the standby
+zone to Azure.
 
 > Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
 
@@ -299,7 +302,8 @@ postgres_geo_redundant_backup        = true
 > changes so the provider cannot cycle the system node pool out from under
 > running pods. Plan reports the mismatch as a `Check block assertion failed`
 > warning naming both the live and the requested zones, and exits 0. Expect that
-> warning here rather than a node pool change.
+> warning here rather than a node pool change. The `[]` default requests no zone
+> and never warns.
 
 ---
 
