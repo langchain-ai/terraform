@@ -184,7 +184,7 @@ Holding the role is not the same as being able to use it. A PIM-eligible role gr
 
 For the full permission inventory, the role assignments the deployment creates, and how to restrict which roles the deployer may assign, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
-Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present, and the fix is to set `terraform_principal_type` rather than to request more access. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present. `terraform_principal_type` fixes the case where the condition admits the deployer's own type; where it admits only `ServicePrincipal` and the deployer is a human, no value of that variable satisfies it and the way through is `keyvault_manage_terraform_admin_assignment = false`. `make preflight` reads the condition and says which case you are in. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ### Authenticate
 
@@ -851,6 +851,14 @@ other name, including the blob container, keeps them.
 The hash is deterministic — the same subscription and `name_prefix` always produce
 the same name, so repeat applies are stable and no random values are stored.
 `a1b2c3` above stands in for it; yours differs.
+
+Determinism is what makes `name_suffix_salt` necessary. If a failed apply burns
+those four names — a Key Vault soft-deleted for its retention window, a Redis name
+Azure still holds — retrying asks for the same names and collides again. Set
+`name_suffix_salt = "2"` to rotate all four; the value only has to differ from the
+last one. The resource group, VNet and AKS names do not carry the hash and are
+unaffected. It carries the same warning as `unique_resource_names`: on an existing
+deployment this is destroy-and-recreate, so pin the single colliding name instead.
 
 Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
 hyphens inside the same 24-character limit Storage has, so it runs out of room
