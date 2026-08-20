@@ -1,13 +1,14 @@
-"""Exercise preflight.sh's RBAC block against a stubbed az CLI.
+"""Exercise preflight.sh's RBAC and Postgres capability checks with a stubbed az CLI.
 
 The checks worth testing are the ones you cannot produce on demand in a real
 subscription: a deny assignment that overrides Owner, a PIM role held but not
-activated, an ABAC-conditioned grant, and a preview API that changes shape or
-stops answering. Each case builds an infra directory, copies the real script into
-it so INFRA_DIR resolves inside the fixture, runs it with a stub `az` first on
-PATH, and asserts on substrings of the rendered output.
+activated, an ABAC-conditioned grant, a preview API that changes shape or stops
+answering, and a Postgres capability response that is empty or malformed. Each
+case builds an infra directory, copies the real script into it so INFRA_DIR
+resolves inside the fixture, runs it with a stub `az` first on PATH, and asserts
+on substrings of the rendered output.
 
-Usage: python3 test_rbac_preflight.py
+Usage: python3 test-preflight-rbac.py
 """
 
 import json
@@ -114,6 +115,98 @@ DENY = {"id": "deny-1", "displayName": "Landing zone RBAC lock"}
 ALL_GOOD = response()
 
 CASES = [
+    {
+        "name": "Postgres capabilities validate the configured version and SKU",
+        "ca_all": ALL_GOOD,
+        "expect": [
+            "[✓] Postgres capability API returned 2 SKU(s) and 2 version(s) in eastus",
+            "[✓] postgres_version '16' is available in eastus",
+            "[✓] postgres_sku_name 'GP_Standard_D2ds_v4' is available in eastus",
+        ],
+        "expect_calls": ["postgres flexible-server list-skus -l eastus -o json"],
+        "reject": ["For prices please refer", "skipping regional availability"],
+    },
+    {
+        "name": "an empty Postgres capability array is a definitive failure",
+        "ca_all": ALL_GOOD,
+        "pg_caps_raw": "[]",
+        "expect": [
+            "[✗] PostgreSQL Flexible Server is unavailable to the active subscription in eastus",
+            "list-skus returned an empty array",
+        ],
+        "reject": ["postgres_version '16' is available", "unexpected response"],
+    },
+    {
+        "name": "a Postgres capability CLI failure warns and skips",
+        "ca_all": ALL_GOOD,
+        "pg_caps_fail": True,
+        "expect": [
+            "[!] Postgres list-skus failed — skipping regional availability, version, and SKU checks",
+        ],
+        "reject": [
+            "[✗] PostgreSQL Flexible Server is unavailable",
+            "postgres_version '16' is available",
+        ],
+    },
+    {
+        "name": "unexpected Postgres capability stderr warns and skips",
+        "ca_all": ALL_GOOD,
+        "pg_caps_stderr": True,
+        "expect": [
+            "[!] Postgres list-skus wrote unexpected stderr — skipping regional availability, version, and SKU checks",
+        ],
+        "reject": [
+            "[✗] PostgreSQL Flexible Server is unavailable",
+            "postgres_version '16' is available",
+            "For prices please refer",
+        ],
+    },
+    {
+        "name": "a reshaped Postgres capability response warns and skips",
+        "ca_all": ALL_GOOD,
+        "pg_caps_raw": json.dumps({"value": []}),
+        "expect": [
+            "[!] Postgres list-skus returned an unexpected response — skipping regional availability, version, and SKU checks",
+        ],
+        "reject": ["[✗] PostgreSQL Flexible Server is unavailable"],
+    },
+    {
+        "name": "a non-JSON Postgres capability response warns and skips",
+        "ca_all": ALL_GOOD,
+        "pg_caps_raw": "<html>gateway timeout</html>",
+        "expect": [
+            "[!] Postgres list-skus returned an unexpected response — skipping regional availability, version, and SKU checks",
+        ],
+        "reject": ["[✗] PostgreSQL Flexible Server is unavailable"],
+    },
+    {
+        "name": "an unavailable configured Postgres version fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'postgres_version = "15"',
+        "expect": [
+            "[✗] postgres_version '15' is not available in eastus. Available versions: 14, 16",
+            "[✓] postgres_sku_name 'GP_Standard_D2ds_v4' is available in eastus",
+        ],
+    },
+    {
+        "name": "an unavailable configured Postgres SKU fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'postgres_sku_name = "MO_Standard_E2ds_v5"',
+        "expect": [
+            "[✓] postgres_version '16' is available in eastus",
+            "[✗] postgres_sku_name 'MO_Standard_E2ds_v5' is not available in eastus",
+            "Available SKUs: GP_Standard_D2ds_v4, GP_Standard_D4ds_v4",
+        ],
+    },
+    {
+        "name": "in-cluster Postgres skips the capability API",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'postgres_source = "in-cluster"',
+        "expect": [
+            "[✓] postgres_source = in-cluster — no Flexible Server capability check needed",
+        ],
+        "reject_calls": ["postgres flexible-server list-skus"],
+    },
     {
         "name": "everything permitted passes at both scopes",
         "ca_all": ALL_GOOD,
@@ -351,9 +444,11 @@ def build_case(case, index):
     )
     if "held" in case:
         (fixture / "held").write_text(case["held"])
+    if "pg_caps_raw" in case:
+        (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail"):
+                 "assignments_fail", "pg_caps_fail", "pg_caps_stderr"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 

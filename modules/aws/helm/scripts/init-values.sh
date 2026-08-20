@@ -616,21 +616,6 @@ _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
 
 _standalone_block=""
 
-# platformBackend extras merged into the single platformBackend block below (the
-# heredoc already sets platformBackend.serviceAccount; appending here keeps it one key).
-_platform_backend_fleet_block=""
-if [[ "$_enable_fleet" == "true" ]]; then
-  # Workaround for chart <= 0.15.x: the chart config-map wires MCP_SERVER_URL (tool
-  # server) but NOT TRIGGER_SERVER_ENDPOINT, so the platform-backend trigger proxy
-  # returns 502 for Fleet cron/Slack/Gmail triggers. Inject it here pointing at the
-  # in-cluster trigger server (port 1990). Remove once the chart sets it natively.
-  _platform_backend_fleet_block="
-  deployment:
-    extraEnv:
-      - name: TRIGGER_SERVER_ENDPOINT
-        value: \"http://langsmith-fleet-trigger-server.${NAMESPACE:-langsmith}.svc.cluster.local:1990\""
-fi
-
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ -z "$_fleet_key" ]]; then
     echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
@@ -803,7 +788,7 @@ TELEMETRY
 platformBackend:
   serviceAccount:
     annotations:
-      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"${_platform_backend_fleet_block}
+      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
 
 backend:
   serviceAccount:

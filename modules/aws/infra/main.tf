@@ -723,6 +723,9 @@ resource "kubernetes_job_v1" "standalone_db" {
 
   spec {
     backoff_limit = 6
+    # Keep the result available briefly, then let Kubernetes remove this
+    # Terraform-managed, idempotent database bootstrap Job.
+    ttl_seconds_after_finished = 3600
     template {
       metadata {
         labels = {
