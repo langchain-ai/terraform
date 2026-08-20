@@ -84,7 +84,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
-- `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
+- `availability_zones`, for the cluster only — PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
 
@@ -1035,6 +1035,22 @@ postgres_high_availability_mode = "ZoneRedundant"
 ```
 
 Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+
+Set `availability_zones = []` when a SKU you need is not offered in every zone
+of the region. Azure then places the AKS node pool and the PostgreSQL server
+itself, which is the only way to get a partially-zoned VM or database size to
+deploy. The failure without it names the zone rather than the SKU, so it reads
+as a capacity problem:
+
+```
+The requested VM size <size> is not available in the requested zone.
+```
+
+Availability differs per SKU and per region, so check before pinning:
+
+```bash
+az vm list-skus --location <region> --size <vm-size> --query "[].locationInfo[].zones" -o tsv
+```
 
 Set `availability_zones` before the first apply. The AKS node pool keeps the
 zones it was created with: `azurerm` re-zones a default node pool by cycling the

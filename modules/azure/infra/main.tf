@@ -670,7 +670,12 @@ module "postgres" {
   storage_tier          = var.postgres_storage_tier
   backup_retention_days = var.postgres_backup_retention_days
 
-  availability_zone            = var.availability_zones[0]
+  # availability_zones = [] means "let Azure place this", which is the only way
+  # to deploy a VM or database SKU that is not offered in every zone of the
+  # region. Indexing an empty list is an error, so this is a ternary rather than
+  # a length() guard joined with &&, which evaluates both sides below Terraform
+  # 1.14 and would error on the very input it is meant to handle.
+  availability_zone            = length(var.availability_zones) > 0 ? var.availability_zones[0] : ""
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 

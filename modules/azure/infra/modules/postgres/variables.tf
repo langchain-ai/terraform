@@ -83,7 +83,7 @@ variable "tags" {
 
 variable "availability_zone" {
   type        = string
-  description = "Primary availability zone for the Postgres server (\"1\", \"2\", or \"3\")"
+  description = "Primary availability zone for the Postgres server (\"1\", \"2\", or \"3\"). Empty lets Azure choose, which is required for SKUs that are not offered in every zone of the region."
   default     = "1"
 }
 

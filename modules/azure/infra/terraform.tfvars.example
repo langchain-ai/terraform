@@ -212,6 +212,7 @@ sizing_profile = "production"
 
 # ── Multi-AZ (optional) ───────────────────────────────────────────────────────
 # availability_zones                   = ["1", "2", "3"]  # zone-redundant HA
+# availability_zones                   = []               # let Azure choose
 # postgres_standby_availability_zone   = "2"              # Postgres HA standby
 # postgres_geo_redundant_backup        = true             # geo-redundant backups
 

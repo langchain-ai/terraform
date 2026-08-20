@@ -161,7 +161,7 @@ variable "workload_identity_name" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones for the default node pool. Use [\"1\",\"2\",\"3\"] for zone-redundant HA."
+  description = "Availability zones for the default node pool. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Use [] for a non-zonal pool, which is required when the node VM size is not offered in every zone of the region."
   default     = ["1"]
 }
 
