@@ -62,7 +62,16 @@ resource "azurerm_postgresql_flexible_server" "db" {
   lifecycle {
     # Azure may move the server to a different availability zone during
     # maintenance. Ignore zone drift to prevent unnecessary plan noise.
-    ignore_changes = [zone]
+    #
+    # The standby zone is ignored for a second reason: leaving
+    # standby_availability_zone unset is the supported way to let Azure place
+    # the standby, and Azure then reports the zone it picked. Without this the
+    # config's null reads as a request to unset a zone the server genuinely
+    # has, so every later plan on an HA deployment offers to change it and
+    # every apply pushes an update at a healthy HA pair. The cost is that
+    # editing an explicit pin is ignored too, which is how zone above already
+    # behaves.
+    ignore_changes = [zone, high_availability[0].standby_availability_zone]
   }
 }
 
