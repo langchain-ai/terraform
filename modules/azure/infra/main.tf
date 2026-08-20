@@ -676,6 +676,7 @@ module "postgres" {
   # a length() guard joined with &&, which evaluates both sides below Terraform
   # 1.14 and would error on the very input it is meant to handle.
   availability_zone            = length(var.availability_zones) > 0 ? var.availability_zones[0] : ""
+  high_availability            = var.postgres_high_availability
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 

@@ -44,11 +44,16 @@ resource "azurerm_postgresql_flexible_server" "db" {
   zone                         = var.availability_zone != "" ? var.availability_zone : null
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
 
+  # standby_availability_zone is optional on the provider's high_availability
+  # block: with mode set and no zone named, Azure picks a standby in a zone
+  # other than the primary's. Naming one is a pin, not the switch. A non-empty
+  # zone still enables HA by itself so that configurations predating
+  # var.high_availability keep the standby they already have.
   dynamic "high_availability" {
-    for_each = var.standby_availability_zone != "" ? [1] : []
+    for_each = var.high_availability || var.standby_availability_zone != "" ? [1] : []
     content {
       mode                      = "ZoneRedundant"
-      standby_availability_zone = var.standby_availability_zone
+      standby_availability_zone = var.standby_availability_zone != "" ? var.standby_availability_zone : null
     }
   }
 

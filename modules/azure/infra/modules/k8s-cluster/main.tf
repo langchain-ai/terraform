@@ -361,12 +361,19 @@ resource "azurerm_kubernetes_cluster" "main" {
 # already sitting in this state cannot apply anything at all until it is
 # resolved. The drift is worth reporting, not worth blocking unrelated work.
 #
+# An empty availability_zones is exempt. [] is the default and asks Azure to
+# place the pool, so whatever zones a pool already reports are not drift from a
+# request nobody made. Without the exemption every cluster created under the
+# earlier ["1"] default would warn on every plan.
+#
 # The condition is a ternary, not a length() guard joined with &&, because &&
 # evaluates both sides below Terraform 1.14 and the indexed reference errors
-# under create_cluster = false, where the resource has no instances.
+# under create_cluster = false, where the resource has no instances. The || is
+# safe by the same rule: both of its operands are length() calls, and only the
+# ternary's false branch indexes.
 check "aks_node_pool_zone_drift" {
   assert {
-    condition = length(azurerm_kubernetes_cluster.main) == 0 ? true : toset(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones) == toset(var.availability_zones)
+    condition = length(var.availability_zones) == 0 || length(azurerm_kubernetes_cluster.main) == 0 ? true : toset(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones) == toset(var.availability_zones)
     error_message = join("", [
       "AKS node pool zones are [",
       join(",", sort(tolist(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones))),

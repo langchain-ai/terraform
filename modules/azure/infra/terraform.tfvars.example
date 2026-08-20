@@ -211,9 +211,12 @@ sizing_profile = "production"
 # create_bastion     = true   # Jump VM for private AKS node access
 
 # ── Multi-AZ (optional) ───────────────────────────────────────────────────────
-# availability_zones                   = ["1", "2", "3"]  # zone-redundant HA
-# availability_zones                   = []               # let Azure choose
-# postgres_standby_availability_zone   = "2"              # Postgres HA standby
+# availability_zones defaults to [], which lets Azure place the node pool and
+# the database. Pin zones only when your VM and database sizes are offered in
+# all of them — README.md "Multi-AZ Support" has the az vm list-skus check.
+# postgres_high_availability           = true             # Postgres standby in another zone
+# availability_zones                   = ["1", "2", "3"]  # pin the AKS node pool
+# postgres_standby_availability_zone   = "2"              # pin the standby; needs pinned zones
 # postgres_geo_redundant_backup        = true             # geo-redundant backups
 
 # ── Networking (optional — override only if reusing existing VNet) ─────────────

@@ -1026,38 +1026,57 @@ plan checks the name, and Azure enforces the size at apply.
 
 ## Multi-AZ Support
 
-```hcl
-# Spread AKS nodes across zones 1, 2, 3
-availability_zones = ["1", "2", "3"]
-
-# PostgreSQL HA standby in a different zone
-postgres_high_availability_mode = "ZoneRedundant"
-```
-
-Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
-
-Set `availability_zones = []` when a SKU you need is not offered in every zone
-of the region. Azure then places the AKS node pool and the PostgreSQL server
-itself, which is the only way to get a partially-zoned VM or database size to
-deploy. The failure without it names the zone rather than the SKU, so it reads
-as a capacity problem:
+`availability_zones` defaults to `[]`, which leaves placement to Azure: the AKS
+node pool is non-zonal and the PostgreSQL server lands where the region has
+room. That default is the only setting that deploys a VM or database size Azure
+does not offer in every zone. Pinning a zone that lacks the size fails with an
+error that names the zone rather than the size, so it reads as a capacity
+problem:
 
 ```
 The requested VM size <size> is not available in the requested zone.
 ```
 
-Availability differs per SKU and per region, so check before pinning:
+Zone-redundant PostgreSQL is a switch of its own and needs no zone numbers:
+
+```hcl
+postgres_high_availability = true
+```
+
+Azure puts the standby in a zone other than the primary's, so HA works under the
+`[]` default and does not force you to pin anything.
+
+Pin zones when you want to choose the placement yourself:
+
+```hcl
+# Spread AKS nodes across zones 1, 2, 3
+availability_zones = ["1", "2", "3"]
+
+# Pin the Postgres standby as well — optional, Azure picks one otherwise
+postgres_standby_availability_zone = "2"
+```
+
+Coverage differs per SKU and per region, so check the VM and database sizes you
+picked before pinning:
 
 ```bash
 az vm list-skus --location <region> --size <vm-size> --query "[].locationInfo[].zones" -o tsv
 ```
+
+Zone-redundant PostgreSQL requires a `GeneralPurpose` or `MemoryOptimized` SKU.
+Pin `postgres_standby_availability_zone` only alongside a pinned
+`availability_zones`. Under the `[]` default the primary is Azure's choice and
+can be the zone you pinned for the standby, which `ZoneRedundant` does not
+allow. Setting the standby zone still enables HA on its own, so a configuration
+written before `postgres_high_availability` keeps its standby.
 
 Set `availability_zones` before the first apply. The AKS node pool keeps the
 zones it was created with: `azurerm` re-zones a default node pool by cycling the
 system node pool, and that cycle does not cordon and drain, so the module ignores
 zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
 mismatch as a `Check block assertion failed` warning naming both the live and the
-requested zones. To re-zone an existing cluster on purpose, remove
+requested zones. The `[]` default is exempt: it requests no zone, so there is
+nothing to be out of sync with. To re-zone an existing cluster on purpose, remove
 `default_node_pool[0].zones` from the `ignore_changes` block in
 `infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
 
