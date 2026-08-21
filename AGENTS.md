@@ -47,17 +47,31 @@ before the PR does, not a separate standard.
   - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
   - No argument → both, across every root.
+  - Variable, tfvars, or `TF_VAR_` name change → `bash agents/contracts.sh
+    modules/<provider>`: every tfvars key and `TF_VAR_` name the provider's
+    shell scripts read, generate, or export has to be a variable that
+    `infra/variables.tf` declares. Reads files only, so it needs no terraform
+    and returns instantly. One direction: a name in use must be declared, but a
+    declared variable that nothing uses is fine — most carry defaults and
+    correctly appear in no example. Nothing else catches this. Terraform warns
+    and exits 0 on an undeclared tfvars key, ignores an undeclared `TF_VAR_*`
+    with no output at all, and an accessor that misses just falls back to its
+    default, so a half-finished rename reverts the setting in silence. Exit 1
+    is an undeclared name; exit 2 means the check could not run (a renamed
+    directory, unbalanced braces, an accessor helper in `_common.sh` that the
+    script does not know about) and needs a fix in `contracts.sh` itself.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries
   pre-existing warnings. Override for a one-off run with
   `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
   needs cloud creds and state — never run it without explicit user approval.
-- **CI runs the same script**, one job per provider plus one for the scripts, so
-  a green local run is a green PR. If you change what the gate covers, change
-  `agents/check.sh` rather than the workflow. A new root under an existing
-  `modules/<provider>/` needs no workflow edit; a brand-new provider directory
-  needs a `matrix.provider` entry in `.github/workflows/checks.yaml`.
+- **CI runs the same scripts**, one job per provider for each of `check.sh` and
+  `contracts.sh`, plus one for the scripts, so a green local run is a green PR.
+  If you change what a gate covers, change the script rather than the workflow.
+  A new root under an existing `modules/<provider>/` needs no workflow edit; a
+  brand-new provider directory needs a `matrix.provider` entry in both matrices
+  in `.github/workflows/checks.yaml`.
 - **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
   initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
   forms slip in from model output unnoticed.
