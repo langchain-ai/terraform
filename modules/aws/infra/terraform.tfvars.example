@@ -374,16 +374,18 @@ clickhouse_source = "in-cluster"
 # Choose how TLS is handled for the LangSmith web UI and API.
 #
 # ┌─────────────────────────────────────────────────────────────────────────────
-# │ RECOMMENDED: Staged deploy with auto-provisioned DNS + ACM
+# │ RECOMMENDED: Staged deploy with a new Route 53 zone + ACM
 # │
-# │ This is the easiest path. Terraform creates a Route 53 hosted zone and
-# │ ACM certificate for your domain. You deploy HTTP first, delegate DNS at
-# │ your own pace, then flip to HTTPS in a second apply.
+# │ This is the default path. Terraform creates a public Route 53 hosted zone
+# │ exactly matching your LangSmith domain and requests an ACM certificate.
+# │ You deploy HTTP first, delegate DNS at your own pace, then flip to HTTPS
+# │ in a second apply.
 # │
 # │ Step 1 — Initial deploy (HTTP, no DNS needed yet):
 # │
 # │   tls_certificate_source = "none"
 # │   langsmith_domain       = "langsmith.example.com"
+# │   dns_create_zone        = true
 # │
 # │   Run: terraform apply
 # │   → Creates all infra (EKS, RDS, ALB, etc.) immediately.
@@ -408,6 +410,24 @@ clickhouse_source = "in-cluster"
 # │   → Adds HTTPS listener, redirects HTTP → HTTPS.
 # │   → Your domain now serves LangSmith over HTTPS.
 # └─────────────────────────────────────────────────────────────────────────────
+#
+# REUSE AN EXISTING PUBLIC ROUTE 53 HOSTED ZONE:
+#   The zone can exactly match langsmith_domain (langsmith.example.com) or be
+#   one of its parents (example.com). Terraform writes the ACM validation CNAME
+#   and LangSmith ALB alias records into that zone; it does not manage the zone.
+#
+#   tls_certificate_source = "none"
+#   langsmith_domain       = "langsmith.example.com"
+#   dns_create_zone        = false
+#   dns_existing_zone_id   = "Z1ABCDEF123456"
+#
+#   If the selected zone is already authoritative, skip the NS delegation step
+#   and wait for the certificate to become ISSUED before switching to "acm".
+#   Public ACM certificates cannot validate through a private hosted zone.
+#
+#   This is not an import path for a zone already managed by this Terraform
+#   state. Migrating an existing deployment from a dedicated zone requires a
+#   separate DNS and state migration; do not only flip dns_create_zone to false.
 #
 # ALTERNATIVE OPTIONS:
 #
@@ -435,10 +455,17 @@ clickhouse_source = "in-cluster"
 # See the staged deploy guide above.
 tls_certificate_source = "none"
 
-# Your domain for LangSmith. When set (without acm_certificate_arn), Terraform
-# auto-provisions a Route 53 hosted zone, ACM certificate, DNS validation
-# records, and an alias record pointing the domain to the ALB.
+# Your domain for LangSmith. When set without acm_certificate_arn, Terraform
+# requests an ACM certificate and creates its validation records plus an ALB
+# alias in either a new or existing Route 53 hosted zone.
 # langsmith_domain = "langsmith.example.com"
+
+# Create a dedicated public hosted zone exactly matching langsmith_domain.
+# Set false to reuse an authoritative public parent or same-name zone instead.
+dns_create_zone = true
+
+# Existing public hosted zone ID, required when dns_create_zone = false.
+# dns_existing_zone_id = "Z1ABCDEF123456"
 
 # Pre-existing ACM certificate ARN — only needed for Option B above.
 # When set, the dns module is skipped (you manage DNS yourself).
