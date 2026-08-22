@@ -173,10 +173,11 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
 # Only the deployer's grant is worth waiting on, because the secret writes below
 # are what would 403 without it. The managed-identity grant is read at runtime by
 # pods that start long after this apply, and an access grant that came from
-# outside this apply propagated long ago.
+# outside this apply propagated long ago. With manage_secrets = false there are
+# no writes to wait for either way.
 
 resource "time_sleep" "wait_for_rbac" {
-  count = var.manage_terraform_admin_assignment ? 1 : 0
+  count = var.manage_terraform_admin_assignment && var.manage_secrets ? 1 : 0
 
   create_duration = "30s"
   depends_on      = [azurerm_role_assignment.terraform_kv_admin]
@@ -196,10 +197,19 @@ resource "time_sleep" "wait_for_rbac" {
 # vault by infra/scripts/seed-keyvault-secrets.sh after apply — matching how the
 # AWS module writes SSM and the GCP module writes Secret Manager.
 #
+# var.manage_secrets = false writes neither, which is what gets a deployment
+# through where the deployer holds no Key Vault data-plane access. Apply then
+# touches only the vault's control plane, and seed-keyvault-secrets.sh writes all
+# nine secrets afterwards. Flipping it on a deployment that already applied
+# deletes both secrets from the vault: drop them from state with
+# `terraform state rm` first. See PERMISSIONS.md.
+#
 # Naming convention: kebab-case, matching the TF variable names.
 # Scripts read these by name: az keyvault secret show --name <name>
 
 resource "azurerm_key_vault_secret" "postgres_admin_password" {
+  count = var.manage_secrets ? 1 : 0
+
   name         = "postgres-admin-password"
   value        = var.postgres_admin_password
   key_vault_id = local.vault_id
@@ -210,7 +220,7 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
 }
 
 resource "azurerm_key_vault_secret" "langsmith_license_key" {
-  count        = var.langsmith_license_key != "" ? 1 : 0
+  count        = var.manage_secrets && var.langsmith_license_key != "" ? 1 : 0
   name         = "langsmith-license-key"
   value        = var.langsmith_license_key
   key_vault_id = local.vault_id
