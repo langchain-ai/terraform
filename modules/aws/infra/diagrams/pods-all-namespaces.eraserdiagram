@@ -6,7 +6,7 @@ typeface clean
 // ============================================================
 // KUBERNETES VIEW: All Pods Across All Namespaces
 // Full-featured LangSmith deployment — all features enabled:
-//   LangGraph Deployments, Agent Builder, Insights, NGINX, cert-manager
+//   LangGraph Deployments, Fleet, Insights, LangSmith Chat, NGINX, cert-manager
 // AWS services shown as external reference boxes only
 // ============================================================
 
@@ -181,12 +181,9 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
     // Defines the listener (port, protocol, TLS settings)
     Gateway langsmith-gateway [icon: kubernetes, color: blue]
 
-    // HTTPRoutes — Envoy mode only (Path 3)
-    // Path-based routing rules: /, /api, /platform-api, /ace, etc.
-    HTTPRoute main [icon: kubernetes, color: blue]
-    HTTPRoute agent-builder [icon: kubernetes, color: pink]
-    HTTPRoute polly [icon: kubernetes, color: gray]
-    HTTPRoute clio [icon: kubernetes, color: gray]
+    // One HTTPRoute — Envoy mode only (Path 3)
+    // Sends all matching external traffic to the frontend
+    HTTPRoute langsmith [icon: kubernetes, color: blue]
 
     // VirtualService langsmith — Istio mode only (Path 4)
     // Equivalent to HTTPRoute but in Istio's resource model
@@ -214,7 +211,7 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
       langsmith-platform-backend [icon: server, color: blue]
 
       // ACE Backend — Agent Control Execution backend
-      // Shared between core and Agent Builder feature
+      // Shared between core and Fleet
       langsmith-ace-backend [icon: server, color: blue]
 
       // Playground — LLM prompt testing and evaluation UI backend
@@ -229,21 +226,20 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
       langsmith-ingest-queue [icon: server, color: blue]
     }
 
+    // Enabled by either Fleet or full LangSmith Deployments
+    langsmith-host-backend [icon: server, color: green]
+
     // ── LangGraph Deployments (opt-in) ─────────────────────
     // enable_deployments = true in Helm values
     // Provides managed LangGraph agent lifecycle within LangSmith
     LangGraph Deployments [color: green] {
-
-      // host-backend — API server for LangGraph agent management
-      // Exposes /langgraph/* routes; stores agent state in RDS
-      langsmith-host-backend [icon: server, color: green]
 
       // listener — watches for new deployment events from host-backend
       // Translates deployment intents into Kubernetes resources
       langsmith-listener [icon: server, color: green]
 
       // operator — reconciles managed agent Deployments
-      // Creates, updates, and deletes agent pods; spawns Polly and Clio
+      // Creates, updates, and deletes LangGraph deployment pods
       langsmith-operator [icon: server, color: green]
 
       // Managed agent pods — one Deployment per user-defined agent
@@ -251,25 +247,29 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
       langsmith-agent-pods [icon: server, color: green]
     }
 
-    // ── Agent Builder (opt-in) ─────────────────────────────
-    // enable_agent_builder = true in Helm values
+    // ── Fleet (opt-in) ─────────────────────────────────────
+    // enable_fleet = true in Helm values
     // Provides visual agent building and tool registration features
-    Agent Builder [color: pink] {
+    Fleet [color: pink] {
+
+      // Standalone Fleet API and background queue
+      langsmith-standalone-fleet-api-server [icon: server, color: pink]
+      langsmith-standalone-fleet-queue [icon: server, color: pink]
 
       // tool-server — manages agent tool definitions and invocations
-      langsmith-agent-builder-tool-server [icon: server, color: pink]
+      langsmith-fleet-tool-server [icon: server, color: pink]
 
       // trigger-server — handles agent trigger events and webhooks
-      langsmith-agent-builder-trigger-server [icon: server, color: pink]
+      langsmith-fleet-trigger-server [icon: server, color: pink]
     }
 
-    // ── Insights / Polly / Clio (opt-in) ──────────────────
-    // Operator-spawned pods; created dynamically by langsmith-operator
-    // polly: trace analytics and aggregation
-    // clio: insights synthesis and report generation
-    Insights [color: gray] {
-      polly [icon: server, color: gray]
-      clio [icon: server, color: gray]
+    // ── Insights / LangSmith Chat (formerly Polly) ─────────
+    // Top-level chart services
+    Product Services [color: gray] {
+      langsmith-standalone-polly-api-server [icon: server, color: gray]
+      langsmith-standalone-polly-queue [icon: server, color: gray]
+      langsmith-standalone-insights-api-server [icon: server, color: gray]
+      langsmith-standalone-insights-queue [icon: server, color: gray]
     }
 
     // ── In-cluster data stores (dev/POC ONLY) ──────────────
@@ -288,6 +288,14 @@ EKS Cluster [icon: aws-elastic-kubernetes-service, color: blue] {
       // In-cluster Postgres StatefulSet — no Multi-AZ, no automated backups
       // Use RDS for any real workload
       langsmith-postgres [icon: database, color: red]
+
+      // Optional chart-managed stores for Fleet, Chat, and Insights
+      langsmith-standalone-fleet-postgres [icon: database, color: red]
+      langsmith-standalone-fleet-redis [icon: database, color: red]
+      langsmith-standalone-polly-postgres [icon: database, color: red]
+      langsmith-standalone-polly-redis [icon: database, color: red]
+      langsmith-standalone-insights-postgres [icon: database, color: red]
+      langsmith-standalone-insights-redis [icon: database, color: red]
     }
 
   }
@@ -310,8 +318,11 @@ Secret langsmith-config-secret --> langsmith-platform-backend: env injection
 Secret langsmith-config-secret --> langsmith-queue: env injection
 Secret langsmith-config-secret --> langsmith-ingest-queue: env injection
 Secret langsmith-config-secret --> langsmith-host-backend: env injection
-Secret langsmith-config-secret --> langsmith-agent-builder-tool-server: env injection
-Secret langsmith-config-secret --> langsmith-agent-builder-trigger-server: env injection
+Secret langsmith-config-secret --> langsmith-standalone-fleet-api-server: env injection
+Secret langsmith-config-secret --> langsmith-standalone-polly-api-server: env injection
+Secret langsmith-config-secret --> langsmith-standalone-insights-api-server: env injection
+Secret langsmith-config-secret --> langsmith-fleet-tool-server: env injection
+Secret langsmith-config-secret --> langsmith-fleet-trigger-server: env injection
 
 // ── cert-manager → Route 53 DNS-01 flow ──────────────────────
 cert-manager --> Route 53 Hosted Zone: DNS-01 TXT record (IRSA auth)
@@ -322,10 +333,7 @@ Certificate langsmith-tls --> Secret langsmith-config-secret: stores TLS secret
 // ── Gateway controllers — control plane → data plane ─────────
 envoy-gateway --> envoy-langsmith-gateway-proxy: xDS config push
 envoy-gateway --> Gateway langsmith-gateway: watches Gateway API resources
-Gateway langsmith-gateway --> HTTPRoute main: reconciles routing rules
-Gateway langsmith-gateway --> HTTPRoute agent-builder: reconciles
-Gateway langsmith-gateway --> HTTPRoute polly: reconciles
-Gateway langsmith-gateway --> HTTPRoute clio: reconciles
+Gateway langsmith-gateway --> HTTPRoute langsmith: reconciles routing rule
 istiod --> istio-ingressgateway: xDS programs data plane
 istiod --> VirtualService langsmith: reconciles traffic rules
 aws-load-balancer-controller --> TargetGroupBinding: manages CRD lifecycle
@@ -333,29 +341,13 @@ aws-load-balancer-controller --> Ingress langsmith: provisions ALB (Path 1)
 
 // ── Inbound traffic → gateway → services ────────────────────
 // NGINX path (opt-in, Path 2)
-ingress-nginx-controller > langsmith-frontend: / (NGINX route)
-ingress-nginx-controller > langsmith-backend: /api/* (NGINX route)
-ingress-nginx-controller > langsmith-platform-backend: /platform-api/*
-ingress-nginx-controller > langsmith-ace-backend: /ace/*
-ingress-nginx-controller > langsmith-playground: /playground/*
-ingress-nginx-controller > langsmith-host-backend: /langgraph/*
+ingress-nginx-controller > langsmith-frontend: Ingress backend
 
 // Envoy path (opt-in, Path 3)
-envoy-langsmith-gateway-proxy > langsmith-frontend: HTTPRoute /
-envoy-langsmith-gateway-proxy > langsmith-backend: HTTPRoute /api
-envoy-langsmith-gateway-proxy > langsmith-platform-backend: HTTPRoute /platform-api
-envoy-langsmith-gateway-proxy > langsmith-ace-backend: HTTPRoute /ace
-envoy-langsmith-gateway-proxy > langsmith-playground: HTTPRoute /playground
-envoy-langsmith-gateway-proxy > langsmith-host-backend: HTTPRoute /langgraph
-envoy-langsmith-gateway-proxy > langsmith-agent-builder-tool-server: HTTPRoute agent-tool
-envoy-langsmith-gateway-proxy > langsmith-agent-builder-trigger-server: HTTPRoute agent-trigger
-envoy-langsmith-gateway-proxy > polly: HTTPRoute polly
-envoy-langsmith-gateway-proxy > clio: HTTPRoute clio
+envoy-langsmith-gateway-proxy > langsmith-frontend: HTTPRoute backendRef
 
 // Istio path (opt-in, Path 4)
-istio-ingressgateway > langsmith-frontend: VirtualService /
-istio-ingressgateway > langsmith-backend: VirtualService /api
-istio-ingressgateway > langsmith-platform-backend: VirtualService /platform-api
+istio-ingressgateway > langsmith-frontend: VirtualService destination
 
 // ── Frontend → backend services ──────────────────────────────
 langsmith-frontend > langsmith-backend: /api/* (cluster DNS)
@@ -363,6 +355,9 @@ langsmith-frontend > langsmith-platform-backend: /platform-api/*
 langsmith-frontend > langsmith-ace-backend: /ace/*
 langsmith-frontend > langsmith-playground: /playground/*
 langsmith-frontend > langsmith-host-backend: /langgraph/*
+langsmith-frontend > langsmith-standalone-fleet-api-server: Fleet routes
+langsmith-frontend > langsmith-standalone-polly-api-server: Chat routes
+langsmith-frontend > langsmith-standalone-insights-api-server: Insights routes
 
 // ── Backend → external data stores (production path) ──────────
 langsmith-backend > RDS PostgreSQL: :5432 reads/writes
@@ -377,10 +372,8 @@ langsmith-host-backend > RDS PostgreSQL: :5432 agent state
 // ── ClickHouse writes ─────────────────────────────────────────
 // Production: external managed ClickHouse
 langsmith-ingest-queue --> LangChain Managed ClickHouse: :9000 analytics writes
-clio --> LangChain Managed ClickHouse: :9000 analytics reads
 // Dev/POC: in-cluster ClickHouse
 langsmith-ingest-queue > langsmith-clickhouse: :9000 (dev/POC only)
-clio > langsmith-clickhouse: :9000 (dev/POC only)
 
 // ── In-cluster data store connections (dev/POC) ───────────────
 langsmith-backend > langsmith-redis: :6379 (dev/POC only)
@@ -389,17 +382,15 @@ langsmith-backend > langsmith-postgres: :5432 (dev/POC only)
 // ── LangGraph Deployments flow ────────────────────────────────
 langsmith-listener > langsmith-operator: deployment events
 langsmith-operator > langsmith-agent-pods: spawn and manage Deployments
-langsmith-operator > polly: spawn insights pod
-langsmith-operator > clio: spawn analytics pod
 keda-operator --> ScaledObject agent: watches metric source
 ScaledObject agent --> langsmith-agent-pods: scale replicas up/down
 langsmith-agent-pods > ElastiCache Redis: :6379 agent state
 langsmith-agent-pods > RDS PostgreSQL: :5432 agent persistence
 
-// ── Agent Builder flow ────────────────────────────────────────
-langsmith-ace-backend > langsmith-agent-builder-tool-server: tool invocations
-langsmith-ace-backend > langsmith-agent-builder-trigger-server: trigger events
-langsmith-agent-builder-trigger-server > langsmith-listener: trigger new deployment
+// ── Fleet flow ────────────────────────────────────────────────
+langsmith-ace-backend > langsmith-fleet-tool-server: tool invocations
+langsmith-ace-backend > langsmith-fleet-trigger-server: trigger events
+langsmith-fleet-trigger-server > langsmith-host-backend: provider and trigger API
 
 // ── IRSA → AWS services ───────────────────────────────────────
 ServiceAccount langsmith --> S3 Traces Bucket: IRSA-scoped s3:PutObject
@@ -412,8 +403,8 @@ Legend [icon: shield, color: gray] {
   Async or Management Path [icon: server, color: gray]
   Core LangSmith blue [icon: server, color: blue]
   LangGraph Deployments opt-in green [icon: server, color: green]
-  Agent Builder opt-in pink [icon: server, color: pink]
-  Operator Managed Pods orange [icon: server, color: gray]
+  Fleet opt-in pink [icon: server, color: pink]
+  Product Services orange [icon: server, color: gray]
   In-Cluster Dev Only red [icon: database, color: red]
   Infrastructure Controllers gray [icon: kubernetes, color: gray]
   Gateway Controllers purple [icon: server, color: purple]

@@ -15,7 +15,7 @@
 #
 # Update mode: when terraform.tfvars already exists, the wizard pre-fills
 # all answers from the existing file so you only need to change what you want.
-# Useful for switching gateway mode, enabling TLS, adding product features, etc.
+# The existing file is backed up before the generated replacement is written.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,9 +58,13 @@ _ask_yn() {
 }
 
 _feature_prompt() {
-  local prompt="$1" enabled="$2"
+  local label="$1" enabled="$2" detail="${3:-}"
   local state="disabled"; [[ "$enabled" == "true" ]] && state="enabled"
-  printf '%s [%s]' "$prompt" "$state"
+  if [[ "${UPDATE_MODE:-false}" == "true" ]]; then
+    printf '%s [%s]%s' "$label" "$state" "$detail"
+  else
+    printf '%s%s' "$label" "$detail"
+  fi
 }
 
 _ask_choice() {
@@ -109,6 +113,10 @@ _section() { echo ""; printf "${BOLD}── %s ──${RESET}\n" "$1"; }
 _existing() {
   local key="$1" fallback="${2:-}"
   local val
+  if [[ "${UPDATE_MODE:-false}" != "true" ]]; then
+    echo "$fallback"
+    return
+  fi
   val=$(_parse_tfvar "$key" 2>/dev/null) || val="$fallback"
   echo "$val"
 }
@@ -178,14 +186,15 @@ FRESH=false
 for arg in "$@"; do [[ "$arg" == "--fresh" ]] && FRESH=true; done
 
 UPDATE_MODE=false
+SHOWED_EXISTING_FILE_PROMPT=false
 if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
+  SHOWED_EXISTING_FILE_PROMPT=true
   echo ""
   printf "${BOLD}  LangSmith on AWS — terraform.tfvars already exists${RESET}\n"
   echo ""
   printf "  ${DIM}%s${RESET}\n" "$OUTPUT"
-  echo ""
-  _ask_choice --default 1 "What would you like to do?" \
-    "Update — re-run wizard with current values as defaults (recommended)" \
+  _ask_choice "What would you like to do?" \
+    "Update — re-run wizard using the existing values" \
     "Start fresh — overwrite everything" \
     "Cancel"
   case "$_CHOICE" in
@@ -202,12 +211,13 @@ fi
 
 # ── Banner ───────────────────────────────────────────────────────────────────
 
-echo ""
-printf "${BOLD}  LangSmith on AWS — Quickstart Setup${RESET}\n"
-if [[ "$UPDATE_MODE" == "true" ]]; then
-  printf "${DIM}  Updating terraform.tfvars — existing values shown as defaults.${RESET}\n"
-else
+if [[ "$SHOWED_EXISTING_FILE_PROMPT" != "true" ]]; then
+  echo ""
+  printf "${BOLD}  LangSmith on AWS — Quickstart Setup${RESET}\n"
   printf "${DIM}  Generates terraform.tfvars for your deployment.${RESET}\n"
+elif [[ "$UPDATE_MODE" != "true" ]]; then
+  echo ""
+  printf "${DIM}  Starting fresh — existing terraform.tfvars will be replaced.${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -225,7 +235,7 @@ fi
 
 _ask_choice --default "$_profile_default" "What kind of deployment is this?" \
   "Dev / POC  — minimal resources, in-cluster services OK" \
-  "Production — HA resources, external managed services"
+  "Production — HA resources, managed Postgres and Redis"
 
 PROFILE="dev"
 [[ "$_CHOICE" == "2" ]] && PROFILE="prod"
@@ -271,10 +281,25 @@ _existing_create_vpc=$(_existing "create_vpc" "true")
 CREATE_VPC="true"
 VPC_ID=""; VPC_CIDR=""; PRIVATE_SUBNETS=""; PUBLIC_SUBNETS=""
 
-if _ask_yn "Create a new VPC?" "$([[ "$_existing_create_vpc" == "true" ]] && echo "y" || echo "n")"; then
+if [[ "$UPDATE_MODE" == "true" ]]; then
+  if [[ "$_existing_create_vpc" == "true" ]]; then
+    CREATE_VPC="true"
+    printf "  ${DIM}Keeping the current Terraform-managed VPC.${RESET}\n"
+  else
+    CREATE_VPC="false"
+    VPC_ID="$(_existing "vpc_id" "")"
+    VPC_CIDR="$(_existing "vpc_cidr_block" "")"
+    PRIVATE_SUBNETS="$(_existing "private_subnets" "")"
+    PUBLIC_SUBNETS="$(_existing "public_subnets" "")"
+    printf "  ${DIM}Keeping the current existing VPC and subnet IDs.${RESET}\n"
+  fi
+elif _ask_yn "Create a new VPC?" "$([[ "$_existing_create_vpc" == "true" ]] && echo "y" || echo "n")"; then
   CREATE_VPC="true"
 else
   CREATE_VPC="false"
+fi
+
+if [[ "$CREATE_VPC" == "false" && "$UPDATE_MODE" != "true" ]]; then
   echo ""
   printf "  ${DIM}Bring Your Own VPC — provide existing resource IDs${RESET}\n"
   _ask "VPC ID"            "$(_existing "vpc_id" "")"
@@ -285,10 +310,11 @@ else
   PRIVATE_SUBNETS="$_REPLY"
   _ask "Public subnet IDs (comma-separated)"  "$(_existing "public_subnets" "")"
   PUBLIC_SUBNETS="$_REPLY"
-  if [[ -z "$PUBLIC_SUBNETS" ]]; then
-    ALB_SCHEME="internal"
-    printf '\n  %sNo public subnets — alb_scheme will be set to "internal"%s\n' "$DIM" "$RESET"
-  fi
+fi
+
+if [[ "$CREATE_VPC" == "false" && -z "$PUBLIC_SUBNETS" ]]; then
+  ALB_SCHEME="internal"
+  printf '\n  %sNo public subnets — alb_scheme will be set to "internal"%s\n' "$DIM" "$RESET"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -345,7 +371,7 @@ _ex_redis=$(_existing "redis_source" "")
 if [[ "$PROFILE" == "prod" ]]; then
   printf "  $(_dim "Production: external RDS + ElastiCache recommended.")\n"
   PG_SOURCE="external"; REDIS_SOURCE="external"
-  if ! _ask_yn "Use external PostgreSQL (RDS)?" "$([[ "$_ex_pg" != "in-cluster" ]] && echo "y" || echo "n")"; then
+  if ! _ask_yn "Use external Postgres (RDS)?" "$([[ "$_ex_pg" != "in-cluster" ]] && echo "y" || echo "n")"; then
     PG_SOURCE="in-cluster"
   fi
   if ! _ask_yn "Use external Redis (ElastiCache)?" "$([[ "$_ex_redis" != "in-cluster" ]] && echo "y" || echo "n")"; then
@@ -354,7 +380,7 @@ if [[ "$PROFILE" == "prod" ]]; then
 else
   _backend_default=1; [[ "$_ex_pg" == "in-cluster" ]] && _backend_default=2
   _ask_choice --default "$_backend_default" "Backend services:" \
-    "All external — RDS + ElastiCache (recommended even for dev)" \
+    "All external (recommended) — RDS + ElastiCache, including for dev" \
     "All in-cluster — everything runs as pods (simplest)"
   if [[ "$_CHOICE" == "1" ]]; then
     PG_SOURCE="external"; REDIS_SOURCE="external"
@@ -392,15 +418,25 @@ fi
 
 echo ""
 _ex_ch=$(_existing "clickhouse_source" "")
-_ch_default=1; [[ "$_ex_ch" == "external" || "$PROFILE" == "prod" ]] && _ch_default=2
+_ch_default=1; [[ "$_ex_ch" == "external" ]] && _ch_default=2
 _ask_choice --default "$_ch_default" "ClickHouse:" \
-  "In-cluster — single pod, dev/POC only" \
-  "External — LangChain Managed ClickHouse (production)"
+  "In-cluster (recommended) — including production" \
+  "External — managed separately"
 CH_SOURCE="in-cluster"; [[ "$_CHOICE" == "2" ]] && CH_SOURCE="external"
-if [[ "$PROFILE" == "prod" && "$CH_SOURCE" == "in-cluster" ]]; then
-  echo ""
-  _yellow "NOTE"; printf ": In-cluster ClickHouse is not production-grade.\n"
-  printf "  Docs: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse\n"
+
+_ex_smithdb=$(_existing "enable_smithdb" "false")
+_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
+_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
+_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
+ENABLE_SMITHDB="false"
+SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+
+if _ask_yn "$(_feature_prompt "Enable SmithDB" "$_ex_smithdb" " (purpose-built database for LangSmith run and trace data)?")" \
+  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
+  ENABLE_SMITHDB="true"
+  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
+  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
+  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -422,7 +458,7 @@ _gw_default=$(_quickstart_gateway_default \
   "$UPDATE_MODE" "$_ex_envoy" "$_ex_istio" "$_ex_nginx")
 
 _ask_choice --default "$_gw_default" "Ingress / Gateway mode:" \
-  "Envoy Gateway (Kubernetes Gateway API) — HTTPRoutes, split dataplane support (recommended for new configurations)" \
+  "Envoy Gateway (recommended) — Kubernetes Gateway API, HTTPRoutes, split dataplane support" \
   "ALB (Application Load Balancer) — standard, TLS via ACM or Let's Encrypt HTTP-01" \
   "NGINX Ingress Controller — ALB → NGINX → pods via TargetGroupBinding (legacy, not recommended)" \
   "Istio Gateway — VirtualServices, split dataplane, TLS via Let's Encrypt DNS-01"
@@ -478,7 +514,7 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
   printf "  ${DIM}ALB only and cannot be used with Istio NLB.${RESET}\n"
   _tls_default_istio=2; [[ "$_ex_tls" == "none" || -z "$_ex_tls" ]] || _tls_default_istio=1
   _ask_choice --default "$_tls_default_istio" "TLS certificate (Istio mode):" \
-    "Let's Encrypt DNS-01 via Route 53 — fully automated, recommended" \
+    "Let's Encrypt DNS-01 (recommended) — fully automated via Route 53" \
     "None — HTTP only (useful for initial deploy, add TLS later)"
   case "$_CHOICE" in
     1) TLS_SOURCE="none"   ;; # tls_certificate_source stays "none"; cert-manager handles it
@@ -491,7 +527,7 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
   printf "  ${DIM}Let's Encrypt is not shown because the automated DNS-01 path is Istio-only.${RESET}\n"
   _tls_default_envoy=2; [[ "$_ex_tls" == "acm" ]] && _tls_default_envoy=1
   _ask_choice --default "$_tls_default_envoy" "TLS certificate (Envoy mode):" \
-    "ACM — AWS Certificate Manager (TLS terminates at the ALB, recommended)" \
+    "ACM (recommended) — AWS Certificate Manager; TLS terminates at the ALB" \
     "None — HTTP only (useful for initial deploy, add TLS later)"
   case "$_CHOICE" in
     1) TLS_SOURCE="acm"  ;;
@@ -503,7 +539,7 @@ else
   [[ "$_ex_tls" == "acm" ]]        && _tls_default_alb=1
   [[ "$_ex_tls" == "letsencrypt" ]] && _tls_default_alb=2
   _ask_choice --default "$_tls_default_alb" "TLS certificate:" \
-    "ACM — AWS Certificate Manager (recommended for ALB)" \
+    "ACM (recommended) — AWS Certificate Manager for ALB" \
     "Let's Encrypt — auto-provisioned via cert-manager HTTP-01" \
     "None — HTTP only (not recommended for production)"
   TLS_MODE="$_CHOICE"
@@ -622,6 +658,7 @@ printf "  ${DIM}Controls resource requests, replica counts, and HPA ranges for L
 
 _ex_sizing=$(_existing "sizing_profile" "")
 _size_default=1
+[[ "$PROFILE" == "prod" ]]                  && _size_default=2
 [[ "$_ex_sizing" == "production" ]]       && _size_default=2
 [[ "$_ex_sizing" == "production-large" ]] && _size_default=3
 [[ "$PROFILE" == "dev" ]]                 && _size_default=1
@@ -647,20 +684,51 @@ echo ""
 printf "  ${DIM}Optional addons — each requires the matching license entitlement.${RESET}\n"
 
 _ex_deploys=$(_existing "enable_deployments" "false")
-_ex_ab=$(_existing "enable_agent_builder" "false")
-_ex_insights=$(_existing "enable_insights" "false")
-_ex_polly=$(_existing "enable_polly" "false")
+_ex_fleet=$(_existing "enable_fleet" "false")
+_ex_fleet_storage=$(_existing "fleet_storage" "external")
+_ex_fleet_external="false"
+[[ "$_ex_fleet_storage" == "external" ]] && _ex_fleet_external="true"
+_ex_insights_primary=$(_existing "enable_insights" "false")
+_ex_standalone_insights=$(_existing "enable_standalone_insights" "false")
+_ex_insights_storage=$(_existing "insights_storage" "")
+_ex_insights_storage_known="false"
+[[ -n "$_ex_insights_storage" ]] && _ex_insights_storage_known="true"
+if [[ -z "$_ex_insights_storage" ]]; then
+  _ex_insights_storage="in-cluster"
+  [[ "$_ex_standalone_insights" == "true" ]] && _ex_insights_storage="external"
+fi
+_ex_insights_external="false"
+[[ "$_ex_insights_storage" == "external" ]] && _ex_insights_external="true"
+_ex_insights="false"
+[[ "$_ex_insights_primary" == "true" || "$_ex_standalone_insights" == "true" ]] && _ex_insights="true"
+_ex_insights_storage_guard="$_ex_insights"
+[[ "$_ex_insights_storage_known" == "true" ]] && _ex_insights_storage_guard="true"
+_ex_polly_primary=$(_existing "enable_polly" "false")
+_ex_standalone_polly=$(_existing "enable_standalone_polly" "false")
+_ex_polly_storage=$(_existing "polly_storage" "")
+_ex_polly_storage_known="false"
+[[ -n "$_ex_polly_storage" ]] && _ex_polly_storage_known="true"
+if [[ -z "$_ex_polly_storage" ]]; then
+  _ex_polly_storage="in-cluster"
+  [[ "$_ex_standalone_polly" == "true" ]] && _ex_polly_storage="external"
+fi
+_ex_polly_external="false"
+[[ "$_ex_polly_storage" == "external" ]] && _ex_polly_external="true"
+_ex_polly="false"
+[[ "$_ex_polly_primary" == "true" || "$_ex_standalone_polly" == "true" ]] && _ex_polly="true"
+_ex_polly_storage_guard="$_ex_polly"
+[[ "$_ex_polly_storage_known" == "true" ]] && _ex_polly_storage_guard="true"
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
-_ex_smithdb=$(_existing "enable_smithdb" "false")
-_ex_smithdb_ingestion=$(_existing "smithdb_ingestion_enabled" "false")
-_ex_smithdb_migration=$(_existing "smithdb_migration_enabled" "false")
-_ex_smithdb_query=$(_existing "smithdb_query_enabled" "false")
 
-ENABLE_DEPLOYMENTS="false"; ENABLE_AGENT_BUILDER="false"
+ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
+FLEET_STORAGE="$_ex_fleet_storage"
 ENABLE_INSIGHTS="false"; ENABLE_POLLY="false"
+INSIGHTS_STORAGE="$_ex_insights_storage"
+POLLY_STORAGE="$_ex_polly_storage"
+ENABLE_INSIGHTS_PRIMARY="false"; ENABLE_POLLY_PRIMARY="false"
+ENABLE_STANDALONE_POLLY="false"; ENABLE_STANDALONE_INSIGHTS="false"
 ENABLE_SANDBOXES="false"
-ENABLE_SMITHDB="false"
-SMITHDB_INGESTION="false"; SMITHDB_MIGRATION="false"; SMITHDB_QUERY="false"
+
 if [[ "$PROFILE" == "prod" ]]; then
   SMITHDB_DELETION_PROTECTION="true"
   SMITHDB_SKIP_FINAL_SNAPSHOT="false"
@@ -672,36 +740,96 @@ else
   SMITHDB_SKIP_FINAL_SNAPSHOT="true"
 fi
 
-_ask_yn "$(_feature_prompt "Enable LangGraph Platform Deployments (listener + operator + host-backend)?" "$_ex_deploys")" \
+_select_feature_storage() {
+  local feature="$1" existing_enabled="$2" existing_external="$3"
+  local default=1 selected="in-cluster" current="in-cluster"
+
+  if [[ "$existing_enabled" == "true" && "$existing_external" == "true" ]]; then
+    default=2
+    current="external"
+  elif [[ "$existing_enabled" != "true" && "$PG_SOURCE" == "external" && "$REDIS_SOURCE" == "external" ]]; then
+    default=2
+  fi
+
+  _ask_choice --default "$default" "$feature storage (Postgres and Redis):" \
+    "In-cluster — dedicated pods with persistent volumes" \
+    "External (recommended) — use the same RDS and ElastiCache as LangSmith; $feature gets a separate Postgres database and Redis index"
+  [[ "$_CHOICE" == "2" ]] && selected="external"
+
+  # Helm does not move feature data between database locations during an upgrade.
+  if [[ "$UPDATE_MODE" == "true" && "$existing_enabled" == "true" && "$selected" != "$current" ]]; then
+    _red "  ERROR: Changing $feature storage requires a separate data migration."
+    printf "  Keep the current %s storage here and migrate it separately.\n" "$current"
+    exit 1
+  fi
+  if [[ "$selected" == "external" && ( "$PG_SOURCE" != "external" || "$REDIS_SOURCE" != "external" ) ]]; then
+    _red "  ERROR: External $feature storage requires external Postgres and Redis."
+    printf "  Re-run QuickStart and choose both external services in Section 5.\n"
+    exit 1
+  fi
+
+  [[ "$selected" == "external" ]]
+}
+
+_ask_yn "$(_feature_prompt "Enable LangSmith Deployments" "$_ex_deploys" " (listener + operator + host-backend)?")" \
   "$([[ "$_ex_deploys" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_DEPLOYMENTS="true" || ENABLE_DEPLOYMENTS="false"
 
-if [[ "$ENABLE_DEPLOYMENTS" == "true" ]]; then
-  _ask_yn "$(_feature_prompt "  ↳ Enable Agent Builder (visual agent UI, requires Deployments)?" "$_ex_ab")" \
-    "$([[ "$_ex_ab" == "true" ]] && echo "y" || echo "n")" \
-    && ENABLE_AGENT_BUILDER="true" || ENABLE_AGENT_BUILDER="false"
-  _ask_yn "$(_feature_prompt "  ↳ Enable Polly (AI-powered eval, requires Deployments)?" "$_ex_polly")" \
-    "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
-    && ENABLE_POLLY="true" || ENABLE_POLLY="false"
+_ask_yn "$(_feature_prompt "Enable Fleet" "$_ex_fleet" " (no-code agents; includes host-backend)?")" \
+  "$([[ "$_ex_fleet" == "true" ]] && echo "y" || echo "n")" \
+  && ENABLE_FLEET="true" || ENABLE_FLEET="false"
+
+if [[ "$ENABLE_FLEET" == "true" ]]; then
+  if _select_feature_storage "Fleet" "$_ex_fleet" "$_ex_fleet_external"; then
+    FLEET_STORAGE="external"
+  else
+    FLEET_STORAGE="in-cluster"
+  fi
 fi
 
-_ask_yn "$(_feature_prompt "Enable Insights (ClickHouse analytics dashboard)?" "$_ex_insights")" \
+_ask_yn "$(_feature_prompt "Enable LangSmith Chat (formerly Polly)" "$_ex_polly" " (chat for traces, threads, prompts, and experiments)?")" \
+  "$([[ "$_ex_polly" == "true" ]] && echo "y" || echo "n")" \
+  && ENABLE_POLLY="true" || ENABLE_POLLY="false"
+
+ENABLE_POLLY_PRIMARY="$ENABLE_POLLY"
+if [[ "$UPDATE_MODE" == "true" && "$_ex_polly" == "true" && "$ENABLE_POLLY" == "true" ]]; then
+  ENABLE_POLLY_PRIMARY="$_ex_polly_primary"
+fi
+
+# Existing features keep their storage model. Newly enabled features follow the
+# selected storage location; external storage requires both services to be external.
+if [[ "$ENABLE_POLLY" == "true" ]]; then
+  if _select_feature_storage "LangSmith Chat" "$_ex_polly_storage_guard" "$_ex_polly_external"; then
+    POLLY_STORAGE="external"
+    ENABLE_STANDALONE_POLLY="true"
+  else
+    POLLY_STORAGE="in-cluster"
+  fi
+fi
+
+_ask_yn "$(_feature_prompt "Enable Insights" "$_ex_insights" " (AI-powered trace analysis for patterns and failure modes)?")" \
   "$([[ "$_ex_insights" == "true" ]] && echo "y" || echo "n")" \
   && ENABLE_INSIGHTS="true" || ENABLE_INSIGHTS="false"
 
-if _ask_yn "$(_feature_prompt "Enable SmithDB (columnar trace store, needs local-NVMe nodes via Karpenter)?" "$_ex_smithdb")" \
-  "$([[ "$_ex_smithdb" == "true" ]] && echo "y" || echo "n")"; then
-  ENABLE_SMITHDB="true"
-  [[ "$_ex_smithdb_ingestion" == "true" ]] && SMITHDB_INGESTION="true"
-  [[ "$_ex_smithdb_migration" == "true" ]] && SMITHDB_MIGRATION="true"
-  [[ "$_ex_smithdb_query" == "true" ]] && SMITHDB_QUERY="true"
+ENABLE_INSIGHTS_PRIMARY="$ENABLE_INSIGHTS"
+if [[ "$UPDATE_MODE" == "true" && "$_ex_insights" == "true" && "$ENABLE_INSIGHTS" == "true" ]]; then
+  ENABLE_INSIGHTS_PRIMARY="$_ex_insights_primary"
+fi
+
+if [[ "$ENABLE_INSIGHTS" == "true" ]]; then
+  if _select_feature_storage "Insights" "$_ex_insights_storage_guard" "$_ex_insights_external"; then
+    INSIGHTS_STORAGE="external"
+    ENABLE_STANDALONE_INSIGHTS="true"
+  else
+    INSIGHTS_STORAGE="in-cluster"
+  fi
 fi
 
 echo ""
 printf "  ${DIM}Sandboxes run untrusted code on dedicated EC2 nodes and create a dedicated${RESET}\n"
 printf "  ${DIM}external Redis instance for JuiceFS metadata. They also require a Linux${RESET}\n"
 printf "  ${DIM}KVM-compatible host. The matching Sandbox image is selected during deployment.${RESET}\n"
-if _ask_yn "$(_feature_prompt "Enable LangSmith Sandboxes?" "$_ex_sandboxes")" \
+if _ask_yn "$(_feature_prompt "Enable LangSmith Sandboxes" "$_ex_sandboxes" "?")" \
   "$([[ "$_ex_sandboxes" == "true" ]] && echo "y" || echo "n")"; then
   ENABLE_SANDBOXES="true"
 fi
@@ -743,6 +871,11 @@ _pre_write_guard() {
 _pre_write_guard
 
 _section "Generating terraform.tfvars"
+
+if [[ -f "$OUTPUT" ]]; then
+  cp -p "$OUTPUT" "${OUTPUT}.backup"
+  printf "  $(_green "✔")  Backed up existing file to: $(_bold "${OUTPUT}.backup")\n"
+fi
 
 _tf_list() {
   local input="$1"
@@ -908,9 +1041,14 @@ sizing_profile = "${SIZING}"
 # deploy.sh reads these flags to select the right Helm values overlays.
 #------------------------------------------------------------------------------
 enable_deployments   = ${ENABLE_DEPLOYMENTS}
-enable_agent_builder = ${ENABLE_AGENT_BUILDER}
-enable_insights      = ${ENABLE_INSIGHTS}
-enable_polly         = ${ENABLE_POLLY}
+enable_fleet         = ${ENABLE_FLEET}
+fleet_storage        = "${FLEET_STORAGE}"
+enable_insights      = ${ENABLE_INSIGHTS_PRIMARY}
+insights_storage     = "${INSIGHTS_STORAGE}"
+enable_polly         = ${ENABLE_POLLY_PRIMARY}
+polly_storage        = "${POLLY_STORAGE}"
+enable_standalone_polly = ${ENABLE_STANDALONE_POLLY}
+enable_standalone_insights = ${ENABLE_STANDALONE_INSIGHTS}
 
 enable_smithdb              = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled   = ${SMITHDB_INGESTION}
@@ -957,19 +1095,21 @@ echo ""
 printf "  %-26s %s\n" "Profile:"      "$PROFILE"
 printf "  %-26s %s\n" "Name:"         "${NAME_PREFIX}-${ENVIRONMENT}"
 printf "  %-26s %s\n" "Region:"       "$REGION"
-printf "  %-26s %s\n" "VPC:"          "$([[ "$CREATE_VPC" == "true" ]] && echo "new" || echo "existing ($VPC_ID)")"
+printf "  %-26s %s\n" "VPC:"          "$([[ "$CREATE_VPC" == "true" ]] && echo "Terraform-managed" || echo "existing ($VPC_ID)")"
 printf "  %-26s %s\n" "EKS API:"      "$([[ "$EKS_PUBLIC" == "true" ]] && echo "public" || echo "private + bastion")"
-printf "  %-26s %s\n" "PostgreSQL:"   "$PG_SOURCE"
+printf "  %-26s %s\n" "Postgres:"     "$PG_SOURCE"
 printf "  %-26s %s\n" "Redis:"        "$REDIS_SOURCE"
 printf "  %-26s %s\n" "ClickHouse:"   "$CH_SOURCE"
 printf "  %-26s %s\n" "Gateway mode:" "$GATEWAY_MODE"
 printf "  %-26s %s\n" "TLS:"          "$([[ "$CREATE_CERT_MANAGER" == "true" ]] && echo "Let's Encrypt DNS-01 (Route 53)" || echo "$TLS_SOURCE")"
 [[ -n "$DOMAIN" ]] && printf "  %-26s %s\n" "Domain:" "$DOMAIN"
 printf "  %-26s %s\n" "Sizing:"       "$SIZING"
-printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
-[[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
-[[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "Polly:"         "$ENABLE_POLLY"
+printf "  %-26s %s\n" "LangSmith Deployments:" "$ENABLE_DEPLOYMENTS"
+printf "  %-26s %s\n" "Fleet:" "$ENABLE_FLEET"
+[[ "$ENABLE_FLEET" == "true" ]] && printf "  %-26s %s\n" "Fleet storage:" "$FLEET_STORAGE"
+[[ "$ENABLE_POLLY" == "true" ]]         && printf "  %-26s %s\n" "LangSmith Chat (formerly Polly):" "$ENABLE_POLLY"
 [[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights:"      "$ENABLE_INSIGHTS"
+[[ "$ENABLE_INSIGHTS" == "true" ]]      && printf "  %-26s %s\n" "Insights storage:" "$INSIGHTS_STORAGE"
 printf "  %-26s %s\n" "Sandboxes:" "$ENABLE_SANDBOXES"
 printf "  %-26s %s\n" "SmithDB:" "$ENABLE_SMITHDB"
 
@@ -1029,12 +1169,6 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
 else
   printf "  4. Deploy LangSmith:\n"
   printf "     ${CYAN}make init-values && make deploy${RESET}\n"
-fi
-
-if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  echo ""
-  printf "  ${DIM}SmithDB requires an explicit stable chart version of 0.16 or newer:${RESET}\n"
-  printf "     ${CYAN}make init-values && CHART_VERSION=0.16.21 make deploy${RESET}\n"
 fi
 
 echo ""

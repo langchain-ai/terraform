@@ -638,7 +638,7 @@ variable "tags" {
 # tflint-ignore: terraform_unused_declarations
 variable "clickhouse_source" {
   type        = string
-  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a pod via Helm (dev/POC only). 'external' for LangChain Managed ClickHouse (recommended for production) — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
+  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a StatefulSet via Helm and is recommended for production during the transition to SmithDB. 'external' uses LangChain Managed ClickHouse — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
   default     = "in-cluster"
 
   validation {
@@ -680,7 +680,7 @@ variable "langsmith_jwt_secret" {
 }
 
 #------------------------------------------------------------------------------
-# LangGraph Platform Features
+# LangSmith Features
 # Boolean flags that control which product addons are enabled in Helm (Pass 2).
 # deploy.sh reads these to decide which values overlay files to include.
 # Addons require the corresponding entitlement in your LangSmith license key.
@@ -699,43 +699,76 @@ variable "sizing_profile" {
 
 variable "enable_deployments" {
   type        = bool
-  description = "Enable LangGraph Platform Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
+  description = "Enable LangSmith Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
   default     = false
 }
 
 variable "enable_agent_builder" {
   type        = bool
-  description = "Enable Agent Builder (visual agent building UI). Requires enable_deployments = true and Agent Builder entitlement in license."
+  description = "Deprecated compatibility input accepted for existing tfvars files. Ignored because chart v0.16 supports Fleet instead."
   default     = false
 }
 
 variable "enable_insights" {
   type        = bool
-  description = "Enable Insights (ClickHouse-backed analytics). Requires Insights entitlement in license."
+  description = "Enable Insights for AI-powered trace analysis. Requires the Insights entitlement."
   default     = false
+}
+
+variable "insights_storage" {
+  type        = string
+  description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.insights_storage)
+    error_message = "insights_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_polly" {
   type        = bool
-  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  description = "Enable LangSmith Chat (formerly Polly) using the chart's top-level polly services. Does not require enable_deployments. Requires the LangSmith Chat entitlement in the license."
   default     = false
+}
+
+variable "polly_storage" {
+  type        = string
+  description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.polly_storage)
+    error_message = "polly_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_fleet" {
   type        = bool
-  description = "Enable Fleet standalone deployment (chart v0.15+). Requires enable_deployments = true (the Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed with Deployments). Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder. Requires postgres_source = redis_source = external."
+  description = "Enable Fleet and the host-backend it requires. Full LangSmith Deployments is optional."
   default     = false
+}
+
+variable "fleet_storage" {
+  type        = string
+  description = "Fleet storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.fleet_storage)
+    error_message = "fleet_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_standalone_polly" {
   type        = bool
-  description = "Enable Polly standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_polly_encryption_key. Requires postgres_source = redis_source = external."
+  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for LangSmith Chat (formerly Polly). Also enables Chat when enable_polly is false for backward compatibility. Requires postgres_source = redis_source = external."
   default     = false
 }
 
 variable "enable_standalone_insights" {
   type        = bool
-  description = "Enable Insights standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_insights_encryption_key. ClickHouse is still required via the existing insights flow. Requires postgres_source = redis_source = external."
+  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for Insights. Also enables Insights when enable_insights is false for backward compatibility. ClickHouse is still required. Requires postgres_source = redis_source = external."
   default     = false
 }
 
@@ -811,7 +844,7 @@ variable "langsmith_deployments_encryption_key" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_agent_builder_encryption_key" {
   type        = string
-  description = "Fernet key for Agent Builder. Generate once and keep stable. Store in SSM: /langsmith/{base_name}/agent-builder-encryption-key."
+  description = "Fernet key for Fleet. The historical variable and SSM parameter names are retained for compatibility. Generate once and keep stable. Store in SSM: /langsmith/{base_name}/agent-builder-encryption-key."
   sensitive   = true
   default     = ""
 }
@@ -827,7 +860,7 @@ variable "langsmith_insights_encryption_key" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_polly_encryption_key" {
   type        = string
-  description = "Fernet key for Polly. Generate once — changing breaks existing Polly encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
+  description = "Fernet key for LangSmith Chat (formerly Polly). Generate once — changing it breaks existing encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
   sensitive   = true
   default     = ""
 }
@@ -845,7 +878,7 @@ variable "langsmith_polly_encryption_key" {
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Requires an explicit chart version of 0.16 or newer in Pass 2. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.16.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
   default     = false
 }
 

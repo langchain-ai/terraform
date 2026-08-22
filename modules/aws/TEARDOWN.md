@@ -68,7 +68,7 @@ kubectl delete crd lgps.apps.langchain.ai
 
 ## A2 — Uninstall LangSmith Helm Release
 
-Use the provided script — it handles the Helm release, ESO resources, and operator-managed pods (agent-builder, LangGraph) in one pass:
+Use the provided script — it handles the Helm release, ESO resources, and operator-managed pods (Fleet, LangGraph) in one pass:
 
 ```bash
 cd aws/helm

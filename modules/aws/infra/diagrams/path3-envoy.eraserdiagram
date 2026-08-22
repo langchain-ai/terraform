@@ -78,11 +78,8 @@ VPC [icon: aws-vpc, color: blue] {
         // Gateway listener on :80 HTTP — ACM handles TLS at ALB above
         GatewayResource [icon: kubernetes, color: orange]
 
-        // HTTPRoutes — one per service group
-        HTTPRouteMain [icon: kubernetes, color: orange]
-        HTTPRouteAgentBuilder [icon: kubernetes, color: orange]
-        HTTPRoutePolly [icon: kubernetes, color: orange]
-        HTTPRouteClio [icon: kubernetes, color: orange]
+        // One HTTPRoute sends all external traffic to the frontend
+        HTTPRoute [icon: kubernetes, color: orange]
 
         // Core LangSmith pods
         Frontend [icon: server, color: blue]
@@ -91,22 +88,33 @@ VPC [icon: aws-vpc, color: blue] {
         ACEBackend [icon: server, color: blue]
         Playground [icon: server, color: blue]
 
-        // LangGraph Deployments (host-backend, listener, operator, agents)
+        // Shared by Fleet and LangGraph Deployments
         HostBackend [icon: server, color: purple]
+
+        // LangGraph Deployments (listener, operator, agents)
         LangGraphListener [icon: server, color: purple]
         LangGraphOperator [icon: server, color: purple]
         ManagedAgentPods [icon: server, color: purple]
 
-        // Agent Builder service pods
-        AgentBuilderToolServer [icon: server, color: green]
-        AgentBuilderTriggerServer [icon: server, color: green]
+        // Fleet service pods
+        langsmith-standalone-fleet-api-server [icon: server, color: green]
+        langsmith-standalone-fleet-queue [icon: server, color: green]
+        langsmith-fleet-tool-server [icon: server, color: green]
+        langsmith-fleet-trigger-server [icon: server, color: green]
 
-        // Observability / data pipeline
-        PollyPods [icon: server, color: gray]
-        ClioPods [icon: server, color: gray]
+        // Insights and LangSmith Chat services
+        langsmith-standalone-insights-api-server [icon: server, color: gray]
+        langsmith-standalone-insights-queue [icon: server, color: gray]
+        langsmith-standalone-polly-api-server [icon: server, color: gray]
+        langsmith-standalone-polly-queue [icon: server, color: gray]
 
-        // ReferenceGrant allows HTTPRoutes to reach services in other namespaces
-        ReferenceGrant [icon: shield, color: gray]
+        // Optional chart-managed stores when in-cluster storage is selected
+        langsmith-standalone-fleet-postgres [icon: database, color: red]
+        langsmith-standalone-fleet-redis [icon: database, color: red]
+        langsmith-standalone-insights-postgres [icon: database, color: red]
+        langsmith-standalone-insights-redis [icon: database, color: red]
+        langsmith-standalone-polly-postgres [icon: database, color: red]
+        langsmith-standalone-polly-redis [icon: database, color: red]
       }
     }
 
@@ -143,26 +151,23 @@ TargetGroupBinding > EnvoyProxyPod2: HTTP :10080 (active-active)
 EnvoyGatewayController --> EnvoyProxyPod1: xDS config push
 EnvoyGatewayController --> EnvoyProxyPod2: xDS config push
 EnvoyGatewayController --> GatewayResource: watches Gateway API resources
-GatewayResource --> HTTPRouteMain: reconciles HTTPRoutes
-GatewayResource --> HTTPRouteAgentBuilder: reconciles
-GatewayResource --> HTTPRoutePolly: reconciles
-GatewayResource --> HTTPRouteClio: reconciles
+GatewayResource --> HTTPRoute: reconciles route
 
 // ALB controller manages the TargetGroupBinding CRD lifecycle
 AWSLoadBalancerController --> TargetGroupBinding: manages CRD lifecycle
 AWSLoadBalancerController --> ALB: syncs target group membership
 
-// Envoy proxy → LangSmith services (routed via HTTPRoutes)
-EnvoyProxyPod1 > Frontend: HTTPRoute match /
-EnvoyProxyPod1 > Backend: HTTPRoute match /api
-EnvoyProxyPod1 > PlatformBackend: HTTPRoute match /platform
-EnvoyProxyPod1 > ACEBackend: HTTPRoute match /ace
-EnvoyProxyPod1 > Playground: HTTPRoute match /playground
-EnvoyProxyPod1 > HostBackend: HTTPRoute match /langgraph
-EnvoyProxyPod1 > AgentBuilderToolServer: HTTPRoute agent-builder-tool
-EnvoyProxyPod1 > AgentBuilderTriggerServer: HTTPRoute agent-builder-trigger
-EnvoyProxyPod1 > PollyPods: HTTPRoute polly
-EnvoyProxyPod1 > ClioPods: HTTPRoute clio
+// The chart's single HTTPRoute targets the frontend. The frontend routes
+// requests to the internal services.
+EnvoyProxyPod1 > Frontend: HTTPRoute backendRef
+Frontend > Backend: internal /api route
+Frontend > PlatformBackend: internal /platform route
+Frontend > ACEBackend: internal /ace route
+Frontend > Playground: internal /playground route
+Frontend > HostBackend: internal /langgraph route
+Frontend > langsmith-standalone-fleet-api-server: internal Fleet route
+Frontend > langsmith-standalone-insights-api-server: internal Insights route
+Frontend > langsmith-standalone-polly-api-server: internal Chat route
 
 // KEDA scales LangGraph agent pods
 KEDAOperator --> ManagedAgentPods: scales replicas (queue-based HPA)
@@ -179,16 +184,12 @@ Backend > ElastiCacheRedis: Redis :6379
 Backend > S3VPCEndpoint: blob storage (payloads)
 PlatformBackend > RDSPostgres: Postgres :5432
 HostBackend > RDSPostgres: Postgres (agent state)
-ClioPods > ClickHouseInCluster: ClickHouse analytics writes
 
 // NAT for outbound (image pulls, external APIs)
 NATGateway --> Internet: outbound egress
 
 // Audit logging
 CloudTrail --> EKSCluster: API audit log stream
-
-// ReferenceGrant enables cross-namespace HTTPRoute → service
-ReferenceGrant --> HTTPRouteAgentBuilder: allows cross-ns service ref
 
 // ============================================================
 // LEGEND
