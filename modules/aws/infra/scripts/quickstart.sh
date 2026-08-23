@@ -515,6 +515,7 @@ else
 fi
 
 ACM_ARN=""; LE_EMAIL=""; DOMAIN=""; CREATE_CERT_MANAGER="false"; HOSTED_ZONE_ID=""
+DNS_CREATE_ZONE="true"; DNS_EXISTING_ZONE_ID=""
 
 # ACM ARN
 if [[ "$TLS_SOURCE" == "acm" ]]; then
@@ -527,6 +528,33 @@ fi
 echo ""
 _ask "Custom domain for LangSmith (e.g. langsmith.example.com, blank = use LB hostname)" "$_ex_domain"
 DOMAIN="$_REPLY"
+
+# The DNS module is enabled whenever a custom domain is set and no existing
+# ACM certificate ARN is supplied, regardless of the selected TLS mode.
+if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
+  _ex_dns_create_zone=$(_existing "dns_create_zone" "true")
+  _dns_zone_default=1
+  [[ "$_ex_dns_create_zone" == "false" ]] && _dns_zone_default=2
+
+  _ask_choice --default "$_dns_zone_default" "Route 53 hosted zone for ${DOMAIN}:" \
+    "Create a new public hosted zone exactly matching ${DOMAIN}" \
+    "Reuse an existing public parent or same-name hosted zone"
+
+  if [[ "$_CHOICE" == "2" ]]; then
+    DNS_CREATE_ZONE="false"
+    echo ""
+    printf "  ${DIM}Find the zone ID: aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table${RESET}\n"
+    while true; do
+      _ask "Existing Route 53 hosted zone ID (e.g. Z1ABCDEF123456)" "$(_existing "dns_existing_zone_id" "")"
+      DNS_EXISTING_ZONE_ID="$_REPLY"
+      if [[ "$DNS_EXISTING_ZONE_ID" =~ ^Z[A-Z0-9]{1,31}$ ]]; then
+        break
+      fi
+      _red "  ERROR: enter a valid Route 53 hosted zone ID starting with Z."
+      echo ""
+    done
+  fi
+fi
 
 # Let's Encrypt email (HTTP-01 or DNS-01)
 if [[ "$TLS_SOURCE" == "letsencrypt" ]] || \
@@ -865,6 +893,13 @@ TFVARS
 [[ -n "$LE_EMAIL" ]] && echo "letsencrypt_email      = \"${LE_EMAIL}\""  >> "$OUTPUT"
 [[ -n "$DOMAIN" ]]   && echo "langsmith_domain       = \"${DOMAIN}\""    >> "$OUTPUT"
 
+if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
+  echo "dns_create_zone        = ${DNS_CREATE_ZONE}" >> "$OUTPUT"
+  if [[ "$DNS_CREATE_ZONE" == "false" ]]; then
+    echo "dns_existing_zone_id   = \"${DNS_EXISTING_ZONE_ID}\"" >> "$OUTPUT"
+  fi
+fi
+
 if [[ "$CREATE_CERT_MANAGER" == "true" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
@@ -965,6 +1000,10 @@ printf "  %-26s %s\n" "ClickHouse:"   "$CH_SOURCE"
 printf "  %-26s %s\n" "Gateway mode:" "$GATEWAY_MODE"
 printf "  %-26s %s\n" "TLS:"          "$([[ "$CREATE_CERT_MANAGER" == "true" ]] && echo "Let's Encrypt DNS-01 (Route 53)" || echo "$TLS_SOURCE")"
 [[ -n "$DOMAIN" ]] && printf "  %-26s %s\n" "Domain:" "$DOMAIN"
+if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
+  printf "  %-26s %s\n" "Route 53 zone:" \
+    "$([[ "$DNS_CREATE_ZONE" == "true" ]] && echo "new (${DOMAIN})" || echo "existing (${DNS_EXISTING_ZONE_ID})")"
+fi
 printf "  %-26s %s\n" "Sizing:"       "$SIZING"
 printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
 [[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
