@@ -214,9 +214,31 @@ echo ""
 # If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
 # resource recreation), warn the operator and update values-overrides.yaml
 # to prevent the Deployments operator from hitting stale endpoints.
+#
+# This only applies to IP-based installs. When langsmith_domain is set,
+# config.hostname must remain the DNS name: Terraform creates the Gateway
+# listener with that hostname, so rewriting the chart's hostname to the IP
+# leaves no intersection between the HTTPRoute and the listener. The route then
+# reports NoMatchingListenerHostname and every request 404s behind an otherwise
+# valid TLS certificate. The AWS module already guards this the same way.
+_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
-if [[ -n "$_live_gateway_ip" ]]; then
+if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
+  # Domain-based install: never rewrite the hostname. Surface a DNS mismatch
+  # instead, since that is the actual thing an operator needs to fix.
+  _resolved_ip=$(dig +short "$_langsmith_domain" A 2>/dev/null | tail -1) || _resolved_ip=""
+  if [[ -z "$_resolved_ip" ]]; then
+    echo "NOTE: ${_langsmith_domain} does not resolve yet."
+    echo "      Point its DNS A record at ${_live_gateway_ip} — TLS issuance and"
+    echo "      ingress stay pending until it does."
+    echo ""
+  elif [[ "$_resolved_ip" != "$_live_gateway_ip" ]]; then
+    echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ip}, not the Gateway"
+    echo "         IP ${_live_gateway_ip}. Update the DNS A record."
+    echo ""
+  fi
+elif [[ -n "$_live_gateway_ip" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
   if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_gateway_ip" ]]; then

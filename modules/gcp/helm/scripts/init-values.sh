@@ -218,7 +218,15 @@ if [[ -f "$OUT_FILE" ]]; then
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_HOSTNAME=""
 fi
 
-if [[ -n "$EXISTING_HOSTNAME" ]]; then
+if [[ -n "$EXISTING_HOSTNAME" && -n "$_domain" \
+      && "$EXISTING_HOSTNAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # Self-heal: a bare IP in the existing file cannot be right when
+  # langsmith_domain names a host. Earlier revisions of deploy.sh rewrote the
+  # hostname to the Gateway IP unconditionally, and because the existing file
+  # outranked the tfvar the wrong value survived every regeneration.
+  echo "Replacing IP hostname ${EXISTING_HOSTNAME} with langsmith_domain ${_domain}"
+  HOSTNAME="$_domain"
+elif [[ -n "$EXISTING_HOSTNAME" ]]; then
   HOSTNAME="$EXISTING_HOSTNAME"
 elif [[ -n "$_domain" ]]; then
   HOSTNAME="$_domain"
