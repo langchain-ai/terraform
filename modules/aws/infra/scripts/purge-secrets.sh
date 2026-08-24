@@ -93,6 +93,9 @@ _ssm_count=${#_ssm_array[@]}
 
 warn "This permanently deletes $_ssm_count SSM parameter(s)."
 echo ""
+info "Parameters:"
+printf "  %s\n" "${_ssm_array[@]}"
+echo ""
 info "Target:"
 printf "  Prefix: %s/\n" "$SSM_PREFIX"
 printf "  Region: %s\n" "$_region"

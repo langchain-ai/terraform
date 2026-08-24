@@ -44,18 +44,25 @@ echo "  region       = $_region"
 echo ""
 
 # ── Get cluster name from Terraform output ────────────────────────────────────
+# Empty state is not proof the cluster is gone (terraform state rm can leave EKS
+# running). Fall back to the tfvars naming convention and describe the cluster.
 echo "Reading cluster name from Terraform output..."
-_state_output=""
-if ! _cluster_output=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>&1); then
-  if _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1) && [[ -z "${_state_output//[$' \t\r\n']/}" ]]; then
-    skip "Terraform state is empty; uninstall is already complete."
-    exit 0
-  fi
-  echo "ERROR: Could not read cluster_name from Terraform output." >&2
-  printf "       %s\n" "$_cluster_output" >&2
-  exit 1
+_expected_cluster=""
+if [[ -n "$_name_prefix" ]]; then
+  _expected_cluster="${_name_prefix}-${_environment}-eks"
 fi
-_cluster_name="$_cluster_output"
+if _cluster_output=$(_terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>&1); then
+  _cluster_name="$_cluster_output"
+else
+  if [[ -z "$_expected_cluster" ]]; then
+    echo "ERROR: Could not read cluster_name from Terraform output, and name_prefix is unset." >&2
+    printf "       %s\n" "$_cluster_output" >&2
+    exit 1
+  fi
+  warn "Could not read cluster_name from Terraform output; describing expected cluster '${_expected_cluster}'."
+  printf "       %s\n" "$_cluster_output"
+  _cluster_name="$_expected_cluster"
+fi
 echo "  cluster_name = $_cluster_name"
 echo ""
 

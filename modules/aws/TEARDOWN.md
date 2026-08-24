@@ -413,7 +413,8 @@ while IFS= read -r name; do
   [ -n "$name" ] && PARAMETER_NAMES+=("$name")
 done < <(printf '%s\n' "$SSM_PARAMS" | tr '\t' '\n')
 
-echo "This permanently deletes ${#PARAMETER_NAMES[@]} SSM parameter(s)."
+echo "This permanently deletes ${#PARAMETER_NAMES[@]} SSM parameter(s):"
+printf "  %s\n" "${PARAMETER_NAMES[@]}"
 printf "Type '%s/' in region '%s' to continue: " "$SSM_PREFIX" "$REGION"
 read -r CONFIRM
 if [ "$CONFIRM" != "$SSM_PREFIX/" ]; then
