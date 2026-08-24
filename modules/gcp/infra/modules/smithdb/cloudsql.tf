@@ -96,12 +96,17 @@ resource "google_sql_database_instance" "metastore" {
   }
 }
 
+# depends_on on the user for destroy ordering - see the same note in
+# modules/postgres/main.tf. The database has to go before the role that owns
+# its objects, or Cloud SQL rejects the DROP ROLE.
 resource "google_sql_database" "metastore" {
   count = local.create_metastore ? 1 : 0
 
   name     = local.metastore_db_name
   project  = var.project_id
   instance = google_sql_database_instance.metastore[0].name
+
+  depends_on = [google_sql_user.metastore]
 }
 
 resource "google_sql_user" "metastore" {

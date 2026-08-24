@@ -48,11 +48,6 @@ provider "helm" {
 #------------------------------------------------------------------------------
 data "google_client_config" "default" {}
 
-# Get project information
-data "google_project" "current" {
-  project_id = var.project_id
-}
-
 # Wait for GKE API server to be fully ready after cluster creation.
 # The google_container_cluster resource waits until RUNNING state, but the
 # API server needs a short additional window before accepting requests.

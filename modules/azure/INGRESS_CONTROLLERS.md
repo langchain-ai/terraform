@@ -157,7 +157,9 @@ create_dns_zone        = true
 ```
 
 **How it works:**
-- Terraform creates Application Gateway v2 + dedicated `/24` subnet
+- Terraform creates Application Gateway v2 + dedicated `/24` subnet, delegated to
+  `Microsoft.Network/applicationGateways` — Azure rejects a network-isolated gateway in an
+  undelegated subnet, so a subnet supplied through `agic_subnet_id` needs the same delegation
 - AKS provisions `IngressClass` named `azure-application-gateway`
 - AGIC watches `Ingress` resources and programs AGW routing rules
 - cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
