@@ -178,7 +178,23 @@ if [[ -z "$ADMIN_EMAIL" ]]; then
   fi
 fi
 
+if [[ -z "$ADMIN_EMAIL" && -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
+  ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
+  info "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
+fi
+
 if [[ -z "$ADMIN_EMAIL" ]]; then
+  # Without a tty the read returns empty and the generic "Admin email is
+  # required" gives no hint that the run failed for lack of a terminal. Every
+  # other input comes from terraform.tfvars or terraform output, so this is the
+  # only value that would otherwise force Pass 2 to be interactive.
+  if [[ ! -t 0 ]]; then
+    fail "Admin email is required and stdin is not a tty"
+    info "Set it to run non-interactively:"
+    info "  export LANGSMITH_ADMIN_EMAIL=you@example.com"
+    info "Or set langsmith_admin_email in terraform.tfvars and re-apply."
+    exit 1
+  fi
   printf "  Initial org admin email: "
   read -r ADMIN_EMAIL
   if [[ -z "$ADMIN_EMAIL" ]]; then
