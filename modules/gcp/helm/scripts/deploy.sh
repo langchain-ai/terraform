@@ -37,6 +37,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
+
+# Defined here rather than further down because CHART_VERSION resolution below
+# needs it, and the chart-line guard runs before the old definition site.
+_parse_tfvar() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+}
 VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
@@ -49,6 +62,13 @@ NAMESPACE="${NAMESPACE:-langsmith}"
 if [[ -n "${CHART_VERSION:-}" ]]; then
   echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+fi
+# Fall back to the langsmith_helm_chart_version tfvar before the line default,
+# so the documented pin actually takes effect. Env var still wins.
+if [[ -z "${CHART_VERSION:-}" ]]; then
+  CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
+  [[ -n "$CHART_VERSION" ]] && \
+    echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
@@ -133,16 +153,6 @@ fi
 # Values are cut at the closing quote, or at an inline # for bare booleans and
 # numbers, so a commented flag line still reads as a flag. Keep identical to the
 # other copies of this function.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 
 # SmithDB needs chart 0.16 or newer, which the line guard above already
