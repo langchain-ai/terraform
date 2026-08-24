@@ -146,11 +146,11 @@ _rm() {
   fi
 }
 
-# ── Terraform live config ──────────────────────────────────────────────────────
-header "Terraform"
-_rm "$INFRA_DIR/terraform.tfvars"
+# Delete terraform.tfvars last. State and SSM checks above need it; if this
+# script dies mid-way, a retry can still verify cleanup.
 
 # Local state files (only present when not using a remote S3 backend)
+header "Terraform state"
 _rm "$INFRA_DIR/terraform.tfstate"
 _rm "$INFRA_DIR/terraform.tfstate.backup"
 for f in "$INFRA_DIR"/terraform.tfstate.*.backup; do
@@ -177,6 +177,9 @@ header "Helm values"
 for f in "$HELM_VALUES_DIR"/langsmith-values*.yaml; do
   [[ -f "$f" ]] && _rm "$f"
 done
+
+header "Terraform config"
+_rm "$INFRA_DIR/terraform.tfvars"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
