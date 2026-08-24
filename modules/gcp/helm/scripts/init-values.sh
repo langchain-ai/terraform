@@ -238,13 +238,24 @@ fi
 if [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
-else
+elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
+  ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
+  echo "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
+elif [[ -t 0 ]]; then
   printf "Admin email: "
   read -r ADMIN_EMAIL
   if [[ -z "$ADMIN_EMAIL" ]]; then
     echo "ERROR: Admin email is required." >&2
     exit 1
   fi
+else
+  # Every other input this script needs comes from terraform.tfvars or terraform
+  # output. Prompting for this one is what forces Pass 2 to have a TTY, so fail
+  # with the way to supply it rather than blocking on a read that cannot return.
+  echo "ERROR: Admin email is required and stdin is not a tty." >&2
+  echo "       Set it to run non-interactively:" >&2
+  echo "         export LANGSMITH_ADMIN_EMAIL=you@example.com" >&2
+  exit 1
 fi
 echo ""
 
