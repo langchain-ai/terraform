@@ -301,7 +301,7 @@ variable "redis_subnet_id" {
 
 variable "agic_subnet_id" {
   type        = string
-  description = "The id of an existing subnet for the Application Gateway, required when ingress_controller = \"agic\" and create_vnet = false. Unlike the three above there is no carve path: Terraform will not create an Application Gateway subnet inside a VNet it does not own. Application Gateway v2 needs the subnet to itself, and Azure recommends a /24."
+  description = "The id of an existing subnet for the Application Gateway, required when ingress_controller = \"agic\" and create_vnet = false. Unlike the three above there is no carve path: Terraform will not create an Application Gateway subnet inside a VNet it does not own. Application Gateway v2 needs the subnet to itself, and Azure recommends a /24. It must also be delegated to Microsoft.Network/applicationGateways, or Azure rejects the gateway during apply; Terraform reads the delegation at plan time and warns when it is missing."
   default     = ""
 
   validation {
@@ -391,7 +391,12 @@ variable "redis_source" {
   }
 }
 
-# Read by create-k8s-secrets.sh and helm/scripts/, not by Terraform.
+# No Terraform resource reads this — where ClickHouse runs is a Helm-values
+# decision, and helm/scripts/init-values.sh parses it out of terraform.tfvars.
+# The declaration earns its place through the validation block: init-values.sh
+# tests only for "external" and treats everything else as in-cluster, so without
+# a plan-time check a typo would quietly deploy the chart's dev-grade ClickHouse
+# StatefulSet on a deployment that asked for a managed one.
 # tflint-ignore: terraform_unused_declarations
 variable "clickhouse_source" {
   type        = string
@@ -580,18 +585,6 @@ variable "additional_node_pools" {
   }
 }
 
-variable "aks_deletion_protection" {
-  type        = bool
-  description = "Prevent accidental AKS cluster deletion. Set false for dev/test environments where you need to destroy and recreate."
-  default     = true
-}
-
-variable "postgres_deletion_protection" {
-  type        = bool
-  description = "Prevent accidental PostgreSQL server deletion. Set false for dev/test environments."
-  default     = true
-}
-
 variable "langsmith_namespace" {
   type        = string
   description = "Namespace of the LangSmith deployment. Used to set up workload identity in a specific namespace for blob storage."
@@ -621,7 +614,8 @@ variable "istio_addon_revision" {
   default     = "asm-1-27"
 }
 
-# Read by helm/scripts/deploy.sh for the ClusterIssuer, not by Terraform.
+# No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
+# terraform.tfvars for the ClusterIssuer it applies, so the declaration has to stay.
 # tflint-ignore: terraform_unused_declarations
 variable "letsencrypt_email" {
   type        = string
@@ -635,6 +629,8 @@ variable "langsmith_domain" {
   default     = ""
 }
 
+# No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
+# terraform.tfvars for the --version it passes to helm upgrade.
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
@@ -766,13 +762,19 @@ variable "ingress_ip" {
 
 variable "availability_zones" {
   type        = list(string)
-  description = "Availability zones to deploy into. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone."
-  default     = ["1"]
+  description = "Availability zones to deploy into. The default [] lets Azure place the AKS node pool and the PostgreSQL server, the only setting that works when a VM or database SKU is not offered in every zone of the region. Set [\"1\",\"2\",\"3\"] for zone-redundant HA, or a single zone to pin placement. Applies at creation only."
+  default     = []
+}
+
+variable "postgres_high_availability" {
+  type        = bool
+  description = "Zone-redundant HA for PostgreSQL (primary + standby in different zones). Azure picks the standby zone unless postgres_standby_availability_zone names one. Requires a GeneralPurpose or MemoryOptimized SKU."
+  default     = false
 }
 
 variable "postgres_standby_availability_zone" {
   type        = string
-  description = "Standby AZ for Postgres HA (ZoneRedundant mode). Leave empty to disable HA standby."
+  description = "Pin the Postgres HA standby to a zone. Leave empty to let Azure choose. Setting this also turns HA on, for compatibility with configurations written before postgres_high_availability existed. Only pin the standby alongside a pinned availability_zones, so the primary cannot land in the same zone."
   default     = ""
 }
 
