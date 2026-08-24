@@ -299,7 +299,32 @@ _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" 
   "_ed25519_private_jwk_gen" "" "true"
 
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
-  "" "Initial LangSmith admin password" "true"
+  "" "Initial LangSmith admin password (min 12 chars, needs lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
+
+# Validate the admin password against the chart's rule before it reaches Secret
+# Manager. templates/validate.yaml rejects a non-compliant password at render
+# time, so without this the failure surfaces only after Pass 1 has provisioned
+# the whole stack and deploy.sh reaches helm upgrade. Mirrors the same check in
+# the AWS module (setup-env.sh) and Azure (_common.sh:_validate_admin_password).
+if [[ -n "${TF_VAR_langsmith_admin_password:-}" ]]; then
+  _pw_error=""
+  if [[ ${#TF_VAR_langsmith_admin_password} -lt 12 ]]; then
+    _pw_error="must be at least 12 characters long"
+  elif ! printf '%s' "$TF_VAR_langsmith_admin_password" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
+    _pw_error="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
+  elif ! printf '%s' "$TF_VAR_langsmith_admin_password" | grep -q '[a-z]'; then
+    _pw_error="must contain at least one lowercase letter"
+  elif ! printf '%s' "$TF_VAR_langsmith_admin_password" | grep -q '[A-Z]'; then
+    _pw_error="must contain at least one uppercase letter"
+  fi
+  if [[ -n "$_pw_error" ]]; then
+    echo "ERROR: Admin password is invalid — ${_pw_error}." >&2
+    echo "       unset TF_VAR_langsmith_admin_password, delete the Secret Manager" >&2
+    echo "       secret ${_sm_prefix}-admin-password, then re-source this script:" >&2
+    echo "         gcloud secrets delete ${_sm_prefix}-admin-password --project=${_project_id} --quiet" >&2
+    return 1
+  fi
+fi
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
 # Auto-generated and stored in Secret Manager on first run.
