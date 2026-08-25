@@ -47,12 +47,38 @@ RESOURCE_ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    "Microsoft.Cache/redisEnterprise/write",
 ]
 
 ABAC = (
     "@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
     "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7}"
+)
+
+# The shape that fails apply while preflight passes: roleAssignments/write is
+# permitted, but only for a ServicePrincipal, so the Key Vault Secrets Officer
+# grant is refused for omitting principal_type rather than for lacking a role.
+ABAC_PRINCIPAL_TYPE = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# The same shape widened to admit human deployers. Here terraform_principal_type
+# is the right advice, so the pinned-condition verdict must not fire on it.
+ABAC_PRINCIPAL_TYPE_ANY = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "ForAnyOfAnyValues:StringEqualsIgnoreCase {'ServicePrincipal', 'User'}))"
+)
+
+# Pinned on delete only. Nothing constrains who a new assignment may target, so
+# the deployer's own grant goes through and only its removal is fenced.
+ABAC_PRINCIPAL_TYPE_DELETE_ONLY = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (%s)) AND "
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+    "(@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))" % ABAC
 )
 
 
@@ -111,6 +137,22 @@ def eligibility(role, scope=SUB_SCOPE):
 
 
 DENY = {"id": "deny-1", "displayName": "Landing zone RBAC lock"}
+
+# What checkNameAvailability returns for a name that exists — byte-identical
+# whether the resource belongs to this deployment or to a stranger's tenant.
+TAKEN = {
+    "nameAvailable": False,
+    "available": False,
+    "reason": "AlreadyExists",
+    "message": "The specified name is already in use.",
+}
+
+# The names the default fixture derives (identifier "-dev", no hash).
+PG = "langsmith-postgres-dev"
+BLOB = "langsmithblobdev"
+KV = "langsmith-kv-dev"
+REDIS = "langsmith-redis-dev"
+DNS = "langsmith-dev-ls"
 
 ALL_GOOD = response()
 
@@ -263,9 +305,60 @@ CASES = [
         ],
     },
     {
+        # The variable declares what the principal is; it cannot make a human into
+        # a service principal, so recommending it here sends the operator down a
+        # dead end that costs an apply to discover.
+        "name": "a condition pinned to ServicePrincipal does not recommend terraform_principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "declares the type rather than changing it",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        "name": "a pinned condition is silent once the grant it rejects is turned off",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "tfvars_extra": "keyvault_manage_terraform_admin_assignment = false",
+        "expect": ["keyvault_manage_terraform_admin_assignment is already false"],
+        "reject": ["[✗] The condition admits only ServicePrincipal targets"],
+    },
+    {
+        # Nothing to work around: the request this deployer sends already matches.
+        "name": "a pinned condition is not a blocker for a service principal deployer",
+        "env": {"ARM_CLIENT_ID": "app-guid"},
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE)),
+        "expect": [
+            "The condition tests principalType",
+            'terraform_principal_type = "ServicePrincipal"',
+        ],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "a principalType condition that admits User names terraform_principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_ANY)),
+        "expect": [
+            "The condition tests principalType",
+            'terraform_principal_type = "User"',
+        ],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "a principalType condition on delete alone does not block the write",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_DELETE_ONLY)),
+        "expect": ["The condition tests principalType"],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "an ABAC condition on roles alone does not mention principal_type",
+        "ca_all": response(assignment=granted(condition=ABAC)),
+        "reject": ["terraform_principal_type"],
+    },
+    {
         "name": "a refused resource write fails and names the action",
-        "ca_all": response(refuse_resources=("Microsoft.Cache/redis/write",)),
-        "expect": ["[✗] Not permitted at", "Microsoft.Cache/redis/write"],
+        "ca_all": response(refuse_resources=("Microsoft.Cache/redisEnterprise/write",)),
+        "expect": ["[✗] Not permitted at", "Microsoft.Cache/redisEnterprise/write"],
         "reject": ["[✗] roleAssignments/write"],
     },
     {
@@ -375,6 +468,47 @@ CASES = [
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg/providers"],
     },
     {
+        # name_suffix_salt exists so a deployment whose four global names got
+        # burned can rotate them. Preflight has to mix it into the hash the same
+        # way local.uniq_suffix does, or bumping the salt leaves preflight
+        # checking the old names and reporting the collision it was bumped to
+        # escape. Redis is asserted because it is the one name printed in full.
+        "name": "name_suffix_salt rotates the derived global names",
+        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true\nname_suffix_salt = "2"',
+        "ca_all": ALL_GOOD,
+        "expect": ["ls-redis-prod-4352a7"],
+        "reject": ["ls-redis-prod-8a57d8"],
+    },
+    {
+        # The unsalted counterpart, pinning the default derivation so a change to
+        # the hash inputs cannot pass unnoticed.
+        "name": "an empty salt leaves the derived names unchanged",
+        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "ca_all": ALL_GOOD,
+        "expect": ["ls-redis-prod-8a57d8"],
+    },
+    {
+        # The redis module provisions Microsoft.Cache/redisEnterprise via azapi,
+        # not the classic Microsoft.Cache/redis. Asking about the classic action
+        # passed a principal that could not create the actual cluster.
+        "name": "Redis is checked as redisEnterprise, not as classic Azure Cache",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Cache/redisEnterprise/write"],
+        "reject_actions": ["Microsoft.Cache/redis/write"],
+    },
+    {
+        # The RBAC scope used to be hardcoded to "langsmith-rg" + the legacy
+        # identifier, so it asked about a resource group Terraform never creates
+        # once unique_resource_names moved the base to "ls". Both halves are
+        # asserted here: name_prefix wins over identifier, and the base follows
+        # unique_resource_names.
+        "name": "the resource group scope follows name_prefix and unique_resource_names",
+        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-prod/providers"],
+        "reject_calls": ["langsmith-rg"],
+    },
+    {
         "name": "a bring-your-own VNet is checked as its own scope",
         "tfvars_extra": f'vnet_id = "{VNET_ID}"',
         "ca_all": ALL_GOOD,
@@ -395,6 +529,79 @@ CASES = [
         "ca_all": ALL_GOOD,
         "expect": ["[!] Could not resolve an object ID", "[!] Skipping RBAC check"],
         "reject": ["[✗] roleAssignments/write"],
+    },
+    {
+        # checkNameAvailability answers a global question and has no ownership
+        # dimension, so every name a deployment already created comes back
+        # taken. Reading Terraform state first is what stops the second
+        # `make preflight` of a live deployment from failing on its own
+        # resources. The DNS label is included because it lives under a
+        # different state attribute than the other three.
+        "name": "names this deployment already created are not collisions",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "tfstate_names": [PG, BLOB, KV],
+        "tfstate_dns_labels": [DNS],
+        "expect": [
+            f"[✓] Postgres: '{PG}' is already deployed and tracked in Terraform state",
+            f"[✓] Storage account: '{BLOB}' is already deployed",
+            f"[✓] Key Vault: '{KV}' is already deployed",
+            f"[✓] Public IP DNS label: '{DNS}' is already deployed",
+        ],
+        "reject": ["ALREADY TAKEN"],
+    },
+    {
+        "name": "a taken name with no state behind it still fails",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "expect": [
+            f"[✗] Postgres: '{PG}' is ALREADY TAKEN globally",
+            f"[✗] Key Vault: '{KV}' is ALREADY TAKEN globally",
+        ],
+        "reject": ["tracked in Terraform state"],
+    },
+    {
+        # State exempts a name, not the run: a half-built deployment must still
+        # fail on the names it has not created yet.
+        "name": "state exempts only the names it actually holds",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "tfstate_names": [PG],
+        "expect": [
+            f"[✓] Postgres: '{PG}' is already deployed",
+            f"[✗] Key Vault: '{KV}' is ALREADY TAKEN globally",
+        ],
+    },
+    {
+        # A soft-deleted vault is ours and still holds the name, but it is in
+        # neither Terraform state nor `az keyvault list`, so state cannot see it
+        # and the generic "already in use" names no remedy.
+        "name": "a soft-deleted Key Vault is named as such, with the remedy",
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "kv_deleted": 1,
+        "expect": [
+            f"[✗] Key Vault: '{KV}' is soft-deleted",
+            f"az keyvault recover --name {KV}",
+        ],
+        "reject": [f"Key Vault: '{KV}' is ALREADY TAKEN"],
+    },
+    {
+        # Redis has no working CheckNameAvailability, so it is checked against
+        # the subscription instead — which was equally blind to ownership.
+        "name": "a Redis left over from a failed apply still fails",
+        "ca_all": ALL_GOOD,
+        "redis_hit": 1,
+        "expect": [f"[✗] Redis: '{REDIS}' already exists in this subscription"],
+    },
+    {
+        "name": "a Redis that Terraform already manages does not",
+        "ca_all": ALL_GOOD,
+        "redis_hit": 1,
+        "tfstate_names": [REDIS],
+        "expect": [f"[✓] Redis: '{REDIS}' is already deployed and tracked in Terraform state"],
+        "reject": ["[✗] Redis"],
     },
     {
         "name": "an ARM_SUBSCRIPTION_ID mismatch fails before any verdict is trusted",
@@ -446,6 +653,26 @@ def build_case(case, index):
         (fixture / "held").write_text(case["held"])
     if "pg_caps_raw" in case:
         (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
+    if "name_availability" in case:
+        (fixture / "name_availability.json").write_text(json.dumps(case["name_availability"]))
+    for key in ("kv_deleted", "redis_hit"):
+        if key in case:
+            (fixture / key).write_text(str(case[key]))
+
+    # Preflight reads the local state file when no backend is initialised, which
+    # is the state a customer running `make preflight` before `make init` is in.
+    if "tfstate_names" in case or "tfstate_dns_labels" in case:
+        resources = [
+            {"type": "stub", "instances": [{"attributes": {"name": value}}]}
+            for value in case.get("tfstate_names", [])
+        ] + [
+            {"type": "azurerm_public_ip",
+             "instances": [{"attributes": {"domain_name_label": value}}]}
+            for value in case.get("tfstate_dns_labels", [])
+        ]
+        (infra / "terraform.tfstate").write_text(
+            json.dumps({"version": 4, "resources": resources})
+        )
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
                  "assignments_fail", "pg_caps_fail", "pg_caps_stderr"):
@@ -498,6 +725,22 @@ def run_case(case, index):
             got = json.loads(body_path.read_text())["Subject"]["Attributes"]["ObjectId"]
             if got != case["assert_subject"]:
                 problems.append(f"Subject was {got}, expected {case['assert_subject']}")
+
+    # The stub answers from this file's own ACTIONS list rather than from the
+    # request, so nothing above notices when the script asks about an action the
+    # deployment never performs. These two read the body the script actually sent.
+    if "assert_actions" in case or "reject_actions" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            sent = {a["Id"] for a in json.loads(body_path.read_text())["Actions"]}
+            for action in case.get("assert_actions", []):
+                if action not in sent:
+                    problems.append(f"never asked about: {action}")
+            for action in case.get("reject_actions", []):
+                if action in sent:
+                    problems.append(f"unexpectedly asked about: {action}")
 
     if problems:
         rendered = [
