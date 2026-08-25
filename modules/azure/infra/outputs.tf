@@ -118,7 +118,7 @@ output "smithdb_metastore_use_ssl" {
 
 output "smithdb_metastore_secret_name" {
   description = "Kubernetes Secret containing the SmithDB metastore connection fields."
-  value       = var.enable_smithdb ? kubernetes_secret.smithdb_metastore[0].metadata[0].name : null
+  value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_metastore_secret_name : null
 }
 
 output "smithdb_metastore_auth_mode" {

@@ -75,12 +75,11 @@ resource "azurerm_postgresql_flexible_server_active_directory_administrator" "sm
 }
 
 resource "azurerm_federated_identity_credential" "smithdb" {
-  name                = "${var.name}-federated"
-  resource_group_name = var.resource_group_name
-  parent_id           = azurerm_user_assigned_identity.smithdb.id
-  issuer              = var.oidc_issuer_url
-  subject             = "system:serviceaccount:${var.namespace}:${var.service_account_name}"
-  audience            = ["api://AzureADTokenExchange"]
+  name                      = "${var.name}-federated"
+  user_assigned_identity_id = azurerm_user_assigned_identity.smithdb.id
+  issuer                    = var.oidc_issuer_url
+  subject                   = "system:serviceaccount:${var.namespace}:${var.service_account_name}"
+  audience                  = ["api://AzureADTokenExchange"]
 }
 
 resource "azurerm_storage_account" "smithdb" {
@@ -102,10 +101,20 @@ resource "azurerm_storage_account" "smithdb" {
   }
 }
 
-resource "azurerm_storage_container" "smithdb" {
-  name                  = var.container_name
-  storage_account_id    = azurerm_storage_account.smithdb.id
-  container_access_type = "private"
+# Create the container through Azure Resource Manager. azurerm_storage_container
+# uses the Blob data plane, which attempts Shared Key authentication even when
+# the account intentionally has Shared Key disabled for workload-identity-only
+# access.
+resource "azapi_resource" "smithdb_container" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
+  name      = var.container_name
+  parent_id = "${azurerm_storage_account.smithdb.id}/blobServices/default"
+
+  body = {
+    properties = {
+      publicAccess = "None"
+    }
+  }
 }
 
 resource "azurerm_role_assignment" "smithdb_storage" {

@@ -775,28 +775,6 @@ module "smithdb" {
   tags                 = local.common_tags
 }
 
-# The chart maps these keys through smithdb.config.metastore. Keeping the
-# password out of generated values prevents it from being written to disk a
-# second time; it is already sensitive Terraform state through the server.
-resource "kubernetes_secret" "smithdb_metastore" {
-  count = var.enable_smithdb ? 1 : 0
-
-  metadata {
-    name      = "smithdb-metastore"
-    namespace = module.k8s_bootstrap.langsmith_namespace
-  }
-
-  data = merge({
-    smithdb_metastore_db_host     = module.smithdb[0].metastore_host
-    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
-    smithdb_metastore_db_username = module.smithdb[0].metastore_username
-    }, var.smithdb_metastore_admin_password == null ? {} : {
-    smithdb_metastore_db_password = var.smithdb_metastore_admin_password
-  })
-
-  type = "Opaque"
-}
-
 # ── Redis ─────────────────────────────────────────────────────────────────────
 # Managed Redis Cache (Premium) in a private subnet.
 # Only provisioned when redis_source = "external".
@@ -936,6 +914,14 @@ module "k8s_bootstrap" {
 
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
+
+  # SmithDB metastore connection. Keeping this Secret in the bootstrap module
+  # ensures it uses that module's AKS-configured Kubernetes provider.
+  enable_smithdb             = var.enable_smithdb
+  smithdb_metastore_host     = var.enable_smithdb ? module.smithdb[0].metastore_host : ""
+  smithdb_metastore_database = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
+  smithdb_metastore_username = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
+  smithdb_metastore_password = var.smithdb_metastore_admin_password
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace.
   ingress_controller = var.ingress_controller

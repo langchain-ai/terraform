@@ -254,6 +254,25 @@ resource "kubernetes_secret_v1" "redis" {
   type = "Opaque"
 }
 
+resource "kubernetes_secret_v1" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = merge({
+    smithdb_metastore_db_host     = var.smithdb_metastore_host
+    smithdb_metastore_db_name     = var.smithdb_metastore_database
+    smithdb_metastore_db_username = var.smithdb_metastore_username
+    }, var.smithdb_metastore_password == null ? {} : {
+    smithdb_metastore_db_password = var.smithdb_metastore_password
+  })
+
+  type = "Opaque"
+}
+
 # LangSmith license key secret — required for the application to start.
 # The Helm chart references this via config.licenseKeySecretName.
 resource "kubernetes_secret_v1" "license" {

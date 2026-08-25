@@ -15,7 +15,7 @@ output "storage_account_name" {
 
 output "container_name" {
   description = "Name of the SmithDB object-store Blob container."
-  value       = azurerm_storage_container.smithdb.name
+  value       = azapi_resource.smithdb_container.name
 }
 
 output "workload_identity_client_id" {

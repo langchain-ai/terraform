@@ -80,6 +80,38 @@ variable "redis_connection_url" {
   default     = ""
 }
 
+variable "enable_smithdb" {
+  type        = bool
+  description = "Create the SmithDB PostgreSQL metastore connection Secret."
+  default     = false
+}
+
+variable "smithdb_metastore_host" {
+  type        = string
+  description = "Private hostname of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_database" {
+  type        = string
+  description = "Database name of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_username" {
+  type        = string
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_password" {
+  type        = string
+  description = "Optional SmithDB metastore password; null when Entra authentication is used."
+  sensitive   = true
+  default     = null
+  nullable    = true
+}
+
 # ── Blob storage (Azure Workload Identity) ────────────────────────────────────
 
 variable "blob_managed_identity_client_id" {
