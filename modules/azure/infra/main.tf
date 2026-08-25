@@ -542,7 +542,7 @@ resource "terraform_data" "validate_network" {
     # keyvault_default_action. Skipped when Terraform is the one adding them,
     # since checking first would fail the plan that would fix it.
     precondition {
-      condition = local.manage_aks_subnet_endpoints || length(data.azurerm_subnet.byo_aks_subnet) == 0 || alltrue([
+      condition = local.manage_aks_subnet_endpoints || length(data.azurerm_subnet.byo_aks_subnet) == 0 ? true : alltrue([
         for endpoint in local.required_aks_service_endpoints :
         contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
       ])

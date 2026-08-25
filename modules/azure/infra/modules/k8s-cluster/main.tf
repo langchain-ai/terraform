@@ -47,12 +47,10 @@ locals {
   # var.create_cluster is checked first so that with create_cluster = false the
   # count = 0 resource is never indexed here — otherwise an "Invalid index" error
   # would fire alongside (and obscure) the data source's precondition message.
-  agic_addon_principal_id = (
-    var.create_cluster &&
-    var.ingress_controller == "agic" &&
-    length(azurerm_kubernetes_cluster.main[0].ingress_application_gateway) > 0 &&
-    length(azurerm_kubernetes_cluster.main[0].ingress_application_gateway[0].ingress_application_gateway_identity) > 0
-  ) ? azurerm_kubernetes_cluster.main[0].ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id : null
+  agic_addon_principal_id = var.create_cluster && var.ingress_controller == "agic" ? try(
+    azurerm_kubernetes_cluster.main[0].ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id,
+    null
+  ) : null
 
   # Derive VNet resource ID from the AGIC subnet ID by stripping the /subnets/... suffix.
   # e.g. /subscriptions/.../virtualNetworks/langsmith-vnet-dz/subnets/langsmith-vnet-dz-subnet-agic
@@ -419,7 +417,9 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   # "System" mode pools are reserved for system pods (kube-system).
   mode = "User"
 
-  temporary_name_for_rotation = "${each.key}tmp"
+  # AKS limits rotation names to 12 lowercase alphanumeric characters. Include
+  # a stable hash fragment so truncating long pool names cannot collide.
+  temporary_name_for_rotation = "${substr(each.key, 0, 8)}${substr(sha1(each.key), 0, 2)}tmp"
 
   lifecycle {
     ignore_changes = [upgrade_settings]
