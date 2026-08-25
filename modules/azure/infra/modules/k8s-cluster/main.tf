@@ -419,7 +419,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
 
   # AKS limits rotation names to 12 lowercase alphanumeric characters. Include
   # a stable hash fragment so truncating long pool names cannot collide.
-  temporary_name_for_rotation = "${substr(each.key, 0, 8)}${substr(sha1(each.key), 0, 2)}tmp"
+  temporary_name_for_rotation = "${substr(each.key, 0, 7)}${substr(sha1(each.key), 0, 2)}tmp"
 
   lifecycle {
     ignore_changes = [upgrade_settings]
