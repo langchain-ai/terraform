@@ -327,6 +327,8 @@ already exists - to be managed via Terraform this resource needs to be imported 
 
 **Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
 
+Seeding is the usual way in: `make seed-secrets` writes both of these too, so running it against a deployment that has not applied yet leaves Terraform to collide with what the script wrote. Setting `keyvault_manage_secrets = false` is the other resolution, and it makes the collision impossible rather than importing past it.
+
 **Fix:** Import the conflicting secret, then re-run apply:
 ```bash
 terraform -chdir=infra import \
@@ -386,6 +388,18 @@ terraform -chdir=infra import \
   'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
 ```
 
+Or take Terraform out of the vault's data plane, which removes the reason that grant exists:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+keyvault_manage_secrets                    = false
+```
+
+Apply then touches only the vault's control plane, and `make seed-secrets` writes all nine secrets afterwards under your own credentials. This is the one route that needs no Key Vault role on the deployer, inherited or otherwise. Both flags are required together: the first is what stops the request the condition rejects, and the second is what makes the role that request was asking for unnecessary. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+
+It does not reduce the deployment's need for `roleAssignments/write`. The other seven assignments still run, so a subscription that delegates none of them fails at `Storage Blob Data Contributor` in the storage module instead.
+
 **Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
 
 ---
@@ -429,6 +443,13 @@ az role assignment create --role "Key Vault Secrets Officer" \
 # 3. Propagation — confirm data-plane access directly, then re-run apply
 az keyvault secret list --vault-name <vault> --query "length(@)"
 ```
+
+**Fix, or take Terraform out of the data plane entirely:**
+```hcl
+keyvault_manage_secrets = false
+```
+
+Terraform then writes no secrets, so none of the three causes above can stop an apply. `make seed-secrets` writes all nine afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
 
 **Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 
