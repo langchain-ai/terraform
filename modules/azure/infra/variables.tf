@@ -609,7 +609,7 @@ variable "smithdb_metastore_admin_username" {
 
 variable "smithdb_metastore_admin_password" {
   type        = string
-  description = "Administrator password for the SmithDB metastore. Required when enable_smithdb is true; supply with TF_VAR_smithdb_metastore_admin_password."
+  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used."
   sensitive   = true
   default     = null
   nullable    = true

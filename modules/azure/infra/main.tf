@@ -466,11 +466,6 @@ resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
 resource "terraform_data" "validate_network" {
   lifecycle {
     precondition {
-      condition     = !var.enable_smithdb || var.smithdb_metastore_admin_password != null
-      error_message = "enable_smithdb requires smithdb_metastore_admin_password. Supply it with TF_VAR_smithdb_metastore_admin_password rather than committing it to terraform.tfvars."
-    }
-
-    precondition {
       condition     = !var.enable_smithdb || (!contains(keys(var.additional_node_pools), "smithcache") && !contains(keys(var.additional_node_pools), "smithcompute"))
       error_message = "additional_node_pools cannot define the reserved SmithDB pool names smithcache or smithcompute when enable_smithdb = true. Configure them through the smithdb_* variables."
     }
@@ -791,12 +786,13 @@ resource "kubernetes_secret" "smithdb_metastore" {
     namespace = module.k8s_bootstrap.langsmith_namespace
   }
 
-  data = {
+  data = merge({
     smithdb_metastore_db_host     = module.smithdb[0].metastore_host
     smithdb_metastore_db_name     = module.smithdb[0].metastore_database
-    smithdb_metastore_db_username = var.smithdb_metastore_admin_username
+    smithdb_metastore_db_username = module.smithdb[0].metastore_username
+    }, var.smithdb_metastore_admin_password == null ? {} : {
     smithdb_metastore_db_password = var.smithdb_metastore_admin_password
-  }
+  })
 
   type = "Opaque"
 }

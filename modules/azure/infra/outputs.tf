@@ -121,6 +121,16 @@ output "smithdb_metastore_secret_name" {
   value       = var.enable_smithdb ? kubernetes_secret.smithdb_metastore[0].metadata[0].name : null
 }
 
+output "smithdb_metastore_auth_mode" {
+  description = "SmithDB metastore authentication mode: entra or password."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_auth_mode : null
+}
+
+output "smithdb_metastore_username" {
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_username : null
+}
+
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true

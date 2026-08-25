@@ -11,7 +11,8 @@ variable "metastore_admin_username" { type = string }
 variable "metastore_admin_password" {
   type      = string
   sensitive = true
-  nullable  = false
+  default   = null
+  nullable  = true
 }
 variable "metastore_sku_name" { type = string }
 variable "metastore_storage_mb" { type = number }

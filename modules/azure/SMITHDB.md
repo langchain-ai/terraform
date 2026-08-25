@@ -18,17 +18,25 @@ The Terraform root creates:
 - two autoscaling, tainted AKS node pools: `smithcache` uses the VM temporary
   disk for SmithDB's local cache and `smithcompute` hosts compute workloads.
 
-The metastore password is stored in Terraform state because Terraform creates
-the server. Supply it outside committed tfvars:
+By default, the same SmithDB workload identity authenticates to PostgreSQL
+through Microsoft Entra ID and is configured as the Flexible Server's Entra
+administrator. This avoids a static database password and the separate SQL
+bootstrap step that a less-privileged Entra principal would require.
+
+To use password authentication instead, supply the password outside committed
+tfvars. Because Terraform creates the server, that password is stored in
+Terraform state:
 
 ```bash
 export TF_VAR_smithdb_metastore_admin_password='<strong-random-password>'
 terraform -chdir=infra apply
 ```
 
-The metastore Secret is created in the LangSmith namespace before Helm runs.
-Object-store access uses Azure Workload Identity, so no Storage Account key or
-SAS token is written to Kubernetes or Terraform outputs.
+The metastore Secret is created in the LangSmith namespace before Helm runs. In
+Entra mode it contains only the host, database, and username; the chart sets
+`iamAuthProvider: azure`. Object-store access also uses Azure Workload Identity,
+so no Storage Account key or SAS token is written to Kubernetes or Terraform
+outputs.
 
 ## Chart contract
 

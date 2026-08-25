@@ -102,7 +102,9 @@ additional_node_pools = {
 # ── SmithDB (optional, chart 0.17+) ──────────────────────────────────────────
 # Creates a dedicated PostgreSQL 18 metastore, private Blob container, Azure
 # Workload Identity, and two tainted AKS pools for cache and compute workloads.
-# Supply the metastore password outside this file:
+# By default, the SmithDB workload identity authenticates to PostgreSQL through
+# Microsoft Entra ID. To use password authentication instead, supply it outside
+# this file:
 #   export TF_VAR_smithdb_metastore_admin_password='...'
 enable_smithdb = false
 
