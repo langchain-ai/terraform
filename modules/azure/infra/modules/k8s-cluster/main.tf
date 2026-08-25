@@ -410,6 +410,9 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   vnet_subnet_id        = var.subnet_id
   min_count             = each.value.min_count
   max_count             = each.value.max_count
+  node_labels           = each.value.node_labels
+  node_taints           = each.value.node_taints
+  kubelet_disk_type     = each.value.kubelet_disk_type
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
 
   # "User" mode: these pools run application workloads.

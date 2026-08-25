@@ -3,6 +3,11 @@ output "postgres_id" {
   value       = azurerm_postgresql_flexible_server.db.id
 }
 
+output "private_dns_zone_id" {
+  description = "Resource ID of the private PostgreSQL DNS zone."
+  value       = azurerm_private_dns_zone.db_dns_zone.id
+}
+
 output "connection_url" {
   description = "The connection URL for the PostgreSQL Flexible Server"
   # replace() percent-encodes special characters that are invalid in URL userinfo.

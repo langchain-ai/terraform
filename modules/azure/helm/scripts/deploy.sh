@@ -15,13 +15,15 @@
 #   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
 #   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
 #
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh
-#   CHART_VERSION=0.13.29 ./helm/scripts/deploy.sh
+#   CHART_VERSION=0.16.0 ./helm/scripts/deploy.sh
+#   LANGSMITH_CHART_PATH=/absolute/path/to/helm/charts/langsmith ./helm/scripts/deploy.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,6 +36,7 @@ source "$INFRA_DIR/scripts/_common.sh"
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 CHART_VERSION="${CHART_VERSION:-}"
+LANGSMITH_CHART_PATH="${LANGSMITH_CHART_PATH:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -325,11 +328,13 @@ _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
+_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
 _tfvar_is_true "enable_polly"         && _enable_polly=true        || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
+_tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -416,47 +421,64 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if [[ ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
+    fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
+    exit 1
+  fi
+  VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+  echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+fi
 echo ""
 
-# ── Chart version ─────────────────────────────────────────────────────────
+# ── Chart source/version ──────────────────────────────────────────────────
+if [[ -n "$LANGSMITH_CHART_PATH" ]]; then
+  if [[ ! -f "$LANGSMITH_CHART_PATH/Chart.yaml" ]]; then
+    fail "LANGSMITH_CHART_PATH must point to a chart directory containing Chart.yaml"
+    exit 1
+  fi
+  _chart_source="$LANGSMITH_CHART_PATH"
+  CHART_VERSION=""
+else
+  _chart_source="langchain/langsmith"
 # Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
-# We pin the chart *line* (~0.16.0 => latest 0.16.x, never 0.17) so an
-# un-pinned deploy can't silently jump a breaking minor.
+# We pin the chart line so an unpinned deploy cannot silently jump a breaking
+# minor. SmithDB selects 0.17; the existing Azure path remains on 0.16.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the pinned chart line."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+_required_chart_line="0.16"
+[[ "$_enable_smithdb" == "true" ]] && _required_chart_line="0.17"
+CHART_VERSION="${CHART_VERSION:-~${_required_chart_line}.0}"
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# Select the chart line explicitly. The SmithDB Azure values first appear in
+# 0.17; deployments without SmithDB retain the existing 0.16 contract.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_chart_line" != "$_required_chart_line" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the required chart ${_required_chart_line} line." >&2
+  echo "       SmithDB requires chart 0.17; other Azure deployments remain pinned to 0.16." >&2
   exit 1
 fi
 # engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
 # are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
+if [[ "$_required_chart_line" == "0.16" && "$CHART_VERSION" == *-* ]]; then
   _rc="${CHART_VERSION##*-rc.}"
   if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
     echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
     echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
     exit 1
   fi
+fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
@@ -575,20 +597,22 @@ info "Deploying LangSmith (sizing: ${_sizing_profile})..."
 info "(waiting for pods — 5-15 min on a cold cluster)"
 echo ""
 
-helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
-helm repo update langchain &>/dev/null
-
-# Resolve the pin to a concrete version and print it. Without this the only place
-# the installed version shows up is `helm list`, after the release is already out.
-_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
-echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
-if [[ -z "$_resolved_chart" ]]; then
-  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
-  exit 1
+if [[ -z "$LANGSMITH_CHART_PATH" ]]; then
+  helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
+  helm repo update langchain &>/dev/null
+  _resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+    | awk '/^version:/{print $2}') || _resolved_chart=""
+  echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+  if [[ -z "$_resolved_chart" ]]; then
+    echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+    exit 1
+  fi
+else
+  _resolved_chart=$(awk '/^version:/{print $2; exit}' "$LANGSMITH_CHART_PATH/Chart.yaml")
+  echo "Chart: $LANGSMITH_CHART_PATH  local version=${_resolved_chart:-UNKNOWN}"
 fi
 
-helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+helm upgrade --install "$RELEASE_NAME" "$_chart_source" \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \

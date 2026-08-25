@@ -53,9 +53,13 @@ locals {
 
   # Globally-unique names — hashed, and each takes an explicit override so a
   # single colliding name can be pinned without renaming the whole deployment.
-  postgres_name = var.postgres_name != "" ? var.postgres_name : "${local.name_base}-postgres${local.name_suffix}${local.uniq_suffix}"
-  redis_name    = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
-  blob_name     = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
+  postgres_name            = var.postgres_name != "" ? var.postgres_name : "${local.name_base}-postgres${local.name_suffix}${local.uniq_suffix}"
+  redis_name               = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
+  blob_name                = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
+  smithdb_name             = "${local.name_base}-smithdb${local.name_suffix}"
+  smithdb_storage_name     = var.smithdb_storage_account_name != "" ? var.smithdb_storage_account_name : substr(replace("${local.name_base}smithdb${local.deployment_name}${replace(local.uniq_suffix, "-", "")}", "-", ""), 0, 24)
+  smithdb_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
+  smithdb_service_account  = "${local.smithdb_release_fullname}-smithdb"
 
   # Key Vault name: max 24 chars, globally unique.
   # Uses the user-supplied keyvault_name or derives from name_prefix. When
@@ -90,7 +94,7 @@ locals {
   # A subnet is created only when it is needed by an enabled service and the
   # operator has not supplied one.
   create_aks_subnet      = !local.byo_aks_subnet
-  create_postgres_subnet = var.postgres_source == "external" && !local.byo_postgres_subnet
+  create_postgres_subnet = (var.postgres_source == "external" || var.enable_smithdb) && !local.byo_postgres_subnet
   create_redis_subnet    = var.redis_source == "external" && !local.byo_redis_subnet
 
   vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
@@ -167,13 +171,34 @@ locals {
       }
     },
     {
-      for name, pool in var.additional_node_pools : name => {
+      for name, pool in local.effective_node_pools : name => {
         nodes              = pool.max_count + 1
         addresses_per_node = local.aks_default_pool_max_pods + 1
       }
     }
   )
   aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+
+  smithdb_node_pools = var.enable_smithdb ? {
+    smithcache = {
+      vm_size           = var.smithdb_instance_store_vm_size
+      min_count         = var.smithdb_instance_store_min_count
+      max_count         = var.smithdb_instance_store_max_count
+      kubelet_disk_type = "Temporary"
+      node_labels       = { "smithdb-local/instance-store" = "true" }
+      node_taints       = ["smithdb-local/instance-store=true:NoSchedule"]
+    }
+    smithcompute = {
+      vm_size           = var.smithdb_compute_vm_size
+      min_count         = var.smithdb_compute_min_count
+      max_count         = var.smithdb_compute_max_count
+      kubelet_disk_type = "OS"
+      node_labels       = { "smithdb-local/compute" = "true" }
+      node_taints       = ["smithdb-local/compute=true:NoSchedule"]
+    }
+  } : {}
+
+  effective_node_pools = merge(var.additional_node_pools, local.smithdb_node_pools)
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -441,6 +466,26 @@ resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
 resource "terraform_data" "validate_network" {
   lifecycle {
     precondition {
+      condition     = !var.enable_smithdb || var.smithdb_metastore_admin_password != null
+      error_message = "enable_smithdb requires smithdb_metastore_admin_password. Supply it with TF_VAR_smithdb_metastore_admin_password rather than committing it to terraform.tfvars."
+    }
+
+    precondition {
+      condition     = !var.enable_smithdb || (!contains(keys(var.additional_node_pools), "smithcache") && !contains(keys(var.additional_node_pools), "smithcompute"))
+      error_message = "additional_node_pools cannot define the reserved SmithDB pool names smithcache or smithcompute when enable_smithdb = true. Configure them through the smithdb_* variables."
+    }
+
+    precondition {
+      condition     = var.enable_smithdb || (!var.smithdb_ingestion_enabled && !var.smithdb_migration_enabled && !var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = var.smithdb_ingestion_enabled || (!var.smithdb_migration_enabled && !var.smithdb_query_enabled)
+      error_message = "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true."
+    }
+
+    precondition {
       condition     = var.create_vnet || var.vnet_id != ""
       error_message = "vnet_id is required when create_vnet = false. Supply the VNet that LangSmith should deploy into."
     }
@@ -625,7 +670,7 @@ module "aks" {
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
   # On a pre-existing cluster whose node pools the customer owns, pass an empty
   # map so Terraform doesn't attach pools to a cluster it doesn't manage.
-  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
+  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller
@@ -705,6 +750,55 @@ module "postgres" {
   enable_fleet = var.enable_fleet
 
   tags = local.common_tags
+}
+
+# ── SmithDB infrastructure (optional) ────────────────────────────────────────
+
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name                 = local.smithdb_name
+  location             = var.location
+  resource_group_name  = azurerm_resource_group.resource_group.name
+  vnet_id              = local.vnet_id
+  subnet_id            = local.postgres_subnet_id
+  aks_subnet_id        = local.aks_subnet_id
+  oidc_issuer_url      = module.aks.oidc_issuer_url
+  namespace            = var.langsmith_namespace
+  service_account_name = local.smithdb_service_account
+
+  metastore_admin_username        = var.smithdb_metastore_admin_username
+  metastore_admin_password        = var.smithdb_metastore_admin_password
+  metastore_sku_name              = var.smithdb_metastore_sku_name
+  metastore_storage_mb            = var.smithdb_metastore_storage_mb
+  metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
+  private_dns_zone_id             = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+
+  storage_account_name = local.smithdb_storage_name
+  container_name       = var.smithdb_storage_container_name
+  tags                 = local.common_tags
+}
+
+# The chart maps these keys through smithdb.config.metastore. Keeping the
+# password out of generated values prevents it from being written to disk a
+# second time; it is already sensitive Terraform state through the server.
+resource "kubernetes_secret" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = module.k8s_bootstrap.langsmith_namespace
+  }
+
+  data = {
+    smithdb_metastore_db_host     = module.smithdb[0].metastore_host
+    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
+    smithdb_metastore_db_username = var.smithdb_metastore_admin_username
+    smithdb_metastore_db_password = var.smithdb_metastore_admin_password
+  }
+
+  type = "Opaque"
 }
 
 # ── Redis ─────────────────────────────────────────────────────────────────────

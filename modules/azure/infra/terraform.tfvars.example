@@ -99,6 +99,29 @@ additional_node_pools = {
   }
 }
 
+# ── SmithDB (optional, chart 0.17+) ──────────────────────────────────────────
+# Creates a dedicated PostgreSQL 18 metastore, private Blob container, Azure
+# Workload Identity, and two tainted AKS pools for cache and compute workloads.
+# Supply the metastore password outside this file:
+#   export TF_VAR_smithdb_metastore_admin_password='...'
+enable_smithdb = false
+
+# Roll out one stage at a time after the infrastructure-only deployment is healthy.
+smithdb_ingestion_enabled = false
+smithdb_migration_enabled = false
+smithdb_query_enabled     = false
+
+# smithdb_metastore_sku_name       = "GP_Standard_D2ds_v5"
+# smithdb_metastore_storage_mb     = 32768
+# smithdb_storage_account_name     = "" # empty derives a globally unique name
+# smithdb_storage_container_name   = "smithdb"
+# smithdb_instance_store_vm_size   = "Standard_L16s_v3"
+# smithdb_instance_store_min_count = 0
+# smithdb_instance_store_max_count = 3
+# smithdb_compute_vm_size           = "Standard_D8s_v5"
+# smithdb_compute_min_count         = 0
+# smithdb_compute_max_count         = 3
+
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "nginx"         — NGINX ingress via Helm (standard, start here)
 # "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)

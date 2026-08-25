@@ -558,9 +558,12 @@ variable "aks_dns_service_ip" {
 
 variable "additional_node_pools" {
   type = map(object({
-    vm_size   = string
-    min_count = number
-    max_count = number
+    vm_size           = string
+    min_count         = number
+    max_count         = number
+    node_labels       = optional(map(string), {})
+    node_taints       = optional(list(string), [])
+    kubelet_disk_type = optional(string, "OS")
   }))
   description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
   default = {
@@ -570,6 +573,112 @@ variable "additional_node_pools" {
       max_count = 2
     }
   }
+}
+
+# ── SmithDB (optional, chart 0.17+) ──────────────────────────────────────────
+
+variable "enable_smithdb" {
+  type        = bool
+  description = "Provision Azure infrastructure required by SmithDB: a dedicated PostgreSQL 18 metastore, Blob container, Workload Identity, and dedicated AKS cache/compute node pools."
+  default     = false
+}
+
+variable "smithdb_ingestion_enabled" {
+  type        = bool
+  description = "Enable LangSmith writes to SmithDB after the infrastructure-only stage is healthy."
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  type        = bool
+  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled."
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  type        = bool
+  description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
+  default     = false
+}
+
+variable "smithdb_metastore_admin_username" {
+  type        = string
+  description = "Administrator username for the SmithDB PostgreSQL metastore."
+  default     = "smithdb"
+}
+
+variable "smithdb_metastore_admin_password" {
+  type        = string
+  description = "Administrator password for the SmithDB metastore. Required when enable_smithdb is true; supply with TF_VAR_smithdb_metastore_admin_password."
+  sensitive   = true
+  default     = null
+  nullable    = true
+}
+
+variable "smithdb_metastore_sku_name" {
+  type        = string
+  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore."
+  default     = "GP_Standard_D2ds_v5"
+}
+
+variable "smithdb_metastore_storage_mb" {
+  type        = number
+  description = "Allocated storage for the SmithDB metastore in MiB."
+  default     = 32768
+}
+
+variable "smithdb_metastore_backup_retention_days" {
+  type        = number
+  description = "Automated backup retention for the SmithDB metastore."
+  default     = 7
+}
+
+variable "smithdb_storage_account_name" {
+  type        = string
+  description = "Optional globally unique Storage Account name for SmithDB. Empty derives one from the deployment name."
+  default     = ""
+}
+
+variable "smithdb_storage_container_name" {
+  type        = string
+  description = "Dedicated Blob container for SmithDB durable data."
+  default     = "smithdb"
+}
+
+variable "smithdb_instance_store_vm_size" {
+  type        = string
+  description = "AKS VM size for the SmithDB cache pool. It must expose enough temporary disk for kubelet ephemeral storage."
+  default     = "Standard_L16s_v3"
+}
+
+variable "smithdb_instance_store_min_count" {
+  type        = number
+  default     = 0
+  description = "Minimum nodes in the SmithDB temporary-disk cache pool."
+}
+
+variable "smithdb_instance_store_max_count" {
+  type        = number
+  default     = 3
+  description = "Maximum nodes in the SmithDB temporary-disk cache pool."
+}
+
+variable "smithdb_compute_vm_size" {
+  type        = string
+  description = "AKS VM size for the SmithDB general compute pool."
+  default     = "Standard_D8s_v5"
+}
+
+variable "smithdb_compute_min_count" {
+  type        = number
+  default     = 0
+  description = "Minimum nodes in the SmithDB compute pool."
+}
+
+variable "smithdb_compute_max_count" {
+  type        = number
+  default     = 3
+  description = "Maximum nodes in the SmithDB compute pool."
 }
 
 variable "langsmith_namespace" {
@@ -621,7 +730,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Must be on the chart 0.16 line — deploy.sh rejects anything else, because these values use the 0.16 schema. Empty string = use the pinned ~0.16.0 line default."
+  description = "Pin a LangSmith chart version. Azure defaults to the 0.16 line; enable_smithdb requires the 0.17 line. LANGSMITH_CHART_PATH can select a local chart checkout for integration testing."
   default     = ""
 }
 
