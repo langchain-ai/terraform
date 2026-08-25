@@ -1,5 +1,22 @@
 # Variables for Ingress Module
 
+# The kubectl steps below fetch their own credentials rather than trusting the
+# ambient kubeconfig, so they need to know which cluster they are managing.
+variable "project_id" {
+  description = "GCP project ID hosting the cluster. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
+variable "region" {
+  description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name of the GKE cluster the ingress resources are applied to. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
 variable "ingress_type" {
   description = "Type of ingress to install: 'envoy' (implemented), 'istio' or 'other' (reserved for future implementation)"
   type        = string

@@ -446,17 +446,14 @@ if [[ "$GATEWAY_MODE" == "nginx" ]]; then
   printf "  ${DIM}TLS terminates at the ALB. Supports ACM and Let's Encrypt HTTP-01.${RESET}\n"
 fi
 
-# For Istio: ask about public NLB
-ISTIO_NLB_SCHEME=""
+# For Istio: brief note. No input needed, because the gateway service is
+# ClusterIP and the ALB in front of it is what decides public vs internal.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
-  printf "  ${DIM}Istio ingressgateway runs an NLB. On EKS it defaults to private subnets.${RESET}\n"
-  printf "  ${DIM}You can switch the scheme after deploy via helm upgrade — see example yaml.${RESET}\n"
-  if _ask_yn "Make the Istio NLB internet-facing? (public subnets)" "y"; then
-    ISTIO_NLB_SCHEME="internet-facing"
-  else
-    ISTIO_NLB_SCHEME="internal"
-  fi
+  printf "  ${DIM}Istio: ALB → TargetGroupBinding → istio-ingressgateway pods → LangSmith.${RESET}\n"
+  printf "  ${DIM}Terraform installs the gateway chart with service.type=ClusterIP, so it${RESET}\n"
+  printf "  ${DIM}provisions no NLB of its own. alb_scheme is what makes this public or${RESET}\n"
+  printf "  ${DIM}internal (asked below on the prod profile; dev stays internet-facing).${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -855,13 +852,6 @@ enable_nginx_ingress = ${ENABLE_NGINX}
 enable_envoy_gateway = ${ENABLE_ENVOY}
 enable_istio_gateway = ${ENABLE_ISTIO}
 TFVARS
-
-# Write istio_nlb_scheme when Istio is selected
-if [[ "$GATEWAY_MODE" == "istio" && -n "$ISTIO_NLB_SCHEME" ]]; then
-  cat >> "$OUTPUT" << TFVARS
-istio_nlb_scheme = "${ISTIO_NLB_SCHEME}"
-TFVARS
-fi
 
 cat >> "$OUTPUT" << TFVARS
 

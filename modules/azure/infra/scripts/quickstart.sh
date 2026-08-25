@@ -206,10 +206,10 @@ STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
-NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS AKS_DELETION_PROTECTION INGRESS_CONTROLLER
+NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
-PG_DELETION_PROTECTION AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
 BLOB_TTL_ENABLED BLOB_TTL_SHORT_DAYS BLOB_TTL_LONG_DAYS
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION
 ENABLE_DEPLOYMENTS ENABLE_AGENT_BUILDER ENABLE_INSIGHTS ENABLE_POLLY
@@ -275,8 +275,8 @@ _tfvar_set() {
 _load_tfvars() {
   local v _TF_VAL
   # The profile is not a tfvar — it is stamped in the header comment. Without it
-  # everything derived from the profile (deletion protection, Key Vault purge
-  # protection, the security add-ons) silently resets to dev values on save.
+  # everything derived from the profile (Key Vault purge protection, the
+  # security add-ons) silently resets to dev values on save.
   _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
   [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
 
@@ -416,8 +416,8 @@ PROFILE="dev"
 _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
-  _hint "Dev/POC:    smaller nodes, in-cluster services OK, no deletion protection."
-  _hint "Production: D8s_v3 nodes, external Postgres + Redis, deletion protection on."
+  _hint "Dev/POC:    smaller nodes, in-cluster services OK, Key Vault stays purgeable."
+  _hint "Production: D8s_v3 nodes, external Postgres + Redis, Key Vault purge protection."
 
   _hint "Changing this later leaves answers you have already given untouched —"
   _hint "it only affects the defaults of sections you have not filled in yet."
@@ -735,7 +735,6 @@ NODE_VM_SIZE="Standard_D4s_v3"
 NODE_MIN=2
 NODE_MAX=5
 NODE_MAX_PODS=60
-AKS_DELETION_PROTECTION="false"
 
 _run_section_4() {
   _section "4. AKS Cluster"
@@ -773,12 +772,6 @@ _run_section_4() {
   _hint "lower it if your subnet is fixed and tight."
   _ask_int "Max pods per node" "$NODE_MAX_PODS"
   NODE_MAX_PODS="$_REPLY"
-
-  AKS_DELETION_PROTECTION="false"
-  if [[ "$PROFILE" == "prod" ]]; then
-    AKS_DELETION_PROTECTION="true"
-    _hint "Production: aks_deletion_protection = true (prevents accidental terraform destroy)."
-  fi
 }
 
 # -- 5. Ingress Controller ---------------------------------------------------
@@ -1027,7 +1020,6 @@ REDIS_SOURCE="in-cluster"
 CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
-PG_DELETION_PROTECTION="false"
 AMR_SKU="Balanced_B1"
 REDIS_HA="false"
 # Storage is not optional — LangSmith needs a blob container for run artifacts —
@@ -1091,11 +1083,6 @@ _run_section_7() {
       PG_SOURCE="in-cluster"
       REDIS_SOURCE="in-cluster"
     fi
-  fi
-
-  if [[ "$PG_SOURCE" == "external" ]]; then
-    PG_DELETION_PROTECTION="false"
-    [[ "$PROFILE" == "prod" ]] && PG_DELETION_PROTECTION="true"
   fi
 
   # Without this prompt every quickstart deployment silently took the Balanced_B0
@@ -1514,11 +1501,11 @@ create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
 aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
 aks_service_cidr agic_subnet_id bastion_subnet_id
 default_node_pool_vm_size default_node_pool_min_count default_node_pool_max_count
-default_node_pool_max_pods aks_deletion_protection
+default_node_pool_max_pods
 ingress_controller istio_addon_revision agw_sku_tier
 tls_certificate_source dns_label langsmith_domain letsencrypt_email create_dns_zone
 postgres_source redis_source clickhouse_source
-postgres_admin_username postgres_database_name postgres_deletion_protection
+postgres_admin_username postgres_database_name
 amr_sku redis_high_availability keyvault_purge_protection
 blob_ttl_enabled blob_ttl_short_days blob_ttl_long_days
 langsmith_namespace langsmith_release_name sizing_profile
@@ -1634,7 +1621,6 @@ default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
 default_node_pool_max_pods  = ${NODE_MAX_PODS}
-aks_deletion_protection     = ${AKS_DELETION_PROTECTION}
 
 #------------------------------------------------------------------------------
 # Ingress
@@ -1674,7 +1660,6 @@ if [[ "$PG_SOURCE" == "external" ]]; then
 # PostgreSQL Flexible Server
 postgres_admin_username      = "${PG_ADMIN_USER}"
 postgres_database_name       = "${PG_DB_NAME}"
-postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 TFVARS
 fi
 

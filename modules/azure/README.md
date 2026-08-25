@@ -88,7 +88,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
-- `availability_zones`, for the cluster only — PostgreSQL and the bastion still use it
+- `availability_zones`, for the cluster only — PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
 
@@ -486,6 +486,7 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
 - Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
 - Maps `postgres_sku_name` to the `Microsoft.Compute` vCPU family it draws on and fails when that family's quota in the region is 0 or has less headroom than the SKU needs. `az postgres flexible-server list-skus` reports what a region offers, not what the subscription may create, and fresh subscriptions commonly carry a limit of 0 on the v5 families. Also confirms the region carries `redisEnterprise`; Managed Redis capacity itself is not queryable ahead of an apply
+- Queries PostgreSQL Flexible Server capabilities for the active subscription and configured region. An empty result fails because the service cannot be created there; a non-empty result also verifies `postgres_version` and `postgres_sku_name`. CLI, permission, stderr, or response-shape failures warn and skip instead of claiming the region is unavailable
 - Verifies `terraform.tfvars` exists with `location` and `subscription_id` set
 - Verifies `secrets.auto.tfvars` exists and has a non-empty `langsmith_license_key`
 - Checks that `terraform`, `kubectl`, and `helm` binaries are on PATH
@@ -1063,22 +1064,57 @@ plan checks the name, and Azure enforces the size at apply.
 
 ## Multi-AZ Support
 
+`availability_zones` defaults to `[]`, which leaves placement to Azure: the AKS
+node pool is non-zonal and the PostgreSQL server lands where the region has
+room. That default is the only setting that deploys a VM or database size Azure
+does not offer in every zone. Pinning a zone that lacks the size fails with an
+error that names the zone rather than the size, so it reads as a capacity
+problem:
+
+```
+The requested VM size <size> is not available in the requested zone.
+```
+
+Zone-redundant PostgreSQL is a switch of its own and needs no zone numbers:
+
+```hcl
+postgres_high_availability = true
+```
+
+Azure puts the standby in a zone other than the primary's, so HA works under the
+`[]` default and does not force you to pin anything.
+
+Pin zones when you want to choose the placement yourself:
+
 ```hcl
 # Spread AKS nodes across zones 1, 2, 3
 availability_zones = ["1", "2", "3"]
 
-# PostgreSQL HA standby in a different zone
-postgres_high_availability_mode = "ZoneRedundant"
+# Pin the Postgres standby as well — optional, Azure picks one otherwise
+postgres_standby_availability_zone = "2"
 ```
 
-Zone-redundant PostgreSQL requires `GeneralPurpose` or `MemoryOptimized` SKU.
+Coverage differs per SKU and per region, so check the VM and database sizes you
+picked before pinning:
+
+```bash
+az vm list-skus --location <region> --size <vm-size> --query "[].locationInfo[].zones" -o tsv
+```
+
+Zone-redundant PostgreSQL requires a `GeneralPurpose` or `MemoryOptimized` SKU.
+Pin `postgres_standby_availability_zone` only alongside a pinned
+`availability_zones`. Under the `[]` default the primary is Azure's choice and
+can be the zone you pinned for the standby, which `ZoneRedundant` does not
+allow. Setting the standby zone still enables HA on its own, so a configuration
+written before `postgres_high_availability` keeps its standby.
 
 Set `availability_zones` before the first apply. The AKS node pool keeps the
 zones it was created with: `azurerm` re-zones a default node pool by cycling the
 system node pool, and that cycle does not cordon and drain, so the module ignores
 zone changes rather than disrupt running pods on a tfvars edit. Plan reports a
 mismatch as a `Check block assertion failed` warning naming both the live and the
-requested zones. To re-zone an existing cluster on purpose, remove
+requested zones. The `[]` default is exempt: it requests no zone, so there is
+nothing to be out of sync with. To re-zone an existing cluster on purpose, remove
 `default_node_pool[0].zones` from the `ignore_changes` block in
 `infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
 

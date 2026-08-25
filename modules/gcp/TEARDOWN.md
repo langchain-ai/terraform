@@ -76,22 +76,34 @@ kubectl delete crd lgps.apps.langchain.ai
 
 ## A2 — Uninstall LangSmith Helm Release
 
+Use the provided script. The script removes the Helm release and operator-managed resources.
+
 ```bash
 cd terraform/gcp
 make uninstall
 ```
 
-Or manually:
+You can also run the same script directly:
 
 ```bash
-helm uninstall langsmith -n langsmith
-kubectl get pods -n langsmith   # verify all pods removed
+cd terraform/gcp
+./helm/scripts/uninstall.sh
 ```
 
-After uninstalling:
+**Sandboxes and JuiceFS:** The JuiceFS CSI driver is part of the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods.
+
+**In-cluster ClickHouse disks:** The `data-langsmith-clickhouse-*` claim uses the `premium-rwo` storage class. The GCE PD CSI driver provisions the Persistent Disk, so Terraform does not track it. The uninstall script keeps the claim by default to support a clean Helm reinstall.
+
+For full infrastructure teardown, delete the claim during uninstall. The CSI driver can then reclaim the disk before Terraform destroys GKE:
 
 ```bash
-# Delete the namespace if it wasn't removed automatically
+cd terraform/gcp
+DELETE_DATA_PVCS=true make uninstall
+```
+
+After a full teardown uninstall, delete the namespace if it still exists:
+
+```bash
 kubectl delete namespace langsmith
 ```
 
@@ -120,7 +132,9 @@ kubectl delete namespace envoy-gateway-system
 
 ## A4 — Handle KEDA ScaledObject Finalizers (if namespace stuck)
 
-If the `langsmith` namespace gets stuck in `Terminating`, KEDA ScaledObject finalizers are the likely cause — the KEDA controller is already gone so it can't clear them. Fix:
+If the `langsmith` namespace gets stuck in `Terminating` after A2, JuiceFS finalizers are the first cause to check (`kubectl get pods -n langsmith | grep juicefs`). Use the uninstall script on a current checkout rather than patching PVCs by hand.
+
+If JuiceFS is already gone, KEDA ScaledObject finalizers are the next cause — the KEDA controller is already gone so it cannot clear them. Fix:
 
 ```bash
 for obj in $(kubectl get scaledobjects -n langsmith -o name 2>/dev/null); do
@@ -128,14 +142,54 @@ for obj in $(kubectl get scaledobjects -n langsmith -o name 2>/dev/null); do
 done
 ```
 
-## A5 — Pre-Destroy: Disable Deletion Protection
+## A5 — Pre-Destroy: Export Data, Then Disable Deletion Protection
 
-Two tfvars must be set to `false` before `terraform destroy` will succeed on GKE and Cloud SQL:
+### 5a — Export anything you need to keep
+
+Cloud SQL has no final-snapshot-on-delete. Automated backups, on-demand backups,
+and PITR logs are all deleted along with the instance, so an export to GCS is the
+only copy that survives teardown. Skip this step for a disposable dev/test stack.
+
+```bash
+PROJECT_ID=your-project
+BACKUP_BUCKET=gs://your-export-bucket
+PG=$(terraform -chdir=infra output -raw postgres_instance_name)
+
+# Cloud SQL exports run as the instance's own service agent, which needs write
+# access to the target bucket first.
+SA=$(gcloud sql instances describe "$PG" --project "$PROJECT_ID" \
+  --format="value(serviceAccountEmailAddress)")
+gcloud storage buckets add-iam-policy-binding "$BACKUP_BUCKET" \
+  --member="serviceAccount:$SA" --role=roles/storage.objectAdmin
+
+gcloud sql export sql "$PG" "$BACKUP_BUCKET/${PG}-final.sql.gz" \
+  --database=langsmith --project "$PROJECT_ID"
+```
+
+Repeat for the SmithDB metastore when `enable_smithdb = true` and
+`smithdb_metastore_source = "create"`. Its trace segments live in the SmithDB GCS
+bucket, which is separate from the metastore and survives unless
+`smithdb_bucket_force_destroy = true`.
+
+```bash
+META=$(terraform -chdir=infra output -raw smithdb_metastore_instance_name)
+gcloud sql export sql "$META" "$BACKUP_BUCKET/${META}-final.sql.gz" \
+  --database=smithdb --project "$PROJECT_ID"
+```
+
+### 5b — Disable deletion protection
+
+Protection covers both Terraform and the Cloud SQL API, so flipping the tfvars is
+not enough on its own — the change has to be applied before the destroy.
 
 ```hcl
 # terraform.tfvars
 gke_deletion_protection      = false
 postgres_deletion_protection = false
+
+# Only when enable_smithdb = true and smithdb_metastore_source = "create"
+smithdb_metastore_deletion_protection = false
+smithdb_bucket_force_destroy          = true   # skip if you want to keep the segments
 ```
 
 Apply the change first (targeted — avoids reconciling in-cluster addons like KEDA/cert-manager/ingress):
@@ -144,8 +198,13 @@ Apply the change first (targeted — avoids reconciling in-cluster addons like K
 cd terraform/gcp
 terraform -chdir=infra apply \
   -target=module.gke_cluster \
-  -target=module.cloudsql
+  -target=module.cloudsql \
+  -target=module.smithdb
 ```
+
+Drop the `module.smithdb` target when SmithDB was never enabled. Do not rerun the
+production quickstart profile after this edit — it regenerates the tfvars with
+protection back on.
 
 > Why not `make apply` here? A full infra apply can re-run Kubernetes/Helm bootstrap paths and recreate components you just removed.
 
@@ -160,10 +219,11 @@ make destroy
 Terraform destroys in dependency order:
 - k8s-bootstrap (KEDA, cert-manager Helm releases)
 - Cloud SQL PostgreSQL instance
+- SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
-- Workload Identity service account + IAM bindings
-- GKE cluster and node pools
+- Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
+- GKE cluster and node pools, including the SmithDB Local SSD and compute pools
 - VPC, subnet, Cloud Router, Cloud NAT
 
 > **Note on `source infra/scripts/setup-env.sh`:** Terraform needs `TF_VAR_postgres_password` even during destroy for provider validation. If the Secret Manager secret no longer exists, set it manually: `export TF_VAR_postgres_password="any-placeholder"`
@@ -219,6 +279,10 @@ gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX
 
 # Secret Manager
 gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith"
+
+# GCE Persistent Disks (in-cluster ClickHouse on premium-rwo is not in Terraform state)
+gcloud compute disks list --project "$PROJECT_ID" --filter="name~$PREFIX OR name~clickhouse" \
+  --format='value(name,zone,sizeGb,status)'
 ```
 
 ---
@@ -256,7 +320,7 @@ gcloud container clusters get-credentials "$PREFIX-gke-<suffix>" \
   --region "$REGION" --project "$PROJECT_ID"
 ```
 
-Then remove Kubernetes resources in order:
+Then remove Kubernetes resources in order. Do not run `helm uninstall langsmith` first when sandboxes are enabled. That removes the JuiceFS CSI controller while mount pods still hold `juicefs.com/finalizer`. Prefer the uninstall script, which deletes sandbox-host and JuiceFS claims first:
 
 ```bash
 # Delete LGP CRD (retained by resource policy)
@@ -265,8 +329,11 @@ kubectl delete crd lgps.apps.langchain.ai 2>/dev/null || true
 # Delete ScaledObjects before KEDA (clears finalizers)
 kubectl delete scaledobjects --all -A 2>/dev/null || true
 
-# Uninstall Helm releases
-helm uninstall langsmith -n langsmith 2>/dev/null || true
+# LangSmith release: use the script so JuiceFS volumes unmount while CSI is up.
+# DELETE_DATA_PVCS=true reclaims the in-cluster ClickHouse GCE PD.
+DELETE_DATA_PVCS=true ./helm/scripts/uninstall.sh
+
+# Remaining bootstrap releases
 helm uninstall cert-manager -n cert-manager 2>/dev/null || true
 helm uninstall keda -n keda 2>/dev/null || true
 helm uninstall envoy-gateway -n envoy-gateway-system 2>/dev/null || true
@@ -296,7 +363,10 @@ gcloud container clusters delete "$PREFIX-gke-<suffix>" \
 
 > GKE cluster deletion takes ~5 minutes. It automatically releases the external IP used by the Envoy Gateway.
 
-## B3 — Delete Cloud SQL Instance
+## B3 — Delete Cloud SQL Instances
+
+Export anything you need first (see A5a) — deleting the instance deletes its
+backups and PITR logs with it.
 
 ```bash
 # Check deletion protection
@@ -312,10 +382,29 @@ gcloud sql instances delete "$PREFIX-pg-<suffix>" \
   --project "$PROJECT_ID" --quiet
 ```
 
+Repeat all three commands for `$PREFIX-smithdb-pg-<suffix>` when SmithDB was
+enabled with a Terraform-created metastore. List both with:
+
+```bash
+gcloud sql instances list --project "$PROJECT_ID" --filter="name~$PREFIX"
+```
+
+Cloud SQL reserves a deleted instance name for about a week, so a rebuild under
+the identical name will fail. The module sidesteps this with `unique_suffix`,
+which appends a random suffix to instance names.
+
 ## B4 — Delete Memorystore Redis Instance
 
 ```bash
 gcloud redis instances delete "$PREFIX-redis-<suffix>" \
+  --region "$REGION" --project "$PROJECT_ID" --quiet
+```
+
+If sandboxes were enabled, a second instance exists for JuiceFS metadata (`$PREFIX-jfs-redis-<suffix>`). Delete that too:
+
+```bash
+gcloud redis instances list --region "$REGION" --project "$PROJECT_ID" --filter="name~$PREFIX"
+gcloud redis instances delete "$PREFIX-jfs-redis-<suffix>" \
   --region "$REGION" --project "$PROJECT_ID" --quiet
 ```
 
@@ -418,6 +507,10 @@ Several resources can be deleted in parallel since they have no dependencies on 
 ## Lessons Learned
 
 - **Always configure a remote backend** (GCS bucket) before `terraform apply` — local state is fragile and easily lost. See `backend.tf.example` in `infra/`.
+- **JuiceFS CSI lives in the LangSmith Helm release.** Uninstall the sandbox-host workload and JuiceFS claims before `helm uninstall`, or mount pods stay `Terminating` with `juicefs.com/finalizer` and namespace delete hangs. Use `./helm/scripts/uninstall.sh`.
+- **In-cluster ClickHouse uses a dynamically provisioned GCE PD** (`premium-rwo`). Terraform does not track it. Run `DELETE_DATA_PVCS=true make uninstall` before `terraform destroy`, or the disk is orphaned.
+- **Terraform validates `postgres_password` on destroy.** Source `infra/scripts/setup-env.sh` first. If the Secret Manager secret is already gone, set `export TF_VAR_postgres_password="any-placeholder"`.
+- **The Cloud SQL database is destroyed before its user.** `google_sql_database` carries a `depends_on` for the matching `google_sql_user`, because Cloud SQL rejects `DROP ROLE` while the role owns objects (`role "langsmith" cannot be dropped because some objects depend on it`). On a stack built before that edge existed, re-run `terraform destroy` once the database is gone.
 - **KEDA finalizers block namespace deletion** if the KEDA controller is uninstalled first — delete ScaledObjects before uninstalling KEDA, or patch out finalizers manually.
 - **The LGP CRD is kept by resource policy** — `helm uninstall` will not remove it; delete it manually with `kubectl delete crd lgps.apps.langchain.ai`.
 - **GKE deletion releases the external IP** — if you re-deploy, a new IP is issued. Update your DNS A record. To avoid this, use a static regional IP (not currently wired in this stack).

@@ -47,6 +47,12 @@ variable "storage_tier" {
   default     = "P4"
 }
 
+variable "backup_retention_days" {
+  description = "The backup retention period in days"
+  type        = number
+  default     = 7
+}
+
 variable "sku_name" {
   description = "The SKU name of the database"
   type        = string
@@ -77,13 +83,19 @@ variable "tags" {
 
 variable "availability_zone" {
   type        = string
-  description = "Primary availability zone for the Postgres server (\"1\", \"2\", or \"3\")"
-  default     = "1"
+  description = "Primary availability zone for the Postgres server (\"1\", \"2\", or \"3\"). The default, empty, lets Azure choose, which is required for SKUs that are not offered in every zone of the region."
+  default     = ""
+}
+
+variable "high_availability" {
+  type        = bool
+  description = "Enable ZoneRedundant HA. Azure places the standby unless standby_availability_zone names a zone. Requires a GeneralPurpose or MemoryOptimized SKU."
+  default     = false
 }
 
 variable "standby_availability_zone" {
   type        = string
-  description = "Standby availability zone for HA. Leave empty to disable zone-redundant HA."
+  description = "Pin the HA standby to a zone. Empty lets Azure choose. A non-empty value also enables HA on its own, so a configuration written before high_availability existed keeps its standby."
   default     = ""
 }
 
