@@ -1,7 +1,8 @@
 locals {
   create_private_dns_zone = var.private_dns_zone_id == null
   private_dns_zone_id     = local.create_private_dns_zone ? azurerm_private_dns_zone.smithdb[0].id : var.private_dns_zone_id
-  use_entra_auth          = var.metastore_admin_password == null
+  # Only declassify whether a password was supplied; the password remains sensitive.
+  use_entra_auth = nonsensitive(var.metastore_admin_password == null)
 }
 
 data "azurerm_client_config" "current" {}
