@@ -391,6 +391,14 @@ data "azurerm_subnet" "byo_agic_subnet" {
   resource_group_name  = local.byo_agic_subnet_parts[4]
 }
 
+# azurerm_subnet does not expose delegations. Feeds the check below.
+data "azapi_resource" "byo_agic_subnet_delegations" {
+  count                  = local.byo_agic_subnet && var.ingress_controller == "agic" ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.agic_subnet_id
+  response_export_values = ["properties.delegations"]
+}
+
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
 # Only when manage_byo_subnet_service_endpoints is on. Reads the endpoints
 # already on the subnet so the patch below appends to them instead of replacing
@@ -567,6 +575,19 @@ resource "terraform_data" "validate_network" {
   }
 }
 
+# A supplied subnet belongs to the operator, so report rather than fix. A check
+# and not a precondition, because a gateway created before Azure applied network
+# isolation keeps running undelegated and is never revalidated.
+check "agic_subnet_delegation" {
+  assert {
+    condition = length(data.azapi_resource.byo_agic_subnet_delegations) == 0 || contains([
+      for d in try(data.azapi_resource.byo_agic_subnet_delegations[0].output.properties.delegations, []) :
+      try(d.properties.serviceName, "")
+    ], "Microsoft.Network/applicationGateways")
+    error_message = "The subnet given as agic_subnet_id is not delegated to Microsoft.Network/applicationGateways. Creating an Application Gateway there fails with ApplicationGatewayNetworkIsolationRequiresSubnetDelegation, partway through the apply. Have the subnet's owner add the delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) before applying: `az network vnet subnet update --ids ${var.agic_subnet_id} --delegations Microsoft.Network/applicationGateways`. Ignore this if the gateway already exists and runs — an existing one is not revalidated."
+  }
+}
+
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
 # AKS cluster with OIDC + Workload Identity enabled, NGINX ingress installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
@@ -670,7 +691,13 @@ module "postgres" {
   storage_tier          = var.postgres_storage_tier
   backup_retention_days = var.postgres_backup_retention_days
 
-  availability_zone            = var.availability_zones[0]
+  # availability_zones = [] means "let Azure place this", which is the only way
+  # to deploy a VM or database SKU that is not offered in every zone of the
+  # region. Indexing an empty list is an error, so this is a ternary rather than
+  # a length() guard joined with &&, which evaluates both sides below Terraform
+  # 1.14 and would error on the very input it is meant to handle.
+  availability_zone            = length(var.availability_zones) > 0 ? var.availability_zones[0] : ""
+  high_availability            = var.postgres_high_availability
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 

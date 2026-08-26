@@ -21,6 +21,15 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 locals {
+  # azurerm reports an unzoned default node pool as null, not [], so the drift
+  # check below has to normalize before toset() and sort() ever see it. one()
+  # also folds away the count, returning null when create_cluster = false.
+  live_node_pool_zones = (
+    one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones) == null
+    ? toset([])
+    : toset(one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones))
+  )
+
   service_accounts_for_workload_identity = [
     "${var.langsmith_release_name}-backend",
     "${var.langsmith_release_name}-platform-backend",
@@ -361,15 +370,20 @@ resource "azurerm_kubernetes_cluster" "main" {
 # already sitting in this state cannot apply anything at all until it is
 # resolved. The drift is worth reporting, not worth blocking unrelated work.
 #
-# The condition is a ternary, not a length() guard joined with &&, because &&
-# evaluates both sides below Terraform 1.14 and the indexed reference errors
-# under create_cluster = false, where the resource has no instances.
+# An empty availability_zones is exempt. [] is the default and asks Azure to
+# place the pool, so whatever zones a pool already reports are not drift from a
+# request nobody made. Without the exemption every cluster created under the
+# earlier ["1"] default would warn on every plan.
+#
+# create_cluster = false is exempt too. local.live_node_pool_zones folds the
+# count away to an empty set there, which would otherwise read as drift against
+# any requested zones on a cluster this module does not manage.
 check "aks_node_pool_zone_drift" {
   assert {
-    condition = length(azurerm_kubernetes_cluster.main) == 0 ? true : toset(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones) == toset(var.availability_zones)
+    condition = length(var.availability_zones) == 0 || length(azurerm_kubernetes_cluster.main) == 0 ? true : local.live_node_pool_zones == toset(var.availability_zones)
     error_message = join("", [
       "AKS node pool zones are [",
-      join(",", sort(tolist(azurerm_kubernetes_cluster.main[0].default_node_pool[0].zones))),
+      join(",", sort(tolist(local.live_node_pool_zones))),
       "] but availability_zones requests [",
       join(",", sort(var.availability_zones)),
       "]. This module ignores zone changes on an existing node pool, so the ",
