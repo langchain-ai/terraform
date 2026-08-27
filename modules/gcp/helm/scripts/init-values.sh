@@ -241,21 +241,21 @@ if [[ -n "$EXISTING_EMAIL" ]]; then
 elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
   ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
   echo "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
-elif [[ -t 0 ]]; then
+else
+  # read returns 1 at EOF and set -euo pipefail (line 48) aborts there, so a
+  # headless run exits 1 with nothing printed. Tolerate the failure and report on
+  # the empty value instead. Testing "is there a tty" would be the wrong gate:
+  # piped stdin is not a tty either, and several prompts below have no env
+  # override, so `printf ... | init-values.sh` is the only way to drive them.
   printf "Admin email: "
-  read -r ADMIN_EMAIL
+  read -r ADMIN_EMAIL || ADMIN_EMAIL=""
   if [[ -z "$ADMIN_EMAIL" ]]; then
+    echo "" >&2
     echo "ERROR: Admin email is required." >&2
+    echo "       Supply it without a prompt:" >&2
+    echo "         export LANGSMITH_ADMIN_EMAIL=you@example.com" >&2
     exit 1
   fi
-else
-  # Every other input this script needs comes from terraform.tfvars or terraform
-  # output. Prompting for this one is what forces Pass 2 to have a TTY, so fail
-  # with the way to supply it rather than blocking on a read that cannot return.
-  echo "ERROR: Admin email is required and stdin is not a tty." >&2
-  echo "       Set it to run non-interactively:" >&2
-  echo "         export LANGSMITH_ADMIN_EMAIL=you@example.com" >&2
-  exit 1
 fi
 echo ""
 
@@ -307,10 +307,12 @@ fi
 ADMIN_PASSWORD="${TF_VAR_langsmith_admin_password:-$EXISTING_ADMIN_PASSWORD}"
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   printf "Initial admin password: "
-  read -rs ADMIN_PASSWORD
+  read -rs ADMIN_PASSWORD || ADMIN_PASSWORD=""
   echo
   if [[ -z "$ADMIN_PASSWORD" ]]; then
     echo "ERROR: initial admin password is required." >&2
+    echo "       Source infra/scripts/setup-env.sh first so" >&2
+    echo "       TF_VAR_langsmith_admin_password is exported from Secret Manager." >&2
     exit 1
   fi
 fi
@@ -508,7 +510,10 @@ elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
   echo "  4) LangSmith + Deployments + Agent Builder + Insights"
   echo ""
   printf "  Choice [1]: "
-  read -r _tier_choice
+  # EOF falls through to choice 1 rather than aborting: this block only runs on a
+  # first run with no enable_* flags set in terraform.tfvars, and 1 is
+  # "LangSmith only", which is what no flags already means.
+  read -r _tier_choice || _tier_choice=""
   _tier_choice="${_tier_choice:-1}"
 
   case "$_tier_choice" in
