@@ -19,8 +19,8 @@ set -euo pipefail
 #     granted it out of band instead)
 #
 # What this seeds:
-#   postgres-admin-password                  — from secrets.auto.tfvars
-#   langsmith-license-key                    — from secrets.auto.tfvars
+#   postgres-admin-password                  — from secrets.auto.tfvars or the env
+#   langsmith-license-key                    — same, and skipped when unset
 #   langsmith-admin-password                 — prompted, or $LANGSMITH_ADMIN_PASSWORD
 #   langsmith-api-key-salt                   — generated
 #   langsmith-jwt-secret                     — generated
@@ -34,11 +34,13 @@ set -euo pipefail
 # and the GCP module (writes Secret Manager). Terraform owns only the vault and
 # its RBAC.
 #
-# The first two are Terraform's, and it writes them itself on the default path.
-# They are seeded here for keyvault_manage_secrets = false, where the deployer
-# holds no Key Vault data-plane access and apply left them out. Write-once means
-# the default path just skips them, so both paths end with the same nine secrets
-# in the vault.
+# postgres-admin-password and langsmith-license-key are Terraform's, and it
+# writes them itself on the default path. They are seeded here for
+# keyvault_manage_secrets = false, where the deployer holds no Key Vault
+# data-plane access and apply left them out. Write-once means the default path
+# just skips them, so both paths end with the same nine secrets in the vault.
+# They are seeded last, after the seven above, so a value this script cannot
+# resolve never costs the seven that nothing else writes.
 #
 # WRITE-ONCE: an existing secret is never overwritten. Rotating any of these
 # breaks running deployments — a new API key salt invalidates every API key, a
@@ -150,33 +152,6 @@ _gen_b64() {
 
 echo "  Seeding..."
 
-# ── Terraform's two secrets ───────────────────────────────────────────────────
-# Present already on the default path, so these are skips. On the
-# keyvault_manage_secrets = false path they are missing and get written here from
-# the same secrets.auto.tfvars that fed terraform apply, so the vault ends up
-# with identical contents either way. langsmith-license-key matters most:
-# create-k8s-secrets.sh reads it out of the vault to build
-# langsmith-config-secret.
-
-_pg_password="${LANGSMITH_PG_PASSWORD:-}"
-if [[ -z "$_pg_password" ]]; then
-  _pg_password=$(_parse_tfvar_quoted postgres_admin_password "secrets.auto.tfvars") || _pg_password=""
-fi
-
-_license_key="${LANGSMITH_LICENSE_KEY:-}"
-if [[ -z "$_license_key" ]]; then
-  _license_key=$(_parse_tfvar_quoted langsmith_license_key "secrets.auto.tfvars") || _license_key=""
-fi
-
-_seed "postgres-admin-password" "$_pg_password" \
-  "component=postgres module=seed-script" \
-  "Set LANGSMITH_PG_PASSWORD, or re-run ./setup-env.sh to write secrets.auto.tfvars."
-_seed "langsmith-license-key" "$_license_key" \
-  "component=langsmith module=seed-script" \
-  "Set LANGSMITH_LICENSE_KEY, or re-run ./setup-env.sh to write secrets.auto.tfvars."
-
-unset _pg_password _license_key
-
 # ── LangSmith admin password ──────────────────────────────────────────────────
 
 if _kv_exists "langsmith-admin-password"; then
@@ -227,6 +202,45 @@ _seed "langsmith-insights-encryption-key" "$(_gen_fernet)" \
   "component=insights stability=critical module=seed-script"
 _seed "langsmith-polly-encryption-key" "$(_gen_fernet)" \
   "component=polly stability=critical module=seed-script"
+
+# ── Terraform's two secrets ───────────────────────────────────────────────────
+# Present already on the default path, so these are skips. On the
+# keyvault_manage_secrets = false path they are missing and get written here from
+# the same values that fed terraform apply, so the vault ends up with identical
+# contents either way. langsmith-license-key matters most: create-k8s-secrets.sh
+# reads it out of the vault to build langsmith-config-secret.
+#
+# Seeded last on purpose. Resolving either value can fail — secrets.auto.tfvars
+# is gitignored and does not survive a tag checkout — and this script is the only
+# writer of the seven secrets above, so a failure here must not cost them.
+
+_pg_password="${LANGSMITH_PG_PASSWORD:-${TF_VAR_postgres_admin_password:-}}"
+if [[ -z "$_pg_password" ]]; then
+  _pg_password=$(_parse_tfvar_quoted postgres_admin_password "secrets.auto.tfvars") || _pg_password=""
+fi
+
+_license_key="${LANGSMITH_LICENSE_KEY:-${TF_VAR_langsmith_license_key:-}}"
+if [[ -z "$_license_key" ]]; then
+  _license_key=$(_parse_tfvar_quoted langsmith_license_key "secrets.auto.tfvars") || _license_key=""
+fi
+
+# No license key is a configuration the module supports — the Terraform resource
+# carries the same guard, and k8s-bootstrap skips its langsmith-license secret to
+# match — so an empty value skips here rather than failing the run.
+if _kv_exists "langsmith-license-key"; then
+  echo -e "  ${DIM}skip${NC}  langsmith-license-key ${DIM}(already set)${NC}"
+elif [[ -n "$_license_key" ]]; then
+  _seed "langsmith-license-key" "$_license_key" \
+    "component=langsmith module=seed-script"
+else
+  echo -e "  ${DIM}skip${NC}  langsmith-license-key ${DIM}(no value configured)${NC}"
+fi
+
+_seed "postgres-admin-password" "$_pg_password" \
+  "component=postgres module=seed-script" \
+  "Set LANGSMITH_PG_PASSWORD, or re-run ./setup-env.sh to write secrets.auto.tfvars."
+
+unset _pg_password _license_key
 
 echo ""
 echo "  Done."
