@@ -109,6 +109,15 @@ _tfvar() {
   echo "$val"
 }
 
+# Terraform scopes its provider at the tfvars subscription_id and hashes it into
+# the globally-unique names, while every az call below answers for whatever the
+# CLI has active. Divergence makes the whole report describe a subscription
+# nobody is deploying to, so say so rather than let it read as a clean run.
+TFVARS_SUB=$(_tfvar subscription_id || echo "")
+if [ -n "${SUB_ID:-}" ] && [ -n "$TFVARS_SUB" ] && [ "$TFVARS_SUB" != "$SUB_ID" ]; then
+  fail "terraform.tfvars sets subscription_id = ${TFVARS_SUB}, but the active CLI subscription is ${SUB_ID}. Terraform would deploy to the first; the checks below describe the second. Run: az account set --subscription ${TFVARS_SUB}"
+fi
+
 # identifier is name_prefix's legacy name. Track which one was read so a warning
 # names a key the user actually has.
 NAME_KEY="name_prefix"
@@ -360,25 +369,74 @@ def role_label(assignment):
     return "role %s" % (guid or "?")
 
 
+def balanced(text):
+    """Whether every parenthesis in `text` closes, so it is a whole group."""
+    depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def write_clause(flat):
+    """The top-level clause of a normalised condition that constrains write.
+
+    Conditions are parenthesised `!(ActionMatches{<action>}) OR <constraint>`
+    groups joined by AND, and a constraint carries ANDs of its own — Azure's
+    stock "constrain roles and principal types" template ANDs RoleDefinitionId
+    against PrincipalType. So the split has to track parenthesis depth: taking
+    the first " and " after the action lands inside the write clause and drops
+    the half that decides this. None when no clause names the write action.
+    """
+    while flat.startswith("(") and flat.endswith(")") and balanced(flat[1:-1]):
+        flat = flat[1:-1].strip()
+    clauses, depth, start, i = [], 0, 0, 0
+    while i < len(flat):
+        if flat[i] == "(":
+            depth += 1
+        elif flat[i] == ")":
+            depth -= 1
+        elif depth == 0 and flat.startswith(" and ", i):
+            clauses.append(flat[start:i])
+            i += 5
+            start = i
+            continue
+        i += 1
+    clauses.append(flat[start:])
+    for clause in clauses:
+        if ROLE_WRITE in clause:
+            return clause
+    return None
+
+
 def pins_service_principal(condition):
     """Whether an ABAC condition admits only ServicePrincipal targets for write.
 
-    Conditions are `!(ActionMatches{<action>}) OR <constraint>` clauses joined by
-    AND, so the constraint that applies to write is the text from that action up
-    to the next clause — a condition that pins the type on delete alone leaves
-    write unconstrained. Values are single-quoted, so matching the quoted literal
-    keeps a permissive {'ServicePrincipal', 'User'} from reading as a pin.
-    Anything this cannot parse falls through to the softer advice below rather
-    than telling the operator to turn off a grant that would have worked.
+    Values are single-quoted, so matching the quoted literal keeps a permissive
+    {'ServicePrincipal', 'User'} from reading as a pin. Anything this cannot
+    parse falls through to the softer advice below rather than telling the
+    operator to turn off a grant that would have worked.
     """
     flat = " ".join(condition.split()).lower()
-    start = flat.find(ROLE_WRITE)
-    if start >= 0:
-        end = flat.find(" and ", start)
-        flat = flat[start:end if end > 0 else len(flat)]
-    return ("principaltype" in flat
-            and "'serviceprincipal'" in flat
-            and "'user'" not in flat)
+    if ROLE_WRITE in flat:
+        clause = write_clause(flat)
+    elif "actionmatches" in flat:
+        # Every clause names an action and none of them is write, so a condition
+        # that pins the type on delete alone leaves this deployment's own
+        # assignments unconstrained.
+        clause = None
+    else:
+        # No action test anywhere, so the constraint applies to every action.
+        clause = flat
+    if clause is None:
+        return False
+    return ("principaltype" in clause
+            and "'serviceprincipal'" in clause
+            and "'user'" not in clause)
 
 
 try:
@@ -801,13 +859,17 @@ else
 
   # Only these four names carry the hash, so it is derived here rather than above.
   # Keep in sync with local.uniq_suffix in infra/main.tf, salt included: omit the
-  # salt and preflight keeps checking the names it was bumped to escape.
+  # salt and preflight keeps checking the names it was bumped to escape. The
+  # subscription comes from tfvars because that is what Terraform hashes and what
+  # _derive_kv_name reads; the CLI's active subscription is a different value
+  # whenever the two have drifted, which the check above reports.
   SALT=$(_tfvar name_suffix_salt || echo "")
+  HASH_SUB="${TFVARS_SUB:-$SUB_ID}"
   if [ "$UNIQUE_NAMES" = "true" ]; then
     if command -v shasum &>/dev/null; then
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}${SALT}" | shasum -a 256 | cut -c1-6)
+      HASH=$(printf '%s' "${HASH_SUB}${NAME_SUFFIX}${SALT}" | shasum -a 256 | cut -c1-6)
     else
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}${SALT}" | sha256sum | cut -c1-6)
+      HASH=$(printf '%s' "${HASH_SUB}${NAME_SUFFIX}${SALT}" | sha256sum | cut -c1-6)
     fi
     UNIQ_SUFFIX="-${HASH}"
   else
@@ -857,12 +919,13 @@ for res in state.get('resources', []):
     [ -n "$STATE_NAMES" ] && printf '%s\n' "$STATE_NAMES" | grep -qxF "$1"
   }
 
-  # _check_name <label> <name> <url> <json-body> <availability-field>
+  # _check_name <label> <name> <url> <json-body> <availability-field> [owned]
   # A definitive "taken" fails the run. Anything else (auth blip, api-version
   # drift, unparseable body) only warns — preflight must never block a deploy
-  # because Azure rotated an API version.
+  # because Azure rotated an API version. Callers pass owned=1 when they have
+  # established the name belongs here by a route Terraform state cannot answer.
   _check_name() {
-    local label="$1" name="$2" url="$3" body="$4" field="$5" resp avail msg
+    local label="$1" name="$2" url="$3" body="$4" field="$5" owned="${6:-0}" resp avail msg
     if ! _name_is_safe "$name"; then
       warn "${label}: '${name}' is not a valid Azure resource name — check skipped"
       return 0
@@ -888,6 +951,8 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
       False)
         if _in_state "$name"; then
           pass "${label}: '${name}' is already deployed and tracked in Terraform state"
+        elif [ "$owned" = "1" ]; then
+          pass "${label}: '${name}' is already held by a resource in this subscription"
         else
           fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}"
         fi ;;
@@ -920,9 +985,21 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 
   if [ -n "$DNS_LABEL" ]; then
+    # Terraform state only carries the label under ingress_controller = "agic",
+    # where azurerm_public_ip.agw sets domain_name_label. The default nginx path
+    # puts it on an AKS-managed IP through a Service annotation, so _in_state
+    # cannot recognise it and a second preflight run would fail the operator's
+    # own label as taken. Ask the subscription who holds it instead.
+    DNS_OWNED=0
+    if _name_is_safe "$DNS_LABEL"; then
+      DNS_HELD=$(az network public-ip list --query "length([?dnsSettings.domainNameLabel=='${DNS_LABEL}'])" -o tsv 2>/dev/null || echo "0")
+      if echo "$DNS_HELD" | grep -qE '^[0-9]+$' && [ "$DNS_HELD" -gt "0" ]; then
+        DNS_OWNED=1
+      fi
+    fi
     _check_name "Public IP DNS label" "$DNS_LABEL" \
       "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
-      "" "available"
+      "" "available" "$DNS_OWNED"
   else
     warn "dns_label not set — skipping DNS label check"
   fi

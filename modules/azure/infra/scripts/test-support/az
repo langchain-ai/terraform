@@ -97,6 +97,8 @@ case "$ARGS" in
     emit_file "$FIX/kv_deleted" "0" ;;
   "redisenterprise list"*)
     emit_file "$FIX/redis_hit" "0" ;;
+  "network public-ip list"*)
+    emit_file "$FIX/dns_held" "0" ;;
   *roleEligibilityScheduleInstances*)
     printf '%s\n' "$ARGS" >> "$FIX/calls.log"
     emit_file "$FIX/eligibilities.json" '{"value":[]}' ;;

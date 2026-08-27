@@ -82,6 +82,43 @@ ABAC_PRINCIPAL_TYPE_DELETE_ONLY = (
 )
 
 
+# Pinned on delete with no write clause at all. Truncating to "the text from the
+# write action onwards" leaves the whole condition in hand, so the pin on delete
+# reads as a pin on write and preflight hard-fails a subscription that would have
+# applied cleanly.
+ABAC_PRINCIPAL_TYPE_NO_WRITE_CLAUSE = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# Azure's stock "Constrain roles and principal types" template. The AND sits
+# inside the write clause's own constraint, so splitting on the first AND after
+# the action drops the principalType half and the pin goes unseen.
+ABAC_ROLES_AND_PRINCIPAL_TYPE = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    "ForAnyOfAnyValues:GuidEquals{%s} AND "
+    "@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))" % OWNER_GUID
+)
+
+# The same template with the sub-operation carve-out Azure adds so an assignment
+# to a principal it cannot resolve still goes through. Its AND lands even earlier.
+ABAC_PRINCIPAL_TYPE_SUBOP = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'}) AND NOT "
+    "SubOperationMatches{'Principal.NotFound'}) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
+# No action test anywhere, so the constraint governs every action including write.
+ABAC_PRINCIPAL_TYPE_NO_ACTION = (
+    "@Request[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'"
+)
+
+
 def granted(role_guid=OWNER_GUID, scope=SUB_SCOPE, condition=None, custom=False):
     return {
         "roleDefinitionId": role_guid,
@@ -356,6 +393,39 @@ CASES = [
         "reject": ["terraform_principal_type"],
     },
     {
+        # Nothing constrains write, so telling the operator to disable the Key
+        # Vault grant would cost them a working assignment for no reason.
+        "name": "a condition with no write clause is not read as a pin",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_NO_WRITE_CLAUSE)),
+        "expect": ["[!] That grant carries an ABAC condition"],
+        "reject": ["The condition admits only ServicePrincipal targets"],
+    },
+    {
+        "name": "Azure's stock roles-and-principal-types template is read as a pin",
+        "ca_all": response(assignment=granted(condition=ABAC_ROLES_AND_PRINCIPAL_TYPE)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        "name": "the Principal.NotFound carve-out does not hide the pin",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_SUBOP)),
+        "expect": [
+            "[✗] The condition admits only ServicePrincipal targets",
+            "keyvault_manage_terraform_admin_assignment = false",
+        ],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        # An unqualified constraint applies to write along with everything else.
+        "name": "a pin with no action test at all still counts",
+        "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_NO_ACTION)),
+        "expect": ["[✗] The condition admits only ServicePrincipal targets"],
+        "reject": ['terraform_principal_type = "User"'],
+    },
+    {
         "name": "a refused resource write fails and names the action",
         "ca_all": response(refuse_resources=("Microsoft.Cache/redisEnterprise/write",)),
         "expect": ["[✗] Not permitted at", "Microsoft.Cache/redisEnterprise/write"],
@@ -552,6 +622,47 @@ CASES = [
         "reject": ["ALREADY TAKEN"],
     },
     {
+        # domain_name_label only reaches state through azurerm_public_ip.agw,
+        # which exists under ingress_controller = "agic" alone. On the default
+        # nginx path the label rides a Service annotation on an AKS-managed IP,
+        # so state cannot vouch for it and the subscription has to.
+        "name": "a DNS label held by this subscription is not a collision",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "dns_held": "1",
+        "expect": [
+            f"[✓] Public IP DNS label: '{DNS}' is already held by a resource in this subscription",
+        ],
+        "reject": [f"[✗] Public IP DNS label: '{DNS}' is ALREADY TAKEN"],
+    },
+    {
+        "name": "a DNS label held by a stranger is still a collision",
+        "tfvars_extra": f'dns_label = "{DNS}"',
+        "ca_all": ALL_GOOD,
+        "name_availability": TAKEN,
+        "dns_held": "0",
+        "expect": [f"[✗] Public IP DNS label: '{DNS}' is ALREADY TAKEN globally"],
+    },
+    {
+        # Terraform hashes the tfvars subscription into the four global names and
+        # deploys there; every az call here answers for the CLI's active one. A
+        # silent divergence means the report describes neither.
+        "name": "a tfvars subscription that is not the active one fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_sub": "99999999-9999-9999-9999-999999999999",
+        "expect": [
+            "[✗] terraform.tfvars sets subscription_id = 99999999-9999-9999-9999-999999999999",
+            f"the active CLI subscription is {SUB}",
+            "az account set --subscription 99999999-9999-9999-9999-999999999999",
+        ],
+    },
+    {
+        "name": "a matching subscription passes without comment",
+        "ca_all": ALL_GOOD,
+        "reject": ["but the active CLI subscription is"],
+    },
+    {
         "name": "a taken name with no state behind it still fails",
         "ca_all": ALL_GOOD,
         "name_availability": TAKEN,
@@ -620,7 +731,7 @@ def build_case(case, index):
 
     identifier = case.get("tfvars_identifier", '"-dev"')
     (infra / "terraform.tfvars").write_text(
-        f'subscription_id = "{SUB}"\n'
+        f'subscription_id = "{case.get("tfvars_sub", SUB)}"\n'
         'location    = "eastus"\n'
         f"identifier  = {identifier}\n"
         f"{case.get('tfvars_extra', '')}\n"
@@ -655,7 +766,7 @@ def build_case(case, index):
         (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
     if "name_availability" in case:
         (fixture / "name_availability.json").write_text(json.dumps(case["name_availability"]))
-    for key in ("kv_deleted", "redis_hit"):
+    for key in ("kv_deleted", "redis_hit", "dns_held"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
