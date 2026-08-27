@@ -227,15 +227,25 @@ _live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
 if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
   # Domain-based install: never rewrite the hostname. Surface a DNS mismatch
   # instead, since that is the actual thing an operator needs to fix.
-  _resolved_ip=$(dig +short "$_langsmith_domain" A 2>/dev/null | tail -1) || _resolved_ip=""
-  if [[ -z "$_resolved_ip" ]]; then
-    echo "NOTE: ${_langsmith_domain} does not resolve yet."
-    echo "      Point its DNS A record at ${_live_gateway_ip} — TLS issuance and"
-    echo "      ingress stay pending until it does."
-    echo ""
-  elif [[ "$_resolved_ip" != "$_live_gateway_ip" ]]; then
-    echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ip}, not the Gateway"
-    echo "         IP ${_live_gateway_ip}. Update the DNS A record."
+  #
+  # Only claim a resolution result when a resolver is actually available —
+  # otherwise an absent dig would report "does not resolve yet" for a domain that
+  # resolves perfectly well.
+  if command -v dig >/dev/null 2>&1; then
+    _resolved_ip=$(dig +short "$_langsmith_domain" A 2>/dev/null | tail -1) || _resolved_ip=""
+    if [[ -z "$_resolved_ip" ]]; then
+      echo "NOTE: ${_langsmith_domain} does not resolve yet."
+      echo "      Point its DNS A record at ${_live_gateway_ip} — TLS issuance and"
+      echo "      ingress stay pending until it does."
+      echo ""
+    elif [[ "$_resolved_ip" != "$_live_gateway_ip" ]]; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ip}, not the Gateway"
+      echo "         IP ${_live_gateway_ip}. Update the DNS A record."
+      echo ""
+    fi
+  else
+    echo "NOTE: Gateway IP is ${_live_gateway_ip}; config.hostname stays"
+    echo "      ${_langsmith_domain}. Install dig to have this checked against DNS."
     echo ""
   fi
 elif [[ -n "$_live_gateway_ip" ]]; then
