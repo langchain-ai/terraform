@@ -11,9 +11,12 @@
 #   classic used VNet subnet INJECTION; AMR doesn't support that, so the private
 #   equivalent is a Private Endpoint into the same redis subnet + a private DNS zone.
 #
-# Connection: rediss://:<url-encoded key>@<host>:10000 (TLS, OSS clustering policy).
-# LangSmith connects via redis.external.clusterSafeMode (standalone client to the
-# endpoint hostname — the cert matches the hostname; cluster node IPs would not).
+# Connection: TLS on port 10000. The client mode follows var.clustering_policy —
+# OSSCluster answers MOVED slot redirects, so LangSmith must use the cluster client
+# (redis.external.cluster.enabled); EnterpriseCluster proxies to one endpoint, so it
+# uses the standalone client plus redis.external.clusterSafeMode. Pairing OSSCluster
+# with the standalone client makes every usage-limit check fail on MOVED, which the
+# ingest path returns to the caller as a 503.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # AMR cluster — Balanced SKU, TLS 1.2, no public access (private endpoint only).
