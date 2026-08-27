@@ -414,7 +414,7 @@ Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
 Service returned an error. Status=403 Code="Forbidden"
 ```
 
-`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes the seven app secrets over the data plane too.
+`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes all nine secrets over the data plane too.
 
 **Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
 
@@ -444,12 +444,12 @@ az role assignment create --role "Key Vault Secrets Officer" \
 az keyvault secret list --vault-name <vault> --query "length(@)"
 ```
 
-**Fix, or take Terraform out of the data plane entirely:**
+**Fix for causes 2 and 3 — take Terraform out of the data plane entirely:**
 ```hcl
 keyvault_manage_secrets = false
 ```
 
-Terraform then writes no secrets, so none of the three causes above can stop an apply. `make seed-secrets` writes all nine afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+Terraform then writes no secrets, so neither a missing grant nor an unpropagated one can stop an apply. `make seed-secrets` writes all nine afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. This does nothing for cause 1: the script reaches the same data plane from the same host, so a firewall that denies the apply host denies the script too, and the allowlisting above is still the fix. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
 
 **Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 
