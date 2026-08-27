@@ -74,14 +74,16 @@ removed {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# State migration: both remaining secrets gained `count`
+# State migration: postgres_admin_password gained `count`
 #
-# postgres_admin_password and langsmith_license_key are now gated by
-# var.manage_secrets, which makes their state addresses indexed. Deployments that
-# applied before this change hold them at the un-indexed address, and without
-# these `moved` blocks Terraform plans a destroy-then-create against the vault on
-# the next apply — on the default path, where nothing about the deployment has
-# changed at all.
+# The secret is now gated by var.manage_secrets, which makes its state address
+# indexed. Deployments that applied before this change hold it at the un-indexed
+# address, and without this `moved` block Terraform plans a destroy-then-create
+# against the vault on the next apply — on the default path, where nothing about
+# the deployment has changed at all.
+#
+# langsmith_license_key needs no equivalent: it carried a `count` already, so it
+# has always been stored at [0] and only the count expression changed.
 #
 # Safe to delete once every deployment has applied once on this version.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -89,9 +91,4 @@ removed {
 moved {
   from = azurerm_key_vault_secret.postgres_admin_password
   to   = azurerm_key_vault_secret.postgres_admin_password[0]
-}
-
-moved {
-  from = azurerm_key_vault_secret.langsmith_license_key
-  to   = azurerm_key_vault_secret.langsmith_license_key[0]
 }
