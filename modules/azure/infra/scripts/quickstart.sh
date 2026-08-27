@@ -107,14 +107,27 @@ _yn_default() {
   [[ "$1" == "true" ]] && echo "y" || echo "n"
 }
 
+# The optional third and fourth arguments are an inclusive floor and ceiling.
+# Without them a prompt accepts anything the regex allows, which is how the blob
+# TTL answers reached a terraform.tfvars that fails its own variable validation
+# at plan — after every other answer had already been given.
 _ask_int() {
-  local prompt="$1" default="${2:-}"
+  local prompt="$1" default="${2:-}" min="${3:-}" max="${4:-}"
   while true; do
     _ask "$prompt" "$default"
-    if [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
-      break
+    if ! [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
+      _red "  ERROR: must be a number. Try again."
+      continue
     fi
-    _red "  ERROR: must be a number. Try again."
+    if [[ -n "$min" ]] && (( _REPLY < min )); then
+      _red "  ERROR: must be $min or greater."
+      continue
+    fi
+    if [[ -n "$max" ]] && (( _REPLY > max )); then
+      _red "  ERROR: must be $max or less."
+      continue
+    fi
+    break
   done
 }
 
@@ -151,37 +164,65 @@ _derive_names() {
   # main.tf: one picks the leading segment, the other adds the uniqueness suffix.
   [[ -n "$NAME_BASE" ]] && base="$NAME_BASE"
   _RG_NAME="${base}-rg${suffix}"
+  _VNET_NAME="${base}-vnet${suffix}"
   _AKS_NAME="${base}-aks${suffix}"
   _KV_NAME="${base}-kv${suffix}${uniq}"
   _PG_NAME="${base}-postgres${suffix}${uniq}"
   _REDIS_NAME="${base}-redis${suffix}${uniq}"
-  # The blob module strips the hyphens, so the 24-char limit applies to the
-  # stripped form and that is also the name Azure ends up showing.
   _BLOB_NAME="${base}blob${suffix}${uniq}"
-  _BLOB_NAME="${_BLOB_NAME//-/}"
   # A pinned name wins outright, the way the locals in main.tf resolve it. This
-  # runs last so the override lands on the finished name, and it applies to the
-  # blob name after the hyphens are stripped — the pinned value is already the
-  # literal account name.
+  # runs last so the override lands on the finished name.
+  [[ -n "$RESOURCE_GROUP_NAME" ]]  && _RG_NAME="$RESOURCE_GROUP_NAME"
+  [[ -n "$VNET_NAME" ]]            && _VNET_NAME="$VNET_NAME"
   [[ -n "$CLUSTER_NAME" ]]         && _AKS_NAME="$CLUSTER_NAME"
   [[ -n "$KEYVAULT_NAME" ]]        && _KV_NAME="$KEYVAULT_NAME"
   [[ -n "$POSTGRES_NAME" ]]        && _PG_NAME="$POSTGRES_NAME"
   [[ -n "$REDIS_NAME" ]]           && _REDIS_NAME="$REDIS_NAME"
   [[ -n "$STORAGE_ACCOUNT_NAME" ]] && _BLOB_NAME="$STORAGE_ACCOUNT_NAME"
+  # The blob module strips the hyphens, so the 24-char limit applies to the
+  # stripped form and that is also the name Azure ends up showing. Stripped
+  # after the override rather than before, because main.tf feeds the pinned
+  # value through the same module: pinning "my-blob" creates "myblob", and
+  # measuring the unstripped form checks a string Terraform never requests.
+  _BLOB_NAME="${_BLOB_NAME//-/}"
+  # Attach mode: the cluster and the vault are the operator's, so the name is
+  # whatever they already called it and nothing here derives it. Same branch
+  # order as local.aks_name and local.keyvault_name, and the reason the review
+  # screen can say "attaches to" rather than naming a resource it will create.
+  [[ "$CREATE_CLUSTER" == "false" ]]  && _AKS_NAME="$EXISTING_CLUSTER_NAME"
+  [[ "$CREATE_KEYVAULT" == "false" ]] && _KV_NAME="$EXISTING_KEYVAULT_NAME"
   # Not derived from name_base — the workspace name predates it and renaming a
   # Log Analytics workspace destroys the logs in it.
   _LAW_NAME="langsmith-logs${suffix}"
 }
 
+# A name for the one-line summaries, marked when the deployment attaches to the
+# resource rather than creating it. Attach mode with the existing_* name unset
+# is a config plan rejects, so say that here instead of printing nothing.
+_name_or_attached() {
+  local create="$1" name="$2"
+  if [[ "$create" == "false" ]]; then
+    printf '%s (existing)' "${name:-<unset>}"
+  else
+    printf '%s' "$name"
+  fi
+}
+
 # One line per derived name that busts its Azure ceiling. The count is the
 # number that says how much to cut, so print it rather than just the rule.
 _name_length_errors() {
-  local spec label name max
-  for spec in "Storage account:${_BLOB_NAME}:24" \
-    "Key Vault:${_KV_NAME}:24" \
-    "Postgres:${_PG_NAME}:63" \
-    "Redis:${_REDIS_NAME}:60" \
-    "AKS cluster:${_AKS_NAME}:63"; do
+  local spec label name max specs
+  specs="Storage account:${_BLOB_NAME}:24
+Postgres:${_PG_NAME}:63
+Redis:${_REDIS_NAME}:60"
+  # An attached cluster or vault already exists under the name its owner gave
+  # it, so Azure has accepted the length. Measuring it would fail the operator
+  # on a name they cannot change from here.
+  [[ "$CREATE_KEYVAULT" == "false" ]] || specs="${specs}
+Key Vault:${_KV_NAME}:24"
+  [[ "$CREATE_CLUSTER" == "false" ]] || specs="${specs}
+AKS cluster:${_AKS_NAME}:63"
+  while IFS= read -r spec; do
     label="${spec%%:*}"
     name="${spec#*:}"
     max="${name##*:}"
@@ -190,7 +231,7 @@ _name_length_errors() {
       printf '%s name "%s" is %d chars; Azure allows at most %d.\n' \
         "$label" "$name" "${#name}" "$max"
     fi
-  done
+  done <<< "$specs"
   return 0
 }
 
@@ -203,6 +244,8 @@ STATE_FILE="$INFRA_DIR/.quickstart-state"
 
 _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE LOCATION OWNER
 STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
+RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
+CREATE_KEYVAULT EXISTING_KEYVAULT_NAME
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
@@ -258,6 +301,13 @@ _tfvar() {
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\"[[:space:]]*\(#.*\)\{0,1\}\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
+# Read an unquoted tfvar value. _tfvar matches quoted values only, so the bare
+# booleans the wizard does not write — create_cluster, create_keyvault — come
+# back empty from it however they are set.
+_tfvar_bare() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^\"#[:space:]]*\).*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
 # Read a list-valued tfvar back as its whole assignment line, which is the form
 # the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
 _tfvar_line() {
@@ -295,13 +345,25 @@ _load_tfvars() {
     fi
   done
 
+  # Bare booleans, so _tfvar cannot see them. Only "false" is acted on: the
+  # module's default is create, and a malformed value should not silently turn
+  # a greenfield deployment into an attach.
+  for v in create_cluster create_keyvault; do
+    [[ "$(_tfvar_bare "$v")" == "false" ]] || continue
+    case "$v" in
+      create_cluster)  CREATE_CLUSTER="false" ;;
+      create_keyvault) CREATE_KEYVAULT="false" ;;
+    esac
+  done
+
   for v in subscription_id location owner environment cost_center \
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
            sizing_profile postgres_admin_username postgres_database_name \
            amr_sku name_base storage_account_name keyvault_name postgres_name \
-           redis_name cluster_name; do
+           redis_name cluster_name resource_group_name vnet_name \
+           existing_cluster_name existing_keyvault_name; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
@@ -312,6 +374,10 @@ _load_tfvars() {
       postgres_name)             POSTGRES_NAME="$_TF_VAL" ;;
       redis_name)                REDIS_NAME="$_TF_VAL" ;;
       cluster_name)              CLUSTER_NAME="$_TF_VAL" ;;
+      resource_group_name)       RESOURCE_GROUP_NAME="$_TF_VAL" ;;
+      vnet_name)                 VNET_NAME="$_TF_VAL" ;;
+      existing_cluster_name)     EXISTING_CLUSTER_NAME="$_TF_VAL" ;;
+      existing_keyvault_name)    EXISTING_KEYVAULT_NAME="$_TF_VAL" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       environment)               ENVIRONMENT="$_TF_VAL" ;;
@@ -459,6 +525,17 @@ KEYVAULT_NAME=""
 POSTGRES_NAME=""
 REDIS_NAME=""
 CLUSTER_NAME=""
+RESOURCE_GROUP_NAME=""
+VNET_NAME=""
+
+# Attach mode, same reason again: the wizard never asks, but the review screen
+# and the length check both name the cluster and the vault, and in attach mode
+# those names are the operator's rather than derived. Greenfield is the default
+# the module assumes, so an absent key reads as create.
+CREATE_CLUSTER="true"
+EXISTING_CLUSTER_NAME=""
+CREATE_KEYVAULT="true"
+EXISTING_KEYVAULT_NAME=""
 # Left blank on purpose. The module omits the tag entirely when it is empty, and
 # an unanswered "platform-team" is a worse answer than no tag at all.
 OWNER=""
@@ -532,8 +609,32 @@ _run_section_2() {
       while IFS= read -r name_error_line; do
         _red "  ERROR: $name_error_line"
       done <<< "$name_errors"
-      _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
-      _hint "keyvault_name in terraform.tfvars once this run has written it."
+      # Whether the deployment name is even the lever. name_base, or a pinned
+      # name read out of an existing tfvars, can eat the whole 24-character
+      # budget on its own — a 16-char name_base leaves nothing, and then every
+      # answer including the shortest one fails. Re-deriving with no deployment
+      # name answers it, and without an escape here the prompt cannot be
+      # satisfied or exited.
+      local _keep_prefix="$NAME_PREFIX"
+      NAME_PREFIX=""
+      _derive_names
+      local shortest_errors
+      shortest_errors="$(_name_length_errors)"
+      NAME_PREFIX="$_keep_prefix"
+      _derive_names
+      if [[ -z "$shortest_errors" ]]; then
+        _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
+        _hint "keyvault_name in terraform.tfvars once this run has written it."
+        continue
+      fi
+      _hint "The deployment name is not what busts the ceiling — an empty one is over it too."
+      _hint "The leading segment is what to change: name_base, or storage_account_name /"
+      _hint "keyvault_name to pin the name outright. All three are set by hand in"
+      _hint "terraform.tfvars, which this run writes and re-reads, so you can finish here"
+      _hint "and edit the file. Terraform rejects the config at plan until you do."
+      if _ask_yn "Continue with this name and fix it in terraform.tfvars?" "n"; then
+        break
+      fi
       continue
     fi
     _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
@@ -561,7 +662,7 @@ _run_section_2() {
   echo ""
   _derive_names
   printf "  Resource group  $(_cyan "$_RG_NAME")  in  $(_cyan "$LOCATION")\n"
-  printf "  Cluster $(_cyan "$_AKS_NAME") · Key Vault $(_cyan "$_KV_NAME") · Storage $(_cyan "$_BLOB_NAME")\n"
+  printf "  Cluster $(_cyan "$(_name_or_attached "$CREATE_CLUSTER" "$_AKS_NAME")") · Key Vault $(_cyan "$(_name_or_attached "$CREATE_KEYVAULT" "$_KV_NAME")") · Storage $(_cyan "$_BLOB_NAME")\n"
 }
 
 # -- 3. Networking -----------------------------------------------------------
@@ -1136,9 +1237,14 @@ _run_section_7() {
   ttl_yn="$(_yn_default "$BLOB_TTL_ENABLED")"
   if _ask_yn "Expire stored artifacts on a schedule?" "$ttl_yn"; then
     BLOB_TTL_ENABLED="true"
-    _ask_int "Days to keep short-lived artifacts" "$BLOB_TTL_SHORT_DAYS"
+    # Same floors as the blob_ttl_* validations in variables.tf, and the same
+    # ordering rule: the two are separate lifecycle rules on separate prefixes,
+    # so Azure accepts an inverted pair and deletes the long-lived artifacts
+    # first. Bounded here as well as at plan, because the plan-time failure
+    # arrives after the whole wizard has been answered.
+    _ask_int "Days to keep short-lived artifacts" "$BLOB_TTL_SHORT_DAYS" 1
     BLOB_TTL_SHORT_DAYS="$_REPLY"
-    _ask_int "Days to keep long-lived artifacts" "$BLOB_TTL_LONG_DAYS"
+    _ask_int "Days to keep long-lived artifacts (at least the short-lived count)" "$BLOB_TTL_LONG_DAYS" "$BLOB_TTL_SHORT_DAYS"
     BLOB_TTL_LONG_DAYS="$_REPLY"
   else
     BLOB_TTL_ENABLED="false"
@@ -1441,8 +1547,21 @@ while true; do
   _derive_names
   echo ""
   printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
-  printf "    %-18s %s\n" "AKS cluster"     "$_AKS_NAME"
-  printf "    %-18s %s\n" "Key Vault"       "$_KV_NAME"
+  # Attach mode is set by hand in tfvars and carried across a re-run as a
+  # preserved unknown key, so the wizard can reach this screen with a cluster or
+  # a vault it is not going to create. Printing those under "Terraform creates"
+  # is the one thing this screen must not do: it is the review an operator gets
+  # before an apply that auto-approves.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    printf "    %-18s %s\n" "AKS cluster"   "${_AKS_NAME:-(existing_cluster_name is unset)}  — attaches, does not create"
+  else
+    printf "    %-18s %s\n" "AKS cluster"   "$_AKS_NAME"
+  fi
+  if [[ "$CREATE_KEYVAULT" == "false" ]]; then
+    printf "    %-18s %s\n" "Key Vault"     "${_KV_NAME:-(existing_keyvault_name is unset)}  — attaches, writes its secrets there"
+  else
+    printf "    %-18s %s\n" "Key Vault"     "$_KV_NAME"
+  fi
   printf "    %-18s %s\n" "Storage account" "$_BLOB_NAME  (LangSmith run artifacts)"
   [[ "$PG_SOURCE" == "external" ]]    && printf "    %-18s %s\n" "PostgreSQL"     "$_PG_NAME"
   [[ "$REDIS_SOURCE" == "external" ]] && printf "    %-18s %s\n" "Redis"          "$_REDIS_NAME  ($AMR_SKU)"

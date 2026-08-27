@@ -241,6 +241,8 @@ az rest --method get \
 az vm list-usage -l eastus --only-show-errors --query "[?limit=='0'].name.value" -o tsv
 ```
 
+`limit` comes back as a JSON string, so the quoting on `'0'` is required: a numeric literal matches nothing and reads as a clean bill of health.
+
 `make preflight` maps the configured `postgres_sku_name` to its family and fails on this before the apply starts.
 
 **Fix:** request an increase at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), or set `postgres_sku_name` to a family that already has room. The quota-increase mechanics are the same as [vCPU quota exceeded](#vcpu-quota-exceeded--autoscaler-backoff-or-node-pool-rotation-fails) above.

@@ -223,10 +223,11 @@ CASES = [
     {
         "name": "everything permitted passes at both scopes",
         "ca_all": ALL_GOOD,
+        # One line per verdict, not per scope: the two scopes agree, so they are
+        # named together. A regression that splits them back out fails here.
         "expect": [
-            f"[✓] roleAssignments/write permitted at {SUB_SCOPE}, granted by Owner held at",
-            f"[✓] roleAssignments/write permitted at {RG_SCOPE}",
-            f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}",
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE}, granted by Owner held at",
+            f"[✓] Every resource action the deployment needs is permitted at {SUB_SCOPE} and {RG_SCOPE}",
         ],
         "reject": ["[✗]", "Falling back"],
     },
@@ -244,7 +245,7 @@ CASES = [
         "name": "roleAssignments/write refused fails without inventing a reason",
         "ca_all": response(write=False),
         "expect": [
-            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE}. All eight role assignments",
+            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE} and {RG_SCOPE}. The deployment grants roles",
         ],
         "reject": ["by deny assignment", "PIM holds"],
     },
@@ -262,8 +263,8 @@ CASES = [
         "ca_all": response(write=False),
         "eligibilities": [eligibility("Owner")],
         "expect": [
-            "[✗] PIM holds these roles for this identity as eligible but not active: Owner at",
-            "activating it (portal: PIM -> My roles -> Activate)",
+            "[✗] Eligible in PIM but not active, and carries roleAssignments/write: Owner at",
+            "(portal: PIM -> My roles -> Activate)",
         ],
     },
     {
@@ -383,17 +384,38 @@ CASES = [
         "reject": ["PIM holds these roles"],
     },
     {
-        "name": "an invalid identifier drops the resource group scope instead of building a bad URL",
-        "tfvars_identifier": '"-Prod Corp"',
+        "name": "a name_prefix that yields an illegal group name drops the scope instead of building a bad URL",
+        "tfvars_name_prefix": '"-prod/../other"',
         "ca_all": ALL_GOOD,
-        "expect": ["[!] terraform.tfvars: identifier is not a valid resource-name suffix"],
+        "expect": ["[!] terraform.tfvars: 'langsmith-rg-prod/../other' is not a legal resource group name"],
         "reject_calls": ["resourceGroups"],
     },
     {
-        "name": "an empty identifier still yields a resource group scope",
-        "tfvars_identifier": '""',
+        "name": "an empty name_prefix still yields a resource group scope",
+        "tfvars_name_prefix": '""',
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg/providers"],
+    },
+    # The three naming overrides each move the resource group, and the probe has
+    # to follow. Checking a group that does not exist is the failure these guard:
+    # it answers, and every RG verdict then describes the wrong thing.
+    {
+        "name": "unique_resource_names shortens the probed group to the ls- base",
+        "tfvars_extra": "unique_resource_names = true",
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-dev/providers"],
+    },
+    {
+        "name": "name_base replaces the probed group's base outright",
+        "tfvars_extra": 'name_base = "acme"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/acme-rg-dev/providers"],
+    },
+    {
+        "name": "resource_group_name replaces the probed group entirely",
+        "tfvars_extra": 'resource_group_name = "platform-shared-rg"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
     },
     {
         "name": "a bring-your-own VNet is checked as its own scope",
@@ -432,11 +454,11 @@ def build_case(case, index):
     (infra / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, infra / "scripts" / "preflight.sh")
 
-    identifier = case.get("tfvars_identifier", '"-dev"')
+    name_prefix = case.get("tfvars_name_prefix", '"-dev"')
     (infra / "terraform.tfvars").write_text(
         f'subscription_id = "{SUB}"\n'
         'location    = "eastus"\n'
-        f"identifier  = {identifier}\n"
+        f"name_prefix = {name_prefix}\n"
         f"{case.get('tfvars_extra', '')}\n"
     )
     (infra / "secrets.auto.tfvars").write_text('langsmith_license_key = "lsv2_pt_stub"\n')

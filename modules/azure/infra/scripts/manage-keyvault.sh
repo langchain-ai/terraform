@@ -25,7 +25,7 @@ source "$SCRIPT_DIR/_common.sh"
 if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
   : # got it from terraform output
 else
-  KV_NAME=$(_derive_kv_name)
+  KV_NAME=$(_require_kv_name)
 fi
 
 NAMESPACE="${NAMESPACE:-langsmith}"

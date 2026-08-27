@@ -307,8 +307,14 @@ resource "azurerm_resource_group" "resource_group" {
       condition     = length(replace(local.blob_name, "-", "")) >= 3 && length(replace(local.blob_name, "-", "")) <= 24
       error_message = "Storage account name '${replace(local.blob_name, "-", "")}' is ${length(replace(local.blob_name, "-", ""))} chars; Azure allows 3-24. Shorten var.name_prefix or set var.storage_account_name explicitly."
     }
+    # The attach branches are exempt. local.keyvault_name and local.aks_name are
+    # the operator's existing resources there, Azure accepted those names when
+    # they were created, and the remedy each message gives — var.keyvault_name,
+    # var.cluster_name — is a config variables.tf rejects outright once
+    # create_* is false. An unset existing_* name fails on the keyvault and
+    # k8s-cluster preconditions instead, which name the variable that applies.
     precondition {
-      condition     = length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24
+      condition     = !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24)
       error_message = "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly."
     }
     precondition {
@@ -320,7 +326,7 @@ resource "azurerm_resource_group" "resource_group" {
       error_message = "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly."
     }
     precondition {
-      condition     = length(local.aks_name) <= 63
+      condition     = !var.create_cluster || length(local.aks_name) <= 63
       error_message = "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly."
     }
   }

@@ -222,13 +222,29 @@ else
 
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # printf adds the newline grep needs to see an empty identifier as a line to
-  # match rather than as no input at all. Empty is valid: it means no suffix.
-  IDENTIFIER=$(tfvar identifier)
-  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
+  # The resource group name is derived, never assumed: name_base,
+  # unique_resource_names, and resource_group_name each move it, and probing a
+  # group that does not exist leaves every RG-scope verdict below describing
+  # nothing. Keep in sync with local.name_base / local.name_suffix /
+  # local.resource_group_name in infra/main.tf.
+  RG_PREFIX=$(_tfvar name_prefix || echo "")
+  RG_SUFFIX=""
+  [ -n "$RG_PREFIX" ] && RG_SUFFIX="-${RG_PREFIX#-}"
+  if [ "$(_tfvar unique_resource_names || echo "false")" = "true" ]; then
+    RG_BASE="ls"
   else
-    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
+    RG_BASE="langsmith"
+  fi
+  RG_BASE=$(_tfvar name_base || echo "$RG_BASE")
+  RG_NAME=$(_tfvar resource_group_name || echo "${RG_BASE}-rg${RG_SUFFIX}")
+
+  # printf adds the newline grep needs to read the name as a line to match
+  # rather than as no input at all. The pattern is Azure's resource-group
+  # grammar, so a hand-edited terraform.tfvars cannot aim the request elsewhere.
+  if printf '%s\n' "$RG_NAME" | grep -qE '^[A-Za-z0-9._()-]{1,90}$'; then
+    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RG_NAME}")
+  else
+    warn "terraform.tfvars: '${RG_NAME}' is not a legal resource group name, so the deployment resource group was not checked"
   fi
 
   EXISTING_VNET=$(tfvar vnet_id)
@@ -770,9 +786,27 @@ if [ ! -f "$TFVARS" ]; then
 elif [ "$REDIS_SOURCE" = "in-cluster" ]; then
   pass "redis_source = in-cluster — no Managed Redis region check needed"
 elif printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  # Asked for as JSON, not tsv, so the answer can be checked for shape before it
+  # is read as a verdict. A tsv line is indistinguishable from an error string or
+  # a reshaped response, and a "not offered" verdict built on one of those blocks
+  # a deploy over a parse. Same rule the name checks below follow: preflight must
+  # never fail a deploy because Azure changed the shape of an answer. Only a JSON
+  # array of region names produces a verdict; anything else warns and skips.
   AMR_REGIONS=$(az provider show -n Microsoft.Cache \
-    --query "resourceTypes[?resourceType=='redisEnterprise'].locations | [0]" -o tsv 2>/dev/null \
-    | tr '[:upper:]' '[:lower:]' | tr -d ' ' || echo "")
+    --query "resourceTypes[?resourceType=='redisEnterprise'].locations | [0]" -o json 2>/dev/null \
+    | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(d, list) or not d:
+    sys.exit(0)
+names = [str(x).lower().replace(' ', '') for x in d if isinstance(x, str) and x.strip()]
+if len(names) != len(d):
+    sys.exit(0)
+print('\\n'.join(names))
+" 2>/dev/null || echo "")
 
   if [ -z "$AMR_REGIONS" ]; then
     warn "Could not read Microsoft.Cache regions — skipping the Managed Redis region check"
@@ -1124,12 +1158,20 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     # opposites: a taken name needs a different one, an illegal name needs a
     # legal one. Reporting both as taken puts our headline in direct conflict
     # with the Azure message printed after it.
+    #
+    # The two providers spell the illegal case differently: Microsoft.DBforPostgreSQL
+    # returns "Invalid", Microsoft.Storage and Microsoft.KeyVault return
+    # "AccountNameInvalid". Matching only the first sends every illegal storage or
+    # vault name back through the ALREADY TAKEN arm. The length gate above covers
+    # an over-long name, but not a pinned storage_account_name with an uppercase
+    # letter or a keyvault_name with doubled hyphens — both pass _name_is_safe.
     case "$avail" in
       True)  pass "${label}: '${name}' is available" ;;
       False)
         case "$reason" in
-          Invalid) fail "${label}: '${name}' is not a legal Azure resource name. ${msg}" ;;
-          *)       fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+          Invalid|AccountNameInvalid)
+                 fail "${label}: '${name}' is not a legal Azure resource name. ${msg}" ;;
+          *)     fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
         esac ;;
       *)     warn "${label}: '${name}' — unexpected API response; collision would surface during apply" ;;
     esac
