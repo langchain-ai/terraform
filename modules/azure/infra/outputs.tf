@@ -10,8 +10,13 @@ output "redis_connection_url" {
   value       = var.redis_source == "external" ? module.redis[0].connection_url : ""
 }
 
+output "redis_cluster_enabled" {
+  description = "Whether LangSmith should set redis.external.cluster.enabled (true for the OSSCluster policy). init-values.sh reads this."
+  value       = var.redis_source == "external" ? module.redis[0].cluster_enabled : false
+}
+
 output "redis_cluster_safe_mode" {
-  description = "Whether LangSmith should set redis.external.clusterSafeMode (true for AMR). init-values.sh reads this."
+  description = "Whether LangSmith should set redis.external.clusterSafeMode (true for the EnterpriseCluster policy). init-values.sh reads this."
   value       = var.redis_source == "external" ? module.redis[0].cluster_safe_mode : false
 }
 
