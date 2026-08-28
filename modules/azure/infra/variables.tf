@@ -500,6 +500,12 @@ variable "amr_sku" {
   default     = "Balanced_B1"
 }
 
+variable "redis_clustering_policy" {
+  type        = string
+  description = "AMR clustering policy. OSSCluster selects the LangSmith cluster client; EnterpriseCluster the standalone client with clusterSafeMode. Change it only for an AMR instance that is already on EnterpriseCluster."
+  default     = "OSSCluster"
+}
+
 variable "redis_high_availability" {
   type        = bool
   description = "Zone-redundant HA for Azure Managed Redis (primary + replica across nodes). Required for the AMR SLA, so set true for production. Unsupported on Balanced_B0."

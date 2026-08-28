@@ -76,8 +76,8 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Version**: Redis ≥ 5 required (Azure Managed Redis runs the Redis Enterprise engine)
 - **Dedicated instance**: Each LangSmith installation must use its own dedicated Redis — shared instances cause deployment tasks to route incorrectly
 - **Access**: Private endpoint only (subnet-redis, private DNS zone) · TLS port 10000
-- **Client mode**: Follows `clustering_policy`. OSSCluster (the default) answers MOVED slot redirects, so LangSmith connects with the cluster client; EnterpriseCluster proxies to one endpoint and uses the standalone client with `clusterSafeMode`. `init-values.sh` picks the matching Helm block from the terraform outputs.
-- **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module. Keys: `connection_url` (standalone), `redis_cluster_node_uris` and `redis_cluster_password` (cluster). All three are always written; the chart reads the pair its mode needs.
+- **Client mode**: Follows `clustering_policy` — OSSCluster (default) uses the cluster client, EnterpriseCluster the standalone client with `clusterSafeMode`. `init-values.sh` renders the matching Helm block from the terraform outputs.
+- **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module. Keys `connection_url`, `redis_cluster_node_uris`, `redis_cluster_password`; all three always written, the chart reads the pair its mode needs.
 
 ### Azure Blob Storage
 - **What**: Object store for trace payloads — large inputs/outputs, attachments

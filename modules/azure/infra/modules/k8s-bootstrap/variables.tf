@@ -82,14 +82,14 @@ variable "redis_connection_url" {
 
 variable "redis_cluster_node_uris" {
   type        = string
-  description = "JSON array of Redis node URIs. Read by the chart when redis.external.cluster.enabled is true."
+  description = "JSON array of Redis node URIs. Read when redis.external.cluster.enabled is true."
   sensitive   = true
   default     = ""
 }
 
 variable "redis_cluster_password" {
   type        = string
-  description = "Redis access key, not URL-encoded. Read by the chart when redis.external.cluster.enabled is true."
+  description = "Redis access key, not URL-encoded. Read when redis.external.cluster.enabled is true."
   sensitive   = true
   default     = ""
 }

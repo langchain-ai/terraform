@@ -41,11 +41,10 @@ variable "amr_sku" {
 
 variable "clustering_policy" {
   type        = string
-  description = "AMR clustering policy. OSSCluster is the default and drives the LangSmith cluster client; EnterpriseCluster drives the standalone client with clusterSafeMode."
+  description = "AMR clustering policy. OSSCluster selects the LangSmith cluster client; EnterpriseCluster the standalone client with clusterSafeMode."
   default     = "OSSCluster"
 
-  # The outputs branch on this string to pick the client mode, so a typo would
-  # silently select the standalone client against an OSS cluster.
+  # The outputs branch on this string, so a typo silently picks the wrong client.
   validation {
     condition     = contains(["OSSCluster", "EnterpriseCluster"], var.clustering_policy)
     error_message = "clustering_policy must be 'OSSCluster' or 'EnterpriseCluster'."
