@@ -107,14 +107,27 @@ _yn_default() {
   [[ "$1" == "true" ]] && echo "y" || echo "n"
 }
 
+# The optional third and fourth arguments are an inclusive floor and ceiling.
+# Without them a prompt accepts anything the regex allows, which is how the blob
+# TTL answers reached a terraform.tfvars that fails its own variable validation
+# at plan — after every other answer had already been given.
 _ask_int() {
-  local prompt="$1" default="${2:-}"
+  local prompt="$1" default="${2:-}" min="${3:-}" max="${4:-}"
   while true; do
     _ask "$prompt" "$default"
-    if [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
-      break
+    if ! [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
+      _red "  ERROR: must be a number. Try again."
+      continue
     fi
-    _red "  ERROR: must be a number. Try again."
+    if [[ -n "$min" ]] && (( _REPLY < min )); then
+      _red "  ERROR: must be $min or greater."
+      continue
+    fi
+    if [[ -n "$max" ]] && (( _REPLY > max )); then
+      _red "  ERROR: must be $max or less."
+      continue
+    fi
+    break
   done
 }
 
@@ -128,6 +141,100 @@ _hint() {
   printf "  ${DIM}%s${RESET}\n" "$1"
 }
 
+# Compose the resource names Terraform will derive, from answers already given.
+# Mirror of the naming locals in infra/main.tf — keep the two in step. The
+# wizard knows every input the derivation needs, so a name that busts an Azure
+# ceiling can be caught at the prompt instead of at preflight or at plan.
+_derive_names() {
+  local suffix="" uniq="" base hash
+  [[ -n "$NAME_PREFIX" ]] && suffix="-${NAME_PREFIX}"
+  if [[ "$UNIQUE_NAMES" == "true" ]]; then
+    base="ls"
+    if command -v shasum &>/dev/null; then
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}" | shasum -a 256 | cut -c1-6)
+    else
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}" | sha256sum | cut -c1-6)
+    fi
+    uniq="-${hash}"
+  else
+    base="langsmith"
+  fi
+  # name_base replaces the default base for every derived name. The hash still
+  # tracks unique_resource_names, because those are separate decisions in
+  # main.tf: one picks the leading segment, the other adds the uniqueness suffix.
+  [[ -n "$NAME_BASE" ]] && base="$NAME_BASE"
+  _RG_NAME="${base}-rg${suffix}"
+  _VNET_NAME="${base}-vnet${suffix}"
+  _AKS_NAME="${base}-aks${suffix}"
+  _KV_NAME="${base}-kv${suffix}${uniq}"
+  _PG_NAME="${base}-postgres${suffix}${uniq}"
+  _REDIS_NAME="${base}-redis${suffix}${uniq}"
+  _BLOB_NAME="${base}blob${suffix}${uniq}"
+  # A pinned name wins outright, the way the locals in main.tf resolve it. This
+  # runs last so the override lands on the finished name.
+  [[ -n "$RESOURCE_GROUP_NAME" ]]  && _RG_NAME="$RESOURCE_GROUP_NAME"
+  [[ -n "$VNET_NAME" ]]            && _VNET_NAME="$VNET_NAME"
+  [[ -n "$CLUSTER_NAME" ]]         && _AKS_NAME="$CLUSTER_NAME"
+  [[ -n "$KEYVAULT_NAME" ]]        && _KV_NAME="$KEYVAULT_NAME"
+  [[ -n "$POSTGRES_NAME" ]]        && _PG_NAME="$POSTGRES_NAME"
+  [[ -n "$REDIS_NAME" ]]           && _REDIS_NAME="$REDIS_NAME"
+  [[ -n "$STORAGE_ACCOUNT_NAME" ]] && _BLOB_NAME="$STORAGE_ACCOUNT_NAME"
+  # The blob module strips the hyphens, so the 24-char limit applies to the
+  # stripped form and that is also the name Azure ends up showing. Stripped
+  # after the override rather than before, because main.tf feeds the pinned
+  # value through the same module: pinning "my-blob" creates "myblob", and
+  # measuring the unstripped form checks a string Terraform never requests.
+  _BLOB_NAME="${_BLOB_NAME//-/}"
+  # Attach mode: the cluster and the vault are the operator's, so the name is
+  # whatever they already called it and nothing here derives it. Same branch
+  # order as local.aks_name and local.keyvault_name, and the reason the review
+  # screen can say "attaches to" rather than naming a resource it will create.
+  [[ "$CREATE_CLUSTER" == "false" ]]  && _AKS_NAME="$EXISTING_CLUSTER_NAME"
+  [[ "$CREATE_KEYVAULT" == "false" ]] && _KV_NAME="$EXISTING_KEYVAULT_NAME"
+  # Not derived from name_base — the workspace name predates it and renaming a
+  # Log Analytics workspace destroys the logs in it.
+  _LAW_NAME="langsmith-logs${suffix}"
+}
+
+# A name for the one-line summaries, marked when the deployment attaches to the
+# resource rather than creating it. Attach mode with the existing_* name unset
+# is a config plan rejects, so say that here instead of printing nothing.
+_name_or_attached() {
+  local create="$1" name="$2"
+  if [[ "$create" == "false" ]]; then
+    printf '%s (existing)' "${name:-<unset>}"
+  else
+    printf '%s' "$name"
+  fi
+}
+
+# One line per derived name that busts its Azure ceiling. The count is the
+# number that says how much to cut, so print it rather than just the rule.
+_name_length_errors() {
+  local spec label name max specs
+  specs="Storage account:${_BLOB_NAME}:24
+Postgres:${_PG_NAME}:63
+Redis:${_REDIS_NAME}:60"
+  # An attached cluster or vault already exists under the name its owner gave
+  # it, so Azure has accepted the length. Measuring it would fail the operator
+  # on a name they cannot change from here.
+  [[ "$CREATE_KEYVAULT" == "false" ]] || specs="${specs}
+Key Vault:${_KV_NAME}:24"
+  [[ "$CREATE_CLUSTER" == "false" ]] || specs="${specs}
+AKS cluster:${_AKS_NAME}:63"
+  while IFS= read -r spec; do
+    label="${spec%%:*}"
+    name="${spec#*:}"
+    max="${name##*:}"
+    name="${name%:*}"
+    if (( ${#name} > max )); then
+      printf '%s name "%s" is %d chars; Azure allows at most %d.\n' \
+        "$label" "$name" "${#name}" "$max"
+    fi
+  done <<< "$specs"
+  return 0
+}
+
 # ── Resume state ──────────────────────────────────────────────────────────────
 # Answers are checkpointed after every completed section so an exit (Ctrl-C,
 # `q`, a dropped SSH session) never costs more than the section in progress.
@@ -135,15 +242,21 @@ _hint() {
 
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
-_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX LOCATION OWNER
-COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE LOCATION OWNER
+STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
+RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
+CREATE_KEYVAULT EXISTING_KEYVAULT_NAME
+ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
-NODE_VM_SIZE NODE_MIN NODE_MAX INGRESS_CONTROLLER
+NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
 AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
-CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
+BLOB_TTL_ENABLED BLOB_TTL_SHORT_DAYS BLOB_TTL_LONG_DAYS
+CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION
+ENABLE_DEPLOYMENTS ENABLE_AGENT_BUILDER ENABLE_INSIGHTS ENABLE_POLLY
+PRESERVE_UNKNOWN"
 
 # Sections the user has actually been through. Profile-driven defaults apply
 # only to sections still unanswered, so going back to switch dev→prod never
@@ -181,15 +294,30 @@ _load_state() {
 }
 
 # Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
-# inside the value (_common.sh's _parse_tfvar strips them).
+# inside the value (_common.sh's _parse_tfvar strips them). A trailing comment
+# is allowed: the writer puts one on amr_sku, and without this that line is the
+# one setting a re-run cannot read back.
 _tfvar() {
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\"[[:space:]]*\(#.*\)\{0,1\}\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Read an unquoted tfvar value. _tfvar matches quoted values only, so the bare
+# booleans the wizard does not write — create_cluster, create_keyvault — come
+# back empty from it however they are set.
+_tfvar_bare() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^\"#[:space:]]*\).*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
 # Read a list-valued tfvar back as its whole assignment line, which is the form
 # the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
 _tfvar_line() {
   sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Whether a key is assigned at all, which _tfvar cannot report: an absent key
+# and one assigned "" both come back as the empty string.
+_tfvar_set() {
+  grep -qE "^[[:space:]]*$1[[:space:]]*=" "$OUTPUT" 2>/dev/null
 }
 
 # Seed the wizard from a terraform.tfvars written by an earlier run, so a
@@ -202,24 +330,57 @@ _load_tfvars() {
   _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
   [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
 
-  # `identifier` is read before `name_prefix` so that a tfvars carrying both
-  # lets the current key win. Accepting the retired key matters more here than
-  # elsewhere: dropping it would leave NAME_PREFIX at its "dev" default and
-  # regenerate a tfvars naming a different set of resources than the one this
-  # deployment already owns. Same back-compat as _common.sh's _name_prefix.
-  for v in subscription_id identifier name_prefix location owner cost_center \
+  # name_prefix is read on its own because it is the one key whose empty value
+  # is an answer: "" is the "none" choice, and _tfvar reports it exactly like an
+  # absent key. Falling through to the "dev" initializer there would regenerate
+  # a tfvars naming a different set of resources than the one this deployment
+  # already owns, which Terraform executes as destroy-and-recreate. `identifier`
+  # is the retired spelling, checked second so the current key wins when a
+  # tfvars carries both. Same back-compat as _common.sh's _name_prefix.
+  for v in name_prefix identifier; do
+    if _tfvar_set "$v"; then
+      _TF_VAL=$(_tfvar "$v")
+      NAME_PREFIX="${_TF_VAL#-}"
+      break
+    fi
+  done
+
+  # Bare booleans, so _tfvar cannot see them. Only "false" is acted on: the
+  # module's default is create, and a malformed value should not silently turn
+  # a greenfield deployment into an attach.
+  for v in create_cluster create_keyvault; do
+    [[ "$(_tfvar_bare "$v")" == "false" ]] || continue
+    case "$v" in
+      create_cluster)  CREATE_CLUSTER="false" ;;
+      create_keyvault) CREATE_KEYVAULT="false" ;;
+    esac
+  done
+
+  for v in subscription_id location owner environment cost_center \
            default_node_pool_vm_size ingress_controller istio_addon_revision \
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
            sizing_profile postgres_admin_username postgres_database_name \
-           amr_sku; do
+           amr_sku name_base storage_account_name keyvault_name postgres_name \
+           redis_name cluster_name resource_group_name vnet_name \
+           existing_cluster_name existing_keyvault_name; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
-      identifier | name_prefix)  NAME_PREFIX="${_TF_VAL#-}" ;;
+      name_base)                 NAME_BASE="$_TF_VAL" ;;
+      storage_account_name)      STORAGE_ACCOUNT_NAME="$_TF_VAL" ;;
+      keyvault_name)             KEYVAULT_NAME="$_TF_VAL" ;;
+      postgres_name)             POSTGRES_NAME="$_TF_VAL" ;;
+      redis_name)                REDIS_NAME="$_TF_VAL" ;;
+      cluster_name)              CLUSTER_NAME="$_TF_VAL" ;;
+      resource_group_name)       RESOURCE_GROUP_NAME="$_TF_VAL" ;;
+      vnet_name)                 VNET_NAME="$_TF_VAL" ;;
+      existing_cluster_name)     EXISTING_CLUSTER_NAME="$_TF_VAL" ;;
+      existing_keyvault_name)    EXISTING_KEYVAULT_NAME="$_TF_VAL" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
+      environment)               ENVIRONMENT="$_TF_VAL" ;;
       cost_center)               COST_CENTER="$_TF_VAL" ;;
       default_node_pool_vm_size) NODE_VM_SIZE="$_TF_VAL" ;;
       ingress_controller)        INGRESS_CONTROLLER="$_TF_VAL" ;;
@@ -241,6 +402,15 @@ _load_tfvars() {
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
   _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar default_node_pool_max_pods)  && NODE_MAX_PODS="$_TF_VAL"
+  # The wizard never asks about the feature flags — the generated file says to
+  # edit them there and re-run `make init-values`. Reading them back is what
+  # makes that true: the writer emits all four every time, so an unloaded flag
+  # is written false and silently turns off a pass that is already deployed.
+  _TF_VAL=$(_parse_tfvar enable_deployments)   && ENABLE_DEPLOYMENTS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_agent_builder) && ENABLE_AGENT_BUILDER="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_insights)      && ENABLE_INSIGHTS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_polly)         && ENABLE_POLLY="$_TF_VAL"
   # Absent means an existing deployment predating the hash, or one that opted
   # out. Either way it stays off — the writer must not turn it on underneath a
   # deployment whose resources are already named.
@@ -248,6 +418,9 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar unique_resource_names)       && UNIQUE_NAMES="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_enabled)            && BLOB_TTL_ENABLED="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_short_days)         && BLOB_TTL_SHORT_DAYS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_long_days)          && BLOB_TTL_LONG_DAYS="$_TF_VAL"
   # Written only when redis_source = "external", so an absent key means either
   # in-cluster Redis or a tfvars predating the variable. false is right for both.
   _TF_VAL=$(_parse_tfvar redis_high_availability)     && REDIS_HA="$_TF_VAL"
@@ -337,14 +510,48 @@ LOCATION="eastus"
 # renames Postgres, Redis, Storage and Key Vault, which Terraform executes as
 # destroy-and-recreate.
 UNIQUE_NAMES="true"
-OWNER="platform-team"
+# The wizard never asks for name_base — it is a naming-standard knob set by hand
+# in tfvars — but it has to be read, because every name the wizard previews and
+# length-checks is built from it. Empty means the derivation picks the default
+# base, matching the locals in main.tf.
+NAME_BASE=""
+
+# Same reason, one resource each. A pinned name replaces the derived one in
+# main.tf, so a length check that ignores these measures a string Terraform
+# throws away — and it fires on the deployment-name prompt, where it would
+# block a valid config and then advise setting the very variables it ignored.
+STORAGE_ACCOUNT_NAME=""
+KEYVAULT_NAME=""
+POSTGRES_NAME=""
+REDIS_NAME=""
+CLUSTER_NAME=""
+RESOURCE_GROUP_NAME=""
+VNET_NAME=""
+
+# Attach mode, same reason again: the wizard never asks, but the review screen
+# and the length check both name the cluster and the vault, and in attach mode
+# those names are the operator's rather than derived. Greenfield is the default
+# the module assumes, so an absent key reads as create.
+CREATE_CLUSTER="true"
+EXISTING_CLUSTER_NAME=""
+CREATE_KEYVAULT="true"
+EXISTING_KEYVAULT_NAME=""
+# Left blank on purpose. The module omits the tag entirely when it is empty, and
+# an unanswered "platform-team" is a worse answer than no tag at all.
+OWNER=""
+ENVIRONMENT=""
 COST_CENTER=""
 
 _run_section_2() {
   _section "2. Subscription & Naming"
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
-  _hint "and becomes the 'environment' tag. Write it without a hyphen — we add the separator."
-  _hint "Example: prod → ls-rg-prod, ls-aks-prod, ls-kv-prod-<hash>"
+  _hint "and is the default 'environment' tag. Write it without a hyphen — we add the separator."
+  # Built from the same base the derivation uses, so a tfvars carrying name_base
+  # gets an example matching the names it will actually see below.
+  _EG_BASE="ls"
+  [[ "$UNIQUE_NAMES" == "true" ]] || _EG_BASE="langsmith"
+  [[ -n "$NAME_BASE" ]] && _EG_BASE="$NAME_BASE"
+  _hint "Example: prod → ${_EG_BASE}-rg-prod, ${_EG_BASE}-aks-prod, ${_EG_BASE}-kv-prod-<hash>"
   _hint "Postgres, Redis, Storage and Key Vault names must be unique across all of Azure,"
   _hint "so those four get a hash of your subscription appended. Keep it under ~12 chars."
   _hint "Changing it later creates entirely new resources — choose something stable."
@@ -374,6 +581,7 @@ _run_section_2() {
   # the default on a blank reply, so an empty default would make Enter fail the
   # regex below and re-prompt forever. Offer the sentinel back instead.
   local name_default="${NAME_PREFIX:-none}"
+  local name_errors="" name_error_line
   [[ "$PROFILE" == "prod" ]] && ! _answered 2 && name_default="prod"
   while true; do
     _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
@@ -390,7 +598,44 @@ _run_section_2() {
     # because the prefix always lands on the end of "ls-<resource>" and the
     # composed name still starts with a letter.
     if [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
-      break
+      # Storage and Key Vault cap at 24 characters including the resource word
+      # and the uniqueness hash, so ~12 characters is the practical ceiling here
+      # and the wizard can say so with the actual name rather than a rule of
+      # thumb. The plan-time preconditions stay as the backstop for a
+      # hand-written tfvars.
+      _derive_names
+      name_errors="$(_name_length_errors)"
+      [[ -z "$name_errors" ]] && break
+      while IFS= read -r name_error_line; do
+        _red "  ERROR: $name_error_line"
+      done <<< "$name_errors"
+      # Whether the deployment name is even the lever. name_base, or a pinned
+      # name read out of an existing tfvars, can eat the whole 24-character
+      # budget on its own — a 16-char name_base leaves nothing, and then every
+      # answer including the shortest one fails. Re-deriving with no deployment
+      # name answers it, and without an escape here the prompt cannot be
+      # satisfied or exited.
+      local _keep_prefix="$NAME_PREFIX"
+      NAME_PREFIX=""
+      _derive_names
+      local shortest_errors
+      shortest_errors="$(_name_length_errors)"
+      NAME_PREFIX="$_keep_prefix"
+      _derive_names
+      if [[ -z "$shortest_errors" ]]; then
+        _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
+        _hint "keyvault_name in terraform.tfvars once this run has written it."
+        continue
+      fi
+      _hint "The deployment name is not what busts the ceiling — an empty one is over it too."
+      _hint "The leading segment is what to change: name_base, or storage_account_name /"
+      _hint "keyvault_name to pin the name outright. All three are set by hand in"
+      _hint "terraform.tfvars, which this run writes and re-reads, so you can finish here"
+      _hint "and edit the file. Terraform rejects the config at plan until you do."
+      if _ask_yn "Continue with this name and fix it in terraform.tfvars?" "n"; then
+        break
+      fi
+      continue
     fi
     _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
   done
@@ -398,14 +643,26 @@ _run_section_2() {
   _ask "Azure region" "$LOCATION"
   LOCATION="$_REPLY"
 
+  # These three are Azure tags and nothing else: they name no resource and grant
+  # no one access. "Owner tag" read like it might do the latter.
+  echo ""
+  _hint "The last three answers are Azure tags, used for cost reporting and policy."
+  _hint "None of them grants access or appears in a resource name. Blank omits the tag."
+  _hint "The environment tag defaults to the deployment name — set it only when the"
+  _hint "deployment name carries more (name \"prod-eastus\", environment tag \"prod\")."
+  _ask "Environment tag (blank = the deployment name)" "$ENVIRONMENT"
+  ENVIRONMENT="$_REPLY"
+
   _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
   OWNER="$_REPLY"
 
-  _ask "Cost center tag (leave blank to skip)" "$COST_CENTER"
+  _ask "Cost center tag (billing code)" "$COST_CENTER"
   COST_CENTER="$_REPLY"
 
   echo ""
-  printf "  Resources: ls-{resource}$(_cyan "${NAME_PREFIX:+-$NAME_PREFIX}")  in  $(_cyan "$LOCATION")\n"
+  _derive_names
+  printf "  Resource group  $(_cyan "$_RG_NAME")  in  $(_cyan "$LOCATION")\n"
+  printf "  Cluster $(_cyan "$(_name_or_attached "$CREATE_CLUSTER" "$_AKS_NAME")") · Key Vault $(_cyan "$(_name_or_attached "$CREATE_KEYVAULT" "$_KV_NAME")") · Storage $(_cyan "$_BLOB_NAME")\n"
 }
 
 # -- 3. Networking -----------------------------------------------------------
@@ -614,7 +871,7 @@ _run_section_4() {
   _hint "Max pods per node multiplies the AKS subnet requirement, at"
   _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
   _hint "lower it if your subnet is fixed and tight."
-  _ask_int "Max pods per node" "60"
+  _ask_int "Max pods per node" "$NODE_MAX_PODS"
   NODE_MAX_PODS="$_REPLY"
 }
 
@@ -709,8 +966,11 @@ CREATE_DNS_ZONE="false"
 # name. Asking here means the operator picks a free one instead of hitting
 # DnsRecordCreateConflict at apply.
 _ask_dns_label() {
+  # A label already in use is the answer to keep — the suggestion is only for a
+  # deployment that has not claimed one yet. Reoffering the derived name would
+  # move the FQDN operators have already handed out.
   _ask "DNS label — must be unique across the whole $LOCATION region (e.g. langsmith-prod)" \
-    "langsmith${NAME_PREFIX:+-$NAME_PREFIX}"
+    "${DNS_LABEL:-langsmith${NAME_PREFIX:+-$NAME_PREFIX}}"
   DNS_LABEL="$_REPLY"
 }
 
@@ -721,13 +981,16 @@ _run_section_6() {
   _hint "None          — HTTP only. Fastest setup, zero cert config. Good for dev/internal."
   _hint "              URL: http://<label>.<region>.cloudapp.azure.com"
   _hint ""
-  _hint "Let's Encrypt — Free HTTPS via ACME HTTP-01 challenge. Requires a public DNS label."
+  _hint "Both HTTPS options are free certificates from Let's Encrypt. What differs is how"
+  _hint "Let's Encrypt proves you control the name, and both register an ACME account."
+  _hint ""
+  _hint "HTTP-01       — Let's Encrypt fetches a token over port 80. Needs a public DNS label."
   _hint "              Works with: nginx, istio (self-managed), envoy-gateway."
   _hint "              Does NOT work with istio-addon or agic (no IngressClass / path rewrite)."
   _hint ""
-  _hint "DNS-01        — HTTPS via ACME DNS-01 challenge. Works with ALL controllers."
+  _hint "DNS-01        — cert-manager writes a TXT record to Azure DNS. No HTTP port needed,"
+  _hint "              so it works with ALL controllers."
   _hint "              Requires a custom domain and an Azure DNS zone (NS delegation)."
-  _hint "              cert-manager writes TXT records to Azure DNS — no HTTP port needed."
   _hint "              Best for: private clusters, firewalled environments, istio-addon."
   _hint ""
   _hint "Existing      — Bring a pre-issued K8s TLS secret (manual cert management)."
@@ -736,10 +999,10 @@ _run_section_6() {
   _answered 6 && tls_choice="$(_index_of "$TLS_SOURCE" none letsencrypt dns01 existing)"
   _ask_choice --default "$tls_choice" \
     "TLS certificate source:" \
-    "None          — HTTP only (quickstart default, zero setup)" \
-    "Let's Encrypt — HTTPS via HTTP-01 (nginx, istio, envoy-gateway only)" \
-    "DNS-01        — HTTPS via DNS-01 (all controllers, requires custom domain)" \
-    "Existing      — bring your own K8s TLS secret"
+    "None                    — HTTP only (quickstart default, zero setup)" \
+    "Let's Encrypt (HTTP-01) — nginx, istio, envoy-gateway only" \
+    "Let's Encrypt (DNS-01)  — all controllers, requires a custom domain" \
+    "Existing                — bring your own K8s TLS secret"
 
   case "$_CHOICE" in
     1) TLS_SOURCE="none" ;;
@@ -787,34 +1050,47 @@ _run_section_6() {
   # DNS hostname setup
   if [[ "$TLS_SOURCE" != "none" && "$TLS_SOURCE" != "existing" ]]; then
     echo ""
-    _hint "How do you want to expose the LangSmith URL?"
-    _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
-    _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
-    _hint "                    Only usable with Let's Encrypt (HTTP-01)."
-    _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
-    _hint "                    Required for DNS-01. Works with all controllers."
-    _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
-    echo ""
+    # DNS-01 has no DNS-label path at all: cert-manager has to write a TXT record
+    # into the zone, and Azure owns cloudapp.azure.com. Offering the choice here
+    # offered an answer that left langsmith_domain empty and the cert unissuable.
+    local want_domain=false
+    [[ "$TLS_SOURCE" == "dns01" ]] && want_domain=true
 
-    local dns_choice=""
-    _answered 6 && { [[ -n "$LANGSMITH_DOMAIN" ]] && dns_choice=2 || dns_choice=1; }
-    _ask_choice --default "$dns_choice" \
-      "DNS approach:" \
-      "Azure public IP DNS label — simplest, free subdomain" \
-      "Custom domain — your own domain (required for DNS-01)"
+    if [[ "$want_domain" == "false" ]]; then
+      _hint "How do you want to expose the LangSmith URL?"
+      _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
+      _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
+      _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
+      _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
+      echo ""
 
-    if [[ "$_CHOICE" == "1" ]]; then
-      LANGSMITH_DOMAIN=""
-      _ask_dns_label
-    else
-      DNS_LABEL=""
-      _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
-      _ask "Custom domain" "$LANGSMITH_DOMAIN"
-      LANGSMITH_DOMAIN="$_REPLY"
+      local dns_choice=""
+      _answered 6 && { [[ -n "$LANGSMITH_DOMAIN" ]] && dns_choice=2 || dns_choice=1; }
+      _ask_choice --default "$dns_choice" \
+        "DNS approach:" \
+        "Azure public IP DNS label — simplest, free subdomain" \
+        "Custom domain — your own domain"
+      [[ "$_CHOICE" == "2" ]] && want_domain=true
     fi
 
-    _hint "Let's Encrypt requires an email for your ACME account (cert expiry notifications)."
-    _ask "Email for Let's Encrypt / ACME registration" "$LE_EMAIL"
+    if [[ "$want_domain" == "true" ]]; then
+      DNS_LABEL=""
+      echo ""
+      _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
+      while true; do
+        _ask "Custom domain" "$LANGSMITH_DOMAIN"
+        LANGSMITH_DOMAIN="$_REPLY"
+        [[ -n "$LANGSMITH_DOMAIN" ]] && break
+        _red "  ERROR: a domain is required here — the certificate is issued for this name."
+      done
+    else
+      LANGSMITH_DOMAIN=""
+      _ask_dns_label
+    fi
+
+    _hint "Both challenge types register an ACME account with Let's Encrypt, which needs"
+    _hint "an email. Used for expiry notices only."
+    _ask "Email for the ACME account" "$LE_EMAIL"
     LE_EMAIL="$_REPLY"
 
   elif [[ "$TLS_SOURCE" == "none" ]]; then
@@ -847,6 +1123,11 @@ PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
 AMR_SKU="Balanced_B1"
 REDIS_HA="false"
+# Storage is not optional — LangSmith needs a blob container for run artifacts —
+# but how long those artifacts live is a policy choice, so section 7 asks.
+BLOB_TTL_ENABLED="true"
+BLOB_TTL_SHORT_DAYS="14"
+BLOB_TTL_LONG_DAYS="400"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -859,7 +1140,7 @@ _run_section_7() {
   _hint "              Automated backups, geo-redundancy, independent scaling."
   _hint "              Recommended for production and long-running POCs."
   _hint ""
-  _hint "ClickHouse  — always in-cluster for self-hosted (single StatefulSet, no backups)."
+  _hint "ClickHouse  — in-cluster is a single StatefulSet with no backups."
   _hint "              For production traces, use LangChain Managed ClickHouse instead."
 
   if [[ "$PROFILE" == "prod" ]]; then
@@ -944,6 +1225,31 @@ _run_section_7() {
     _yellow "NOTE"; printf ": In-cluster ClickHouse is not recommended for production.\n"
     printf "  See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse\n"
   fi
+
+  # Storage came with the deployment whether or not anyone asked, and the
+  # retention defaults were written into tfvars unasked with it. A customer with
+  # a data-retention policy has to see this as a choice.
+  echo ""
+  _hint "LangSmith stores run inputs, outputs and attachments in an Azure Storage account"
+  _hint "this module creates. Retention expires them on a schedule: short-lived covers the"
+  _hint "per-run payloads, long-lived covers datasets and exports."
+  local ttl_yn
+  ttl_yn="$(_yn_default "$BLOB_TTL_ENABLED")"
+  if _ask_yn "Expire stored artifacts on a schedule?" "$ttl_yn"; then
+    BLOB_TTL_ENABLED="true"
+    # Same floors as the blob_ttl_* validations in variables.tf, and the same
+    # ordering rule: the two are separate lifecycle rules on separate prefixes,
+    # so Azure accepts an inverted pair and deletes the long-lived artifacts
+    # first. Bounded here as well as at plan, because the plan-time failure
+    # arrives after the whole wizard has been answered.
+    _ask_int "Days to keep short-lived artifacts" "$BLOB_TTL_SHORT_DAYS" 1
+    BLOB_TTL_SHORT_DAYS="$_REPLY"
+    _ask_int "Days to keep long-lived artifacts (at least the short-lived count)" "$BLOB_TTL_LONG_DAYS" "$BLOB_TTL_SHORT_DAYS"
+    BLOB_TTL_LONG_DAYS="$_REPLY"
+  else
+    BLOB_TTL_ENABLED="false"
+    _hint "Artifacts are kept until you delete them. Storage cost grows with trace volume."
+  fi
 }
 
 # -- 8. Key Vault ------------------------------------------------------------
@@ -977,6 +1283,13 @@ _run_section_8() {
 
 # -- 9. Sizing Profile -------------------------------------------------------
 SIZING_PROFILE="dev"
+# Not prompted anywhere: a first deployment is Pass 1/2 only, and the later
+# passes are turned on by editing the generated file. Held as variables so a
+# re-run writes back what is already deployed instead of a hardcoded false.
+ENABLE_DEPLOYMENTS="false"
+ENABLE_AGENT_BUILDER="false"
+ENABLE_INSIGHTS="false"
+ENABLE_POLLY="false"
 
 _run_section_9() {
   _section "9. Sizing Profile"
@@ -1079,6 +1392,11 @@ _run_section_10() {
 
 TOTAL_SECTIONS=10
 SECTION=1
+# Whether settings the wizard cannot ask about survive the rewrite. Set before
+# the checkpoint is read so a resumed run keeps the answer it was given, and
+# true by default so a checkpoint written by an older version of this script
+# does not delete them.
+PRESERVE_UNKNOWN="true"
 
 if [[ -f "$STATE_FILE" ]]; then
   echo ""
@@ -1108,13 +1426,32 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
   _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
   _ask_choice "What would you like to do?" \
     "Edit it     — load its values as answers, change what you need" \
-    "Start fresh — ignore it and answer every question again (overwrites on save)" \
+    "Start fresh — ignore it and answer every question again (discards hand-edits too)" \
     "Quit        — leave it untouched"
   case "$_CHOICE" in
     1) _load_tfvars
        ANSWERED="1 2 3 4 5 6 7 8 9 10"
        printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
-    2) : ;;
+    2) PRESERVE_UNKNOWN="false"
+       # The wizard never writes create_cluster or create_keyvault, so both ride
+       # through a re-run as preserved unknown keys — except on this branch,
+       # which drops them. That is not one more discarded hand-edit: it turns an
+       # attached deployment back into a greenfield one, and the next plan builds
+       # a second cluster and vault beside the ones already in use.
+       _attached=""
+       if grep -qE '^[[:space:]]*create_cluster[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="an AKS cluster"
+       fi
+       if grep -qE '^[[:space:]]*create_keyvault[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="${_attached:+${_attached} and }a Key Vault"
+       fi
+       if [[ -n "$_attached" ]]; then
+         echo ""
+         _yellow "NOTE"; printf ": that file attaches to %s you already own.\n" "$_attached"
+         printf "  Starting fresh drops those settings, and the next plan creates new ones\n"
+         printf "  instead of reusing yours. To keep attaching, copy them back from\n"
+         printf "  %s.bak when the wizard finishes.\n" "$OUTPUT"
+       fi ;;
     3) echo "Aborted."; exit 0 ;;
   esac
 fi
@@ -1166,6 +1503,11 @@ while true; do
   printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
+  # An unanswered environment tag falls back to the deployment name, and to "dev"
+  # when there is no deployment name either, so show what the tag will say.
+  printf "  %-24s %s\n" "   Environment tag:" "${ENVIRONMENT:-${NAME_PREFIX:-dev}}"
+  [[ -n "$OWNER" ]]       && printf "  %-24s %s\n" "   Owner tag:"       "$OWNER"
+  [[ -n "$COST_CENTER" ]] && printf "  %-24s %s\n" "   Cost center tag:" "$COST_CENTER"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
   if [[ "$CREATE_VNET" == "false" ]]; then
     printf "  %-24s %s\n" "   VNet ID:"           "$VNET_ID"
@@ -1180,7 +1522,12 @@ while true; do
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
   [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
   [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
-  printf "  %-24s %s\n" "6. TLS:"             "$TLS_SOURCE"
+  # Both HTTPS values are Let's Encrypt, which "letsencrypt" and "dns01" alone
+  # hide — the review screen is the last place that misreading can be caught.
+  _TLS_REVIEW="$TLS_SOURCE"
+  [[ "$TLS_SOURCE" == "letsencrypt" ]] && _TLS_REVIEW="letsencrypt  (Let's Encrypt, HTTP-01 challenge)"
+  [[ "$TLS_SOURCE" == "dns01" ]]       && _TLS_REVIEW="dns01  (Let's Encrypt, DNS-01 challenge)"
+  printf "  %-24s %s\n" "6. TLS:"             "$_TLS_REVIEW"
   [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
   [[ -n "$LE_EMAIL" ]]         && printf "  %-24s %s\n" "   ACME email:"   "$LE_EMAIL"
@@ -1194,6 +1541,39 @@ while true; do
     printf "  %-24s %s\n" "    Log Analytics:"  "$CREATE_DIAGNOSTICS"
     printf "  %-24s %s\n" "    Bastion:"        "$CREATE_BASTION"
   fi
+  # What the answers add up to. The resource group and the storage account are
+  # never asked about, so this is the only place an operator with a naming or a
+  # storage policy sees that they are part of the deployment at all.
+  _derive_names
+  echo ""
+  printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  # Attach mode is set by hand in tfvars and carried across a re-run as a
+  # preserved unknown key, so the wizard can reach this screen with a cluster or
+  # a vault it is not going to create. Printing those under "Terraform creates"
+  # is the one thing this screen must not do: it is the review an operator gets
+  # before an apply that auto-approves.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    printf "    %-18s %s\n" "AKS cluster"   "${_AKS_NAME:-(existing_cluster_name is unset)}  — attaches, does not create"
+  else
+    printf "    %-18s %s\n" "AKS cluster"   "$_AKS_NAME"
+  fi
+  if [[ "$CREATE_KEYVAULT" == "false" ]]; then
+    printf "    %-18s %s\n" "Key Vault"     "${_KV_NAME:-(existing_keyvault_name is unset)}  — attaches, writes its secrets there"
+  else
+    printf "    %-18s %s\n" "Key Vault"     "$_KV_NAME"
+  fi
+  printf "    %-18s %s\n" "Storage account" "$_BLOB_NAME  (LangSmith run artifacts)"
+  [[ "$PG_SOURCE" == "external" ]]    && printf "    %-18s %s\n" "PostgreSQL"     "$_PG_NAME"
+  [[ "$REDIS_SOURCE" == "external" ]] && printf "    %-18s %s\n" "Redis"          "$_REDIS_NAME  ($AMR_SKU)"
+  # 90 days is the log_retention_days default; the wizard does not ask for it.
+  [[ "$CREATE_DIAGNOSTICS" == "true" ]] && printf "    %-18s %s\n" "Log Analytics" "$_LAW_NAME  (90-day retention)"
+  if [[ "$BLOB_TTL_ENABLED" == "true" ]]; then
+    printf "    %-18s %s\n" "Blob retention" "short-lived ${BLOB_TTL_SHORT_DAYS}d, long-lived ${BLOB_TTL_LONG_DAYS}d"
+  else
+    printf "    %-18s %s\n" "Blob retention" "off — artifacts are kept until you delete them"
+  fi
+  printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+
   echo ""
   printf "  ${DIM}Press Enter to write terraform.tfvars, a section number (1-10) to change it,${RESET}\n"
   printf "  ${DIM}or q to save your answers and quit without writing.${RESET}\n"
@@ -1228,6 +1608,77 @@ done
 
 _section "Generating terraform.tfvars"
 
+# Every key the writer below can emit, across all of its branches. Anything else
+# in an existing terraform.tfvars was put there by hand — a pinned resource
+# name, a tuned SKU, an authorized-IP range — and the rewrite would destroy it,
+# so those lines are carried across instead. `identifier` is on the list as the
+# retired spelling of name_prefix: it has already been read back, and carrying
+# it forward would leave two keys naming the deployment.
+_WRITER_KEYS="subscription_id identifier name_prefix location unique_resource_names
+environment owner cost_center
+create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
+aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
+aks_service_cidr agic_subnet_id bastion_subnet_id
+default_node_pool_vm_size default_node_pool_min_count default_node_pool_max_count
+default_node_pool_max_pods
+ingress_controller istio_addon_revision agw_sku_tier
+tls_certificate_source dns_label langsmith_domain letsencrypt_email create_dns_zone
+postgres_source redis_source clickhouse_source
+postgres_admin_username postgres_database_name
+amr_sku redis_high_availability keyvault_purge_protection
+blob_ttl_enabled blob_ttl_short_days blob_ttl_long_days
+langsmith_namespace langsmith_release_name sizing_profile
+enable_deployments enable_agent_builder enable_insights enable_polly
+create_waf create_diagnostics create_bastion"
+
+PRESERVED=""
+PRESERVED_PARTIAL=""
+if [[ -f "$OUTPUT" ]]; then
+  # The rewrite truncates, so the previous file is only recoverable from here.
+  cp "$OUTPUT" "$OUTPUT.bak"
+  if [[ "$PRESERVE_UNKNOWN" != "false" ]]; then
+    _depth=0
+    while IFS= read -r _line; do
+      # Brackets inside a string or a comment do not open a block, so take them
+      # out before counting. Without this, `foo = "a { b"` swallows the rest of
+      # the file.
+      _bare=$(printf '%s' "$_line" | sed 's/"[^"]*"//g; s/#.*//')
+      # The closing brace needs the backslash: an unescaped one inside a bracket
+      # expression still ends the ${...} expansion.
+      _open="${_bare//[^\[{]/}"
+      _close="${_bare//[^]\}]/}"
+      _delta=$(( ${#_open} - ${#_close} ))
+
+      # Inside a value that opened on an earlier line. Its inner lines look like
+      # assignments themselves (`foo = "bar"` inside a map), so they have to be
+      # consumed here rather than treated as settings of their own.
+      if (( _depth > 0 )); then
+        _depth=$(( _depth + _delta ))
+        (( _depth < 0 )) && _depth=0
+        continue
+      fi
+      _depth=$_delta
+      (( _depth < 0 )) && _depth=0
+
+      [[ "$_line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*= ]] || continue
+      _key="${BASH_REMATCH[1]}"
+      _known=false
+      for _k in $_WRITER_KEYS; do
+        [[ "$_k" == "$_key" ]] && { _known=true; break; }
+      done
+      [[ "$_known" == "true" ]] && continue
+      # Only a value that closes on its own line can be copied verbatim. A list
+      # or map spanning several lines would arrive as a fragment, which is worse
+      # than naming it and leaving the operator to paste it back from the .bak.
+      if [[ "$_line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(\"[^\"]*\"|\[[^][]*\]|\{[^{}]*\}|[A-Za-z0-9._-]+)[[:space:]]*(#.*)?$ ]]; then
+        PRESERVED="${PRESERVED}${_line}"$'\n'
+      else
+        PRESERVED_PARTIAL="${PRESERVED_PARTIAL} ${_key}"
+      fi
+    done < "$OUTPUT"
+  fi
+fi
+
 cat > "$OUTPUT" << TFVARS
 # Generated by quickstart.sh on $(date -u +"%Y-%m-%d %H:%M UTC")
 # Profile: ${PROFILE}
@@ -1238,14 +1689,15 @@ cat > "$OUTPUT" << TFVARS
 subscription_id = "${SUBSCRIPTION_ID}"
 name_prefix     = "${NAME_PREFIX}"
 location        = "${LOCATION}"
-# environment tag defaults to name_prefix. Uncomment to tag it differently:
-# environment   = "${NAME_PREFIX}"
 
 # Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
 # Key Vault) so they cannot collide with another LangSmith deployment.
 unique_resource_names = ${UNIQUE_NAMES}
 TFVARS
 
+# Tags are written only when answered: the module omits an empty owner or
+# cost_center tag, and an empty environment falls back to the deployment name.
+[[ -n "$ENVIRONMENT" ]] && echo "environment     = \"${ENVIRONMENT}\"" >> "$OUTPUT"
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
 [[ -n "$COST_CENTER" ]] && echo "cost_center     = \"${COST_CENTER}\"" >> "$OUTPUT"
 
@@ -1350,9 +1802,9 @@ keyvault_purge_protection = ${KV_PURGE_PROTECTION}
 #------------------------------------------------------------------------------
 # Blob Storage
 #------------------------------------------------------------------------------
-blob_ttl_enabled    = true
-blob_ttl_short_days = 14
-blob_ttl_long_days  = 400
+blob_ttl_enabled    = ${BLOB_TTL_ENABLED}
+blob_ttl_short_days = ${BLOB_TTL_SHORT_DAYS}
+blob_ttl_long_days  = ${BLOB_TTL_LONG_DAYS}
 
 #------------------------------------------------------------------------------
 # LangSmith
@@ -1367,16 +1819,16 @@ langsmith_release_name = "langsmith"
 sizing_profile = "${SIZING_PROFILE}"
 
 # Pass 3 — LangGraph Platform (required before agent_builder, insights, polly)
-enable_deployments   = false
+enable_deployments   = ${ENABLE_DEPLOYMENTS}
 
 # Pass 4 — Agent Builder UI
-enable_agent_builder = false
+enable_agent_builder = ${ENABLE_AGENT_BUILDER}
 
 # Pass 5 — Insights (ClickHouse-backed analytics)
-enable_insights      = false
+enable_insights      = ${ENABLE_INSIGHTS}
 
 # Pass 5 — Polly
-enable_polly         = false
+enable_polly         = ${ENABLE_POLLY}
 TFVARS
 
 HAS_SECURITY=false
@@ -1395,6 +1847,20 @@ TFVARS
   printf "%b" "$SECURITY_BLOCK" >> "$OUTPUT"
 fi
 
+if [[ -n "$PRESERVED" ]]; then
+  # Quoted delimiter and a literal printf: these lines come out of a file on
+  # disk and are never expanded on the way through.
+  cat >> "$OUTPUT" << 'TFVARS'
+
+#------------------------------------------------------------------------------
+# Kept from your previous terraform.tfvars
+# The wizard does not ask about these, so it carries them across a rewrite
+# rather than dropping them. Edit or delete them by hand.
+#------------------------------------------------------------------------------
+TFVARS
+  printf '%s' "$PRESERVED" >> "$OUTPUT"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Done
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1405,6 +1871,14 @@ rm -f "$STATE_FILE"
 
 echo ""
 printf "  $(_green "✔")  Written to: $(_bold "$OUTPUT")\n"
+[[ -f "$OUTPUT.bak" ]] && printf "     Previous file: $(_bold "$OUTPUT.bak")\n"
+if [[ -n "$PRESERVED_PARTIAL" ]]; then
+  echo ""
+  _yellow "  WARNING"
+  printf ": these were set in the previous file, span more than one line,\n"
+  printf "  and were not carried over:%s\n" "$PRESERVED_PARTIAL"
+  printf "  Copy them back from %s if you still need them.\n" "$OUTPUT.bak"
+fi
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
 echo ""
@@ -1419,6 +1893,12 @@ printf "     ${CYAN}make preflight${RESET}\n"
 echo ""
 printf "  4. Deploy infrastructure (~15–20 min):\n"
 printf "     ${CYAN}make init && make apply${RESET}\n"
+# make apply runs -auto-approve across three targeted stages, so the summary
+# above is the last look at a first deployment before it is built. Deliberately
+# silent on whether make plan works beforehand: that depends on whether any
+# kubernetes_manifest is left in the config, which is in flux.
+printf "     ${DIM}apply auto-approves. The summary above is your review.${RESET}\n"
+printf "     ${DIM}Run ${RESET}${CYAN}make plan${RESET}${DIM} before any later apply.${RESET}\n"
 echo ""
 printf "  5. Get cluster credentials + create K8s secrets:\n"
 printf "     ${CYAN}make kubeconfig && make k8s-secrets${RESET}\n"

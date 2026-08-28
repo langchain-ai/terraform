@@ -32,16 +32,17 @@ set -euo pipefail
 SECRETS_FILE="secrets.auto.tfvars"
 
 # ── Resolve the Key Vault name ────────────────────────────────────────────────
-# Priority: terraform output → _derive_kv_name. Same order as manage-keyvault.sh.
+# Priority: terraform output → _require_kv_name. Same order as manage-keyvault.sh.
 #
 # _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix, an
-# explicit keyvault_name, and the unique_resource_names hash. Deriving it here by
-# hand is how this script and three others drifted apart. It still cannot cover
-# create_keyvault = false, where the name is the customer's and nothing in
-# terraform.tfvars derives it, so the output wins when there is one. Reading the
-# wrong vault fails silently: _kv_secret below falls through to the local file, then
-# to generating a fresh value. A machine without those files would mint a new
-# api_key_salt and jwt_secret, and Terraform would write them over the live ones.
+# explicit keyvault_name, the unique_resource_names hash, and the create_keyvault =
+# false branch that takes existing_keyvault_name. Deriving it here by hand is how
+# this script and three others drifted apart. Reading the wrong vault fails
+# silently: _kv_secret below falls through to the local file, then to generating a
+# fresh value. A machine without those files would mint a new api_key_salt and
+# jwt_secret, and Terraform would write them over the live ones. That is why this
+# runs through _require_kv_name: an attach config with no vault name stops the run
+# instead of deriving a name for a vault nobody created.
 #
 # `terraform output -raw` exits 0 and prints its "No outputs found" warning on
 # stdout when there is no state, so the guard checks the shape of what came back
@@ -53,7 +54,7 @@ source "$SCRIPT_DIR/_common.sh"
 _name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
 _kv_name=$(terraform output -raw keyvault_name 2>/dev/null || true)
 case "$_kv_name" in
-  "" | *[![:alnum:]-]*) _kv_name=$(_derive_kv_name) ;;
+  "" | *[![:alnum:]-]*) _kv_name=$(_require_kv_name) ;;
 esac
 
 # LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.

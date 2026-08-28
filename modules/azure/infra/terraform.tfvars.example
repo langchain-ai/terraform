@@ -29,6 +29,15 @@ unique_resource_names = true
 # above — before the first successful apply only.
 # name_suffix_salt = "2"
 
+# Naming standard overrides. name_base replaces the "ls"/"langsmith" prefix on
+# every derived name at once; the three below name one resource each. All are
+# creation-time only — changing one after an apply renames the resource, which
+# Terraform executes as destroy-and-recreate. The wizard does not ask for these.
+# name_base           = "mycorp"                   # mycorp-rg-prod, mycorp-aks-prod, ...
+# resource_group_name = "rg-langsmith-prod-eastus"
+# vnet_name           = "vnet-langsmith-prod"      # ignored when create_vnet = false
+# cluster_name        = "aks-langsmith-prod"
+
 # Optional tags for cost allocation and compliance
 # environment = "prod"   # defaults to name_prefix; set only to tag it differently
 # owner       = "platform-team"
@@ -151,7 +160,7 @@ tls_certificate_source = "none"
 # tls_certificate_source = "letsencrypt"
 # letsencrypt_email      = "you@example.com"
 
-# Option C: Custom domain + DNS-01 — all controllers, works behind firewalls
+# Option C: Custom domain + Let's Encrypt DNS-01 — all controllers, works behind firewalls
 #   Requires: Azure DNS zone + NS delegation at registrar (one-time setup).
 #   → https://langsmith.example.com
 # tls_certificate_source = "dns01"

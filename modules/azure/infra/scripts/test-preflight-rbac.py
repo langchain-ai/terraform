@@ -118,6 +118,19 @@ ABAC_PRINCIPAL_TYPE_NO_ACTION = (
     "StringEqualsIgnoreCase 'ServicePrincipal'"
 )
 
+# Two clauses, the second past the 240th character. A real subscription policy
+# runs this long, and the constraint that decides whether an apply can succeed
+# is as likely to sit in the tail as the head.
+ABAC_LONG = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7, "
+    "ba92f5b4-2d11-453d-a403-e96b0029c9fe}"
+    ")) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'}"
+    ")) OR (@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
 
 def granted(role_guid=OWNER_GUID, scope=SUB_SCOPE, condition=None, custom=False):
     return {
@@ -289,10 +302,11 @@ CASES = [
     {
         "name": "everything permitted passes at both scopes",
         "ca_all": ALL_GOOD,
+        # One line per verdict, not per scope: the two scopes agree, so they are
+        # named together. A regression that splits them back out fails here.
         "expect": [
-            f"[✓] roleAssignments/write permitted at {SUB_SCOPE}, granted by Owner held at",
-            f"[✓] roleAssignments/write permitted at {RG_SCOPE}",
-            f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}",
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE}, granted by Owner held at",
+            f"[✓] Every resource action the deployment needs is permitted at {SUB_SCOPE} and {RG_SCOPE}",
         ],
         "reject": ["[✗]", "Falling back"],
     },
@@ -310,7 +324,7 @@ CASES = [
         "name": "roleAssignments/write refused fails without inventing a reason",
         "ca_all": response(write=False),
         "expect": [
-            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE}. All eight role assignments",
+            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE} and {RG_SCOPE}. The deployment grants roles",
         ],
         "reject": ["by deny assignment", "PIM holds"],
     },
@@ -328,8 +342,8 @@ CASES = [
         "ca_all": response(write=False),
         "eligibilities": [eligibility("Owner")],
         "expect": [
-            "[✗] PIM holds these roles for this identity as eligible but not active: Owner at",
-            "activating it (portal: PIM -> My roles -> Activate)",
+            "[✗] Eligible in PIM but not active, and carries roleAssignments/write: Owner at",
+            "(portal: PIM -> My roles -> Activate)",
         ],
     },
     {
@@ -424,6 +438,14 @@ CASES = [
         "ca_all": response(assignment=granted(condition=ABAC_PRINCIPAL_TYPE_NO_ACTION)),
         "expect": ["[✗] The condition admits only ServicePrincipal targets"],
         "reject": ['terraform_principal_type = "User"'],
+    },
+    {
+        "name": "a long ABAC condition is reported past its 240th character",
+        "ca_all": response(assignment=granted(condition=ABAC_LONG)),
+        "expect": [
+            "[!] That grant carries an ABAC condition",
+            "PrincipalType",
+        ],
     },
     {
         "name": "a refused resource write fails and names the action",
@@ -525,17 +547,47 @@ CASES = [
         "reject": ["PIM holds these roles"],
     },
     {
-        "name": "an invalid identifier drops the resource group scope instead of building a bad URL",
-        "tfvars_identifier": '"-Prod Corp"',
+        "name": "a name_prefix that yields an illegal group name drops the scope instead of building a bad URL",
+        "tfvars_name_prefix": '"-prod/../other"',
         "ca_all": ALL_GOOD,
-        "expect": ["[!] terraform.tfvars: identifier is not a valid resource-name suffix"],
+        "expect": ["[!] terraform.tfvars: 'langsmith-rg-prod/../other' is not a legal resource group name"],
         "reject_calls": ["resourceGroups"],
     },
     {
-        "name": "an empty identifier still yields a resource group scope",
-        "tfvars_identifier": '""',
+        "name": "an empty name_prefix still yields a resource group scope",
+        "tfvars_name_prefix": '""',
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg/providers"],
+    },
+    {
+        # identifier is name_prefix's legacy name, and a deployment that predates
+        # the rename still has only that key. Reading name_prefix alone leaves the
+        # suffix empty and probes a group Terraform never created.
+        "name": "the legacy identifier key still moves the probed group",
+        "tfvars_identifier": '"-prod"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg-prod/providers"],
+    },
+    # The three naming overrides each move the resource group, and the probe has
+    # to follow. Checking a group that does not exist is the failure these guard:
+    # it answers, and every RG verdict then describes the wrong thing.
+    {
+        "name": "unique_resource_names shortens the probed group to the ls- base",
+        "tfvars_extra": "unique_resource_names = true",
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-dev/providers"],
+    },
+    {
+        "name": "name_base replaces the probed group's base outright",
+        "tfvars_extra": 'name_base = "acme"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/acme-rg-dev/providers"],
+    },
+    {
+        "name": "resource_group_name replaces the probed group entirely",
+        "tfvars_extra": 'resource_group_name = "platform-shared-rg"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
     },
     {
         # name_suffix_salt exists so a deployment whose four global names got
@@ -544,7 +596,8 @@ CASES = [
         # checking the old names and reporting the collision it was bumped to
         # escape. Redis is asserted because it is the one name printed in full.
         "name": "name_suffix_salt rotates the derived global names",
-        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true\nname_suffix_salt = "2"',
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": 'unique_resource_names = true\nname_suffix_salt = "2"',
         "ca_all": ALL_GOOD,
         "expect": ["ls-redis-prod-4352a7"],
         "reject": ["ls-redis-prod-8a57d8"],
@@ -553,7 +606,8 @@ CASES = [
         # The unsalted counterpart, pinning the default derivation so a change to
         # the hash inputs cannot pass unnoticed.
         "name": "an empty salt leaves the derived names unchanged",
-        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": "unique_resource_names = true",
         "ca_all": ALL_GOOD,
         "expect": ["ls-redis-prod-8a57d8"],
     },
@@ -573,7 +627,8 @@ CASES = [
         # asserted here: name_prefix wins over identifier, and the base follows
         # unique_resource_names.
         "name": "the resource group scope follows name_prefix and unique_resource_names",
-        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": "unique_resource_names = true",
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-prod/providers"],
         "reject_calls": ["langsmith-rg"],
@@ -729,11 +784,14 @@ def build_case(case, index):
     (infra / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, infra / "scripts" / "preflight.sh")
 
-    identifier = case.get("tfvars_identifier", '"-dev"')
+    if "tfvars_identifier" in case:
+        name_line = f"identifier  = {case['tfvars_identifier']}"
+    else:
+        name_line = f"name_prefix = {case.get('tfvars_name_prefix', chr(34) + '-dev' + chr(34))}"
     (infra / "terraform.tfvars").write_text(
         f'subscription_id = "{case.get("tfvars_sub", SUB)}"\n'
         'location    = "eastus"\n'
-        f"identifier  = {identifier}\n"
+        f"{name_line}\n"
         f"{case.get('tfvars_extra', '')}\n"
     )
     (infra / "secrets.auto.tfvars").write_text('langsmith_license_key = "lsv2_pt_stub"\n')

@@ -17,6 +17,7 @@
 #   _read_values_stamp <f> <k>      — Read one stamped value back out
 #   _name_suffix                    — Resource-name suffix derived from name_prefix
 #   _derive_kv_name                 — Key Vault name, mirroring local.keyvault_name
+#   _require_kv_name                — _derive_kv_name, or exit with the reason it could not
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -142,14 +143,31 @@ _name_suffix() {
 # unique_resource_names hash. Four scripts need this name and each derived it
 # independently before, so they all went looking for the wrong vault the moment
 # the naming scheme changed. Keep this in step with main.tf.
+#
+# The attach branch comes first for the same reason it does in main.tf: with
+# create_keyvault = false the vault is the caller's, and a derived name points
+# at one that does not exist. That matters before the first apply, when there is
+# no terraform output to fall back on — setup-env.sh would read no secret from
+# the phantom vault and mint a fresh Postgres password over the real one.
+# Returns 1 when attach mode is on but existing_keyvault_name is unset, which is
+# the same combination plan rejects; callers report it rather than guess a name.
 _derive_kv_name() {
-  local explicit suffix sub salt hash
+  local explicit suffix sub salt hash base create
+  create=$(_parse_tfvar create_keyvault || echo "true")
+  if [[ "$create" == "false" ]]; then
+    explicit=$(_parse_tfvar existing_keyvault_name || true)
+    [[ -n "$explicit" ]] || return 1
+    echo "$explicit"
+    return 0
+  fi
   explicit=$(_parse_tfvar keyvault_name || true)
   if [[ -n "$explicit" ]]; then
     echo "$explicit"
     return 0
   fi
   suffix=$(_name_suffix || true)
+  # name_base overrides the ls/langsmith switch outright, same as main.tf.
+  base=$(_parse_tfvar name_base || true)
   if _tfvar_is_true unique_resource_names; then
     sub=$(_parse_tfvar subscription_id || true)
     salt=$(_parse_tfvar name_suffix_salt || true)
@@ -158,10 +176,24 @@ _derive_kv_name() {
     else
       hash=$(printf '%s' "${sub}${suffix}${salt}" | sha256sum | cut -c1-6)
     fi
-    echo "ls-kv${suffix}-${hash}"
+    echo "${base:-ls}-kv${suffix}-${hash}"
   else
-    echo "langsmith-kv${suffix}"
+    echo "${base:-langsmith}-kv${suffix}"
   fi
+}
+
+# _derive_kv_name with the one failure spelled out. Attach mode without
+# existing_keyvault_name is the only way it returns nothing, and every caller
+# but status.sh needs a real vault to do anything at all, so they exit here
+# rather than carry an empty name into an az command.
+_require_kv_name() {
+  local name
+  if ! name=$(_derive_kv_name); then
+    echo "  create_keyvault = false but existing_keyvault_name is unset in terraform.tfvars." >&2
+    echo "  Set it to the vault to attach to, or set create_keyvault = true." >&2
+    exit 1
+  fi
+  printf '%s' "$name"
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────
