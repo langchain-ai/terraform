@@ -41,10 +41,8 @@ locals {
   # var.name_base overrides the switch outright, for a corporate naming standard
   # that wants its own prefix on every resource.
   #
-  # The other hash inputs are fixed for a deployment, so a burned name (a
-  # soft-deleted Key Vault, a Redis name Azure still holds) has no way out.
-  # Bumping name_suffix_salt rotates all four global names at once. Empty by
-  # default.
+  # Both hash inputs are fixed for a deployment, so name_suffix_salt is the only
+  # way out of a burned name. Bumping it rotates all four at once.
   name_base   = var.name_base != "" ? var.name_base : (var.unique_resource_names ? "ls" : "langsmith")
   uniq_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.name_suffix}${var.name_suffix_salt}"), 0, 6)}" : ""
 
