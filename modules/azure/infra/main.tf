@@ -808,10 +808,8 @@ module "keyvault" {
   # Only the two Terraform already holds in state for another reason. The
   # LangSmith app secrets are written to the vault post-apply by
   # scripts/seed-keyvault-secrets.sh and never pass through Terraform.
-  #
-  # keyvault_manage_secrets = false drops those two as well, leaving apply with
-  # no Key Vault data-plane access to need at all. The seed script writes all
-  # nine, so nothing downstream changes.
+  # keyvault_manage_secrets = false drops those two too; the seed script then
+  # writes all nine.
   manage_secrets          = var.keyvault_manage_secrets
   postgres_admin_password = var.postgres_admin_password
   langsmith_license_key   = var.langsmith_license_key

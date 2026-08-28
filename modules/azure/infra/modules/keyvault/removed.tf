@@ -76,14 +76,10 @@ removed {
 # ══════════════════════════════════════════════════════════════════════════════
 # State migration: postgres_admin_password gained `count`
 #
-# The secret is now gated by var.manage_secrets, which makes its state address
-# indexed. Deployments that applied before this change hold it at the un-indexed
-# address, and without this `moved` block Terraform plans a destroy-then-create
-# against the vault on the next apply — on the default path, where nothing about
-# the deployment has changed at all.
-#
-# langsmith_license_key needs no equivalent: it carried a `count` already, so it
-# has always been stored at [0] and only the count expression changed.
+# var.manage_secrets makes its state address indexed. Without this `moved` block,
+# deployments that applied earlier plan a destroy-then-create on an upgrade that
+# changes nothing else. langsmith_license_key had a `count` already, so it needs
+# no equivalent.
 #
 # Safe to delete once every deployment has applied once on this version.
 # ══════════════════════════════════════════════════════════════════════════════
