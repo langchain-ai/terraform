@@ -56,10 +56,14 @@ before the PR does, not a separate standard.
     correctly appear in no example. Nothing else catches this. Terraform warns
     and exits 0 on an undeclared tfvars key, ignores an undeclared `TF_VAR_*`
     with no output at all, and an accessor that misses just falls back to its
-    default, so a half-finished rename reverts the setting in silence. Exit 1
-    is an undeclared name; exit 2 means the check could not run (a renamed
-    directory, unbalanced braces, an accessor helper in `_common.sh` that the
-    script does not know about) and needs a fix in `contracts.sh` itself.
+    default, so a half-finished rename reverts the setting in silence. Your own
+    gitignored `infra/terraform.tfvars` is out of scope: CI never sees it, so a
+    stray key there stays a terraform warning nothing fails on. Exit 1 is an
+    undeclared name; exit 2 means the check could not run (a renamed directory,
+    unbalanced braces, a tfvars heredoc whose keys stopped coming out, an
+    accessor helper in `_common.sh` that it can neither follow nor name) and
+    needs a fix in `contracts.sh` itself, never a workaround in the provider
+    script.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries
