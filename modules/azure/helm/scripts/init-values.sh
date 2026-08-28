@@ -99,7 +99,9 @@ WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_man
 NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-# AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
+# Redis client mode follows the AMR clustering policy. Both come from TF outputs and
+# are mutually exclusive — the chart rejects cluster.enabled and clusterSafeMode together.
+REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED="false"
 REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
 
 echo ""
@@ -313,17 +315,30 @@ fi
 
 # Build redis block
 if [[ "$_redis_source" == "external" ]]; then
-  _redis_block='redis:
+  if [[ "$REDIS_CLUSTER_ENABLED" == "true" ]]; then
+    # OSSCluster: the endpoint answers MOVED slot redirects, so LangSmith needs the
+    # cluster client. Node URIs and password come from the secret; the chart reads
+    # them under the default keys redis_cluster_node_uris and redis_cluster_password.
+    # Requires chart 0.13.33 or newer.
+    _redis_block='redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-secret"
+    cluster:
+      enabled: true
+      tlsEnabled: true'
+  else
+    # EnterpriseCluster: one proxied endpoint, so the standalone client plus
+    # clusterSafeMode to keep the application off cluster-unsafe operations.
+    _redis_block='redis:
   external:
     enabled: true
     existingSecretName: "langsmith-redis-secret"
     connectionUrlSecretKey: "connection_url"'
-  # AMR is an OSS cluster reached over TLS by hostname — LangSmith must use a
-  # standalone client (clusterSafeMode), not a cluster client (whose node-IP TLS
-  # verification fails). Classic cache leaves this false.
-  if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
-    _redis_block="${_redis_block}
+    if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
+      _redis_block="${_redis_block}
     clusterSafeMode: true"
+    fi
   fi
 else
   _redis_block='# redis: in-cluster (managed by Helm chart)'
