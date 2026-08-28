@@ -602,6 +602,17 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+variable "langsmith_helm_chart_version" {
+  type        = string
+  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.16.11\". Empty deploys the latest patch on the pinned 0.16 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.16\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x version — deploy.sh refuses anything off the pinned chart line."
+  }
+}
+
 variable "langsmith_domain" {
   type        = string
   description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set (and acm_certificate_arn is empty), activates the dns module to auto-provision a Route 53 hosted zone, ACM certificate, and alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
