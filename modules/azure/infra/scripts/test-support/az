@@ -90,8 +90,8 @@ case "$ARGS" in
       *) echo "STUB: unexpected role assignment query: $ARGS" >&2; exit 1 ;;
     esac ;;
   *checkNameAvailability*|*CheckDnsNameAvailability*)
-    # The global name checks. Default is "free" so the cases that care about
-    # ownership are the only ones that have to supply a fixture.
+    # Global name checks. Default is "free" so only ownership cases need a
+    # fixture.
     emit_file "$FIX/name_availability.json" '{"nameAvailable":true,"available":true}' ;;
   "keyvault list-deleted"*)
     emit_file "$FIX/kv_deleted" "0" ;;

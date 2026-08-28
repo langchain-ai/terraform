@@ -53,9 +53,8 @@ variable "name_suffix_salt" {
   description = "Rotation counter mixed into the per-subscription hash on the globally-unique names. Bump it (\"\" → \"2\" → \"3\") when a previous deployment burned those names: a soft-deleted Key Vault holds its name for the whole retention window, and Managed Redis exposes no way to check availability before applying. All four names rotate together; the resource group, VNet and AKS names are unaffected. DESTRUCTIVE on an existing deployment — changing it renames Postgres, Redis, Storage and Key Vault, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. To dodge a single collision instead, pin that one name below. No effect when unique_resource_names = false."
   default     = ""
 
-  # Hashed, never appended, so the length costs nothing against the 24-character
-  # name cap. Bounded only to keep it recognisable as a counter — the value has
-  # no job beyond differing from the last one.
+  # Hashed, never appended, so the length costs nothing against the
+  # 24-character name cap. Bounded only to keep it recognisable as a counter.
   validation {
     condition     = can(regex("^[a-zA-Z0-9]{0,8}$", var.name_suffix_salt))
     error_message = "name_suffix_salt must be 0-8 alphanumeric characters (e.g. \"2\")."
