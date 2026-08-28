@@ -38,22 +38,18 @@ locals {
   #
   # sha256 of subscription_id + name_suffix rather than the random provider: the
   # value is derived, so repeat applies are stable and nothing is kept in state.
-  # var.name_base overrides the switch outright, for a corporate naming standard
-  # that wants its own prefix on every resource.
+  # var.name_base overrides the switch outright, for a corporate naming standard.
   name_base   = var.name_base != "" ? var.name_base : (var.unique_resource_names ? "ls" : "langsmith")
   uniq_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.name_suffix}"), 0, 6)}" : ""
 
-  # Regional names — unique within the subscription, so no hash needed. Each
-  # takes an override for a naming standard the derivation cannot produce;
-  # changing one after an apply is a destroy and recreate.
+  # Regional names — unique within the subscription, so no hash needed. Changing
+  # an override after an apply is a destroy and recreate.
   resource_group_name = var.resource_group_name != "" ? var.resource_group_name : "${local.name_base}-rg${local.name_suffix}"
   vnet_name           = var.vnet_name != "" ? var.vnet_name : "${local.name_base}-vnet${local.name_suffix}"
 
-  # Cluster name: the override, else derived, for a cluster this module creates;
-  # the customer's existing cluster name when attaching to one
-  # (create_cluster = false). No fallback in the attach case — an unset
-  # existing_cluster_name fails on the aks module's precondition instead of
-  # looking up a cluster that was never created.
+  # Attaching (create_cluster = false) takes the customer's name with no
+  # fallback: an unset existing_cluster_name fails on the aks module's
+  # precondition rather than deriving a name for a cluster nothing created.
   aks_name = var.create_cluster ? (var.cluster_name != "" ? var.cluster_name : "${local.name_base}-aks${local.name_suffix}") : var.existing_cluster_name
 
   # Globally-unique names — hashed, and each takes an explicit override so a
@@ -62,12 +58,8 @@ locals {
   redis_name    = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
   blob_name     = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
 
-  # Key Vault name: max 24 chars, globally unique.
-  # Uses the user-supplied keyvault_name or derives from name_prefix. When
-  # attaching to a customer-owned vault (create_keyvault = false) the name is
-  # theirs, with no fallback — an unset existing_keyvault_name fails on the
-  # keyvault module's precondition instead of deriving a name for a vault that
-  # was never created.
+  # Max 24 chars, globally unique. Attaching takes the customer's name with no
+  # fallback, same as aks_name above.
   keyvault_name = var.create_keyvault ? (var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}") : var.existing_keyvault_name
 
   # Whether the keyvault module creates each of its two role assignments. Both
@@ -289,30 +281,19 @@ resource "azurerm_resource_group" "resource_group" {
   location = var.location
   tags     = local.common_tags
 
-  # Assert the derived names fit Azure's limits before anything is created.
-  # Without this, an over-long name_prefix surfaces as an Azure 400 partway
-  # through the apply, after the resource group, VNet, and AKS already exist.
-  # Key Vault binds first: it keeps its hyphens inside the same 24-char limit
-  # Storage has, so a ~12-char name_prefix is the practical ceiling under
-  # unique_resource_names.
-  #
-  # These five cover every name the module derives. AKS is the binding one of
-  # the three that carry no hash: "-vnet" is a character longer than "-aks"
-  # against a ceiling a character higher, so the two bust at the same base
-  # length, and the resource group's 90 is another 28 characters out. AKS
-  # matters once storage_account_name and keyvault_name are both overridden,
-  # which lifts the two 24-char limits that would otherwise fail first.
+  # Catch an over-long name here rather than as an Azure 400 partway through the
+  # apply. Key Vault binds first — hyphens kept, inside Storage's 24-char limit —
+  # so ~12 chars of name_prefix is the ceiling under unique_resource_names. AKS
+  # binds only once both 24-char names are overridden. VNet and the resource
+  # group never bind before those, so they are not checked.
   lifecycle {
     precondition {
       condition     = length(replace(local.blob_name, "-", "")) >= 3 && length(replace(local.blob_name, "-", "")) <= 24
       error_message = "Storage account name '${replace(local.blob_name, "-", "")}' is ${length(replace(local.blob_name, "-", ""))} chars; Azure allows 3-24. Shorten var.name_prefix or set var.storage_account_name explicitly."
     }
-    # The attach branches are exempt. local.keyvault_name and local.aks_name are
-    # the operator's existing resources there, Azure accepted those names when
-    # they were created, and the remedy each message gives — var.keyvault_name,
-    # var.cluster_name — is a config variables.tf rejects outright once
-    # create_* is false. An unset existing_* name fails on the keyvault and
-    # k8s-cluster preconditions instead, which name the variable that applies.
+    # Exempt when attaching: the name is the operator's already-created resource,
+    # and the remedy below is a config variables.tf rejects once create_* is
+    # false. An unset existing_* name fails on the module's own precondition.
     precondition {
       condition     = !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24)
       error_message = "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly."

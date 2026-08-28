@@ -33,21 +33,14 @@ SECRETS_FILE="secrets.auto.tfvars"
 
 # ── Resolve the Key Vault name ────────────────────────────────────────────────
 # Priority: terraform output → _require_kv_name. Same order as manage-keyvault.sh.
-#
-# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix, an
-# explicit keyvault_name, the unique_resource_names hash, and the create_keyvault =
-# false branch that takes existing_keyvault_name. Deriving it here by hand is how
-# this script and three others drifted apart. Reading the wrong vault fails
-# silently: _kv_secret below falls through to the local file, then to generating a
-# fresh value. A machine without those files would mint a new api_key_salt and
-# jwt_secret, and Terraform would write them over the live ones. That is why this
-# runs through _require_kv_name: an attach config with no vault name stops the run
-# instead of deriving a name for a vault nobody created.
+# Never derive the name here by hand — reading the wrong vault fails silently,
+# because _kv_secret below falls through to generating a fresh value and
+# Terraform then writes a new api_key_salt and jwt_secret over the live ones.
 #
 # `terraform output -raw` exits 0 and prints its "No outputs found" warning on
 # stdout when there is no state, so the guard checks the shape of what came back
-# rather than the exit code. Key Vault names are alphanumerics and hyphens, which
-# the warning is not. Before the first apply that leaves the derivation.
+# rather than the exit code: a Key Vault name is alphanumerics and hyphens, the
+# warning is not.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 

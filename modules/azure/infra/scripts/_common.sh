@@ -140,17 +140,13 @@ _name_suffix() {
 }
 
 # Key Vault name, mirroring local.keyvault_name in main.tf including the
-# unique_resource_names hash. Four scripts need this name and each derived it
-# independently before, so they all went looking for the wrong vault the moment
-# the naming scheme changed. Keep this in step with main.tf.
+# unique_resource_names hash. Keep the two in step.
 #
-# The attach branch comes first for the same reason it does in main.tf: with
-# create_keyvault = false the vault is the caller's, and a derived name points
-# at one that does not exist. That matters before the first apply, when there is
-# no terraform output to fall back on — setup-env.sh would read no secret from
-# the phantom vault and mint a fresh Postgres password over the real one.
-# Returns 1 when attach mode is on but existing_keyvault_name is unset, which is
-# the same combination plan rejects; callers report it rather than guess a name.
+# The attach branch comes first, as in main.tf: with create_keyvault = false a
+# derived name points at a vault that does not exist, and before the first
+# apply there is no terraform output to catch it — setup-env.sh would read no
+# secret and mint a fresh Postgres password over the real one. Returns 1 when
+# attach mode is on but existing_keyvault_name is unset.
 _derive_kv_name() {
   local explicit suffix sub hash base create
   create=$(_parse_tfvar create_keyvault || echo "true")
@@ -181,10 +177,9 @@ _derive_kv_name() {
   fi
 }
 
-# _derive_kv_name with the one failure spelled out. Attach mode without
-# existing_keyvault_name is the only way it returns nothing, and every caller
-# but status.sh needs a real vault to do anything at all, so they exit here
-# rather than carry an empty name into an az command.
+# _derive_kv_name with its one failure spelled out. Every caller but status.sh
+# needs a real vault, so they exit here rather than carry an empty name into an
+# az command.
 _require_kv_name() {
   local name
   if ! name=$(_derive_kv_name); then
