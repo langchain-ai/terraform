@@ -64,8 +64,17 @@ playground:
         cpu: "25m"
         memory: "384Mi"
       limits:
-        cpu: "250m"
+        # Same image as backend above, so the same CPU. At the previous 250m the
+        # container bound to its port just after the 60s startup-probe budget expired
+        # and crash-looped. Measured at 500m: ready in 39s, 1 probe failure of 6.
+        cpu: "500m"
         memory: "512Mi"
+    # Only the two fields we change; Helm merges the rest, so path and port stay
+    # whatever the chart says. Startup saturates the CPU limit, so a cold pull or a
+    # busy node can outlast the chart's 60s.
+    startupProbe:
+      failureThreshold: 12
+      timeoutSeconds: 10
 
 queue:
   deployment:
