@@ -99,10 +99,9 @@ WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_man
 NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-# Redis client mode follows the AMR clustering policy. Both come from TF outputs and
-# are mutually exclusive — the chart rejects cluster.enabled and clusterSafeMode together.
-REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED="false"
-REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
+# Redis client mode follows the AMR clustering policy. No default: guessing wrong pairs
+# the standalone client with an OSS cluster, which is the combination that 503s ingest.
+REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED=""
 
 echo ""
 pass "Terraform outputs read"
@@ -295,11 +294,15 @@ fi
 
 # Build redis block
 if [[ "$_redis_source" == "external" ]]; then
+  # terraform prints its "no outputs" warning to stdout and still exits 0, so check the
+  # value parses as a bool rather than trusting the read.
+  if [[ "$REDIS_CLUSTER_ENABLED" != "true" && "$REDIS_CLUSTER_ENABLED" != "false" ]]; then
+    fail "Could not read redis_cluster_enabled. Run terraform apply in $INFRA_DIR first."
+    exit 1
+  fi
   if [[ "$REDIS_CLUSTER_ENABLED" == "true" ]]; then
-    # OSSCluster: the endpoint answers MOVED slot redirects, so LangSmith needs the
-    # cluster client. Node URIs and password come from the secret; the chart reads
-    # them under the default keys redis_cluster_node_uris and redis_cluster_password.
-    # Requires chart 0.13.33 or newer.
+    # OSSCluster: the endpoint answers MOVED redirects, so the cluster client. Node
+    # URIs and password come from the secret's default keys. Needs chart 0.13.33+.
     _redis_block='redis:
   external:
     enabled: true
@@ -308,17 +311,13 @@ if [[ "$_redis_source" == "external" ]]; then
       enabled: true
       tlsEnabled: true'
   else
-    # EnterpriseCluster: one proxied endpoint, so the standalone client plus
-    # clusterSafeMode to keep the application off cluster-unsafe operations.
+    # EnterpriseCluster: one proxied endpoint — standalone client, cluster-safe ops only.
     _redis_block='redis:
   external:
     enabled: true
     existingSecretName: "langsmith-redis-secret"
-    connectionUrlSecretKey: "connection_url"'
-    if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
-      _redis_block="${_redis_block}
-    clusterSafeMode: true"
-    fi
+    connectionUrlSecretKey: "connection_url"
+    clusterSafeMode: true'
   fi
 else
   _redis_block='# redis: in-cluster (managed by Helm chart)'
