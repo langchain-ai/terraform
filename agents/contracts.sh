@@ -2,73 +2,51 @@
 # Contract checks across the shell/HCL boundary, one provider per invocation:
 #   bash agents/contracts.sh modules/aws
 #
-# terraform validate checks the HCL and shellcheck checks the shell; neither
-# looks at the names the two exchange. Rename a variable in variables.tf and
-# miss one of its readers and there are three ways to get no error: an accessor
-# returns non-zero and the caller falls back to its default, a generated tfvars
-# key draws "Warning: Value for undeclared variable" and exit 0, and an
-# undeclared TF_VAR_* export is ignored with no output at all. The third kind
-# already happened -- #140, the GCP root not declaring three secrets that
-# setup-env.sh exported.
+# terraform validate checks the HCL, shellcheck checks the shell; neither checks
+# the names the two exchange. Miss a reader when renaming a variable and there is
+# no error: the accessor falls back to its default, a generated tfvars key draws
+# a warning and exit 0, and an undeclared TF_VAR_* is ignored silently (#140).
 #
 # Every check runs one direction: a name in use must be declared in that
-# provider's infra/variables.tf. A declared variable that nothing uses is not a
+# provider's infra/variables.tf. A declared variable nothing uses is not a
 # finding, since most carry defaults and correctly appear in no example.
 #
-# No terraform, no cloud credentials, no state: this reads files only.
+# Reads files only: no terraform, no cloud credentials, no state.
 #
-# Exit 0 clean, 1 findings, 2 the check itself could not run (bad directory,
-# unbalanced braces, an accessor helper this script can neither follow nor
-# name).
+# Exit 0 clean, 1 findings, 2 the check could not run. Wherever a pattern could
+# stop matching -- a heredoc that stopped extracting, an accessor that grew a
+# second line, a renamed directory -- the answer is exit 2, never an empty
+# result: "no findings" from a scan that skipped content reads as confidence.
 #
-# A silent under-report is the failure mode to design against here: "no
-# findings" from a scan that skipped the content is worse than a false
-# positive, because it reads as confidence. So wherever a pattern could stop
-# matching -- a heredoc whose keys stopped being extracted, an accessor helper
-# that grew a second line, a provider directory that got renamed -- the answer
-# is exit 2, not an empty result.
-#
-# Out of scope: the operator's own infra/terraform.tfvars. It is gitignored, so
-# CI never sees it, and a stray key there is precisely the warning-and-exit-0
-# case above -- an aks_deletion_protection carried across from GCP's
-# gke_deletion_protection has no Azure counterpart and sits inert. Only the
-# checked-in example and the generators that write tfvars are covered;
-# documentation is the mitigation for a hand-edited file.
+# Out of scope: the operator's own gitignored infra/terraform.tfvars. CI never
+# sees it, so a stray key there stays a warning nothing fails on.
 set -u
 
 unset CDPATH
 REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 
-# Primitive accessors: the helpers in _common.sh that read a tfvars file
-# themselves. Check 5 asserts this list still covers every such helper, so a
-# new primitive fails the run until it is registered rather than passing having
-# silently read nothing through it. Helpers that merely forward to one of these
-# are discovered per provider instead (see _func_classes).
+# Primitive accessors: the _common.sh helpers that read a tfvars file
+# themselves. Check 5 asserts this list still covers every one. Helpers that
+# only forward to these are discovered per provider (see _func_classes).
 ACCESSORS="_parse_tfvar _parse_tfvar_quoted _tfvar_is_true"
-# Wrappers are discovered, but _read_tfvar is named here too so a provider that
-# drops its status.sh alias does not quietly change what gets scanned.
+# Named here too, so a provider dropping its status.sh alias fails loudly
+# rather than quietly changing what gets scanned.
 WRAPPERS_KNOWN="_read_tfvar"
-# Providers with no tfvars accessors at all. Skipped by name, not by an empty
-# result: an empty result is also what a renamed directory or a broken scan
-# looks like, and those must fail. ocp's scripts read zero tfvars keys; byoc is
-# a standalone IAM root with no infra/ tree.
+# Providers with no tfvars accessors. Skipped by name, not by an empty result:
+# a renamed directory or a broken scan looks the same and must fail.
 SKIP_PROVIDERS="byoc ocp"
 # Records are tab-separated; bash 3.2 has no dollar-quoted \t.
 TAB=$(printf '\t')
 
 # ── Shared awk pieces ────────────────────────────────────────────────────────
-# Concatenated into the awk programs below rather than repeated in each. Both
-# grew out of review findings where two collectors disagreed about the same
-# line, which is exactly the drift that turns into a silent under-report.
-#
-# No literal single quote appears in any awk source here: these programs are
-# shell single-quoted, so the character is spelled sprintf("%c", 39).
+# Concatenated into the programs below so two collectors cannot drift apart on
+# the same line. These programs are shell single-quoted, so a literal single
+# quote is spelled sprintf("%c", 39).
 AWK_LIB='
 function _sq() { return sprintf("%c", 39) }
 
 # s with any trailing comment removed. A # inside a quoted span is part of a
-# value, not a comment, so the scan tracks quote state instead of cutting at
-# the first #. A whole-line comment comes back empty.
+# value, so this tracks quote state rather than cutting at the first #.
 function _decomment(s,   i, c, q, out, sq) {
   sq = _sq(); q = ""; out = ""
   for (i = 1; i <= length(s); i++) {
@@ -83,10 +61,9 @@ function _decomment(s,   i, c, q, out, sq) {
   return out
 }
 
-# The quote character still open at the end of s, or "" when balanced. A shell
-# string that stays open carries its context onto the next line, which is how a
-# multi-line argument such as _write_override "a = 1\nb = 2" is read as one
-# write rather than as one write and one unrelated line.
+# The quote character still open at the end of s, or "" when balanced. A string
+# left open carries its context onto the next line, which is how a multi-line
+# argument such as _write_override "a = 1\nb = 2" reads as one write.
 function _qstate(s,   i, c, q, sq) {
   sq = _sq(); q = ""
   for (i = 1; i <= length(s); i++) {
@@ -98,11 +75,9 @@ function _qstate(s,   i, c, q, sq) {
   return q
 }
 
-# _qstate carried across lines: the state s leaves behind, given the state q it
-# started in. A comment closes the state rather than feeding it, which is the
-# whole reason this is not just _qstate over the concatenated lines. One
-# apostrophe in one prose comment leaves that version open for the rest of the
-# file, and every tfvars write below it drops out with no output and exit 0.
+# _qstate carried across lines. A comment closes the state rather than feeding
+# it: one apostrophe in one prose comment would otherwise leave the state open
+# for the rest of the file, dropping every tfvars write below it.
 function _qnext(q, s,   i, c, sq) {
   sq = _sq()
   for (i = 1; i <= length(s); i++) {
@@ -119,12 +94,9 @@ function _qnext(q, s,   i, c, sq) {
 # A real heredoc start on s. Fills o["delim"], o["dash"], o["target"] and
 # returns 1, or returns 0.
 #
-# Both guards earn their place. A <<DELIM inside a comment or inside a quoted
-# string is text, and treating it as a start is the worst thing this script can
-# do: a phantom whose target is not tfvars sets want=0, and its body then
-# swallows the next real tfvars heredoc and drops those keys with no output and
-# exit 0. Inserting "# ...  kubectl apply -f - <<EOF" above azure setup-env.sh
-# secrets heredoc used to do exactly that.
+# A <<DELIM inside a comment or a quoted string is text. Treating one as a start
+# is the worst case here: the phantom body swallows the next real tfvars heredoc
+# and drops those keys with no output and exit 0.
 function _hd_start(s, o,   sq, re, d, t, pre) {
   s = _decomment(s)
   if (s ~ /<<</) return 0
@@ -144,8 +116,7 @@ function _hd_start(s, o,   sq, re, d, t, pre) {
 }
 
 # Resolve a redirect target or file argument through one level of shell
-# variable, so OUTPUT, SECRETS_FILE, TFVARS and OVERRIDE_FILE all land on the
-# path they hold.
+# variable, so OUTPUT, SECRETS_FILE, TFVARS and OVERRIDE_FILE land on a path.
 function _resolve(t, var,   sq) {
   sq = _sq()
   gsub("[\"" sq "]", "", t)
@@ -155,14 +126,12 @@ function _resolve(t, var,   sq) {
 }
 '
 
-# Assignment tracking. Anchored on an optional declaration keyword because the
-# tfvars heredocs mostly live inside functions, where `local out="..."` is the
-# likelier spelling than a bare assignment -- and an unresolved target means
-# want stays 0 and the whole heredoc goes unchecked in silence.
+# Assignment tracking. Declaration keywords are optional but matched, since the
+# tfvars heredocs live inside functions where `local out="..."` is the likelier
+# spelling -- and an unresolved target means the heredoc goes unchecked.
 #
-# Guarded on _in_hd so a `key=value` line inside a heredoc body does not
-# register as a shell assignment. Only _tfvars_heredocs sets that flag; in the
-# other programs it is always unset, so the guard is free.
+# _in_hd keeps a `key=value` line inside a heredoc body from registering as a
+# shell assignment. Only _tfvars_heredocs sets it; elsewhere the guard is free.
 AWK_ASSIGN='
 !_in_hd && $0 ~ /^[ \t]*(local|export|declare|readonly|typeset)?[ \t]*(-[A-Za-z]+[ \t]+)?[A-Za-z_][A-Za-z0-9_]*\+?=/ {
   _v = $0
@@ -178,11 +147,10 @@ AWK_ASSIGN='
   }
 }
 
-# An append can also sit mid-line behind a guard, which the anchored rule above
-# does not see: quickstart.sh builds its whole security block as
-# `[[ "$X" == true ]] && { SECURITY_BLOCK+="create_waf = true\n"; ... }`. Only
-# the name is taken, and only to recognise the variable as an accumulator: a
-# spurious entry there costs nothing, a missing one drops six keys.
+# An append can also sit mid-line behind a guard: quickstart.sh builds its
+# security block as `[[ ... ]] && { SECURITY_BLOCK+="create_waf = true\n"; }`.
+# Only the name is taken, to recognise an accumulator; a spurious entry costs
+# nothing, a missing one drops six keys.
 !_in_hd {
   _rest = $0
   while (match(_rest, /(^|[ \t;&|{(])[A-Za-z_][A-Za-z0-9_]*\+=/)) {
@@ -194,29 +162,22 @@ AWK_ASSIGN='
 '
 
 # ── The extractor ────────────────────────────────────────────────────────────
-# One depth-aware HCL key reader, used by every check that reads HCL, so the
-# checks cannot drift apart on what counts as a key.
+# One depth-aware HCL key reader for every check that reads HCL, so the checks
+# cannot drift apart on what counts as a key.
 #
-# Input is numbered lines, "<lineno>\t<text>", so a finding can name the line it
-# came from. Output is "<lineno>\t<name>" for every assignment at brace depth 0.
+# In "<lineno>\t<text>", out "<lineno>\t<name>" per assignment at depth 0.
+# Depth matters: a line grep on the aws example reports five keys that live
+# inside eks_node_groups. Quoted spans come out first, so a brace or a # inside
+# a string cannot move the depth or fake a comment. Depth that has not returned
+# to 0 at EOF means the scrubbing lost track, and a partial key set silently
+# under-reports, so that exits 3.
 #
-# Depth matters: a line grep on aws/infra/terraform.tfvars.example reports 39
-# keys, five of which (name, default, instance_types, min_size, max_size) live
-# inside the eks_node_groups block and are not root variables. Quoted spans come
-# out before anything else so that a brace inside a string, a "${VAR}" in a
-# generated heredoc, or a # inside a value cannot move the depth or fake a
-# comment. Depth that has not returned to 0 at EOF means the scrubbing lost
-# track, and a partial key set would silently under-report, so that exits 3.
+# An HCL heredoc value (key = <<-EOT ... EOT) is a legal multi-line string: the
+# key is a root key but the body is a value, and a `helm_override = "x"` inside
+# one would otherwise report as an undeclared variable.
 #
-# An HCL heredoc value (key = <<-EOT ... EOT) is a legal multi-line string. The
-# key is a root key, but the body is a value: without skipping it, a
-# `helm_override = "x"` line inside one is reported as an undeclared variable
-# and its braces move the depth.
-#
-# With -v nested=1 the sense inverts and only keys below depth 0 come out: the
-# fields inside a block value. Those are not root variables and are not
-# declared anywhere, but a script can still read one, so check 1 needs to tell
-# them apart from a name that exists nowhere.
+# With -v nested=1 only keys below depth 0 come out -- the fields inside a block
+# value, which check 1 needs to tell apart from a name that exists nowhere.
 _hcl_keys() {
   awk -F'\t' -v nested="${1:-}" '
     { n = $1; s = $0; sub(/^[0-9]+\t/, "", s) }
@@ -255,15 +216,13 @@ _hcl_keys() {
 _numbered() { awk '{ print NR "\t" $0 }' "$1"; }
 
 # ── Collectors ───────────────────────────────────────────────────────────────
-# Bodies of every heredoc whose redirect target resolves to a *.tfvars path, as
-# numbered lines, followed by one "COUNT\t<n>" record giving how many such
-# heredocs were opened. The caller needs the count to tell "this file writes no
-# tfvars" apart from "the extraction broke", which look identical otherwise.
+# Bodies of every heredoc whose redirect target resolves to *.tfvars, as
+# numbered lines, then one "COUNT\t<n>" record. The caller needs the count to
+# tell "this file writes no tfvars" from "the extraction broke".
 #
-# The delimiter is read off the redirect line rather than hardcoded: quickstart.sh
-# uses TFVARS and azure's setup-env.sh uses EOF. The target is resolved through
-# one level of shell variable, which is also what keeps a heredoc writing
-# something other than tfvars out.
+# The delimiter is read off the redirect line rather than hardcoded (TFVARS in
+# quickstart.sh, EOF in azure setup-env.sh), and the target resolved through one
+# level of variable, which is also what keeps non-tfvars heredocs out.
 _tfvars_heredocs() {
   awk "$AWK_LIB$AWK_ASSIGN"'
     _in_hd {
@@ -291,24 +250,19 @@ _tfvars_heredocs() {
 
 # Function definitions in one script, classified by what the body does:
 #   wrapper <name>   forwards the function's own $1 to a known accessor
+#   touch   <name>   names a tfvars file directly
 #   writer  <name>   redirects into a path that resolves to *.tfvars
 #
-# One walker for both, since both need the same thing: the head in all four
-# spellings (name(), name (), function name, function name()) and the body up to
-# its close.
-#
-# Wrappers have to be followed or check 1 under-reports -- azure reads 21 keys
-# instead of 36 without _read_tfvar. Matching only the one-line
-# `_read_tfvar() { _parse_tfvar "$1"; }` form is not enough: `local key="$1"` on
-# one line and `_tfvar_is_true "$key"` on the next is the same forward, which is
-# how aws's _read_gateway_flag is written, and a four-line helper whose name
-# says nothing about tfvars used to slip past every check here.
+# Wrappers have to be followed or check 1 under-reports: azure reads 21 keys
+# instead of 36 without _read_tfvar. The one-line `_read_tfvar() { _parse_tfvar
+# "$1"; }` form is not enough -- `local key="$1"` on one line and
+# `_tfvar_is_true "$key"` on the next is the same forward, which is how aws's
+# _read_gateway_flag is written.
 #
 # The body ends at a close brace in column 0, the convention in all 203 function
-# definitions under modules/. Brace counting would be the general answer, but
-# ${VAR} and a brace inside a string both feed it noise. Heredoc bodies are
-# skipped while walking, because a JSON heredoc indents its own } to column 0
-# and would otherwise end the function early.
+# definitions under modules/. Brace counting takes noise from ${VAR} and braces
+# inside strings. Heredoc bodies are skipped while walking: a JSON heredoc
+# indents its own } to column 0 and would end the function early.
 _func_classes() {
   awk -v accs="$1" "$AWK_LIB$AWK_ASSIGN"'
     BEGIN { n = split(accs, a, " "); for (i = 1; i <= n; i++) acc[a[i]] = 1 }
@@ -323,16 +277,14 @@ _func_classes() {
       sub(/^[ \t]*/, "", fname); sub(/^function[ \t]+/, "", fname)
       sub(/[ \t]*(\(\))?[ \t]*\{$/, "", fname)
       delete argv1
-      # A one-line definition opens and closes on the head line, so classify it
-      # here and clear straight away.
+      # A one-line definition opens and closes on the head line.
       if ($0 ~ /\}[ \t]*$/) { _classify($0, fname, acc, argv1, var); fname = "" }
       next
     }
     fname != "" {
       # `local key="$1"` makes $key another spelling of $1 for the rest of the
-      # body, and every multi-line wrapper in the tree is written that way.
-      # Not anchored to end of line: aws _read_gateway_flag declares its second
-      # local on the same line, as `local key="$1" val`.
+      # body. Not anchored to end of line: aws _read_gateway_flag declares its
+      # second local on the same line.
       if (match($0, /[A-Za-z_][A-Za-z0-9_]*=[ \t]*"?\$\{?1\}?"?([ \t]|$)/)) {
         a1 = substr($0, RSTART, RLENGTH); sub(/=.*/, "", a1); argv1[a1] = 1
       }
@@ -350,12 +302,11 @@ _func_classes() {
         gsub(/[${}]/, "", m)
         if (m == "1" || (m in argv1)) print "wrapper " fn
       }
-      # A function that names a tfvars file in its own body reads or writes one
-      # directly, which is what makes it a primitive rather than a forwarder.
+      # A function naming a tfvars file in its own body reads or writes one
+      # directly, which makes it a primitive rather than a forwarder.
       if (s ~ /\.tfvars/) print "touch " fn
-      # Redirect into a tfvars path makes this function a tfvars writer, so its
-      # callers string arguments are tfvars content (test-permutations.sh
-      # _write_override).
+      # A redirect into a tfvars path makes this a writer, so its callers pass
+      # tfvars content (test-permutations.sh _write_override).
       if (match(s, />>?[ \t]*[^ \t;&|<>]+/)) {
         tgt = substr(s, RSTART, RLENGTH); sub(/^>>?[ \t]*/, "", tgt)
         if (_resolve(tgt, var) ~ /\.tfvars$/) print "writer " fn
@@ -365,26 +316,21 @@ _func_classes() {
 }
 
 # tfvars assignments emitted from shell rather than from a heredoc, as
-# "<lineno>\t<key>": tls.sh seds acm_certificate_arn back into terraform.tfvars,
-# the quickstart scripts echo optional keys one line at a time and accumulate a
-# security block in a variable, and test-permutations.sh hands a multi-line
-# block to _write_override.
+# "<lineno>\t<key>": tls.sh seds acm_certificate_arn back in, the quickstarts
+# echo optional keys one at a time and accumulate a security block, and
+# test-permutations.sh hands a multi-line block to _write_override.
 #
 # Gated per line, not per file. A file-level gate reads every `key = value`
 # string in any script that writes tfvars somewhere, so an
-# `echo "bucket = \"x\"" > backend.tf` in the same script reports bucket as an
-# undeclared variable, and an error message that quotes tfvars syntax
-# (tls.sh:47) counts as a write. The line has to actually land in a tfvars file:
-# a redirect resolving to *.tfvars, a sed -i naming one, a call to a function
-# whose own body writes one, or an append to a variable that is later written
-# into one. A quoted string left open carries the gate onto its continuation
-# lines.
+# `echo "bucket = \"x\"" > backend.tf` reports bucket, and an error message
+# quoting tfvars syntax (tls.sh:47) counts as a write. The line has to land in a
+# tfvars file: a redirect resolving to *.tfvars, a sed -i naming one, a call to
+# a writer, or an append to a variable later written into one. An open quoted
+# string carries the gate onto its continuation lines.
 #
-# The file is read three times. An accumulator is appended to before the
-# redirect that reveals where it goes -- quickstart.sh builds SECURITY_BLOCK at
-# 931 and writes it at 945 -- so one pass cannot know it is a tfvars sink. Two
-# would do for that ordering and quietly drop six keys for the other one, so the
-# appends, the sinks and the keys each get their own pass.
+# Three passes over the file. An accumulator is appended to before the redirect
+# that reveals where it goes -- quickstart.sh builds SECURITY_BLOCK at 931 and
+# writes it at 945 -- so appends, sinks and keys each get their own pass.
 _quoted_tfvars_writes() {
   awk -v writers="$1" "$AWK_LIB$AWK_ASSIGN"'
     BEGIN { n = split(writers, w, " "); for (i = 1; i <= n; i++) wr[w[i]] = 1 }
@@ -393,16 +339,14 @@ _quoted_tfvars_writes() {
       hit = 0
       if (match(s, />>?[ \t]*[^ \t;&|<>]+/)) {
         tgt = substr(s, RSTART, RLENGTH); sub(/^>>?[ \t]*/, "", tgt)
-        # A redirect that goes anywhere else settles it: this line is not a
-        # tfvars write, whatever else it mentions.
+        # A redirect anywhere else settles it, whatever the line mentions.
         return (_resolve(tgt, var) ~ /\.tfvars$/) ? 1 : 0
       }
       nt = split(s, t, /[ \t]+/)
       for (i = 1; i <= nt; i++) {
-        # Both ends of the token. A call is the identifier at the end of
-        # `val=$(_write_override`, and an append is the one at the start of
-        # `SECURITY_BLOCK+="alb_scheme = ...`; taking only the trailing run
-        # reads that second one as alb_scheme and never finds the sink.
+        # Both ends of the token: a call is the identifier at the end of
+        # `val=$(_write_override`, an append the one at the start of
+        # `SECURITY_BLOCK+="alb_scheme = ...`.
         tok = t[i]; sub(/^.*[^A-Za-z0-9_]/, "", tok)
         if (tok in wr || tok in sink) hit = 1
         tok = t[i]; sub(/[^A-Za-z0-9_].*$/, "", tok)
@@ -450,38 +394,34 @@ _quoted_tfvars_writes() {
   ' "$2" "$2" "$2"
 }
 
-# Accessor call sites. Emits one tab-separated record per call:
+# Accessor call sites, one tab-separated record per call:
 #   key   <lineno>  <key>            a literal key, checkable
 #   file  <lineno>  <key>  <file>    an accessor reading a named file
 #   dyn   <lineno>  <text>           the key is built at runtime, not checkable
 #
-# Tokenized rather than pattern-matched on the whole call, because all 26
-# _read_tfvar call sites pass the key bare and requiring quotes undercounts
-# azure by 15 keys. A trailing identifier run is what identifies the accessor,
-# so `val=$(_parse_tfvar` matches and `_read_gateway_flag` does not.
+# Tokenized rather than matched on the whole call: all 26 _read_tfvar call sites
+# pass the key bare, and requiring quotes undercounts azure by 15 keys. The
+# accessor is the trailing identifier run, so `val=$(_parse_tfvar` matches and
+# `_read_gateway_flag` does not.
 #
-# An argument of exactly "$1" is a definition forwarding its own argument, not a
-# read, so it is neither checked nor reported. The same goes for a variable the
-# file assigned from "$1": aws _read_gateway_flag reads through $key, and
-# calling that a runtime-built key tells the operator to go look at a line whose
-# key is perfectly static one call site away.
+# An argument of exactly "$1", or a variable the file assigned from it, is a
+# definition forwarding its own argument rather than a read. Calling that a
+# runtime-built key points the operator at a line whose key is static one call
+# site away.
 #
-# _parse_tfvar_quoted takes an optional second argument naming the file, so the
-# token after the key is only a filename when it resolves to one. Treating
-# whatever followed as a filename regardless turned the one-argument form --
-# `_parse_tfvar_quoted "$key" 2>/dev/null` and every call that ends after the
-# key -- into an exit 2 claiming the root module was unknown. A token holding a
-# path that is not tfvars still comes through as a file record, because naming
-# some other root is the case check 1 has to refuse rather than skip.
+# _parse_tfvar_quoted takes an optional file argument, so the token after the
+# key is a filename only when it resolves to one -- otherwise the one-argument
+# form exits 2 claiming an unknown root module. A token holding a non-tfvars
+# path still comes through, because naming another root has to be refused rather
+# than skipped.
 _accessor_calls() {
   awk -v accs="$1" "$AWK_LIB"'
     /^[ \t]*#/ { next }
     '"$AWK_ASSIGN"'
     BEGIN { n = split(accs, a, " "); for (i = 1; i <= n; i++) acc[a[i]] = 1 }
-    # $1 aliases are per function, not per file. Scoping them to the file marks
-    # "key" an alias for the whole of _common.sh -- _parse_tfvar declares it
-    # that way on its first line -- and then azure _values_input_stamp, which
-    # loops "key" over a list, stops being reported as a runtime-built read.
+    # $1 aliases are per function, not per file: _parse_tfvar declares "key" on
+    # its first line, which file scope would make an alias for all of
+    # _common.sh, silencing the azure _values_input_stamp loop.
     /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*(\(\))?[ \t]*\{/ || /^\}/ {
       delete argv1
     }
@@ -510,8 +450,7 @@ _accessor_calls() {
           cand = t[i+2]
           sub(/[);&|].*$/, "", cand)
           # A redirection is not an argument. `_parse_tfvar_quoted "$k"
-          # 2>/dev/null` used to resolve to "2>/dev/null" and fail the run
-          # claiming that path was an unknown root module.
+          # 2>/dev/null` used to resolve as an unknown root module.
           if (cand !~ /[<>]/) {
             r = _resolve(cand, var)
             if (r ~ /\.tfvars$/ || r ~ /\//) f = r
@@ -589,10 +528,10 @@ if [ -z "$scripts" ]; then
 fi
 
 # Fields inside a block value in the checked-in example -- instance_types and
-# friends inside eks_node_groups. Not root variables, so nothing declares them,
-# but _parse_tfvar anchors its grep loosely enough to reach one and
-# aws/quickstart.sh reads instance_types that way on purpose. Reporting those as
-# undeclared is wrong and dropping them silently is worse, so they are noted.
+# friends inside eks_node_groups. Nothing declares them, but _parse_tfvar
+# anchors its grep loosely enough to reach one and aws/quickstart.sh reads
+# instance_types that way on purpose. Reporting those as undeclared is wrong,
+# and dropping them silently is worse, so they are noted.
 EXAMPLE="$PROVIDER_DIR/infra/terraform.tfvars.example"
 EXAMPLE_REL="$arg/infra/terraform.tfvars.example"
 if [ ! -f "$EXAMPLE" ]; then
@@ -606,11 +545,9 @@ NESTED=" $(_numbered "$EXAMPLE" | _hcl_keys nested | awk -F"$TAB" '{ print $2 }'
 # Runs first: every other check reads through this list, so an unregistered
 # helper has to fail loudly rather than shrink the scan.
 #
-# Behavior, not name. Matching function names against "tfvar" only catches a
-# primitive that happens to be called one: _read_setting() { _parse_tfvar "$1"
-# || echo "$2"; } is a tfvars accessor by any useful definition and the name
-# rule passes it in silence, so every key read through it goes unchecked. What
-# actually distinguishes a primitive is that its body names a tfvars file.
+# Behavior, not name. _read_setting() { _parse_tfvar "$1" || echo "$2"; } is an
+# accessor by any useful definition and a name rule passes it in silence. What
+# distinguishes a primitive is that its body names a tfvars file.
 COMMON="$PROVIDER_DIR/infra/scripts/_common.sh"
 if [ ! -f "$COMMON" ]; then
   echo "contracts: $arg/infra/scripts/_common.sh is missing." >&2
@@ -628,13 +565,11 @@ if [ -n "$unregistered" ]; then
 fi
 
 # ── Accessors and writers for this provider ──────────────────────────────────
-# Two things are discovered per provider rather than listed: helpers that
-# forward to an accessor, and functions that write a tfvars file.
-#
-# Wrappers are followed to a fixpoint, because a helper forwarding to a wrapper
-# is itself a wrapper and one pass stops at the first hop. Following them is not
-# cosmetic: azure reads 21 keys instead of 36 without _read_tfvar, and every
-# unfollowed hop is fifteen keys nothing checks.
+# Discovered per provider rather than listed: helpers that forward to an
+# accessor, and functions that write a tfvars file. Wrappers are followed to a
+# fixpoint, since a helper forwarding to a wrapper is itself a wrapper and one
+# pass stops at the first hop. Not cosmetic: azure reads 21 keys instead of 36
+# without _read_tfvar.
 wrappers=""
 writers=""
 settled=0
@@ -678,9 +613,8 @@ for w in $WRAPPERS_KNOWN; do
 done
 all_accessors="$ACCESSORS$wrappers"
 
-# The name rule, kept for what the behavior rule cannot see: a helper named for
-# tfvars that neither reads a file itself nor forwards in a shape this script
-# can follow. It reads something, and nothing above found out what.
+# The name rule, kept for what behavior cannot see: a helper named for tfvars
+# that neither reads a file itself nor forwards in a followable shape.
 unfollowed=""
 for fn in $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$COMMON" | sed 's/()//' | grep tfvar); do
   case " $all_accessors " in *" $fn "*) ;; *) unfollowed="$unfollowed $fn" ;; esac
@@ -705,11 +639,9 @@ for f in $scripts; do
 "
         ;;
       key|file)
-        # The file argument decides which root's variables the key belongs to.
-        # Every current use resolves to a bare *.tfvars name, which _common.sh
-        # resolves against INFRA_DIR -- the same root as variables.tf. An
-        # absolute path or one that climbs out belongs to some other root and
-        # cannot be checked here.
+        # The file argument decides which root the key belongs to. A bare
+        # *.tfvars name resolves against INFRA_DIR, the same root as
+        # variables.tf; an absolute path or one that climbs out does not.
         if [ "$kind" = file ]; then
           case "$b" in
             */*|"")
@@ -748,22 +680,20 @@ for f in $scripts; do
   hd=$(_tfvars_heredocs "$REPO_ROOT/$f") || {
     echo "contracts: $f: heredoc scan failed, see above" >&2; exit 2; }
   # The trailing COUNT record says how many tfvars heredocs were opened, which
-  # is the only way to tell "this file writes none" from "the extraction
-  # broke". Both produce an empty key set, and one of them is a clean bill of
-  # health for content nothing looked at.
+  # COUNT tells "this file writes none" apart from "the extraction broke". Both
+  # produce an empty key set, and one is a clean bill of health for content
+  # nothing looked at.
   opened=$(printf '%s\n' "$hd" | awk -F"$TAB" '$1 == "COUNT" { print $2 }')
   hd=$(printf '%s\n' "$hd" | grep -v "^COUNT$TAB")
-  # Body lines that look like assignments. A tfvars heredoc whose body is one
-  # "$content" expansion (test-permutations.sh _write_override) legitimately
-  # yields no keys; one full of key = value lines that yields none means the
-  # extractor stopped matching.
+  # A tfvars heredoc whose body is one "$content" expansion legitimately yields
+  # no keys (test-permutations.sh _write_override); one full of key = value
+  # lines that yields none means the extractor stopped matching.
   hd_assigns=$(printf '%s\n' "$hd" \
     | grep -cE "^[0-9]+${TAB}[ ${TAB}]*[A-Za-z_][A-Za-z0-9_-]*[ ${TAB}]*=[^=]" | tr -d ' ')
   hd_keys=""
   if [ -n "$hd" ]; then
-    # Piped separately rather than folded into one pipeline with the sort
-    # below: a pipeline reports only its last command's status, which would
-    # swallow the unbalanced-braces exit.
+    # Piped separately from the sort below: a pipeline reports only its last
+    # command status, which would swallow the unbalanced-braces exit.
     hd_keys=$(printf '%s\n' "$hd" | _hcl_keys) || {
       echo "contracts: $f: heredoc body unbalanced, see above" >&2; exit 2; }
   fi
@@ -801,15 +731,14 @@ echo "   $example_n keys in $EXAMPLE_REL"
 
 # ── Check 4: TF_VAR_ exports ─────────────────────────────────────────────────
 # The silent kind: terraform ignores an undeclared TF_VAR_* with no output at
-# all. This is #140 -- setup-env.sh exported three secrets the GCP root did not
+# all. This is #140 -- setup-env.sh exporting three secrets the GCP root did not
 # declare -- run automatically.
 #
 # Comments are stripped first. Most of these names are not exported directly:
-# they are string arguments to _sm_secret and _ssm_secret, which export
-# indirectly, so the scan cannot be narrowed to `export TF_VAR_x=` without
-# dropping ten of aws's sixteen. What it can do is not read a name out of a
-# commented-out line, which otherwise reports a variable that was deleted along
-# with the export that used it.
+# they are arguments to _sm_secret and _ssm_secret, so the scan cannot narrow to
+# `export TF_VAR_x=` without dropping ten of aws's sixteen. What it can do is
+# skip a commented-out line, which otherwise reports a variable deleted along
+# with its export.
 SETUP="$PROVIDER_DIR/infra/scripts/setup-env.sh"
 SETUP_REL="$arg/infra/scripts/setup-env.sh"
 if [ ! -f "$SETUP" ]; then
@@ -836,12 +765,9 @@ echo "   $tf_var_n TF_VAR_ exports in $SETUP_REL"
 # ── Reads that resolve to no root variable ───────────────────────────────────
 # Two kinds, neither a finding and neither safe to drop. A key assembled at
 # runtime is invisible to a static check: gcp/infra/scripts/status.sh builds
-# enable_${addon} from a literal loop over three add-ons, and all six resolved
-# names are declared today, but nothing here proves that. A field inside a block
-# value is real and readable but is not a root variable, so variables.tf will
-# never declare it.
-#
-# Naming the call sites is the point. Passing over them silently is the same
+# enable_${addon} over three add-ons, and all six names are declared today, but
+# nothing here proves that. A field inside a block value is real and readable
+# but is not a root variable. Passing over either silently is the same
 # under-report the exit 2 cases exist to prevent, one severity down.
 if [ -n "$notes" ]; then
   echo "   note: reads not checked against $VARS_REL:"
