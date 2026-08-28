@@ -118,9 +118,8 @@ ABAC_PRINCIPAL_TYPE_NO_ACTION = (
     "StringEqualsIgnoreCase 'ServicePrincipal'"
 )
 
-# Two clauses, the second past the 240th character. A real subscription policy
-# runs this long, and the constraint that decides whether an apply can succeed
-# is as likely to sit in the tail as the head.
+# Two clauses, the second past the 240th character: real policies run this long,
+# and the deciding constraint is as likely to sit in the tail as the head.
 ABAC_LONG = (
     "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
     "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
@@ -302,8 +301,8 @@ CASES = [
     {
         "name": "everything permitted passes at both scopes",
         "ca_all": ALL_GOOD,
-        # One line per verdict, not per scope: the two scopes agree, so they are
-        # named together. A regression that splits them back out fails here.
+        # One line per verdict, not per scope: these two scopes agree, so they
+        # are named together. Splitting them back out fails here.
         "expect": [
             f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE}, granted by Owner held at",
             f"[✓] Every resource action the deployment needs is permitted at {SUB_SCOPE} and {RG_SCOPE}",
@@ -568,9 +567,9 @@ CASES = [
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg-prod/providers"],
     },
-    # The three naming overrides each move the resource group, and the probe has
-    # to follow. Checking a group that does not exist is the failure these guard:
-    # it answers, and every RG verdict then describes the wrong thing.
+    # Each naming override moves the resource group and the probe has to follow.
+    # A group that does not exist still answers, and every RG verdict below then
+    # describes the wrong thing.
     {
         "name": "unique_resource_names shortens the probed group to the ls- base",
         "tfvars_extra": "unique_resource_names = true",
