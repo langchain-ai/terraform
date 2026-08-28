@@ -81,6 +81,51 @@ jobs:
       - name: Run checks
         run: bash agents/check.sh "modules/${{ matrix.provider }}"
 
+  # Plan tests, one job per provider for the same reasons as the legs above. Its
+  # own job rather than a step inside check (<provider>): it plans the root
+  # module, which is slower than validate and tflint put together, and a failing
+  # assertion should read as a wiring failure rather than as a lint failure.
+  # The matrix mirrors the check legs, byoc included: plan-tests.sh skips it by
+  # name because it has no infra/ root to plan, and a leg that says so beats a
+  # missing check nobody can account for. ocp is out of both matrices, having no
+  # versions.tf to init against at all.
+  plan-tests:
+    name: plan tests (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [aws, azure, byoc, gcp]
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      # Shared with the check leg above by key, so whichever job runs first
+      # populates it and the other reads it.
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-providers-${{ matrix.provider }}-${{ hashFiles(format('modules/{0}/**/.terraform.lock.hcl', matrix.provider), format('modules/{0}/**/versions.tf', matrix.provider)) }}
+          restore-keys: |
+            tf-providers-${{ matrix.provider }}-
+
+      - name: Create plugin cache dir
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
+      # No credentials and no backend: the suite mocks every provider, and
+      # plan-tests.sh inits with -backend=false. A provider outside the skip
+      # list with no tests/ directory exits 2 here rather than passing.
+      - name: Run plan tests
+        run: bash agents/plan-tests.sh "modules/${{ matrix.provider }}"
+
   # Every tracked script, one bar, whole repo -- including the ones outside the
   # provider trees (agents/, .github/scripts/, modules/ocp/). Its own job rather
   # than part of the legs above: it needs no terraform, so findings land in
