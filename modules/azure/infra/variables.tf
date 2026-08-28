@@ -48,6 +48,20 @@ variable "unique_resource_names" {
   default     = false
 }
 
+variable "name_suffix_salt" {
+  type        = string
+  description = "Rotation counter mixed into the per-subscription hash on the globally-unique names. Bump it (\"\" → \"2\" → \"3\") when a previous deployment burned those names: a soft-deleted Key Vault holds its name for the whole retention window, and Managed Redis exposes no way to check availability before applying. All four names rotate together; the resource group, VNet and AKS names are unaffected. DESTRUCTIVE on an existing deployment — changing it renames Postgres, Redis, Storage and Key Vault, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. To dodge a single collision instead, pin that one name below. No effect when unique_resource_names = false."
+  default     = ""
+
+  # Hashed, never appended, so the length costs nothing against the 24-character
+  # name cap. Bounded only to keep it recognisable as a counter — the value has
+  # no job beyond differing from the last one.
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9]{0,8}$", var.name_suffix_salt))
+    error_message = "name_suffix_salt must be 0-8 alphanumeric characters (e.g. \"2\")."
+  }
+}
+
 # ── Explicit name overrides ───────────────────────────────────────────────────
 # Each defaults to "" meaning "derive it". Set one to pin an existing resource's
 # name, or to work around a collision without renaming the whole deployment.
@@ -778,9 +792,7 @@ variable "postgres_geo_redundant_backup" {
 }
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
-# These variables are declared here only to prevent Terraform from warning
-# about undeclared variables in terraform.tfvars. They are read by
-# helm/scripts/init-values.sh and helm/scripts/deploy.sh.
+# Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
