@@ -735,6 +735,11 @@ variable "enable_agent_builder" {
   type        = bool
   description = "Deprecated compatibility input accepted for existing tfvars files. Ignored because chart v0.16 supports Fleet instead."
   default     = false
+
+  validation {
+    condition     = var.enable_agent_builder == false
+    error_message = "enable_agent_builder was removed in chart v0.16. Use enable_fleet instead; setting enable_agent_builder has no effect."
+  }
 }
 
 variable "enable_insights" {
