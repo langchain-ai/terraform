@@ -51,6 +51,23 @@ variable "vpc_public_subnets" {
   default     = []
 }
 
+variable "dns_create_zone" {
+  type        = bool
+  description = "Create a dedicated public Route 53 hosted zone for langsmith_domain. Set to false to write DNS validation and ALB alias records into dns_existing_zone_id instead."
+  default     = true
+}
+
+variable "dns_existing_zone_id" {
+  type        = string
+  description = "ID of an existing public Route 53 hosted zone for langsmith_domain or one of its parent domains. Used when dns_create_zone is false."
+  default     = ""
+
+  validation {
+    condition     = var.dns_existing_zone_id == "" || can(regex("^Z[A-Z0-9]{1,31}$", var.dns_existing_zone_id))
+    error_message = "dns_existing_zone_id must be a valid Route 53 hosted zone ID (starts with Z, e.g., Z1ABCDEF123456)."
+  }
+}
+
 variable "dns_include_wildcard_san" {
   type        = bool
   description = "Include a wildcard SAN (*.<langsmith_domain>) on the ACM certificate created by module.dns. Needed for HTTPS on subdomains like mission-control.langsmith.example.com."
@@ -602,9 +619,20 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+variable "langsmith_helm_chart_version" {
+  type        = string
+  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.16.11\". Empty deploys the latest patch on the pinned 0.16 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.16\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x version — deploy.sh refuses anything off the pinned chart line."
+  }
+}
+
 variable "langsmith_domain" {
   type        = string
-  description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set (and acm_certificate_arn is empty), activates the dns module to auto-provision a Route 53 hosted zone, ACM certificate, and alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
+  description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set and acm_certificate_arn is empty, activates the DNS module to create or reuse a Route 53 hosted zone, request an ACM certificate, and create an ALB alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
   default     = ""
 }
 
@@ -1027,7 +1055,7 @@ variable "smithdb_capacity_type" {
 variable "smithdb_instance_store_sizes" {
   type        = list(string)
   description = "Allowed instance sizes for the SmithDB instance-store pool (karpenter.k8s.aws/instance-size). Combined with the local-NVMe requirement, this selects families like m6id/m5d/r6id at these sizes."
-  default     = ["4xlarge", "8xlarge"]
+  default     = ["4xlarge", "8xlarge", "16xlarge"]
 }
 
 variable "smithdb_instance_store_min_local_nvme_gib" {

@@ -83,48 +83,57 @@ _parse_tfvar() {
   ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
 }
 
-# ── Resolve config from terraform.tfvars ──────────────────────────────────────
-if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
-  exit 1
+# ── Resolve config from terraform.tfvars (best effort) ────────────────────────
+# TEARDOWN.md Option B documents teardown with no Terraform state and instructs
+# running this script, so hard-requiring terraform.tfvars and `terraform output`
+# made it unusable in exactly the situation it is documented for. Both are now
+# optional: when they resolve, the script retargets kubeconfig itself; when they
+# do not, it falls back to the active kubectl context and names the cluster it is
+# about to act on so the operator can confirm.
+_project_id=""; _name_prefix=""; _environment=""; _region=""
+if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  _project_id=$(_parse_tfvar "project_id")
+  _name_prefix=$(_parse_tfvar "name_prefix")
+  _environment=$(_parse_tfvar "environment")
+  _region=$(_parse_tfvar "region")
+  _region="${_region:-us-west2}"
+  echo "Resolved from terraform.tfvars:"
+  echo "  name_prefix  = ${_name_prefix:-(empty)}"
+  echo "  environment  = ${_environment:-(empty)}"
+  echo "  project_id   = ${_project_id:-(empty)}"
+  echo "  region       = $_region"
+else
+  echo "NOTE: no terraform.tfvars at $INFRA_DIR."
+  echo "      Falling back to the active kubectl context (TEARDOWN.md Option B)."
 fi
-
-_project_id=$(_parse_tfvar "project_id")
-_name_prefix=$(_parse_tfvar "name_prefix")
-_environment=$(_parse_tfvar "environment")
-_region=$(_parse_tfvar "region")
-_region="${_region:-us-west2}"
-
-if [[ -z "$_project_id" || -z "$_environment" ]]; then
-  echo "ERROR: Could not resolve project_id and/or environment from $INFRA_DIR/terraform.tfvars." >&2
-  echo "       Ensure terraform.tfvars has these values set." >&2
-  exit 1
-fi
-
-echo "Resolved from terraform.tfvars:"
-echo "  name_prefix  = ${_name_prefix:-(empty)}"
-echo "  environment  = $_environment"
-echo "  project_id   = $_project_id"
-echo "  region       = $_region"
 echo ""
 
-# ── Get cluster name from Terraform output ────────────────────────────────────
-echo "Reading cluster name from Terraform output..."
-_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || {
-  echo "ERROR: Could not read cluster_name. Is 'terraform apply' complete?" >&2
-  exit 1
-}
-echo "  cluster_name = $_cluster_name"
-echo ""
+# ── Point kubeconfig at the right cluster, if Terraform can tell us ───────────
+_cluster_name=""
+if [[ -n "$_project_id" && -n "$_region" ]]; then
+  _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
+fi
 
-# ── Point kubeconfig at the right cluster ─────────────────────────────────────
-echo "Updating kubeconfig for cluster: $_cluster_name..."
-"$SCRIPT_DIR/get-kubeconfig.sh" "$_cluster_name" "$_region" "$_project_id"
-echo "  Active context: $(kubectl config current-context)"
+if [[ -n "$_cluster_name" ]]; then
+  echo "Updating kubeconfig for cluster: $_cluster_name..."
+  "$SCRIPT_DIR/get-kubeconfig.sh" "$_cluster_name" "$_region" "$_project_id"
+else
+  echo "NOTE: cluster name unavailable from Terraform output — kubeconfig left as is."
+fi
+
+_ctx=$(kubectl config current-context 2>/dev/null) || _ctx=""
+if [[ -z "$_ctx" ]]; then
+  echo "ERROR: no active kubectl context, and no cluster resolvable from Terraform." >&2
+  echo "       Point kubectl at the target cluster first:" >&2
+  echo "         gcloud container clusters get-credentials <cluster> \\" >&2
+  echo "           --region <region> --project <project-id>" >&2
+  exit 1
+fi
+echo "  Active context: $_ctx"
 echo ""
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
-echo "This will remove:"
+echo "This will remove, from cluster context '$_ctx':"
 echo "  - Helm release '$RELEASE_NAME' from namespace '$NAMESPACE'"
 echo "  - Operator-managed LangSmith resources in namespace '$NAMESPACE'"
 echo "  - JuiceFS / sandbox volumes (while CSI is still present)"

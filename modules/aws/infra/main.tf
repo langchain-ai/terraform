@@ -81,6 +81,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !local.dns_enabled || var.dns_create_zone || var.dns_existing_zone_id != ""
+      error_message = "dns_existing_zone_id is required when the DNS module is enabled and dns_create_zone = false."
+    }
+
+    precondition {
       condition     = var.tls_certificate_source != "letsencrypt" || var.letsencrypt_email != ""
       error_message = "letsencrypt_email is required when tls_certificate_source = 'letsencrypt'."
     }
@@ -429,16 +434,21 @@ module "cert_manager" {
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
 # Activates whenever langsmith_domain is set (regardless of tls_certificate_source).
-# This lets you deploy with tls_certificate_source = "none" first, delegate
-# NS records at your leisure, then flip to "acm" in a later apply.
+# This lets you deploy with tls_certificate_source = "none" first, finish the
+# selected zone's DNS setup at your leisure, then flip to "acm" in a later apply.
 #
-# When tls_certificate_source != "acm": creates the Route 53 zone, requests
-# the ACM certificate, writes DNS validation records, and creates the alias
-# record — but does NOT block waiting for certificate validation.
+# By default, creates a hosted zone exactly matching langsmith_domain. Set
+# dns_create_zone = false to put the certificate validation and ALB alias
+# records in an existing public parent or same-name hosted zone instead.
+# Only a newly created hosted zone needs NS delegation from its parent.
+#
+# When tls_certificate_source != "acm": requests the ACM certificate, writes
+# DNS validation records, and creates the alias record — but does NOT block
+# waiting for certificate validation.
 #
 # When tls_certificate_source == "acm": additionally blocks until the ACM
-# certificate is validated (NS delegation must be complete), then wires the
-# validated cert into the ALB HTTPS listener.
+# certificate is validated (the selected zone must be authoritative), then
+# wires the validated cert into the ALB HTTPS listener.
 
 locals {
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
@@ -449,7 +459,8 @@ module "dns" {
   count  = local.dns_enabled ? 1 : 0
 
   domain_name          = var.langsmith_domain
-  create_zone          = true
+  create_zone          = var.dns_create_zone
+  existing_zone_id     = var.dns_existing_zone_id
   create_certificate   = true
   wait_for_validation  = var.tls_certificate_source == "acm"
   include_wildcard_san = var.dns_include_wildcard_san
@@ -457,6 +468,8 @@ module "dns" {
 
 # Alias record lives here (not in the dns module) to avoid a circular
 # dependency: dns needs nothing from alb, and alb needs dns's cert ARN.
+# The record's zone_id is the selected Route 53 zone; alias.zone_id is the
+# ALB's canonical hosted zone ID required by Route 53 for the alias target.
 resource "aws_route53_record" "langsmith_alb_alias" {
   count   = local.dns_enabled ? 1 : 0
   zone_id = module.dns[0].zone_id

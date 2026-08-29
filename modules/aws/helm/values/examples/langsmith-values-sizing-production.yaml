@@ -208,6 +208,73 @@ fleetTriggerServer:
         cpu: "1"
         memory: "2Gi"
 
+# -- SmithDB ---------------------------------------------------------------
+
+smithdb:
+  query:
+    deployment:
+      resources:
+        requests:
+          cpu: "28"
+          memory: "48Gi"
+          ephemeral-storage: "200Gi"
+        limits:
+          cpu: "28"
+          memory: "48Gi"
+          ephemeral-storage: "200Gi"
+    autoscaling:
+      minReplicas: 1
+
+  ingestion:
+    deployment:
+      resources:
+        requests:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+        limits:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+    autoscaling:
+      minReplicas: 1
+
+  compaction:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: "8Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+
+  compactionWorker:
+    deployment:
+      resources:
+        requests:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+        limits:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+    autoscaling:
+      minReplicas: 3
+
+  clusterManager:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "250m"
+          memory: "256Mi"
+
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 
 clickhouse:
