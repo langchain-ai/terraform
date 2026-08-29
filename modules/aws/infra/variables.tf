@@ -746,7 +746,7 @@ variable "enable_insights" {
 variable "insights_storage" {
   type        = string
   description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "external"
+  default     = "in-cluster"
 
   validation {
     condition     = contains(["external", "in-cluster"], var.insights_storage)
@@ -763,7 +763,7 @@ variable "enable_polly" {
 variable "polly_storage" {
   type        = string
   description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
-  default     = "external"
+  default     = "in-cluster"
 
   validation {
     condition     = contains(["external", "in-cluster"], var.polly_storage)
