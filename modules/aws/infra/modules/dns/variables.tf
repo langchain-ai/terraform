@@ -4,13 +4,13 @@ variable "domain_name" {
 }
 
 variable "create_zone" {
-  description = "Whether to create a new Route 53 hosted zone"
+  description = "Whether to create a new public Route 53 hosted zone exactly matching domain_name"
   type        = bool
   default     = true
 }
 
 variable "existing_zone_id" {
-  description = "ID of an existing Route 53 hosted zone (used when create_zone = false)"
+  description = "ID of an existing public Route 53 hosted zone for domain_name or one of its parent domains (used when create_zone = false)"
   type        = string
   default     = ""
 }
@@ -32,4 +32,3 @@ variable "include_wildcard_san" {
   type        = bool
   default     = false
 }
-
