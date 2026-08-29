@@ -719,8 +719,6 @@ _ex_fleet_external="false"
 _ex_insights_primary=$(_existing "enable_insights" "false")
 _ex_standalone_insights=$(_existing "enable_standalone_insights" "false")
 _ex_insights_storage=$(_existing "insights_storage" "")
-_ex_insights_storage_known="false"
-[[ -n "$_ex_insights_storage" ]] && _ex_insights_storage_known="true"
 if [[ -z "$_ex_insights_storage" ]]; then
   _ex_insights_storage="in-cluster"
   [[ "$_ex_standalone_insights" == "true" ]] && _ex_insights_storage="external"
@@ -730,7 +728,6 @@ _ex_insights_external="false"
 _ex_insights="false"
 [[ "$_ex_insights_primary" == "true" || "$_ex_standalone_insights" == "true" ]] && _ex_insights="true"
 _ex_insights_storage_guard="$_ex_insights"
-[[ "$_ex_insights_storage_known" == "true" ]] && _ex_insights_storage_guard="true"
 _ex_polly_primary=$(_existing "enable_polly" "false")
 _ex_standalone_polly=$(_existing "enable_standalone_polly" "false")
 _ex_polly_storage=$(_existing "polly_storage" "")
@@ -745,7 +742,6 @@ _ex_polly_external="false"
 _ex_polly="false"
 [[ "$_ex_polly_primary" == "true" || "$_ex_standalone_polly" == "true" ]] && _ex_polly="true"
 _ex_polly_storage_guard="$_ex_polly"
-[[ "$_ex_polly_storage_known" == "true" ]] && _ex_polly_storage_guard="true"
 _ex_sandboxes=$(_existing "enable_sandboxes" "false")
 
 ENABLE_DEPLOYMENTS="false"; ENABLE_FLEET="false"
