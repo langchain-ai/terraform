@@ -1072,8 +1072,7 @@ fi
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB requires an explicit stable chart version of 0.16 or newer:${RESET}\n"
-  printf "     ${CYAN}make init-values && CHART_VERSION=0.16.21 make deploy${RESET}\n"
+  printf "  ${DIM}SmithDB uses the repository's pinned 0.16.x chart line.${RESET}\n"
 fi
 
 echo ""
