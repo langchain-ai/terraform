@@ -1038,7 +1038,7 @@ variable "smithdb_capacity_type" {
 variable "smithdb_instance_store_sizes" {
   type        = list(string)
   description = "Allowed instance sizes for the SmithDB instance-store pool (karpenter.k8s.aws/instance-size). Combined with the local-NVMe requirement, this selects families like m6id/m5d/r6id at these sizes."
-  default     = ["4xlarge", "8xlarge"]
+  default     = ["4xlarge", "8xlarge", "16xlarge"]
 }
 
 variable "smithdb_instance_store_min_local_nvme_gib" {
