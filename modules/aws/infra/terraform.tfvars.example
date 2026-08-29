@@ -480,6 +480,20 @@ s3_ttl_long_days  = 400    # delete long-lived traces after ~13 months
 langsmith_namespace = "langsmith"
 
 #------------------------------------------------------------------------------
+# HELM CHART VERSION
+#------------------------------------------------------------------------------
+# Pin the chart to an exact patch for reproducible deploys. Empty deploys the
+# latest patch on the pinned 0.16 line, so a rebuild months apart can land on a
+# different chart. Must be a 0.16.x version — deploy.sh refuses anything else.
+#
+# The CHART_VERSION environment variable still overrides this when set:
+#   CHART_VERSION=0.16.11 make deploy
+#
+# List what is published with:
+#   helm search repo langchain/langsmith --versions
+# langsmith_helm_chart_version = "0.16.11"
+
+#------------------------------------------------------------------------------
 # SECURITY ADD-ONS (all optional, all default to off)
 #------------------------------------------------------------------------------
 # These are independent features you can enable for compliance or auditing.
