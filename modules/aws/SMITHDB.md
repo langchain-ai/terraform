@@ -38,7 +38,8 @@ Apply infrastructure, then generate values:
 make init-values
 ```
 
-The repository pins deployments to the latest compatible 0.16.x chart:
+SmithDB requires a stable Helm chart version of 0.16 or newer.
+The deploy script already pins the latest 0.16.x chart (`~0.16.0`):
 
 ```sh
 make deploy

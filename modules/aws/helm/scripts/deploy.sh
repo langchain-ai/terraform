@@ -41,6 +41,14 @@ if [[ -n "${CHART_VERSION:-}" ]]; then
   echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
+# Fall back to the langsmith_helm_chart_version tfvar before the line default, so
+# the pin can live in version-controlled config rather than only in a shell
+# variable. Env var still wins. Matches Azure and GCP.
+if [[ -z "${CHART_VERSION:-}" ]]; then
+  CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
+  [[ -n "$CHART_VERSION" ]] && \
+    echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
+fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
 _chart_version_supports_sandboxes() {

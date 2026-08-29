@@ -174,6 +174,73 @@ fleetTriggerServer:
 # are sized via the top-level apiServer/queue resources in their own overlays
 # (langsmith-values-fleet.yaml, -standalone-polly.yaml, -standalone-insights.yaml).
 
+# -- SmithDB ---------------------------------------------------------------
+
+smithdb:
+  query:
+    deployment:
+      resources:
+        requests:
+          cpu: "4"
+          memory: "8Gi"
+          ephemeral-storage: "200Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+          ephemeral-storage: "200Gi"
+    autoscaling:
+      minReplicas: 1
+
+  ingestion:
+    deployment:
+      resources:
+        requests:
+          cpu: "4"
+          memory: "8Gi"
+          ephemeral-storage: "100Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+          ephemeral-storage: "100Gi"
+    autoscaling:
+      minReplicas: 1
+
+  compaction:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: "4Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+
+  compactionWorker:
+    deployment:
+      resources:
+        requests:
+          cpu: "8"
+          memory: "16Gi"
+          ephemeral-storage: "100Gi"
+        limits:
+          cpu: "8"
+          memory: "16Gi"
+          ephemeral-storage: "100Gi"
+    autoscaling:
+      minReplicas: 1
+
+  clusterManager:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "250m"
+          memory: "256Mi"
+
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # These apply when using in-cluster postgres, redis, and clickhouse.
 # If you're pointing at managed services (RDS, ElastiCache, ClickHouse Cloud),

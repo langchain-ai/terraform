@@ -24,13 +24,6 @@ smithdb:
   # groups in infra.
   query:
     deployment:
-      volumes:
-        - name: local-ssd-storage
-          emptyDir:
-            sizeLimit: 200Gi
-      volumeMounts:
-        - name: local-ssd-storage
-          mountPath: /data
       nodeSelector:
         smithdb-local/instance-store: "true"
       tolerations:
@@ -48,6 +41,27 @@ smithdb:
           value: "true"
           effect: NoSchedule
   compactionWorker:
+    deployment:
+      nodeSelector:
+        smithdb-local/instance-store: "true"
+      tolerations:
+        - key: smithdb-local/instance-store
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+
+  # The chart defaults to one 8-vCPU migration pod, which the documented
+  # formula estimates at about 40 million historical runs per day. Actual
+  # throughput varies.
+  migration:
+    taskdb:
+      postgres:
+        auth:
+          # Set TASKDB_PASSWORD to a stable value, then create this Secret in
+          # the Helm release namespace before enabling migration:
+          # kubectl create secret generic smithdb-migration-taskdb --namespace "${NAMESPACE:-langsmith}" --from-literal=postgres_password="$TASKDB_PASSWORD"
+          existingSecretName: "smithdb-migration-taskdb"
+          passwordSecretKey: "postgres_password"
     deployment:
       nodeSelector:
         smithdb-local/instance-store: "true"
