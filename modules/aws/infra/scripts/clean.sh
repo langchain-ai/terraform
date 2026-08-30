@@ -89,9 +89,14 @@ if ! _state_output=$(_terraform -chdir="$INFRA_DIR" state list 2>&1); then
     fi
     _state_output=""
   else
-    fail "Could not read Terraform state; refusing to remove local configuration."
+    # Unreadable state (for example an S3 backend with .terraform/ deleted) means we cannot verify anything is gone.
+    # Warn and let the user decide, rather than strand credentials on disk with no way past the check.
+    warn "Could not read Terraform state (.terraform deleted or terraform init never run); cannot verify infrastructure is gone."
     printf "  %s\n" "$_state_output" >&2
-    exit 1
+    printf "  Force clean anyway? [y/N] "
+    read -r _force_clean
+    [[ "$_force_clean" =~ ^[Yy]$ ]] || { echo "  Aborted."; exit 0; }
+    _state_output=""
   fi
 fi
 
