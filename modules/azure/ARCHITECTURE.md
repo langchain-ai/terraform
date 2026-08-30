@@ -173,26 +173,40 @@ See [README.md](README.md#bring-your-own-vnet).
 
 ## Secret Flow
 
+Terraform state stores variable values as plaintext, and `sensitive = true` only
+suppresses CLI output — it does not keep a value out of the state file. So the
+LangSmith application secrets never pass through a Terraform variable. Only the
+two values Terraform needs in order to build something reach it at all.
+
 ```
 Pass 1 — Infrastructure
 
-  ./setup-env.sh   (read-only against Key Vault — never writes to KV directly)
-    First run:  prompts for postgres password, license key, admin password
-                generates api_key_salt, jwt_secret, Fernet keys
-                Key Vault does not exist yet → writes to local dot-files + secrets.auto.tfvars
-    Subsequent: Key Vault exists → reads all secrets from KV → writes to secrets.auto.tfvars
-                no prompts, no generation, no KV writes
-    Output:     secrets.auto.tfvars  (gitignored, chmod 600)
-                Terraform picks this up automatically — no shell session coupling
+  ./setup-env.sh   (never reads or writes Key Vault)
+    Prompts for the values Terraform itself needs:
+      postgres_admin_password — Terraform creates the Postgres flexible server
+      langsmith_license_key   — k8s-bootstrap builds the langsmith-license secret
+      langsmith_admin_email   — the initial org admin address
+    Output: secrets.auto.tfvars  (gitignored, chmod 600)
+            Terraform picks this up automatically — no shell session coupling
 
   terraform apply
-    Reads:  terraform.tfvars (non-sensitive config)
-            secrets.auto.tfvars (sensitive values — sole input for KV secret creation)
-    Creates: Azure Key Vault + all secrets stored as KV secrets (Terraform is the sole KV writer)
+    Reads:   terraform.tfvars (non-sensitive config)
+             secrets.auto.tfvars
+    Creates: Key Vault, its network ACLs and RBAC role assignments, and the two
+             KV secrets above
+
+  ./scripts/seed-keyvault-secrets.sh   (make seed-secrets)
+    Writes the LangSmith app secrets straight to Key Vault over the az CLI:
+      langsmith-admin-password                — prompted, or $LANGSMITH_ADMIN_PASSWORD
+      langsmith-api-key-salt                  — generated
+      langsmith-jwt-secret                    — generated
+      langsmith-deployments-encryption-key    — generated (Fernet)
+      langsmith-agent-builder-encryption-key  — generated (Fernet)
+      langsmith-insights-encryption-key       — generated (Fernet)
+      langsmith-polly-encryption-key          — generated (Fernet)
+    Write-once — an existing secret is never overwritten, so it is safe to re-run.
 
 Pass 2 — Application
-
-  ./setup-env.sh   (re-run on any machine to refresh secrets.auto.tfvars from Key Vault)
 
   kubectl create secret generic langsmith-config-secret
     Reads:  Key Vault secrets + terraform outputs (postgres/redis URLs, blob account)
@@ -204,7 +218,11 @@ Pass 2 — Application
     no secrets inline in any YAML file
 ```
 
-**Key rule:** `secrets.auto.tfvars` is never committed. It is regenerated from Key Vault on any machine by running `./setup-env.sh`. Terraform is the sole writer to Key Vault — `setup-env.sh` only reads from it after the first apply.
+**Key rules:**
+
+- `secrets.auto.tfvars` is never committed. Re-run `./setup-env.sh` on any machine to recreate it.
+- The seven app secrets exist only in Key Vault — there is no second copy to restore from. Rotating one is destructive: a new API key salt invalidates every API key, a new JWT secret drops every session, and a new Fernet key makes existing encrypted data unreadable.
+- This matches the other two clouds. The AWS module's script writes SSM Parameter Store; the GCP module's writes Secret Manager. Terraform owns the vault and its access control, never its contents.
 
 ---
 

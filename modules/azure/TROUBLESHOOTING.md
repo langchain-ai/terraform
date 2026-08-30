@@ -187,6 +187,25 @@ Message: "Subscriptions are restricted from provisioning in location 'eastus'.
 Try again in a different location."
 ```
 
+The same restriction also surfaces as a `ParameterOutOfRange` on a field the module does set correctly:
+
+```text
+Error: creating Flexible Server ...: unexpected status 400 (400 Bad Request) with error:
+ParameterOutOfRange: The value of the 'Version' should be in: [].
+```
+
+The list is empty, not missing your value. Azure enumerates no allowed versions for the subscription, region and SKU together, then reports the first field it cannot satisfy. Confirm with the capability API before changing anything:
+
+```bash
+az postgres flexible-server list-skus -l <region> -o table
+```
+
+Rows means the subscription can provision there and the problem is the specific SKU or version. No rows at all (only the pricing warning on stderr) means the whole offering is unavailable, which is this section. Rule out an unregistered provider first, since it produces the same empty list:
+
+```bash
+az provider show -n Microsoft.DBforPostgreSQL --query registrationState -o tsv
+```
+
 **Cause:** This is a subscription offer-type restriction, not regional capacity and not a configuration error. Azure blocks certain offer types (Free Trial, Azure Pass, Visual Studio and MSDN credit, some sponsored and CSP subscriptions) from provisioning PostgreSQL Flexible Server in high-demand regions. The error text points at the region, which sends most people hunting for a new one, but the subscription is what determines the outcome.
 
 Check the offer type:
@@ -298,36 +317,120 @@ make apply
 
 ---
 
-### Key Vault secrets already exist but are not in Terraform state
+### Key Vault secret already exists but is not in Terraform state
 
 **Symptom:**
 ```
-Error: a resource with the ID "https://langsmith-kv-<id>.vault.azure.net/secrets/langsmith-deployments-encryption-key/..."
+Error: a resource with the ID "https://langsmith-kv-<id>.vault.azure.net/secrets/langsmith-license-key/..."
 already exists - to be managed via Terraform this resource needs to be imported into the State.
 ```
 
-**Cause:** Older versions of `setup-env.sh` wrote Fernet keys directly to Key Vault when KV already existed, which conflicted with Terraform trying to create the same secrets. Current `setup-env.sh` is read-only against Key Vault — Terraform is the sole writer.
+**Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
 
-This error only occurs if you are using an older copy of `setup-env.sh` or manually wrote secrets to Key Vault outside of Terraform.
-
-**Fix:** Import the three secrets into Terraform state, then re-run apply:
+**Fix:** Import the conflicting secret, then re-run apply:
 ```bash
-terraform import \
-  'module.keyvault.azurerm_key_vault_secret.deployments_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-deployments-encryption-key --query id -o tsv)"
+terraform -chdir=infra import \
+  'module.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]' \
+  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-license-key --query id -o tsv)"
 
-terraform import \
-  'module.keyvault.azurerm_key_vault_secret.agent_builder_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-agent-builder-encryption-key --query id -o tsv)"
-
-terraform import \
-  'module.keyvault.azurerm_key_vault_secret.insights_encryption_key[0]' \
-  "$(az keyvault secret show --vault-name langsmith-kv-<name_prefix> --name langsmith-insights-encryption-key --query id -o tsv)"
-
-terraform apply
+make apply
 ```
 
-**Prevention:** On a brand-new environment this won't occur. Current `setup-env.sh` never writes to Key Vault — it only reads. On first run (no KV), secrets go to local dot-files and `secrets.auto.tfvars`; Terraform creates Key Vault and stores all secrets on `terraform apply`. On subsequent runs, `setup-env.sh` reads from KV to regenerate `secrets.auto.tfvars`.
+**Upgrading from a release before the secret split?** You will see the opposite of an error: the seven app-secret resources are dropped from state by `removed` blocks with `destroy = false`. The plan reports `0 to destroy` and says each "will no longer be managed by Terraform, but will not be destroyed". The secrets stay in Key Vault, untouched, with the same version IDs. Nothing to import and nothing to re-seed — `make seed-secrets` will report `skip (already set)` for all seven.
+
+The stale entries left in your `secrets.auto.tfvars` produce a `Value for undeclared variable` warning each. They are ignored; delete the lines to quiet it.
+
+---
+
+### AuthorizationFailed on roleAssignments/write — subscription gates principalType
+
+**Symptom:**
+```
+Error: unexpected status 403 (403 Forbidden) with error: AuthorizationFailed:
+The client 'you@example.com' with object id '<your-object-id>' does not have
+authorization to perform action 'Microsoft.Authorization/roleAssignments/write'
+over scope '/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.KeyVault/
+vaults/<vault>/providers/Microsoft.Authorization/roleAssignments/<guid>'
+or the scope is invalid.
+
+  with module.keyvault.azurerm_role_assignment.terraform_kv_admin,
+  on modules/keyvault/main.tf line 80
+```
+
+**Cause:** Two unrelated problems produce this identical message.
+
+Usually it means exactly what it says: the apply identity has no `User Access Administrator`. Confirm with `az role assignment list --assignee <your-object-id> --all -o table` and get UAA or Owner.
+
+If that listing already shows UAA (or a custom role granting `Microsoft.Authorization/roleAssignments/write`), the cause is different: the subscription delegates that permission behind an ABAC condition on `principalType`. Enterprises use this to let a deployer grant roles to managed identities without handing out blanket Owner. The condition is evaluated against the request, so a request that leaves `principalType` out fails it, and ARM returns the generic message above with no mention of the condition. Nothing in the error tells you a condition exists.
+
+**Fix:** Grants targeting managed identities already declare `principal_type = "ServicePrincipal"` and need no action. The exception is the apply identity's own `Key Vault Secrets Officer` grant, which cannot hardcode a value because that principal is a user under an interactive `az login` and a service principal in CI:
+
+```hcl
+# terraform.tfvars
+terraform_principal_type = "User"             # interactive az login
+terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
+```
+
+Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
+
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+
+```bash
+# Run by a subscription owner, who is not subject to the delegation condition
+RA_ID=$(az role assignment create --role "Key Vault Secrets Officer" \
+  --assignee-object-id <your-object-id> --assignee-principal-type User \
+  --scope "$(az keyvault show --name langsmith-kv<identifier> --query id -o tsv)" \
+  --query id -o tsv)
+
+terraform -chdir=infra import \
+  'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
+```
+
+**Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
+
+---
+
+### Existing Key Vault — apply creates the role assignment, then 403s on the secrets
+
+**Symptom:** apply gets past `azurerm_role_assignment` and fails on the first `azurerm_key_vault_secret`:
+```
+Error: checking for presence of existing Secret "postgres-admin-password"
+(Key Vault "https://customer-platform-kv.vault.azure.net/"): keyvault.BaseClient#GetSecret:
+Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
+Service returned an error. Status=403 Code="Forbidden"
+```
+
+`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes the seven app secrets over the data plane too.
+
+**Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
+
+1. The vault's firewall has `default_action = Deny` and the apply host's IP isn't allowlisted. Control-plane calls like the role assignment go through ARM and succeed; secret writes go to the vault's data plane and get dropped.
+2. The deployer doesn't hold Key Vault Secrets Officer on the vault. With `create_keyvault = false`, Terraform doesn't create that grant, so it has to exist beforehand.
+3. The grant exists but hasn't propagated. Key Vault data-plane RBAC can lag a fresh assignment by a few minutes, and on the attach path there's no `time_sleep` to absorb it because Terraform didn't create the assignment.
+
+**Fix:**
+```bash
+# 1. Which is it — check the firewall first
+az keyvault show --name <vault> --query "properties.networkAcls" -o json
+
+# Allowlist the apply host
+az keyvault network-rule add --name <vault> --ip-address "$(curl -s ifconfig.me)/32"
+
+# 2. Confirm the deployer's role, at the vault or above it
+az role assignment list --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --scope "$(az keyvault show --name <vault> --query id -o tsv)" \
+  --include-inherited --query "[].roleDefinitionName" -o tsv
+
+# Grant it, if the platform team allows you to
+az role assignment create --role "Key Vault Secrets Officer" \
+  --assignee "$(az ad signed-in-user show --query id -o tsv)" \
+  --scope "$(az keyvault show --name <vault> --query id -o tsv)"
+
+# 3. Propagation — confirm data-plane access directly, then re-run apply
+az keyvault secret list --vault-name <vault> --query "length(@)"
+```
+
+**Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 
 ---
 
@@ -503,7 +606,7 @@ kubectl describe certificate langsmith-tls -n langsmith
 # Events: ... clusterissuers.cert-manager.io "letsencrypt-prod" not found
 ```
 
-**Cause:** When `tls_certificate_source = "letsencrypt"` is set, the `k8s-bootstrap` module creates a `letsencrypt-prod` ClusterIssuer via `kubernetes_manifest`. If you deployed from an older version of the module (before `cluster_issuer_http01` was added), the ClusterIssuer was never created.
+**Cause:** `deploy.sh` applies the `letsencrypt-prod` ClusterIssuer when `tls_certificate_source` is `letsencrypt` or `dns01`. Terraform never creates it. You hit this when `make deploy` has not run yet, when `tls_certificate_source` was unset in tfvars at the time it ran, or when the `dns01` branch skipped the issuer because `langsmith_domain` was empty (`make deploy` prints a warning in that case).
 
 **Fix — apply it manually:**
 ```bash
@@ -689,25 +792,35 @@ Multiple pods fail with `CreateContainerConfigError` immediately after enabling 
 
 **Cause:** `langsmith-values-insights.yaml` (copied from the AWS-oriented example) sets `clickhouse.external.enabled: true` with `existingSecretName: langsmith-clickhouse`. This overrides the in-cluster ClickHouse configuration and expects an external secret that doesn't exist.
 
-**Fix:** `init-values.sh` now generates a minimal insights file when `clickhouse_source = "in-cluster"`:
+**Fix:** `init-values.sh` no longer puts any ClickHouse configuration in the insights file. The generated file only enables the feature:
 ```yaml
-config:
-  insights:
-    enabled: true
-# No clickhouse.external block — chart uses in-cluster ClickHouse
+insights:
+  enabled: true
 ```
 
 If you have this issue on an existing deployment, overwrite the file and redeploy:
 ```bash
 cat > helm/values/langsmith-values-insights.yaml << 'EOF'
-config:
-  insights:
-    enabled: true
+insights:
+  enabled: true
 EOF
 make deploy
 ```
 
-For **external ClickHouse** (production with LangChain managed ClickHouse), the full configuration is in `helm/values/examples/langsmith-values-insights.yaml`.
+For **external ClickHouse**, set `clickhouse_source = "external"` in `terraform.tfvars` and re-run `make init-values`. That writes the `clickhouse.external` block into `values-overrides.yaml` and prompts for the connection details to create the `langsmith-clickhouse` secret.
+
+The same symptom appears when the secret exists but is missing a key. The chart reads all seven through `secretKeyRef` with `optional: false`:
+
+```
+clickhouse_host  clickhouse_port  clickhouse_native_port  clickhouse_user
+clickhouse_password  clickhouse_db  clickhouse_tls
+```
+
+`clickhouse_native_port` is the one most often left out of a hand-rolled secret. To list the keys present without exposing their values:
+
+```bash
+kubectl get secret langsmith-clickhouse -n langsmith -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}'
+```
 
 ---
 

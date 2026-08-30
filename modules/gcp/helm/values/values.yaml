@@ -129,6 +129,16 @@ hostBackend:
     type: ClusterIP
     port: 1985
 
+# Chart 0.16 defaults insights.enabled and polly.enabled to true with empty
+# encryptionKeys, and validate.yaml fails the render on that combination. Both are
+# opt-in here via the langsmith-values-insights.yaml / -polly.yaml overlays, which
+# supply the key along with the enable flag, so hold them off in the base.
+insights:
+  enabled: false
+
+polly:
+  enabled: false
+
 listener:
   deployment:
     resources:

@@ -273,8 +273,7 @@ resource "kubernetes_secret_v1" "license" {
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
 # TLS automation infrastructure. Manages Let's Encrypt certificates.
-# ClusterIssuers are applied separately via:
-#   bash helm/scripts/apply-cluster-issuers.sh
+# ClusterIssuers are applied separately by helm/scripts/deploy.sh.
 
 resource "helm_release" "cert_manager" {
   name             = "cert-manager"
@@ -328,50 +327,11 @@ resource "helm_release" "cert_manager" {
   }
 }
 
-# HTTP-01 ClusterIssuer is NOT created here.
+# No ClusterIssuer is created here, for either HTTP-01 or DNS-01.
 # kubernetes_manifest requires a live API connection during plan, which fails on fresh
-# deploy (no cluster exists yet). It is applied by helm/scripts/deploy.sh instead,
-# after the cluster is up, via kubectl apply.
-
-# DNS-01 ClusterIssuer — created by Terraform when tls_certificate_source = "dns01".
-# Uses Azure DNS + Workload Identity: no static service principal needed.
-# cert-manager controller calls the Azure DNS API to create/delete TXT records
-# for ACME challenge verification.
-resource "kubernetes_manifest" "cluster_issuer_dns01" {
-  count = var.tls_certificate_source == "dns01" ? 1 : 0
-
-  manifest = {
-    apiVersion = "cert-manager.io/v1"
-    kind       = "ClusterIssuer"
-    metadata = {
-      name = "letsencrypt-prod"
-    }
-    spec = {
-      acme = {
-        server = "https://acme-v02.api.letsencrypt.org/directory"
-        email  = var.letsencrypt_email
-        privateKeySecretRef = {
-          name = "letsencrypt-prod-account-key"
-        }
-        solvers = [{
-          dns01 = {
-            azureDNS = {
-              subscriptionID    = var.subscription_id
-              resourceGroupName = var.dns_resource_group_name
-              hostedZoneName    = var.dns_zone_name
-              environment       = "AzurePublicCloud"
-              managedIdentity = {
-                clientID = var.cert_manager_identity_client_id
-              }
-            }
-          }
-        }]
-      }
-    }
-  }
-
-  depends_on = [helm_release.cert_manager]
-}
+# deploy (no cluster exists yet). Both issuers are applied by helm/scripts/deploy.sh
+# after the cluster is up, via kubectl apply. The DNS-01 issuer needs the pod labels
+# and service account annotation set on the cert-manager release above.
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────
 # Kubernetes Event-Driven Autoscaling. Scales LangSmith queue workers

@@ -31,6 +31,8 @@ resource "azurerm_postgresql_flexible_server" "db" {
   storage_tier = var.storage_tier # P4 = premium SSD, consistent IOPS
   sku_name     = var.sku_name
 
+  backup_retention_days = var.backup_retention_days
+
   administrator_login    = var.admin_username
   administrator_password = var.admin_password
 
@@ -39,14 +41,19 @@ resource "azurerm_postgresql_flexible_server" "db" {
   delegated_subnet_id           = var.subnet_id
   private_dns_zone_id           = azurerm_private_dns_zone.db_dns_zone.id
 
-  zone                         = var.availability_zone
+  zone                         = var.availability_zone != "" ? var.availability_zone : null
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
 
+  # standby_availability_zone is optional on the provider's high_availability
+  # block: with mode set and no zone named, Azure picks a standby in a zone
+  # other than the primary's. Naming one is a pin, not the switch. A non-empty
+  # zone still enables HA by itself so that configurations predating
+  # var.high_availability keep the standby they already have.
   dynamic "high_availability" {
-    for_each = var.standby_availability_zone != "" ? [1] : []
+    for_each = var.high_availability || var.standby_availability_zone != "" ? [1] : []
     content {
       mode                      = "ZoneRedundant"
-      standby_availability_zone = var.standby_availability_zone
+      standby_availability_zone = var.standby_availability_zone != "" ? var.standby_availability_zone : null
     }
   }
 
@@ -55,7 +62,16 @@ resource "azurerm_postgresql_flexible_server" "db" {
   lifecycle {
     # Azure may move the server to a different availability zone during
     # maintenance. Ignore zone drift to prevent unnecessary plan noise.
-    ignore_changes = [zone]
+    #
+    # The standby zone is ignored for a second reason: leaving
+    # standby_availability_zone unset is the supported way to let Azure place
+    # the standby, and Azure then reports the zone it picked. Without this the
+    # config's null reads as a request to unset a zone the server genuinely
+    # has, so every later plan on an HA deployment offers to change it and
+    # every apply pushes an update at a healthy HA pair. The cost is that
+    # editing an explicit pin is ignored too, which is how zone above already
+    # behaves.
+    ignore_changes = [zone, high_availability[0].standby_availability_zone]
   }
 }
 

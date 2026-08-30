@@ -240,17 +240,6 @@
           "aws:ResourceTag/managed_by": "langsmith"
         }
       }
-    },
-    {
-      "Sid": "SecretsManagerDeleteForLangsmith",
-      "Effect": "Allow",
-      "Action": ["secretsmanager:DeleteSecret"],
-      "Resource": "arn:aws:secretsmanager:*:${account_id}:secret:langsmith/*",
-      "Condition": {
-        "StringEquals": {
-          "aws:ResourceTag/managed_by": "langsmith"
-        }
-      }
     }
   ],
   "storage": [
