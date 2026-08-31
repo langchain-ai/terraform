@@ -15,6 +15,7 @@ locals {
   iam_karpenter_eks_profiles_statements = jsondecode(templatefile("${path.module}/policies/iam-karpenter-eks-profiles.json", local.policy_template_vars))
   kms_statements                        = jsondecode(templatefile("${path.module}/policies/kms.json", local.policy_template_vars))
   lambda_statements                     = jsondecode(templatefile("${path.module}/policies/lambda.json", local.policy_template_vars))
+  network_firewall_statements           = jsondecode(templatefile("${path.module}/policies/network_firewall.json", local.policy_template_vars))
   delete_statements                     = jsondecode(templatefile("${path.module}/policies/delete.json", local.policy_template_vars))
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
@@ -34,7 +35,7 @@ locals {
     # Keep optional delete permissions packed into smaller existing policies so
     # each managed policy stays under IAM's 6,144 character policy size limit.
     vpc                        = local.vpc_statements
-    ec2-eni                    = concat(local.ec2_eni_statements, local.delete_statements_for_policy.vpc)
+    ec2-eni                    = concat(local.ec2_eni_statements, local.network_firewall_statements, local.delete_statements_for_policy.vpc)
     iam                        = concat(local.iam_statements, local.delete_statements_for_policy.iam)
     iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"])
     eks                        = concat(local.eks_statements, local.delete_statements_for_policy.eks)
