@@ -26,8 +26,9 @@ unset CDPATH
 REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 
 # Primitive accessors: the _common.sh helpers that read a tfvars file
-# themselves. Check 5 asserts this list still covers every one. Helpers that
-# only forward to these are discovered per provider (see _func_classes).
+# themselves. Helpers that forward to one, and per-provider helpers that read a
+# tfvars file of their own, are discovered rather than listed (see
+# _func_classes); check 5 fails on one shaped so that nothing can follow it.
 ACCESSORS="_parse_tfvar _parse_tfvar_quoted _tfvar_is_true"
 # Named here too, so a provider dropping its status.sh alias fails loudly
 # rather than quietly changing what gets scanned.
@@ -250,19 +251,29 @@ _tfvars_heredocs() {
 
 # Function definitions in one script, classified by what the body does:
 #   wrapper <name>   forwards the function's own $1 to a known accessor
-#   touch   <name>   names a tfvars file directly
+#   reader  <name>   pulls a key out of a tfvars file itself
 #   writer  <name>   redirects into a path that resolves to *.tfvars
+#   uses    <name>   reaches a known accessor at all, in any shape
 #
-# Wrappers have to be followed or check 1 under-reports: azure reads 21 keys
-# instead of 36 without _read_tfvar. The one-line `_read_tfvar() { _parse_tfvar
-# "$1"; }` form is not enough -- `local key="$1"` on one line and
-# `_tfvar_is_true "$key"` on the next is the same forward, which is how aws's
-# _read_gateway_flag is written.
+# Wrappers and readers are both followed, or check 1 under-reports: azure reads
+# 21 keys instead of 36 without _read_tfvar, and 36 instead of 51 without the
+# four readers its own scripts define. uses exempts a caller from check 5.
 #
-# The body ends at a close brace in column 0, the convention in all 203 function
-# definitions under modules/. Brace counting takes noise from ${VAR} and braces
-# inside strings. Heredoc bodies are skipped while walking: a JSON heredoc
-# indents its own } to column 0 and would end the function early.
+# A reader is a body that does all three of: run a text extractor, anchor a key
+# lookup on the function's own $1, and name a tfvars file -- the file being $2
+# in aws _tfvars_get. Per body rather than per line, since gcp _tfvar spreads
+# the three over eight lines of an awk program. All three are needed: on two of
+# them azure _read_values_stamp, which greps a comment stamp with the arguments
+# the other way round, reads as an accessor and gets its file checked as a key.
+#
+# The body ends at a close brace indented like the definition. Column 0 alone
+# loses every definition below azure/preflight.sh:186, which nests tfvar() in an
+# else branch, and with it the _tfvar that file defines further down. Brace
+# counting takes noise from ${VAR} and braces inside strings. Heredoc bodies are
+# skipped while walking: a JSON heredoc indents its own } to column 0 and would
+# end the function early. The heredoc head line is classified before it is
+# skipped, since _write_override opens its heredoc on the same line as the
+# redirect that makes it a writer.
 _func_classes() {
   awk -v accs="$1" "$AWK_LIB$AWK_ASSIGN"'
     BEGIN { n = split(accs, a, " "); for (i = 1; i <= n; i++) acc[a[i]] = 1 }
@@ -271,47 +282,95 @@ _func_classes() {
       if (t == delim) _in_hd = 0
       next
     }
-    _hd_start($0, o) { delim = o["delim"]; dash = o["dash"]; _in_hd = 1; next }
-    fname == "" && match($0, /^[ \t]*(function[ \t]+[A-Za-z_][A-Za-z0-9_]*([ \t]*\(\))?|[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\))[ \t]*\{/) {
-      fname = substr($0, RSTART, RLENGTH)
-      sub(/^[ \t]*/, "", fname); sub(/^function[ \t]+/, "", fname)
-      sub(/[ \t]*(\(\))?[ \t]*\{$/, "", fname)
-      delete argv1
+    # A definition can open a heredoc on its own head line, so the head is read
+    # as a definition before it is skipped as a heredoc start; the other order
+    # leaves fname empty and the whole body unclassified.
+    _hd_start($0, o) {
+      if (fname == "" && _isdef($0, d)) {
+        fname = d["name"]; ind = d["ind"]; delete argv1; delete argv2
+      }
+      if (fname != "") _classify($0, fname, acc, argv1, argv2, var)
+      delim = o["delim"]; dash = o["dash"]; _in_hd = 1
+      next
+    }
+    fname == "" && _isdef($0, d) {
+      fname = d["name"]; ind = d["ind"]
+      delete argv1; delete argv2
       # A one-line definition opens and closes on the head line.
-      if ($0 ~ /\}[ \t]*$/) { _classify($0, fname, acc, argv1, var); fname = "" }
+      if ($0 ~ /\}[ \t]*$/) { _classify($0, fname, acc, argv1, argv2, var); fname = "" }
       next
     }
     fname != "" {
-      # `local key="$1"` makes $key another spelling of $1 for the rest of the
-      # body. Not anchored to end of line: aws _read_gateway_flag declares its
-      # second local on the same line.
-      if (match($0, /[A-Za-z_][A-Za-z0-9_]*=[ \t]*"?\$\{?1\}?"?([ \t]|$)/)) {
-        a1 = substr($0, RSTART, RLENGTH); sub(/=.*/, "", a1); argv1[a1] = 1
+      # `local key="$1" file="$2"` makes $key and $file other spellings of the
+      # arguments for the rest of the body.
+      rest = $0
+      while (match(rest, /[A-Za-z_][A-Za-z0-9_]*=[ \t]*"?\$\{?[12]\}?"?([ \t]|$)/)) {
+        a1 = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+        nm = a1; sub(/=.*/, "", nm)
+        if (a1 ~ /\$\{?1\}?/) argv1[nm] = 1
+        if (a1 ~ /\$\{?2\}?/) argv2[nm] = 1
       }
-      _classify($0, fname, acc, argv1, var)
-      if ($0 ~ /^\}/) fname = ""
+      _classify($0, fname, acc, argv1, argv2, var)
+      close_at = $0; sub(/[^ \t].*$/, "", close_at)
+      if ($0 ~ /^[ \t]*\}/ && length(close_at) == ind) fname = ""
     }
-    function _classify(line, fn, acc, argv1, var,   s, i, m, tgt, tok, nt, t) {
+    # The name and indent of a function definition opening on this line.
+    function _isdef(line, o,   f, pad) {
+      if (!match(line, /^[ \t]*(function[ \t]+[A-Za-z_][A-Za-z0-9_]*([ \t]*\(\))?|[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\))[ \t]*\{/))
+        return 0
+      f = substr(line, RSTART, RLENGTH)
+      pad = f; sub(/[^ \t].*$/, "", pad); o["ind"] = length(pad)
+      sub(/^[ \t]*/, "", f); sub(/^function[ \t]+/, "", f)
+      sub(/[ \t]*(\(\))?[ \t]*\{$/, "", f)
+      o["name"] = f
+      return 1
+    }
+    function _classify(line, fn, acc, argv1, argv2, var,   s, r, i, m, tgt, tok, nt, t) {
       s = _decomment(line)
-      # Accessor called with the function own argument, directly or by alias.
       nt = split(s, t, /[ \t]+/)
       for (i = 1; i <= nt; i++) {
         tok = t[i]; sub(/^.*[^A-Za-z0-9_]/, "", tok)
-        if (!(tok in acc) || i == nt) continue
+        if (!(tok in acc)) continue
+        print "uses " fn
+        if (i == nt) continue
+        # Called with the function own argument, directly or by alias.
         m = t[i+1]; gsub("[\"" _sq() "]", "", m); sub(/[);&|].*$/, "", m)
         gsub(/[${}]/, "", m)
         if (m == "1" || (m in argv1)) print "wrapper " fn
       }
-      # A function naming a tfvars file in its own body reads or writes one
-      # directly, which makes it a primitive rather than a forwarder.
-      if (s ~ /\.tfvars/) print "touch " fn
       # A redirect into a tfvars path makes this a writer, so its callers pass
       # tfvars content (test-permutations.sh _write_override).
       if (match(s, />>?[ \t]*[^ \t;&|<>]+/)) {
         tgt = substr(s, RSTART, RLENGTH); sub(/^>>?[ \t]*/, "", tgt)
         if (_resolve(tgt, var) ~ /\.tfvars$/) print "writer " fn
       }
+      # Redirect targets come off first: a grep whose output lands in a tfvars
+      # file writes one, it does not read one.
+      r = s; gsub(/>>?[ \t]*[^ \t;&|<>]+/, "", r)
+      if (r ~ /(^|[^A-Za-z0-9_])(grep|sed|awk)([ \t]|$)/) rd[fn] = 1
+      if (_key_pat(r, argv1)) kp[fn] = 1
+      if (_file_arg(r, argv2, var)) fp[fn] = 1
     }
+    # An anchored key lookup: ^ ... the function own first argument ... =. The
+    # argument can be bare between the anchor and the =, since gcp _tfvar hands
+    # it to awk as -v key="$1" and matches on the awk variable.
+    function _key_pat(s, argv1,   v, re) {
+      re = "1"
+      for (v in argv1) re = re "|" v
+      return (s ~ ("\\^[^=]*[^A-Za-z0-9_](" re ")[^A-Za-z0-9_][^=]*="))
+    }
+    # A token resolving to a tfvars path, or the function own second argument.
+    function _file_arg(s, argv2, var,   i, nt, t, tok) {
+      nt = split(s, t, /[ \t]+/)
+      for (i = 1; i <= nt; i++) {
+        tok = t[i]; sub(/[);&|].*$/, "", tok)
+        if (_resolve(tok, var) ~ /\.tfvars$/) return 1
+        gsub("[\"" _sq() "]", "", tok); gsub(/[${}]/, "", tok)
+        if (tok == "2" || (tok in argv2)) return 1
+      }
+      return 0
+    }
+    END { for (f in rd) if (kp[f] && fp[f]) print "reader " f }
   ' "$2"
 }
 
@@ -328,9 +387,15 @@ _func_classes() {
 # a writer, or an append to a variable later written into one. An open quoted
 # string carries the gate onto its continuation lines.
 #
-# Three passes over the file. An accumulator is appended to before the redirect
-# that reveals where it goes -- quickstart.sh builds SECURITY_BLOCK at 931 and
-# writes it at 945 -- so appends, sinks and keys each get their own pass.
+# Three passes over the file, so line numbers are FNR: an accumulator is
+# appended to before the redirect that reveals where it goes -- quickstart.sh
+# builds SECURITY_BLOCK at 931 and writes it at 945 -- so appends, sinks and
+# keys each get their own pass.
+#
+# Quote state is only carried while the gate is open. Carried unconditionally,
+# one apostrophe outside a tfvars write freezes the gate for the rest of the
+# file: aws/quickstart.sh:966 has "Let's Encrypt" inside a $(...), which blinds
+# the 77 lines below it.
 _quoted_tfvars_writes() {
   awk -v writers="$1" "$AWK_LIB$AWK_ASSIGN"'
     BEGIN { n = split(writers, w, " "); for (i = 1; i <= n; i++) wr[w[i]] = 1 }
@@ -378,18 +443,18 @@ _quoted_tfvars_writes() {
       next
     }
     {
-      if (open == "") gate = _dest($0, var, wr)
+      if (!gate) { open = ""; gate = _dest($0, var, wr) }
       if (gate) {
         s = $0
         while (match(s, /(^|[^A-Za-z0-9_.\-])[a-z][a-z0-9_]*[ \t]*=[ \t]*[^ \t=]/)) {
           k = substr(s, RSTART, RLENGTH)
           s = substr(s, RSTART + RLENGTH)
           sub(/^[^a-z]/, "", k); sub(/[ \t]*=.*/, "", k)
-          print NR "\t" k
+          print FNR "\t" k
         }
+        open = _qnext(open, $0)
+        if (open == "") gate = 0
       }
-      open = _qnext(open, $0)
-      if (open == "") gate = 0
     }
   ' "$2" "$2" "$2"
 }
@@ -541,37 +606,23 @@ fi
 NESTED=" $(_numbered "$EXAMPLE" | _hcl_keys nested | awk -F"$TAB" '{ print $2 }' \
   | sort -u | tr '\n' ' ')"
 
-# ── Check 5: the accessor registry is still complete ─────────────────────────
-# Runs first: every other check reads through this list, so an unregistered
-# helper has to fail loudly rather than shrink the scan.
-#
-# Behavior, not name. _read_setting() { _parse_tfvar "$1" || echo "$2"; } is an
-# accessor by any useful definition and a name rule passes it in silence. What
-# distinguishes a primitive is that its body names a tfvars file.
 COMMON="$PROVIDER_DIR/infra/scripts/_common.sh"
 if [ ! -f "$COMMON" ]; then
   echo "contracts: $arg/infra/scripts/_common.sh is missing." >&2
   exit 2
 fi
-unregistered=""
-for fn in $(_func_classes "$ACCESSORS" "$COMMON" | awk '$1 == "touch" { print $2 }' | sort -u); do
-  case " $ACCESSORS " in *" $fn "*) ;; *) unregistered="$unregistered $fn" ;; esac
-done
-if [ -n "$unregistered" ]; then
-  echo "contracts: $arg/infra/scripts/_common.sh defines$unregistered, which read a" >&2
-  echo "tfvars file directly but are not in ACCESSORS. Register them there, or every" >&2
-  echo "key read through them goes unchecked." >&2
-  exit 2
-fi
 
 # ── Accessors and writers for this provider ──────────────────────────────────
 # Discovered per provider rather than listed: helpers that forward to an
-# accessor, and functions that write a tfvars file. Wrappers are followed to a
-# fixpoint, since a helper forwarding to a wrapper is itself a wrapper and one
-# pass stops at the first hop. Not cosmetic: azure reads 21 keys instead of 36
-# without _read_tfvar.
+# accessor, helpers that read a tfvars file themselves, and functions that write
+# one. Followed to a fixpoint, since a helper forwarding to a wrapper is itself
+# a wrapper and one pass stops at the first hop. Not cosmetic: azure reads 21
+# keys instead of 36 without _read_tfvar, and 36 instead of 51 without the four
+# readers preflight.sh and quickstart.sh define outside _common.sh.
 wrappers=""
+readers=""
 writers=""
+users=""
 settled=0
 pass=0
 while [ "$pass" -lt 5 ]; do
@@ -582,17 +633,26 @@ while [ "$pass" -lt 5 ]; do
       [ -n "${name:-}" ] || continue
       case "$class" in
         wrapper)
-          case " $ACCESSORS$wrappers " in
+          case " $ACCESSORS$wrappers$readers " in
             *" $name "*) ;;
             *) wrappers="$wrappers $name"; grew=1 ;;
+          esac
+          ;;
+        reader)
+          case " $ACCESSORS$wrappers$readers " in
+            *" $name "*) ;;
+            *) readers="$readers $name"; grew=1 ;;
           esac
           ;;
         writer)
           case " $writers " in *" $name "*) ;; *) writers="$writers $name" ;; esac
           ;;
+        uses)
+          case " $users " in *" $name "*) ;; *) users="$users $name" ;; esac
+          ;;
       esac
     done <<EOF
-$(_func_classes "$ACCESSORS$wrappers" "$REPO_ROOT/$f")
+$(_func_classes "$ACCESSORS$wrappers$readers" "$REPO_ROOT/$f")
 EOF
   done
   if [ "$grew" -eq 0 ]; then settled=1; break; fi
@@ -611,22 +671,32 @@ for w in $WRAPPERS_KNOWN; do
        exit 2 ;;
   esac
 done
-all_accessors="$ACCESSORS$wrappers"
+all_accessors="$ACCESSORS$wrappers$readers"
 
+# ── Check 5: the accessor registry is still complete ─────────────────────────
 # The name rule, kept for what behavior cannot see: a helper named for tfvars
-# that neither reads a file itself nor forwards in a followable shape.
+# that discovery did not classify and that reaches no accessor of its own. It
+# either reads a tfvars file in a shape nothing here follows, or it is dead.
+# Writers are exempt: check 2 already reads their heredocs.
+# Scanned across every script, not just _common.sh: azure defines four readers
+# in preflight.sh and quickstart.sh, gcp one in setup-env.sh.
 unfollowed=""
-for fn in $(grep -oE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$COMMON" | sed 's/()//' | grep tfvar); do
-  case " $all_accessors " in *" $fn "*) ;; *) unfollowed="$unfollowed $fn" ;; esac
+for f in $scripts; do
+  for fn in $(grep -oE '^[ ]*(function[ ]+)?[A-Za-z_][A-Za-z0-9_]*[ ]*\(\)' "$REPO_ROOT/$f" \
+      | sed 's/[ ()]//g; s/^function//' | grep tfvar); do
+    case " $all_accessors $users $writers " in *" $fn "*) continue ;; esac
+    case " $unfollowed " in *" $fn "*) ;; *) unfollowed="$unfollowed $fn" ;; esac
+  done
 done
 if [ -n "$unfollowed" ]; then
-  echo "contracts: $arg/infra/scripts/_common.sh defines$unfollowed, named for tfvars" >&2
-  echo "but neither registered in ACCESSORS nor recognisable as a forwarder. Add it," >&2
-  echo "or the keys read through it go unchecked." >&2
+  echo "contracts: $arg defines$unfollowed, named for tfvars but neither followed as" >&2
+  echo "an accessor nor calling one. Give it a shape this can follow, or add it to" >&2
+  echo "ACCESSORS, or the keys read through it go unchecked. If it never touches a" >&2
+  echo "tfvars file and only names one in a message, rename it." >&2
   exit 2
 fi
 
-echo "   accessors: $ACCESSORS (+ wrapper$wrappers)"
+echo "   accessors: $ACCESSORS${wrappers:+ (+ wrapper$wrappers)}${readers:+ (+ reader$readers)}"
 
 # ── Check 1: keys read through an accessor ───────────────────────────────────
 read_keys=""
@@ -640,13 +710,15 @@ for f in $scripts; do
         ;;
       key|file)
         # The file argument decides which root the key belongs to. A bare
-        # *.tfvars name resolves against INFRA_DIR, the same root as
-        # variables.tf; an absolute path or one that climbs out does not.
+        # *.tfvars name, or a path built from the script's own location as aws
+        # preflight.sh builds the argument it hands _tfvars_get, resolves
+        # against INFRA_DIR -- the same root as variables.tf. A path naming
+        # another module does not.
         if [ "$kind" = file ]; then
           case "$b" in
-            */*|"")
-              echo "contracts: $f:$lineno reads $a from \"$b\", which is not a bare" >&2
-              echo "tfvars name under $arg/infra, so its root module is unknown." >&2
+            ""|*modules/*)
+              echo "contracts: $f:$lineno reads $a from \"$b\", which is not under" >&2
+              echo "$arg/infra, so its root module is unknown." >&2
               exit 2
               ;;
             *.tfvars) ;;
@@ -673,6 +745,10 @@ $(_accessor_calls "$all_accessors" "$REPO_ROOT/$f")
 EOF
 done
 echo "   $(echo "$read_keys" | wc -w | tr -d ' ') keys read through an accessor"
+# The demotion above is by bare name, so a root variable sharing a name with a
+# block field -- aws has name, default, min_size, max_size -- is demoted too and
+# can never be reported. Print the set so a masked name is at least visible.
+[ -n "${NESTED# }" ] && echo "   block fields, so noted rather than reported when read:${NESTED% }"
 
 # ── Check 2: keys written into a tfvars file ─────────────────────────────────
 write_keys=""
