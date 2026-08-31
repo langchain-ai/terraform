@@ -37,8 +37,10 @@ _parse_tfvar() {
   # Quoted string: key = "value"
   val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
   if [[ -z "$val" ]]; then
-    # Unquoted value: key = true / key = 42 / key = {}
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
+    # Unquoted value: key = true / key = 42 / key = {}. The trailing comment goes
+    # first, or "create_keyvault = false # attach" returns a value matching
+    # neither true nor false and every caller silently takes the other branch.
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
   fi
   [[ -n "$val" ]] || return 1
   echo "$val"
