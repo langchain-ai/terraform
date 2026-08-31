@@ -45,8 +45,13 @@ resource "azurerm_postgresql_flexible_server" "metastore" {
     tenant_id                     = local.use_entra_auth ? data.azurerm_client_config.current.tenant_id : null
   }
 
-  depends_on = [azurerm_private_dns_zone_virtual_network_link.smithdb]
+  # Azure assigns a zone when none is requested. Treat that placement as
+  # service-managed so a later refresh does not try to unset or exchange it.
+  lifecycle {
+    ignore_changes = [zone]
+  }
 
+  depends_on = [azurerm_private_dns_zone_virtual_network_link.smithdb]
 }
 
 resource "azurerm_postgresql_flexible_server_database" "metastore" {
@@ -89,11 +94,12 @@ resource "azurerm_storage_account" "smithdb" {
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
   public_network_access_enabled   = true
-  shared_access_key_enabled       = false
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
   tags                            = merge(var.tags, { module = "smithdb" })
 
+  # Runtime access uses Workload Identity by default. Shared Key remains
+  # available for parity with the chart's optional static-key authentication.
   network_rules {
     default_action             = "Deny"
     bypass                     = ["AzureServices"]

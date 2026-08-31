@@ -730,7 +730,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Azure defaults to the 0.16 line; enable_smithdb requires the 0.17 line. LANGSMITH_CHART_PATH can select a local chart checkout for integration testing."
+  description = "Pin a LangSmith chart version. Azure defaults to the 0.16 line; enable_smithdb requires an explicit 0.17 version."
   default     = ""
 }
 

@@ -23,7 +23,6 @@
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh
 #   CHART_VERSION=0.16.0 ./helm/scripts/deploy.sh
-#   LANGSMITH_CHART_PATH=/absolute/path/to/helm/charts/langsmith ./helm/scripts/deploy.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,7 +35,6 @@ source "$INFRA_DIR/scripts/_common.sh"
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 CHART_VERSION="${CHART_VERSION:-}"
-LANGSMITH_CHART_PATH="${LANGSMITH_CHART_PATH:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -435,18 +433,11 @@ fi
 echo ""
 
 # ── Chart source/version ──────────────────────────────────────────────────
-if [[ -n "$LANGSMITH_CHART_PATH" ]]; then
-  if [[ ! -f "$LANGSMITH_CHART_PATH/Chart.yaml" ]]; then
-    fail "LANGSMITH_CHART_PATH must point to a chart directory containing Chart.yaml"
-    exit 1
-  fi
-  _chart_source="$LANGSMITH_CHART_PATH"
-  CHART_VERSION=""
-else
-  _chart_source="langchain/langsmith"
+_chart_source="langchain/langsmith"
 # Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
 # We pin the chart line so an unpinned deploy cannot silently jump a breaking
-# minor. SmithDB selects 0.17; the existing Azure path remains on 0.16.
+# minor. The existing Azure path remains on 0.16; SmithDB requires an explicit
+# 0.17 selection until the provider-wide default advances.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
@@ -457,9 +448,11 @@ fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
+CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 _required_chart_line="0.16"
-[[ "$_enable_smithdb" == "true" ]] && _required_chart_line="0.17"
-CHART_VERSION="${CHART_VERSION:-~${_required_chart_line}.0}"
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _required_chart_line="0.17"
+fi
 
 # Select the chart line explicitly. The SmithDB Azure values first appear in
 # 0.17; deployments without SmithDB retain the existing 0.16 contract.
@@ -478,7 +471,6 @@ if [[ "$_required_chart_line" == "0.16" && "$CHART_VERSION" == *-* ]]; then
     echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
     exit 1
   fi
-fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
@@ -597,25 +589,20 @@ info "Deploying LangSmith (sizing: ${_sizing_profile})..."
 info "(waiting for pods — 5-15 min on a cold cluster)"
 echo ""
 
-if [[ -z "$LANGSMITH_CHART_PATH" ]]; then
-  helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
-  helm repo update langchain &>/dev/null
-  _resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-    | awk '/^version:/{print $2}') || _resolved_chart=""
-  echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
-  if [[ -z "$_resolved_chart" ]]; then
-    echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
-    exit 1
-  fi
-else
-  _resolved_chart=$(awk '/^version:/{print $2; exit}' "$LANGSMITH_CHART_PATH/Chart.yaml")
-  echo "Chart: $LANGSMITH_CHART_PATH  local version=${_resolved_chart:-UNKNOWN}"
+helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
+helm repo update langchain &>/dev/null
+_resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+  | awk '/^version:/{print $2}') || _resolved_chart=""
+echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+if [[ -z "$_resolved_chart" ]]; then
+  echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
+  exit 1
 fi
 
 helm upgrade --install "$RELEASE_NAME" "$_chart_source" \
   --namespace "$NAMESPACE" \
   --create-namespace \
-  ${CHART_VERSION:+--version "$CHART_VERSION"} \
+  --version "$CHART_VERSION" \
   "${VALUES_ARGS[@]}" \
   ${EXTRA_HELM_ARGS:+$EXTRA_HELM_ARGS} \
   --server-side=false \

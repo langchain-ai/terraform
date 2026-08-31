@@ -53,13 +53,13 @@ locals {
 
   # Globally-unique names — hashed, and each takes an explicit override so a
   # single colliding name can be pinned without renaming the whole deployment.
-  postgres_name            = var.postgres_name != "" ? var.postgres_name : "${local.name_base}-postgres${local.name_suffix}${local.uniq_suffix}"
-  redis_name               = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
-  blob_name                = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
-  smithdb_name             = "${local.name_base}-smithdb${local.name_suffix}"
-  smithdb_storage_name     = var.smithdb_storage_account_name != "" ? var.smithdb_storage_account_name : substr(replace("${local.name_base}smithdb${local.deployment_name}${replace(local.uniq_suffix, "-", "")}", "-", ""), 0, 24)
-  smithdb_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
-  smithdb_service_account  = "${local.smithdb_release_fullname}-smithdb"
+  postgres_name              = var.postgres_name != "" ? var.postgres_name : "${local.name_base}-postgres${local.name_suffix}${local.uniq_suffix}"
+  redis_name                 = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
+  blob_name                  = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
+  smithdb_name               = "${local.name_base}-smithdb${local.name_suffix}"
+  smithdb_storage_name       = var.smithdb_storage_account_name != "" ? var.smithdb_storage_account_name : substr(replace("${local.name_base}smithdb${local.deployment_name}${replace(local.uniq_suffix, "-", "")}", "-", ""), 0, 24)
+  langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
+  smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
   # Key Vault name: max 24 chars, globally unique.
   # Uses the user-supplied keyvault_name or derives from name_prefix. When
@@ -949,7 +949,10 @@ module "k8s_bootstrap" {
 
   # Blob storage — Workload Identity client ID is added as a pod annotation
   # so the OIDC token exchange can bind the pod to the Managed Identity.
-  blob_managed_identity_client_id = module.blob.k8s_managed_identity_client_id
+  blob_managed_identity_client_id    = module.blob.k8s_managed_identity_client_id
+  backend_service_account_name       = "${local.langsmith_release_fullname}-backend"
+  smithdb_service_account_name       = local.smithdb_service_account
+  smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by

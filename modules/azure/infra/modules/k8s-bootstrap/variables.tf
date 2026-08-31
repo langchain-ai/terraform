@@ -119,6 +119,23 @@ variable "blob_managed_identity_client_id" {
   description = "Client ID of the User-Assigned Managed Identity used by LangSmith pods to access blob storage (Workload Identity)"
 }
 
+variable "backend_service_account_name" {
+  type        = string
+  description = "Pre-created backend ServiceAccount used by Helm pre-install hooks."
+}
+
+variable "smithdb_service_account_name" {
+  type        = string
+  description = "Pre-created SmithDB ServiceAccount used by Helm pre-install hooks."
+  default     = ""
+}
+
+variable "smithdb_managed_identity_client_id" {
+  type        = string
+  description = "Client ID of the SmithDB managed identity."
+  default     = ""
+}
+
 # ── Application secrets ───────────────────────────────────────────────────────
 # License key is stored in K8s as langsmith-license secret.
 # Other app secrets (api_key_salt, jwt_secret, admin_password) are written by

@@ -47,11 +47,12 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
 `azure.workload.identity/use: "true"`.
 
-To test an unreleased chart checkout, deploy it after `terraform apply`:
+The Azure module remains pinned to chart 0.16 by default. Select chart 0.17
+explicitly when enabling SmithDB:
 
-```bash
-make init-values
-LANGSMITH_CHART_PATH=/absolute/path/to/helm/charts/langsmith make deploy
+```hcl
+enable_smithdb               = true
+langsmith_helm_chart_version = "~0.17.0"
 ```
 
 The chart is intentionally a separate deployment pass: `terraform apply`
