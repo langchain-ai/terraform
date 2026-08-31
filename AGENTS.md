@@ -61,9 +61,8 @@ before the PR does, not a separate standard.
     stray key there stays a terraform warning nothing fails on. Exit 1 is an
     undeclared name; exit 2 means the check could not run (a renamed directory,
     unbalanced braces, a tfvars heredoc whose keys stopped coming out, an
-    accessor helper in `_common.sh` that it can neither follow nor name) and
-    needs a fix in `contracts.sh` itself, never a workaround in the provider
-    script.
+    accessor helper it can neither follow nor name) and needs a fix in
+    `contracts.sh` itself, never a workaround in the provider script.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries
