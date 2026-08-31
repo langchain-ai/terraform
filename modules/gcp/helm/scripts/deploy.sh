@@ -56,19 +56,42 @@ RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 # Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
 # Override with the CHART_VERSION env var for an exact patch if needed.
+#
+# Read the pin from the Terraform output, not from terraform.tfvars. That file is
+# only one of Terraform's variable sources, and not the highest priority one, so
+# a parse of the file alone misses a value set in an .auto.tfvars file, a
+# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_helm_chart_version, and
+# Helm then installs a different chart than the applied configuration declares.
+# The output is a plain string and carries no secret.
+#
+# The read fails when the state carries outputs but not this one, which is a
+# state applied before this output existed, and when terraform cannot run at all.
+# Fall back to the file parse there, so an older state keeps its documented pin.
+# An empty result is an answer rather than a failure: it means no pin, so let the
+# chart line default below apply. A tree with no state at all also reads as
+# empty, and the cluster_name check further down stops that run regardless.
+_chart_version_pin_source="terraform output"
+if ! _chart_version_pin=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_helm_chart_version 2>/dev/null); then
+  _chart_version_pin_source="terraform.tfvars"
+  _chart_version_pin=$(_parse_tfvar "langsmith_helm_chart_version") || _chart_version_pin=""
+fi
+
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
-# a different chart than the branch intends.
+# a different chart than the branch intends, and name the version that an unset
+# returns to, which is the pin when there is one.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
-  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
-fi
-# Fall back to the langsmith_helm_chart_version tfvar before the line default,
-# so the documented pin actually takes effect. Env var still wins.
-if [[ -z "${CHART_VERSION:-}" ]]; then
-  CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
-  [[ -n "$CHART_VERSION" ]] && \
-    echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment."
+  if [[ -n "$_chart_version_pin" ]]; then
+    echo "      It overrides langsmith_helm_chart_version=${_chart_version_pin} (${_chart_version_pin_source})."
+    echo "      Run 'unset CHART_VERSION' to deploy ${_chart_version_pin}."
+  else
+    echo "      It overrides the ~0.16.0 chart line pin."
+    echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+  fi
+elif [[ -n "$_chart_version_pin" ]]; then
+  CHART_VERSION="$_chart_version_pin"
+  echo "Chart version pinned by langsmith_helm_chart_version (${_chart_version_pin_source}): ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
