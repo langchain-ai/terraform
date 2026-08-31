@@ -572,54 +572,54 @@ _run_section_2() {
     _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
     NAME_PREFIX="${_REPLY#-}" # tolerate a pasted leading hyphen from an older tfvars
     # "none" is the only route to the empty name_prefix variables.tf allows,
-    # since _ask substitutes the default on a blank reply.
+    # since _ask substitutes the default on a blank reply. It still falls through
+    # to the length gate below: an over-long name_base busts the ceiling on its
+    # own, and "none" is the first thing reached for once told to shorten.
     if [[ "$NAME_PREFIX" == "none" ]]; then
       NAME_PREFIX=""
-      break
-    fi
     # Same rule as the name_prefix validation in variables.tf: hyphens only
     # between alphanumerics, since a trailing or doubled hyphen produces a
     # Key Vault and AKS name Azure rejects at apply. A leading digit is fine,
     # because the prefix always lands on the end of "ls-<resource>" and the
     # composed name still starts with a letter.
-    if [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
-      # Storage and Key Vault cap at 24 including the resource word and the
-      # hash, so ~12 is the practical ceiling — said here with the actual name
-      # rather than a rule of thumb. The preconditions remain the backstop for a
-      # hand-written tfvars.
-      _derive_names
-      name_errors="$(_name_length_errors)"
-      [[ -z "$name_errors" ]] && break
-      while IFS= read -r name_error_line; do
-        _red "  ERROR: $name_error_line"
-      done <<< "$name_errors"
-      # Whether the deployment name is even the lever: a 16-char name_base eats
-      # the 24-char budget on its own, and then every answer fails. Re-deriving
-      # with no deployment name answers that, and without the escape below the
-      # prompt can be neither satisfied nor exited.
-      local _keep_prefix="$NAME_PREFIX"
-      NAME_PREFIX=""
-      _derive_names
-      local shortest_errors
-      shortest_errors="$(_name_length_errors)"
-      NAME_PREFIX="$_keep_prefix"
-      _derive_names
-      if [[ -z "$shortest_errors" ]]; then
-        _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
-        _hint "keyvault_name in terraform.tfvars once this run has written it."
-        continue
-      fi
-      _hint "The deployment name is not what busts the ceiling — an empty one is over it too."
-      _hint "The leading segment is what to change: name_base, or storage_account_name /"
-      _hint "keyvault_name to pin the name outright. All three are set by hand in"
-      _hint "terraform.tfvars, which this run writes and re-reads, so you can finish here"
-      _hint "and edit the file. Terraform rejects the config at plan until you do."
-      if _ask_yn "Continue with this name and fix it in terraform.tfvars?" "n"; then
-        break
-      fi
+    elif ! [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
+      _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
       continue
     fi
-    _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
+    # Storage and Key Vault cap at 24 including the resource word and the hash,
+    # so ~12 is the practical ceiling — said here with the actual name rather
+    # than a rule of thumb. The preconditions remain the backstop for a
+    # hand-written tfvars.
+    _derive_names
+    name_errors="$(_name_length_errors)"
+    [[ -z "$name_errors" ]] && break
+    while IFS= read -r name_error_line; do
+      _red "  ERROR: $name_error_line"
+    done <<< "$name_errors"
+    # Whether the deployment name is even the lever: a 16-char name_base eats
+    # the 24-char budget on its own, and then every answer fails. Re-deriving
+    # with no deployment name answers that, and without the escape below the
+    # prompt can be neither satisfied nor exited.
+    local _keep_prefix="$NAME_PREFIX"
+    NAME_PREFIX=""
+    _derive_names
+    local shortest_errors
+    shortest_errors="$(_name_length_errors)"
+    NAME_PREFIX="$_keep_prefix"
+    _derive_names
+    if [[ -z "$shortest_errors" ]]; then
+      _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
+      _hint "keyvault_name in terraform.tfvars once this run has written it."
+      continue
+    fi
+    _hint "The deployment name is not what busts the ceiling — an empty one is over it too."
+    _hint "The leading segment is what to change: name_base, or storage_account_name /"
+    _hint "keyvault_name to pin the name outright. All three are set by hand in"
+    _hint "terraform.tfvars, which this run writes and re-reads, so you can finish here"
+    _hint "and edit the file. Terraform rejects the config at plan until you do."
+    if _ask_yn "Continue with this name and fix it in terraform.tfvars?" "n"; then
+      break
+    fi
   done
 
   _ask "Azure region" "$LOCATION"
@@ -1521,6 +1521,8 @@ while true; do
   _derive_names
   echo ""
   printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  # A BYO VNet is listed under section 3 by ID, so name only the created one.
+  [[ "$CREATE_VNET" == "true" ]] && printf "    %-18s %s\n" "Virtual network" "$_VNET_NAME"
   # Attach mode is set by hand and carried across a re-run, so the wizard can
   # reach this screen with a cluster or vault it will not create. This is the
   # review before an auto-approved apply, so it must not list those as created.
