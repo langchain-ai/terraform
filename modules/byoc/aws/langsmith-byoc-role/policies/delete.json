@@ -28,7 +28,10 @@
         "ec2:DeleteVpcEndpoints",
         "ec2:DeleteVpcEndpointServiceConfigurations",
         "ec2:DeleteFlowLogs",
-        "ec2:DeleteRoute"
+        "ec2:DeleteRoute",
+        "network-firewall:DeleteFirewall",
+        "network-firewall:DeleteFirewallPolicy",
+        "network-firewall:DeleteRuleGroup"
       ],
       "Resource": [
         "arn:aws:ec2:*:${account_id}:vpc/*",
@@ -42,7 +45,11 @@
         "arn:aws:ec2:*:${account_id}:vpc-endpoint/*",
         "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*",
         "arn:aws:ec2:*:${account_id}:vpc-flow-log/*",
-        "arn:aws:ec2:*:${account_id}:network-acl/*"
+        "arn:aws:ec2:*:${account_id}:network-acl/*",
+        "arn:aws:network-firewall:*:${account_id}:firewall/*-smith-*",
+        "arn:aws:network-firewall:*:${account_id}:firewall-policy/*-smith-*",
+        "arn:aws:network-firewall:*:${account_id}:stateful-rulegroup/*-smith-*",
+        "arn:aws:network-firewall:*:${account_id}:stateless-rulegroup/*-smith-*"
       ],
       "Condition": {
         "StringEquals": {

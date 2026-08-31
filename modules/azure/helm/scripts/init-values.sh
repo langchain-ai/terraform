@@ -159,9 +159,12 @@ if [[ -z "$HOSTNAME" ]]; then
   warn "No hostname found — set dns_label or langsmith_domain in terraform.tfvars"
   echo ""
   printf "  Enter hostname (e.g. langsmith.example.com): "
-  read -r HOSTNAME
+  read -r HOSTNAME || HOSTNAME=""
   if [[ -z "$HOSTNAME" ]]; then
+    echo ""
     fail "Hostname is required"
+    info "Set dns_label or langsmith_domain in terraform.tfvars and re-apply,"
+    info "or pipe the value in: printf '%s\\n' host.example.com | $(basename "$0")"
     exit 1
   fi
 fi
@@ -178,11 +181,25 @@ if [[ -z "$ADMIN_EMAIL" ]]; then
   fi
 fi
 
+if [[ -z "$ADMIN_EMAIL" && -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
+  ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
+  info "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
+fi
+
 if [[ -z "$ADMIN_EMAIL" ]]; then
+  # `read` returns 1 at EOF and set -euo pipefail aborts the script there, so a
+  # headless run exits 1 with nothing printed. Tolerate the failure and report on
+  # the empty value instead, which also keeps `printf '...' | init-values.sh`
+  # working — several prompts below have no env override, so piped stdin is the
+  # only way to drive them.
   printf "  Initial org admin email: "
-  read -r ADMIN_EMAIL
+  read -r ADMIN_EMAIL || ADMIN_EMAIL=""
   if [[ -z "$ADMIN_EMAIL" ]]; then
+    echo ""
     fail "Admin email is required"
+    info "Supply it without a prompt using either:"
+    info "  export LANGSMITH_ADMIN_EMAIL=you@example.com"
+    info "  langsmith_admin_email = \"you@example.com\"  in terraform.tfvars, then re-apply"
     exit 1
   fi
 fi
@@ -197,7 +214,10 @@ if [[ "$_sizing_profile" == "default" ]]; then
   echo "    4) production — HA production (3+ replicas, higher CPU/mem)"
   echo ""
   printf "  Sizing choice [1]: "
-  read -r _sizing_choice
+  # EOF here is not an error: the block only runs when sizing_profile is already
+  # "default" in terraform.tfvars, so falling through to 1 preserves exactly what
+  # was configured rather than aborting a headless run.
+  read -r _sizing_choice || _sizing_choice=""
   case "${_sizing_choice:-1}" in
     2) _sizing_profile="minimum" ;;
     3) _sizing_profile="dev" ;;
