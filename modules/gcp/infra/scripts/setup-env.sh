@@ -301,8 +301,8 @@ _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" 
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
   "" "Initial LangSmith admin password (min 12 chars, needs lowercase, uppercase, and a symbol: \!#\$%()+,-./:?@[\\]^_{~})" "true"
 
-# Validate the admin password against the chart's rule before it reaches Secret
-# Manager. templates/validate.yaml rejects a non-compliant password at render
+# Validate the admin password after Secret Manager handling and before deploy.sh uses it.
+# templates/validate.yaml rejects a non-compliant password at render
 # time, so without this the failure surfaces only after Pass 1 has provisioned
 # the whole stack and deploy.sh reaches helm upgrade. Mirrors the same check in
 # the AWS module (setup-env.sh) and Azure (_common.sh:_validate_admin_password).
