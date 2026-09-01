@@ -830,6 +830,18 @@ module "blob" {
   depends_on = [azapi_update_resource.byo_aks_subnet_endpoints]
 }
 
+# The SmithDB migration job reads existing LangSmith trace blobs before writing
+# them to SmithDB's dedicated object store. It runs as the SmithDB workload
+# identity, so that identity needs read access to the source storage account.
+resource "azurerm_role_assignment" "smithdb_trace_blob_reader" {
+  count = var.enable_smithdb ? 1 : 0
+
+  scope                = module.blob.storage_account_id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = module.smithdb[0].workload_identity_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 # Centralized secret storage for all LangSmith sensitive values.
 # Depends on blob module (needs the managed identity principal ID for RBAC).

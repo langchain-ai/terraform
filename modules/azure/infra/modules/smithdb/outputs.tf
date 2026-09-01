@@ -23,6 +23,11 @@ output "workload_identity_client_id" {
   value       = azurerm_user_assigned_identity.smithdb.client_id
 }
 
+output "workload_identity_principal_id" {
+  description = "Principal ID of the SmithDB user-assigned identity."
+  value       = azurerm_user_assigned_identity.smithdb.principal_id
+}
+
 output "metastore_auth_mode" {
   description = "SmithDB metastore authentication mode: entra or password."
   value       = local.use_entra_auth ? "entra" : "password"
