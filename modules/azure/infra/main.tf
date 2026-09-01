@@ -102,6 +102,17 @@ locals {
   postgres_subnet_id = local.byo_postgres_subnet ? var.postgres_subnet_id : module.vnet.subnet_postgres_id
   redis_subnet_id    = local.byo_redis_subnet ? var.redis_subnet_id : module.vnet.subnet_redis_id
 
+  # Blob Private Endpoints default into the AKS subnet. That subnet already
+  # carries this traffic to the same accounts, so placing them there adds one
+  # address per endpoint and no new reachability.
+  storage_private_endpoint_subnet_id = var.storage_private_endpoint_subnet_id != "" ? var.storage_private_endpoint_subnet_id : local.aks_subnet_id
+
+  # Both accounts share one privatelink.blob.core.windows.net zone. Azure links
+  # a zone name to a VNet once, so the root owns it and hands the ID to each
+  # module instead of letting both create their own.
+  create_blob_private_dns_zone = var.storage_private_endpoint_enabled && var.storage_private_dns_zone_id == ""
+  blob_private_dns_zone_id     = local.create_blob_private_dns_zone ? azurerm_private_dns_zone.blob[0].id : var.storage_private_dns_zone_id
+
   # Bastion and AGIC are supply-only under bring-your-own: Terraform carves their
   # subnets out of a VNet it owns, and reuses a supplied one otherwise. There is
   # no carve path inside someone else's VNet, so the preconditions below require
@@ -480,6 +491,15 @@ resource "terraform_data" "validate_network" {
       error_message = "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true."
     }
 
+    # A Private Endpoint removes the public listener that storage_allowed_ips
+    # writes rules for, so the allowlist stops granting anything. Say so at plan
+    # time rather than leaving an operator to believe a CI runner still reaches
+    # the data plane.
+    precondition {
+      condition     = !var.storage_private_endpoint_enabled || length(var.storage_allowed_ips) == 0
+      error_message = "storage_allowed_ips cannot be combined with storage_private_endpoint_enabled = true: the storage accounts have no public endpoint for those rules to apply to. Clear storage_allowed_ips and reach the blob data plane from inside the VNet, or leave the private endpoints off."
+    }
+
     precondition {
       condition     = var.create_vnet || var.vnet_id != ""
       error_message = "vnet_id is required when create_vnet = false. Supply the VNet that LangSmith should deploy into."
@@ -772,7 +792,14 @@ module "smithdb" {
 
   storage_account_name = local.smithdb_storage_name
   container_name       = var.smithdb_storage_container_name
-  tags                 = local.common_tags
+
+  # Prefixed to keep it apart from private_dns_zone_id above, which is the
+  # metastore's PostgreSQL zone.
+  blob_private_endpoint_enabled   = var.storage_private_endpoint_enabled
+  blob_private_endpoint_subnet_id = local.storage_private_endpoint_subnet_id
+  blob_private_dns_zone_id        = local.blob_private_dns_zone_id
+
+  tags = local.common_tags
 }
 
 # ── Redis ─────────────────────────────────────────────────────────────────────
@@ -794,6 +821,29 @@ module "redis" {
   cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
+}
+
+# ── Blob private DNS ──────────────────────────────────────────────────────────
+# Shared by the LangSmith trace-blob account and the SmithDB object store. The
+# account keeps its usual <name>.blob.core.windows.net hostname; this zone is
+# what makes that name resolve to the Private Endpoint address inside the VNet.
+# Skipped when the operator supplies a central zone.
+
+resource "azurerm_private_dns_zone" "blob" {
+  count               = local.create_blob_private_dns_zone ? 1 : 0
+  name                = "privatelink.blob.core.windows.net"
+  resource_group_name = azurerm_resource_group.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
+  count                 = local.create_blob_private_dns_zone ? 1 : 0
+  name                  = "${local.name_base}-blob-dnslink"
+  resource_group_name   = azurerm_resource_group.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.blob[0].name
+  virtual_network_id    = local.vnet_id
+  registration_enabled  = false
+  tags                  = local.common_tags
 }
 
 # ── Blob Storage ──────────────────────────────────────────────────────────────
@@ -822,6 +872,13 @@ module "blob" {
   # via var.storage_allowed_ips.
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
+
+  # When enabled, the public endpoint is turned off and the firewall above
+  # becomes inert. It stays declared so disabling the endpoint restores a
+  # default-deny account rather than an open one.
+  private_endpoint_enabled   = var.storage_private_endpoint_enabled
+  private_endpoint_subnet_id = local.storage_private_endpoint_subnet_id
+  private_dns_zone_id        = local.blob_private_dns_zone_id
 
   tags = local.common_tags
 

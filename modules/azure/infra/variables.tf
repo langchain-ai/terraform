@@ -450,6 +450,41 @@ variable "storage_allowed_ips" {
   default     = []
 }
 
+# ── Blob storage private endpoints ────────────────────────────────────────────
+# Without this, both storage accounts keep a public endpoint that a default-deny
+# firewall filters down to the AKS subnet. That posture depends on the firewall
+# staying correct; a wrong default_action or a stray ip_rules entry exposes the
+# account. A Private Endpoint removes the internet-facing listener instead of
+# filtering it, which is what a customer security review normally asks for.
+
+variable "storage_private_endpoint_enabled" {
+  type        = bool
+  description = "Reach Blob Storage over Private Endpoints and turn off the public endpoint. Applies to both the LangSmith trace-blob account and the SmithDB object store, so the two never diverge. Leaving this false keeps the service-endpoint firewall. Each endpoint bills hourly and consumes one address in its subnet."
+  default     = false
+}
+
+variable "storage_private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the blob Private Endpoints. Empty uses the AKS subnet, which needs no extra address space beyond one IP per endpoint. Supply a dedicated subnet when policy separates endpoints from nodes."
+  default     = ""
+
+  validation {
+    condition     = var.storage_private_endpoint_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.storage_private_endpoint_subnet_id))
+    error_message = "storage_private_endpoint_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "storage_private_dns_zone_id" {
+  type        = string
+  description = "Existing privatelink.blob.core.windows.net zone to attach the endpoints to. Empty creates one and links it to the VNet. Azure allows a zone name to be linked to a VNet once, so supply the central zone when the VNet already resolves privatelink.blob.core.windows.net — creating a second one fails the link."
+  default     = ""
+
+  validation {
+    condition     = var.storage_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", var.storage_private_dns_zone_id))
+    error_message = "storage_private_dns_zone_id must be a full privatelink.blob.core.windows.net zone resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  }
+}
+
 # ── AKS node pool sizing guidance ─────────────────────────────────────────────
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)

@@ -315,6 +315,19 @@ sizing_profile = "production"
 # keyvault_allowed_ips     = ["203.0.113.42/32"]
 # aks_authorized_ip_ranges = ["203.0.113.42/32", "198.51.100.0/24"]
 
+# Blob Private Endpoints. This turns off the public endpoint on both the
+# LangSmith trace-blob account and the SmithDB object store, so a firewall
+# mistake can no longer expose either one. Endpoints land in the AKS subnet and
+# take one address each. storage_allowed_ips stops working once this is on:
+# reach the data plane from inside the VNet instead.
+# storage_private_endpoint_enabled = true
+#
+# Supply the central zone when the VNet already resolves
+# privatelink.blob.core.windows.net. Creating a second zone of that name and
+# linking it to the same VNet fails.
+# storage_private_dns_zone_id        = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+# storage_private_endpoint_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/private-endpoints"
+
 # ── Constrained role-assignment delegation (optional) ─────────────────────────
 # Set only if `terraform apply` fails with a 403 AuthorizationFailed on
 # Microsoft.Authorization/roleAssignments/write. Some subscriptions delegate

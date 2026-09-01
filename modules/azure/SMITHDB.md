@@ -67,10 +67,22 @@ release `prod` uses `prod-langsmith-smithdb`.
 
 ## Network and sizing notes
 
-The Storage Account firewall admits the AKS subnet through its
-`Microsoft.Storage` service endpoint. PostgreSQL uses the delegated database
-subnet and the VNet's private PostgreSQL DNS zone. SmithDB increases AKS subnet
-IP demand; the root module includes both node pools in its capacity check.
+By default the Storage Account firewall admits the AKS subnet through its
+`Microsoft.Storage` service endpoint. The account keeps its public endpoint and
+denies all other traffic.
+
+Set `storage_private_endpoint_enabled = true` to replace that with a Private
+Endpoint and turn the public endpoint off. The setting covers the LangSmith
+trace-blob account as well, so the two accounts never end up with different
+postures. SmithDB keeps using the same account hostname, which then resolves to
+a VNet address through the `privatelink.blob.core.windows.net` zone. Supply
+`storage_private_dns_zone_id` when the VNet already resolves that zone; Azure
+links a zone name to a VNet once, so creating a second one fails.
+
+PostgreSQL uses the delegated database subnet and the VNet's private PostgreSQL
+DNS zone. SmithDB increases AKS subnet IP demand; the root module includes both
+node pools in its capacity check. Each Private Endpoint takes one further
+address in its subnet.
 
 `Standard_L16s_v3` is the default cache VM because it has a large local NVMe
 temporary disk. Confirm that the SKU and capacity are available in the target

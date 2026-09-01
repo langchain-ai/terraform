@@ -24,6 +24,21 @@ variable "private_dns_zone_id" {
 }
 variable "storage_account_name" { type = string }
 variable "container_name" { type = string }
+variable "blob_private_endpoint_enabled" {
+  type        = bool
+  description = "Reach the object store over a Private Endpoint and turn off its public endpoint. The container is created through Azure Resource Manager, so provisioning is unaffected."
+  default     = false
+}
+variable "blob_private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the object-store Private Endpoint. Required when blob_private_endpoint_enabled is true."
+  default     = ""
+}
+variable "blob_private_dns_zone_id" {
+  type        = string
+  description = "privatelink.blob.core.windows.net zone the object-store endpoint registers in. Owned by the root module because both storage accounts share one zone. Not the metastore zone, which is private_dns_zone_id above."
+  default     = ""
+}
 variable "tags" {
   type    = map(string)
   default = {}

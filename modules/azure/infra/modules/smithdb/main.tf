@@ -93,10 +93,14 @@ resource "azurerm_storage_account" "smithdb" {
   location                        = var.location
   account_tier                    = "Standard"
   account_replication_type        = "LRS"
-  public_network_access_enabled   = true
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
   tags                            = merge(var.tags, { module = "smithdb" })
+
+  # With a Private Endpoint there is no public listener to filter, so the rules
+  # below stop applying. They stay declared: turning the endpoint back off must
+  # land on a default-deny account, not an open one.
+  public_network_access_enabled = !var.blob_private_endpoint_enabled
 
   # Runtime access uses Workload Identity by default. Shared Key remains
   # available for parity with the chart's optional static-key authentication.
@@ -104,6 +108,37 @@ resource "azurerm_storage_account" "smithdb" {
     default_action             = "Deny"
     bypass                     = ["AzureServices"]
     virtual_network_subnet_ids = [var.aks_subnet_id]
+  }
+}
+
+# Private Endpoint — SmithDB keeps using the account's own hostname, which the
+# zone the root module owns resolves to an address in the VNet.
+resource "azurerm_private_endpoint" "smithdb_blob" {
+  count               = var.blob_private_endpoint_enabled ? 1 : 0
+  name                = "${var.name}-blob-pe"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = var.blob_private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "${var.name}-blob-psc"
+    private_connection_resource_id = azurerm_storage_account.smithdb.id
+    subresource_names              = ["blob"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "blob"
+    private_dns_zone_ids = [var.blob_private_dns_zone_id]
+  }
+
+  tags = merge(var.tags, { module = "smithdb" })
+
+  lifecycle {
+    precondition {
+      condition     = var.blob_private_endpoint_subnet_id != "" && var.blob_private_dns_zone_id != ""
+      error_message = "blob_private_endpoint_enabled requires both blob_private_endpoint_subnet_id and blob_private_dns_zone_id. The root module derives them from storage_private_endpoint_subnet_id and storage_private_dns_zone_id."
+    }
   }
 }
 
