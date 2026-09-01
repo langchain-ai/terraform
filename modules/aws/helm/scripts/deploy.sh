@@ -10,13 +10,14 @@
 #   1. langsmith-values.yaml              — base AWS config (always)
 #   2. langsmith-values-overrides.yaml    — env-specific: hostname, IRSA, S3 (required)
 #   3. langsmith-values-agent-deploys.yaml  — Deployments feature (if enabled)
-#   4. langsmith-values-agent-builder.yaml  — Agent Builder legacy (if enable_agent_builder)
-#   5. langsmith-values-insights.yaml       — ClickHouse/Insights legacy (if enable_insights)
-#   6. langsmith-values-polly.yaml          — Polly legacy (if enable_polly)
-#   7. langsmith-values-fleet.yaml          — Fleet standalone v0.15+ (if enable_fleet)
-#   8. langsmith-values-standalone-polly.yaml    — Polly standalone v0.15+ (if enable_standalone_polly)
-#   9. langsmith-values-standalone-insights.yaml — Insights standalone v0.15+ (if enable_standalone_insights)
-#  10. langsmith-values-sizing-{profile}.yaml — sizing (loaded last so it wins over addons)
+#   4. langsmith-values-insights.yaml       — Insights (if enable_insights)
+#   5. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
+#   6. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
+#   7. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
+#   8. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
+#   9. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
+#  10. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#  11. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -133,6 +134,14 @@ _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _enable_sandboxes=false
 _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+_direct_polly_enabled=false
+if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
+  _direct_polly_enabled=true
+fi
+_direct_insights_enabled=false
+if _tfvar_is_true "enable_insights" || _tfvar_is_true "enable_standalone_insights"; then
+  _direct_insights_enabled=true
+fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
@@ -196,6 +205,12 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
     _require_env "TF_VAR_sandbox_callback_signing_jwk"
   fi
+  if [[ "$_direct_polly_enabled" == "true" ]]; then
+    _require_env "TF_VAR_langsmith_polly_encryption_key"
+  fi
+  if [[ "$_direct_insights_enabled" == "true" ]]; then
+    _require_env "TF_VAR_langsmith_insights_encryption_key"
+  fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
   _sandbox_secret_literals=()
@@ -203,6 +218,20 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _sandbox_secret_literals=(
       --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+    )
+  fi
+  _polly_secret_literals=()
+  if [[ "$_direct_polly_enabled" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _polly_secret_literals=(
+      --from-literal=polly_encryption_key="${TF_VAR_langsmith_polly_encryption_key}"
+    )
+  fi
+  _insights_secret_literals=()
+  if [[ "$_direct_insights_enabled" == "true" ]]; then
+    # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
+    _insights_secret_literals=(
+      --from-literal=insights_encryption_key="${TF_VAR_langsmith_insights_encryption_key}"
     )
   fi
 
@@ -215,6 +244,8 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
     "${_sandbox_secret_literals[@]}" \
+    "${_polly_secret_literals[@]}" \
+    "${_insights_secret_literals[@]}" \
     --dry-run=client -o yaml | kubectl apply -f -
   echo "  langsmith-config secret ready (direct)."
 else
@@ -227,7 +258,6 @@ echo ""
 
 # ── Read feature flags from terraform.tfvars ─────────────────────────────────
 _enable_deployments=false
-_enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
@@ -236,7 +266,6 @@ _enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
@@ -245,19 +274,38 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 _tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
 
-# Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the bundled
-# agent-bootstrap Job, so config.agentBuilder on its own now renders the tool/trigger
-# servers and the UI nav item but no agent runtime behind them. The two paths also
-# manage the same data with different schemas, so they must not run together.
-if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
-  echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
-  echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
+_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
+if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
+  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
 fi
-if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
-  echo "WARNING: enable_agent_builder without enable_fleet deploys the Agent Builder UI and its" >&2
-  echo "         tool/trigger servers, but chart 0.16 removed the bundled agent-bootstrap Job that" >&2
-  echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
+
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="external"
+if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
+  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  _enable_polly=true
+  _polly_storage="external"
+elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
+  _enable_standalone_polly=true
+fi
+
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="external"
+if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
+  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  _enable_insights=true
+  _insights_storage="external"
+elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
+  _enable_standalone_insights=true
 fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
@@ -297,23 +345,6 @@ _resolve_entry_hostname() {
   fi
 }
 
-# Validate addon dependencies
-if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
-if [[ "$_enable_polly" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-  exit 1
-fi
-# Standalone Fleet's chat UI resolves OAuth provider/token connections via host-backend,
-# which only exists when Deployments is enabled. (Standalone Polly/Insights do not need it.)
-if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
-  echo "ERROR: enable_fleet requires enable_deployments = true in terraform.tfvars." >&2
-  echo "       The Fleet chat UI needs host-backend (Deployments) for OAuth provider/token endpoints." >&2
-  exit 1
-fi
-
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
@@ -331,7 +362,6 @@ echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
-  "agent-builder:agent_builder:$_enable_agent_builder"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "fleet:fleet:$_enable_fleet"
@@ -359,6 +389,76 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# The chart defaults Chat to enabled. Force the product and storage contract so
+# skipping a stale values file cannot enable Chat or select the wrong database.
+if [[ "$_enable_polly" == "true" ]]; then
+  VALUES_ARGS+=(--set "polly.enabled=true")
+  if [[ "$_polly_storage" == "external" ]]; then
+    VALUES_ARGS+=(
+      --set "polly.postgres.external.enabled=true"
+      --set "polly.postgres.external.existingSecretName=langsmith-polly-postgres"
+      --set "polly.redis.external.enabled=true"
+      --set "polly.redis.external.existingSecretName=langsmith-polly-redis"
+    )
+  else
+    VALUES_ARGS+=(
+      --set "polly.postgres.external.enabled=false"
+      --set "polly.postgres.external.existingSecretName="
+      --set "polly.redis.external.enabled=false"
+      --set "polly.redis.external.existingSecretName="
+    )
+  fi
+  echo "  ✔ LangSmith Chat contract (${_polly_storage} Postgres/Redis)"
+else
+  VALUES_ARGS+=(--set "polly.enabled=false")
+  echo "  ○ LangSmith Chat disabled"
+fi
+
+# Insights defaults to enabled in the chart. Force both its product flag and
+# shared Engine/Insights storage so stale values cannot redirect its data.
+if [[ "$_enable_insights" == "true" ]]; then
+  VALUES_ARGS+=(--set "insights.enabled=true")
+  if [[ "$_insights_storage" == "external" ]]; then
+    VALUES_ARGS+=(
+      --set "engineInsightsAgent.postgres.external.enabled=true"
+      --set "engineInsightsAgent.postgres.external.existingSecretName=langsmith-insights-postgres"
+      --set "engineInsightsAgent.redis.external.enabled=true"
+      --set "engineInsightsAgent.redis.external.existingSecretName=langsmith-insights-redis"
+    )
+  else
+    VALUES_ARGS+=(
+      --set "engineInsightsAgent.postgres.external.enabled=false"
+      --set "engineInsightsAgent.postgres.external.existingSecretName="
+      --set "engineInsightsAgent.redis.external.enabled=false"
+      --set "engineInsightsAgent.redis.external.existingSecretName="
+    )
+  fi
+  echo "  ✔ Insights contract (${_insights_storage} Postgres/Redis)"
+else
+  VALUES_ARGS+=(--set "insights.enabled=false")
+  echo "  ○ Insights disabled"
+fi
+
+# Fleet always needs host-backend. Its storage mode must also override preserved
+# values files because init-values.sh intentionally does not replace them.
+if [[ "$_enable_fleet" == "true" ]]; then
+  VALUES_ARGS+=(--set "hostBackend.enabled=true")
+  if [[ "$_fleet_storage" == "external" ]]; then
+    VALUES_ARGS+=(
+      --set "fleet.postgres.external.enabled=true"
+      --set "fleet.postgres.external.existingSecretName=langsmith-fleet-postgres"
+      --set "fleet.redis.external.enabled=true"
+      --set "fleet.redis.external.existingSecretName=langsmith-fleet-redis"
+    )
+  else
+    VALUES_ARGS+=(
+      --set "fleet.postgres.external.enabled=false"
+      --set "fleet.redis.external.enabled=false"
+    )
+  fi
+  echo "  ✔ Fleet contract (host-backend; ${_fleet_storage} Postgres/Redis)"
+fi
 
 # Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).
 if [[ "$_sizing_profile" != "default" ]]; then
@@ -554,11 +654,14 @@ if [[ "$_enable_deployments" == "true" ]]; then
     "${RELEASE_NAME}-operator"
   )
 fi
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  _core_deployments+=("${RELEASE_NAME}-host-backend")
+fi
 # Standalone agent features (chart v0.15+). Deployment names derive from
 # <release>-<namePrefix>-<component>; namePrefix is standalone-{fleet,polly,insights}.
 [[ "$_enable_fleet" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-fleet-api-server")
-[[ "$_enable_standalone_polly" == "true" ]]    && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
-[[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
+[[ "$_enable_polly" == "true" ]]               && _core_deployments+=("${RELEASE_NAME}-standalone-polly-api-server")
+[[ "$_enable_insights" == "true" ]] && _core_deployments+=("${RELEASE_NAME}-standalone-insights-api-server")
 
 _all_ready=true
 for dep in "${_core_deployments[@]}"; do
@@ -569,8 +672,9 @@ for dep in "${_core_deployments[@]}"; do
 done
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
-    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+  # Helm's fullname can include the chart name or an override, so select by the release labels.
+  if ! kubectl rollout status deployment -n "$NAMESPACE" -l "app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host for release ${RELEASE_NAME} not ready within 5m (sandbox-host nodes may still be starting)"
     _all_ready=false
   fi
 fi

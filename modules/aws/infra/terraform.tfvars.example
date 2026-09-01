@@ -191,7 +191,7 @@ enable_public_eks_cluster = false
 # min_size guidance:
 #   3  — base LangSmith with no addons. Enough to schedule all core pods
 #         without waiting for the autoscaler to provision new nodes.
-#   6  — recommended if you plan to enable Agent Builder, Deployments, and/or
+#   6  — recommended if you plan to enable Fleet, Deployments, and/or
 #         Insights from the start. All workloads schedule immediately.
 #  10  — max_size ceiling for autoscaler. Adjust based on expected load.
 #
@@ -580,7 +580,7 @@ langsmith_namespace = "langsmith"
 #   Envoy Gateway (default)
 #     enable_envoy_gateway = true
 #     enable_istio_gateway = false
-#     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
+#     → Chart creates one HTTPRoute (Gateway API); Envoy Gateway proxies traffic.
 #       Supports split dataplane routing across namespaces.
 #
 #   Istio Gateway
@@ -701,21 +701,29 @@ enable_istio_gateway = false
 sizing_profile = "production"
 
 #------------------------------------------------------------------------------
-# LANGGRAPH PLATFORM FEATURES (product addons)
+# LANGSMITH FEATURES (product addons)
 #------------------------------------------------------------------------------
 # These flags control which LangSmith product features are enabled.
 # Each requires the corresponding entitlement in your LangSmith license key.
 # deploy.sh reads these to decide which Helm values overlay files to include.
 #
-# If you're doing a base LangSmith deployment, leave all three as false.
+# For a base LangSmith deployment, leave these flags false.
 #
-#   enable_deployments   — LangGraph Platform (listener, operator, host-backend)
-#   enable_agent_builder — Visual agent builder UI (requires enable_deployments)
-#   enable_insights      — ClickHouse-backed analytics dashboard
+#   enable_deployments — LangSmith Deployments (listener, operator, host-backend)
+#   enable_fleet       — No-code agents; enables its required host-backend
+#   fleet_storage      — Fleet Postgres/Redis: "external" or "in-cluster"
+#   enable_insights    — AI-powered trace analysis
+#   insights_storage   — Insights Postgres/Redis: "external" or "in-cluster"
+#   enable_polly       — LangSmith Chat (formerly Polly)
+#   polly_storage      — Chat Postgres/Redis: "external" or "in-cluster"
 #
 enable_deployments   = false
-enable_agent_builder = false
+enable_fleet         = false
+fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = false
+insights_storage     = "external" # Or "in-cluster"
+enable_polly         = false
+polly_storage        = "external" # Or "in-cluster"
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.
 # Default is off. Enable if you want to share usage data.
@@ -730,7 +738,7 @@ enable_usage_telemetry = false
 #
 # Each key corresponds to a feature flag:
 #   Deployments  → enable_deployments   = true
-#   Agent Builder → enable_agent_builder = true
+#   Fleet       → enable_fleet = true (uses the historical Agent Builder encryption-key name)
 #   Insights     → enable_insights      = true
 #
 # Generate a Fernet key (https://cryptography.io/en/latest/fernet/):
@@ -760,8 +768,8 @@ enable_usage_telemetry = false
 #   - the Karpenter controller + SmithDB instance-store + compute NodePools
 #     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
 #
-# Pass 2 requires an explicit stable chart version of 0.16 or newer.
-# Infrastructure enablement never changes the normal chart line automatically.
+# Pass 2 uses the repository's ~0.16.0 pin, which resolves to the latest
+# compatible 0.16.x chart unless CHART_VERSION explicitly overrides it.
 #
 # The generated values initially deploy SmithDB services with ingestion,
 # migration, and query integration disabled. Follow ../SMITHDB.md to enable each

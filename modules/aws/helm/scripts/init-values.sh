@@ -20,8 +20,14 @@
 #   - values/langsmith-values.yaml              (base — copied from examples/)
 #   - values/langsmith-values-overrides.yaml    (auto-generated: hostname, IRSA, S3)
 #   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
-#   - values/langsmith-values-agent-*.yaml      (based on product tier)
-#   - values/langsmith-values-insights.yaml     (if tier 4 chosen)
+#   - values/langsmith-values-agent-deploys.yaml (if Deployments is enabled)
+#   - values/langsmith-values-insights.yaml     (if Insights is enabled)
+#   - values/langsmith-values-polly.yaml        (if LangSmith Chat is enabled)
+#   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
+#   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
+#   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
+#   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
+#   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
 #
 # Re-running is safe: Terraform outputs are refreshed; choices are preserved
 # if the files already exist.
@@ -235,12 +241,10 @@ echo ""
 
 # ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
-_builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
 _polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
 
 _enable_deployments=false
-_enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
@@ -249,7 +253,6 @@ _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
-_tfvar_is_true "enable_agent_builder"  && _enable_agent_builder=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
 _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
@@ -257,6 +260,40 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+
+_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
+if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
+  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="external"
+if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
+  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_polly" == "true" ]]; then
+  _enable_polly=true
+  _polly_storage="external"
+elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
+  _enable_standalone_polly=true
+fi
+
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="external"
+if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
+  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
+  exit 1
+fi
+
+# Keep the older standalone switch as an external-storage enabling alias.
+if [[ "$_enable_standalone_insights" == "true" ]]; then
+  _enable_insights=true
+  _insights_storage="external"
+elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
+  _enable_standalone_insights=true
+fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -269,36 +306,13 @@ echo "Product addons (from terraform.tfvars):"
 if [[ "$_enable_deployments" == "true" ]]; then
   if [[ ! -f "$_deploys_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-agent-deploys.yaml" "$_deploys_file"
-    echo "  ✔ Deployments (created langsmith-values-agent-deploys.yaml)"
+    echo "  Created: langsmith-values-agent-deploys.yaml"
   else
-    echo "  ✔ Deployments (existing)"
+    echo "  Existing: langsmith-values-agent-deploys.yaml"
   fi
+  echo "  ✔ Deployments"
 else
   echo "  ✗ Deployments (enable_deployments = false)"
-fi
-
-# Agent Builder
-if [[ "$_enable_agent_builder" == "true" ]]; then
-  if [[ "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_agent_builder requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
-  # Fleet is the standalone successor to Agent Builder. Chart 0.16 removed the
-  # bundled agent-bootstrap Job, so the two paths can no longer be combined and
-  # the legacy one has no agent runtime of its own.
-  if [[ "$_enable_fleet" == "true" ]]; then
-    echo "ERROR: enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path." >&2
-    echo "       Set enable_agent_builder = false in terraform.tfvars." >&2
-    exit 1
-  fi
-  if [[ ! -f "$_builder_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-agent-builder.yaml" "$_builder_file"
-    echo "  ✔ Agent Builder (created langsmith-values-agent-builder.yaml)"
-  else
-    echo "  ✔ Agent Builder (existing)"
-  fi
-else
-  echo "  ✗ Agent Builder (enable_agent_builder = false)"
 fi
 
 # Insights
@@ -315,11 +329,10 @@ if [[ "$_enable_insights" == "true" ]]; then
 insights:
   enabled: true
 CHEOF
-      echo "  ✔ Insights (in-cluster ClickHouse — created langsmith-values-insights.yaml)"
+      echo "  Created: langsmith-values-insights.yaml"
     else
       # External ClickHouse: prompt for connection details on first creation.
       cp "$EXAMPLES_DIR/langsmith-values-insights.yaml" "$_insights_file"
-      echo "  ✔ Insights (created langsmith-values-insights.yaml)"
       echo ""
       echo "  Insights requires an external ClickHouse instance."
       printf "  ClickHouse host: "
@@ -368,7 +381,7 @@ clickhouse:
     tls: ${_ch_tls_val}
     existingSecretName: "langsmith-clickhouse"
 CHEOF
-      echo "  Updated: langsmith-values-insights.yaml"
+      echo "  Created: langsmith-values-insights.yaml"
       echo ""
       echo "  Creating langsmith-clickhouse K8s Secret..."
       echo "  (deploy.sh will re-apply this if the namespace is recreated)"
@@ -387,29 +400,21 @@ CHEOF
       fi
     fi
   else
-    echo "  ✔ Insights (existing)"
+    echo "  Existing: langsmith-values-insights.yaml"
   fi
-else
-  echo "  ✗ Insights (enable_insights = false)"
 fi
 
-# Polly
+# LangSmith Chat (formerly Polly)
 if [[ "$_enable_polly" == "true" ]]; then
-  if [[ "$_enable_deployments" != "true" ]]; then
-    echo "ERROR: enable_polly requires enable_deployments = true in terraform.tfvars." >&2
-    exit 1
-  fi
   if [[ ! -f "$_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-polly.yaml" "$_polly_file"
-    echo "  ✔ Polly (created langsmith-values-polly.yaml)"
+    echo "  Created: langsmith-values-polly.yaml"
   else
-    echo "  ✔ Polly (existing)"
+    echo "  Existing: langsmith-values-polly.yaml"
   fi
-else
-  echo "  ✗ Polly (enable_polly = false)"
 fi
 
-# ── Standalone agent features (chart v0.15+): Fleet / Polly / Insights ───────
+# ── Fleet and external-storage overlays ─────────────────────────────────────
 # Top-level fleet:/polly:/insights: deployments wired to per-feature databases on
 # the shared RDS/ElastiCache (K8s Secrets created by Terraform). encryptionKey and
 # IRSA service-account annotations are injected into the overrides file below.
@@ -420,10 +425,11 @@ _standalone_insights_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ ! -f "$_fleet_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-fleet.yaml" "$_fleet_file"
-    echo "  ✔ Fleet (created langsmith-values-fleet.yaml)"
+    echo "  Created: langsmith-values-fleet.yaml"
   else
-    echo "  ✔ Fleet (existing)"
+    echo "  Existing: langsmith-values-fleet.yaml"
   fi
+  echo "  ✔ Fleet"
 else
   echo "  ✗ Fleet (enable_fleet = false)"
 fi
@@ -431,23 +437,34 @@ fi
 if [[ "$_enable_standalone_polly" == "true" ]]; then
   if [[ ! -f "$_standalone_polly_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
-    echo "  ✔ Standalone Polly (created langsmith-values-standalone-polly.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+    echo "  Created: langsmith-values-standalone-polly.yaml"
   else
-    echo "  ✔ Standalone Polly (existing; encryptionKey in langsmith-values-overrides.yaml)"
+    echo "  Existing: langsmith-values-standalone-polly.yaml"
   fi
-else
-  echo "  ✗ Standalone Polly (enable_standalone_polly = false)"
 fi
 
 if [[ "$_enable_standalone_insights" == "true" ]]; then
   if [[ ! -f "$_standalone_insights_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_standalone_insights_file"
-    echo "  ✔ Standalone Insights (created langsmith-values-standalone-insights.yaml; encryptionKey written to langsmith-values-overrides.yaml)"
+    echo "  Created: langsmith-values-standalone-insights.yaml"
   else
-    echo "  ✔ Standalone Insights (existing; encryptionKey in langsmith-values-overrides.yaml)"
+    echo "  Existing: langsmith-values-standalone-insights.yaml"
   fi
+fi
+
+if [[ "$_enable_polly" == "true" ]]; then
+  _polly_storage="in-cluster Postgres/Redis"
+  [[ "$_enable_standalone_polly" == "true" ]] && _polly_storage="external Postgres/Redis"
+  echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage)"
 else
-  echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
+  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly and enable_standalone_polly are false)"
+fi
+
+if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+  _insights_storage_label="${_insights_storage} Postgres/Redis"
+  echo "  ✔ Insights ($_insights_storage_label)"
+else
+  echo "  ✗ Insights (enable_insights and enable_standalone_insights are false)"
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -593,21 +610,41 @@ fi
 # that are OFF get an explicit `enabled: false` so the chart's top-level default
 # (polly/insights default to enabled: true) cannot silently turn them on
 # (migration issue #6).
-_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
+_fleet_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
 _polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
 _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
 
 _standalone_block=""
 
 if [[ "$_enable_fleet" == "true" ]]; then
-  if [[ -z "$_agent_builder_key" ]]; then
+  if [[ -z "$_fleet_key" ]]; then
     echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
+  _fleet_storage_block=""
+  if [[ "$_fleet_storage" == "external" ]]; then
+    _fleet_storage_block="
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-fleet-postgres\"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-fleet-redis\""
+  else
+    _fleet_storage_block="
+  postgres:
+    external:
+      enabled: false
+  redis:
+    external:
+      enabled: false"
+  fi
   _standalone_block+="
 fleet:
-  encryptionKey: \"${_agent_builder_key}\"
+  encryptionKey: \"${_fleet_key}\"${_fleet_storage_block}
   apiServer:
     serviceAccount:
       annotations:
@@ -645,7 +682,7 @@ polly:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
-else
+elif [[ "$_enable_polly" != "true" ]]; then
   _standalone_block+="
 polly:
   enabled: false"
@@ -672,7 +709,7 @@ engineInsightsAgent:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
-else
+elif [[ "$_enable_insights" != "true" ]]; then
   _standalone_block+="
 insights:
   enabled: false"

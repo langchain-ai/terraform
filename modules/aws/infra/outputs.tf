@@ -283,23 +283,38 @@ output "cert_manager_irsa_role_arn" {
 # Product Features
 #------------------------------------------------------------------------------
 output "enable_deployments" {
-  description = "Whether LangGraph Platform Deployments addon is enabled"
+  description = "Whether LangSmith Deployments is enabled"
   value       = var.enable_deployments
 }
 
-output "enable_agent_builder" {
-  description = "Whether Agent Builder addon is enabled"
-  value       = var.enable_agent_builder
+output "enable_fleet" {
+  description = "Whether Fleet is enabled"
+  value       = var.enable_fleet
+}
+
+output "fleet_storage" {
+  description = "Fleet storage location"
+  value       = var.fleet_storage
 }
 
 output "enable_insights" {
-  description = "Whether Insights addon is enabled"
-  value       = var.enable_insights
+  description = "Whether Insights is enabled by either the product or external-storage switch"
+  value       = local.insights_enabled
+}
+
+output "insights_storage" {
+  description = "Insights storage location"
+  value       = local.insights_external_storage ? "external" : var.insights_storage
 }
 
 output "enable_polly" {
-  description = "Whether Polly addon is enabled"
-  value       = var.enable_polly
+  description = "Whether LangSmith Chat (formerly Polly) is enabled by either the product or external-storage switch"
+  value       = local.polly_enabled
+}
+
+output "polly_storage" {
+  description = "LangSmith Chat storage location"
+  value       = local.polly_external_storage ? "external" : var.polly_storage
 }
 
 output "enable_envoy_gateway" {
@@ -328,22 +343,25 @@ output "gateway_target_group_arn" {
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster         = module.eks.cluster_name
-    postgres_source = var.postgres_source
-    postgres        = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
-    redis_source    = var.redis_source
-    redis           = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
-    storage_bucket  = local.bucket_name
-    namespace       = var.langsmith_namespace
-    tls             = var.tls_certificate_source
-    alb             = module.alb.alb_dns_name
-    bastion         = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall        = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
-    deployments     = var.enable_deployments
-    agent_builder   = var.enable_agent_builder
-    insights        = var.enable_insights
-    polly           = var.enable_polly
-    smithdb         = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
+    cluster          = module.eks.cluster_name
+    postgres_source  = var.postgres_source
+    postgres         = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    redis_source     = var.redis_source
+    redis            = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
+    storage_bucket   = local.bucket_name
+    namespace        = var.langsmith_namespace
+    tls              = var.tls_certificate_source
+    alb              = module.alb.alb_dns_name
+    bastion          = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall         = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
+    deployments      = var.enable_deployments
+    fleet            = var.enable_fleet
+    fleet_storage    = var.enable_fleet ? var.fleet_storage : "not enabled"
+    insights         = local.insights_enabled
+    insights_storage = local.insights_enabled ? (local.insights_external_storage ? "external" : var.insights_storage) : "not enabled"
+    polly            = local.polly_enabled
+    polly_storage    = local.polly_enabled ? (local.polly_external_storage ? "external" : var.polly_storage) : "not enabled"
+    smithdb          = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
   }
 }
 

@@ -348,7 +348,7 @@ if [[ -n "$LANGSMITH_ADMIN_PASSWORD" ]]; then
 fi
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
-# Fernet keys for Deployments, Agent Builder, Insights, and Polly addons.
+# Fernet keys for Deployments, Fleet, Insights, and LangSmith Chat (formerly Polly).
 # Auto-generated and stored in SSM on first run. Only created when the user
 # opts in — ESO's apply-eso.sh dynamically includes whichever keys exist in SSM.
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
@@ -405,7 +405,7 @@ echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-ke
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
 echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"
 echo "  deploy_key        = (hidden — SSM: ${_ssm_prefix}/deployments-encryption-key)"
-echo "  ab_key            = (hidden — SSM: ${_ssm_prefix}/agent-builder-encryption-key)"
+echo "  fleet_key         = (hidden — SSM: ${_ssm_prefix}/agent-builder-encryption-key; historical name)"
 echo "  insights_key      = (hidden — SSM: ${_ssm_prefix}/insights-encryption-key)"
 echo "  ssm_prefix        = $_ssm_prefix"
 echo ""
