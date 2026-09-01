@@ -221,7 +221,21 @@ echo ""
 # leaves no intersection between the HTTPRoute and the listener. The route then
 # reports NoMatchingListenerHostname and every request 404s behind an otherwise
 # valid TLS certificate. The AWS module already guards this the same way.
-_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+#
+# Read the domain from the Terraform output, not from terraform.tfvars. That
+# file is only one of Terraform's variable sources and not the highest priority
+# one, so a file parse misses a value set in an .auto.tfvars file, a
+# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_domain. Reading empty
+# there takes this branch for a domain-based install and rewrites the hostname
+# to the Gateway IP — the exact failure this guard exists to prevent. A domain
+# name is not a secret.
+#
+# A read failure means the state predates the langsmith_domain output, so fall
+# back to the file parse. An empty result from a successful read is an answer:
+# no domain is configured, so this is an IP-based install.
+if ! _langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
+  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+fi
 _live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
 if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
@@ -232,15 +246,28 @@ if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
   # otherwise an absent dig would report "does not resolve yet" for a domain that
   # resolves perfectly well.
   if command -v dig >/dev/null 2>&1; then
-    _resolved_ip=$(dig +short "$_langsmith_domain" A 2>/dev/null | tail -1) || _resolved_ip=""
-    if [[ -z "$_resolved_ip" ]]; then
+    # Compare the whole A-record set against the one Gateway address. Taking a
+    # single record instead ties the verdict to the order the resolver happens
+    # to return, which rotates: a domain answering with both the Gateway IP and
+    # a stale one then passes on some runs and warns on others, and a run that
+    # passes hides that part of the traffic never reaches this cluster.
+    # Keep only IPv4 literals, since dig prints the CNAME target as well when
+    # the name is an alias.
+    _resolved_ips=$(dig +short "$_langsmith_domain" A 2>/dev/null \
+      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') || _resolved_ips=""
+    if [[ -z "$_resolved_ips" ]]; then
       echo "NOTE: ${_langsmith_domain} does not resolve yet."
       echo "      Point its DNS A record at ${_live_gateway_ip} — TLS issuance and"
       echo "      ingress stay pending until it does."
       echo ""
-    elif [[ "$_resolved_ip" != "$_live_gateway_ip" ]]; then
-      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ip}, not the Gateway"
-      echo "         IP ${_live_gateway_ip}. Update the DNS A record."
+    elif ! printf '%s\n' "$_resolved_ips" | grep -qxF "$_live_gateway_ip"; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ips//$'\n'/, }, not the"
+      echo "         Gateway IP ${_live_gateway_ip}. Update the DNS A record."
+      echo ""
+    elif [[ $(printf '%s\n' "$_resolved_ips" | wc -l) -gt 1 ]]; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ips//$'\n'/, }."
+      echo "         Only ${_live_gateway_ip} is this Gateway. Requests that take one of"
+      echo "         the other addresses do not reach it. Remove the stale A records."
       echo ""
     fi
   else
