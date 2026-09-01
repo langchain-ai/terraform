@@ -96,6 +96,18 @@ if [[ -n "$_region" ]]; then
 fi
 
 if [[ -n "$_cluster_name" ]]; then
+  # Empty Terraform state is not proof the cluster is gone (terraform state rm
+  # can leave EKS running); only an API miss is. If the cluster is gone, the
+  # uninstall is already complete.
+  if ! _cluster_status=$(aws eks describe-cluster --name "$_cluster_name" --region "$_region" --query 'cluster.status' --output text 2>&1); then
+    if [[ "$_cluster_status" == *"ResourceNotFoundException"* ]]; then
+      skip "EKS cluster '$_cluster_name' no longer exists; uninstall is already complete."
+      exit 0
+    fi
+    fail "Could not verify EKS cluster '$_cluster_name'."
+    printf "  %s\n" "$_cluster_status" >&2
+    exit 1
+  fi
   echo "Updating kubeconfig for cluster: $_cluster_name..."
   aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
 else
@@ -161,7 +173,13 @@ done < <(_names_matching pvc 'juicefs|smithbox')
 echo ""
 
 # ── Uninstall Helm release ────────────────────────────────────────────────────
-if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null | grep -q '"name"'; then
+if ! _helm_releases=$(_helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>&1); then
+  fail "Could not list Helm releases in namespace '$NAMESPACE'."
+  printf "  %s\n" "$_helm_releases" >&2
+  exit 1
+fi
+
+if grep -q '"name"' <<<"$_helm_releases"; then
   echo "Uninstalling Helm release '$RELEASE_NAME'..."
   helm uninstall "$RELEASE_NAME" -n "$NAMESPACE"
 else
@@ -222,3 +240,6 @@ if [[ -n "$_data_pvcs" ]]; then
 fi
 
 echo "Uninstall complete."
+echo ""
+echo "Next step: destroy this deployment's infrastructure."
+echo "  make destroy"
