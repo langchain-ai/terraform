@@ -39,14 +39,18 @@ keyvault_purge_protection    = false   # required for clean terraform destroy af
 dns_label              = "langsmith-test"
 tls_certificate_source       = "letsencrypt"
 letsencrypt_email            = "you@example.com"
-default_node_pool_min_count  = 3       # critical — autoscaler starts here; 1 causes pod pending
+default_node_pool_min_count  = 1       # Minimum profile floor sizing
 default_node_pool_max_pods   = 60      # immutable — must be set before first apply
+sizing_profile               = "minimum"
+postgres_source              = "in-cluster"
+redis_source                 = "in-cluster"
+unique_resource_names        = true
 ```
 
-All other defaults are fine for testing. A typical dev config uses:
-- AKS: `Standard_D8s_v3`, 3 min / 10 max nodes
-- PostgreSQL: Flexible Server (GeneralPurpose_Standard_D2s_v3)
-- Redis: P1 (6 GB RAM)
+All other defaults are fine for testing. A typical low-footprint minimum profile uses:
+- AKS: `Standard_D4s_v3`, 1 node minimum
+- PostgreSQL: In-cluster
+- Redis: In-cluster
 
 ---
 
