@@ -1,0 +1,20 @@
+modules/gcp/TEARDOWN.md
+  s_69600e958473f5::t_9d2e9759a7e802 794-798,805-819
+  s_69600e958473f5::t_6ae63fbb2866db 790-792
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e4f68500d0631e7da8fa5d34fb62ec8df635d9e1",
+  "prompts": {},
+  "sessions": {
+    "s_69600e958473f5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "ea18d317-fda8-4b01-998a-c3e86c001808",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
