@@ -446,17 +446,14 @@ if [[ "$GATEWAY_MODE" == "nginx" ]]; then
   printf "  ${DIM}TLS terminates at the ALB. Supports ACM and Let's Encrypt HTTP-01.${RESET}\n"
 fi
 
-# For Istio: ask about public NLB
-ISTIO_NLB_SCHEME=""
+# For Istio: brief note. No input needed, because the gateway service is
+# ClusterIP and the ALB in front of it is what decides public vs internal.
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
   echo ""
-  printf "  ${DIM}Istio ingressgateway runs an NLB. On EKS it defaults to private subnets.${RESET}\n"
-  printf "  ${DIM}You can switch the scheme after deploy via helm upgrade — see example yaml.${RESET}\n"
-  if _ask_yn "Make the Istio NLB internet-facing? (public subnets)" "y"; then
-    ISTIO_NLB_SCHEME="internet-facing"
-  else
-    ISTIO_NLB_SCHEME="internal"
-  fi
+  printf "  ${DIM}Istio: ALB → TargetGroupBinding → istio-ingressgateway pods → LangSmith.${RESET}\n"
+  printf "  ${DIM}Terraform installs the gateway chart with service.type=ClusterIP, so it${RESET}\n"
+  printf "  ${DIM}provisions no NLB of its own. alb_scheme is what makes this public or${RESET}\n"
+  printf "  ${DIM}internal (asked below on the prod profile; dev stays internet-facing).${RESET}\n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -518,6 +515,7 @@ else
 fi
 
 ACM_ARN=""; LE_EMAIL=""; DOMAIN=""; CREATE_CERT_MANAGER="false"; HOSTED_ZONE_ID=""
+DNS_CREATE_ZONE="true"; DNS_EXISTING_ZONE_ID=""
 
 # ACM ARN
 if [[ "$TLS_SOURCE" == "acm" ]]; then
@@ -530,6 +528,33 @@ fi
 echo ""
 _ask "Custom domain for LangSmith (e.g. langsmith.example.com, blank = use LB hostname)" "$_ex_domain"
 DOMAIN="$_REPLY"
+
+# The DNS module is enabled whenever a custom domain is set and no existing
+# ACM certificate ARN is supplied, regardless of the selected TLS mode.
+if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
+  _ex_dns_create_zone=$(_existing "dns_create_zone" "true")
+  _dns_zone_default=1
+  [[ "$_ex_dns_create_zone" == "false" ]] && _dns_zone_default=2
+
+  _ask_choice --default "$_dns_zone_default" "Route 53 hosted zone for ${DOMAIN}:" \
+    "Create a new public hosted zone exactly matching ${DOMAIN}" \
+    "Reuse an existing public parent or same-name hosted zone"
+
+  if [[ "$_CHOICE" == "2" ]]; then
+    DNS_CREATE_ZONE="false"
+    echo ""
+    printf "  ${DIM}Find the zone ID: aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table${RESET}\n"
+    while true; do
+      _ask "Existing Route 53 hosted zone ID (e.g. Z1ABCDEF123456)" "$(_existing "dns_existing_zone_id" "")"
+      DNS_EXISTING_ZONE_ID="$_REPLY"
+      if [[ "$DNS_EXISTING_ZONE_ID" =~ ^Z[A-Z0-9]{1,31}$ ]]; then
+        break
+      fi
+      _red "  ERROR: enter a valid Route 53 hosted zone ID starting with Z."
+      echo ""
+    done
+  fi
+fi
 
 # Let's Encrypt email (HTTP-01 or DNS-01)
 if [[ "$TLS_SOURCE" == "letsencrypt" ]] || \
@@ -856,13 +881,6 @@ enable_envoy_gateway = ${ENABLE_ENVOY}
 enable_istio_gateway = ${ENABLE_ISTIO}
 TFVARS
 
-# Write istio_nlb_scheme when Istio is selected
-if [[ "$GATEWAY_MODE" == "istio" && -n "$ISTIO_NLB_SCHEME" ]]; then
-  cat >> "$OUTPUT" << TFVARS
-istio_nlb_scheme = "${ISTIO_NLB_SCHEME}"
-TFVARS
-fi
-
 cat >> "$OUTPUT" << TFVARS
 
 #------------------------------------------------------------------------------
@@ -874,6 +892,13 @@ TFVARS
 [[ -n "$ACM_ARN" ]]  && echo "acm_certificate_arn    = \"${ACM_ARN}\""  >> "$OUTPUT"
 [[ -n "$LE_EMAIL" ]] && echo "letsencrypt_email      = \"${LE_EMAIL}\""  >> "$OUTPUT"
 [[ -n "$DOMAIN" ]]   && echo "langsmith_domain       = \"${DOMAIN}\""    >> "$OUTPUT"
+
+if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
+  echo "dns_create_zone        = ${DNS_CREATE_ZONE}" >> "$OUTPUT"
+  if [[ "$DNS_CREATE_ZONE" == "false" ]]; then
+    echo "dns_existing_zone_id   = \"${DNS_EXISTING_ZONE_ID}\"" >> "$OUTPUT"
+  fi
+fi
 
 if [[ "$CREATE_CERT_MANAGER" == "true" ]]; then
   cat >> "$OUTPUT" << TFVARS
@@ -975,6 +1000,10 @@ printf "  %-26s %s\n" "ClickHouse:"   "$CH_SOURCE"
 printf "  %-26s %s\n" "Gateway mode:" "$GATEWAY_MODE"
 printf "  %-26s %s\n" "TLS:"          "$([[ "$CREATE_CERT_MANAGER" == "true" ]] && echo "Let's Encrypt DNS-01 (Route 53)" || echo "$TLS_SOURCE")"
 [[ -n "$DOMAIN" ]] && printf "  %-26s %s\n" "Domain:" "$DOMAIN"
+if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
+  printf "  %-26s %s\n" "Route 53 zone:" \
+    "$([[ "$DNS_CREATE_ZONE" == "true" ]] && echo "new (${DOMAIN})" || echo "existing (${DNS_EXISTING_ZONE_ID})")"
+fi
 printf "  %-26s %s\n" "Sizing:"       "$SIZING"
 printf "  %-26s %s\n" "Deployments:"  "$ENABLE_DEPLOYMENTS"
 [[ "$ENABLE_AGENT_BUILDER" == "true" ]] && printf "  %-26s %s\n" "Agent Builder:" "$ENABLE_AGENT_BUILDER"
@@ -1043,8 +1072,7 @@ fi
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB requires an explicit stable chart version of 0.16 or newer:${RESET}\n"
-  printf "     ${CYAN}make init-values && CHART_VERSION=0.16.21 make deploy${RESET}\n"
+  printf "  ${DIM}SmithDB uses the repository's pinned 0.16.x chart line.${RESET}\n"
 fi
 
 echo ""

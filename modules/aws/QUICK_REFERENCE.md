@@ -213,20 +213,32 @@ aws iam get-role --role-name <irsa-role-name>
 
 ## Terraform Commands
 
-```bash
-cd modules/aws/infra
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
 
-terraform init
-terraform plan
-terraform apply
-terraform apply -target=module.eks
-terraform output
-terraform output -raw cluster_name
-terraform output -raw alb_dns_name
-terraform output -raw langsmith_irsa_role_arn
-terraform output -raw bucket_name
-terraform state list
+```bash
+cd modules/aws
+
+make init    ARGS="-upgrade"               # re-resolve provider versions
+make plan    ARGS="-target=module.eks"     # plan one module
+make plan    ARGS="-out=tfplan"            # save a plan file
+make apply   ARGS="tfplan"                 # apply that saved plan
+make apply   ARGS="-auto-approve"          # skip the approval prompt
+make destroy ARGS="-target=module.redis"   # destroy one module
 ```
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output -raw cluster_name"
+make tf ARGS="output -raw alb_dns_name"
+make tf ARGS="output -raw langsmith_irsa_role_arn"
+make tf ARGS="output -raw bucket_name"
+make tf ARGS="state list"
+make tf ARGS="validate"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/aws/infra` if you prefer.
 
 ---
 

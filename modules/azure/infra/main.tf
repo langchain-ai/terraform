@@ -44,7 +44,12 @@ locals {
   # Regional names — unique within the subscription, so no hash needed.
   resource_group_name = "${local.name_base}-rg${local.name_suffix}"
   vnet_name           = "${local.name_base}-vnet${local.name_suffix}"
-  aks_name            = "${local.name_base}-aks${local.name_suffix}"
+
+  # Cluster name: derived for new clusters, or the customer's existing cluster
+  # name when attaching to one (create_cluster = false). No fallback in the
+  # attach case — an unset existing_cluster_name fails on the aks module's
+  # precondition instead of looking up a cluster that was never created.
+  aks_name = var.create_cluster ? "${local.name_base}-aks${local.name_suffix}" : var.existing_cluster_name
 
   # Globally-unique names — hashed, and each takes an explicit override so a
   # single colliding name can be pinned without renaming the whole deployment.
@@ -53,8 +58,23 @@ locals {
   blob_name     = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
 
   # Key Vault name: max 24 chars, globally unique.
-  # Uses the user-supplied keyvault_name or derives from name_prefix.
-  keyvault_name = var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
+  # Uses the user-supplied keyvault_name or derives from name_prefix. When
+  # attaching to a customer-owned vault (create_keyvault = false) the name is
+  # theirs, with no fallback — an unset existing_keyvault_name fails on the
+  # keyvault module's precondition instead of deriving a name for a vault that
+  # was never created.
+  keyvault_name = var.create_keyvault ? (var.keyvault_name != "" ? var.keyvault_name : "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}") : var.existing_keyvault_name
+
+  # Whether the keyvault module creates each of its two role assignments. Both
+  # default to create_keyvault: a vault this module creates gets both grants, a
+  # customer's vault gets neither, because creating them there means calling
+  # Microsoft.Authorization/roleAssignments/write on a resource their platform
+  # team owns. Gated one apiece rather than together because the two requests
+  # carry different principal types, and a subscription that delegates
+  # roleAssignments/write through an ABAC condition on principalType can reject
+  # the deployer's grant while permitting the managed identity's.
+  keyvault_manage_terraform_admin_assignment  = var.keyvault_manage_terraform_admin_assignment != null ? var.keyvault_manage_terraform_admin_assignment : var.create_keyvault
+  keyvault_manage_managed_identity_assignment = var.keyvault_manage_managed_identity_assignment != null ? var.keyvault_manage_managed_identity_assignment : var.create_keyvault
 
   # ── Network resolution ──────────────────────────────────────────────────────
   # create_vnet = true  → Terraform owns the whole network; BYO IDs are rejected
@@ -311,10 +331,10 @@ module "vnet" {
   postgres_subnet_address_prefix = var.postgres_subnet_address_prefix
   redis_subnet_address_prefix    = var.redis_subnet_address_prefix
 
-  # Both are carved only out of a VNet Terraform owns. Under bring-your-own the
-  # operator supplies the subnet instead, and local.*_subnet_id selects it.
-  enable_bastion     = var.create_bastion && var.create_vnet
-  availability_zones = var.availability_zones
+  # The bastion and AGIC subnets below are carved only out of a VNet Terraform
+  # owns. Under bring-your-own the operator supplies the subnet instead, and
+  # local.*_subnet_id selects it.
+  enable_bastion = var.create_bastion && var.create_vnet
 
   # AGIC subnet: provisioned only when ingress_controller = "agic"
   enable_agic                = var.ingress_controller == "agic" && var.create_vnet
@@ -369,6 +389,14 @@ data "azurerm_subnet" "byo_agic_subnet" {
   name                 = local.byo_agic_subnet_parts[10]
   virtual_network_name = local.byo_agic_subnet_parts[8]
   resource_group_name  = local.byo_agic_subnet_parts[4]
+}
+
+# azurerm_subnet does not expose delegations. Feeds the check below.
+data "azapi_resource" "byo_agic_subnet_delegations" {
+  count                  = local.byo_agic_subnet && var.ingress_controller == "agic" ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.agic_subnet_id
+  response_export_values = ["properties.delegations"]
 }
 
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
@@ -547,6 +575,19 @@ resource "terraform_data" "validate_network" {
   }
 }
 
+# A supplied subnet belongs to the operator, so report rather than fix. A check
+# and not a precondition, because a gateway created before Azure applied network
+# isolation keeps running undelegated and is never revalidated.
+check "agic_subnet_delegation" {
+  assert {
+    condition = length(data.azapi_resource.byo_agic_subnet_delegations) == 0 || contains([
+      for d in try(data.azapi_resource.byo_agic_subnet_delegations[0].output.properties.delegations, []) :
+      try(d.properties.serviceName, "")
+    ], "Microsoft.Network/applicationGateways")
+    error_message = "The subnet given as agic_subnet_id is not delegated to Microsoft.Network/applicationGateways. Creating an Application Gateway there fails with ApplicationGatewayNetworkIsolationRequiresSubnetDelegation, partway through the apply. Have the subnet's owner add the delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) before applying: `az network vnet subnet update --ids ${var.agic_subnet_id} --delegations Microsoft.Network/applicationGateways`. Ignore this if the gateway already exists and runs — an existing one is not revalidated."
+  }
+}
+
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
 # AKS cluster with OIDC + Workload Identity enabled, NGINX ingress installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
@@ -559,14 +600,32 @@ module "aks" {
   subnet_id           = local.aks_subnet_id
   service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
+  kubernetes_version  = var.aks_kubernetes_version
+
+  # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
+  create_cluster = var.create_cluster
+  create_vnet    = var.create_vnet
+
+  # Both of these are passed straight from variables, never derived from another
+  # resource. azurerm_resource_group.resource_group is pending creation on a first
+  # apply, and local.aks_subnet_id reads module.vnet.subnet_main_id, whose module
+  # has no count and so is pending too. A reference to either draws a dependency
+  # edge that defers the cluster lookup to apply, taking the OIDC issuer, Workload
+  # Identity, node subnet, and region guards with it, silent on exactly the run
+  # where a misconfiguration is most likely. var.aks_subnet_id is the right value
+  # to use because create_cluster = false requires create_vnet = false.
+  existing_cluster_resource_group_name = var.existing_cluster_resource_group_name
+  existing_cluster_subnet_id           = var.aks_subnet_id
 
   default_node_pool_vm_size   = var.default_node_pool_vm_size
   default_node_pool_min_count = var.default_node_pool_min_count
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
-  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads)
-  additional_node_pools = var.additional_node_pools
+  # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
+  # On a pre-existing cluster whose node pools the customer owns, pass an empty
+  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
+  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller
@@ -627,7 +686,18 @@ module "postgres" {
   database_name  = var.postgres_database_name
   sku_name       = var.postgres_sku_name
 
-  availability_zone            = var.availability_zones[0]
+  postgres_version      = var.postgres_version
+  storage_mb            = var.postgres_storage_mb
+  storage_tier          = var.postgres_storage_tier
+  backup_retention_days = var.postgres_backup_retention_days
+
+  # availability_zones = [] means "let Azure place this", which is the only way
+  # to deploy a VM or database SKU that is not offered in every zone of the
+  # region. Indexing an empty list is an error, so this is a ternary rather than
+  # a length() guard joined with &&, which evaluates both sides below Terraform
+  # 1.14 and would error on the very input it is meant to handle.
+  availability_zone            = length(var.availability_zones) > 0 ? var.availability_zones[0] : ""
+  high_availability            = var.postgres_high_availability
   standby_availability_zone    = var.postgres_standby_availability_zone
   geo_redundant_backup_enabled = var.postgres_geo_redundant_backup
 
@@ -652,6 +722,8 @@ module "redis" {
   subnet_id           = local.redis_subnet_id                    # private endpoint goes here
   vnet_id             = local.vnet_id                            # private DNS zone link
   amr_sku             = var.amr_sku
+  high_availability   = var.redis_high_availability
+  cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
 }
@@ -693,11 +765,12 @@ module "blob" {
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 # Centralized secret storage for all LangSmith sensitive values.
 # Depends on blob module (needs the managed identity principal ID for RBAC).
-# Secrets stored here: postgres password, admin password, license key, JWT
-# secret, API key salt, and all Fernet encryption keys.
+# Secrets stored here by Terraform: postgres password and license key.
 #
-# First-apply: Key Vault is created and all current TF_VAR_* values are stored.
-# Subsequent applies: setup-env.sh reads from Key Vault instead of local files.
+# The LangSmith app secrets (admin password, API key salt, JWT secret, Fernet
+# keys) are written straight to the vault by scripts/seed-keyvault-secrets.sh
+# after apply, so they never enter Terraform state. Run `make seed-secrets`
+# between `make apply` and `make k8s-secrets`.
 
 module "keyvault" {
   source              = "./modules/keyvault"
@@ -705,9 +778,23 @@ module "keyvault" {
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
 
+  # Bring-your-own Key Vault: attach to a customer-owned vault instead of
+  # creating one. The module writes its secrets into that vault and changes
+  # nothing else about it, so the network ACL and retention settings below are
+  # ignored on this path.
+  create_keyvault                       = var.create_keyvault
+  existing_keyvault_name                = var.existing_keyvault_name
+  existing_keyvault_resource_group_name = var.existing_keyvault_resource_group_name
+  manage_terraform_admin_assignment     = local.keyvault_manage_terraform_admin_assignment
+  manage_managed_identity_assignment    = local.keyvault_manage_managed_identity_assignment
+
   # The managed identity used by LangSmith pods gets read-only access to
   # all secrets so future CSI-driver integration requires no RBAC changes.
   managed_identity_principal_id = module.blob.k8s_managed_identity_principal_id
+
+  # Principal type of the apply identity for its Secrets Officer grant. Only
+  # needed where the subscription gates roleAssignments/write on principalType.
+  terraform_principal_type = var.terraform_principal_type
 
   # Network ACLs — default Allow keeps first-apply secret creation working.
   # Production deployments override keyvault_default_action = "Deny" and
@@ -718,18 +805,11 @@ module "keyvault" {
   allowed_subnet_ids     = [local.aks_subnet_id]
 
   # ── Secrets ─────────────────────────────────────────────────────────────────
-  # Values come from TF_VAR_* on first apply. setup-env.sh reads from Key Vault
-  # on subsequent applies, eliminating local .secret files.
-  postgres_admin_password  = var.postgres_admin_password
-  langsmith_admin_password = var.langsmith_admin_password
-  langsmith_license_key    = var.langsmith_license_key
-  langsmith_api_key_salt   = var.langsmith_api_key_salt
-  langsmith_jwt_secret     = var.langsmith_jwt_secret
-
-  langsmith_deployments_encryption_key   = var.langsmith_deployments_encryption_key
-  langsmith_agent_builder_encryption_key = var.langsmith_agent_builder_encryption_key
-  langsmith_insights_encryption_key      = var.langsmith_insights_encryption_key
-  langsmith_polly_encryption_key         = var.langsmith_polly_encryption_key
+  # Only the two Terraform already holds in state for another reason. The
+  # LangSmith app secrets are written to the vault post-apply by
+  # scripts/seed-keyvault-secrets.sh and never pass through Terraform.
+  postgres_admin_password = var.postgres_admin_password
+  langsmith_license_key   = var.langsmith_license_key
 
   purge_protection_enabled = var.keyvault_purge_protection
 
@@ -746,8 +826,8 @@ module "keyvault" {
 #
 # LangSmith application deployment is handled outside Terraform:
 #   Pass 1.5: bash helm/scripts/get-kubeconfig.sh <cluster> <rg>
-#   Pass 1.6: ACME_EMAIL=... bash helm/scripts/apply-cluster-issuers.sh
 #   Pass 2:   bash helm/scripts/generate-secrets.sh && bash helm/scripts/deploy.sh
+#             (deploy.sh also applies the letsencrypt-prod ClusterIssuer)
 #   Pass 3+:  bash helm/scripts/deploy.sh --overlay overlays/<feature>.yaml
 #
 # Note: This module configures its own kubernetes/helm providers internally,
@@ -800,13 +880,24 @@ module "k8s_bootstrap" {
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
-  # TLS / cert-manager
+  # TLS / cert-manager. The ClusterIssuers themselves are applied by
+  # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
+  # subscription_id straight from terraform.tfvars.
   tls_certificate_source          = var.tls_certificate_source
-  letsencrypt_email               = var.letsencrypt_email
   cert_manager_identity_client_id = module.aks.cert_manager_identity_client_id
-  subscription_id                 = var.subscription_id
-  dns_zone_name                   = var.create_dns_zone ? var.langsmith_domain : ""
-  dns_resource_group_name         = azurerm_resource_group.resource_group.name
+}
+
+# The DNS-01 ClusterIssuer used to be a kubernetes_manifest in k8s-bootstrap, which
+# broke terraform plan on a fresh deploy: kubernetes_manifest opens an API connection
+# during plan and there is no cluster yet. deploy.sh already applied an identical
+# issuer, so the Terraform copy was dropped. Existing deployments keep the live
+# object; only the state entry goes.
+removed {
+  from = module.k8s_bootstrap.kubernetes_manifest.cluster_issuer_dns01
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
@@ -844,8 +935,11 @@ module "diagnostics" {
   agw_id = module.aks.agw_id
 
   # Boolean flags known at plan time — count cannot depend on computed resource IDs.
+  # Key Vault diagnostics only when this module owns the vault: writing a
+  # diagnostic setting onto a customer's vault changes their resource, and a
+  # platform-owned vault usually already has one collecting AuditEvent.
   enable_aks_diag      = true
-  enable_keyvault_diag = true
+  enable_keyvault_diag = var.create_keyvault
   enable_postgres_diag = var.postgres_source == "external"
   enable_agw_diag      = var.ingress_controller == "agic"
 
@@ -885,5 +979,6 @@ module "dns" {
 
   # Grant cert-manager DNS Zone Contributor so it can create TXT records
   # for DNS-01 ACME challenges. Only needed when tls_certificate_source = "dns01".
+  grant_cert_manager_dns    = var.tls_certificate_source == "dns01"
   cert_manager_principal_id = var.tls_certificate_source == "dns01" ? module.aks.cert_manager_identity_principal_id : ""
 }

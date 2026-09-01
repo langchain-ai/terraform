@@ -185,8 +185,8 @@ if [[ -d "$INFRA_DIR/.terraform" ]]; then
   pass "terraform init — done"
 else
   fail "terraform init — not run"
-  action "terraform -chdir=infra init"
-  set_next "terraform -chdir=infra init"
+  action "make init"
+  set_next "make init"
 fi
 
 _tf_output=""
@@ -214,8 +214,8 @@ if [[ -n "$_tf_output" ]] && echo "$_tf_output" | grep -q '"cluster_name"'; then
 else
   fail "terraform output — empty (no state file or infra not yet applied)"
   info "If infra was applied from another machine, configure a GCS remote backend."
-  action "terraform -chdir=infra init  (if using a remote backend)"
-  action "terraform -chdir=infra apply  (if starting fresh)"
+  action "make init  (if using a remote backend)"
+  action "make apply  (if starting fresh)"
   set_next "Resolve terraform state — see section 5"
 fi
 
@@ -325,6 +325,36 @@ else
       skip "Secret: ${secret} — not created yet"
     fi
   done
+
+  # Namespace quota headroom. Exhausting this quota does not report itself as a
+  # quota problem: a Deployment records FailedCreate on its ReplicaSet, and a Job
+  # reports Running with no pod at all. Both look like scheduling or image
+  # problems, so surface the remaining CPU here.
+  _quota_cpu=$(kubectl get resourcequota langsmith-quota -n "$_NAMESPACE" \
+    -o jsonpath='{.status.hard.requests\.cpu} {.status.used.requests\.cpu}' 2>/dev/null) || _quota_cpu=""
+  if [[ -z "${_quota_cpu// /}" ]]; then
+    skip "ResourceQuota langsmith-quota not found (created by terraform)"
+  else
+    # Each figure arrives either as whole cores ("50") or as milli-CPU ("43850m").
+    _quota_free=$(awk '
+      function cores(v) {
+        if (v ~ /m$/) { sub(/m$/, "", v); return (v + 0) / 1000 }
+        return v + 0
+      }
+      { printf "%.2f", cores($1) - cores($2) }
+    ' <<< "$_quota_cpu")
+    _quota_hard=${_quota_cpu%% *}
+    _quota_used=${_quota_cpu##* }
+    if (( $(awk -v f="$_quota_free" 'BEGIN { print (f < 5) ? 1 : 0 }') )); then
+      warn "ResourceQuota CPU: ${_quota_used} of ${_quota_hard} used — only ${_quota_free} free"
+      info "  A rolling update needs a second copy of the largest pod, and the"
+      info "  SmithDB backfill Job alone requests 8 CPU. Under ~5 free, an upgrade"
+      info "  can wedge: the new pod is refused, so the old one never terminates."
+      info "  Raise it via resource_quota_extra_cpu on modules/k8s-bootstrap."
+    else
+      pass "ResourceQuota CPU: ${_quota_used} of ${_quota_hard} used (${_quota_free} free)"
+    fi
+  fi
 fi
 
 # ── 9. Helm Release ───────────────────────────────────────────────────────────
@@ -354,20 +384,20 @@ else
       action "helm rollback langsmith -n ${_NAMESPACE}"
     elif [[ "$_helm_status" == "pending-install" ]]; then
       fail "Helm release: langsmith — stuck in pending-install (interrupted install)"
-      action "helm uninstall langsmith -n ${_NAMESPACE}  then re-run ./helm/scripts/deploy.sh"
+      action "helm uninstall langsmith -n ${_NAMESPACE}  then re-run make deploy"
     elif [[ "$_helm_status" == "failed" ]]; then
       warn "Helm release: langsmith — status 'failed' (likely a prior --wait timeout)"
       info "Pods may still be running — Helm marks failed if --wait times out"
       [[ -n "$_helm_version" ]] && info "Chart: ${_helm_version}"
-      action "Re-run ./helm/scripts/deploy.sh  (upgrades over the failed release)"
+      action "Re-run make deploy  (upgrades over the failed release)"
     else
       warn "Helm release: langsmith — status: ${_helm_status}"
-      action "./helm/scripts/deploy.sh"
+      action "make deploy"
     fi
   else
     skip "Helm release: langsmith — not installed"
-    action "./helm/scripts/deploy.sh"
-    set_next "./helm/scripts/deploy.sh"
+    action "make deploy"
+    set_next "make deploy"
   fi
 
   # Pod health

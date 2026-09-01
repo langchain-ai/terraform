@@ -75,6 +75,14 @@ cd aws/helm
 ./scripts/uninstall.sh
 ```
 
+**Sandboxes / JuiceFS:** the JuiceFS CSI driver is part of the LangSmith Helm release. Uninstalling the release before the JuiceFS PVCs leaves mount pods holding `juicefs.com/finalizer` with no controller left to clear it, so `kubectl delete` blocks past the grace period and never returns. `uninstall.sh` therefore deletes the sandbox-host workload and the JuiceFS claims first, while the driver is still running, and force-clears any pod still in `Terminating` afterwards.
+
+**In-cluster ClickHouse volumes:** `data-langsmith-clickhouse-*` is provisioned by the EBS CSI driver, so Terraform has no record of the volume. `uninstall.sh` keeps the claim by default, because uninstall is also the path to a clean Helm reinstall. When the cluster is going away, delete the claim during uninstall so the driver reclaims the volume — after `terraform destroy` the driver is gone and the EBS volume is orphaned:
+
+```bash
+DELETE_DATA_PVCS=true ./scripts/uninstall.sh
+```
+
 After the script completes:
 
 ```bash
@@ -279,9 +287,22 @@ Same as Option A, but since there's no Terraform to clean up k8s-bootstrap resou
 1. Delete ingress resources *before* uninstalling the ALB controller
 2. Uninstall KEDA *after* deleting namespaces that contain ScaledObjects, OR delete ScaledObjects first
 
+Point kubectl at the cluster first, since there is no Terraform output to resolve it:
+
 ```bash
-# Uninstall LangSmith app
-helm uninstall langsmith -n langsmith
+aws eks update-kubeconfig --name <cluster-name> --region $REGION
+kubectl config current-context
+```
+
+```bash
+# Uninstall LangSmith app. Use the script rather than `helm uninstall` directly:
+# the JuiceFS CSI driver ships in this release, so removing the release first
+# strands mount pods on juicefs.com/finalizer with no controller left to clear
+# them. The script deletes sandbox-host and the JuiceFS claims while the driver
+# is still up, and works without Terraform state (it falls back to the active
+# kubectl context). Add DELETE_DATA_PVCS=true to also reclaim the ClickHouse EBS
+# volume, which Terraform does not track.
+DELETE_DATA_PVCS=true ./scripts/uninstall.sh
 
 # Delete the retained LGP CRD
 kubectl delete crd lgps.apps.langchain.ai 2>/dev/null
