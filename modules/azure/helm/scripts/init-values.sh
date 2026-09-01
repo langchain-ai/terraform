@@ -99,8 +99,9 @@ WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_man
 NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-# AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
-REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
+# Redis client mode follows the AMR clustering policy. No default: guessing wrong pairs
+# the standalone client with an OSS cluster, which is the combination that 503s ingest.
+REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED=""
 
 echo ""
 pass "Terraform outputs read"
@@ -313,17 +314,30 @@ fi
 
 # Build redis block
 if [[ "$_redis_source" == "external" ]]; then
-  _redis_block='redis:
+  # terraform prints its "no outputs" warning to stdout and still exits 0, so check the
+  # value parses as a bool rather than trusting the read.
+  if [[ "$REDIS_CLUSTER_ENABLED" != "true" && "$REDIS_CLUSTER_ENABLED" != "false" ]]; then
+    fail "Could not read redis_cluster_enabled. Run terraform apply in $INFRA_DIR first."
+    exit 1
+  fi
+  if [[ "$REDIS_CLUSTER_ENABLED" == "true" ]]; then
+    # OSSCluster: the endpoint answers MOVED redirects, so the cluster client. Node
+    # URIs and password come from the secret's default keys. Needs chart 0.13.33+.
+    _redis_block='redis:
   external:
     enabled: true
     existingSecretName: "langsmith-redis-secret"
-    connectionUrlSecretKey: "connection_url"'
-  # AMR is an OSS cluster reached over TLS by hostname — LangSmith must use a
-  # standalone client (clusterSafeMode), not a cluster client (whose node-IP TLS
-  # verification fails). Classic cache leaves this false.
-  if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
-    _redis_block="${_redis_block}
-    clusterSafeMode: true"
+    cluster:
+      enabled: true
+      tlsEnabled: true'
+  else
+    # EnterpriseCluster: one proxied endpoint — standalone client, cluster-safe ops only.
+    _redis_block='redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-secret"
+    connectionUrlSecretKey: "connection_url"
+    clusterSafeMode: true'
   fi
 else
   _redis_block='# redis: in-cluster (managed by Helm chart)'

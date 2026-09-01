@@ -195,7 +195,7 @@ NAME                        TYPE     DATA
 langsmith-config-secret     Opaque   8
 langsmith-license           Opaque   1
 langsmith-postgres-secret   Opaque   1
-langsmith-redis-secret      Opaque   1
+langsmith-redis-secret      Opaque   3
 
 # WI annotation
 annotations:

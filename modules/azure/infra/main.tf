@@ -722,6 +722,7 @@ module "redis" {
   subnet_id           = local.redis_subnet_id                    # private endpoint goes here
   vnet_id             = local.vnet_id                            # private DNS zone link
   amr_sku             = var.amr_sku
+  clustering_policy   = var.redis_clustering_policy
   high_availability   = var.redis_high_availability
   cluster_location    = var.redis_location # null => var.location
 
@@ -863,6 +864,8 @@ module "k8s_bootstrap" {
   postgres_admin_password = var.postgres_source == "external" ? var.postgres_admin_password : ""
   use_external_redis      = var.redis_source == "external"
   redis_connection_url    = var.redis_source == "external" ? module.redis[0].connection_url : ""
+  redis_cluster_node_uris = var.redis_source == "external" ? module.redis[0].cluster_node_uris : ""
+  redis_cluster_password  = var.redis_source == "external" ? module.redis[0].cluster_password : ""
 
   # Standalone Fleet — creates the langsmith-fleet-postgres secret pointing at the
   # dedicated langsmith_fleet database. No fleet Redis secret: Fleet uses the chart's

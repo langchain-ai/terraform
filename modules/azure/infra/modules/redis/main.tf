@@ -11,9 +11,9 @@
 #   classic used VNet subnet INJECTION; AMR doesn't support that, so the private
 #   equivalent is a Private Endpoint into the same redis subnet + a private DNS zone.
 #
-# Connection: rediss://:<url-encoded key>@<host>:10000 (TLS, OSS clustering policy).
-# LangSmith connects via redis.external.clusterSafeMode (standalone client to the
-# endpoint hostname — the cert matches the hostname; cluster node IPs would not).
+# Connection: TLS on port 10000. Client mode follows var.clustering_policy — OSSCluster
+# needs the cluster client, EnterpriseCluster the standalone client with clusterSafeMode.
+# Mismatched, every usage-limit check fails on MOVED and the ingest path returns 503.
 # ══════════════════════════════════════════════════════════════════════════════
 
 # AMR cluster — Balanced SKU, TLS 1.2, no public access (private endpoint only).
@@ -42,7 +42,7 @@ resource "azapi_resource" "amr" {
   schema_validation_enabled = false
 }
 
-# AMR database — OSS clustering policy, TLS (Encrypted) on port 10000, key auth on.
+# AMR database — clustering policy per var, TLS (Encrypted) on port 10000, key auth on.
 resource "azapi_resource" "amr_db" {
   type      = "Microsoft.Cache/redisEnterprise/databases@2025-07-01"
   name      = "default"
