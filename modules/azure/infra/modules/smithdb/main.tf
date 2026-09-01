@@ -107,10 +107,9 @@ resource "azurerm_storage_account" "smithdb" {
   }
 }
 
-# Create the container through Azure Resource Manager. azurerm_storage_container
-# uses the Blob data plane, which attempts Shared Key authentication even when
-# the account intentionally has Shared Key disabled for workload-identity-only
-# access.
+# Create the container through Azure Resource Manager. network_rules admits the
+# AKS subnet only, so a Blob data-plane create from the Terraform runner is
+# refused before its credentials are considered.
 resource "azapi_resource" "smithdb_container" {
   type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
   name      = var.container_name
