@@ -89,6 +89,50 @@ for PROVIDER in "${REQUIRED_PROVIDERS[@]}"; do
   fi
 done
 
+# ── Derived resource names ────────────────────────────────────────────────────
+# Shared by the RBAC scope check and the global-name check; deriving them
+# separately is how RBAC drifted to a hardcoded "langsmith-rg".
+# Keep in sync with local.name_base / local.name_suffix in infra/main.tf.
+TFVARS="${INFRA_DIR}/terraform.tfvars"
+
+# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh, which
+# preflight.sh deliberately does not source. Non-zero when absent or empty.
+_tfvar() {
+  local raw val
+  [ -f "$TFVARS" ] || return 1
+  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
+  [ -n "$raw" ] || return 1
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
+  [ -n "$val" ] || return 1
+  echo "$val"
+}
+
+# Terraform deploys to the tfvars subscription_id; every az call below reads the
+# active CLI one. If they differ, the report describes the wrong subscription.
+TFVARS_SUB=$(_tfvar subscription_id || echo "")
+if [ -n "${SUB_ID:-}" ] && [ -n "$TFVARS_SUB" ] && [ "$TFVARS_SUB" != "$SUB_ID" ]; then
+  fail "terraform.tfvars sets subscription_id = ${TFVARS_SUB}, but the active CLI subscription is ${SUB_ID}. Terraform would deploy to the first; the checks below describe the second. Run: az account set --subscription ${TFVARS_SUB}"
+fi
+
+# identifier is name_prefix's legacy name. Track which was read so warnings name
+# a key the user actually has.
+NAME_KEY="name_prefix"
+NAME_PREFIX=$(_tfvar name_prefix || echo "")
+if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_tfvar identifier); then
+  NAME_KEY="identifier"
+fi
+
+# The separator hyphen is optional; normalize as local.name_suffix does. Empty
+# is valid.
+NAME_SUFFIX=""
+[ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
+
+UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"; fi
+
+RESOURCE_GROUP_NAME="${NAME_BASE}-rg${NAME_SUFFIX}"
+
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
 # provider reads its ARM_* environment variables before falling back to the CLI,
@@ -137,6 +181,18 @@ else
   PRINCIPAL_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
 fi
 
+# What terraform_principal_type must be set to when an ABAC condition forces
+# principalType to be sent explicitly.
+case "$PRINCIPAL_KIND" in
+*"service principal"* | *"managed identity"*) PRINCIPAL_TYPE_HINT="ServicePrincipal" ;;
+*) PRINCIPAL_TYPE_HINT="User" ;;
+esac
+
+# The deployer's Key Vault Secrets Officer grant is the only assignment whose
+# target is not a service principal, so it is the only one a ServicePrincipal pin
+# can reject. Mirrors main.tf: explicit wins, null follows create_keyvault.
+KV_ADMIN_GRANT=$(_tfvar keyvault_manage_terraform_admin_assignment || _tfvar create_keyvault || echo "true")
+
 if [ -n "$PRINCIPAL_ID" ]; then
   pass "Terraform will authenticate as ${PRINCIPAL_KIND} (object ID ${PRINCIPAL_ID})"
 else
@@ -179,27 +235,17 @@ else
   # Both values come out of terraform.tfvars and end up in a request URL, so each
   # is held to the pattern its Terraform variable already validates and dropped
   # if it does not fit. An unchecked value here could aim the request elsewhere.
-  TFVARS_FILE="${INFRA_DIR}/terraform.tfvars"
-
-  # An absent key is a valid answer (every variable read here has a default), so
-  # the trailing || true keeps a no-match grep from tripping set -e.
-  tfvar() {
-    [ -f "$TFVARS_FILE" ] || return 0
-    grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS_FILE" 2>/dev/null | head -1 | cut -d'"' -f2 || true
-  }
-
   SCOPES=("/subscriptions/${SUB_ID_CHECK}")
 
-  # printf adds the newline grep needs to see an empty identifier as a line to
-  # match rather than as no input at all. Empty is valid: it means no suffix.
-  IDENTIFIER=$(tfvar identifier)
-  if printf '%s\n' "$IDENTIFIER" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/langsmith-rg${IDENTIFIER}")
+  # printf supplies the newline grep needs to see an empty suffix as a line
+  # rather than as no input. Empty is valid.
+  if printf '%s\n' "$NAME_SUFFIX" | grep -qE '^(-[a-z0-9][a-z0-9-]*)?$'; then
+    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}")
   else
-    warn "terraform.tfvars: identifier is not a valid resource-name suffix, so the deployment resource group was not checked"
+    warn "terraform.tfvars: ${NAME_KEY} is not a valid resource-name suffix, so the deployment resource group was not checked"
   fi
 
-  EXISTING_VNET=$(tfvar vnet_id)
+  EXISTING_VNET=$(_tfvar vnet_id || echo "")
   if [ -n "$EXISTING_VNET" ]; then
     if printf '%s\n' "$EXISTING_VNET" \
       | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+$'; then
@@ -225,7 +271,9 @@ ACTIONS = [
     "Microsoft.Storage/storageAccounts/write",
     "Microsoft.Network/virtualNetworks/write",
     "Microsoft.DBforPostgreSQL/flexibleServers/write",
-    "Microsoft.Cache/redis/write",
+    # redisEnterprise is Azure Managed Redis, what the module provisions.
+    # Microsoft.Cache/redis is classic Azure Cache and a separate RBAC action.
+    "Microsoft.Cache/redisEnterprise/write",
 ]
 
 print(json.dumps({
@@ -263,10 +311,12 @@ PY
   RBAC_VERDICT=$(python3 - \
     "$RBAC_TMP" \
     "${RBAC_TMP}/eligibilities.json" \
-    "$PRINCIPAL_IS_CALLER" <<'PY' || echo "unavailable"
+    "$PRINCIPAL_IS_CALLER" \
+    "$PRINCIPAL_TYPE_HINT" \
+    "$KV_ADMIN_GRANT" <<'PY' || echo "unavailable"
 import json, os, sys
 
-tmp, elig_path, is_caller = sys.argv[1:4]
+tmp, elig_path, is_caller, principal_type_hint, kv_admin_grant = sys.argv[1:6]
 
 ROLE_WRITE = "microsoft.authorization/roleassignments/write"
 ROLE_DELETE = "microsoft.authorization/roleassignments/delete"
@@ -315,6 +365,71 @@ def role_label(assignment):
     return "role %s" % (guid or "?")
 
 
+def balanced(text):
+    """Whether every parenthesis in `text` closes, so it is a whole group."""
+    depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def write_clause(flat):
+    """The top-level clause of a normalised condition that constrains write.
+
+    Conditions are `!(ActionMatches{<action>}) OR <constraint>` groups joined by
+    AND, and a constraint carries ANDs of its own, so the split tracks
+    parenthesis depth. None when no clause names the write action.
+    """
+    while flat.startswith("(") and flat.endswith(")") and balanced(flat[1:-1]):
+        flat = flat[1:-1].strip()
+    clauses, depth, start, i = [], 0, 0, 0
+    while i < len(flat):
+        if flat[i] == "(":
+            depth += 1
+        elif flat[i] == ")":
+            depth -= 1
+        elif depth == 0 and flat.startswith(" and ", i):
+            clauses.append(flat[start:i])
+            i += 5
+            start = i
+            continue
+        i += 1
+    clauses.append(flat[start:])
+    for clause in clauses:
+        if ROLE_WRITE in clause:
+            return clause
+    return None
+
+
+def pins_service_principal(condition):
+    """Whether an ABAC condition admits only ServicePrincipal targets for write.
+
+    Matching the quoted literal keeps a permissive {'ServicePrincipal', 'User'}
+    from reading as a pin. Anything unparseable returns False and falls through
+    to the softer advice below.
+    """
+    flat = " ".join(condition.split()).lower()
+    if ROLE_WRITE in flat:
+        clause = write_clause(flat)
+    elif "actionmatches" in flat:
+        # Every clause names an action and none is write, so a pin on delete
+        # alone leaves this deployment's assignments unconstrained.
+        clause = None
+    else:
+        # No action test anywhere, so the constraint applies to every action.
+        clause = flat
+    if clause is None:
+        return False
+    return ("principaltype" in clause
+            and "'serviceprincipal'" in clause
+            and "'user'" not in clause)
+
+
 try:
     with open(os.path.join(tmp, "scopes.txt")) as fh:
         scopes = [line.strip() for line in fh if line.strip()]
@@ -351,9 +466,41 @@ for scope, decisions in answered:
             out.append("pass roleAssignments/write permitted at %s, granted by %s held at %s"
                        % (scope, role_label(assignment), assignment.get("scope") or "?"))
             if assignment.get("condition"):
+                cond = " ".join(assignment["condition"].split())
                 out.append("warn That grant carries an ABAC condition, so it permits only the roles "
                            "the condition allows. The modules assign: %s. Condition: %s"
-                           % (ASSIGNED_ROLES, " ".join(assignment["condition"].split())[:240]))
+                           % (ASSIGNED_ROLES, cond[:240]))
+                # Terraform omits principal_type by default, and a condition
+                # testing it rejects that request as a plain AuthorizationFailed,
+                # which reads like a missing role.
+                if "principaltype" in cond.lower():
+                    if pins_service_principal(cond) and principal_type_hint != "ServicePrincipal":
+                        # terraform_principal_type declares the type rather
+                        # than changing it, so against this shape every value is
+                        # denied, including the softer branch's recommendation.
+                        if kv_admin_grant == "false":
+                            out.append("pass The condition admits only ServicePrincipal targets, which "
+                                       "this %s is not — but keyvault_manage_terraform_admin_assignment "
+                                       "is already false, so no request in the apply is subject to it."
+                                       % principal_type_hint.lower())
+                        else:
+                            out.append("fail The condition admits only ServicePrincipal targets, and "
+                                       "Terraform will authenticate as a %s. terraform_principal_type "
+                                       "declares the type rather than changing it, so no value of it "
+                                       "satisfies this condition. Set "
+                                       "keyvault_manage_terraform_admin_assignment = false in "
+                                       "terraform.tfvars and hold Key Vault Secrets Officer some other "
+                                       "way — a grant inherited from the subscription or resource "
+                                       "group is enough, and `az role assignment list --assignee "
+                                       "<object-id> --all` says whether you already do. Running apply "
+                                       "as a service principal is the other way out, and is what this "
+                                       "condition exists to require."
+                                       % principal_type_hint.lower())
+                    else:
+                        out.append("warn The condition tests principalType. Set terraform_principal_type "
+                                   "= \"%s\" in terraform.tfvars, or the Key Vault Secrets Officer grant "
+                                   "fails at apply with a 403 that names no condition."
+                                   % principal_type_hint)
         else:
             denied_write = True
             if deny:
@@ -481,7 +628,6 @@ fi
 # ── 6. terraform.tfvars ───────────────────────────────────────────────────────
 echo ""
 echo "── Terraform Config ──────────────────────────────────"
-TFVARS="${INFRA_DIR}/terraform.tfvars"
 if [ ! -f "$TFVARS" ]; then
   fail "terraform.tfvars not found. Copy the example: cp infra/terraform.tfvars.example infra/terraform.tfvars"
 else
@@ -515,18 +661,6 @@ else
     fi
   fi
 fi
-
-# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh;
-# preflight.sh deliberately has no external sourcing.
-_tfvar() {
-  local raw val
-  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
-  [ -n "$raw" ] || return 1
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
-  [ -n "$val" ] || return 1
-  echo "$val"
-}
 
 # ── 7. PostgreSQL regional capabilities ─────────────────────────────────────
 # The offer-type check above is only a heuristic. This command asks the
@@ -697,38 +831,34 @@ EOF
 fi
 
 # ── 8. Globally-unique resource names ────────────────────────────────────────
-# Postgres, Redis, Storage, and Key Vault names live in a namespace shared by
-# every Azure tenant, as does the public-IP DNS label. A collision surfaces as a
-# raw Azure 400 partway through the apply, after the resource group, VNet, and
-# AKS already exist — so check up front instead.
+# Postgres, Redis, Storage, Key Vault, and the public-IP DNS label share a
+# namespace across every Azure tenant. A collision surfaces as a raw 400 partway
+# through the apply, after the resource group, VNet, and AKS already exist. A
+# name this deployment already owns is not a collision, so state is read first.
 echo ""
 echo "── Global Name Availability ──────────────────────────"
 
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping name checks (need terraform.tfvars and an active az login)"
 else
-  NAME_PREFIX=$(_tfvar name_prefix || _tfvar identifier || echo "")
   LOCATION=$(_tfvar location || echo "")
   DNS_LABEL=$(_tfvar dns_label || echo "")
-  UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
 
-  # Recompute exactly what main.tf's locals derive, so the check covers the names
-  # Terraform will actually request. name_prefix may carry a leading hyphen or
-  # not; normalize the same way local.name_suffix does. Keep in sync with
-  # local.name_base / local.name_suffix / local.uniq_suffix in infra/main.tf.
-  NAME_SUFFIX=""
-  [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
-
+  # Only these four names carry the hash, so it is derived here rather than above.
+  # Keep in sync with local.uniq_suffix in infra/main.tf, salt included: omit the
+  # salt and preflight keeps checking the names it was bumped to escape. The
+  # subscription comes from tfvars because that is what Terraform hashes and what
+  # _derive_kv_name reads.
+  SALT=$(_tfvar name_suffix_salt || echo "")
+  HASH_SUB="${TFVARS_SUB:-$SUB_ID}"
   if [ "$UNIQUE_NAMES" = "true" ]; then
-    NAME_BASE="ls"
     if command -v shasum &>/dev/null; then
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | shasum -a 256 | cut -c1-6)
+      HASH=$(printf '%s' "${HASH_SUB}${NAME_SUFFIX}${SALT}" | shasum -a 256 | cut -c1-6)
     else
-      HASH=$(printf '%s' "${SUB_ID}${NAME_SUFFIX}" | sha256sum | cut -c1-6)
+      HASH=$(printf '%s' "${HASH_SUB}${NAME_SUFFIX}${SALT}" | sha256sum | cut -c1-6)
     fi
     UNIQ_SUFFIX="-${HASH}"
   else
-    NAME_BASE="langsmith"
     UNIQ_SUFFIX=""
     warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
   fi
@@ -745,12 +875,41 @@ else
     echo "$1" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$'
   }
 
-  # _check_name <label> <name> <url> <json-body> <availability-field>
+  # checkNameAvailability has no notion of ownership: a name this deployment
+  # holds reports "taken" exactly like a stranger's, so state decides which it
+  # is. Preflight runs before `terraform init`, so `state pull` only answers on
+  # an initialised backend — fall back to the local file, and treat no state as
+  # the first run, where every name genuinely has to be free.
+  STATE_JSON=$(terraform -chdir="$INFRA_DIR" state pull </dev/null 2>/dev/null || true)
+  if [ -z "$STATE_JSON" ] && [ -f "${INFRA_DIR}/terraform.tfstate" ]; then
+    STATE_JSON=$(cat "${INFRA_DIR}/terraform.tfstate")
+  fi
+  STATE_NAMES=$(printf '%s' "$STATE_JSON" | python3 -c "
+import json, sys
+try:
+    state = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for res in state.get('resources', []):
+    for inst in res.get('instances', []):
+        attrs = inst.get('attributes') or {}
+        for key in ('name', 'domain_name_label'):
+            value = attrs.get(key)
+            if isinstance(value, str) and value:
+                print(value)
+" 2>/dev/null || true)
+
+  _in_state() {
+    [ -n "$STATE_NAMES" ] && printf '%s\n' "$STATE_NAMES" | grep -qxF "$1"
+  }
+
+  # _check_name <label> <name> <url> <json-body> <availability-field> [owned]
   # A definitive "taken" fails the run. Anything else (auth blip, api-version
   # drift, unparseable body) only warns — preflight must never block a deploy
-  # because Azure rotated an API version.
+  # because Azure rotated an API version. Callers pass owned=1 when they have
+  # established ownership by a route state cannot answer.
   _check_name() {
-    local label="$1" name="$2" url="$3" body="$4" field="$5" resp avail msg
+    local label="$1" name="$2" url="$3" body="$4" field="$5" owned="${6:-0}" resp avail msg
     if ! _name_is_safe "$name"; then
       warn "${label}: '${name}' is not a valid Azure resource name — check skipped"
       return 0
@@ -773,7 +932,14 @@ m = (json.load(sys.stdin).get('message', '') or '').strip()
 print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null || echo "")
     case "$avail" in
       True)  pass "${label}: '${name}' is available" ;;
-      False) fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}" ;;
+      False)
+        if _in_state "$name"; then
+          pass "${label}: '${name}' is already deployed and tracked in Terraform state"
+        elif [ "$owned" = "1" ]; then
+          pass "${label}: '${name}' is already held by a resource in this subscription"
+        else
+          fail "${label}: '${name}' is ALREADY TAKEN globally. ${msg}"
+        fi ;;
       *)     warn "${label}: '${name}' — unexpected API response; collision would surface during apply" ;;
     esac
   }
@@ -786,14 +952,36 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
     "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable"
 
-  _check_name "Key Vault" "$KV_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
-    "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+  # A soft-deleted vault holds its name for the retention window while appearing
+  # in neither state nor `az keyvault list`, and the generic "already in use"
+  # message names no remedy.
+  KV_DELETED=0
+  if _name_is_safe "$KV_NAME"; then
+    KV_DELETED=$(az keyvault list-deleted --query "length([?name=='${KV_NAME}'])" -o tsv 2>/dev/null || echo "0")
+    echo "$KV_DELETED" | grep -qE '^[0-9]+$' || KV_DELETED=0
+  fi
+  if [ "$KV_DELETED" -gt "0" ]; then
+    fail "Key Vault: '${KV_NAME}' is soft-deleted, which still reserves the name. Recover it (az keyvault recover --name ${KV_NAME}) or purge it (az keyvault purge --name ${KV_NAME})."
+  else
+    _check_name "Key Vault" "$KV_NAME" \
+      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+      "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable"
+  fi
 
   if [ -n "$DNS_LABEL" ]; then
+    # State carries the label only under ingress_controller = "agic". The
+    # default nginx path sets it as a Service annotation on an AKS-managed IP,
+    # so _in_state cannot see it — ask the subscription who holds it instead.
+    DNS_OWNED=0
+    if _name_is_safe "$DNS_LABEL"; then
+      DNS_HELD=$(az network public-ip list --query "length([?dnsSettings.domainNameLabel=='${DNS_LABEL}'])" -o tsv 2>/dev/null || echo "0")
+      if echo "$DNS_HELD" | grep -qE '^[0-9]+$' && [ "$DNS_HELD" -gt "0" ]; then
+        DNS_OWNED=1
+      fi
+    fi
     _check_name "Public IP DNS label" "$DNS_LABEL" \
       "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
-      "" "available"
+      "" "available" "$DNS_OWNED"
   else
     warn "dns_label not set — skipping DNS label check"
   fi
@@ -809,7 +997,11 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     REDIS_HIT=$(az redisenterprise list --query "length([?name=='${REDIS_NAME}'])" -o tsv 2>/dev/null || echo "0")
     echo "$REDIS_HIT" | grep -qE '^[0-9]+$' || REDIS_HIT=0
     if [ "$REDIS_HIT" -gt "0" ]; then
-      fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+      if _in_state "$REDIS_NAME"; then
+        pass "Redis: '${REDIS_NAME}' is already deployed and tracked in Terraform state"
+      else
+        fail "Redis: '${REDIS_NAME}' already exists in this subscription — import it or delete it before applying"
+      fi
     else
       warn "Redis: '${REDIS_NAME}' not present in this subscription (Azure exposes no global name check for Managed Redis)"
     fi
