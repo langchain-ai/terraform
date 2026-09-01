@@ -223,9 +223,40 @@ az rest --method get \
 
 1. **Convert the subscription to Pay-As-You-Go.** For a trial or credit-based subscription this removes the restriction outright, with no ticket and no configuration change.
 2. **Request an exemption** at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), quota type "Azure Database for PostgreSQL Flexible Server". Requests for offer restrictions are frequently approved the same day, and the region and SKU stay as configured.
-3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation.
+3. **Try a different tier.** Restrictions are sometimes scoped to a SKU family. Set `postgres_sku_name = "GP_Standard_D2ds_v5"` in `terraform.tfvars` and re-apply. This is worth one attempt rather than an expectation. Check the family has quota before re-applying, because subscriptions frequently carry a limit of 0 on the v5 families and the retry then fails on quota instead. `make preflight` reports both.
 4. **Use in-cluster Postgres** for a dev or demo deployment. Set `postgres_source = "in-cluster"` and the Helm chart runs its own Postgres pod, so nothing is provisioned through the PostgreSQL resource provider. Not suitable for production.
 5. **Change the region.** Set `location` in `terraform.tfvars`. Because Postgres uses a delegated subnet it must sit in the same region as the VNet, so the whole deployment moves. Any resources already created are destroyed and recreated.
+
+---
+
+### Database SKU family has no quota in the region
+
+**Symptom:** the apply builds the resource group, VNet, and AKS, then fails on the Flexible Server with a quota error naming a vCPU family and the region, such as `standardDDSv5Family` in `eastus`.
+
+**Cause:** `az postgres flexible-server list-skus` reports what a region *offers*, which is a different question from what your subscription may *create*. Postgres Flexible Server draws on the `Microsoft.Compute` per-family vCPU quota, and a family whose limit is 0 refuses every size in it. Fresh subscriptions commonly ship the v5 families at 0 while older families have room, so a SKU that reads as available in the docs still fails.
+
+`Microsoft.DBforPostgreSQL` registers no quota resource type of its own and `az quota` rejects a DBforPostgreSQL scope, so Compute is the surface to query:
+
+```bash
+az vm list-usage -l eastus --only-show-errors --query "[?limit=='0'].name.value" -o tsv
+```
+
+`limit` comes back as a JSON string, so the quoting on `'0'` is required: a numeric literal matches nothing and reads as a clean bill of health.
+
+`make preflight` maps the configured `postgres_sku_name` to its family and fails on this before the apply starts.
+
+**Fix:** request an increase at [aka.ms/postgres-request-quota-increase](https://aka.ms/postgres-request-quota-increase), or set `postgres_sku_name` to a family that already has room. The quota-increase mechanics are the same as [vCPU quota exceeded](#vcpu-quota-exceeded--autoscaler-backoff-or-node-pool-rotation-fails) above.
+
+**Not the same as a capacity shortage.** Two failures read alike and have opposite fixes:
+
+| | Quota at 0 | `InsufficientCapacity` / `AllocationFailed` |
+|---|---|---|
+| What it means | Your subscription is not allowed this family here | Azure has no hardware for it here right now |
+| Visible before apply | Yes, `make preflight` catches it | No, only the create call reveals it |
+| Fix | Quota request, region and SKU unchanged | Move regions, or wait |
+| Changing SKU size | Helps, if another family has quota | Rarely helps, the shortage is regional |
+
+Azure Managed Redis has no quota surface and no capacity API at all, so only the second column applies to it. A region that offers `redisEnterprise` can still refuse the create, and the fallbacks are moving `location` or setting `redis_source = "in-cluster"` for a dev deployment. Bumping the AMR SKU does not clear a capacity refusal.
 
 ---
 
@@ -239,9 +270,30 @@ The client '<user>' with object id '<oid>' does not have authorization to
 perform action 'Microsoft.Authorization/roleAssignments/write' over scope '<scope>'
 ```
 
-**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates eight of them.
+**Cause:** The deploying identity holds Contributor but no role-assignment role. Contributor cannot create role assignments, and the deployment creates one for each of its own managed identities.
 
 **Fix:** Grant `Role Based Access Control Administrator` at subscription scope, or `Owner` in place of both roles. When one role assignment succeeds and another on the same scope fails, an ABAC condition is restricting which role definitions the identity may grant. For the full permission inventory, the `checkAccess` probe, and how to read the condition, refer to [PERMISSIONS.md](PERMISSIONS.md).
+
+---
+
+### AuthorizationFailed on a read, during plan rather than apply
+
+**Symptom:** `terraform plan` against an already-applied deployment fails while refreshing, before it proposes any change:
+
+```text
+Error: retrieving Public IP Address ...: unexpected status 403 (403 Forbidden)
+  ... does not have authorization to perform action
+  'Microsoft.Network/publicIPAddresses/read' over scope ...
+
+Error: reading resource group: ...
+  'Microsoft.Resources/subscriptions/resourceGroups/read'
+```
+
+Azure closes that message with "if access was recently granted, please refresh your credentials", which reads as an instruction to run `az login` again. That is rarely the fix.
+
+**Cause:** Refresh reads every resource in state, so plan needs read access on all of them before it needs write access on anything. When a read that worked an hour ago starts failing, the usual reason is a PIM activation that expired. The roles are still eligible, so the portal still lists them, and nothing in the error says the window closed. The other case is an identity that never had read access, which `make preflight` now probes for directly.
+
+**Fix:** Re-activate the role (portal: PIM → My roles → Activate) for longer than the apply will take. A first apply of AKS plus Postgres runs 20-25 minutes. `make preflight` prints the time remaining on any active PIM activation and warns when it is under 45 minutes, so run it again after re-activating. If nothing was activated in the first place, [PERMISSIONS.md](PERMISSIONS.md) lists the roles to ask for.
 
 ---
 
@@ -651,7 +703,7 @@ infra/scripts/_common.sh: No such file or directory
 
 **Cause:** These scripts are tracked in git but were untracked (`??`) files — meaning they existed locally but had never been committed. After a fresh clone or `git clean -f`, they are absent.
 
-**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, they can be recreated from the source in `BUILDING_LIGHT_LANGSMITH.md` or by cherry-picking the commit that adds them.
+**Fix:** These scripts are now committed to the repo. After pulling the latest branch, they will be present. If you are on an older branch without them, cherry-pick the commit that adds them.
 
 **Scripts that were added (now committed):**
 | Script | Purpose |

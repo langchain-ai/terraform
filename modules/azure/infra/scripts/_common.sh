@@ -17,6 +17,7 @@
 #   _read_values_stamp <f> <k>      — Read one stamped value back out
 #   _name_suffix                    — Resource-name suffix derived from name_prefix
 #   _derive_kv_name                 — Key Vault name, mirroring local.keyvault_name
+#   _require_kv_name                — _derive_kv_name, or exit with the reason it could not
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -36,8 +37,10 @@ _parse_tfvar() {
   # Quoted string: key = "value"
   val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
   if [[ -z "$val" ]]; then
-    # Unquoted value: key = true / key = 42 / key = {}
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
+    # Unquoted value: key = true / key = 42 / key = {}. The trailing comment goes
+    # first, or "create_keyvault = false # attach" returns a value matching
+    # neither true nor false and every caller silently takes the other branch.
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
   fi
   [[ -n "$val" ]] || return 1
   echo "$val"
@@ -139,17 +142,30 @@ _name_suffix() {
 }
 
 # Key Vault name, mirroring local.keyvault_name in main.tf including the
-# unique_resource_names hash. Four scripts need this name and each derived it
-# independently before, so they all went looking for the wrong vault the moment
-# the naming scheme changed. Keep this in step with main.tf.
+# unique_resource_names hash. Keep the two in step.
+#
+# The attach branch comes first, as in main.tf: with create_keyvault = false a
+# derived name points at a vault that does not exist, and before the first
+# apply there is no terraform output to catch it — setup-env.sh would read no
+# secret and mint a fresh Postgres password over the real one. Returns 1 when
+# attach mode is on but existing_keyvault_name is unset.
 _derive_kv_name() {
-  local explicit suffix sub hash
+  local explicit suffix sub hash base create
+  create=$(_parse_tfvar create_keyvault || echo "true")
+  if [[ "$create" == "false" ]]; then
+    explicit=$(_parse_tfvar existing_keyvault_name || true)
+    [[ -n "$explicit" ]] || return 1
+    echo "$explicit"
+    return 0
+  fi
   explicit=$(_parse_tfvar keyvault_name || true)
   if [[ -n "$explicit" ]]; then
     echo "$explicit"
     return 0
   fi
   suffix=$(_name_suffix || true)
+  # name_base overrides the ls/langsmith switch outright, same as main.tf.
+  base=$(_parse_tfvar name_base || true)
   if _tfvar_is_true unique_resource_names; then
     sub=$(_parse_tfvar subscription_id || true)
     if command -v shasum &>/dev/null; then
@@ -157,10 +173,23 @@ _derive_kv_name() {
     else
       hash=$(printf '%s' "${sub}${suffix}" | sha256sum | cut -c1-6)
     fi
-    echo "ls-kv${suffix}-${hash}"
+    echo "${base:-ls}-kv${suffix}-${hash}"
   else
-    echo "langsmith-kv${suffix}"
+    echo "${base:-langsmith}-kv${suffix}"
   fi
+}
+
+# _derive_kv_name with its one failure spelled out. Every caller but status.sh
+# needs a real vault, so they exit here rather than carry an empty name into an
+# az command.
+_require_kv_name() {
+  local name
+  if ! name=$(_derive_kv_name); then
+    echo "  create_keyvault = false but existing_keyvault_name is unset in terraform.tfvars." >&2
+    echo "  Set it to the vault to attach to, or set create_keyvault = true." >&2
+    exit 1
+  fi
+  printf '%s' "$name"
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────

@@ -153,6 +153,25 @@ _load_state
 eq "name survives the full trip"    "${!NAME_VAR}" "acme"
 eq "profile survives the full trip" "$PROFILE"     "prod"
 
+echo "7. A trailing comment on a bare value is not part of the value"
+# terraform.tfvars.example ships annotated keys, so a copied file reaches here
+# with them. An unstripped comment makes every boolean read as neither true nor
+# false, and _derive_kv_name then names a vault that does not exist.
+cat > "$OUTPUT" << EOF
+subscription_id       = "sub-1"
+$NAME_TFKEY           = "acme"
+create_waf            = false  # the dev subscription has no WAF quota
+blob_ttl_short_days   = 21     # short-lived trace payloads
+create_keyvault       = false  # attach to the platform vault
+existing_keyvault_name = "corp-shared-kv"
+unique_resource_names = true
+EOF
+CREATE_WAF="true"; BLOB_TTL_SHORT_DAYS=""
+_load_tfvars
+eq "annotated boolean loses its comment" "$CREATE_WAF"          "false"
+eq "annotated integer loses its comment" "$BLOB_TTL_SHORT_DAYS" "21"
+eq "attach mode survives the comment"    "$(_derive_kv_name)"   "corp-shared-kv"
+
 echo ""
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

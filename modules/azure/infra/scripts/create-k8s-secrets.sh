@@ -36,7 +36,7 @@ source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
 if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  KV_NAME=$(_derive_kv_name)
+  KV_NAME=$(_require_kv_name)
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 

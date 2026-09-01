@@ -28,6 +28,10 @@ A [Makefile](Makefile) wraps all commands — run `make help` to see available t
 | **Light** | In-cluster pod | In-cluster pod | In-cluster pod | Demo / POC |
 | **Production** | Azure DB for PostgreSQL (private) | Azure Managed Redis (private) | [LangChain Managed](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse) | Scalable / persistent |
 
+Three variables pick the tier: `postgres_source`, `redis_source`, and
+`clickhouse_source`, each `"external"` or `"in-cluster"`. Postgres and Redis
+default to `external`, ClickHouse to `in-cluster`.
+
 > **Blob storage is always required.** Trace payloads must go to Azure Blob — never to ClickHouse.
 >
 > **In-cluster ClickHouse is for dev/POC only.** It runs as a single pod with no replication or backups. For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
@@ -178,9 +182,9 @@ The identity running Terraform needs the following roles on the subscription:
 | `Contributor` | Create and manage all Azure resources |
 | `Role Based Access Control Administrator` | Create role assignments for Key Vault, Blob, and cert-manager managed identities |
 
-`Owner` covers both. `User Access Administrator` works in place of `Role Based Access Control Administrator` but grants more than the deployment needs. Contributor alone is insufficient: the deployment creates eight role assignments and fails partway through without one of the role-assignment roles.
+`Owner` covers both. `User Access Administrator` works in place of `Role Based Access Control Administrator` but grants more than the deployment needs. Contributor alone is insufficient: the deployment grants roles to its own managed identities and fails partway through without one of the role-assignment roles.
 
-Holding the role is not the same as being able to use it. A PIM-eligible role grants nothing until it is activated, an ABAC condition on the grant can restrict which roles you may assign, and a deny assignment from a landing zone or managed application overrides every grant including Owner. `make preflight` reports all three, so run it rather than reasoning from the role list in the portal.
+Holding the role is not the same as being able to use it. A PIM-eligible role grants nothing until it is activated, an ABAC condition on the grant can restrict which roles you may assign, and a deny assignment from a landing zone or managed application overrides every grant including Owner. `make preflight` reports all three, so run it rather than reasoning from the role list in the portal. It also prints the time remaining on an active PIM activation: a window that expires mid-apply is a distinct failure from never having activated, and both surface as a 403.
 
 For the full permission inventory, the role assignments the deployment creates, and how to restrict which roles the deployer may assign, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
@@ -193,6 +197,8 @@ az login
 az account set --subscription <your-subscription-id>
 az account show   # verify correct subscription
 ```
+
+To deploy as a service principal instead, from CI or from a subscription that will not grant these roles to a user, see [Run as a service principal](PERMISSIONS.md#run-as-a-service-principal).
 
 ---
 
@@ -259,7 +265,6 @@ make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values 
 ```
 
 For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
-For demo/POC (all in-cluster DBs), see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
 
 ### Naming your deployment
 
@@ -478,8 +483,9 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
 - Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
-- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write` and eight resource-creation actions are permitted. `roleAssignments/write` is what the eight role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
+- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
 - Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
+- Maps `postgres_sku_name` to the `Microsoft.Compute` vCPU family it draws on and fails when that family's quota in the region is 0 or has less headroom than the SKU needs. `az postgres flexible-server list-skus` reports what a region offers, not what the subscription may create, and fresh subscriptions commonly carry a limit of 0 on the v5 families. Also confirms the region carries `redisEnterprise`; Managed Redis capacity itself is not queryable ahead of an apply
 - Queries PostgreSQL Flexible Server capabilities for the active subscription and configured region. An empty result fails because the service cannot be created there; a non-empty result also verifies `postgres_version` and `postgres_sku_name`. CLI, permission, stderr, or response-shape failures warn and skip instead of claiming the region is unavailable
 - Verifies `terraform.tfvars` exists with `location` and `subscription_id` set
 - Verifies `secrets.auto.tfvars` exists and has a non-empty `langsmith_license_key`
@@ -767,7 +773,7 @@ azure/
 │   └── scripts/
 │       ├── _common.sh              # Shared helpers: _parse_tfvar, _tfvar_is_true, color output
 │       ├── setup-env.sh            # Bootstrap secrets → secrets.auto.tfvars
-│       ├── preflight.sh            # Pre-flight checks (az CLI, auth, providers, RBAC)
+│       ├── preflight.sh            # Pre-flight checks (az CLI, auth, providers, RBAC, quota)
 │       ├── status.sh               # 9-section health check (supports --quick)
 │       ├── create-k8s-secrets.sh   # Key Vault → langsmith-config-secret
 │       └── clean.sh                # Remove all generated/sensitive local files after teardown
@@ -876,6 +882,37 @@ keyvault_name        = "langsmith-kv-dev"
 availability APIs before you apply. Redis is the exception: Azure exposes no
 working name-availability endpoint for Managed Redis, so a cross-tenant Redis
 collision only surfaces at apply time.
+
+### Naming standards
+
+A corporate naming standard usually wants its own prefix on everything rather
+than per-resource surgery, which is what `name_base` is for. It replaces the
+`ls`/`langsmith` switch in every derived name:
+
+```hcl
+name_base = "mycorp"   # mycorp-rg-dev, mycorp-aks-dev, mycorp-kv-dev-a1b2c3, ...
+```
+
+The regional names take individual overrides too, for a standard the derivation
+cannot produce:
+
+```hcl
+resource_group_name = "rg-langsmith-prod-eastus"
+vnet_name           = "vnet-langsmith-prod"
+cluster_name        = "aks-langsmith-prod"
+```
+
+`vnet_name` applies only when Terraform creates the network; under
+[bring your own VNet](#bring-your-own-vnet) the name comes from `vnet_id`.
+
+None of these are asked by `quickstart.sh` — set them in `terraform.tfvars`
+before the first apply. Changing one afterwards renames the resource, which
+Terraform carries out as destroy-and-recreate. `name_base` and `name_prefix`
+draw on the same 24-character Storage and Key Vault ceiling, so a long base
+leaves less for the deployment name. There is no fixed limit on either: the
+plan measures each assembled name against the ceiling that applies to it and
+names the one that is too long, so overriding `storage_account_name` and
+`keyvault_name` lifts the constraint they impose.
 
 ---
 
@@ -1090,10 +1127,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Service Reference
 
 See [SERVICES.md](SERVICES.md) — what each pod does, what it depends on, and which pass enables it.
-
-## Light Deploy (Demo / POC)
-
-See [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — full guide for all-in-cluster deployment (no external Postgres/Redis), using Front Door for TLS.
 
 ## Troubleshooting
 
