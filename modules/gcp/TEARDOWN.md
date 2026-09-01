@@ -787,22 +787,36 @@ producer resources of an instance you already deleted are still holding the conn
 The three checks cannot see them: the instance is gone from your project while its
 backing resources are not yet released.
 
-There is no way to shorten the wait. Retry step 5 periodically, or stop here and finish
-B8 on a later pass — a VPC with no subnets and no rules costs nothing and blocks nothing.
-Record it as an open item so it is not forgotten.
+Nothing shortens the producer-side wait, including the last resort below. Retry step 5
+periodically, or stop here and finish B8 on a later pass — a VPC with no subnets and no
+rules costs nothing and blocks nothing. Record it as an open item so it is not forgotten.
 
-**Do not delete the peering object to get past this.**
+### Last resort — remove the peering at the Compute Engine layer
+
+Google's documentation says not to delete a private connection by deleting its VPC
+Network Peering connection, so treat this as unsupported rather than as a second
+procedure:
 
 ```bash
-# Not a workaround — do not run this to force step 5
 gcloud compute networks peerings delete servicenetworking-googleapis-com \
   --network="$VPC_NAME" --project "$PROJECT_ID"
 ```
 
-Google's guidance is explicit: do not delete a private connection by deleting its VPC
-Network Peering connection directly. The connection stays registered on the producer
-side, and a later attempt to create a private connection in the same network can fail
-with an allocated-range error that is harder to clear than the wait.
+It clears the route immediately and the VPC then deletes. What it does not do is release
+the connection on the producer side, and the cost lands later: creating a private
+connection again in a network of this name can fail with a `Cannot modify allocated
+ranges` error, which is harder to clear than the wait would have been.
+
+Use it only when all of these hold:
+
+- The three producer checks above return nothing.
+- The VPC is being deleted for good in this pass, not repaired.
+- Neither the VPC name nor its allocated range will be reused in this project.
+- Waiting has a real cost — a closing account, a billing cutoff, a quota that blocks
+  other work.
+
+Otherwise wait. A stack rebuilt under the same `name_prefix` and `environment` takes the
+same VPC name, and that is the case this breaks.
 
 ### Verifying peering removal
 
