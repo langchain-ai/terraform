@@ -247,8 +247,14 @@ else
   # the empty value instead. Testing "is there a tty" would be the wrong gate:
   # piped stdin is not a tty either, and several prompts below have no env
   # override, so `printf ... | init-values.sh` is the only way to drive them.
+  #
+  # Keep whatever read assigned: `|| true`, not `|| ADMIN_EMAIL=""`. read assigns
+  # the partial line and then returns 1 when the input has no trailing newline,
+  # so clearing the variable on failure discards a value the operator did supply.
+  # `printf 'you@example.com' | init-values.sh` is that case. At a true EOF read
+  # assigns the empty string, which the check below still catches.
   printf "Admin email: "
-  read -r ADMIN_EMAIL || ADMIN_EMAIL=""
+  read -r ADMIN_EMAIL || true
   if [[ -z "$ADMIN_EMAIL" ]]; then
     echo "" >&2
     echo "ERROR: Admin email is required." >&2
@@ -307,7 +313,10 @@ fi
 ADMIN_PASSWORD="${TF_VAR_langsmith_admin_password:-$EXISTING_ADMIN_PASSWORD}"
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   printf "Initial admin password: "
-  read -rs ADMIN_PASSWORD || ADMIN_PASSWORD=""
+  # `|| true`, not `|| ADMIN_PASSWORD=""` — see the admin email prompt above.
+  # A password piped without a trailing newline is otherwise silently dropped,
+  # and the operator sees "password is required" for a password they supplied.
+  read -rs ADMIN_PASSWORD || true
   echo
   if [[ -z "$ADMIN_PASSWORD" ]]; then
     echo "ERROR: initial admin password is required." >&2
@@ -513,7 +522,11 @@ elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
   # EOF falls through to choice 1 rather than aborting: this block only runs on a
   # first run with no enable_* flags set in terraform.tfvars, and 1 is
   # "LangSmith only", which is what no flags already means.
-  read -r _tier_choice || _tier_choice=""
+  #
+  # `|| true`, not `|| _tier_choice=""` — see the admin email prompt above. Here
+  # the cleared value is not caught by any check: it defaults to 1 below, so
+  # `printf 4 | init-values.sh` would deploy LangSmith only and report nothing.
+  read -r _tier_choice || true
   _tier_choice="${_tier_choice:-1}"
 
   case "$_tier_choice" in
