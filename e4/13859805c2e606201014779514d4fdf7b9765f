@@ -1,0 +1,46 @@
+modules/azure/infra/main.tf
+  s_5ac91aded112e3::t_02e349822ad555 105-115
+  s_5ac91aded112e3::t_cbf3da7204f286 826-847
+  s_5ac91aded112e3::t_974face7c798e5 795,801-802
+  s_5ac91aded112e3::t_4cad59edb10926 796-800
+  s_5ac91aded112e3::t_6839631aaf1150 494-500
+  s_5ac91aded112e3::t_36e2e5a33a7d86 876-881
+  s_5ac91aded112e3::t_9586206d5fd1e9 501-502
+  s_5ac91aded112e3::t_a27ac9767b9a7a 848
+  s_5ac91aded112e3::t_16ddad2c09fdf0 882
+modules/azure/infra/terraform.tfvars.example
+  s_5ac91aded112e3::t_dc550b690396d8 318-330
+modules/azure/infra/modules/smithdb/variables.tf
+  s_5ac91aded112e3::t_c2f789d34b231b 27-41
+modules/azure/infra/modules/storage/variables.tf
+  s_5ac91aded112e3::t_c0ed25e98fd249 63,66-83
+modules/azure/SMITHDB.md
+  s_5ac91aded112e3::t_979c9719b35441 70,72-85
+  s_5ac91aded112e3::t_1514777378ccf3 71
+modules/azure/infra/variables.tf
+  s_5ac91aded112e3::t_8b66606e6e8a62 453-487
+modules/azure/infra/modules/smithdb/main.tf
+  s_5ac91aded112e3::t_56e3aa50c00711 100-104,114-142
+  s_5ac91aded112e3::t_28d47b21abc41b 143-144
+modules/azure/infra/modules/storage/main.tf
+  s_5ac91aded112e3::t_ca9b03f4799672 31-35,50-80
+  s_5ac91aded112e3::t_c540bcec44f58e 81-82
+modules/azure/ARCHITECTURE.md
+  s_5ac91aded112e3::t_203f1d8075f2df 167-175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e413859805c2e606201014779514d4fdf7b9765f",
+  "prompts": {},
+  "sessions": {
+    "s_5ac91aded112e3": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7dfad1a7-b408-4dff-9fd1-fc34bfc35ae9",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
