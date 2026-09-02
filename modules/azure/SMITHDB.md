@@ -16,7 +16,11 @@ The Terraform root creates:
   The default runtime path does not use it;
 - a SmithDB-only user-assigned identity, federated to the chart-owned SmithDB
   Kubernetes ServiceAccount and scoped to `Storage Blob Data Contributor` on
-  that account; and
+  that account. Set `smithdb_migration_enabled = true` and the identity also
+  receives `Storage Blob Data Reader` on the LangSmith trace-blob account, which
+  is the source the historical backfill reads. The grant exists only while that
+  flag is on, so a steady-state install leaves the identity able to reach
+  nothing but its own account; and
 - two autoscaling, tainted AKS node pools: `smithcache` uses the VM temporary
   disk for SmithDB's local cache and `smithcompute` hosts compute workloads.
 
@@ -39,6 +43,11 @@ Entra mode it contains only the host, database, and username; the chart sets
 `iamAuthProvider: azure`. Object-store access also uses Azure Workload Identity,
 so no Storage Account key or SAS token is written to Kubernetes or Terraform
 outputs.
+
+Azure RBAC does not take effect the moment `terraform apply` returns. A backfill
+started in the first minutes after the Reader grant is created can fail with 403
+responses that look the same as a missing grant. Confirm the assignment exists
+with `az role assignment list`, then retry before you treat the 403 as a defect.
 
 ## Chart contract
 

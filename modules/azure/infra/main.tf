@@ -887,11 +887,21 @@ module "blob" {
   depends_on = [azapi_update_resource.byo_aks_subnet_endpoints]
 }
 
-# The SmithDB migration job reads existing LangSmith trace blobs before writing
-# them to SmithDB's dedicated object store. It runs as the SmithDB workload
-# identity, so that identity needs read access to the source storage account.
+# The historical backfill is the one SmithDB workload that reads outside its own
+# object store: it pulls the run payloads LangSmith offloaded to the trace-blob
+# account and rewrites them into SmithDB's format. Without this grant the job
+# plans its tasks and then fails every one on a 403 from the source account.
+# Reader rather than Contributor because it only reads there; it writes to the
+# SmithDB account, which modules/smithdb grants separately.
+#
+# Migration-gated so a steady-state install leaves the identity able to reach
+# nothing but its own account, matching the objectViewer binding in
+# modules/gcp/infra/modules/smithdb/iam.tf. enable_smithdb is in the condition
+# because this lives in the root module and indexes module.smithdb[0]: on the
+# migration flag alone, enable_smithdb = false would hit "Invalid index" instead
+# of the readable message in terraform_data.validate_network.
 resource "azurerm_role_assignment" "smithdb_trace_blob_reader" {
-  count = var.enable_smithdb ? 1 : 0
+  count = var.enable_smithdb && var.smithdb_migration_enabled ? 1 : 0
 
   scope                = module.blob.storage_account_id
   role_definition_name = "Storage Blob Data Reader"
