@@ -282,7 +282,7 @@ if [[ -z "${LANGSMITH_LICENSE_KEY:-}" && -z "$_prev_license" ]]; then
   fi
 fi
 
-_pg_prompt="PostgreSQL admin password (Enter = generate)"
+_pg_prompt="PostgreSQL admin password (Enter = generate; avoid \" and \\)"
 _license_prompt="LangSmith license key      "
 _email_prompt="Initial org admin email    "
 if [[ -n "$_prev_pg" ]]; then
