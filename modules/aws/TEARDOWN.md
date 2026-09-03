@@ -549,7 +549,15 @@ for igw_id in $(aws ec2 describe-internet-gateways \
 done
 
 # 6. Delete security groups (revoke cross-references first)
-for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION \
+#
+# Scoped to Name=tag:managed-by,Values=terraform, which every SG this config
+# creates gets automatically via the aws provider's default_tags (locals.tf:
+# common_tags). A customer-supplied security group (existing_security_group_id
+# / smithdb_existing_metastore_security_group_id) never carries that tag, so
+# both passes below skip it. Do not widen this back to "every SG in the VPC";
+# that would delete infrastructure this config never created.
+for sg_id in $(aws ec2 describe-security-groups \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:managed-by,Values=terraform" --region $REGION \
   --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text); do
   # Revoke all rules (ingress and egress) to break circular dependencies
   for rule_id in $(aws ec2 describe-security-group-rules --filters "Name=group-id,Values=$sg_id" --region $REGION \
@@ -562,7 +570,8 @@ for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$V
   done
 done
 # Now delete them
-for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION \
+for sg_id in $(aws ec2 describe-security-groups \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:managed-by,Values=terraform" --region $REGION \
   --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text); do
   aws ec2 delete-security-group --group-id "$sg_id" --region $REGION
 done
@@ -578,6 +587,10 @@ aws ec2 delete-vpc --vpc-id $VPC_ID --region $REGION
 ```
 
 **Known issue — EKS security groups:** EKS creates node and cluster security groups that reference each other. You must revoke all rules from both before either can be deleted, which is why the script above revokes rules in a separate pass before deleting.
+
+**Bring-your-own security groups are left alone on purpose, in this script (Option B) only.** If you set `existing_security_group_id` (alb/bastion/postgres/redis) or `smithdb_existing_metastore_security_group_id`, that group was never created by this Terraform config, and step 6 won't touch it: both the revoke and delete passes are scoped to `tag:managed-by=terraform`, which a supplied SG never carries.
+
+One exception: if you also opted into `smithdb_manage_byo_security_group_rules = true`, Terraform wrote the tcp/5432-from-EKS-nodes ingress rule (and a default egress rule) onto your supplied group. Those are ordinary Terraform-managed resources, so a real `terraform destroy` (Option A) reverts them normally. Only this Option B script leaves them behind, since its tag filter never inspects rules on an untagged SG. If you're using this script (no Terraform state) and want the group back to its original state, remove those two rules yourself with `aws ec2 revoke-security-group-ingress` / `revoke-security-group-egress`.
 
 ## B10 — Clean Up Remaining Resources
 

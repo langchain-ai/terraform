@@ -9,8 +9,8 @@ output "public_ip" {
 }
 
 output "security_group_id" {
-  description = "Security group ID attached to the bastion"
-  value       = aws_security_group.bastion.id
+  description = "Security group ID attached to the bastion (created by this module, or the supplied existing_security_group_id)"
+  value       = local.security_group_id
 }
 
 output "iam_role_arn" {

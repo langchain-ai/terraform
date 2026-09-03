@@ -270,6 +270,8 @@ module "redis" {
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
+
+  existing_security_group_id = var.redis_existing_security_group_id
 }
 
 resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
@@ -337,6 +339,8 @@ module "postgres" {
   deletion_protection                 = var.postgres_deletion_protection
   skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
+
+  existing_security_group_id = var.postgres_existing_security_group_id
 
   depends_on = [module.eks]
 }
@@ -501,6 +505,8 @@ module "alb" {
   enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
 
+  existing_security_group_id = var.alb_existing_security_group_id
+
   depends_on = [module.vpc]
 }
 
@@ -594,6 +600,8 @@ module "bastion" {
   ssh_allowed_cidrs   = var.bastion_ssh_allowed_cidrs
   root_volume_size_gb = var.bastion_root_volume_size_gb
   tags                = local.common_tags
+
+  existing_security_group_id = var.bastion_existing_security_group_id
 
   depends_on = [module.vpc, module.eks]
 }
@@ -935,6 +943,9 @@ module "smithdb" {
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
+
+  existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
+  manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
 
   depends_on = [module.eks]
 }
