@@ -90,8 +90,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
 # the public internet) are implicitly denied. This is the enforcement layer
 # that guarantees the bucket stays private — even if someone misconfigures
 # the block-public-access settings above, this policy still blocks external access.
+locals {
+  bucket_policy_irsa_role_arns = compact(concat([var.langsmith_irsa_role_arn], var.additional_irsa_role_arns))
+}
+
 resource "aws_s3_bucket_policy" "bucket_policy" {
-  count  = var.create_bucket_policy ? 1 : 0
+  count  = var.create_bucket_policy && length(local.bucket_policy_irsa_role_arns) > 0 ? 1 : 0
   bucket = aws_s3_bucket.bucket.id
 
   policy = jsonencode({
@@ -101,7 +105,7 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
         Sid    = "AllowAccessViaVPCE",
         Effect = "Allow",
         Principal = {
-          AWS = var.langsmith_irsa_role_arn
+          AWS = jsondecode(length(local.bucket_policy_irsa_role_arns) == 1 ? jsonencode(local.bucket_policy_irsa_role_arns[0]) : jsonencode(local.bucket_policy_irsa_role_arns))
         },
         Action = [
           "s3:GetObject",

@@ -314,10 +314,16 @@ redis_instance_type = "cache.m6g.xlarge"
 #------------------------------------------------------------------------------
 # Enables infrastructure prerequisites for LangSmith Sandboxes.
 #
-# Sandboxes use the sandbox-host architecture in the same EKS cluster and
-# namespace as LangSmith. This provisions a dedicated node group with the label
-# and taint expected by the Helm chart:
+# By default, Sandboxes use the sandbox-host architecture in the same EKS
+# cluster and namespace as LangSmith. Set sandbox_deployment_mode to
+# "separate_cluster" to create a dedicated EKS cluster in the same VPC and
+# install the standalone langsmith-sandbox chart there. Both modes provision
+# nodes with the label and taint expected by the Helm chart:
 #   sandbox.langsmith.com/host=true
+#
+# Separate-cluster mode uses private VPC routing from the main EKS worker/pod
+# security group to sandbox node port 19190. It requires LangSmith chart 0.17.x
+# and langsmith-sandbox chart 0.1.x.
 #
 # Requirements:
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
@@ -336,6 +342,13 @@ redis_instance_type = "cache.m6g.xlarge"
 #     matching m5d.metal.
 #
 # enable_sandboxes = true
+# sandbox_deployment_mode = "same_cluster" # or "separate_cluster"
+# sandbox_namespace = "langsmith-sandbox"
+#
+# For separate_cluster, pin compatible charts:
+# langsmith_helm_chart_version = "0.17.0-rc.22"
+# langsmith_sandbox_helm_chart_version = "0.1.0-rc.1"
+#
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
 # sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
 # Do not put it in this file. Export it manually with:

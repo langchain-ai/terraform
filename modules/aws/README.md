@@ -303,6 +303,25 @@ kubectl get ns
 kubectl get pods -n kube-system
 ```
 
+### Optional dedicated sandbox cluster
+
+`enable_sandboxes = true` uses the main EKS cluster by default. To isolate the privileged Firecracker runtime, select the dedicated-cluster topology:
+
+```hcl
+enable_sandboxes       = true
+sandbox_deployment_mode = "separate_cluster"
+sandbox_namespace       = "langsmith-sandbox"
+
+langsmith_helm_chart_version         = "0.17.0-rc.22"
+langsmith_sandbox_helm_chart_version = "0.1.0-rc.1"
+```
+
+Terraform then creates a second EKS cluster in the same VPC with only the KVM-capable sandbox node group. It also creates a sandbox-scoped IRSA role, allows the main cluster's worker and pod security group to reach sandbox nodes on TCP port 19190, and creates minimal write-only runtime and JuiceFS Secrets in the sandbox namespace. The S3 bucket and dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
+
+`make init-values` generates both the core LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`. `make deploy` installs the core release first, switches to the sandbox EKS cluster for the standalone `langsmith-sandbox` release, waits for `sandbox-host`, and restores the main cluster context.
+
+The main and sandbox cluster networks must remain mutually routable. If you place the sandbox cluster in another VPC instead, configure equivalent routing and restrict TCP port 19190 to the LangSmith control-plane source.
+
 ---
 
 ## Pass 2 — LangSmith Application
@@ -917,6 +936,13 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
 | `create_langsmith_irsa_role` | `true` | no | Create IRSA role for LangSmith pods (S3 access) |
+| `enable_sandboxes` | `false` | no | Provision sandbox-host nodes, dedicated JuiceFS Redis, and sandbox storage access |
+| `sandbox_deployment_mode` | `same_cluster` | no | Run sandbox-host in the main EKS cluster or create a `separate_cluster` |
+| `sandbox_namespace` | `langsmith-sandbox` | separate cluster | Namespace for the standalone sandbox runtime |
+| `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
+| `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
+| `langsmith_helm_chart_version` | `""` | no | Exact 0.16.x version, or 0.17.x for separate-cluster sandboxes |
+| `langsmith_sandbox_helm_chart_version` | `""` | separate cluster | Standalone sandbox chart version; empty selects the 0.1.x line |
 | `postgres_source` | `external` | no | `external` (RDS) or `in-cluster` (Helm) |
 | `postgres_instance_type` | `db.t3.large` | no | RDS instance class |
 | `postgres_storage_gb` | `10` | no | Initial RDS storage in GB |

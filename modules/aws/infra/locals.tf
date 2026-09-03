@@ -16,8 +16,12 @@ locals {
   base_name                  = "${var.name_prefix}-${var.environment}"
   vpc_name                   = "${local.base_name}-vpc"
   cluster_name               = "${local.base_name}-eks"
+  sandbox_cluster_name       = "${local.base_name}-sandbox-eks"
   redis_name                 = "${local.base_name}-redis"
   sandbox_juicefs_redis_name = "${local.base_name}-jfs-redis"
+
+  same_cluster_sandboxes     = var.enable_sandboxes && var.sandbox_deployment_mode == "same_cluster"
+  separate_cluster_sandboxes = var.enable_sandboxes && var.sandbox_deployment_mode == "separate_cluster"
   bucket_name                = "${local.base_name}-traces-${random_id.bucket_suffix.hex}"
   postgres_name              = "${local.base_name}-pg"
   alb_name                   = "${local.base_name}-alb"
@@ -138,7 +142,7 @@ locals {
 
   eks_managed_node_groups = merge(
     var.eks_managed_node_groups,
-    var.enable_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {},
+    local.same_cluster_sandboxes ? { sandbox_host = local.sandbox_host_node_group } : {},
   )
 
   sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
