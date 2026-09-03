@@ -290,7 +290,7 @@ _ed25519_private_jwk_gen() {
 export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 
 _ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_password" \
-  "" "PostgreSQL admin password" "true"
+  "" "PostgreSQL admin password (RDS forbids: [ '/' '@' '\"' \"'\" space ])" "true"
 
 # ── Redis auth token (auto-generated, stable after first deployment) ──────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.

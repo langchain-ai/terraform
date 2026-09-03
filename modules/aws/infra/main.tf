@@ -710,10 +710,9 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 
 locals {
-  # Admin base URL (no database) for the shared RDS instance. Guarded by the
-  # external check so module.postgres[0] is only referenced when it exists.
+  # Encoded admin URL for the shared RDS instance, without a database name.
   standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${var.postgres_password}@${module.postgres[0].address}:${module.postgres[0].port}"
+    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
   ) : ""
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
