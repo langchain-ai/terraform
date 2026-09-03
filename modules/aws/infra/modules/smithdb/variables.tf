@@ -129,6 +129,18 @@ variable "metastore_master_password" {
   sensitive   = true
 }
 
+variable "existing_metastore_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the metastore RDS instance instead of creating one. Only applies when metastore_source = 'create'. By default Terraform does not write rules onto it; see manage_byo_security_group_rules."
+  default     = null
+}
+
+variable "manage_byo_security_group_rules" {
+  type        = bool
+  description = "When existing_metastore_security_group_id is set, allow Terraform to still write the tcp/5432-from-EKS-nodes ingress rule (and the default egress rule) onto that supplied security group. Default false (attach-only). Needed because the ingress rule references the EKS node security group ID, which only exists after this same apply creates it, so a customer cannot pre-provision that rule themselves."
+  default     = false
+}
+
 # External metastore fields (used when metastore_source = external).
 variable "external_metastore_host" {
   type        = string

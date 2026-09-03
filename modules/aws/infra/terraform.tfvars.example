@@ -281,6 +281,11 @@ postgres_skip_final_snapshot = false
 # Backup retention — days to keep automated snapshots. 0 disables backups.
 # postgres_backup_retention_period = 7
 
+# Attach an existing security group instead of letting Terraform create one.
+# Attach-only: Terraform will not write rules onto a supplied group. See
+# "Bring your own security groups" in README.md.
+# postgres_existing_security_group_id = "sg-0123456789abcdef0"
+
 #------------------------------------------------------------------------------
 # REDIS (ElastiCache)
 #------------------------------------------------------------------------------
@@ -308,6 +313,11 @@ redis_instance_type = "cache.m6g.xlarge"
 #   export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
 # Or let setup-env.sh auto-generate one and store it in SSM:
 #   source ./setup-env.sh
+
+# Attach an existing security group instead of letting Terraform create one.
+# Attach-only: Terraform will not write rules onto a supplied group. See
+# "Bring your own security groups" in README.md.
+# redis_existing_security_group_id = "sg-0123456789abcdef1"
 
 #------------------------------------------------------------------------------
 # SANDBOXES
@@ -547,6 +557,13 @@ langsmith_namespace = "langsmith"
 # alb_scheme              = "internet-facing"
 # alb_allowed_cidr_blocks = ["0.0.0.0/0"]
 
+# Attach an existing security group to the ALB (or bastion, if create_bastion
+# = true) instead of letting Terraform create one. Attach-only: Terraform
+# will not write rules onto a supplied group. See "Bring your own security
+# groups" in README.md.
+# alb_existing_security_group_id     = "sg-0123456789abcdef2"
+# bastion_existing_security_group_id = "sg-0123456789abcdef3"
+
 # ALB Access Logs — captures every request that hits the ALB:
 #   client IP, request URI, response latency, HTTP status code.
 #   Docs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
@@ -785,6 +802,14 @@ enable_usage_telemetry = false
 #   smithdb_external_metastore_host     = "my-pg.example.com"
 #   smithdb_external_metastore_username = "smithdb"
 #   export TF_VAR_smithdb_external_metastore_password="..."
+#
+# Or keep smithdb_metastore_source = "create" but attach an existing security
+# group to the metastore RDS instance instead of letting Terraform create one.
+# Attach-only by default; set smithdb_manage_byo_security_group_rules = true
+# to let Terraform still write the required EKS-node ingress rule. See
+# "Bring your own security groups" in README.md.
+# smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+# smithdb_manage_byo_security_group_rules      = false
 
 # ── Object store (S3) ─────────────────────────────────────────────────────────
 # A shared S3 Gateway endpoint is always associated with the VPC route tables.

@@ -268,6 +268,74 @@ terraform {
 
 ---
 
+## Bring your own security groups
+
+By default, every module that needs one creates a dedicated security group: ALB,
+bastion, RDS PostgreSQL, ElastiCache Redis, and (when `enable_smithdb = true`) the
+SmithDB metastore RDS instance. If your network team requires a pre-approved
+security group instead, for example one that already carries a compliance tag
+set or a mandated egress policy, supply its ID and Terraform skips creating its
+own:
+
+```hcl
+alb_existing_security_group_id               = "sg-0123456789abcdef0"
+bastion_existing_security_group_id           = "sg-0123456789abcdef1"
+postgres_existing_security_group_id          = "sg-0123456789abcdef2"
+redis_existing_security_group_id             = "sg-0123456789abcdef3"
+smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+```
+
+Each is independent: supply one, some, or all of them. Leave a variable unset
+(the default) and that component keeps creating its own security group as before.
+
+### Attach-only: Terraform does not manage rules on a supplied group
+
+For every component above, a supplied security group is **attach-only**. Terraform
+associates it with the resource but never writes an ingress or egress rule onto
+it. The group must already allow what that component needs before you apply:
+
+| Component | Your security group must allow |
+|-----------|-------------------------------|
+| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks`. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
+| Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
+| Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
+| Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |
+| SmithDB metastore (RDS) | See below. This one component can have its ingress rule managed by Terraform |
+
+### The one exception: SmithDB's metastore security group
+
+The SmithDB metastore's required ingress rule allows tcp/5432 from the **EKS node
+security group**, an ID that doesn't exist until the `eks` module creates it in
+the same `apply`. You can't look that ID up and pre-provision the rule yourself
+before running Terraform. So this one case has an opt-in escape hatch:
+
+```hcl
+smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+smithdb_manage_byo_security_group_rules      = true   # default: false
+```
+
+Leave `smithdb_manage_byo_security_group_rules` at its default (`false`) and the
+supplied group is attach-only, same as everywhere else, but then you're
+responsible for adding tcp/5432 ingress from the EKS node security group
+yourself (`module.eks.node_security_group_id` after a first apply, or from the
+EKS console) before SmithDB pods can reach the metastore. Set it to `true` and
+Terraform writes that ingress rule (plus a default allow-all egress rule) onto
+your security group. A real `terraform destroy` reverts those rules normally,
+since they're ordinary Terraform-managed resources. Only the manual AWS CLI
+teardown path (no Terraform state) leaves them behind; see
+[Teardown](#teardown) / `TEARDOWN.md` for that case.
+
+### What Terraform does not check
+
+Unlike the [Azure bring-your-own-VNet path](../azure/README.md#bring-your-own-vnet),
+plan-time validation here is minimal: Terraform does not verify that a supplied
+security group ID exists, belongs to the target VPC, or actually permits the
+traffic in the table above. A typo or a group with the wrong rules fails at
+`apply` (wrong VPC) or shows up later as a connectivity failure (missing rule),
+not as a clear plan-time error. Double-check the ID and its rules before applying.
+
+---
+
 ## Pass 1 — Infrastructure
 
 Provisions: VPC, EKS cluster, RDS PostgreSQL, ElastiCache Redis, S3 bucket + VPC endpoint, ALB, IRSA role, ESO IRSA role, SSM secrets.
@@ -928,9 +996,11 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `postgres_deletion_protection` | `true` | no | Enable deletion protection on RDS |
 | `postgres_skip_final_snapshot` | `false` | no | Skip the final RDS snapshot during deletion; use `true` for disposable dev/test environments |
 | `postgres_backup_retention_period` | `7` | no | Days to retain automated RDS backups (0 = disabled) |
+| `postgres_existing_security_group_id` | `null` | no | Attach an existing SG to RDS instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `redis_source` | `external` | no | `external` (ElastiCache) or `in-cluster` (Helm) |
 | `redis_instance_type` | `cache.m6g.xlarge` | no | ElastiCache node type |
 | `redis_auth_token` | `""` | when external | ElastiCache auth token (min 16 chars) — use `TF_VAR_redis_auth_token` |
+| `redis_existing_security_group_id` | `null` | no | Attach an existing SG to ElastiCache instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `s3_ttl_enabled` | `true` | no | Enable S3 lifecycle rules for trace TTL |
 | `s3_ttl_short_days` | `14` | no | TTL for `ttl_s/` prefix in days |
 | `s3_ttl_long_days` | `400` | no | TTL for `ttl_l/` prefix in days |
@@ -947,12 +1017,14 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `clickhouse_source` | `in-cluster` | no | `in-cluster` or `external` |
 | `alb_scheme` | `internet-facing` | no | ALB scheme: `internet-facing` or `internal` |
 | `alb_access_logs_enabled` | `false` | no | Enable ALB access logging to S3 |
+| `alb_existing_security_group_id` | `null` | no | Attach an existing SG to the ALB instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_bastion` | `false` | no | Create EC2 bastion host for private cluster access (SSM or SSH) |
 | `bastion_instance_type` | `t3.micro` | no | EC2 instance type for bastion |
 | `bastion_key_name` | `null` | no | EC2 key pair for SSH (empty = SSM only) |
 | `bastion_enable_ssh` | `false` | no | Open port 22 on bastion security group |
 | `bastion_ssh_allowed_cidrs` | `[]` | no | CIDRs allowed to SSH to bastion |
 | `bastion_root_volume_size_gb` | `20` | no | Root EBS volume size for bastion |
+| `bastion_existing_security_group_id` | `null` | no | Attach an existing SG to the bastion instead of creating one. See [bring your own security groups](#bring-your-own-security-groups) |
 | `create_cloudtrail` | `false` | no | Create CloudTrail trail for AWS API audit |
 | `cloudtrail_multi_region` | `true` | no | Record API calls across all regions |
 | `cloudtrail_log_retention_days` | `365` | no | Days to retain CloudTrail logs |
@@ -969,6 +1041,8 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 requires an explicit compatible chart version. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
+| `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |
+| `smithdb_manage_byo_security_group_rules` | `false` | no | Let Terraform still write the required EKS-node ingress rule onto a supplied metastore SG. See [bring your own security groups](#bring-your-own-security-groups) |
 | `smithdb_karpenter_chart_version` | `1.6.3` | no | Karpenter Helm chart version. Must match `eks_cluster_version` per the [Karpenter compatibility matrix](https://karpenter.sh/docs/upgrading/compatibility/) |
 | `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
 | `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |

@@ -38,3 +38,8 @@ output "irsa_role_arn" {
   description = "IAM role ARN for the SmithDB service account (IRSA)."
   value       = local.irsa_role_arn
 }
+
+output "metastore_security_group_id" {
+  description = "Security group ID attached to the metastore RDS instance (created by this module, or the supplied existing_metastore_security_group_id). Null when metastore_source = 'external'."
+  value       = local.metastore_security_group_id
+}
