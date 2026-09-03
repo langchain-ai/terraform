@@ -46,6 +46,26 @@ output "get_credentials_command" {
   value       = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.region}"
 }
 
+output "sandbox_cluster_name" {
+  description = "Dedicated sandbox EKS cluster name when separate-cluster mode is enabled"
+  value       = local.separate_cluster_sandboxes ? module.sandbox_eks[0].cluster_name : null
+}
+
+output "sandbox_get_credentials_command" {
+  description = "Command to update kubeconfig for the dedicated sandbox cluster"
+  value       = local.separate_cluster_sandboxes ? "aws eks update-kubeconfig --name ${module.sandbox_eks[0].cluster_name} --region ${var.region}" : null
+}
+
+output "sandbox_irsa_role_arn" {
+  description = "IRSA role used by sandbox-host in the dedicated sandbox cluster"
+  value       = local.separate_cluster_sandboxes ? aws_iam_role.sandbox_host[0].arn : null
+}
+
+output "sandbox_namespace" {
+  description = "Namespace containing the standalone sandbox runtime"
+  value       = local.separate_cluster_sandboxes ? var.sandbox_namespace : null
+}
+
 #------------------------------------------------------------------------------
 # PostgreSQL (RDS)
 #------------------------------------------------------------------------------
@@ -80,8 +100,13 @@ output "redis_connection_url" {
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
-  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  description = "Kubernetes Secret name for JuiceFS config when sandboxes are enabled"
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_runtime_secret_name" {
+  description = "Minimal service-auth Secret used by the standalone sandbox runtime"
+  value       = local.separate_cluster_sandboxes ? var.sandbox_runtime_secret_name : null
 }
 
 output "sandbox_juicefs_redis_name" {

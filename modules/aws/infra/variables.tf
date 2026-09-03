@@ -294,6 +294,40 @@ variable "enable_sandboxes" {
   default     = false
 }
 
+variable "sandbox_deployment_mode" {
+  type        = string
+  description = "Sandbox topology. same_cluster deploys sandbox-host in the LangSmith EKS cluster; separate_cluster creates a dedicated EKS cluster and deploys the runtime there."
+  default     = "same_cluster"
+
+  validation {
+    condition     = contains(["same_cluster", "separate_cluster"], var.sandbox_deployment_mode)
+    error_message = "sandbox_deployment_mode must be 'same_cluster' or 'separate_cluster'."
+  }
+}
+
+variable "sandbox_namespace" {
+  type        = string
+  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_deployment_mode is separate_cluster."
+  default     = "langsmith-sandbox"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.sandbox_namespace))
+    error_message = "sandbox_namespace must be a valid Kubernetes namespace name."
+  }
+}
+
+variable "sandbox_runtime_secret_name" {
+  type        = string
+  description = "Name of the minimal Secret shared with the standalone sandbox runtime."
+  default     = "langsmith-sandbox-runtime"
+}
+
+variable "sandbox_runtime_secret_revision" {
+  type        = number
+  description = "Revision for the write-only standalone sandbox runtime Secret. Increment to intentionally rewrite it."
+  default     = 1
+}
+
 variable "sandbox_host_node_count" {
   type        = number
   description = "Fixed number of sandbox-host nodes to provision when enable_sandboxes = true."
@@ -619,15 +653,23 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.16.11\". Empty deploys the latest patch on the pinned 0.16 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  description = "Pin the LangSmith Helm chart to an exact 0.16.x or 0.17.x version. Empty deploys the latest patch on the pinned 0.16 line. Separate-cluster sandboxes require 0.17.x."
   default     = ""
 
   validation {
-    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.16\\.", var.langsmith_helm_chart_version))
-    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x version — deploy.sh refuses anything off the pinned chart line."
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.(16|17)\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x/0.17.x version."
   }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_sandbox_helm_chart_version" {
+  type        = string
+  description = "Pin the standalone langsmith-sandbox chart. Empty deploys the latest 0.1.x release."
+  default     = ""
 }
 
 variable "langsmith_domain" {

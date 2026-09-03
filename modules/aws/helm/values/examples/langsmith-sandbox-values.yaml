@@ -1,0 +1,25 @@
+# Reference values for the standalone langsmith-sandbox chart.
+# init-values.sh generates helm/values/langsmith-sandbox-values-overrides.yaml
+# with deployment-specific values from Terraform outputs.
+
+platform:
+  endpoint: "https://langsmith.example.com/api"
+
+serviceAuth:
+  existingSecretName: "langsmith-sandbox-runtime"
+
+juicefs:
+  existingSecretName: "juicefs-csi-config"
+  hostMount:
+    cacheDirs:
+      - "/var/cache/juicefs"
+
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+  serviceAccount:
+    name: "sandbox-host"
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::<account-id>:role/<sandbox-irsa-role>"

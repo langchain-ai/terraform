@@ -22,6 +22,17 @@ provider "kubernetes" {
   }
 }
 
+provider "kubernetes" {
+  alias                  = "sandbox"
+  host                   = try(module.sandbox_eks[0].cluster_endpoint, null)
+  cluster_ca_certificate = try(base64decode(module.sandbox_eks[0].cluster_certificate_authority_data), null)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", try(module.sandbox_eks[0].cluster_name, ""), "--region", var.region]
+  }
+}
+
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
@@ -73,6 +84,13 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = !var.enable_sandboxes || (var.sandbox_juicefs_redis_auth_token != "" && length(var.sandbox_juicefs_redis_auth_token) >= 16)
       error_message = "sandbox_juicefs_redis_auth_token is required (min 16 chars) when enable_sandboxes = true. Run: source ./scripts/setup-env.sh, or set TF_VAR_sandbox_juicefs_redis_auth_token."
+    }
+
+    precondition {
+      condition = !local.separate_cluster_sandboxes || (
+        var.langsmith_api_key_salt != "" && var.sandbox_callback_signing_jwk != ""
+      )
+      error_message = "separate_cluster sandboxes require langsmith_api_key_salt and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
     }
 
     precondition {
@@ -246,6 +264,35 @@ module "eks" {
   enable_istio_gateway            = var.enable_istio_gateway
 }
 
+module "sandbox_eks" {
+  source = "./modules/sandbox-eks"
+  count  = local.separate_cluster_sandboxes ? 1 : 0
+
+  cluster_name                = local.sandbox_cluster_name
+  cluster_version             = var.eks_cluster_version
+  vpc_id                      = local.vpc_id
+  subnet_ids                  = local.private_subnets
+  managed_node_group_defaults = var.eks_managed_node_group_defaults
+  managed_node_group          = local.sandbox_host_node_group
+  cluster_addons              = var.eks_addons
+  public_cluster_enabled      = var.enable_public_eks_cluster
+  public_access_cidrs         = var.eks_public_access_cidrs
+  cluster_enabled_log_types   = var.eks_cluster_enabled_log_types
+  tags                        = merge(local.common_tags, { component = "sandbox" })
+}
+
+resource "aws_security_group_rule" "sandbox_host_from_langsmith" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  type                     = "ingress"
+  from_port                = 19190
+  to_port                  = 19190
+  protocol                 = "tcp"
+  security_group_id        = module.sandbox_eks[0].node_security_group_id
+  source_security_group_id = module.eks.node_security_group_id
+  description              = "LangSmith control plane to sandbox-host"
+}
+
 # State migration: adding count changes the module address.
 # These moved blocks tell Terraform the resources haven't changed — only their address has.
 moved {
@@ -303,16 +350,17 @@ module "sandbox_juicefs_redis" {
 module "storage" {
   source = "./modules/storage"
 
-  bucket_name             = local.bucket_name
-  region                  = var.region
-  vpc_id                  = local.vpc_id
-  langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
-  create_bucket_policy    = true
-  s3_ttl_enabled          = var.s3_ttl_enabled
-  s3_ttl_short_days       = var.s3_ttl_short_days
-  s3_ttl_long_days        = var.s3_ttl_long_days
-  kms_key_arn             = var.s3_kms_key_arn
-  versioning_enabled      = var.s3_versioning_enabled
+  bucket_name               = local.bucket_name
+  region                    = var.region
+  vpc_id                    = local.vpc_id
+  langsmith_irsa_role_arn   = module.eks.langsmith_irsa_role_arn
+  additional_irsa_role_arns = local.separate_cluster_sandboxes ? [aws_iam_role.sandbox_host[0].arn] : []
+  create_bucket_policy      = true
+  s3_ttl_enabled            = var.s3_ttl_enabled
+  s3_ttl_short_days         = var.s3_ttl_short_days
+  s3_ttl_long_days          = var.s3_ttl_long_days
+  kms_key_arn               = var.s3_kms_key_arn
+  versioning_enabled        = var.s3_versioning_enabled
 }
 
 module "postgres" {
@@ -346,6 +394,58 @@ resource "aws_iam_role_policy" "langsmith_s3" {
 
   name = "langsmith-s3-access"
   role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3Access"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          module.storage.bucket_arn,
+          "${module.storage.bucket_arn}/*",
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role" "sandbox_host" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  name = "${local.sandbox_cluster_name}-irsa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = module.sandbox_eks[0].oidc_provider_arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${module.sandbox_eks[0].oidc_provider}:aud" = "sts.amazonaws.com"
+            "${module.sandbox_eks[0].oidc_provider}:sub" = "system:serviceaccount:${var.sandbox_namespace}:sandbox-host"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "sandbox_host_s3" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  name = "sandbox-s3-access"
+  role = aws_iam_role.sandbox_host[0].name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -672,7 +772,7 @@ module "k8s_bootstrap" {
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
-  count = var.enable_sandboxes ? 1 : 0
+  count = local.same_cluster_sandboxes ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name
@@ -691,6 +791,57 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
   data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 
   depends_on = [module.k8s_bootstrap]
+}
+
+resource "kubernetes_namespace_v1" "sandbox" {
+  provider = kubernetes.sandbox
+  count    = local.separate_cluster_sandboxes ? 1 : 0
+
+  metadata {
+    name = var.sandbox_namespace
+  }
+
+  depends_on = [module.sandbox_eks]
+}
+
+resource "kubernetes_secret_v1" "sandbox_runtime" {
+  provider = kubernetes.sandbox
+  count    = local.separate_cluster_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_runtime_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    api_key_salt                 = var.langsmith_api_key_salt
+    sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
+  }
+
+  data_wo_revision = var.sandbox_runtime_secret_revision
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_config" {
+  provider = kubernetes.sandbox
+  count    = local.separate_cluster_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
+    storage = "s3"
+    bucket  = local.sandbox_juicefs_bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 }
 
 #------------------------------------------------------------------------------
