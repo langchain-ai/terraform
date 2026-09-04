@@ -48,6 +48,30 @@ resource "kubernetes_service_account_v1" "langsmith" {
   }
 }
 
+# Helm pre-install hooks run before ordinary chart resources are created. Own
+# the hook ServiceAccounts here so the Jobs can start on the first install.
+resource "kubernetes_service_account_v1" "backend" {
+  metadata {
+    name      = var.backend_service_account_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    annotations = {
+      "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
+    }
+  }
+}
+
+resource "kubernetes_service_account_v1" "smithdb" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = var.smithdb_service_account_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    annotations = {
+      "azure.workload.identity/client-id" = var.smithdb_managed_identity_client_id
+    }
+  }
+}
+
 # ── Resource Quota ────────────────────────────────────────────────────────────
 # Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
 # deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.
@@ -250,6 +274,25 @@ resource "kubernetes_secret_v1" "redis" {
   data = {
     connection_url = var.redis_connection_url
   }
+
+  type = "Opaque"
+}
+
+resource "kubernetes_secret_v1" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = merge({
+    smithdb_metastore_db_host     = var.smithdb_metastore_host
+    smithdb_metastore_db_name     = var.smithdb_metastore_database
+    smithdb_metastore_db_username = var.smithdb_metastore_username
+    }, var.smithdb_metastore_password == null ? {} : {
+    smithdb_metastore_db_password = var.smithdb_metastore_password
+  })
 
   type = "Opaque"
 }

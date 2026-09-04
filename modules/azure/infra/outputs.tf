@@ -79,6 +79,58 @@ output "aks_oidc_issuer_url" {
   value       = module.aks.oidc_issuer_url
 }
 
+# ── SmithDB ──────────────────────────────────────────────────────────────────
+
+output "smithdb_metastore_host" {
+  description = "Private hostname of the SmithDB PostgreSQL metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_host : null
+}
+
+output "smithdb_metastore_database" {
+  description = "Database name of the SmithDB metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_database : null
+}
+
+output "smithdb_storage_account_name" {
+  description = "Storage Account containing SmithDB durable data."
+  value       = var.enable_smithdb ? module.smithdb[0].storage_account_name : null
+}
+
+output "smithdb_storage_container_name" {
+  description = "Blob container containing SmithDB durable data."
+  value       = var.enable_smithdb ? module.smithdb[0].container_name : null
+}
+
+output "smithdb_workload_identity_client_id" {
+  description = "Client ID to annotate on the SmithDB Kubernetes ServiceAccount."
+  value       = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : null
+}
+
+output "smithdb_metastore_port" {
+  description = "Port of the SmithDB PostgreSQL metastore."
+  value       = var.enable_smithdb ? "5432" : null
+}
+
+output "smithdb_metastore_use_ssl" {
+  description = "Whether SmithDB must use TLS for its PostgreSQL metastore."
+  value       = var.enable_smithdb ? true : null
+}
+
+output "smithdb_metastore_secret_name" {
+  description = "Kubernetes Secret containing the SmithDB metastore connection fields."
+  value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_metastore_secret_name : null
+}
+
+output "smithdb_metastore_auth_mode" {
+  description = "SmithDB metastore authentication mode: entra or password."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_auth_mode : null
+}
+
+output "smithdb_metastore_username" {
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_username : null
+}
+
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true

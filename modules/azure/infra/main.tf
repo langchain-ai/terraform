@@ -53,9 +53,13 @@ locals {
 
   # Globally-unique names — hashed, and each takes an explicit override so a
   # single colliding name can be pinned without renaming the whole deployment.
-  postgres_name = var.postgres_name != "" ? var.postgres_name : "${local.name_base}-postgres${local.name_suffix}${local.uniq_suffix}"
-  redis_name    = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
-  blob_name     = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
+  postgres_name              = var.postgres_name != "" ? var.postgres_name : "${local.name_base}-postgres${local.name_suffix}${local.uniq_suffix}"
+  redis_name                 = var.redis_name != "" ? var.redis_name : "${local.name_base}-redis${local.name_suffix}${local.uniq_suffix}"
+  blob_name                  = var.storage_account_name != "" ? var.storage_account_name : "${local.name_base}-blob${local.name_suffix}${local.uniq_suffix}" # blob module strips hyphens → "lsblobdeva1b2c3"
+  smithdb_name               = "${local.name_base}-smithdb${local.name_suffix}"
+  smithdb_storage_name       = var.smithdb_storage_account_name != "" ? var.smithdb_storage_account_name : substr(replace("${local.name_base}smithdb${local.deployment_name}${replace(local.uniq_suffix, "-", "")}", "-", ""), 0, 24)
+  langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
+  smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
   # Key Vault name: max 24 chars, globally unique.
   # Uses the user-supplied keyvault_name or derives from name_prefix. When
@@ -90,13 +94,24 @@ locals {
   # A subnet is created only when it is needed by an enabled service and the
   # operator has not supplied one.
   create_aks_subnet      = !local.byo_aks_subnet
-  create_postgres_subnet = var.postgres_source == "external" && !local.byo_postgres_subnet
+  create_postgres_subnet = (var.postgres_source == "external" || var.enable_smithdb) && !local.byo_postgres_subnet
   create_redis_subnet    = var.redis_source == "external" && !local.byo_redis_subnet
 
   vnet_id            = var.create_vnet ? module.vnet.vnet_id : var.vnet_id
   aks_subnet_id      = local.byo_aks_subnet ? var.aks_subnet_id : module.vnet.subnet_main_id
   postgres_subnet_id = local.byo_postgres_subnet ? var.postgres_subnet_id : module.vnet.subnet_postgres_id
   redis_subnet_id    = local.byo_redis_subnet ? var.redis_subnet_id : module.vnet.subnet_redis_id
+
+  # Blob Private Endpoints default into the AKS subnet. That subnet already
+  # carries this traffic to the same accounts, so placing them there adds one
+  # address per endpoint and no new reachability.
+  storage_private_endpoint_subnet_id = var.storage_private_endpoint_subnet_id != "" ? var.storage_private_endpoint_subnet_id : local.aks_subnet_id
+
+  # Both accounts share one privatelink.blob.core.windows.net zone. Azure links
+  # a zone name to a VNet once, so the root owns it and hands the ID to each
+  # module instead of letting both create their own.
+  create_blob_private_dns_zone = var.storage_private_endpoint_enabled && var.storage_private_dns_zone_id == ""
+  blob_private_dns_zone_id     = local.create_blob_private_dns_zone ? azurerm_private_dns_zone.blob[0].id : var.storage_private_dns_zone_id
 
   # Bastion and AGIC are supply-only under bring-your-own: Terraform carves their
   # subnets out of a VNet it owns, and reuses a supplied one otherwise. There is
@@ -167,13 +182,34 @@ locals {
       }
     },
     {
-      for name, pool in var.additional_node_pools : name => {
+      for name, pool in local.effective_node_pools : name => {
         nodes              = pool.max_count + 1
         addresses_per_node = local.aks_default_pool_max_pods + 1
       }
     }
   )
   aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+
+  smithdb_node_pools = var.enable_smithdb ? {
+    smithcache = {
+      vm_size           = var.smithdb_instance_store_vm_size
+      min_count         = var.smithdb_instance_store_min_count
+      max_count         = var.smithdb_instance_store_max_count
+      kubelet_disk_type = "Temporary"
+      node_labels       = { "smithdb-local/instance-store" = "true" }
+      node_taints       = ["smithdb-local/instance-store=true:NoSchedule"]
+    }
+    smithcompute = {
+      vm_size           = var.smithdb_compute_vm_size
+      min_count         = var.smithdb_compute_min_count
+      max_count         = var.smithdb_compute_max_count
+      kubelet_disk_type = "OS"
+      node_labels       = { "smithdb-local/compute" = "true" }
+      node_taints       = ["smithdb-local/compute=true:NoSchedule"]
+    }
+  } : {}
+
+  effective_node_pools = merge(var.additional_node_pools, local.smithdb_node_pools)
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -441,6 +477,30 @@ resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
 resource "terraform_data" "validate_network" {
   lifecycle {
     precondition {
+      condition     = !var.enable_smithdb || (!contains(keys(var.additional_node_pools), "smithcache") && !contains(keys(var.additional_node_pools), "smithcompute"))
+      error_message = "additional_node_pools cannot define the reserved SmithDB pool names smithcache or smithcompute when enable_smithdb = true. Configure them through the smithdb_* variables."
+    }
+
+    precondition {
+      condition     = var.enable_smithdb || (!var.smithdb_ingestion_enabled && !var.smithdb_migration_enabled && !var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = var.smithdb_ingestion_enabled || (!var.smithdb_migration_enabled && !var.smithdb_query_enabled)
+      error_message = "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true."
+    }
+
+    # A Private Endpoint removes the public listener that storage_allowed_ips
+    # writes rules for, so the allowlist stops granting anything. Say so at plan
+    # time rather than leaving an operator to believe a CI runner still reaches
+    # the data plane.
+    precondition {
+      condition     = !var.storage_private_endpoint_enabled || length(var.storage_allowed_ips) == 0
+      error_message = "storage_allowed_ips cannot be combined with storage_private_endpoint_enabled = true: the storage accounts have no public endpoint for those rules to apply to. Clear storage_allowed_ips and reach the blob data plane from inside the VNet, or leave the private endpoints off."
+    }
+
+    precondition {
       condition     = var.create_vnet || var.vnet_id != ""
       error_message = "vnet_id is required when create_vnet = false. Supply the VNet that LangSmith should deploy into."
     }
@@ -502,7 +562,7 @@ resource "terraform_data" "validate_network" {
     # keyvault_default_action. Skipped when Terraform is the one adding them,
     # since checking first would fail the plan that would fix it.
     precondition {
-      condition = local.manage_aks_subnet_endpoints || length(data.azurerm_subnet.byo_aks_subnet) == 0 || alltrue([
+      condition = local.manage_aks_subnet_endpoints || length(data.azurerm_subnet.byo_aks_subnet) == 0 ? true : alltrue([
         for endpoint in local.required_aks_service_endpoints :
         contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
       ])
@@ -625,7 +685,7 @@ module "aks" {
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
   # On a pre-existing cluster whose node pools the customer owns, pass an empty
   # map so Terraform doesn't attach pools to a cluster it doesn't manage.
-  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? var.additional_node_pools : {}
+  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
   # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
   ingress_controller   = var.ingress_controller
@@ -707,6 +767,41 @@ module "postgres" {
   tags = local.common_tags
 }
 
+# ── SmithDB infrastructure (optional) ────────────────────────────────────────
+
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name                 = local.smithdb_name
+  location             = var.location
+  resource_group_name  = azurerm_resource_group.resource_group.name
+  vnet_id              = local.vnet_id
+  subnet_id            = local.postgres_subnet_id
+  aks_subnet_id        = local.aks_subnet_id
+  oidc_issuer_url      = module.aks.oidc_issuer_url
+  namespace            = var.langsmith_namespace
+  service_account_name = local.smithdb_service_account
+
+  metastore_admin_username        = var.smithdb_metastore_admin_username
+  metastore_admin_password        = var.smithdb_metastore_admin_password
+  metastore_sku_name              = var.smithdb_metastore_sku_name
+  metastore_storage_mb            = var.smithdb_metastore_storage_mb
+  metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
+  private_dns_zone_id             = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+
+  storage_account_name = local.smithdb_storage_name
+  container_name       = var.smithdb_storage_container_name
+
+  # Prefixed to keep it apart from private_dns_zone_id above, which is the
+  # metastore's PostgreSQL zone.
+  blob_private_endpoint_enabled   = var.storage_private_endpoint_enabled
+  blob_private_endpoint_subnet_id = local.storage_private_endpoint_subnet_id
+  blob_private_dns_zone_id        = local.blob_private_dns_zone_id
+
+  tags = local.common_tags
+}
+
 # ── Redis ─────────────────────────────────────────────────────────────────────
 # Managed Redis Cache (Premium) in a private subnet.
 # Only provisioned when redis_source = "external".
@@ -726,6 +821,29 @@ module "redis" {
   cluster_location    = var.redis_location # null => var.location
 
   tags = local.common_tags
+}
+
+# ── Blob private DNS ──────────────────────────────────────────────────────────
+# Shared by the LangSmith trace-blob account and the SmithDB object store. The
+# account keeps its usual <name>.blob.core.windows.net hostname; this zone is
+# what makes that name resolve to the Private Endpoint address inside the VNet.
+# Skipped when the operator supplies a central zone.
+
+resource "azurerm_private_dns_zone" "blob" {
+  count               = local.create_blob_private_dns_zone ? 1 : 0
+  name                = "privatelink.blob.core.windows.net"
+  resource_group_name = azurerm_resource_group.resource_group.name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
+  count                 = local.create_blob_private_dns_zone ? 1 : 0
+  name                  = "${local.name_base}-blob-dnslink"
+  resource_group_name   = azurerm_resource_group.resource_group.name
+  private_dns_zone_name = azurerm_private_dns_zone.blob[0].name
+  virtual_network_id    = local.vnet_id
+  registration_enabled  = false
+  tags                  = local.common_tags
 }
 
 # ── Blob Storage ──────────────────────────────────────────────────────────────
@@ -755,11 +873,67 @@ module "blob" {
   allowed_subnet_ids = [local.aks_subnet_id]
   allowed_ips        = var.storage_allowed_ips
 
+  # When enabled, the public endpoint is turned off and the firewall above
+  # becomes inert. It stays declared so disabling the endpoint restores a
+  # default-deny account rather than an open one.
+  private_endpoint_enabled   = var.storage_private_endpoint_enabled
+  private_endpoint_subnet_id = local.storage_private_endpoint_subnet_id
+  private_dns_zone_id        = local.blob_private_dns_zone_id
+
   tags = local.common_tags
 
   # A subnet ID is a plain string and creates no dependency, so the firewall rule
   # has to be told to wait for the endpoint that makes it valid.
   depends_on = [azapi_update_resource.byo_aks_subnet_endpoints]
+}
+
+# The historical backfill is the one SmithDB workload that reads outside its own
+# object store: it pulls the run payloads LangSmith offloaded to the trace-blob
+# account and rewrites them into SmithDB's format. Without this grant the job
+# plans its tasks and then fails every one on a 403 from the source account.
+# Reader rather than Contributor because it only reads there; it writes to the
+# SmithDB account, which modules/smithdb grants separately.
+#
+# Migration-gated so a steady-state install leaves the identity able to reach
+# nothing but its own account, matching the objectViewer binding in
+# modules/gcp/infra/modules/smithdb/iam.tf. enable_smithdb is in the condition
+# because this lives in the root module and indexes module.smithdb[0]: on the
+# migration flag alone, enable_smithdb = false would hit "Invalid index" instead
+# of the readable message in terraform_data.validate_network.
+resource "azurerm_role_assignment" "smithdb_trace_blob_reader" {
+  count = var.enable_smithdb && var.smithdb_migration_enabled ? 1 : 0
+
+  scope                = module.blob.storage_account_id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = module.smithdb[0].workload_identity_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Azure takes up to 10 minutes to make a blob data-plane grant effective, and the
+# backfill Job is started by hand after this apply returns. Started too early it
+# fails every task on a 403 from the source account, which is the same symptom as
+# the grant above being absent. Hold the apply open instead: the delay is spent
+# once, with an explanation, rather than in a failure that reads as a defect.
+# Same approach as time_sleep.wait_for_rbac in modules/keyvault and
+# time_sleep.agic_identity_propagation in modules/k8s-cluster.
+#
+# Nothing reads this resource. Blocking the apply is the entire effect, so it is
+# not an unused resource to remove. triggers re-runs the delay when the grant is
+# replaced rather than created, which happens if the trace-blob account is
+# rebuilt and the scope moves with it.
+#
+# 300s against a 10-minute ceiling is deliberate: it covers the common case
+# without stalling every migration apply for the worst one. SMITHDB.md keeps the
+# verify-then-retry step, because this shortens the race and does not remove it.
+resource "time_sleep" "smithdb_trace_blob_reader_propagation" {
+  count = var.enable_smithdb && var.smithdb_migration_enabled ? 1 : 0
+
+  create_duration = "300s"
+  depends_on      = [azurerm_role_assignment.smithdb_trace_blob_reader]
+
+  triggers = {
+    role_assignment_id = azurerm_role_assignment.smithdb_trace_blob_reader[0].id
+  }
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -847,6 +1021,14 @@ module "k8s_bootstrap" {
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
 
+  # SmithDB metastore connection. Keeping this Secret in the bootstrap module
+  # ensures it uses that module's AKS-configured Kubernetes provider.
+  enable_smithdb             = var.enable_smithdb
+  smithdb_metastore_host     = var.enable_smithdb ? module.smithdb[0].metastore_host : ""
+  smithdb_metastore_database = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
+  smithdb_metastore_username = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
+  smithdb_metastore_password = var.smithdb_metastore_admin_password
+
   # Ingress controller — drives the NetworkPolicy's allowed source namespace.
   ingress_controller = var.ingress_controller
 
@@ -873,7 +1055,10 @@ module "k8s_bootstrap" {
 
   # Blob storage — Workload Identity client ID is added as a pod annotation
   # so the OIDC token exchange can bind the pod to the Managed Identity.
-  blob_managed_identity_client_id = module.blob.k8s_managed_identity_client_id
+  blob_managed_identity_client_id    = module.blob.k8s_managed_identity_client_id
+  backend_service_account_name       = "${local.langsmith_release_fullname}-backend"
+  smithdb_service_account_name       = local.smithdb_service_account
+  smithdb_managed_identity_client_id = var.enable_smithdb ? module.smithdb[0].workload_identity_client_id : ""
 
   # License key — stored in K8s secret langsmith-license.
   # App secrets (api_key_salt, jwt_secret, admin_password) are written by

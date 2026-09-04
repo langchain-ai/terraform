@@ -80,11 +80,60 @@ variable "redis_connection_url" {
   default     = ""
 }
 
+variable "enable_smithdb" {
+  type        = bool
+  description = "Create the SmithDB PostgreSQL metastore connection Secret."
+  default     = false
+}
+
+variable "smithdb_metastore_host" {
+  type        = string
+  description = "Private hostname of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_database" {
+  type        = string
+  description = "Database name of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_username" {
+  type        = string
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_password" {
+  type        = string
+  description = "Optional SmithDB metastore password; null when Entra authentication is used."
+  sensitive   = true
+  default     = null
+  nullable    = true
+}
+
 # ── Blob storage (Azure Workload Identity) ────────────────────────────────────
 
 variable "blob_managed_identity_client_id" {
   type        = string
   description = "Client ID of the User-Assigned Managed Identity used by LangSmith pods to access blob storage (Workload Identity)"
+}
+
+variable "backend_service_account_name" {
+  type        = string
+  description = "Pre-created backend ServiceAccount used by Helm pre-install hooks."
+}
+
+variable "smithdb_service_account_name" {
+  type        = string
+  description = "Pre-created SmithDB ServiceAccount used by Helm pre-install hooks."
+  default     = ""
+}
+
+variable "smithdb_managed_identity_client_id" {
+  type        = string
+  description = "Client ID of the SmithDB managed identity."
+  default     = ""
 }
 
 # ── Application secrets ───────────────────────────────────────────────────────

@@ -99,6 +99,31 @@ additional_node_pools = {
   }
 }
 
+# ── SmithDB (optional, chart 0.17+) ──────────────────────────────────────────
+# Creates a dedicated PostgreSQL 18 metastore, private Blob container, Azure
+# Workload Identity, and two tainted AKS pools for cache and compute workloads.
+# By default, the SmithDB workload identity authenticates to PostgreSQL through
+# Microsoft Entra ID. To use password authentication instead, supply it outside
+# this file:
+#   export TF_VAR_smithdb_metastore_admin_password='...'
+enable_smithdb = false
+
+# Roll out one stage at a time after the infrastructure-only deployment is healthy.
+smithdb_ingestion_enabled = false
+smithdb_migration_enabled = false
+smithdb_query_enabled     = false
+
+# smithdb_metastore_sku_name       = "GP_Standard_D2ds_v5"
+# smithdb_metastore_storage_mb     = 32768
+# smithdb_storage_account_name     = "" # empty derives a globally unique name
+# smithdb_storage_container_name   = "smithdb"
+# smithdb_instance_store_vm_size   = "Standard_L16s_v3"
+# smithdb_instance_store_min_count = 0
+# smithdb_instance_store_max_count = 3
+# smithdb_compute_vm_size           = "Standard_D8s_v5"
+# smithdb_compute_min_count         = 0
+# smithdb_compute_max_count         = 3
+
 # ── Ingress controller ────────────────────────────────────────────────────────
 # "nginx"         — NGINX ingress via Helm (standard, start here)
 # "istio-addon"   — Azure managed Istio, AKS service mesh add-on (production/multi-dataplane)
@@ -289,6 +314,19 @@ sizing_profile = "production"
 # keyvault_default_action  = "Deny"
 # keyvault_allowed_ips     = ["203.0.113.42/32"]
 # aks_authorized_ip_ranges = ["203.0.113.42/32", "198.51.100.0/24"]
+
+# Blob Private Endpoints. This turns off the public endpoint on both the
+# LangSmith trace-blob account and the SmithDB object store, so a firewall
+# mistake can no longer expose either one. Endpoints land in the AKS subnet and
+# take one address each. storage_allowed_ips stops working once this is on:
+# reach the data plane from inside the VNet instead.
+# storage_private_endpoint_enabled = true
+#
+# Supply the central zone when the VNet already resolves
+# privatelink.blob.core.windows.net. Creating a second zone of that name and
+# linking it to the same VNet fails.
+# storage_private_dns_zone_id        = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+# storage_private_endpoint_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/private-endpoints"
 
 # ── Constrained role-assignment delegation (optional) ─────────────────────────
 # Set only if `terraform apply` fails with a 403 AuthorizationFailed on
