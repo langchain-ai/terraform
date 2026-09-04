@@ -625,6 +625,9 @@ _core_deployments=(
   "${RELEASE_NAME}-platform-backend"
   "${RELEASE_NAME}-ingest-queue"
   "${RELEASE_NAME}-queue"
+  # The chart always installs playground. Without it here, a sizing profile that
+  # leaves playground crash-looping still reports "All core deployments ready" (#217).
+  "${RELEASE_NAME}-playground"
 )
 if [[ "$_enable_deployments" == "true" ]]; then
   _core_deployments+=(
