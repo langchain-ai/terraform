@@ -401,8 +401,9 @@ orphaned ALB. `init-values.sh` no longer emits it.
 **Prevention:**
 - Ensure the `group.name` annotation is set (`init-values.sh` does this automatically)
 - Never delete the ingress unless you plan to update all hostname-dependent config
-- Avoid `helm rollback` without `--server-side=false` — the ingress SSA conflict
-  can trigger a delete/recreate cycle
+- On Helm 4, avoid `helm rollback` without `--server-side=false`: the ingress SSA
+  conflict can trigger a delete/recreate cycle. Helm 3 has no server-side apply, so
+  it is unaffected and rejects the flag.
 
 **Fix:**
 ```bash

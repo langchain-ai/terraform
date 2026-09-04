@@ -588,13 +588,30 @@ if [[ -z "$_resolved_chart" ]]; then
   exit 1
 fi
 
+# --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
+# whole invocation with "unknown flag: --server-side" (verified on v3.21.4), so
+# passing it unconditionally blocks the deploy on the Helm 3 the docs require.
+# On Helm 4, SSA is the default for a fresh install, which is what this module
+# does. The chart was written and tested against client-side apply, so ask for it
+# explicitly rather than let the Helm binary decide the apply semantics. Helm 3
+# only ever applies client-side, making the flag redundant as well as unsupported.
+# If the version cannot be read, omit it: omitting is valid on both majors,
+# passing it fails outright on one.
+_helm_major=$(helm version --template '{{.Version}}' 2>/dev/null | sed -e 's/^v//' -e 's/[^0-9].*$//') || _helm_major=""
+_ssa_flag=""
+if [[ -z "$_helm_major" ]]; then
+  echo "WARNING: could not read the Helm version; omitting --server-side=false." >&2
+elif [[ "$_helm_major" -ge 4 ]]; then
+  _ssa_flag="--server-side=false"
+fi
+
 helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   "${VALUES_ARGS[@]}" \
   ${EXTRA_HELM_ARGS:+$EXTRA_HELM_ARGS} \
-  --server-side=false \
+  ${_ssa_flag} \
   --timeout 20m
 
 echo ""

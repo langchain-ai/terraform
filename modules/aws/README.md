@@ -675,7 +675,7 @@ The sizing file is always loaded last so it can override replicas/resources set 
 
 **Step 7 — Broken release recovery.** Checks the current Helm release status. If `pending-upgrade` (left by a Ctrl+C'd upgrade), rolls back automatically. If `failed` (common after a first deploy timeout), logs a warning and proceeds — Helm upgrade works fine on a failed release.
 
-**Step 8 — Helm upgrade.** Runs `helm upgrade --install` with `--server-side=false`. Server-side apply (Helm 3.14+ default) conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules` — client-side apply avoids this. Does **not** use `--wait` because the chart's post-install hooks and the operator's agent pods can take 10+ minutes to settle on new nodes.
+**Step 8 — Helm upgrade.** Runs `helm upgrade --install`, adding `--server-side=false` only when the installed Helm is 4.x. Server-side apply is a Helm 4 feature and its default for a fresh install, and it conflicts with the AWS Load Balancer Controller over ownership of `ingress.spec.rules`, so the deploy asks for client-side apply. Helm 3 has no such flag and applies client-side regardless, so the flag is omitted there. Does **not** use `--wait` because the chart's post-install hooks and the operator's agent pods can take 10+ minutes to settle on new nodes.
 
 **Step 9 — Core readiness.** Polls each core deployment with `kubectl rollout status --timeout=5m`:
 - `langsmith-frontend`, `langsmith-backend`, `langsmith-platform-backend`, `langsmith-ingest-queue`, `langsmith-queue`
