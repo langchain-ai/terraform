@@ -828,6 +828,22 @@ for TOOL in terraform kubectl helm; do
   fi
 done
 
+# The documented floor is Helm 3.12, and deploy.sh picks the apply mode from the
+# major, so 3.12+ and 4.x both work. Checked here rather than at the last step of
+# Pass 2, where a wrong version fails after every resource is already metered.
+HELM_VER=$(helm version --template '{{.Version}}' 2>/dev/null | sed 's/^v//') || HELM_VER=""
+HELM_MAJ=${HELM_VER%%.*}
+HELM_MIN=$(echo "$HELM_VER" | cut -s -d. -f2)
+if ! echo "${HELM_MAJ}|${HELM_MIN}" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  warn "helm: could not parse a version from '${HELM_VER:-no output}', so the 3.12 minimum is unverified"
+elif [ "$HELM_MAJ" -lt 3 ] || { [ "$HELM_MAJ" -eq 3 ] && [ "$HELM_MIN" -lt 12 ]; }; then
+  fail "helm ${HELM_VER} is below the documented 3.12 minimum. Upgrade before Pass 2."
+elif [ "$HELM_MAJ" -ge 4 ]; then
+  pass "helm ${HELM_VER}: deploy.sh will pass --server-side=false to keep client-side apply"
+else
+  pass "helm ${HELM_VER}: client-side apply is Helm 3's only mode, so no flag is needed"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════"
