@@ -219,8 +219,7 @@ cmd_set() {
     --name "$path" \
     --value "$val" \
     --type SecureString \
-    --overwrite \
-    --output none
+    --overwrite >/dev/null
 
   _green "OK"; echo ": Updated $path"
 
