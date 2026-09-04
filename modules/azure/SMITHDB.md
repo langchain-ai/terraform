@@ -44,10 +44,21 @@ Entra mode it contains only the host, database, and username; the chart sets
 so no Storage Account key or SAS token is written to Kubernetes or Terraform
 outputs.
 
-Azure RBAC does not take effect the moment `terraform apply` returns. A backfill
-started in the first minutes after the Reader grant is created can fail with 403
-responses that look the same as a missing grant. Confirm the assignment exists
-with `az role assignment list`, then retry before you treat the 403 as a defect.
+Azure RBAC does not take effect the moment the grant is created. A blob
+data-plane role change needs up to 10 minutes, and the backfill runs from a
+separate Helm pass that an operator can start straight after `terraform apply`
+returns. So the apply that creates the `Storage Blob Data Reader` grant waits
+300 seconds before it hands control back, in
+`time_sleep.smithdb_trace_blob_reader_propagation`. The pause is deliberate. Let
+it finish.
+
+The wait shortens this race and does not remove it. A backfill that reads the
+source account before the grant is effective fails with 403 responses that look
+the same as a missing grant. Confirm the assignment exists with
+`az role assignment list`, wait, and retry before you treat the 403 as a defect.
+
+Setting `smithdb_migration_enabled` back to false removes the grant. A backfill
+that has to run again needs the flag on again, and waits again.
 
 ## Chart contract
 

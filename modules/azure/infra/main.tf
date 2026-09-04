@@ -909,6 +909,33 @@ resource "azurerm_role_assignment" "smithdb_trace_blob_reader" {
   principal_type       = "ServicePrincipal"
 }
 
+# Azure takes up to 10 minutes to make a blob data-plane grant effective, and the
+# backfill Job is started by hand after this apply returns. Started too early it
+# fails every task on a 403 from the source account, which is the same symptom as
+# the grant above being absent. Hold the apply open instead: the delay is spent
+# once, with an explanation, rather than in a failure that reads as a defect.
+# Same approach as time_sleep.wait_for_rbac in modules/keyvault and
+# time_sleep.agic_identity_propagation in modules/k8s-cluster.
+#
+# Nothing reads this resource. Blocking the apply is the entire effect, so it is
+# not an unused resource to remove. triggers re-runs the delay when the grant is
+# replaced rather than created, which happens if the trace-blob account is
+# rebuilt and the scope moves with it.
+#
+# 300s against a 10-minute ceiling is deliberate: it covers the common case
+# without stalling every migration apply for the worst one. SMITHDB.md keeps the
+# verify-then-retry step, because this shortens the race and does not remove it.
+resource "time_sleep" "smithdb_trace_blob_reader_propagation" {
+  count = var.enable_smithdb && var.smithdb_migration_enabled ? 1 : 0
+
+  create_duration = "300s"
+  depends_on      = [azurerm_role_assignment.smithdb_trace_blob_reader]
+
+  triggers = {
+    role_assignment_id = azurerm_role_assignment.smithdb_trace_blob_reader[0].id
+  }
+}
+
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 # Centralized secret storage for all LangSmith sensitive values.
 # Depends on blob module (needs the managed identity principal ID for RBAC).
