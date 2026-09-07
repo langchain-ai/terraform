@@ -12,7 +12,7 @@
 # Where am I?        make status
 # Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart status status-quick setup-env init plan apply destroy purge-secrets tf \
+.PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
@@ -53,6 +53,9 @@ status-quick: ## Quick status check (skip SSM and K8s queries)
 
 quickstart: ## Interactive setup wizard — generates terraform.tfvars
 	$(INFRA_DIR)/scripts/quickstart.sh
+
+test-quickstart: ## Test QuickStart Route 53 choices and update-mode defaults (no AWS calls)
+	$(INFRA_DIR)/scripts/test-quickstart-dns.sh
 
 # ── Pass 1: Infrastructure ────────────────────────────────────────────────────
 

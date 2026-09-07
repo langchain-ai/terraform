@@ -4,7 +4,7 @@ output "zone_id" {
 }
 
 output "name_servers" {
-  description = "Route 53 name servers (only populated when create_zone = true)"
+  description = "Route 53 name servers for a newly created zone (empty when an existing zone is reused)"
   value       = var.create_zone ? aws_route53_zone.langsmith[0].name_servers : []
 }
 
