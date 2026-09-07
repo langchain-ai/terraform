@@ -46,8 +46,8 @@ lint_scripts() {
 # CI leg can scope itself to modules/<provider> without carrying a second copy
 # of the rule. A root is any directory with its own versions.tf, minus the
 # internal child modules under modules/<provider>/<root>/modules/<child>/:
-# those are validated transitively via --call-module-type=all, and two of them
-# (azure keyvault, azure redis) do carry a versions.tf, so depth alone cannot
+# those are validated transitively via --call-module-type=all, and three of them
+# (azure keyvault, redis, k8s-cluster) do carry a versions.tf, so depth alone cannot
 # tell them apart from a root. Depth varies anyway, modules/aws/infra is two
 # levels down and modules/byoc/aws/langsmith-byoc-role is three.
 discover_roots() {
@@ -91,8 +91,8 @@ for arg in "$@"; do
 $(discover_roots "$arg")
 EOF
   if [ "${#roots[@]}" -eq "$before" ]; then
-    echo "check: no terraform root under $arg, so this run would have checked" >&2
-    echo "nothing. The directory was renamed, or its versions.tf is gone." >&2
+    echo "check: no terraform root under $arg. A root has its own versions.tf; child" >&2
+    echo "modules (modules/*/infra/modules/*) are checked via their parent root." >&2
     exit 2
   fi
 done
