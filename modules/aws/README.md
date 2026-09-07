@@ -226,6 +226,32 @@ acm_certificate_arn    = "arn:aws:acm:us-west-2:<account-id>:certificate/<cert-i
 langsmith_domain = "langsmith.<your-domain>"
 ```
 
+### Route 53 hosted zone modes
+
+When `langsmith_domain` is set and `acm_certificate_arn` is empty, Terraform
+requests a DNS-validated ACM certificate and manages the DNS records for it.
+The default, `dns_create_zone = true`, creates a public hosted zone exactly
+matching `langsmith_domain`. Delegate the returned `dns_name_servers` from the
+parent zone before enabling ACM-backed HTTPS.
+
+To reuse an existing authoritative public Route 53 zone, pass the zone ID:
+
+```hcl
+langsmith_domain     = "langsmith.example.com"
+dns_create_zone      = false
+dns_existing_zone_id = "Z1ABCDEF123456"
+```
+
+The existing zone may be `langsmith.example.com` itself or a parent such as
+`example.com`. Terraform writes the ACM validation CNAME and LangSmith ALB
+alias record into that selected zone. The alias target continues to use the
+ALB's canonical hosted zone ID. `dns_name_servers` is empty when a zone is
+reused, and a private hosted zone cannot validate a public ACM certificate.
+
+Reusing a zone does not import or manage the zone itself. If this stack already
+created a dedicated zone, do not switch modes without separately planning the
+DNS and Terraform state migration.
+
 ### Terraform state backend (recommended for production)
 
 Configure `terraform/aws/infra/backend.tf`:
@@ -913,7 +939,10 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `tls_certificate_source` | `acm` | no | `acm`, `letsencrypt`, or `none` |
 | `acm_certificate_arn` | `""` | when acm | ACM certificate ARN |
 | `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt |
-| `langsmith_domain` | `""` | no | Custom hostname (empty = use ALB DNS name) |
+| `langsmith_domain` | `""` | no | Custom hostname; activates managed DNS/ACM when no certificate ARN is supplied |
+| `dns_create_zone` | `true` | no | Create a dedicated public Route 53 zone exactly matching `langsmith_domain` |
+| `dns_existing_zone_id` | `""` | when reusing DNS | Existing public parent or same-name Route 53 zone ID |
+| `dns_include_wildcard_san` | `false` | no | Add `*.langsmith_domain` to the managed ACM certificate |
 | `langsmith_namespace` | `langsmith` | no | Kubernetes namespace for LangSmith |
 | `clickhouse_source` | `in-cluster` | no | `in-cluster` or `external` |
 | `alb_scheme` | `internet-facing` | no | ALB scheme: `internet-facing` or `internal` |
