@@ -911,6 +911,7 @@ module "ingress" {
   cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
+  gke_gateway_class   = var.gke_gateway_class
   langsmith_domain    = var.langsmith_domain
   langsmith_namespace = var.langsmith_namespace
 
