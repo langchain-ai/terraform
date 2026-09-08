@@ -1,35 +1,19 @@
 # OCP-specific Helm values for LangSmith.
 # These are checked in and applied on every deploy alongside values-overrides.yaml.
-# They configure OpenShift-specific settings: Route-based ingress, restricted SCC, and OCP storage.
+# They configure the OpenShift specifics: no Ingress object (the dns Terraform module
+# creates the Route) and secrets read from an existing Secret rather than rendered.
 
 ingress:
   # OpenShift uses Routes rather than Ingress objects.
   # Disable the standard Ingress resource; the Route is managed by the dns Terraform module.
   enabled: false
 
-route:
-  enabled: true
-
-# Run as non-root to satisfy OpenShift's restricted SCC
-podSecurityContext:
-  runAsNonRoot: true
-
-containerSecurityContext:
-  allowPrivilegeEscalation: false
-  runAsNonRoot: true
-  seccompProfile:
-    type: RuntimeDefault
-  capabilities:
-    drop:
-      - ALL
-
-storage:
-  storageClassName: ""  # Use cluster default; set explicitly if needed (e.g. ocs-storagecluster-ceph-rbd)
-
-# Chart 0.16 ships insights.enabled and polly.enabled as true. This module sets no
-# config.existingSecretName, so leaving them on makes the chart hard-fail on the
-# encryption key it cannot find. Turn them on in values-overrides.yaml, together
-# with the matching encryptionKey, when you actually want those agents.
+# Chart 0.16 ships insights.enabled and polly.enabled as true, and each product's
+# pods hard-require its encryption key in the secret below. Turn one on in
+# values-overrides.yaml only together with the matching key —
+# INSIGHTS_ENCRYPTION_KEY / POLLY_ENCRYPTION_KEY in generate-secrets.sh. Setting
+# insights.encryptionKey or polly.encryptionKey inline does nothing here: with
+# config.existingSecretName set, the chart never renders its own secret.
 insights:
   enabled: false
 
@@ -37,4 +21,11 @@ polly:
   enabled: false
 
 config:
-  blobStorageBackend: s3  # Override in values-overrides.yaml if using a different backend
+  # All application secrets come from the langsmith-secrets Secret created by
+  # helm/scripts/generate-secrets.sh, so the chart skips its own secrets.yaml.
+  # Consequence: every config.* value that would have been written into that
+  # secret is inert — oauth.oauthClientId, oauth.oauthClientSecret,
+  # oauth.oauthIssuerUrl, apiKeySalt, langsmithLicenseKey,
+  # basicAuth.jwtSecret, basicAuth.initialOrgAdminPassword and the per-product
+  # encryptionKey values. Change those by updating the secret, not this file.
+  existingSecretName: "langsmith-secrets"

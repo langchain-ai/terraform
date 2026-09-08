@@ -24,3 +24,17 @@ variable "hostname" {
   type        = string
   default     = ""
 }
+
+variable "postgres_connection_url" {
+  description = "Full PostgreSQL connection URL (postgresql://user:password@host:5432/database) written to the langsmith-postgres secret. Leave empty to have generate-secrets.sh create that secret instead."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "redis_connection_url" {
+  description = "Full Redis connection URL (redis://:password@host:6379/0, or rediss:// for TLS) written to the langsmith-redis secret. Leave empty to have generate-secrets.sh create that secret instead."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
