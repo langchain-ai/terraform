@@ -146,4 +146,41 @@ locals {
   )
 
   sandbox_juicefs_bucket_url = "https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com"
+
+  # ── Sandbox cluster reachability to the LangSmith API ───────────────────────
+  # In same_cluster mode the sandbox host talks to the platform backend over
+  # in-cluster Service DNS, so none of this applies. In separate_cluster mode it
+  # calls https://<langsmith_domain>/api, which is fronted by the ALB, and the
+  # route in depends on the ALB scheme.
+  #
+  # Internal ALB: the request stays inside the VPC and keeps its source security
+  # group, so we can name the sandbox node group directly. This is the tight,
+  # self-maintaining form and needs no operator action.
+  alb_allowed_security_group_ids = (
+    local.separate_cluster_sandboxes && var.alb_scheme == "internal"
+  ) ? [module.sandbox_eks[0].node_security_group_id] : []
+
+  # Internet-facing ALB: the request exits through the NAT gateway and comes back
+  # as public traffic, so only alb_allowed_cidr_blocks can match it. An allowlist
+  # left at 0.0.0.0/0 already admits it; a narrowed one does not, and we refuse to
+  # widen it implicitly because the NAT address is shared with untrusted sandbox
+  # workloads. See variables.tf (sandbox_alb_allow_nat_egress).
+  alb_allowlist_is_open = contains(var.alb_allowed_cidr_blocks, "0.0.0.0/0")
+
+  sandbox_nat_egress_cidrs = (
+    local.separate_cluster_sandboxes
+    && var.alb_scheme == "internet-facing"
+    && var.sandbox_alb_allow_nat_egress
+    && var.create_vpc
+  ) ? [for ip in module.vpc[0].nat_public_ips : "${ip}/32"] : []
+
+  alb_ingress_cidr_blocks = distinct(concat(var.alb_allowed_cidr_blocks, local.sandbox_nat_egress_cidrs))
+
+  # Egress filtering is FQDN-based and applies to the shared private route tables,
+  # so the sandbox cluster's callback is dropped unless the LangSmith hostname is
+  # allowed explicitly.
+  firewall_allowed_fqdns = distinct(concat(
+    var.firewall_allowed_fqdns,
+    local.separate_cluster_sandboxes && var.langsmith_domain != "" ? [var.langsmith_domain] : [],
+  ))
 }

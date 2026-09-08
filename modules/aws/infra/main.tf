@@ -93,6 +93,34 @@ resource "terraform_data" "validate_inputs" {
       error_message = "separate_cluster sandboxes require langsmith_api_key_salt and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
     }
 
+    # Separate-cluster sandboxes call the LangSmith API through the ALB. With an
+    # internal ALB a security group rule covers that automatically; with an
+    # internet-facing ALB the call arrives from the NAT gateway and is matched by
+    # alb_allowed_cidr_blocks, so a narrowed allowlist silently breaks it. Fail at
+    # plan time rather than letting sandboxes come up unable to register.
+    precondition {
+      condition = (
+        !local.separate_cluster_sandboxes
+        || var.alb_scheme == "internal"
+        || local.alb_allowlist_is_open
+        || var.sandbox_alb_allow_nat_egress
+      )
+      error_message = "separate_cluster sandboxes cannot reach the LangSmith API: alb_scheme is 'internet-facing' and alb_allowed_cidr_blocks is narrowed, so the sandbox cluster's callback (which egresses via the NAT gateway) is blocked. Preferred fix: set alb_scheme = 'internal'. Otherwise add your NAT egress address to alb_allowed_cidr_blocks, or set sandbox_alb_allow_nat_egress = true to add it automatically — note that this grants ALB access to everything sharing the NAT gateway, including untrusted sandbox code."
+    }
+
+    precondition {
+      condition     = !var.sandbox_alb_allow_nat_egress || var.create_vpc
+      error_message = "sandbox_alb_allow_nat_egress = true requires create_vpc = true, because the NAT gateway Elastic IPs are only known when Terraform manages the VPC. For bring-your-own-VPC, add your NAT egress address to alb_allowed_cidr_blocks explicitly."
+    }
+
+    # Egress filtering is FQDN-based, so the sandbox callback needs the LangSmith
+    # hostname allowed. locals.firewall_allowed_fqdns appends it automatically,
+    # which is only possible when the hostname is known.
+    precondition {
+      condition     = !local.separate_cluster_sandboxes || !var.create_firewall || var.langsmith_domain != ""
+      error_message = "separate_cluster sandboxes with create_firewall = true require langsmith_domain, so the sandbox cluster's callback to the LangSmith API can be added to the Network Firewall allowlist. Without it the callback is dropped as unmatched egress."
+    }
+
     precondition {
       condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != "" || var.langsmith_domain != ""
       error_message = "When tls_certificate_source = 'acm', either acm_certificate_arn (existing cert) or langsmith_domain (auto-provision via Route 53) is required."
@@ -236,7 +264,7 @@ module "firewall" {
   nat_gateway_az          = module.vpc[0].nat_gateway_az
   firewall_subnet_cidr    = var.firewall_subnet_cidr
   private_route_table_ids = module.vpc[0].private_route_table_ids
-  allowed_fqdns           = var.firewall_allowed_fqdns
+  allowed_fqdns           = local.firewall_allowed_fqdns
   tags                    = local.common_tags
 
   depends_on = [module.vpc]
@@ -593,20 +621,21 @@ resource "aws_route53_record" "langsmith_alb_alias" {
 module "alb" {
   source = "./modules/alb"
 
-  name                   = local.alb_name
-  vpc_id                 = local.vpc_id
-  vpc_cidr_block         = local.vpc_cidr_block
-  subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
-  internal               = var.alb_scheme == "internal"
-  allowed_cidr_blocks    = var.alb_allowed_cidr_blocks
-  tls_certificate_source = var.tls_certificate_source
-  acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
-  access_logs_enabled    = var.alb_access_logs_enabled
-  bucket_suffix          = random_id.bucket_suffix.hex
-  enable_envoy_gateway   = local.enable_envoy_gateway
-  enable_istio_gateway   = var.enable_istio_gateway
-  enable_nginx_ingress   = var.enable_nginx_ingress
-  tags                   = local.common_tags
+  name                       = local.alb_name
+  vpc_id                     = local.vpc_id
+  vpc_cidr_block             = local.vpc_cidr_block
+  subnets                    = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
+  internal                   = var.alb_scheme == "internal"
+  allowed_cidr_blocks        = local.alb_ingress_cidr_blocks
+  allowed_security_group_ids = local.alb_allowed_security_group_ids
+  tls_certificate_source     = var.tls_certificate_source
+  acm_certificate_arn        = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
+  access_logs_enabled        = var.alb_access_logs_enabled
+  bucket_suffix              = random_id.bucket_suffix.hex
+  enable_envoy_gateway       = local.enable_envoy_gateway
+  enable_istio_gateway       = var.enable_istio_gateway
+  enable_nginx_ingress       = var.enable_nginx_ingress
+  tags                       = local.common_tags
 
   depends_on = [module.vpc]
 }

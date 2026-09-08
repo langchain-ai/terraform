@@ -456,6 +456,30 @@ variable "alb_access_logs_enabled" {
   default     = false
 }
 
+# Escape hatch for separate-cluster sandboxes behind an internet-facing ALB.
+#
+# The sandbox cluster reaches the LangSmith API at https://<langsmith_domain>/api.
+# With an internal ALB that path is covered automatically by a security group
+# rule naming the sandbox node group. With an internet-facing ALB the request
+# leaves via the NAT gateway and returns as public traffic, so it is matched by
+# alb_allowed_cidr_blocks instead — and is therefore blocked whenever that list
+# has been narrowed away from the default.
+#
+# Setting this to true appends the NAT gateway Elastic IPs to the ALB allowlist.
+# Understand what that grants before enabling it: with single_nat_gateway = true
+# every workload in the private subnets shares one Elastic IP, including the
+# sandboxes themselves, which run untrusted user code. Allowing that address
+# re-exposes the LangSmith API to anything running in the VPC, which is usually
+# the opposite of why alb_allowed_cidr_blocks was narrowed.
+#
+# Prefer alb_scheme = "internal", or terminate the sandbox callback on a
+# separate internal load balancer, and leave this false.
+variable "sandbox_alb_allow_nat_egress" {
+  type        = bool
+  description = "Append the NAT gateway Elastic IPs to alb_allowed_cidr_blocks so separate-cluster sandboxes can reach the LangSmith API through an internet-facing ALB. Grants ALB access to every workload sharing the NAT gateway, including untrusted sandbox code. Prefer alb_scheme = 'internal'."
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # CloudTrail
 #------------------------------------------------------------------------------

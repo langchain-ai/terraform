@@ -101,6 +101,31 @@ resource "aws_security_group" "alb" {
     }
   }
 
+  # Inline rather than standalone aws_security_group_rule resources: this
+  # security group already declares inline ingress blocks, and mixing the two
+  # forms makes each apply delete the rules the other manages.
+  dynamic "ingress" {
+    for_each = length(var.allowed_security_group_ids) > 0 ? [1] : []
+    content {
+      description     = "HTTP from allowed security groups"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      security_groups = var.allowed_security_group_ids
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = length(var.allowed_security_group_ids) > 0 && var.tls_certificate_source != "none" ? [1] : []
+    content {
+      description     = "HTTPS from allowed security groups"
+      from_port       = 443
+      to_port         = 443
+      protocol        = "tcp"
+      security_groups = var.allowed_security_group_ids
+    }
+  }
+
   # Egress scoped to VPC CIDR: ALB only needs to reach EKS pod IPs (target-type: ip).
   # If using VPC peering for targets outside this VPC, add those CIDRs here.
   egress {
