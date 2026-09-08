@@ -66,7 +66,36 @@ The deployment creates the following assignments. Each one requires `Microsoft.A
 | `Network Contributor` | `4d97b98b-1d4f-4787-a291-c67834d212e7` | Virtual network | AGIC identity | `ingress_controller = "agic"` |
 | `Virtual Machine Administrator Login` | `1c0163c0-47e6-4577-8991-ea5c82e286e4` | Bastion VM | Operators | Bastion module is enabled |
 
-The Key Vault assignment to the deploying identity is self-granting: Terraform gives itself `Key Vault Secrets Officer` so that it can then write the application secrets through the Key Vault data plane. The vault runs in RBAC mode, so no access policy path exists as a fallback.
+The Key Vault assignment to the deploying identity is self-granting: Terraform gives itself `Key Vault Secrets Officer` so that it can then write `postgres-admin-password` and `langsmith-license-key` through the Key Vault data plane. The vault runs in RBAC mode, so no access policy path exists as a fallback. Set `keyvault_manage_secrets = false` to drop both writes, and `keyvault_manage_terraform_admin_assignment = false` alongside it to drop the grant they exist for, as below.
+
+## Deploy without Key Vault access
+
+Two settings take Key Vault out of the deploying identity's requirements:
+
+```hcl
+keyvault_manage_terraform_admin_assignment = false  # skip the self-grant
+keyvault_manage_secrets                    = false  # write no secrets
+```
+
+The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all nine secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
+
+This does not remove the deployment's need for `roleAssignments/write` altogether. `Storage Blob Data Contributor` on the storage account is not optional, because LangSmith pods need it at runtime, and it has no toggle. A deployer who holds no role-assignment rights at all still fails there.
+
+### Turning it off on a deployment that already applied
+
+Leaving `keyvault_manage_secrets` at its default needs no migration. Setting it to false afterwards does, because Terraform reads `count = 0` as "delete these two secrets from the vault". Nothing breaks at the moment of the delete, since no runtime path reads the vault — the failure surfaces later, when `make k8s-secrets` cannot read `langsmith-license-key` to build `langsmith-config-secret`. Soft delete keeps both recoverable for the vault's retention window.
+
+Drop them from state first, which leaves the vault untouched. Read the addresses out of state rather than typing them: `postgres_admin_password` is un-indexed on deployments that last applied before this flag existed and `[0]` after, while `langsmith_license_key` carried a `count` already and is `[0]` either way:
+
+```bash
+terraform -chdir=infra state list | grep azurerm_key_vault_secret
+```
+
+```bash
+terraform -chdir=infra state rm '<address>'   # once per address listed
+```
+
+Then set the flag, and confirm `terraform plan` reports no change to the vault's secrets. `make seed-secrets` is write-once, so running it afterwards skips both and the vault keeps the values it already had.
 
 ## Restrict which roles the deployer can assign
 
