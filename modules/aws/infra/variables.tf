@@ -716,7 +716,7 @@ variable "langsmith_jwt_secret" {
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), or 'default' (chart defaults, no sizing file)."
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
   default     = "default"
 
   validation {

@@ -1,13 +1,14 @@
 # Terraform
 
-Production-ready Terraform modules for LangSmith self-hosted deployments across AWS, Azure, GCP, and OpenShift.
+Terraform layouts for LangSmith self-hosted deployments across AWS, Azure, GCP, and OpenShift.
 
 ## Structure
 
-Each provider directory mirrors this layout:
+AWS, Azure, and GCP share the same broad workflow, but their child modules and scripts are provider-specific. From the repository root, the common shape is:
 
 ```
-terraform/<provider>/
+modules/<provider>/
+├── Makefile                         # AWS, Azure, and GCP
 ├── infra/
 │   ├── main.tf
 │   ├── locals.tf
@@ -16,33 +17,25 @@ terraform/<provider>/
 │   ├── versions.tf
 │   ├── terraform.tfvars.example
 │   ├── backend.tf.example
-│   └── modules/
-│       ├── networking/
-│       ├── k8s-cluster/
-│       ├── k8s-bootstrap/
-│       ├── postgres/
-│       ├── redis/
-│       ├── storage/
-│       ├── dns/           # hosted zone + TLS certificate
-│       ├── secrets/       # cloud-native secrets store
-│       └── iam/           # workload identity / pod IAM (aws, gcp)
-│           identity/      # managed identity (azure)
-│           scc/           # SecurityContextConstraints (ocp)
+│   ├── modules/                     # provider-specific child modules
+│   └── scripts/                     # setup, quickstart, and secret helpers
 ├── helm/
-│   ├── scripts/
-│   │   ├── preflight-check.sh   # verify tools and cluster connectivity
-│   │   ├── get-kubeconfig.sh    # fetch cluster credentials
-│   │   ├── generate-secrets.sh  # bridge Terraform outputs → k8s Secrets
-│   │   └── deploy.sh            # helm upgrade --install
+│   ├── scripts/                     # provider-specific Helm and cluster helpers
 │   └── values/
-│       ├── values.yaml                   # cloud-specific defaults (checked in)
-│       └── values-overrides.yaml.example # customer config template
+│       └── examples/                # sizing and add-on examples where supported
 ├── README.md
 ├── ARCHITECTURE.md
 ├── QUICK_REFERENCE.md
 ├── TROUBLESHOOTING.md
 └── TEARDOWN.md
 ```
+
+Not every provider has every file in that sketch. In particular:
+
+- AWS gets cluster credentials from `infra/scripts/set-kubeconfig.sh`; Azure and GCP use `helm/scripts/get-kubeconfig.sh`.
+- There is no shared `generate-secrets.sh` for AWS, Azure, and GCP. AWS uses `helm/scripts/apply-eso.sh`, Azure uses `infra/scripts/seed-keyvault-secrets.sh` and `infra/scripts/create-k8s-secrets.sh`, and GCP uses `infra/scripts/setup-env.sh` plus `helm/scripts/init-values.sh`. `generate-secrets.sh` exists only in the OpenShift preview.
+- Among AWS, Azure, and GCP, only GCP checks in `helm/values/values-overrides.yaml.example`. AWS and Azure generate their local Helm values through `init-values.sh`. OpenShift also carries an example file for its preview flow.
+- OpenShift currently contains stub infrastructure modules and Helm helpers, but no provider `Makefile` or quickstart wizard.
 
 ## Providers
 
@@ -53,51 +46,50 @@ terraform/<provider>/
 | `gcp/` | Google Cloud Platform |
 | `ocp/` | OpenShift Container Platform |
 
-## Modules
+## Capabilities
 
-| Module | AWS | GCP | Azure | OCP |
+The rows below describe equivalent capabilities; the child-module directory names are not uniform across providers.
+
+| Capability | AWS | GCP | Azure | OCP |
 |---|---|---|---|---|
-| `networking` | VPC | VPC | VNet | stub |
-| `k8s-cluster` | EKS | GKE | AKS | stub |
+| Networking | VPC (`vpc/`) | VPC (`networking/`) | VNet (`networking/`) | stub |
+| Kubernetes cluster | EKS (`eks/`) | GKE (`k8s-cluster/`) | AKS (`k8s-cluster/`) | stub |
 | `k8s-bootstrap` | namespaces / RBAC | namespaces / RBAC | namespaces / RBAC | namespaces / RBAC |
 | `postgres` | RDS | Cloud SQL | Azure Database for PostgreSQL | stub |
-| `redis` | ElastiCache | Memorystore | Azure Cache for Redis | stub |
+| `redis` | ElastiCache | Memorystore | Azure Managed Redis (`Microsoft.Cache/redisEnterprise` via AzAPI) | stub |
 | `storage` | S3 | GCS | Azure Blob Storage | stub |
 | `dns` | Route 53 + ACM | Cloud DNS + managed cert | Azure DNS | OCP Route |
-| `secrets` | Secrets Manager | Secret Manager | Key Vault | k8s Secret |
-| `iam` / `identity` / `scc` | IRSA role | Workload Identity | Managed Identity | SCC + RBAC |
+| Application secret store | SSM Parameter Store, managed by scripts (no `secrets/` child module) | Secret Manager; `secrets/` is an optional Terraform bootstrap module | Key Vault (`keyvault/`) | Kubernetes Secret (`secrets/`) |
+| Workload access | IRSA resources | Workload Identity (`iam/`) | Managed Identity | SCC + RBAC (`scc/`) |
+
+## Secret flow and state
+
+The cloud-native store is not the Kubernetes delivery mechanism, and marking a Terraform input as sensitive does not keep it out of state.
+
+| Provider | Persistent store | Application delivery to Kubernetes / Helm | Terraform state boundary |
+|---|---|---|---|
+| AWS | `infra/scripts/setup-env.sh` writes application secrets to SSM Parameter Store. | `helm/scripts/apply-eso.sh` applies an ESO `ClusterSecretStore` and `ExternalSecret`, which sync `langsmith-config`. | SSM-backed application secrets are not managed by Terraform. Terraform-managed database, cache, and feature connection Kubernetes Secrets are stored in state. |
+| Azure | `infra/scripts/seed-keyvault-secrets.sh` writes generated application secrets directly to Key Vault. By default, Terraform also writes the Postgres password and license key to the vault because it already consumes those values. | `infra/scripts/create-k8s-secrets.sh` reads Key Vault and applies `langsmith-config-secret`; Terraform separately creates Postgres, Redis, Fleet, and license Kubernetes Secrets. | Generated application secrets bypass Terraform. Postgres, Redis, Fleet, and license values used by Terraform remain in state. |
+| GCP | `infra/scripts/setup-env.sh` stores setup values in Secret Manager and exports them for the deployment tools. | `helm/scripts/init-values.sh` writes application values to the gitignored `values-overrides.yaml`; Terraform separately creates database, cache, license, ClickHouse, and optional TLS Kubernetes Secrets. | Application values consumed only by Helm are not stored in Terraform state. Values used by Terraform-managed Secret resources remain in state. |
+
+Treat every Terraform backend that contains one of these deployments as sensitive data. Gitignored `tfvars`, state files, and generated Helm values still need access controls and secure storage.
 
 ## Usage
 
-### 1. Provision infrastructure
+AWS, Azure, and GCP all expose the same interactive entry point:
 
 ```bash
-cd terraform/aws/infra        # or azure/ gcp/ ocp/
-cp terraform.tfvars.example terraform.tfvars
-cp backend.tf.example backend.tf
-# edit both files
-terraform init
-terraform plan
-terraform apply
+cd modules/aws                # or modules/azure, modules/gcp
+make quickstart
+make help
 ```
 
-### 2. Configure Helm values
+Each provider then has its own secret and cluster-access steps, so follow its README instead of assuming script names are interchangeable:
 
-```bash
-cd terraform/aws/helm/values  # or azure/ gcp/ ocp/
-cp values-overrides.yaml.example values-overrides.yaml
-# fill in license key, hostname, and Terraform outputs
-```
-
-### 3. Deploy LangSmith
-
-```bash
-cd terraform/aws/helm/scripts  # or azure/ gcp/ ocp/
-./preflight-check.sh
-./get-kubeconfig.sh <cluster-name>
-./generate-secrets.sh
-./deploy.sh
-```
+- AWS: [`aws/README.md`](aws/README.md)
+- Azure: [`azure/README.md`](azure/README.md)
+- GCP: [`gcp/README.md`](gcp/README.md)
+- OpenShift preview: [`ocp/README.md`](ocp/README.md)
 
 ## Deployment tiers
 
