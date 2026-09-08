@@ -9,8 +9,6 @@ type: "reference"
 
 All commands run from `modules/azure/`. Run `make help` to see all targets.
 
-For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
-
 ---
 
 ## First-Time Setup
@@ -429,4 +427,3 @@ make clean
 - [ARCHITECTURE.md](ARCHITECTURE.md) — component diagram and pass structure
 - [SERVICES.md](SERVICES.md) — what each pod does, dependencies, which pass enables it
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — issues, gotchas, and fixes
-- [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — all-in-cluster demo/POC guide

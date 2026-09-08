@@ -55,6 +55,18 @@ ABAC = (
     "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7}"
 )
 
+# Two clauses, the second past the 240th character: real policies run this long,
+# and the deciding constraint is as likely to sit in the tail as the head.
+ABAC_LONG = (
+    "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+    "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+    "ForAnyOfAnyValues:GuidEquals{acdd72a7-3385-48ef-bd42-f606fba81ae7, "
+    "ba92f5b4-2d11-453d-a403-e96b0029c9fe}"
+    ")) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'}"
+    ")) OR (@Resource[Microsoft.Authorization/roleAssignments:PrincipalType] "
+    "StringEqualsIgnoreCase 'ServicePrincipal'))"
+)
+
 # The shape that fails apply while preflight passes: roleAssignments/write is
 # permitted, but only for a ServicePrincipal, so the Key Vault Secrets Officer
 # grant is refused for omitting principal_type rather than for lacking a role.
@@ -184,7 +196,7 @@ TAKEN = {
     "message": "The specified name is already in use.",
 }
 
-# The names the default fixture derives (identifier "-dev", no hash).
+# The names the default fixture derives (name_prefix "-dev", no hash).
 PG = "langsmith-postgres-dev"
 BLOB = "langsmithblobdev"
 KV = "langsmith-kv-dev"
@@ -289,10 +301,11 @@ CASES = [
     {
         "name": "everything permitted passes at both scopes",
         "ca_all": ALL_GOOD,
+        # One line per verdict, not per scope: these two scopes agree, so they
+        # are named together. Splitting them back out fails here.
         "expect": [
-            f"[✓] roleAssignments/write permitted at {SUB_SCOPE}, granted by Owner held at",
-            f"[✓] roleAssignments/write permitted at {RG_SCOPE}",
-            f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}",
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE}, granted by Owner held at",
+            f"[✓] Every resource action the deployment needs is permitted at {SUB_SCOPE} and {RG_SCOPE}",
         ],
         "reject": ["[✗]", "Falling back"],
     },
@@ -310,7 +323,7 @@ CASES = [
         "name": "roleAssignments/write refused fails without inventing a reason",
         "ca_all": response(write=False),
         "expect": [
-            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE}. All eight role assignments",
+            f"[✗] roleAssignments/write is not permitted at {SUB_SCOPE} and {RG_SCOPE}. The deployment grants roles",
         ],
         "reject": ["by deny assignment", "PIM holds"],
     },
@@ -328,8 +341,8 @@ CASES = [
         "ca_all": response(write=False),
         "eligibilities": [eligibility("Owner")],
         "expect": [
-            "[✗] PIM holds these roles for this identity as eligible but not active: Owner at",
-            "activating it (portal: PIM -> My roles -> Activate)",
+            "[✗] Eligible in PIM but not active, and carries roleAssignments/write: Owner at",
+            "(portal: PIM -> My roles -> Activate)",
         ],
     },
     {
@@ -339,6 +352,14 @@ CASES = [
             "[!] That grant carries an ABAC condition",
             "The modules assign: Storage Blob Data Contributor",
             "GuidEquals",
+        ],
+    },
+    {
+        "name": "a long ABAC condition is reported past its 240th character",
+        "ca_all": response(assignment=granted(condition=ABAC_LONG)),
+        "expect": [
+            "[!] That grant carries an ABAC condition",
+            "PrincipalType",
         ],
     },
     {
@@ -525,17 +546,38 @@ CASES = [
         "reject": ["PIM holds these roles"],
     },
     {
-        "name": "an invalid identifier drops the resource group scope instead of building a bad URL",
-        "tfvars_identifier": '"-Prod Corp"',
+        "name": "a name_prefix that yields an illegal group name drops the scope instead of building a bad URL",
+        "tfvars_name_prefix": '"-prod/../other"',
         "ca_all": ALL_GOOD,
-        "expect": ["[!] terraform.tfvars: identifier is not a valid resource-name suffix"],
+        "expect": ["[!] terraform.tfvars: 'langsmith-rg-prod/../other' is not a legal resource group name"],
         "reject_calls": ["resourceGroups"],
     },
     {
-        "name": "an empty identifier still yields a resource group scope",
-        "tfvars_identifier": '""',
+        "name": "an empty name_prefix still yields a resource group scope",
+        "tfvars_name_prefix": '""',
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg/providers"],
+    },
+    # Each naming override moves the resource group and the probe has to follow.
+    # A group that does not exist still answers, and every RG verdict below then
+    # describes the wrong thing.
+    {
+        "name": "unique_resource_names shortens the probed group to the ls- base",
+        "tfvars_extra": "unique_resource_names = true",
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-dev/providers"],
+    },
+    {
+        "name": "name_base replaces the probed group's base outright",
+        "tfvars_extra": 'name_base = "acme"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/acme-rg-dev/providers"],
+    },
+    {
+        "name": "resource_group_name replaces the probed group entirely",
+        "tfvars_extra": 'resource_group_name = "platform-shared-rg"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
     },
     {
         # name_suffix_salt exists so a deployment whose four global names got
@@ -544,7 +586,8 @@ CASES = [
         # checking the old names and reporting the collision it was bumped to
         # escape. Redis is asserted because it is the one name printed in full.
         "name": "name_suffix_salt rotates the derived global names",
-        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true\nname_suffix_salt = "2"',
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": 'unique_resource_names = true\nname_suffix_salt = "2"',
         "ca_all": ALL_GOOD,
         "expect": ["ls-redis-prod-4352a7"],
         "reject": ["ls-redis-prod-8a57d8"],
@@ -553,7 +596,8 @@ CASES = [
         # The unsalted counterpart, pinning the default derivation so a change to
         # the hash inputs cannot pass unnoticed.
         "name": "an empty salt leaves the derived names unchanged",
-        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_extra": 'unique_resource_names = true',
         "ca_all": ALL_GOOD,
         "expect": ["ls-redis-prod-8a57d8"],
     },
@@ -573,10 +617,21 @@ CASES = [
         # asserted here: name_prefix wins over identifier, and the base follows
         # unique_resource_names.
         "name": "the resource group scope follows name_prefix and unique_resource_names",
-        "tfvars_extra": 'name_prefix = "prod"\nunique_resource_names = true',
+        "tfvars_name_prefix": '"prod"',
+        "tfvars_identifier": '"-dev"',
+        "tfvars_extra": 'unique_resource_names = true',
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/ls-rg-prod/providers"],
-        "reject_calls": ["langsmith-rg"],
+        "reject_calls": ["langsmith-rg", "ls-rg-dev"],
+    },
+    {
+        # identifier is name_prefix's retired name. A deployment whose tfvars
+        # predates the rename still has to be probed at the group it owns.
+        "name": "a tfvars with only the legacy identifier still names its group",
+        "tfvars_name_prefix": None,
+        "tfvars_identifier": '"-legacy"',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg-legacy/providers"],
     },
     {
         "name": "a bring-your-own VNet is checked as its own scope",
@@ -729,13 +784,19 @@ def build_case(case, index):
     (infra / "scripts").mkdir(parents=True)
     shutil.copy2(SOURCE_SCRIPT, infra / "scripts" / "preflight.sh")
 
-    identifier = case.get("tfvars_identifier", '"-dev"')
-    (infra / "terraform.tfvars").write_text(
-        f'subscription_id = "{case.get("tfvars_sub", SUB)}"\n'
-        'location    = "eastus"\n'
-        f"identifier  = {identifier}\n"
-        f"{case.get('tfvars_extra', '')}\n"
-    )
+    # tfvars_name_prefix = None omits the key, so a case can write the legacy
+    # identifier instead and exercise the fallback.
+    name_prefix = case.get("tfvars_name_prefix", '"-dev"')
+    lines = [
+        f'subscription_id = "{case.get("tfvars_sub", SUB)}"',
+        'location    = "eastus"',
+    ]
+    if name_prefix is not None:
+        lines.append(f"name_prefix = {name_prefix}")
+    if "tfvars_identifier" in case:
+        lines.append(f"identifier  = {case['tfvars_identifier']}")
+    lines.append(case.get("tfvars_extra", ""))
+    (infra / "terraform.tfvars").write_text("\n".join(lines) + "\n")
     (infra / "secrets.auto.tfvars").write_text('langsmith_license_key = "lsv2_pt_stub"\n')
 
     fixture = root / "fixtures"
