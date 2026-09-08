@@ -66,6 +66,11 @@ output "sandbox_namespace" {
   value       = local.separate_cluster_sandboxes ? var.sandbox_namespace : null
 }
 
+output "sandbox_service_account_name" {
+  description = "ServiceAccount trusted by the sandbox IRSA role. init-values.sh writes this into sandboxHost.serviceAccount.name so the chart matches the role trust policy."
+  value       = local.separate_cluster_sandboxes ? var.sandbox_service_account_name : null
+}
+
 #------------------------------------------------------------------------------
 # PostgreSQL (RDS)
 #------------------------------------------------------------------------------

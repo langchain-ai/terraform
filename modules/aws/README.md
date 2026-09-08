@@ -939,6 +939,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_sandboxes` | `false` | no | Provision sandbox-host nodes, dedicated JuiceFS Redis, and sandbox storage access |
 | `sandbox_deployment_mode` | `same_cluster` | no | Run sandbox-host in the main EKS cluster or create a `separate_cluster` |
 | `sandbox_namespace` | `langsmith-sandbox` | separate cluster | Namespace for the standalone sandbox runtime |
+| `sandbox_service_account_name` | `sandbox-host` | no | ServiceAccount trusted by the sandbox IRSA role. `init-values.sh` writes it into `sandboxHost.serviceAccount.name`, so change it here rather than in the values file |
 | `sandbox_host_node_count` | `1` | when enabled | Fixed number of KVM-capable sandbox nodes |
 | `sandbox_host_instance_types` | `["m5d.metal"]` | when enabled | KVM-capable EC2 instance types for sandbox-host |
 | `langsmith_helm_chart_version` | `""` | no | Exact 0.16.x version, or 0.17.x for separate-cluster sandboxes |

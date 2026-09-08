@@ -19,6 +19,10 @@ sandboxHost:
   deployment:
     nodeSelector:
       sandbox.langsmith.com/host: "true"
+  # serviceAccount.name must match the sandbox IAM role's OIDC 'sub' condition
+  # (Terraform: sandbox_service_account_name). The chart would otherwise default
+  # it to <release>-langsmith-sandbox-sandbox-host, which the role does not
+  # trust, and sandbox-host would fail to reach the trace bucket.
   serviceAccount:
     name: "sandbox-host"
     annotations:

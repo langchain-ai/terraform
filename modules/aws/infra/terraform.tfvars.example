@@ -345,6 +345,13 @@ redis_instance_type = "cache.m6g.xlarge"
 # sandbox_deployment_mode = "same_cluster" # or "separate_cluster"
 # sandbox_namespace = "langsmith-sandbox"
 #
+# ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+# This is the IRSA contract: the same name goes into the sandbox IAM role's
+# OIDC trust condition and into sandboxHost.serviceAccount.name in the values
+# init-values.sh generates. Change it here, never only in the values file, or
+# sandbox-host loses access to the trace bucket.
+# sandbox_service_account_name = "sandbox-host"
+#
 # For separate_cluster, pin compatible charts:
 # langsmith_helm_chart_version = "0.17.0-rc.22"
 # langsmith_sandbox_helm_chart_version = "0.1.0-rc.1"

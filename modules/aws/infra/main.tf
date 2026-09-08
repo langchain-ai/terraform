@@ -416,6 +416,13 @@ resource "aws_iam_role_policy" "langsmith_s3" {
   })
 }
 
+# Trust is scoped to exactly one ServiceAccount, not a wildcard over the
+# namespace: any other workload scheduled there must not be able to assume the
+# role that reaches the trace bucket. var.sandbox_service_account_name is the
+# single source of truth for that name — init-values.sh reads it back out of
+# the sandbox_service_account_name output and writes the same value into
+# sandboxHost.serviceAccount.name, so the chart cannot drift away from the
+# trust policy and leave IRSA silently failing at runtime.
 resource "aws_iam_role" "sandbox_host" {
   count = local.separate_cluster_sandboxes ? 1 : 0
 
@@ -433,7 +440,7 @@ resource "aws_iam_role" "sandbox_host" {
         Condition = {
           StringEquals = {
             "${module.sandbox_eks[0].oidc_provider}:aud" = "sts.amazonaws.com"
-            "${module.sandbox_eks[0].oidc_provider}:sub" = "system:serviceaccount:${var.sandbox_namespace}:sandbox-host"
+            "${module.sandbox_eks[0].oidc_provider}:sub" = "system:serviceaccount:${var.sandbox_namespace}:${var.sandbox_service_account_name}"
           }
         }
       }

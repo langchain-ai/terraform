@@ -265,6 +265,7 @@ _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || 
 SANDBOX_CLUSTER_NAME=""
 SANDBOX_IRSA_ROLE_ARN=""
 SANDBOX_RUNTIME_SECRET_NAME=""
+SANDBOX_SERVICE_ACCOUNT_NAME=""
 SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=""
 SANDBOX_CACHE_DIRS=()
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -284,6 +285,17 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       exit 1
     }
     SANDBOX_RUNTIME_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_runtime_secret_name 2>/dev/null) || SANDBOX_RUNTIME_SECRET_NAME="langsmith-sandbox-runtime"
+    # The sandbox IRSA role trusts exactly one ServiceAccount. Read that name
+    # back from Terraform rather than hardcoding it here: the chart defaults
+    # sandboxHost.serviceAccount.name to <release>-langsmith-sandbox-sandbox-host,
+    # which would not match the trust policy and would fail IRSA at runtime with
+    # a WebIdentityErr that points nowhere near this file.
+    SANDBOX_SERVICE_ACCOUNT_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_service_account_name 2>/dev/null) || SANDBOX_SERVICE_ACCOUNT_NAME=""
+    if [[ -z "$SANDBOX_SERVICE_ACCOUNT_NAME" ]]; then
+      echo "ERROR: Could not read sandbox_service_account_name. Upgrade the infra module and re-apply;" >&2
+      echo "       without it the generated values cannot be matched to the sandbox IRSA trust policy." >&2
+      exit 1
+    fi
     while IFS= read -r _cache_dir; do
       [[ -n "$_cache_dir" ]] && SANDBOX_CACHE_DIRS+=("$_cache_dir")
     done < <(terraform -chdir="$INFRA_DIR" output -json sandbox_juicefs_host_cache_dirs 2>/dev/null | python3 -c 'import json, sys; print("\n".join(json.load(sys.stdin)))' 2>/dev/null || true)
@@ -743,12 +755,16 @@ sandboxHost:
   deployment:
     nodeSelector:
       sandbox.langsmith.com/host: "true"
+  # serviceAccount.name is the IRSA contract with the sandbox IAM role's OIDC
+  # 'sub' condition (Terraform: sandbox_service_account_name). Do not rename it
+  # here alone — change the tfvar and re-run init-values so both sides move
+  # together, or sandbox-host loses access to the trace bucket.
   serviceAccount:
-    name: "sandbox-host"
+    name: "${SANDBOX_SERVICE_ACCOUNT_NAME}"
     annotations:
       eks.amazonaws.com/role-arn: "${SANDBOX_IRSA_ROLE_ARN}"
 YAML
-    echo "Written: $SANDBOX_VALUES_FILE (cluster: $SANDBOX_CLUSTER_NAME)"
+    echo "Written: $SANDBOX_VALUES_FILE (cluster: $SANDBOX_CLUSTER_NAME, serviceAccount: $SANDBOX_SERVICE_ACCOUNT_NAME)"
   else
     _sandbox_config_block="
 sandboxes:

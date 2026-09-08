@@ -328,6 +328,26 @@ variable "sandbox_runtime_secret_revision" {
   default     = 1
 }
 
+variable "sandbox_service_account_name" {
+  type        = string
+  description = <<-EOT
+    ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+    This name is the IRSA contract: it is written into the OIDC `sub` condition
+    on the sandbox IAM role AND into sandboxHost.serviceAccount.name in the
+    generated langsmith-sandbox values, so both sides always agree. The
+    langsmith-sandbox chart otherwise defaults this to
+    <release>-langsmith-sandbox-sandbox-host, which would not match the role
+    trust policy. Only change it if you also install the chart with the same
+    sandboxHost.serviceAccount.name.
+  EOT
+  default     = "sandbox-host"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.sandbox_service_account_name)) && length(var.sandbox_service_account_name) <= 63
+    error_message = "sandbox_service_account_name must be a valid DNS-1123 label: up to 63 lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character."
+  }
+}
+
 variable "sandbox_host_node_count" {
   type        = number
   description = "Fixed number of sandbox-host nodes to provision when enable_sandboxes = true."
