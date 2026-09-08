@@ -314,10 +314,16 @@ redis_instance_type = "cache.m6g.xlarge"
 #------------------------------------------------------------------------------
 # Enables infrastructure prerequisites for LangSmith Sandboxes.
 #
-# Sandboxes use the sandbox-host architecture in the same EKS cluster and
-# namespace as LangSmith. This provisions a dedicated node group with the label
-# and taint expected by the Helm chart:
+# By default, Sandboxes use the sandbox-host architecture in the same EKS
+# cluster and namespace as LangSmith. Set sandbox_deployment_mode to
+# "separate_cluster" to create a dedicated EKS cluster in the same VPC and
+# install the standalone langsmith-sandbox chart there. Both modes provision
+# nodes with the label and taint expected by the Helm chart:
 #   sandbox.langsmith.com/host=true
+#
+# Separate-cluster mode uses private VPC routing from the main EKS worker/pod
+# security group to sandbox node port 19190. It requires LangSmith chart 0.17.x
+# and langsmith-sandbox chart 0.1.x.
 #
 # Requirements:
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
@@ -336,6 +342,20 @@ redis_instance_type = "cache.m6g.xlarge"
 #     matching m5d.metal.
 #
 # enable_sandboxes = true
+# sandbox_deployment_mode = "same_cluster" # or "separate_cluster"
+# sandbox_namespace = "langsmith-sandbox"
+#
+# ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+# This is the IRSA contract: the same name goes into the sandbox IAM role's
+# OIDC trust condition and into sandboxHost.serviceAccount.name in the values
+# init-values.sh generates. Change it here, never only in the values file, or
+# sandbox-host loses access to the trace bucket.
+# sandbox_service_account_name = "sandbox-host"
+#
+# For separate_cluster, pin compatible charts:
+# langsmith_helm_chart_version = "0.17.0-rc.22"
+# langsmith_sandbox_helm_chart_version = "0.1.0-rc.1"
+#
 # sandbox_juicefs_redis_instance_type = "cache.m6g.large"
 # sandbox_juicefs_redis_auth_token is required when sandboxes are enabled.
 # Do not put it in this file. Export it manually with:
@@ -547,6 +567,32 @@ langsmith_namespace = "langsmith"
 # alb_scheme              = "internet-facing"
 # alb_allowed_cidr_blocks = ["0.0.0.0/0"]
 
+# ── Narrowing the ALB with separate_cluster sandboxes ────────────────────────
+#
+# Separate-cluster sandboxes call the LangSmith API back through the ALB, so a
+# narrowed alb_allowed_cidr_blocks can cut them off. How that is handled depends
+# on the scheme, and terraform apply fails with instructions if it cannot be:
+#
+#   alb_scheme = "internal"
+#     Handled automatically. The call stays inside the VPC, so Terraform adds an
+#     ALB ingress rule naming the sandbox node security group. Narrow
+#     alb_allowed_cidr_blocks as much as you like. This is the recommended setup.
+#
+#   alb_scheme = "internet-facing"
+#     The call leaves via the NAT gateway and returns as public traffic, so only
+#     alb_allowed_cidr_blocks can match it. Either add your NAT egress address
+#     there yourself, or set the flag below to have Terraform add it.
+#
+# sandbox_alb_allow_nat_egress = true
+#   Appends the NAT gateway Elastic IPs to alb_allowed_cidr_blocks. Read this
+#   before enabling: with a single NAT gateway, every workload in the private
+#   subnets shares that address — including the sandboxes, which run untrusted
+#   user code. Allowing it re-opens the LangSmith API to anything in the VPC,
+#   which is usually the reason you narrowed the allowlist to begin with.
+#   Prefer alb_scheme = "internal". Requires create_vpc = true.
+#
+# sandbox_alb_allow_nat_egress = false
+
 # ALB Access Logs — captures every request that hits the ALB:
 #   client IP, request URI, response latency, HTTP status code.
 #   Docs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
@@ -668,6 +714,11 @@ enable_istio_gateway = false
 # Add more entries if LangSmith components need additional external endpoints
 # (e.g. LangChain Managed ClickHouse, external model providers, package registries).
 # Default covers the LangSmith beacon/telemetry endpoint only.
+#
+# With sandbox_deployment_mode = "separate_cluster", langsmith_domain is appended
+# automatically: the sandbox cluster shares these private route tables, so its
+# callback to the LangSmith API is inspected here and would otherwise be dropped.
+# You do not need to list it yourself.
 #
 # firewall_allowed_fqdns = ["beacon.langchain.com"]
 

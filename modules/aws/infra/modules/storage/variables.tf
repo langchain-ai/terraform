@@ -19,6 +19,12 @@ variable "langsmith_irsa_role_arn" {
   default     = null
 }
 
+variable "additional_irsa_role_arns" {
+  type        = list(string)
+  description = "Additional IRSA role ARNs allowed through the private S3 bucket policy."
+  default     = []
+}
+
 variable "create_bucket_policy" {
   type        = bool
   description = "Whether to create the S3 bucket policy. Use this instead of checking langsmith_irsa_role_arn for count, since the ARN is not known until apply."

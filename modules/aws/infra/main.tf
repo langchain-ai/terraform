@@ -22,6 +22,17 @@ provider "kubernetes" {
   }
 }
 
+provider "kubernetes" {
+  alias                  = "sandbox"
+  host                   = try(module.sandbox_eks[0].cluster_endpoint, null)
+  cluster_ca_certificate = try(base64decode(module.sandbox_eks[0].cluster_certificate_authority_data), null)
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", try(module.sandbox_eks[0].cluster_name, ""), "--region", var.region]
+  }
+}
+
 provider "helm" {
   kubernetes {
     host                   = module.eks.cluster_endpoint
@@ -73,6 +84,41 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = !var.enable_sandboxes || (var.sandbox_juicefs_redis_auth_token != "" && length(var.sandbox_juicefs_redis_auth_token) >= 16)
       error_message = "sandbox_juicefs_redis_auth_token is required (min 16 chars) when enable_sandboxes = true. Run: source ./scripts/setup-env.sh, or set TF_VAR_sandbox_juicefs_redis_auth_token."
+    }
+
+    precondition {
+      condition = !local.separate_cluster_sandboxes || (
+        var.langsmith_api_key_salt != "" && var.sandbox_callback_signing_jwk != ""
+      )
+      error_message = "separate_cluster sandboxes require langsmith_api_key_salt and sandbox_callback_signing_jwk so Terraform can create the minimal runtime Secret. Run: source ./scripts/setup-env.sh."
+    }
+
+    # Separate-cluster sandboxes call the LangSmith API through the ALB. With an
+    # internal ALB a security group rule covers that automatically; with an
+    # internet-facing ALB the call arrives from the NAT gateway and is matched by
+    # alb_allowed_cidr_blocks, so a narrowed allowlist silently breaks it. Fail at
+    # plan time rather than letting sandboxes come up unable to register.
+    precondition {
+      condition = (
+        !local.separate_cluster_sandboxes
+        || var.alb_scheme == "internal"
+        || local.alb_allowlist_is_open
+        || var.sandbox_alb_allow_nat_egress
+      )
+      error_message = "separate_cluster sandboxes cannot reach the LangSmith API: alb_scheme is 'internet-facing' and alb_allowed_cidr_blocks is narrowed, so the sandbox cluster's callback (which egresses via the NAT gateway) is blocked. Preferred fix: set alb_scheme = 'internal'. Otherwise add your NAT egress address to alb_allowed_cidr_blocks, or set sandbox_alb_allow_nat_egress = true to add it automatically — note that this grants ALB access to everything sharing the NAT gateway, including untrusted sandbox code."
+    }
+
+    precondition {
+      condition     = !var.sandbox_alb_allow_nat_egress || var.create_vpc
+      error_message = "sandbox_alb_allow_nat_egress = true requires create_vpc = true, because the NAT gateway Elastic IPs are only known when Terraform manages the VPC. For bring-your-own-VPC, add your NAT egress address to alb_allowed_cidr_blocks explicitly."
+    }
+
+    # Egress filtering is FQDN-based, so the sandbox callback needs the LangSmith
+    # hostname allowed. locals.firewall_allowed_fqdns appends it automatically,
+    # which is only possible when the hostname is known.
+    precondition {
+      condition     = !local.separate_cluster_sandboxes || !var.create_firewall || var.langsmith_domain != ""
+      error_message = "separate_cluster sandboxes with create_firewall = true require langsmith_domain, so the sandbox cluster's callback to the LangSmith API can be added to the Network Firewall allowlist. Without it the callback is dropped as unmatched egress."
     }
 
     precondition {
@@ -218,7 +264,7 @@ module "firewall" {
   nat_gateway_az          = module.vpc[0].nat_gateway_az
   firewall_subnet_cidr    = var.firewall_subnet_cidr
   private_route_table_ids = module.vpc[0].private_route_table_ids
-  allowed_fqdns           = var.firewall_allowed_fqdns
+  allowed_fqdns           = local.firewall_allowed_fqdns
   tags                    = local.common_tags
 
   depends_on = [module.vpc]
@@ -244,6 +290,35 @@ module "eks" {
   eks_addons                      = var.eks_addons
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
   enable_istio_gateway            = var.enable_istio_gateway
+}
+
+module "sandbox_eks" {
+  source = "./modules/sandbox-eks"
+  count  = local.separate_cluster_sandboxes ? 1 : 0
+
+  cluster_name                = local.sandbox_cluster_name
+  cluster_version             = var.eks_cluster_version
+  vpc_id                      = local.vpc_id
+  subnet_ids                  = local.private_subnets
+  managed_node_group_defaults = var.eks_managed_node_group_defaults
+  managed_node_group          = local.sandbox_host_node_group
+  cluster_addons              = var.eks_addons
+  public_cluster_enabled      = var.enable_public_eks_cluster
+  public_access_cidrs         = var.eks_public_access_cidrs
+  cluster_enabled_log_types   = var.eks_cluster_enabled_log_types
+  tags                        = merge(local.common_tags, { component = "sandbox" })
+}
+
+resource "aws_security_group_rule" "sandbox_host_from_langsmith" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  type                     = "ingress"
+  from_port                = 19190
+  to_port                  = 19190
+  protocol                 = "tcp"
+  security_group_id        = module.sandbox_eks[0].node_security_group_id
+  source_security_group_id = module.eks.node_security_group_id
+  description              = "LangSmith control plane to sandbox-host"
 }
 
 # State migration: adding count changes the module address.
@@ -303,16 +378,17 @@ module "sandbox_juicefs_redis" {
 module "storage" {
   source = "./modules/storage"
 
-  bucket_name             = local.bucket_name
-  region                  = var.region
-  vpc_id                  = local.vpc_id
-  langsmith_irsa_role_arn = module.eks.langsmith_irsa_role_arn
-  create_bucket_policy    = true
-  s3_ttl_enabled          = var.s3_ttl_enabled
-  s3_ttl_short_days       = var.s3_ttl_short_days
-  s3_ttl_long_days        = var.s3_ttl_long_days
-  kms_key_arn             = var.s3_kms_key_arn
-  versioning_enabled      = var.s3_versioning_enabled
+  bucket_name               = local.bucket_name
+  region                    = var.region
+  vpc_id                    = local.vpc_id
+  langsmith_irsa_role_arn   = module.eks.langsmith_irsa_role_arn
+  additional_irsa_role_arns = local.separate_cluster_sandboxes ? [aws_iam_role.sandbox_host[0].arn] : []
+  create_bucket_policy      = true
+  s3_ttl_enabled            = var.s3_ttl_enabled
+  s3_ttl_short_days         = var.s3_ttl_short_days
+  s3_ttl_long_days          = var.s3_ttl_long_days
+  kms_key_arn               = var.s3_kms_key_arn
+  versioning_enabled        = var.s3_versioning_enabled
 }
 
 module "postgres" {
@@ -346,6 +422,65 @@ resource "aws_iam_role_policy" "langsmith_s3" {
 
   name = "langsmith-s3-access"
   role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3Access"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket",
+        ]
+        Resource = [
+          module.storage.bucket_arn,
+          "${module.storage.bucket_arn}/*",
+        ]
+      }
+    ]
+  })
+}
+
+# Trust is scoped to exactly one ServiceAccount, not a wildcard over the
+# namespace: any other workload scheduled there must not be able to assume the
+# role that reaches the trace bucket. var.sandbox_service_account_name is the
+# single source of truth for that name — init-values.sh reads it back out of
+# the sandbox_service_account_name output and writes the same value into
+# sandboxHost.serviceAccount.name, so the chart cannot drift away from the
+# trust policy and leave IRSA silently failing at runtime.
+resource "aws_iam_role" "sandbox_host" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  name = "${local.sandbox_cluster_name}-irsa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = module.sandbox_eks[0].oidc_provider_arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${module.sandbox_eks[0].oidc_provider}:aud" = "sts.amazonaws.com"
+            "${module.sandbox_eks[0].oidc_provider}:sub" = "system:serviceaccount:${var.sandbox_namespace}:${var.sandbox_service_account_name}"
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "sandbox_host_s3" {
+  count = local.separate_cluster_sandboxes ? 1 : 0
+
+  name = "sandbox-s3-access"
+  role = aws_iam_role.sandbox_host[0].name
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -486,20 +621,21 @@ resource "aws_route53_record" "langsmith_alb_alias" {
 module "alb" {
   source = "./modules/alb"
 
-  name                   = local.alb_name
-  vpc_id                 = local.vpc_id
-  vpc_cidr_block         = local.vpc_cidr_block
-  subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
-  internal               = var.alb_scheme == "internal"
-  allowed_cidr_blocks    = var.alb_allowed_cidr_blocks
-  tls_certificate_source = var.tls_certificate_source
-  acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
-  access_logs_enabled    = var.alb_access_logs_enabled
-  bucket_suffix          = random_id.bucket_suffix.hex
-  enable_envoy_gateway   = local.enable_envoy_gateway
-  enable_istio_gateway   = var.enable_istio_gateway
-  enable_nginx_ingress   = var.enable_nginx_ingress
-  tags                   = local.common_tags
+  name                       = local.alb_name
+  vpc_id                     = local.vpc_id
+  vpc_cidr_block             = local.vpc_cidr_block
+  subnets                    = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
+  internal                   = var.alb_scheme == "internal"
+  allowed_cidr_blocks        = local.alb_ingress_cidr_blocks
+  allowed_security_group_ids = local.alb_allowed_security_group_ids
+  tls_certificate_source     = var.tls_certificate_source
+  acm_certificate_arn        = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
+  access_logs_enabled        = var.alb_access_logs_enabled
+  bucket_suffix              = random_id.bucket_suffix.hex
+  enable_envoy_gateway       = local.enable_envoy_gateway
+  enable_istio_gateway       = var.enable_istio_gateway
+  enable_nginx_ingress       = var.enable_nginx_ingress
+  tags                       = local.common_tags
 
   depends_on = [module.vpc]
 }
@@ -672,7 +808,7 @@ module "k8s_bootstrap" {
 }
 
 resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
-  count = var.enable_sandboxes ? 1 : 0
+  count = local.same_cluster_sandboxes ? 1 : 0
 
   metadata {
     name      = var.sandbox_juicefs_csi_config_secret_name
@@ -691,6 +827,57 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
   data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 
   depends_on = [module.k8s_bootstrap]
+}
+
+resource "kubernetes_namespace_v1" "sandbox" {
+  provider = kubernetes.sandbox
+  count    = local.separate_cluster_sandboxes ? 1 : 0
+
+  metadata {
+    name = var.sandbox_namespace
+  }
+
+  depends_on = [module.sandbox_eks]
+}
+
+resource "kubernetes_secret_v1" "sandbox_runtime" {
+  provider = kubernetes.sandbox
+  count    = local.separate_cluster_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_runtime_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    api_key_salt                 = var.langsmith_api_key_salt
+    sandbox_callback_signing_jwk = var.sandbox_callback_signing_jwk
+  }
+
+  data_wo_revision = var.sandbox_runtime_secret_revision
+}
+
+resource "kubernetes_secret_v1" "sandbox_juicefs_config" {
+  provider = kubernetes.sandbox
+  count    = local.separate_cluster_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = kubernetes_namespace_v1.sandbox[0].metadata[0].name
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
+    storage = "s3"
+    bucket  = local.sandbox_juicefs_bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
 }
 
 #------------------------------------------------------------------------------

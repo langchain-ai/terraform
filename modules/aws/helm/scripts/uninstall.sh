@@ -25,6 +25,7 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
+SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
 DELETE_TIMEOUT="${DELETE_TIMEOUT:-120s}"
 # In-cluster ClickHouse holds trace data, so its claim is kept by default:
 # uninstall is also the path to a clean Helm reinstall on the same cluster.
@@ -32,39 +33,69 @@ DELETE_TIMEOUT="${DELETE_TIMEOUT:-120s}"
 # the volume before terraform destroy removes the driver.
 DELETE_DATA_PVCS="${DELETE_DATA_PVCS:-false}"
 
-# Names of resources of type $1 whose name matches extended regex $2.
-# Resource names rather than labels: the sandbox-host workload is named
-# "sandbox-host" on some chart versions and "<release>-sandbox-host" on
+# Names of resources of type $2 in namespace $1 whose name matches extended
+# regex $3. Resource names rather than labels: the sandbox-host workload is
+# named "sandbox-host" on some chart versions and "<release>-sandbox-host" on
 # others, and JuiceFS mount pods carry no chart labels at all.
 _names_matching() {
-  local _type="$1" _pattern="$2"
-  kubectl get "$_type" -n "$NAMESPACE" \
+  local _ns="$1" _type="$2" _pattern="$3"
+  kubectl get "$_type" -n "$_ns" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
     | grep -Ei -- "$_pattern" || true
 }
 
-# Force-delete pods stuck in Terminating and strip the JuiceFS finalizer that
-# only the (now-removed) CSI controller would clear. Without this, kubectl
-# delete blocks past terminationGracePeriodSeconds with no way to finish.
+# Force-delete pods stuck in Terminating in namespace $1 and strip the JuiceFS
+# finalizer that only the (now-removed) CSI controller would clear. Without
+# this, kubectl delete blocks past terminationGracePeriodSeconds with no way
+# to finish.
 _force_clear_stuck_pods() {
-  local _pod
+  local _ns="$1" _pod
   while IFS= read -r _pod; do
     [[ -z "$_pod" ]] && continue
     echo "  force-deleting pod $_pod"
-    kubectl patch pod "$_pod" -n "$NAMESPACE" \
+    kubectl patch pod "$_pod" -n "$_ns" \
       --type=merge -p '{"metadata":{"finalizers":null}}' >/dev/null || true
-    kubectl delete pod "$_pod" -n "$NAMESPACE" \
+    kubectl delete pod "$_pod" -n "$_ns" \
       --grace-period=0 --force --wait=false --ignore-not-found || true
   done < <(
     {
       # Pods the API server has accepted a delete for but that never finish.
-      kubectl get pods -n "$NAMESPACE" \
+      kubectl get pods -n "$_ns" \
         -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.name}{"\n"}{end}' \
         2>/dev/null || true
       # JuiceFS mount pods, which hold juicefs.com/finalizer.
-      _names_matching pods 'juicefs'
+      _names_matching "$_ns" pods 'juicefs'
     } | sort -u
   )
+}
+
+# Drop the sandbox-host workload and its JuiceFS volumes in namespace $1 while
+# the CSI driver from the same release is still running. helm uninstall removes
+# the driver along with everything else, and a PVC that mounted through it can
+# then never be unmounted, because the controller that clears
+# juicefs.com/finalizer is gone. Same ordering the main cluster needs, so both
+# paths call this before their helm uninstall.
+_drain_juicefs_volumes() {
+  local _ns="$1" _workload _pvc
+  echo "Removing JuiceFS / sandbox volumes in '$_ns' while CSI is still present..."
+  while IFS= read -r _workload; do
+    [[ -z "$_workload" ]] && continue
+    echo "  deleting $_workload"
+    kubectl delete "$_workload" -n "$_ns" \
+      --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
+  done < <(
+    {
+      _names_matching "$_ns" deployments 'sandbox-host' | sed 's|^|deployment/|'
+      _names_matching "$_ns" statefulsets 'sandbox-host' | sed 's|^|statefulset/|'
+    }
+  )
+
+  while IFS= read -r _pvc; do
+    [[ -z "$_pvc" ]] && continue
+    echo "  deleting PVC $_pvc"
+    kubectl delete pvc "$_pvc" -n "$_ns" \
+      --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
+  done < <(_names_matching "$_ns" pvc 'juicefs|smithbox')
 }
 
 # ── Resolve config from terraform.tfvars (best effort) ────────────────────────
@@ -74,11 +105,12 @@ _force_clear_stuck_pods() {
 # strands JuiceFS mount pods on juicefs.com/finalizer. Both inputs are now
 # optional: when they resolve, the script retargets kubeconfig itself; when they
 # do not, it uses the active kubectl context and names it in the confirmation.
-_environment=""; _name_prefix=""; _region="${AWS_REGION:-}"
+_environment=""; _name_prefix=""; _region="${AWS_REGION:-}"; _sandbox_deployment_mode="same_cluster"
 if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
   _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
   _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
+  _sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
   echo "Resolved from terraform.tfvars:"
   echo "  name_prefix  = ${_name_prefix:-(empty)}"
   echo "  environment  = ${_environment:-(empty)}"
@@ -91,8 +123,14 @@ echo ""
 
 # ── Point kubeconfig at the right cluster, if Terraform can tell us ───────────
 _cluster_name=""
+_sandbox_cluster_name=""
+_sandbox_namespace="langsmith-sandbox"
 if [[ -n "$_region" ]]; then
   _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
+  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+    _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || _sandbox_cluster_name=""
+    _sandbox_namespace=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace="langsmith-sandbox"
+  fi
 fi
 
 if [[ -n "$_cluster_name" ]]; then
@@ -118,6 +156,9 @@ echo "  - Helm release '$RELEASE_NAME' from namespace '$NAMESPACE'"
 echo "  - ExternalSecret 'langsmith-config' from namespace '$NAMESPACE'"
 echo "  - ClusterSecretStore 'langsmith-ssm'"
 echo "  - JuiceFS / sandbox volumes (while CSI is still present)"
+if [[ -n "$_sandbox_cluster_name" ]]; then
+  echo "  - Helm release '$SANDBOX_RELEASE_NAME' from sandbox cluster '$_sandbox_cluster_name' namespace '$_sandbox_namespace'"
+fi
 if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
   echo "  - ClickHouse data PVCs — TRACE DATA IS DELETED (DELETE_DATA_PVCS=true)"
 else
@@ -132,32 +173,49 @@ if [[ "$_confirm" != "y" && "$_confirm" != "Y" ]]; then
 fi
 echo ""
 
+if [[ -n "$_sandbox_cluster_name" ]]; then
+  echo "Uninstalling standalone sandbox runtime from '$_sandbox_cluster_name'..."
+
+  # Throwaway kubeconfig rather than rewriting the operator's: mutating the
+  # shared file switches current-context for every other shell using it, and a
+  # failure mid-teardown would strand it pointed at the sandbox cluster.
+  _sandbox_kubeconfig=$(mktemp -t langsmith-sandbox-kubeconfig.XXXXXX)
+  chmod 600 "$_sandbox_kubeconfig"
+  # shellcheck disable=SC2064  # capture the path now; it is what we must remove
+  trap "rm -f '$_sandbox_kubeconfig'" EXIT
+
+  # Subshell so the export cannot leak into the main-cluster teardown below,
+  # whatever the shell's POSIX mode does with `VAR=x func`.
+  (
+    export KUBECONFIG="$_sandbox_kubeconfig"
+    aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region"
+
+    if helm list -n "$_sandbox_namespace" --filter "^${SANDBOX_RELEASE_NAME}$" \
+      --output json 2>/dev/null | grep -q '"name"'; then
+      # Same CSI-before-release ordering the main cluster needs: the standalone
+      # chart ships JuiceFS alongside sandbox-host, so uninstalling first would
+      # leave mount pods on juicefs.com/finalizer with no controller to clear
+      # it and hang past the timeout.
+      _drain_juicefs_volumes "$_sandbox_namespace"
+      helm uninstall "$SANDBOX_RELEASE_NAME" -n "$_sandbox_namespace" --wait --timeout 10m
+      echo "Clearing sandbox pods stuck in Terminating (JuiceFS finalizers)..."
+      _force_clear_stuck_pods "$_sandbox_namespace"
+    else
+      echo "Helm release '$SANDBOX_RELEASE_NAME' not found in namespace '$_sandbox_namespace' — skipping."
+    fi
+  )
+
+  rm -f "$_sandbox_kubeconfig"
+  trap - EXIT
+  echo ""
+fi
+
 # ── Pre-Helm: tear down JuiceFS while CSI can still unmount ───────────────────
 # helm uninstall removes the JuiceFS CSI driver along with the release. A PVC
 # that mounts through that driver can then never be unmounted, because the
 # controller that clears juicefs.com/finalizer is gone. Drop the consumer and
 # the volume first, while the driver is still running.
-echo "Removing JuiceFS / sandbox volumes while CSI is still present..."
-_workload=""
-while IFS= read -r _workload; do
-  [[ -z "$_workload" ]] && continue
-  echo "  deleting $_workload"
-  kubectl delete "$_workload" -n "$NAMESPACE" \
-    --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
-done < <(
-  {
-    _names_matching deployments 'sandbox-host' | sed 's|^|deployment/|'
-    _names_matching statefulsets 'sandbox-host' | sed 's|^|statefulset/|'
-  }
-)
-
-_pvc=""
-while IFS= read -r _pvc; do
-  [[ -z "$_pvc" ]] && continue
-  echo "  deleting PVC $_pvc"
-  kubectl delete pvc "$_pvc" -n "$NAMESPACE" \
-    --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
-done < <(_names_matching pvc 'juicefs|smithbox')
+_drain_juicefs_volumes "$NAMESPACE"
 echo ""
 
 # ── Uninstall Helm release ────────────────────────────────────────────────────
@@ -192,7 +250,7 @@ kubectl delete deployments,pods \
 echo ""
 
 echo "Clearing pods stuck in Terminating (JuiceFS finalizers)..."
-_force_clear_stuck_pods
+_force_clear_stuck_pods "$NAMESPACE"
 echo ""
 
 # ── Reclaim dynamically provisioned EBS before terraform destroy ──────────────
@@ -200,7 +258,7 @@ echo ""
 # has no record of the volume. Destroying the cluster first leaves it billing
 # with nothing attached, because the driver that would reclaim it goes with the
 # cluster. Deleting the claim here is the only point where reclaim still works.
-_data_pvcs=$(_names_matching pvc 'clickhouse')
+_data_pvcs=$(_names_matching "$NAMESPACE" pvc 'clickhouse')
 if [[ -n "$_data_pvcs" ]]; then
   if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
     echo "Deleting ClickHouse data PVCs (reclaims EBS while the CSI driver is alive)..."

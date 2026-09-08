@@ -1,0 +1,29 @@
+# Reference values for the standalone langsmith-sandbox chart.
+# init-values.sh generates helm/values/langsmith-sandbox-values-overrides.yaml
+# with deployment-specific values from Terraform outputs.
+
+platform:
+  endpoint: "https://langsmith.example.com/api"
+
+serviceAuth:
+  existingSecretName: "langsmith-sandbox-runtime"
+
+juicefs:
+  existingSecretName: "juicefs-csi-config"
+  hostMount:
+    cacheDirs:
+      - "/var/cache/juicefs"
+
+sandboxHost:
+  enabled: true
+  deployment:
+    nodeSelector:
+      sandbox.langsmith.com/host: "true"
+  # serviceAccount.name must match the sandbox IAM role's OIDC 'sub' condition
+  # (Terraform: sandbox_service_account_name). The chart would otherwise default
+  # it to <release>-langsmith-sandbox-sandbox-host, which the role does not
+  # trust, and sandbox-host would fail to reach the trace bucket.
+  serviceAccount:
+    name: "sandbox-host"
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::<account-id>:role/<sandbox-irsa-role>"

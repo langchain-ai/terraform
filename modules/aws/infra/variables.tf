@@ -294,6 +294,60 @@ variable "enable_sandboxes" {
   default     = false
 }
 
+variable "sandbox_deployment_mode" {
+  type        = string
+  description = "Sandbox topology. same_cluster deploys sandbox-host in the LangSmith EKS cluster; separate_cluster creates a dedicated EKS cluster and deploys the runtime there."
+  default     = "same_cluster"
+
+  validation {
+    condition     = contains(["same_cluster", "separate_cluster"], var.sandbox_deployment_mode)
+    error_message = "sandbox_deployment_mode must be 'same_cluster' or 'separate_cluster'."
+  }
+}
+
+variable "sandbox_namespace" {
+  type        = string
+  description = "Kubernetes namespace for the standalone langsmith-sandbox release when sandbox_deployment_mode is separate_cluster."
+  default     = "langsmith-sandbox"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,62}$", var.sandbox_namespace))
+    error_message = "sandbox_namespace must be a valid Kubernetes namespace name."
+  }
+}
+
+variable "sandbox_runtime_secret_name" {
+  type        = string
+  description = "Name of the minimal Secret shared with the standalone sandbox runtime."
+  default     = "langsmith-sandbox-runtime"
+}
+
+variable "sandbox_runtime_secret_revision" {
+  type        = number
+  description = "Revision for the write-only standalone sandbox runtime Secret. Increment to intentionally rewrite it."
+  default     = 1
+}
+
+variable "sandbox_service_account_name" {
+  type        = string
+  description = <<-EOT
+    ServiceAccount that sandbox-host runs as in the dedicated sandbox cluster.
+    This name is the IRSA contract: it is written into the OIDC `sub` condition
+    on the sandbox IAM role AND into sandboxHost.serviceAccount.name in the
+    generated langsmith-sandbox values, so both sides always agree. The
+    langsmith-sandbox chart otherwise defaults this to
+    <release>-langsmith-sandbox-sandbox-host, which would not match the role
+    trust policy. Only change it if you also install the chart with the same
+    sandboxHost.serviceAccount.name.
+  EOT
+  default     = "sandbox-host"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.sandbox_service_account_name)) && length(var.sandbox_service_account_name) <= 63
+    error_message = "sandbox_service_account_name must be a valid DNS-1123 label: up to 63 lowercase alphanumeric characters or '-', starting and ending with an alphanumeric character."
+  }
+}
+
 variable "sandbox_host_node_count" {
   type        = number
   description = "Fixed number of sandbox-host nodes to provision when enable_sandboxes = true."
@@ -399,6 +453,30 @@ variable "alb_allowed_cidr_blocks" {
 variable "alb_access_logs_enabled" {
   type        = bool
   description = "Enable ALB access logging to a dedicated S3 bucket. Useful for traffic analysis and compliance."
+  default     = false
+}
+
+# Escape hatch for separate-cluster sandboxes behind an internet-facing ALB.
+#
+# The sandbox cluster reaches the LangSmith API at https://<langsmith_domain>/api.
+# With an internal ALB that path is covered automatically by a security group
+# rule naming the sandbox node group. With an internet-facing ALB the request
+# leaves via the NAT gateway and returns as public traffic, so it is matched by
+# alb_allowed_cidr_blocks instead — and is therefore blocked whenever that list
+# has been narrowed away from the default.
+#
+# Setting this to true appends the NAT gateway Elastic IPs to the ALB allowlist.
+# Understand what that grants before enabling it: with single_nat_gateway = true
+# every workload in the private subnets shares one Elastic IP, including the
+# sandboxes themselves, which run untrusted user code. Allowing that address
+# re-exposes the LangSmith API to anything running in the VPC, which is usually
+# the opposite of why alb_allowed_cidr_blocks was narrowed.
+#
+# Prefer alb_scheme = "internal", or terminate the sandbox callback on a
+# separate internal load balancer, and leave this false.
+variable "sandbox_alb_allow_nat_egress" {
+  type        = bool
+  description = "Append the NAT gateway Elastic IPs to alb_allowed_cidr_blocks so separate-cluster sandboxes can reach the LangSmith API through an internet-facing ALB. Grants ALB access to every workload sharing the NAT gateway, including untrusted sandbox code. Prefer alb_scheme = 'internal'."
   default     = false
 }
 
@@ -619,15 +697,23 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.16.11\". Empty deploys the latest patch on the pinned 0.16 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  description = "Pin the LangSmith Helm chart to an exact 0.16.x or 0.17.x version. Empty deploys the latest patch on the pinned 0.16 line. Separate-cluster sandboxes require 0.17.x."
   default     = ""
 
   validation {
-    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.16\\.", var.langsmith_helm_chart_version))
-    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x version — deploy.sh refuses anything off the pinned chart line."
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.(16|17)\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x/0.17.x version."
   }
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_sandbox_helm_chart_version" {
+  type        = string
+  description = "Pin the standalone langsmith-sandbox chart. Empty deploys the latest 0.1.x release."
+  default     = ""
 }
 
 variable "langsmith_domain" {

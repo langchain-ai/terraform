@@ -31,6 +31,8 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
+SANDBOX_RELEASE_NAME="${SANDBOX_RELEASE_NAME:-langsmith-sandbox}"
+SANDBOX_VALUES_FILE="$VALUES_DIR/langsmith-sandbox-values-overrides.yaml"
 # Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
@@ -49,6 +51,11 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+_sandbox_deployment_mode=$(_parse_tfvar "sandbox_deployment_mode") || _sandbox_deployment_mode="same_cluster"
+if [[ -z "${SANDBOX_CHART_VERSION:-}" ]]; then
+  SANDBOX_CHART_VERSION=$(_parse_tfvar "langsmith_sandbox_helm_chart_version") || SANDBOX_CHART_VERSION=""
+fi
+SANDBOX_CHART_VERSION="${SANDBOX_CHART_VERSION:-~0.1.0-0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -67,31 +74,41 @@ _validate_sandbox_values_file() {
   local values_file="$1"
 
   if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file"; then
+    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file"; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
     exit 1
   fi
+  if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+    if ! grep -Eq '^[[:space:]]{2}deploymentMode:[[:space:]]*separateCluster[[:space:]]*$' "$values_file" \
+      || [[ ! -f "$SANDBOX_VALUES_FILE" ]]; then
+      echo "ERROR: separate_cluster sandbox values are missing. Run: make init-values" >&2
+      exit 1
+    fi
+  elif ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file"; then
+    echo "ERROR: same_cluster sandbox JuiceFS values are missing. Run: make init-values" >&2
+    exit 1
+  fi
 }
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# Same-cluster installs preserve the pinned 0.16 values contract. The separate
+# runtime topology starts with chart 0.17, which adds deploymentMode and the
+# standalone langsmith-sandbox chart.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  if [[ "$_chart_line" != "0.17" ]]; then
+    echo "ERROR: sandbox_deployment_mode=separate_cluster requires a LangSmith 0.17.x chart; got '$CHART_VERSION'." >&2
+    echo "       Set langsmith_helm_chart_version in terraform.tfvars or CHART_VERSION." >&2
+    exit 1
+  fi
+elif [[ "$_chart_line" != "0.16" ]]; then
+  echo "ERROR: same_cluster examples remain pinned to the chart 0.16 line; got '$CHART_VERSION'." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or select separate_cluster for chart 0.17." >&2
   exit 1
 fi
 # engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
 # are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
+if [[ "$_chart_line" == "0.16" && "$CHART_VERSION" == *-* ]]; then
   _rc="${CHART_VERSION##*-rc.}"
   if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
     echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
@@ -157,6 +174,16 @@ fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _validate_sandbox_values_file "$ENV_FILE"
+fi
+
+_sandbox_cluster_name=""
+_sandbox_namespace=""
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  _sandbox_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_cluster_name 2>/dev/null) || {
+    echo "ERROR: Could not read sandbox_cluster_name. Is terraform apply complete?" >&2
+    exit 1
+  }
+  _sandbox_namespace=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_namespace 2>/dev/null) || _sandbox_namespace="langsmith-sandbox"
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────────
@@ -483,10 +510,23 @@ fi
 kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
   --ignore-not-found=true 2>/dev/null || true
 
-# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14). Helm
-# silently skips any version tagged -rc./-alpha./-beta. without it.
+# --devel is required for pre-release chart versions. Helm filters prereleases
+# out of the repo index before matching, so without it a constraint that only
+# a prerelease can satisfy silently resolves to nothing.
+#
+# The test is "does the constraint carry a SemVer prerelease identifier", i.e.
+# a '-' after the version core, rather than an -rc/-alpha/-beta allowlist. Both
+# forms appear in these pins: the LangSmith chart uses 0.17.0-rc.22, and the
+# sandbox chart's default is ~0.1.0-0, where -0 is the conventional way to say
+# "prereleases allowed". An allowlist matches the first and misses the second.
+# Build metadata (+meta) is stripped first so it cannot be mistaken for one.
+_needs_devel_flag() {
+  local _version="${1%%+*}"
+  [[ "$_version" == *-* ]]
+}
+
 _devel_flag=""
-if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
+if [[ -n "$CHART_VERSION" ]] && _needs_devel_flag "$CHART_VERSION"; then
   _devel_flag="--devel"
 fi
 
@@ -513,7 +553,7 @@ if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
 fi
-if [[ "$_enable_sandboxes" == "true" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
   _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: chart $_resolved_chart does not declare an appVersion for the Sandbox image." >&2
@@ -568,7 +608,7 @@ for dep in "${_core_deployments[@]}"; do
   fi
 done
 
-if [[ "$_enable_sandboxes" == "true" ]]; then
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "same_cluster" ]]; then
   if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
     echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
     _all_ready=false
@@ -629,6 +669,98 @@ if [[ -n "$_active_host" ]]; then
   fi
 else
   echo "(Load balancer not yet ready — re-run deploy after a few minutes to get the hostname)"
+fi
+
+if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
+  # Read hostname and basePath from the *config:* block specifically. A bare
+  # `grep '^\s*hostname:'` also matches the hostname keys that gateway and
+  # sandbox overlays nest under other top-level maps, so it silently picks up
+  # whichever happens to sort first. basePath matters because the sandbox
+  # reaches LangSmith at <hostname>/<basePath>/api; dropping it yields a URL
+  # that passes the chart's /api check and then 404s at runtime.
+  _read_config_key() {
+    awk -v key="$1" '
+      /^[^[:space:]#]/ { in_config = ($0 ~ /^config:[[:space:]]*$/) ; next }
+      !in_config { next }
+      $1 == key":" {
+        sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "")
+        sub(/[[:space:]]*(#.*)?$/, "")
+        gsub(/^"|"$/, "")
+        print
+        exit
+      }
+    ' "$ENV_FILE" 2>/dev/null || true
+  }
+
+  _platform_host=$(_read_config_key "hostname")
+  _platform_base_path=$(_read_config_key "basePath")
+
+  if [[ ! "$_platform_host" =~ ^https?://[^/]+ ]]; then
+    echo "ERROR: separate_cluster sandboxes need an absolute config.hostname in $(basename "$ENV_FILE")." >&2
+    echo "       Found: '${_platform_host:-<empty>}'. Re-run 'make init-values' after the ALB is up," >&2
+    echo "       or set langsmith_domain in terraform.tfvars." >&2
+    exit 1
+  fi
+
+  _platform_endpoint="${_platform_host%/}"
+  _platform_base_path="${_platform_base_path#/}"
+  _platform_base_path="${_platform_base_path%/}"
+  [[ -n "$_platform_base_path" ]] && _platform_endpoint+="/${_platform_base_path}"
+  _platform_endpoint+="/api"
+
+  # Same rule as the core chart above, so the two pins cannot drift apart.
+  _sandbox_devel_flag=""
+  if _needs_devel_flag "$SANDBOX_CHART_VERSION"; then
+    _sandbox_devel_flag="--devel"
+  fi
+  _sandbox_chart_metadata=$(helm show chart langchain/langsmith-sandbox --version "$SANDBOX_CHART_VERSION" ${_sandbox_devel_flag:-} 2>/dev/null) || _sandbox_chart_metadata=""
+  _resolved_sandbox_chart=$(awk '/^version:/{print $2}' <<<"$_sandbox_chart_metadata")
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_sandbox_chart_metadata")
+  if [[ -z "$_resolved_sandbox_chart" || -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: no langchain/langsmith-sandbox chart matches '$SANDBOX_CHART_VERSION'." >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "Deploying sandbox runtime to cluster: $_sandbox_cluster_name"
+  echo "Chart: langchain/langsmith-sandbox requested=${SANDBOX_CHART_VERSION} resolved=${_resolved_sandbox_chart}"
+  echo "Platform endpoint: $_platform_endpoint"
+
+  # Target the sandbox cluster through a throwaway kubeconfig instead of
+  # rewriting the operator's. `aws eks update-kubeconfig` mutates the shared
+  # file in place and switches current-context; a failure between the switch
+  # and the switch back would leave the shell pointed at the sandbox cluster,
+  # and on a shared KUBECONFIG it writes credentials other people can see.
+  _sandbox_kubeconfig=$(mktemp -t langsmith-sandbox-kubeconfig.XXXXXX)
+  chmod 600 "$_sandbox_kubeconfig"
+  # shellcheck disable=SC2064  # capture the path now; it is what we must remove
+  trap "rm -f '$_sandbox_kubeconfig'" EXIT
+
+  # Subshell so the export cannot leak past the sandbox deploy, whatever the
+  # shell's POSIX mode does with `VAR=x func`. set -e still propagates: a
+  # failure in here exits the script and the trap removes the file.
+  (
+    export KUBECONFIG="$_sandbox_kubeconfig"
+    aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region"
+
+    helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
+      --namespace "$_sandbox_namespace" \
+      --create-namespace \
+      --version "$SANDBOX_CHART_VERSION" \
+      ${_sandbox_devel_flag:-} \
+      -f "$SANDBOX_VALUES_FILE" \
+      --set-string "platform.endpoint=$_platform_endpoint" \
+      --set-string "images.sandboxHost.tag=$_sandbox_host_image_tag" \
+      --timeout "$_helm_timeout"
+
+    if ! kubectl rollout status "deployment/${SANDBOX_RELEASE_NAME}-sandbox-host" \
+      -n "$_sandbox_namespace" --timeout=5m; then
+      echo "WARNING: sandbox-host is not ready; sandbox nodes may still be starting." >&2
+    fi
+  )
+
+  rm -f "$_sandbox_kubeconfig"
+  trap - EXIT
 fi
 
 echo ""
