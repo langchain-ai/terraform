@@ -67,45 +67,53 @@ _force_clear_stuck_pods() {
   )
 }
 
-# ── Resolve config from terraform.tfvars ──────────────────────────────────────
-if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
-  exit 1
+# ── Resolve config from terraform.tfvars (best effort) ────────────────────────
+# TEARDOWN.md Option B covers teardown with no Terraform state. Hard-requiring
+# terraform.tfvars and `terraform output` made this script unusable there, which
+# is why Option B fell back to a bare `helm uninstall` — the very ordering that
+# strands JuiceFS mount pods on juicefs.com/finalizer. Both inputs are now
+# optional: when they resolve, the script retargets kubeconfig itself; when they
+# do not, it uses the active kubectl context and names it in the confirmation.
+_environment=""; _name_prefix=""; _region="${AWS_REGION:-}"
+if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  _environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
+  _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+  _region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
+  echo "Resolved from terraform.tfvars:"
+  echo "  name_prefix  = ${_name_prefix:-(empty)}"
+  echo "  environment  = ${_environment:-(empty)}"
+  echo "  region       = ${_region:-(empty)}"
+else
+  echo "NOTE: no terraform.tfvars at $INFRA_DIR."
+  echo "      Falling back to the active kubectl context (TEARDOWN.md Option B)."
 fi
-
-_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
-_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
-
-if [[ -z "$_environment" || -z "$_region" ]]; then
-  echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
-  echo "       Ensure terraform.tfvars has 'environment' and 'region' set." >&2
-  exit 1
-fi
-
-echo "Resolved from terraform.tfvars:"
-echo "  name_prefix  = ${_name_prefix:-(empty)}"
-echo "  environment  = $_environment"
-echo "  region       = $_region"
 echo ""
 
-# ── Get cluster name from Terraform output ────────────────────────────────────
-echo "Reading cluster name from Terraform output..."
-_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || {
-  echo "ERROR: Could not read cluster_name. Is 'terraform apply' complete?" >&2
-  exit 1
-}
-echo "  cluster_name = $_cluster_name"
-echo ""
+# ── Point kubeconfig at the right cluster, if Terraform can tell us ───────────
+_cluster_name=""
+if [[ -n "$_region" ]]; then
+  _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null) || _cluster_name=""
+fi
 
-# ── Point kubeconfig at the right cluster ─────────────────────────────────────
-echo "Updating kubeconfig for cluster: $_cluster_name..."
-aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
-echo "  Active context: $(kubectl config current-context)"
+if [[ -n "$_cluster_name" ]]; then
+  echo "Updating kubeconfig for cluster: $_cluster_name..."
+  aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+else
+  echo "NOTE: cluster name unavailable from Terraform output — kubeconfig left as is."
+fi
+
+_ctx=$(kubectl config current-context 2>/dev/null) || _ctx=""
+if [[ -z "$_ctx" ]]; then
+  echo "ERROR: no active kubectl context, and no cluster resolvable from Terraform." >&2
+  echo "       Point kubectl at the target cluster first:" >&2
+  echo "         aws eks update-kubeconfig --name <cluster> --region <region>" >&2
+  exit 1
+fi
+echo "  Active context: $_ctx"
 echo ""
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
-echo "This will remove:"
+echo "This will remove, from cluster context '$_ctx':"
 echo "  - Helm release '$RELEASE_NAME' from namespace '$NAMESPACE'"
 echo "  - ExternalSecret 'langsmith-config' from namespace '$NAMESPACE'"
 echo "  - ClusterSecretStore 'langsmith-ssm'"

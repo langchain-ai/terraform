@@ -254,10 +254,10 @@ output "langsmith_domain" {
 }
 
 #------------------------------------------------------------------------------
-# DNS / ACM (auto-provisioned)
+# DNS / ACM
 #------------------------------------------------------------------------------
 output "dns_name_servers" {
-  description = "Route 53 NS records — delegate these from your registrar to enable your custom domain and ACM certificate validation"
+  description = "Route 53 NS records for a newly created zone; empty when an existing zone is reused or the DNS module is disabled"
   value       = local.dns_enabled ? module.dns[0].name_servers : []
 }
 
@@ -366,16 +366,16 @@ output "next_steps" {
     - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
     - S3 Bucket:    ${local.bucket_name}
     - ALB:          ${module.alb.alb_dns_name}
-    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (Route 53 + ACM auto-provisioned)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
+    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (${var.dns_create_zone ? "new" : "existing"} Route 53 zone + ACM)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
 
     Next Steps:
 
     1. Update kubeconfig:
        aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.region}
-${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
+${local.dns_enabled && var.tls_certificate_source != "acm" && var.dns_create_zone ? <<-NEWDNS
 
     2. DELEGATE DNS — required before enabling HTTPS
-       Terraform created a Route 53 hosted zone for ${var.langsmith_domain}.
+       Terraform created a Route 53 hosted zone exactly matching ${var.langsmith_domain}.
        Add NS records at your registrar (or parent zone) pointing to:
 
          terraform output dns_name_servers
@@ -395,7 +395,30 @@ ${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
     5. Access LangSmith:
        http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
 
-DNS
+NEWDNS
+  : local.dns_enabled && var.tls_certificate_source != "acm" ? <<-EXISTINGDNS
+
+    2. WAIT FOR ACM VALIDATION
+       Terraform wrote the validation CNAME and ALB alias records into the
+       existing Route 53 hosted zone ${var.dns_existing_zone_id}.
+
+       No new NS delegation is needed if that public zone is already authoritative
+       for ${var.langsmith_domain}. Otherwise, correct its delegation first.
+       Wait for the ACM certificate status to become ISSUED (~5-30 min).
+
+    3. ENABLE HTTPS — after the certificate is issued
+       In terraform.tfvars, change:
+         tls_certificate_source = "acm"
+       Then run: terraform apply
+       This adds the HTTPS listener to the ALB and redirects HTTP → HTTPS.
+
+    4. Run the Helm deployment:
+       cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh
+
+    5. Access LangSmith:
+       http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
+
+EXISTINGDNS
   : local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
 
     2. Deploy LangSmith:
