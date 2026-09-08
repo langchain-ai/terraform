@@ -92,6 +92,18 @@ resource "aws_s3_bucket_lifecycle_configuration" "ttl" {
 # the block-public-access settings above, this policy still blocks external access.
 locals {
   bucket_policy_irsa_role_arns = compact(concat([var.langsmith_irsa_role_arn], var.additional_irsa_role_arns))
+
+  # Principal.AWS is a bare string for one role and a list for several. A plain
+  # ternary cannot express that: Terraform unifies both arms of a conditional to
+  # one type and rejects string-vs-list with "Inconsistent conditional result
+  # types". Round-tripping through JSON defers the type to apply time, which is
+  # the standard workaround. Do not "simplify" this back to a ternary — it does
+  # not compile.
+  bucket_policy_principal = jsondecode(
+    length(local.bucket_policy_irsa_role_arns) == 1
+    ? jsonencode(local.bucket_policy_irsa_role_arns[0])
+    : jsonencode(local.bucket_policy_irsa_role_arns)
+  )
 }
 
 resource "aws_s3_bucket_policy" "bucket_policy" {
@@ -105,7 +117,7 @@ resource "aws_s3_bucket_policy" "bucket_policy" {
         Sid    = "AllowAccessViaVPCE",
         Effect = "Allow",
         Principal = {
-          AWS = jsondecode(length(local.bucket_policy_irsa_role_arns) == 1 ? jsonencode(local.bucket_policy_irsa_role_arns[0]) : jsonencode(local.bucket_policy_irsa_role_arns))
+          AWS = local.bucket_policy_principal
         },
         Action = [
           "s3:GetObject",
