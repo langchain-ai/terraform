@@ -45,6 +45,20 @@ redis_name = "langsmith-redis-mycorp-dev"
 The available overrides are `postgres_name`, `redis_name`, `storage_account_name`,
 and `keyvault_name`.
 
+**Fix — a failed first apply burned the names.** The hash derives from your
+subscription and `name_prefix`, both fixed, so a retry asks for the same four
+names and hits the same collision. Bump the salt to rotate all four at once:
+
+```hcl
+name_suffix_salt = "2"
+```
+
+The resource group, VNet and AKS names do not carry the hash, so they stay put.
+Only do this before the first successful apply, or on a deployment you are willing
+to lose: on an existing one it renames Postgres, Redis, Storage and Key Vault,
+which Terraform executes as destroy-and-recreate. To dodge a single collision on a
+live deployment, pin that one name instead.
+
 A soft-deleted Key Vault holds its name for the duration of the retention window,
 so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destroy`:
 
@@ -52,6 +66,11 @@ so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destr
 az keyvault list-deleted --query "[].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table
 az keyvault purge --name langsmith-kv-dev   # only if you are certain
 ```
+
+Purging is the cleaner fix, because it frees the name rather than working around
+it. It fails when the vault was created with `keyvault_purge_protection = true`
+(the default), which holds the name for the full `soft_delete_retention_days`
+window — 90 days out of the box. Salt or pin the name in that case.
 
 **Catch it before applying:** `make preflight` checks Postgres, Storage, Key Vault
 and `dns_label` against Azure's availability APIs.
@@ -375,7 +394,22 @@ terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
 
 Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
 
-**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant. The variable declares what the principal is rather than changing it, and ARM resolves the real type from the object ID either way, so the request is rejected whatever it declares. Omitting it fails the same way: an ABAC comparison against an absent attribute is false.
+
+That grant exists only to give the apply identity data-plane rights on the vault, so the cheapest way through is to stop asking for it:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+```
+
+Check first that the identity holds `Key Vault Secrets Officer` or `Key Vault Administrator` some other way, since a grant at subscription or resource-group scope inherits down to the vault:
+
+```bash
+az role assignment list --assignee <your-object-id> --all -o table
+```
+
+If it holds neither, run the apply as a service principal, which is what the condition exists to require, or have a subscription owner create that one assignment out of band and import it:
 
 ```bash
 # Run by a subscription owner, who is not subject to the delegation condition

@@ -23,7 +23,7 @@ checklist below.
 | `Contributor` | Create and manage all Azure resources |
 | `User Access Administrator` | Create role assignments for Key Vault, Blob, cert-manager identities |
 
-Owner includes both. Contributor alone is insufficient — role assignments require UAA. If UAA is delegated through an ABAC condition on `principalType`, the apply fails with a generic 403 and needs `terraform_principal_type` set (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)).
+Owner includes both. Contributor alone is insufficient — role assignments require UAA. If UAA is delegated through an ABAC condition on `principalType`, the apply fails with a generic 403 and needs either `terraform_principal_type` set or, where the condition admits only `ServicePrincipal`, `keyvault_manage_terraform_admin_assignment = false` (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)).
 
 ---
 

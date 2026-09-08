@@ -38,8 +38,11 @@ locals {
   #
   # sha256 of subscription_id + name_suffix rather than the random provider: the
   # value is derived, so repeat applies are stable and nothing is kept in state.
+  #
+  # Both hash inputs are fixed for a deployment, so name_suffix_salt is the only
+  # way out of a burned name. Bumping it rotates all four at once.
   name_base   = var.unique_resource_names ? "ls" : "langsmith"
-  uniq_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.name_suffix}"), 0, 6)}" : ""
+  uniq_suffix = var.unique_resource_names ? "-${substr(sha256("${var.subscription_id}${local.name_suffix}${var.name_suffix_salt}"), 0, 6)}" : ""
 
   # Regional names — unique within the subscription, so no hash needed.
   resource_group_name = "${local.name_base}-rg${local.name_suffix}"
