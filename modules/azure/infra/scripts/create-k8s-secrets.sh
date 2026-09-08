@@ -23,7 +23,8 @@ set -euo pipefail
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
-#   langsmith-redis-secret    — connection_url
+#   langsmith-redis-secret    — connection_url, redis_cluster_node_uris,
+#                               redis_cluster_password
 #
 # Safe to re-run — uses --dry-run=client | kubectl apply so it updates in place.
 
