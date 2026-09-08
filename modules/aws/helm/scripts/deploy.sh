@@ -724,21 +724,42 @@ if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate
   echo ""
   echo "Deploying sandbox runtime to cluster: $_sandbox_cluster_name"
   echo "Chart: langchain/langsmith-sandbox requested=${SANDBOX_CHART_VERSION} resolved=${_resolved_sandbox_chart}"
-  trap 'aws eks update-kubeconfig --name "$_cluster_name" --region "$_region" >/dev/null 2>&1 || true' EXIT
-  aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region"
-  helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
-    --namespace "$_sandbox_namespace" \
-    --create-namespace \
-    --version "$SANDBOX_CHART_VERSION" \
-    ${_sandbox_devel_flag:-} \
-    -f "$SANDBOX_VALUES_FILE" \
-    --set-string "platform.endpoint=$_platform_endpoint" \
-    --set-string "images.sandboxHost.tag=$_sandbox_host_image_tag" \
-    --timeout "$_helm_timeout"
-  if ! kubectl rollout status "deployment/${SANDBOX_RELEASE_NAME}-sandbox-host" -n "$_sandbox_namespace" --timeout=5m; then
-    echo "WARNING: sandbox-host is not ready; sandbox nodes may still be starting." >&2
-  fi
-  aws eks update-kubeconfig --name "$_cluster_name" --region "$_region"
+  echo "Platform endpoint: $_platform_endpoint"
+
+  # Target the sandbox cluster through a throwaway kubeconfig instead of
+  # rewriting the operator's. `aws eks update-kubeconfig` mutates the shared
+  # file in place and switches current-context; a failure between the switch
+  # and the switch back would leave the shell pointed at the sandbox cluster,
+  # and on a shared KUBECONFIG it writes credentials other people can see.
+  _sandbox_kubeconfig=$(mktemp -t langsmith-sandbox-kubeconfig.XXXXXX)
+  chmod 600 "$_sandbox_kubeconfig"
+  # shellcheck disable=SC2064  # capture the path now; it is what we must remove
+  trap "rm -f '$_sandbox_kubeconfig'" EXIT
+
+  # Subshell so the export cannot leak past the sandbox deploy, whatever the
+  # shell's POSIX mode does with `VAR=x func`. set -e still propagates: a
+  # failure in here exits the script and the trap removes the file.
+  (
+    export KUBECONFIG="$_sandbox_kubeconfig"
+    aws eks update-kubeconfig --name "$_sandbox_cluster_name" --region "$_region"
+
+    helm upgrade --install "$SANDBOX_RELEASE_NAME" langchain/langsmith-sandbox \
+      --namespace "$_sandbox_namespace" \
+      --create-namespace \
+      --version "$SANDBOX_CHART_VERSION" \
+      ${_sandbox_devel_flag:-} \
+      -f "$SANDBOX_VALUES_FILE" \
+      --set-string "platform.endpoint=$_platform_endpoint" \
+      --set-string "images.sandboxHost.tag=$_sandbox_host_image_tag" \
+      --timeout "$_helm_timeout"
+
+    if ! kubectl rollout status "deployment/${SANDBOX_RELEASE_NAME}-sandbox-host" \
+      -n "$_sandbox_namespace" --timeout=5m; then
+      echo "WARNING: sandbox-host is not ready; sandbox nodes may still be starting." >&2
+    fi
+  )
+
+  rm -f "$_sandbox_kubeconfig"
   trap - EXIT
 fi
 

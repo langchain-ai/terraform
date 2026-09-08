@@ -318,9 +318,11 @@ langsmith_sandbox_helm_chart_version = "0.1.0-rc.1"
 
 Terraform then creates a second EKS cluster in the same VPC with only the KVM-capable sandbox node group. It also creates a sandbox-scoped IRSA role, allows the main cluster's worker and pod security group to reach sandbox nodes on TCP port 19190, and creates minimal write-only runtime and JuiceFS Secrets in the sandbox namespace. The S3 bucket and dedicated `noeviction` ElastiCache metadata store remain shared infrastructure in the VPC.
 
-`make init-values` generates both the core LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`. `make deploy` installs the core release first, switches to the sandbox EKS cluster for the standalone `langsmith-sandbox` release, waits for `sandbox-host`, and restores the main cluster context.
+`make init-values` generates both the core LangSmith values and `helm/values/langsmith-sandbox-values-overrides.yaml`. `make deploy` installs the core release first, then installs the standalone `langsmith-sandbox` release against the sandbox cluster and waits for `sandbox-host`. The sandbox cluster is reached through a temporary kubeconfig created for that step alone, so your own `~/.kube/config` and its current context are never modified.
 
-The main and sandbox cluster networks must remain mutually routable. If you place the sandbox cluster in another VPC instead, configure equivalent routing and restrict TCP port 19190 to the LangSmith control-plane source.
+The sandbox IRSA role trusts exactly one ServiceAccount, named by `sandbox_service_account_name` (default `sandbox-host`). `init-values.sh` writes the same name into `sandboxHost.serviceAccount.name` in the generated values, so the two always agree. Renaming the ServiceAccount only in the values file breaks IRSA and leaves `sandbox-host` unable to reach the trace bucket — change the tfvar and re-run `make init-values` instead.
+
+The main and sandbox cluster networks must remain mutually routable: LangSmith pods reach sandbox nodes on TCP 19190, and sandbox pods reach the LangSmith API at `platform.endpoint`. If you place the sandbox cluster in another VPC, configure equivalent routing in both directions and restrict TCP port 19190 to the LangSmith control-plane source.
 
 ---
 
