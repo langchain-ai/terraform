@@ -247,8 +247,12 @@ resource "kubernetes_secret_v1" "redis" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
 
+  # All three keys in both modes — the chart reads only the pair its mode needs, so
+  # switching modes is a values-file edit, not a terraform apply.
   data = {
-    connection_url = var.redis_connection_url
+    connection_url          = var.redis_connection_url
+    redis_cluster_node_uris = var.redis_cluster_node_uris
+    redis_cluster_password  = var.redis_cluster_password
   }
 
   type = "Opaque"

@@ -149,10 +149,12 @@ _derive_names() {
   [[ -n "$NAME_PREFIX" ]] && suffix="-${NAME_PREFIX}"
   if [[ "$UNIQUE_NAMES" == "true" ]]; then
     base="ls"
+    # The salt is a hash input, so omitting it previews the names the deployment
+    # bumped the salt to escape.
     if command -v shasum &>/dev/null; then
-      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}" | shasum -a 256 | cut -c1-6)
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}${NAME_SUFFIX_SALT}" | shasum -a 256 | cut -c1-6)
     else
-      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}" | sha256sum | cut -c1-6)
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}${NAME_SUFFIX_SALT}" | sha256sum | cut -c1-6)
     fi
     uniq="-${hash}"
   else
@@ -236,7 +238,7 @@ AKS cluster:${_AKS_NAME}:63"
 
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
-_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE LOCATION OWNER
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
 STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
 CREATE_KEYVAULT EXISTING_KEYVAULT_NAME
@@ -350,7 +352,7 @@ _load_tfvars() {
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
            sizing_profile postgres_admin_username postgres_database_name \
-           amr_sku name_base storage_account_name keyvault_name postgres_name \
+           amr_sku name_base name_suffix_salt storage_account_name keyvault_name postgres_name \
            redis_name cluster_name resource_group_name vnet_name \
            existing_cluster_name existing_keyvault_name; do
     _TF_VAL=$(_tfvar "$v")
@@ -358,6 +360,7 @@ _load_tfvars() {
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
       name_base)                 NAME_BASE="$_TF_VAL" ;;
+      name_suffix_salt)          NAME_SUFFIX_SALT="$_TF_VAL" ;;
       storage_account_name)      STORAGE_ACCOUNT_NAME="$_TF_VAL" ;;
       keyvault_name)             KEYVAULT_NAME="$_TF_VAL" ;;
       postgres_name)             POSTGRES_NAME="$_TF_VAL" ;;
@@ -502,6 +505,7 @@ UNIQUE_NAMES="true"
 # and length-checked below is built from it. Empty means the default base, as in
 # main.tf.
 NAME_BASE=""
+NAME_SUFFIX_SALT=""
 
 # Same reason, one resource each. A pinned name replaces the derived one, so a
 # length check that ignores these measures a string Terraform throws away, then
@@ -712,6 +716,24 @@ _subnet_review() {
   else
     echo "create  ${cidr_line#*= }"
   fi
+}
+
+# A subnet resource ID, lowercased first because Azure returns the provider
+# namespace and the resourceGroups segment in mixed case depending on the API.
+_valid_subnet_id() {
+  local lc
+  lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ "$lc" =~ ^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$ ]]
+}
+
+# An IPv4 CIDR, the only form the three *_subnet_address_prefix variables are
+# ever written with. Shape only: an out-of-range octet still fails at plan, where
+# Terraform's own message is clear. Checked here for the reason the IDs are —
+# it lands in double-quoted HCL, and none of the three variables carries a
+# validation block, so an empty or typo'd answer otherwise surfaces as a cidr
+# function error several steps later.
+_valid_cidr() {
+  [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]
 }
 
 _run_section_3() {

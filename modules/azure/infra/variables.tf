@@ -48,6 +48,19 @@ variable "unique_resource_names" {
   default     = false
 }
 
+variable "name_suffix_salt" {
+  type        = string
+  description = "Rotation counter mixed into the per-subscription hash on the globally-unique names. Bump it (\"\" → \"2\" → \"3\") when a previous deployment burned those names: a soft-deleted Key Vault holds its name for the whole retention window, and Managed Redis exposes no way to check availability before applying. All four names rotate together; the resource group, VNet and AKS names are unaffected. DESTRUCTIVE on an existing deployment — changing it renames Postgres, Redis, Storage and Key Vault, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. To dodge a single collision instead, pin that one name below. No effect when unique_resource_names = false."
+  default     = ""
+
+  # Hashed, never appended, so the length costs nothing against the
+  # 24-character name cap. Bounded only to keep it recognisable as a counter.
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9]{0,8}$", var.name_suffix_salt))
+    error_message = "name_suffix_salt must be 0-8 alphanumeric characters (e.g. \"2\")."
+  }
+}
+
 # ── Explicit name overrides ───────────────────────────────────────────────────
 # Each defaults to "" meaning "derive it". Set one to pin an existing resource's
 # name, to work around a collision without renaming the whole deployment, or to
@@ -193,6 +206,12 @@ variable "keyvault_manage_managed_identity_assignment" {
   default     = null
 }
 
+variable "keyvault_manage_secrets" {
+  type        = bool
+  description = "Whether Terraform writes postgres-admin-password and langsmith-license-key into the vault. False writes neither, so apply needs no Key Vault data-plane access at all and `make seed-secrets` writes all nine secrets afterwards under your own credentials. Set it where the deployer cannot hold Key Vault Secrets Officer, or where keyvault_default_action = \"Deny\" blocks the machine running apply. Flipping it to false on a deployment that already applied deletes both secrets from the vault, so drop them from state first. See PERMISSIONS.md."
+  default     = true
+}
+
 variable "keyvault_purge_protection" {
   type        = bool
   description = "Enable purge protection on Key Vault. Set false for dev environments where you need to destroy and recreate. Always true for production."
@@ -201,7 +220,7 @@ variable "keyvault_purge_protection" {
 
 variable "keyvault_default_action" {
   type        = string
-  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — first apply creates ~10 secrets via the data plane and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate keyvault_allowed_ips."
+  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — apply and `make seed-secrets` write nine secrets via the data plane, and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate keyvault_allowed_ips."
   default     = "Allow"
 
   validation {
@@ -479,6 +498,12 @@ variable "amr_sku" {
   type        = string
   description = "Azure Managed Redis SKU. Balanced_B1 (1 GB) is the default — Balanced_B0 (0.5 GB) exists but sits on the most capacity-constrained pool and intermittently fails to allocate, and it can't run high availability. Bump (Balanced_B3/B5/...) for more memory. A larger SKU does not cure InsufficientCapacity: that shortage is regional and reaches every Balanced size, so use redis_location for it. (Replaces the classic redis_capacity.)"
   default     = "Balanced_B1"
+}
+
+variable "redis_clustering_policy" {
+  type        = string
+  description = "AMR clustering policy. OSSCluster selects the LangSmith cluster client; EnterpriseCluster the standalone client with clusterSafeMode. Change it only for an AMR instance that is already on EnterpriseCluster."
+  default     = "OSSCluster"
 }
 
 variable "redis_high_availability" {
@@ -868,9 +893,7 @@ variable "postgres_geo_redundant_backup" {
 }
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
-# These variables are declared here only to prevent Terraform from warning
-# about undeclared variables in terraform.tfvars. They are read by
-# helm/scripts/init-values.sh and helm/scripts/deploy.sh.
+# Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {

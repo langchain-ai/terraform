@@ -84,7 +84,7 @@ variable "purge_protection_enabled" {
 
 variable "network_default_action" {
   type        = string
-  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — Terraform's first apply creates ~10 secrets via the data plane and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate allowed_ips / allowed_subnet_ids."
+  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — apply and seed-keyvault-secrets.sh write nine secrets via the data plane, and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate allowed_ips / allowed_subnet_ids."
   default     = "Allow"
 
   validation {
@@ -109,6 +109,12 @@ variable "allowed_subnet_ids" {
 # Only secrets Terraform already holds for another reason. The LangSmith app
 # secrets are seeded post-apply by infra/scripts/seed-keyvault-secrets.sh so
 # they never land in Terraform state.
+
+variable "manage_secrets" {
+  type        = bool
+  description = "Whether this module writes its two secrets into the vault. False writes neither, so apply touches only the vault's control plane and needs no Key Vault data-plane access at all: seed-keyvault-secrets.sh writes all nine secrets afterwards under the operator's own credentials. Set it where the deployer cannot hold Key Vault Secrets Officer, or where the vault firewall denies the machine running apply. Flipping it to false on a deployment that already applied deletes both secrets from the vault, so drop them from state with `terraform state rm` first."
+  default     = true
+}
 
 variable "postgres_admin_password" {
   type        = string

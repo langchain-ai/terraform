@@ -495,10 +495,22 @@ fi
 # hardcoded 20m because of sequential stateful rollouts and migration jobs.
 _helm_timeout="${HELM_TIMEOUT:-30m}"
 
-# Deploy with --server-side=false to avoid SSA field ownership conflicts with the
-# ALB ingress controller. Helm 3.14+ defaults to server-side apply, which fights
-# with the controller over .spec.rules ownership. Client-side apply sidesteps this.
-#
+# --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
+# whole invocation with "unknown flag: --server-side" (verified on v3.21.4), so
+# passing it unconditionally blocks the deploy on the Helm 3 the docs require.
+# On Helm 4, SSA is the default for a fresh install and fights the ALB ingress
+# controller over .spec.rules ownership, so ask for client-side apply explicitly
+# there. Helm 3 only ever applies client-side, making the flag redundant as well
+# as unsupported. If the version cannot be read, omit it: omitting is valid on
+# both majors, passing it fails outright on one.
+_helm_major=$(helm version --template '{{.Version}}' 2>/dev/null | sed -e 's/^v//' -e 's/[^0-9].*$//') || _helm_major=""
+_ssa_flag=""
+if [[ -z "$_helm_major" ]]; then
+  echo "WARNING: could not read the Helm version; omitting --server-side=false." >&2
+elif [[ "$_helm_major" -ge 4 ]]; then
+  _ssa_flag="--server-side=false"
+fi
+
 # We intentionally do NOT use --wait here. The chart's post-install hooks and the
 # operator's agent pods can take 10+ minutes to settle on a cold cluster with
 # autoscaling. Using --wait causes the release to go 'failed' if a hook exceeds the
@@ -529,7 +541,7 @@ helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   ${CHART_VERSION:+--version "$CHART_VERSION"} \
   ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
-  --server-side=false \
+  ${_ssa_flag} \
   --timeout "$_helm_timeout"
 
 echo ""
@@ -622,7 +634,7 @@ if [[ -n "$_active_host" ]]; then
       ${CHART_VERSION:+--version "$CHART_VERSION"} \
       ${_devel_flag} \
       "${VALUES_ARGS[@]}" \
-      --server-side=false \
+      ${_ssa_flag} \
       --timeout "$_helm_timeout"
     echo ""
     echo "LangSmith redeployed with hostname: $_active_host"

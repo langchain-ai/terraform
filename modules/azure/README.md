@@ -114,7 +114,7 @@ Expect `Reader` on the gateway's resource group, `Contributor` on the Applicatio
 
 ### Deploying against an existing Key Vault
 
-Set `create_keyvault = false` to write LangSmith's secrets into a Key Vault the customer already owns. Terraform reads the vault, writes its nine secrets, and changes nothing else about it: the auth mode, network rules, retention, and purge protection stay as the vault's owner configured them, and `keyvault_default_action`, `keyvault_allowed_ips`, and `keyvault_purge_protection` are ignored.
+Set `create_keyvault = false` to write LangSmith's secrets into a Key Vault the customer already owns. Terraform reads the vault, writes the two secrets it manages, and changes nothing else about it: the auth mode, network rules, retention, and purge protection stay as the vault's owner configured them, and `keyvault_default_action`, `keyvault_allowed_ips`, and `keyvault_purge_protection` are ignored.
 
 ```hcl
 create_keyvault                       = false
@@ -134,7 +134,7 @@ az keyvault show --name <vault> --query "{rbac:properties.enableRbacAuthorizatio
 | Requirement | Why | Fix |
 |---|---|---|
 | Azure RBAC authorization, not access policies | Terraform grants access with `azurerm_role_assignment`, which grants nothing on an access-policy vault while the apply still reports success | Migrate the vault to RBAC or pick a different one. The plan fails naming this rather than applying |
-| Deployer already holds Key Vault Secrets Officer | Terraform writes the nine secrets through the data plane, and it does not create its own grant on a vault it doesn't own | Have the vault's owner grant it on the vault or its resource group before apply, or set `keyvault_manage_terraform_admin_assignment = true` if the deployer has `roleAssignments/write` on the vault |
+| Deployer already holds Key Vault Secrets Officer | Terraform writes `postgres-admin-password` and `langsmith-license-key` through the data plane, and it does not create its own grant on a vault it doesn't own | Have the vault's owner grant it on the vault or its resource group before apply, or set `keyvault_manage_terraform_admin_assignment = true` if the deployer has `roleAssignments/write` on the vault. Failing both, set `keyvault_manage_secrets = false`: apply then writes nothing to the vault, and whoever runs `make seed-secrets` afterwards needs the role instead of the apply identity |
 | Apply host's IP allowlisted, if the vault firewall is on | A vault with `default_action = Deny` accepts the role assignment and then rejects the secret writes partway through apply, with an error that reads nothing like a permissions error | Add the apply host's egress IP to the vault firewall, or add the AKS subnet with the `Microsoft.KeyVault` service endpoint |
 | Purge protection off, on any vault you intend to tear down | Destroying the deployment soft-deletes the nine secrets, reserving their names for the vault's retention window. Purging early needs a permission the deployer won't have on a vault someone else owns, so the next apply blocks until the window passes | Leave purge protection off on dev vaults |
 
@@ -188,7 +188,7 @@ Holding the role is not the same as being able to use it. A PIM-eligible role gr
 
 For the full permission inventory, the role assignments the deployment creates, and how to restrict which roles the deployer may assign, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
-Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present, and the fix is to set `terraform_principal_type` rather than to request more access. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present. `terraform_principal_type` fixes the case where the condition admits the deployer's own type; where it admits only `ServicePrincipal` and the deployer is a human, no value of that variable satisfies it and the way through is `keyvault_manage_terraform_admin_assignment = false`. `make preflight` reads the condition and says which case you are in. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ### Authenticate
 
@@ -453,7 +453,7 @@ Only two secrets reach Terraform, because Terraform needs them to build somethin
 
 Writes the LangSmith application secrets directly into Key Vault via `az`, after `make apply` has created the vault. These never pass through Terraform, so they never land in Terraform state — the same split the AWS module uses with SSM and the GCP module uses with Secret Manager.
 
-Seeds seven secrets:
+Seeds the seven secrets Terraform never sees:
 
 | Secret | Source |
 |---|---|
@@ -464,6 +464,8 @@ Seeds seven secrets:
 | `langsmith-agent-builder-encryption-key` | Generated (Fernet) |
 | `langsmith-insights-encryption-key` | Generated (Fernet) |
 | `langsmith-polly-encryption-key` | Generated (Fernet) |
+
+It also seeds `postgres-admin-password` and `langsmith-license-key`, from `secrets.auto.tfvars` or the environment, when the vault does not already hold them. That is what `keyvault_manage_secrets = false` relies on. On the default path Terraform wrote both and the script skips them.
 
 - **Write-once.** An existing secret is never overwritten, so the script is safe to re-run and seeds only what is missing. Rotating any of these breaks a running deployment: a new API key salt invalidates every API key, a new JWT secret drops every session, a new Fernet key makes existing encrypted data unreadable. Rotate deliberately with `make keyvault` instead.
 - **Validates the admin password before storing it:** min 12 characters, with a lowercase letter, an uppercase letter, and a symbol from ``!#$%()+,-./:?@[\]^_{~}``. The Helm chart's auth-bootstrap job rejects a password without a symbol, and it fails ~10 minutes into the release rather than at the point you typed it.
@@ -857,6 +859,14 @@ other name, including the blob container, keeps them.
 The hash is deterministic — the same subscription and `name_prefix` always produce
 the same name, so repeat applies are stable and no random values are stored.
 `a1b2c3` above stands in for it; yours differs.
+
+Determinism is what makes `name_suffix_salt` necessary. If a failed apply burns
+those four names — a Key Vault soft-deleted for its retention window, a Redis name
+Azure still holds — retrying asks for the same names and collides again. Set
+`name_suffix_salt = "2"` to rotate all four; the value only has to differ from the
+last one. The resource group, VNet and AKS names do not carry the hash and are
+unaffected. It carries the same warning as `unique_resource_names`: on an existing
+deployment this is destroy-and-recreate, so pin the single colliding name instead.
 
 Key Vault is what caps `name_prefix` at roughly 12 characters: it keeps its
 hyphens inside the same 24-character limit Storage has, so it runs out of room

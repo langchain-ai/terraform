@@ -45,6 +45,20 @@ redis_name = "langsmith-redis-mycorp-dev"
 The available overrides are `postgres_name`, `redis_name`, `storage_account_name`,
 and `keyvault_name`.
 
+**Fix — a failed first apply burned the names.** The hash derives from your
+subscription and `name_prefix`, both fixed, so a retry asks for the same four
+names and hits the same collision. Bump the salt to rotate all four at once:
+
+```hcl
+name_suffix_salt = "2"
+```
+
+The resource group, VNet and AKS names do not carry the hash, so they stay put.
+Only do this before the first successful apply, or on a deployment you are willing
+to lose: on an existing one it renames Postgres, Redis, Storage and Key Vault,
+which Terraform executes as destroy-and-recreate. To dodge a single collision on a
+live deployment, pin that one name instead.
+
 A soft-deleted Key Vault holds its name for the duration of the retention window,
 so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destroy`:
 
@@ -52,6 +66,11 @@ so a `VaultAlreadyExists` may be your own vault from an earlier `terraform destr
 az keyvault list-deleted --query "[].{name:name, scheduledPurgeDate:properties.scheduledPurgeDate}" -o table
 az keyvault purge --name langsmith-kv-dev   # only if you are certain
 ```
+
+Purging is the cleaner fix, because it frees the name rather than working around
+it. It fails when the vault was created with `keyvault_purge_protection = true`
+(the default), which holds the name for the full `soft_delete_retention_days`
+window — 90 days out of the box. Salt or pin the name in that case.
 
 **Catch it before applying:** `make preflight` checks Postgres, Storage, Key Vault
 and `dns_label` against Azure's availability APIs.
@@ -379,6 +398,8 @@ already exists - to be managed via Terraform this resource needs to be imported 
 
 **Cause:** Something wrote the secret to Key Vault outside Terraform, or the state file lost the resource. This can only happen for the two secrets Terraform still manages — `postgres-admin-password` and `langsmith-license-key`. The seven LangSmith app secrets are written by `make seed-secrets` and have no Terraform resource, so they never produce this error.
 
+Seeding is the usual way in: `make seed-secrets` writes both of these too, so running it against a deployment that has not applied yet leaves Terraform to collide with what the script wrote. Setting `keyvault_manage_secrets = false` is the other resolution, and it makes the collision impossible rather than importing past it.
+
 **Fix:** Import the conflicting secret, then re-run apply:
 ```bash
 terraform -chdir=infra import \
@@ -425,7 +446,22 @@ terraform_principal_type = "ServicePrincipal" # CI pipeline / OIDC federation
 
 Leave it unset in any subscription without the condition, which is the common case. Azure infers the type server-side and the default reproduces that.
 
-**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant, because the request is rejected whatever type it declares. Either run the apply as a service principal, or have a subscription owner create that one assignment out of band and import it:
+**If the condition permits only `ServicePrincipal`:** no value of `terraform_principal_type` lets a human login create that grant. The variable declares what the principal is rather than changing it, and ARM resolves the real type from the object ID either way, so the request is rejected whatever it declares. Omitting it fails the same way: an ABAC comparison against an absent attribute is false.
+
+That grant exists only to give the apply identity data-plane rights on the vault, so the cheapest way through is to stop asking for it:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+```
+
+Check first that the identity holds `Key Vault Secrets Officer` or `Key Vault Administrator` some other way, since a grant at subscription or resource-group scope inherits down to the vault:
+
+```bash
+az role assignment list --assignee <your-object-id> --all -o table
+```
+
+If it holds neither, run the apply as a service principal, which is what the condition exists to require, or have a subscription owner create that one assignment out of band and import it:
 
 ```bash
 # Run by a subscription owner, who is not subject to the delegation condition
@@ -437,6 +473,18 @@ RA_ID=$(az role assignment create --role "Key Vault Secrets Officer" \
 terraform -chdir=infra import \
   'module.keyvault.azurerm_role_assignment.terraform_kv_admin' "$RA_ID"
 ```
+
+Or take Terraform out of the vault's data plane, which removes the reason that grant exists:
+
+```hcl
+# terraform.tfvars
+keyvault_manage_terraform_admin_assignment = false
+keyvault_manage_secrets                    = false
+```
+
+Apply then touches only the vault's control plane, and `make seed-secrets` writes all nine secrets afterwards under your own credentials. This is the one route that needs no Key Vault role on the deployer, inherited or otherwise. Both flags are required together: the first is what stops the request the condition rejects, and the second is what makes the role that request was asking for unnecessary. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
+
+It does not reduce the deployment's need for `roleAssignments/write`. The other seven assignments still run, so a subscription that delegates none of them fails at `Storage Blob Data Contributor` in the storage module instead.
 
 **Note:** on versions predating the `principal_type` declarations, the first failure came earlier, on `module.blob.azurerm_role_assignment.blob_data_contributor`. Every role assignment in the module was affected.
 
@@ -452,7 +500,7 @@ Failure responding to request: StatusCode=403 -- Original Error: autorest/azure:
 Service returned an error. Status=403 Code="Forbidden"
 ```
 
-`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes the seven app secrets over the data plane too.
+`make seed-secrets` fails the same way and for the same reasons, reported by `az` as `(Forbidden) Caller is not authorized`. It writes all nine secrets over the data plane too.
 
 **Cause:** one of three, and the 403 looks the same for all of them. Read the message body: a network denial names `ForbiddenByFirewall` or client address, an authorization denial names the caller and action.
 
@@ -481,6 +529,13 @@ az role assignment create --role "Key Vault Secrets Officer" \
 # 3. Propagation — confirm data-plane access directly, then re-run apply
 az keyvault secret list --vault-name <vault> --query "length(@)"
 ```
+
+**Fix for causes 2 and 3 — take Terraform out of the data plane entirely:**
+```hcl
+keyvault_manage_secrets = false
+```
+
+Terraform then writes no secrets, so neither a missing grant nor an unpropagated one can stop an apply. `make seed-secrets` writes all nine afterwards under your own credentials, which is a step you can retry in seconds instead of 10 minutes into an apply. This does nothing for cause 1: the script reaches the same data plane from the same host, so a firewall that denies the apply host denies the script too, and the allowlisting above is still the fix. On a deployment that already applied, drop the two secrets from state first or Terraform deletes them from the vault. See [PERMISSIONS.md](PERMISSIONS.md#deploy-without-key-vault-access).
 
 **Prevention:** run through the prerequisites table in the README's "Deploying against an existing Key Vault" section before applying. All three of these are checkable in advance, and the apply is 10+ minutes in by the time the secret writes run.
 

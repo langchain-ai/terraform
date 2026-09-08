@@ -150,7 +150,7 @@ _name_suffix() {
 # secret and mint a fresh Postgres password over the real one. Returns 1 when
 # attach mode is on but existing_keyvault_name is unset.
 _derive_kv_name() {
-  local explicit suffix sub hash base create
+  local explicit suffix sub salt hash base create
   create=$(_parse_tfvar create_keyvault || echo "true")
   if [[ "$create" == "false" ]]; then
     explicit=$(_parse_tfvar existing_keyvault_name || true)
@@ -168,10 +168,11 @@ _derive_kv_name() {
   base=$(_parse_tfvar name_base || true)
   if _tfvar_is_true unique_resource_names; then
     sub=$(_parse_tfvar subscription_id || true)
+    salt=$(_parse_tfvar name_suffix_salt || true)
     if command -v shasum &>/dev/null; then
-      hash=$(printf '%s' "${sub}${suffix}" | shasum -a 256 | cut -c1-6)
+      hash=$(printf '%s' "${sub}${suffix}${salt}" | shasum -a 256 | cut -c1-6)
     else
-      hash=$(printf '%s' "${sub}${suffix}" | sha256sum | cut -c1-6)
+      hash=$(printf '%s' "${sub}${suffix}${salt}" | sha256sum | cut -c1-6)
     fi
     echo "${base:-ls}-kv${suffix}-${hash}"
   else

@@ -89,6 +89,16 @@ case "$ARGS" in
       *roleDefinitionName*) emit_file "$FIX/held" "" ;;
       *) echo "STUB: unexpected role assignment query: $ARGS" >&2; exit 1 ;;
     esac ;;
+  *checkNameAvailability*|*CheckDnsNameAvailability*)
+    # Global name checks. Default is "free" so only ownership cases need a
+    # fixture.
+    emit_file "$FIX/name_availability.json" '{"nameAvailable":true,"available":true}' ;;
+  "keyvault list-deleted"*)
+    emit_file "$FIX/kv_deleted" "0" ;;
+  "redisenterprise list"*)
+    emit_file "$FIX/redis_hit" "0" ;;
+  "network public-ip list"*)
+    emit_file "$FIX/dns_held" "0" ;;
   *roleEligibilityScheduleInstances*)
     printf '%s\n' "$ARGS" >> "$FIX/calls.log"
     emit_file "$FIX/eligibilities.json" '{"value":[]}' ;;
