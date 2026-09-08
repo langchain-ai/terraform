@@ -280,7 +280,7 @@ if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; t
   exit 1
 fi
 
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="external"
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
 if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
   echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
@@ -294,7 +294,7 @@ elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
   _enable_standalone_polly=true
 fi
 
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="external"
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
 if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
   echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1

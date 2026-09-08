@@ -267,7 +267,7 @@ if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; t
   exit 1
 fi
 
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="external"
+_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
 if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
   echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
@@ -281,7 +281,7 @@ elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
   _enable_standalone_polly=true
 fi
 
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="external"
+_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
 if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
   echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
   exit 1
@@ -665,9 +665,9 @@ fleetTriggerServer:
       eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
 fi
 
-if [[ "$_enable_standalone_polly" == "true" ]]; then
+if [[ "$_enable_polly" == "true" ]]; then
   if [[ -z "$_polly_key" ]]; then
-    echo "ERROR: enable_standalone_polly = true but TF_VAR_langsmith_polly_encryption_key is not set." >&2
+    echo "ERROR: enable_polly = true but TF_VAR_langsmith_polly_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -682,15 +682,15 @@ polly:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
-elif [[ "$_enable_polly" != "true" ]]; then
+else
   _standalone_block+="
 polly:
   enabled: false"
 fi
 
-if [[ "$_enable_standalone_insights" == "true" ]]; then
+if [[ "$_enable_insights" == "true" ]]; then
   if [[ -z "$_insights_key" ]]; then
-    echo "ERROR: enable_standalone_insights = true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "ERROR: enable_insights = true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -709,7 +709,7 @@ engineInsightsAgent:
     serviceAccount:
       annotations:
         eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
-elif [[ "$_enable_insights" != "true" ]]; then
+else
   _standalone_block+="
 insights:
   enabled: false"

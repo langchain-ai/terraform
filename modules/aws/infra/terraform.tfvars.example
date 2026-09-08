@@ -721,9 +721,9 @@ enable_deployments   = false
 enable_fleet         = false
 fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = false
-insights_storage     = "external" # Or "in-cluster"
+insights_storage     = "in-cluster" # Or "external"
 enable_polly         = false
-polly_storage        = "external" # Or "in-cluster"
+polly_storage        = "in-cluster" # Or "external"
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.
 # Default is off. Enable if you want to share usage data.
