@@ -510,10 +510,23 @@ fi
 kubectl delete job "${RELEASE_NAME}-agent-bootstrap" -n "$NAMESPACE" \
   --ignore-not-found=true 2>/dev/null || true
 
-# --devel is required for pre-release chart versions (e.g. 0.15.0-rc.14). Helm
-# silently skips any version tagged -rc./-alpha./-beta. without it.
+# --devel is required for pre-release chart versions. Helm filters prereleases
+# out of the repo index before matching, so without it a constraint that only
+# a prerelease can satisfy silently resolves to nothing.
+#
+# The test is "does the constraint carry a SemVer prerelease identifier", i.e.
+# a '-' after the version core, rather than an -rc/-alpha/-beta allowlist. Both
+# forms appear in these pins: the LangSmith chart uses 0.17.0-rc.22, and the
+# sandbox chart's default is ~0.1.0-0, where -0 is the conventional way to say
+# "prereleases allowed". An allowlist matches the first and misses the second.
+# Build metadata (+meta) is stripped first so it cannot be mistaken for one.
+_needs_devel_flag() {
+  local _version="${1%%+*}"
+  [[ "$_version" == *-* ]]
+}
+
 _devel_flag=""
-if [[ -n "$CHART_VERSION" ]] && echo "$CHART_VERSION" | grep -qE '\-(rc|alpha|beta)\.'; then
+if [[ -n "$CHART_VERSION" ]] && _needs_devel_flag "$CHART_VERSION"; then
   _devel_flag="--devel"
 fi
 
@@ -659,16 +672,45 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" && "$_sandbox_deployment_mode" == "separate_cluster" ]]; then
-  _platform_endpoint=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
-    | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _platform_endpoint=""
-  if [[ -z "$_platform_endpoint" || "$_platform_endpoint" == "http://" || "$_platform_endpoint" == "https://" ]]; then
-    echo "ERROR: separate_cluster sandboxes require config.hostname before the runtime can be deployed." >&2
+  # Read hostname and basePath from the *config:* block specifically. A bare
+  # `grep '^\s*hostname:'` also matches the hostname keys that gateway and
+  # sandbox overlays nest under other top-level maps, so it silently picks up
+  # whichever happens to sort first. basePath matters because the sandbox
+  # reaches LangSmith at <hostname>/<basePath>/api; dropping it yields a URL
+  # that passes the chart's /api check and then 404s at runtime.
+  _read_config_key() {
+    awk -v key="$1" '
+      /^[^[:space:]#]/ { in_config = ($0 ~ /^config:[[:space:]]*$/) ; next }
+      !in_config { next }
+      $1 == key":" {
+        sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "")
+        sub(/[[:space:]]*(#.*)?$/, "")
+        gsub(/^"|"$/, "")
+        print
+        exit
+      }
+    ' "$ENV_FILE" 2>/dev/null || true
+  }
+
+  _platform_host=$(_read_config_key "hostname")
+  _platform_base_path=$(_read_config_key "basePath")
+
+  if [[ ! "$_platform_host" =~ ^https?://[^/]+ ]]; then
+    echo "ERROR: separate_cluster sandboxes need an absolute config.hostname in $(basename "$ENV_FILE")." >&2
+    echo "       Found: '${_platform_host:-<empty>}'. Re-run 'make init-values' after the ALB is up," >&2
+    echo "       or set langsmith_domain in terraform.tfvars." >&2
     exit 1
   fi
-  _platform_endpoint="${_platform_endpoint%/}/api"
 
+  _platform_endpoint="${_platform_host%/}"
+  _platform_base_path="${_platform_base_path#/}"
+  _platform_base_path="${_platform_base_path%/}"
+  [[ -n "$_platform_base_path" ]] && _platform_endpoint+="/${_platform_base_path}"
+  _platform_endpoint+="/api"
+
+  # Same rule as the core chart above, so the two pins cannot drift apart.
   _sandbox_devel_flag=""
-  if [[ "${SANDBOX_CHART_VERSION%%+*}" == *-* ]]; then
+  if _needs_devel_flag "$SANDBOX_CHART_VERSION"; then
     _sandbox_devel_flag="--devel"
   fi
   _sandbox_chart_metadata=$(helm show chart langchain/langsmith-sandbox --version "$SANDBOX_CHART_VERSION" ${_sandbox_devel_flag:-} 2>/dev/null) || _sandbox_chart_metadata=""
