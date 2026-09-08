@@ -81,6 +81,27 @@ jobs:
       - name: Run checks
         run: bash agents/check.sh "modules/${{ matrix.provider }}"
 
+  # Name contracts: a tfvars key or TF_VAR_ export that no longer matches a
+  # declared variable fails silently at deploy time -- terraform warns and
+  # exits 0 on an undeclared tfvars key, and ignores an undeclared TF_VAR_*
+  # with no output at all. One job per provider so a failure names the
+  # provider. Reads files only, so it sits beside shellcheck-all rather than
+  # behind a terraform init. ocp and byoc are skipped inside the script, by
+  # name, and still get a leg so a rename fails here instead of vanishing.
+  contracts:
+    name: contracts (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [aws, azure, byoc, gcp, ocp]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check tfvars and TF_VAR_ names
+        run: bash agents/contracts.sh "modules/${{ matrix.provider }}"
+
   # Every tracked script, one bar, whole repo -- including the ones outside the
   # provider trees (agents/, .github/scripts/, modules/ocp/). Its own job rather
   # than part of the legs above: it needs no terraform, so findings land in
