@@ -8,12 +8,13 @@ ingress:
   # Disable the standard Ingress resource; the Route is managed by the dns Terraform module.
   enabled: false
 
-# Chart 0.16 ships insights.enabled and polly.enabled as true, and each product's
-# pods hard-require its encryption key in the secret below. Turn one on in
-# values-overrides.yaml only together with the matching key —
-# INSIGHTS_ENCRYPTION_KEY / POLLY_ENCRYPTION_KEY in generate-secrets.sh. Setting
-# insights.encryptionKey or polly.encryptionKey inline does nothing here: with
-# config.existingSecretName set, the chart never renders its own secret.
+# Chart 0.16 ships insights.enabled and polly.enabled as true; both are off here
+# because neither is part of a first install. Turning one on in
+# values-overrides.yaml needs no secret work: generate-secrets.sh writes all four
+# encryption keys up front, and the chart mounts each as a non-optional key only
+# for the product that is enabled. Setting insights.encryptionKey or
+# polly.encryptionKey inline does nothing — with config.existingSecretName set the
+# chart never renders its own secret.
 insights:
   enabled: false
 

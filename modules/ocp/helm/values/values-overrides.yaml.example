@@ -7,6 +7,24 @@
 # values.yaml points the chart at via config.existingSecretName. Any secret-bearing
 # config.* value written in this file is silently ignored.
 
+# Internal registry. Clusters with no direct egress pull every image from a proxy
+# (Nexus, Artifactory, Quay) instead of the upstream registries. This value is
+# PREPENDED to each image's repository, which already carries its upstream host,
+# so `registry: nexus.example.com` resolves to
+# nexus.example.com/docker.io/langchain/langsmith-backend. That matches a proxy
+# laid out with one repository path per upstream host; if yours flattens them,
+# override the individual images[*].repository values instead.
+#
+# Chart 0.16 pulls from three upstream hosts, all of which need a proxy path:
+#   docker.io           — every LangSmith image, plus postgres/redis/clickhouse
+#   mcr.microsoft.com   — presidio-analyzer (only when insights is enabled)
+#   registry.k8s.io     — csi-node-driver-registrar (only with sandboxes/JuiceFS)
+#
+# images:
+#   registry: ""
+#   imagePullSecrets:
+#     - name: ""                 # Only when the proxy requires authentication
+
 config:
   initialOrgName: ""             # Required: your organization name
   hostname: langsmith.apps.cluster.example.com
