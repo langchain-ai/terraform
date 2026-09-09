@@ -25,11 +25,10 @@ resource "aws_security_group" "metastore" {
 #
 # This references var.eks_node_security_group_id, an ID that only exists once
 # the EKS module creates it in the same apply. A customer bringing their own
-# metastore SG can't pre-provision this rule themselves, so it's the one BYO
-# security group case where Terraform still writes a rule, gated by opting in
-# via manage_byo_security_group_rules.
+# metastore SG can opt into Terraform managing this one rule via
+# manage_byo_security_group_rules.
 resource "aws_vpc_security_group_ingress_rule" "metastore_from_nodes" {
-  count = local.manage_metastore_security_group_rules ? 1 : 0
+  count = local.manage_metastore_ingress_rule ? 1 : 0
 
   security_group_id            = local.metastore_security_group_id
   description                  = "Postgres from EKS worker nodes"
@@ -40,7 +39,7 @@ resource "aws_vpc_security_group_ingress_rule" "metastore_from_nodes" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "metastore_egress" {
-  count = local.manage_metastore_security_group_rules ? 1 : 0
+  count = local.manage_metastore_egress_rule ? 1 : 0
 
   security_group_id = local.metastore_security_group_id
   ip_protocol       = "-1"

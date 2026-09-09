@@ -137,7 +137,7 @@ variable "existing_metastore_security_group_id" {
 
 variable "manage_byo_security_group_rules" {
   type        = bool
-  description = "When existing_metastore_security_group_id is set, allow Terraform to still write the tcp/5432-from-EKS-nodes ingress rule (and the default egress rule) onto that supplied security group. Default false (attach-only). Needed because the ingress rule references the EKS node security group ID, which only exists after this same apply creates it, so a customer cannot pre-provision that rule themselves."
+  description = "When existing_metastore_security_group_id is set, allow Terraform to write the tcp/5432-from-EKS-nodes ingress rule onto that supplied security group. Default false (attach-only). This helps on a new deployment because the EKS node security group ID is created in the same apply."
   default     = false
 }
 

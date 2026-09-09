@@ -319,11 +319,9 @@ supplied group is attach-only, same as everywhere else, but then you're
 responsible for adding tcp/5432 ingress from the EKS node security group
 yourself (`module.eks.node_security_group_id` after a first apply, or from the
 EKS console) before SmithDB pods can reach the metastore. Set it to `true` and
-Terraform writes that ingress rule (plus a default allow-all egress rule) onto
-your security group. A real `terraform destroy` reverts those rules normally,
-since they're ordinary Terraform-managed resources. Only the manual AWS CLI
-teardown path (no Terraform state) leaves them behind; see
-[Teardown](#teardown) / `TEARDOWN.md` for that case.
+Terraform adds that ingress rule to your security group. `terraform destroy`
+removes the rule. Manual teardown without Terraform state leaves the rule in
+place; see [Teardown](#teardown) / `TEARDOWN.md` for removal instructions.
 
 ### What Terraform does not check
 

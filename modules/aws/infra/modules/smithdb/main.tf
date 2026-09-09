@@ -18,11 +18,15 @@ locals {
     local.byo_metastore_security_group ? var.existing_metastore_security_group_id :
     null
   )
-  # Rules are always written when Terraform owns the SG. On a BYO SG they're only
-  # written if the customer opts in. The ingress rule references the EKS node SG,
-  # an ID that doesn't exist until this same apply creates it, so it's the one
-  # case a customer can't reasonably pre-provision themselves.
-  manage_metastore_security_group_rules = local.create_metastore_security_group || (local.byo_metastore_security_group && var.manage_byo_security_group_rules)
+  # Terraform owns egress only for the group it creates. A supplied group may
+  # already have AWS's default allow-all egress rule, so managing it would fail
+  # with a duplicate-rule error.
+  manage_metastore_egress_rule = local.create_metastore_security_group
+
+  # On a supplied group, this opt-in manages only the required ingress rule.
+  # The EKS node group is created in the same apply, so its security group ID is
+  # unavailable when preparing a new deployment's group rules.
+  manage_metastore_ingress_rule = local.create_metastore_security_group || (local.byo_metastore_security_group && var.manage_byo_security_group_rules)
 
   rds_identifier = "${var.name}-metastore"
   rds_db_name    = "smithdb"
