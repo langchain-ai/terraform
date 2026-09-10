@@ -65,6 +65,11 @@ output "postgres_iam_connection_url" {
   value       = var.postgres_source == "external" ? module.postgres[0].iam_connection_url : null
 }
 
+output "postgres_security_group_id" {
+  description = "Security group ID attached to the RDS instance (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.postgres[0].security_group_id : null
+}
+
 #------------------------------------------------------------------------------
 # Redis (ElastiCache)
 #------------------------------------------------------------------------------
@@ -77,6 +82,11 @@ output "redis_connection_url" {
   description = "Redis connection URL (null if using in-cluster Redis)"
   value       = var.redis_source == "external" ? module.redis[0].connection_url : null
   sensitive   = true
+}
+
+output "redis_security_group_id" {
+  description = "Security group ID attached to ElastiCache (null if using in-cluster Redis)"
+  value       = var.redis_source == "external" ? module.redis[0].security_group_id : null
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
@@ -194,6 +204,11 @@ output "smithdb_metastore_use_ssl" {
   value       = var.smithdb_metastore_use_ssl
 }
 
+output "smithdb_metastore_security_group_id" {
+  description = "Security group ID attached to the metastore RDS instance (null when enable_smithdb = false or smithdb_metastore_source = 'external')"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_security_group_id : null
+}
+
 #------------------------------------------------------------------------------
 # ALB
 #------------------------------------------------------------------------------
@@ -210,6 +225,11 @@ output "alb_scheme" {
 output "alb_dns_name" {
   description = "ALB DNS hostname — use as config.hostname in Helm values"
   value       = module.alb.alb_dns_name
+}
+
+output "alb_security_group_id" {
+  description = "Security group ID attached to the ALB"
+  value       = module.alb.security_group_id
 }
 
 output "langsmith_url" {
@@ -233,6 +253,11 @@ output "bastion_public_ip" {
 output "bastion_ssm_command" {
   description = "AWS CLI command to start an SSM session to the bastion"
   value       = var.create_bastion ? module.bastion[0].ssm_start_session_command : null
+}
+
+output "bastion_security_group_id" {
+  description = "Security group ID attached to the bastion (null if bastion not created)"
+  value       = var.create_bastion ? module.bastion[0].security_group_id : null
 }
 
 #------------------------------------------------------------------------------
