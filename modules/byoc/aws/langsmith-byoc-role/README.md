@@ -86,6 +86,21 @@ We recommend keeping Terraform state in remote storage when possible, rather tha
 
 By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions.
 
+### Customer-supplied VPC (BYOVPC)
+
+Set the following inputs when the customer manages the base network, using the VPC IDs supplied to LangSmith:
+
+```hcl
+allow_vpc_creation_permissions = false
+vpc_ids                        = [module.langsmith_byovpc.vpc_id]
+```
+
+Here `module.langsmith_byovpc` is an instance of the [`BYOVPC reference module`](../byovpc/README.md). For an existing VPC, supply its ID directly. At least one VPC ID is required when disabling base-network permissions.
+
+This removes permissions to create or manage VPCs, subnets, Internet and NAT gateways, Elastic IPs, route tables and routes, network ACLs, customer-side VPC endpoints, VPC flow logs, and Network Firewall. It retains EC2 discovery, EBS encryption defaults, tagged workload security groups, PrivateLink endpoint services, and workload ENI detachment. Security-group creation is limited to the supplied VPC IDs in your account.
+
+With `allow_delete_permissions = true`, BYOVPC mode permits deletion of tagged workload security groups and endpoint services, plus termination of matching Karpenter instances. It does not restore base-network deletion permissions. `allow_vpc_creation_permissions` defaults to `true` for compatibility with LangSmith-managed VPCs.
+
 ### Enabling break-glass assume-role access
 
 `LangSmithBYOCBreakGlass` defaults to `Deny`. To allow an approved LangChain engineer to assume the role, set `allow_break_glass_access = true` and include that engineer's Identity Store user ID and SourceIdentity email (the engineer will provide it to you):
@@ -131,6 +146,8 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
 | `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
+| `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
+| `vpc_ids` | `set(string)` | no | `[]` | Customer VPC IDs allowed for tagged workload security-group creation; required when `allow_vpc_creation_permissions = false`. |
 
 ## Outputs
 
@@ -149,8 +166,8 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 
 | Policy suffix | Surface |
 |---------------|---------|
-| `-vpc` | VPC, subnets, NAT, route tables, endpoints, security groups, VPC flow logs |
-| `-ec2-eni` | `DetachNetworkInterface` on data-plane ENIs (Karpenter node teardown) |
+| `-vpc` | Base networking by default; reduced workload security-group and endpoint-service permissions in BYOVPC mode |
+| `-ec2-eni` | Workload ENI detachment, Network Firewall in managed-network mode, and optional network/Karpenter deletion permissions |
 | `-iam` | IAM role lifecycle for the data plane (EKS, IRSA, Karpenter, etc.) |
 | `-iam-karpenter-eks-profiles` | EC2 instance profiles for Karpenter and EKS, plus the Karpenter controller customer-managed policy |
 | `-eks` | EKS cluster, node groups, add-ons |
@@ -183,6 +200,10 @@ The break-glass role only carries an inline `eks:DescribeCluster` permission on 
 - Delete permissions are disabled by default. Enable `allow_delete_permissions` only when tearing down LangSmith-managed resources, then disable it again after teardown.
 - `data.aws_caller_identity.current` is used at plan time to template account IDs into the policies. Run `terraform apply` from credentials in the **target** account, not the LangSmith control-plane account.
 - Removing this module will delete both roles and all attached policies. The LangSmith data plane will lose all control-plane reconciliation; do not apply destroys without coordinating with LangChain.
+
+## Validation
+
+From the repository root, run `bash agents/check.sh modules/byoc/aws/langsmith-byoc-role` for Terraform validation and TFLint.
 
 ## License
 
