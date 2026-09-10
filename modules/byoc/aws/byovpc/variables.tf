@@ -112,9 +112,9 @@ variable "create_nat_gateway" {
 }
 
 variable "enable_vpc_flow_logs" {
-  description = "Create an S3-backed VPC Flow Log that records accepted and rejected traffic with 90-day retention."
+  description = "Create an S3-backed VPC Flow Log that records accepted and rejected traffic with 90-day retention. Enabled by default; set to false to disable."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_vpc_endpoints" {

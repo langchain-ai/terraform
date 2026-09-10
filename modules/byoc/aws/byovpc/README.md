@@ -20,6 +20,7 @@ By default, the module creates:
 - One route table per private application subnet and one shared isolated database route table.
 - An Internet Gateway and a regional NAT gateway for application-subnet egress.
 - A default security group with no ingress or egress rules.
+- S3-backed VPC flow logs for accepted and rejected traffic.
 
 Set `publicly_accessible = true` to create matching public subnets and their Internet Gateway route. These subnets do not automatically assign public IP addresses. Use this setting if you are going to deploy LangSmith BYOC with internet-facing load balancers.
 
@@ -49,9 +50,9 @@ Customers can opt into:
 
 Customize `interface_endpoint_services` to the supported services you need. Enabling endpoints does not remove NAT routes or provide all external connectivity needed by workloads.
 
-## Optional flow logs
+## Flow logs
 
-Set `enable_vpc_flow_logs = true` to record traffic in an S3 bucket with encryption, versioning, public access blocked, and a policy requiring TLS. Current objects expire after 90 days, noncurrent versions after one day, and expired delete markers are cleaned up.
+Flow logs are enabled by default with `traffic_type = "ALL"`. Set `enable_vpc_flow_logs = false` to disable flow logs and creation of their S3 bucket.
 
 ## Customer-managed responsibilities
 
@@ -120,7 +121,7 @@ All inputs are optional. Full types and validation rules are in [`variables.tf`]
 | `enable_vpc_endpoints` | `false` | Create S3 Gateway and AWS Interface endpoints. |
 | `interface_endpoint_services` | See `variables.tf` | Unique service names from the module's allowlist. |
 | `enable_control_plane_privatelink` | `false` | Create a control-plane endpoint and private DNS. |
-| `enable_vpc_flow_logs` | `false` | Create S3-backed VPC flow logs. |
+| `enable_vpc_flow_logs` | `true` | Record accepted and rejected traffic in S3; set to `false` to disable. |
 | `aws_marketplace_product_code` | `"5iyery30g5gp8777bzkpum6uq"` | AWS Marketplace attribution via `aws-apn-id`; set to `null` to omit the module-generated tag. |
 | `tags` | `{}` | Customer tags; generated `Name` and Marketplace tags take precedence. |
 
