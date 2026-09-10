@@ -54,6 +54,17 @@ Customize `interface_endpoint_services` to the supported services you need. Enab
 
 Flow logs are enabled by default with `traffic_type = "ALL"`. Set `enable_vpc_flow_logs = false` to disable flow logs and creation of their S3 bucket.
 
+The bucket defaults to S3-managed encryption (SSE-S3). To use a customer-managed KMS key (SSE-KMS), set `flow_logs_kms_key_arn` in your module call:
+
+```hcl
+flow_logs_kms_key_arn = "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+```
+
+- Supply a symmetric encryption key in the bucket's region using its full key ARN, not a key ID or alias. 
+- Before enabling it, configure the key policy to permit `delivery.logs.amazonaws.com` to deliver encrypted logs, following the [AWS key-policy requirements for VPC flow logs](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs-s3-cmk-policy.html). 
+
+Leave `flow_logs_kms_key_arn = null` (the default) to use SSE-S3. Security scanners requiring a customer-managed key may still report the default configuration. Changing the key setting affects new objects; existing logs retain their original encryption.
+
 ## Customer-managed responsibilities
 
 This module deliberately does not manage:
@@ -122,6 +133,7 @@ All inputs are optional. Full types and validation rules are in [`variables.tf`]
 | `interface_endpoint_services` | See `variables.tf` | Unique service names from the module's allowlist. |
 | `enable_control_plane_privatelink` | `false` | Create a control-plane endpoint and private DNS. |
 | `enable_vpc_flow_logs` | `true` | Record accepted and rejected traffic in S3; set to `false` to disable. |
+| `flow_logs_kms_key_arn` | `null` | Customer-managed KMS key ARN for flow-log encryption; `null` uses S3-managed encryption. |
 | `aws_marketplace_product_code` | `"5iyery30g5gp8777bzkpum6uq"` | AWS Marketplace attribution via `aws-apn-id`; set to `null` to omit the module-generated tag. |
 | `tags` | `{}` | Customer tags; generated `Name` and Marketplace tags take precedence. |
 

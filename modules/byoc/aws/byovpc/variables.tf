@@ -117,6 +117,17 @@ variable "enable_vpc_flow_logs" {
   default     = true
 }
 
+variable "flow_logs_kms_key_arn" {
+  description = "Optional customer-managed KMS key ARN for the flow-log bucket. Use a symmetric key in the bucket's region with a key policy permitting VPC flow-log delivery. Null uses S3-managed encryption; ignored when flow logs are disabled."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.flow_logs_kms_key_arn == null || can(regex("^arn:[a-z0-9-]+:kms:[a-z0-9-]+:[0-9]{12}:key/[a-zA-Z0-9-]+$", var.flow_logs_kms_key_arn))
+    error_message = "flow_logs_kms_key_arn must be null or a full KMS key ARN."
+  }
+}
+
 variable "enable_vpc_endpoints" {
   description = "Create an S3 Gateway endpoint and customer-owned Interface endpoints for interface_endpoint_services."
   type        = bool
