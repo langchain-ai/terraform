@@ -9,10 +9,11 @@
 # Post-infra check:  make preflight-post
 # Full deploy:       make deploy-all
 # Teardown:          make uninstall → make destroy → make purge-secrets → make clean
+# BYO SG teardown:   make teardown-byo-sg BYO_SECURITY_GROUP_IDS="sg-..." → make destroy
 # Where am I?        make status
 # Terraform flags:   make plan ARGS="-target=module.eks"   (see make help)
 
-.PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy purge-secrets tf \
+.PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
         init-values deploy apply-eso uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
@@ -35,6 +36,7 @@ help: ## Show available targets
 	@echo "    make apply   ARGS=\"tfplan\"                   # apply that saved plan"
 	@echo "    make apply   ARGS=\"-auto-approve\"            # skip the approval prompt"
 	@echo "    make destroy ARGS=\"-target=module.redis\"     # destroy one module"
+	@echo "    make teardown-byo-sg BYO_SECURITY_GROUP_IDS=\"sg-... sg-...\"  # delete supplied SGs after destroy"
 	@echo ""
 	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
 	@echo "    make tf      ARGS=\"output\"                   # all infra outputs"
@@ -91,6 +93,9 @@ destroy: ## terraform destroy (infra) — run make uninstall first
 	@echo "  Next step: delete this deployment's SSM secrets."
 	@echo "    make purge-secrets"
 	@echo ""
+
+teardown-byo-sg: ## Delete supplied SGs from a Terraform-created VPC after make destroy
+	BYO_SECURITY_GROUP_IDS="$(BYO_SECURITY_GROUP_IDS)" $(INFRA_DIR)/scripts/teardown-byo-sg.sh
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	terraform -chdir=$(INFRA_DIR) $(ARGS)

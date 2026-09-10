@@ -207,6 +207,27 @@ Terraform will destroy in dependency order:
 - EKS node groups and cluster
 - VPC, subnets, NAT gateway, route tables
 
+### Customer-supplied security groups in a Terraform-created VPC
+
+Terraform leaves a supplied security group alone. AWS will not delete the VPC
+while that group remains. If `terraform destroy` finishes every other resource
+but reports that the VPC still has dependencies, delete the supplied groups and
+run destroy again:
+
+```bash
+# From modules/aws/
+make teardown-byo-sg BYO_SECURITY_GROUP_IDS="sg-0123456789abcdef0 sg-0123456789abcdef1"
+make destroy
+```
+
+`make teardown-byo-sg` verifies that every supplied ID belongs to the VPC Terraform is
+destroying and asks you to confirm the VPC ID. After confirmation, it removes
+inbound and outbound rules referencing other groups in your list, then deletes
+the listed groups. It leaves groups and references outside that list untouched;
+references from an unlisted group can still block deletion. Do not run it for a
+customer-owned VPC (`create_vpc = false`); that command refuses to delete groups
+from one.
+
 **Note on `source ./scripts/setup-env.sh`:** The script sets `TF_VAR_postgres_password` and `TF_VAR_redis_auth_token`. If those SSM parameters don't exist (e.g. they were never stored there), the variables will be unset and Terraform will fail provider validation even during destroy. In that case, set them manually before running destroy:
 
 ```bash
@@ -601,8 +622,25 @@ for igw_id in $(aws ec2 describe-internet-gateways \
 done
 
 # 6. Delete security groups (revoke cross-references first)
-for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION \
+#
+# Set this to the effective managed-by tag value for this deployment. It is
+# "terraform" by default; for tags = { "managed-by" = "platform" }, use
+# "platform". List every supplied group so it is excluded even when it has the
+# same tag value as Terraform-created groups.
+MANAGED_BY_TAG_VALUE="terraform"
+BYO_SECURITY_GROUP_IDS=""
+
+is_byo_security_group() {
+  local candidate_id="$1"
+  for byo_security_group_id in $BYO_SECURITY_GROUP_IDS; do
+    [ "$candidate_id" = "$byo_security_group_id" ] && return 0
+  done
+  return 1
+}
+for sg_id in $(aws ec2 describe-security-groups \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:managed-by,Values=$MANAGED_BY_TAG_VALUE" --region $REGION \
   --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text); do
+  is_byo_security_group "$sg_id" && continue
   # Revoke all rules (ingress and egress) to break circular dependencies
   for rule_id in $(aws ec2 describe-security-group-rules --filters "Name=group-id,Values=$sg_id" --region $REGION \
     --query 'SecurityGroupRules[?!IsEgress].SecurityGroupRuleId' --output text); do
@@ -614,8 +652,10 @@ for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$V
   done
 done
 # Now delete them
-for sg_id in $(aws ec2 describe-security-groups --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION \
+for sg_id in $(aws ec2 describe-security-groups \
+  --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:managed-by,Values=$MANAGED_BY_TAG_VALUE" --region $REGION \
   --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text); do
+  is_byo_security_group "$sg_id" && continue
   aws ec2 delete-security-group --group-id "$sg_id" --region $REGION
 done
 
@@ -630,6 +670,10 @@ aws ec2 delete-vpc --vpc-id $VPC_ID --region $REGION
 ```
 
 **Known issue — EKS security groups:** EKS creates node and cluster security groups that reference each other. You must revoke all rules from both before either can be deleted, which is why the script above revokes rules in a separate pass before deleting.
+
+**Manual teardown preserves supplied security groups.** If you set `existing_security_group_id` (alb/bastion/postgres/redis) or `smithdb_existing_metastore_security_group_id`, add every supplied ID to `BYO_SECURITY_GROUP_IDS`. Step 6 excludes those groups from rule removal and deletion, even when they share the deployment's ownership tag.
+
+With `smithdb_manage_byo_security_group_rules = true`, Terraform manages the tcp/5432-from-EKS-nodes ingress rule on your supplied group. `terraform destroy` (Option A) removes that rule. The Option B script preserves it along with the supplied group; remove the ingress rule yourself if you want the group back to its original state.
 
 ## B10 — Clean Up Remaining Resources
 
