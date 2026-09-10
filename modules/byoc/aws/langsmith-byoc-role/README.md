@@ -95,9 +95,9 @@ allow_vpc_creation_permissions = false
 vpc_ids                        = [module.langsmith_byovpc.vpc_id]
 ```
 
-Here `module.langsmith_byovpc` is an instance of the [`BYOVPC reference module`](../byovpc/README.md). For an existing VPC, supply its ID directly. At least one VPC ID is required when disabling base-network permissions.
+Here `module.langsmith_byovpc` is an instance of the [`BYOVPC reference module`](../byovpc/README.md). For an existing VPC, supply its ID directly. At least one VPC ID is required.
 
-This removes permissions to create or manage VPCs, subnets, Internet and NAT gateways, Elastic IPs, route tables and routes, network ACLs, customer-side VPC endpoints, VPC flow logs, and Network Firewall. It retains EC2 discovery, EBS encryption defaults, tagged workload security groups, PrivateLink endpoint services, and workload ENI detachment. Security-group creation is limited to the supplied VPC IDs in your account.
+This removes permissions to create or manage VPCs, subnets, Internet and NAT gateways, Elastic IPs, route tables and routes, network ACLs, customer-side VPC endpoints, VPC flow logs, and Network Firewall. It retains EC2 discovery, tagged workload security groups, PrivateLink endpoint services, and workload ENI detachment. Security-group creation is limited to the supplied VPC IDs in your account.
 
 With `allow_delete_permissions = true`, BYOVPC mode permits deletion of tagged workload security groups and endpoint services, plus termination of matching Karpenter instances. It does not restore base-network deletion permissions. `allow_vpc_creation_permissions` defaults to `true` for compatibility with LangSmith-managed VPCs.
 
@@ -200,10 +200,6 @@ The break-glass role only carries an inline `eks:DescribeCluster` permission on 
 - Delete permissions are disabled by default. Enable `allow_delete_permissions` only when tearing down LangSmith-managed resources, then disable it again after teardown.
 - `data.aws_caller_identity.current` is used at plan time to template account IDs into the policies. Run `terraform apply` from credentials in the **target** account, not the LangSmith control-plane account.
 - Removing this module will delete both roles and all attached policies. The LangSmith data plane will lose all control-plane reconciliation; do not apply destroys without coordinating with LangChain.
-
-## Validation
-
-From the repository root, run `bash agents/check.sh modules/byoc/aws/langsmith-byoc-role` for Terraform validation and TFLint.
 
 ## License
 
