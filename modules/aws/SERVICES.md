@@ -41,6 +41,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **What**: Dedicated high-throughput ingestion worker — parallel to `queue`, handles burst traffic
 - **Depends on**: Redis, S3
 - **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **IRSA**
+- **Enabled**: Always deployed across all profiles. External Redis influences throughput characteristics rather than deployment eligibility.
 
 ### `langsmith-ace-backend`
 - **What**: Async compute engine — dataset runs, evaluations, background jobs
