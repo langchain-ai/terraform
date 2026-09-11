@@ -87,7 +87,25 @@ _region=$(_parse_tfvar "region")
 _region="${_region:-us-west2}"
 _tls_source=$(_parse_tfvar "tls_certificate_source")
 _tls_source="${_tls_source:-none}"
-_domain=$(_parse_tfvar "langsmith_domain")
+# Resolve the domain through Terraform rather than by parsing terraform.tfvars
+# alone. That file is only one of Terraform's variable sources and not the
+# highest priority one, so a file parse misses a value set in an .auto.tfvars
+# file, a .tfvars.json file, -var, -var-file or TF_VAR_langsmith_domain. Where
+# the two disagree, Terraform creates the Gateway listener for its value while
+# this script writes the file's value into config.hostname, and every request
+# then fails the listener match with NoMatchingListenerHostname. A domain name
+# is not a secret.
+#
+# A read failure means the state predates the langsmith_domain output, so fall
+# back to the file parse and keep an older stack working. An empty result from a
+# successful read is an answer rather than a failure: no domain is configured.
+# A tree with no state also reads empty, and the storage_bucket_name check below
+# stops that run regardless.
+_domain_source="terraform output"
+if ! _domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
+  _domain_source="terraform.tfvars"
+  _domain=$(_parse_tfvar "langsmith_domain") || _domain=""
+fi
 _postgres_source=$(_parse_tfvar "postgres_source")
 _postgres_source="${_postgres_source:-external}"
 _redis_source=$(_parse_tfvar "redis_source")
@@ -140,6 +158,7 @@ echo "  name_prefix            = $_name_prefix"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
+echo "  langsmith_domain       = ${_domain:-(none)} (from $_domain_source)"
 echo "  postgres_source        = $_postgres_source"
 echo "  redis_source           = $_redis_source"
 echo "  clickhouse_source      = $_clickhouse_source"
@@ -211,14 +230,26 @@ fi
 echo ""
 
 # ── Hostname ──────────────────────────────────────────────────────────────────
-# Priority: existing OUT_FILE > langsmith_domain tfvar > ingress IP > empty
+# Priority: langsmith_domain > existing OUT_FILE > ingress IP > empty
 EXISTING_HOSTNAME=""
 if [[ -f "$OUT_FILE" ]]; then
   EXISTING_HOSTNAME=$(grep -E '^\s*hostname:' "$OUT_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || EXISTING_HOSTNAME=""
 fi
 
-if [[ -n "$EXISTING_HOSTNAME" ]]; then
+if [[ -n "$EXISTING_HOSTNAME" && -n "$_domain" && "$EXISTING_HOSTNAME" != "$_domain" ]]; then
+  # Self-heal: Terraform owns the Gateway listener hostname, so a configured
+  # langsmith_domain outranks whatever the file holds. Earlier revisions of
+  # deploy.sh rewrote the hostname to the Gateway IP unconditionally, and
+  # because the existing file outranked the variable the wrong value survived
+  # every regeneration.
+  #
+  # Test for "differs", not for "is an IPv4 literal". A stale DNS name left
+  # behind by an earlier langsmith_domain fails the listener match exactly as a
+  # bare IP does, and an IPv4-only test preserves it silently.
+  echo "Replacing hostname ${EXISTING_HOSTNAME} with langsmith_domain ${_domain}"
+  HOSTNAME="$_domain"
+elif [[ -n "$EXISTING_HOSTNAME" ]]; then
   HOSTNAME="$EXISTING_HOSTNAME"
 elif [[ -n "$_domain" ]]; then
   HOSTNAME="$_domain"
@@ -238,11 +269,28 @@ fi
 if [[ -n "$EXISTING_EMAIL" ]]; then
   ADMIN_EMAIL="$EXISTING_EMAIL"
   echo "Reusing existing admin email: $ADMIN_EMAIL"
+elif [[ -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
+  ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
+  echo "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
 else
+  # read returns 1 at EOF and set -euo pipefail (line 48) aborts there, so a
+  # headless run exits 1 with nothing printed. Tolerate the failure and report on
+  # the empty value instead. Testing "is there a tty" would be the wrong gate:
+  # piped stdin is not a tty either, and several prompts below have no env
+  # override, so `printf ... | init-values.sh` is the only way to drive them.
+  #
+  # Keep whatever read assigned: `|| true`, not `|| ADMIN_EMAIL=""`. read assigns
+  # the partial line and then returns 1 when the input has no trailing newline,
+  # so clearing the variable on failure discards a value the operator did supply.
+  # `printf 'you@example.com' | init-values.sh` is that case. At a true EOF read
+  # assigns the empty string, which the check below still catches.
   printf "Admin email: "
-  read -r ADMIN_EMAIL
+  read -r ADMIN_EMAIL || true
   if [[ -z "$ADMIN_EMAIL" ]]; then
+    echo "" >&2
     echo "ERROR: Admin email is required." >&2
+    echo "       Supply it without a prompt:" >&2
+    echo "         export LANGSMITH_ADMIN_EMAIL=you@example.com" >&2
     exit 1
   fi
 fi
@@ -296,10 +344,15 @@ fi
 ADMIN_PASSWORD="${TF_VAR_langsmith_admin_password:-$EXISTING_ADMIN_PASSWORD}"
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   printf "Initial admin password: "
-  read -rs ADMIN_PASSWORD
+  # `|| true`, not `|| ADMIN_PASSWORD=""` — see the admin email prompt above.
+  # A password piped without a trailing newline is otherwise silently dropped,
+  # and the operator sees "password is required" for a password they supplied.
+  read -rs ADMIN_PASSWORD || true
   echo
   if [[ -z "$ADMIN_PASSWORD" ]]; then
     echo "ERROR: initial admin password is required." >&2
+    echo "       Source infra/scripts/setup-env.sh first so" >&2
+    echo "       TF_VAR_langsmith_admin_password is exported from Secret Manager." >&2
     exit 1
   fi
 fi
@@ -497,7 +550,14 @@ elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
   echo "  4) LangSmith + Deployments + Agent Builder + Insights"
   echo ""
   printf "  Choice [1]: "
-  read -r _tier_choice
+  # EOF falls through to choice 1 rather than aborting: this block only runs on a
+  # first run with no enable_* flags set in terraform.tfvars, and 1 is
+  # "LangSmith only", which is what no flags already means.
+  #
+  # `|| true`, not `|| _tier_choice=""` — see the admin email prompt above. Here
+  # the cleared value is not caught by any check: it defaults to 1 below, so
+  # `printf 4 | init-values.sh` would deploy LangSmith only and report nothing.
+  read -r _tier_choice || true
   _tier_choice="${_tier_choice:-1}"
 
   case "$_tier_choice" in

@@ -7,7 +7,24 @@ resource "aws_db_subnet_group" "this" {
   subnet_ids = var.subnet_ids
 }
 
+locals {
+  byo_security_group = var.existing_security_group_id != null && var.existing_security_group_id != ""
+  security_group_id  = local.byo_security_group ? var.existing_security_group_id : aws_security_group.this[0].id
+}
+
+# Preserves state: without this, existing deployments would see their RDS
+# security group destroyed and recreated just from the count above changing
+# its address from aws_security_group.this to aws_security_group.this[0].
+moved {
+  from = aws_security_group.this
+  to   = aws_security_group.this[0]
+}
+
+# Skipped when var.existing_security_group_id is set. Terraform never
+# writes rules onto a customer-supplied security group (attach-only BYO).
 resource "aws_security_group" "this" {
+  count = local.byo_security_group ? 0 : 1
+
   name        = "${var.identifier}-sg"
   description = "Allow PostgreSQL access"
   vpc_id      = var.vpc_id
@@ -40,7 +57,7 @@ resource "aws_db_instance" "this" {
   password              = var.password
 
   db_subnet_group_name    = aws_db_subnet_group.this.name
-  vpc_security_group_ids  = [aws_security_group.this.id]
+  vpc_security_group_ids  = [local.security_group_id]
   publicly_accessible     = false
   deletion_protection     = var.deletion_protection
   storage_encrypted       = true

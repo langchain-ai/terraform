@@ -22,3 +22,8 @@ output "db_name" {
   description = "Name of the default (admin) database created on the instance."
   value       = aws_db_instance.this.db_name
 }
+
+output "security_group_id" {
+  description = "Security group ID attached to the RDS instance (created by this module, or the supplied existing_security_group_id)"
+  value       = local.security_group_id
+}

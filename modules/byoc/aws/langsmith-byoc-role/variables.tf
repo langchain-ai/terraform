@@ -4,7 +4,7 @@ variable "role_name" {
 }
 
 variable "external_id" {
-  description = "External ID required to assume this role."
+  description = "External ID copied from Settings > Data Planes in the LangSmith UI, required to assume this role."
   type        = string
 }
 
