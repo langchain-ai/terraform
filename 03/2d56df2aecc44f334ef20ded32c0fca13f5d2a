@@ -1,0 +1,29 @@
+modules/azure/infra/modules/postgres/outputs.tf
+  s_0cc43e343b78a4::t_df3f8d3b9a9338 24
+  s_0cc43e343b78a4::t_37571fd319c690 3
+  s_0cc43e343b78a4::t_b5bdce4432585e 14
+modules/azure/infra/variables.tf
+  s_0cc43e343b78a4::t_5786926fb6cfc7 652-654,656-664
+modules/azure/infra/scripts/setup-env.sh
+  s_0cc43e343b78a4::t_7edc95e447fb76 360-364
+  s_0cc43e343b78a4::t_e1b5206077a561 75-93,110-113
+  s_0cc43e343b78a4::t_2eeb270385d37b 130-134
+  s_0cc43e343b78a4::t_ece0f658b03dea 156-159
+  s_0cc43e343b78a4::t_74e9ce2fcee927 317
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "032d56df2aecc44f334ef20ded32c0fca13f5d2a",
+  "prompts": {},
+  "sessions": {
+    "s_0cc43e343b78a4": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "312b9fbc-41df-42d7-965a-f1edcc1983ca",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
