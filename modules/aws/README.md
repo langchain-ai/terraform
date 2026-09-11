@@ -581,7 +581,7 @@ For each secret it follows this priority order:
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | You enter it | Terraform sets RDS with this password |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. Override with `TF_VAR_postgres_password`; setup-env.sh rejects a value RDS will not accept. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
@@ -595,6 +595,8 @@ For each secret it follows this priority order:
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
 After running, you'll see a summary of all values (masked) and the SSM prefix. Terraform then reads the secrets as `TF_VAR_*` variables during `plan` / `apply`.
+
+If an apply updates `langsmith-postgres` or the Fleet/Polly/Insights Postgres secrets (for example after password URL-encoding), LangSmith pods keep the previous `connection_url` until you run `./helm/scripts/deploy.sh` or `kubectl rollout restart`. Terraform recreates a failed `langsmith-standalone-*-db-init` Job when the encoded admin URL changes. The Job skips `CREATE DATABASE` when the database already exists.
 
 > **Why SSM?** Secrets are never in git or `.tfvars`. ESO reads them from SSM at runtime and syncs them into the `langsmith-config` Kubernetes Secret that the Helm chart mounts.
 
