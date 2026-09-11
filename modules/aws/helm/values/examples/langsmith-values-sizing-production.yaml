@@ -1,12 +1,12 @@
 # Production sizing — multi-replica deployments with HPA autoscaling.
 #
 # This is the recommended profile for any environment serving real traffic.
-# Enables horizontal pod autoscaling on all stateless components with
+# Enables horizontal pod autoscaling on the core stateless components with
 # reasonable resource requests as starting points. Tune to your workload:
 #   kubectl top pods -n langsmith
 #
-# Covers ALL chart components including infrastructure (ClickHouse, operator,
-# agent-builder servers) — not just the application pods.
+# Covers core services and shared infrastructure. Fleet, Chat, and Insights
+# service resources and autoscaling come from their separate add-on overlays.
 
 # -- Application components ----------------------------------------------------
 
@@ -175,7 +175,7 @@ operator:
         cpu: "1"
         memory: "2Gi"
 
-# -- Agent Builder infrastructure ----------------------------------------------
+# -- Fleet infrastructure ------------------------------------------------------
 
 fleetToolServer:
   deployment:
