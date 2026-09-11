@@ -1,0 +1,33 @@
+modules/aws/infra/scripts/setup-env.sh
+  s_6b9f3d6355acdd::t_5e29a605864909 292-293,295-313
+modules/aws/infra/main.tf
+  s_6b9f3d6355acdd::t_60a6a23eb5a630 726-733
+  s_6b9f3d6355acdd::t_3e6eb109b04385 805-810,817-818
+modules/aws/TEST_CYCLE.md
+  s_6b9f3d6355acdd::t_a6946bf187afea 370
+modules/aws/TROUBLESHOOTING.md
+  s_6b9f3d6355acdd::t_9f5449bb53a9a5 540
+modules/aws/infra/variables.tf
+  s_6b9f3d6355acdd::t_0a33cf50e1e87d 217-223,229-230
+modules/aws/infra/modules/k8s-bootstrap/main.tf
+  s_6b9f3d6355acdd::t_47b2b100768adb 31-32
+modules/aws/README.md
+  s_6b9f3d6355acdd::t_8c377c94ac5dbe 599-600
+  s_6b9f3d6355acdd::t_504de5d9fa2488 584
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "128a072fbbdb49dc774782565a4d68fb2de2c50f",
+  "prompts": {},
+  "sessions": {
+    "s_6b9f3d6355acdd": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a1b39c17-f8c8-441d-b5fb-cb2786d33629",
+        "model": "auto-smart"
+      },
+      "human_author": null
+    }
+  }
+}
