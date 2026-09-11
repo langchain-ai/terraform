@@ -659,9 +659,9 @@ variable "postgres_admin_password" {
       !strcontains(var.postgres_admin_password, "$") &&
       !strcontains(var.postgres_admin_password, "`") &&
       !strcontains(var.postgres_admin_password, "\n") &&
-      !strcontains(var.postgres_admin_password, "%{")
+      !strcontains(var.postgres_admin_password, "%%{")
     )
-    error_message = "postgres_admin_password must not contain double quotes, backslashes, dollar signs, backticks, newlines, or HCL template markers (%{)."
+    error_message = "postgres_admin_password must not contain double quotes, backslashes, dollar signs, backticks, newlines, or HCL template markers (%%{)."
   }
 }
 
