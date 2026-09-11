@@ -1,39 +1,78 @@
 # Customer-specific overrides for LangSmith on OpenShift.
 # Copy to values-overrides.yaml, fill in all required fields, then run deploy.sh.
+#
+# Secrets are NOT set here. The license key, api_key_salt, jwt_secret, admin
+# password, OAuth credentials and the per-product encryption keys live in the
+# langsmith-secrets Secret created by helm/scripts/generate-secrets.sh, which
+# values.yaml points the chart at via config.existingSecretName. Any secret-bearing
+# config.* value written in this file is silently ignored.
+
+# Internal registry. Clusters with no direct egress pull every image from a proxy
+# (Nexus, Artifactory, Quay) instead of the upstream registries. This value is
+# PREPENDED to each image's repository, which already carries its upstream host,
+# so `registry: nexus.example.com` resolves to
+# nexus.example.com/docker.io/langchain/langsmith-backend. That matches a proxy
+# laid out with one repository path per upstream host; if yours flattens them,
+# override the individual images[*].repository values instead.
+#
+# Chart 0.16 pulls from three upstream hosts, all of which need a proxy path:
+#   docker.io           — every LangSmith image, plus postgres/redis/clickhouse
+#   mcr.microsoft.com   — presidio-analyzer (only when insights is enabled)
+#   registry.k8s.io     — csi-node-driver-registrar (only with sandboxes/JuiceFS)
+#
+# images:
+#   registry: ""
+#   imagePullSecrets:
+#     - name: ""                 # Only when the proxy requires authentication
 
 config:
-  langsmithLicenseKey: ""        # Required: your LangSmith license key
-  orgName: ""                    # Required: your organization name
+  initialOrgName: ""             # Required: your organization name
   hostname: langsmith.apps.cluster.example.com
-  blobStorageBackend: s3         # s3 | gcs | azure — match your object storage provider
-  blobStorageBucket: ""          # Bucket/container name
 
+  # Required, and exactly one of basicAuth / oauth below must be enabled:
+  #   mixed = username/password, optionally alongside SSO
+  #   oauth = SSO only
+  authType: mixed
+
+  # Username/password login. The password itself is the
+  # initial_org_admin_password key in langsmith-secrets
+  # (INITIAL_ORG_ADMIN_PASSWORD), and jwt_secret is generated there too.
+  # initialOrgAdminEmail is required whenever basicAuth is on.
+  basicAuth:
+    enabled: true
+  initialOrgAdminEmail: ""       # Required with basicAuth
+
+  # SSO. oauth_client_id, oauth_client_secret and oauth_issuer_url are keys in
+  # langsmith-secrets (OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET /
+  # OAUTH_ISSUER_URL); this block only turns the flow on. oauth_client_secret is
+  # read only when authType is "mixed". Basic auth and OAuth cannot both be
+  # enabled — for SSO only, set authType: oauth and disable basicAuth above.
+  # oauth:
+  #   enabled: true
+
+  # Object storage. The access key pair is in langsmith-secrets
+  # (BLOB_STORAGE_ACCESS_KEY / BLOB_STORAGE_ACCESS_KEY_SECRET); only the
+  # non-secret settings belong here. Leave the key pair out when the pods reach
+  # object storage through an ambient identity.
+  # blobStorage:
+  #   enabled: true
+  #   engine: "S3"
+  #   bucketName: ""
+  #   apiURL: "https://s3-openshift-storage.apps.cluster.example.com"
+  #   s3UsePathStyle: true       # ODF/Noobaa serves path-style addressing
+
+# Datastore credentials come from secrets too. Each holds one key,
+# connection_url, carrying the full URI including host, port, database and
+# password — with existingSecretName set there are no separate host/port/database
+# values to fill in. Created by Terraform (postgres_connection_url /
+# redis_connection_url) or by generate-secrets.sh (POSTGRES_CONNECTION_URL /
+# REDIS_CONNECTION_URL).
 postgres:
   external:
     enabled: true
-    host: ""       # Your PostgreSQL host
-    port: 5432
-    database: langsmith
     existingSecretName: langsmith-postgres
-    existingSecretKey: password
 
 redis:
   external:
     enabled: true
-    host: ""       # Your Redis host
-    port: 6379
-
-# Object storage credentials (if not using workload identity / IAM)
-# blobStorage:
-#   accessKeyId: ""
-#   secretAccessKey: ""
-#   region: us-east-1
-
-# Uncomment to configure SSO
-# auth:
-#   sso:
-#     enabled: true
-#     provider: okta    # okta | google | azure-ad
-#     clientId: ""
-#     clientSecret: ""
-#     issuerUrl: ""
+    existingSecretName: langsmith-redis
