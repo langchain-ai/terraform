@@ -328,3 +328,48 @@ run "in_cluster_redis_plans_nothing" {
     error_message = "redis_source = in-cluster still planned ElastiCache"
   }
 }
+
+# ── Add-on storage switches ──────────────────────────────────────────────────
+# fleet_storage decides who owns the Fleet database and Redis index: Terraform
+# on the shared RDS and ElastiCache, or the chart's own in-cluster StatefulSets.
+# Chart v0.16 added the in-cluster path, so both directions need a run.
+
+run "external_fleet_storage_plans_the_shared_credentials" {
+  command = plan
+
+  variables {
+    enable_fleet    = true
+    fleet_storage   = "external"
+    postgres_source = "external"
+    redis_source    = "external"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.fleet_postgres) == 1
+    error_message = "fleet_storage = external did not plan the Fleet Postgres secret"
+  }
+  assert {
+    condition     = length(kubernetes_secret.fleet_redis) == 1
+    error_message = "fleet_storage = external did not plan the Fleet Redis secret"
+  }
+}
+
+run "in_cluster_fleet_storage_plans_no_shared_credentials" {
+  command = plan
+
+  variables {
+    enable_fleet    = true
+    fleet_storage   = "in-cluster"
+    postgres_source = "external"
+    redis_source    = "external"
+  }
+
+  assert {
+    condition     = length(kubernetes_secret.fleet_postgres) == 0
+    error_message = "fleet_storage = in-cluster still planned the Fleet Postgres secret"
+  }
+  assert {
+    condition     = length(kubernetes_secret.fleet_redis) == 0
+    error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
+  }
+}

@@ -38,6 +38,9 @@ run "enums_reject_an_unlisted_value" {
     sizing_profile           = "small"
     smithdb_metastore_source = "import"
     smithdb_node_arch        = "x86_64"
+    fleet_storage            = "rds"
+    insights_storage         = "rds"
+    polly_storage            = "rds"
   }
 
   expect_failures = [
@@ -50,7 +53,23 @@ run "enums_reject_an_unlisted_value" {
     var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_node_arch,
+    var.fleet_storage,
+    var.insights_storage,
+    var.polly_storage,
   ]
+}
+
+# enable_agent_builder is a bool the root accepts only as false, not an enum, so
+# it needs its own run. Chart v0.16 replaced it with enable_fleet and the
+# variable survives only so an existing tfvars file still plans.
+run "enable_agent_builder_is_rejected_when_true" {
+  command = plan
+
+  variables {
+    enable_agent_builder = true
+  }
+
+  expect_failures = [var.enable_agent_builder]
 }
 
 run "names_and_ids_reject_a_malformed_value" {

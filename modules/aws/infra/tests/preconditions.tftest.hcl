@@ -130,55 +130,54 @@ run "byo_vpc_serving_the_internet_without_public_subnets_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-# ── Feature dependencies ─────────────────────────────────────────────────────
+# ── Add-on storage ───────────────────────────────────────────────────────────
+# External add-on storage means a dedicated database on the shared RDS and a
+# logical index on the shared ElastiCache, so both services have to be external.
+# Chart v0.16 moved these interlocks off enable_deployments, which the root no
+# longer reads at all, and onto the per-add-on storage mode.
+#
+# Fleet reads var.fleet_storage directly. Chat and Insights each go through a
+# local that is an OR of two arms, so each one takes two runs: the storage mode
+# here, and the enable_standalone_* compatibility flag below.
 
-run "agent_builder_without_deployments_is_rejected" {
+run "external_fleet_storage_with_in_cluster_postgres_is_rejected" {
   command = plan
 
   variables {
-    enable_agent_builder = true
-    enable_deployments   = false
+    enable_fleet    = true
+    fleet_storage   = "external"
+    postgres_source = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "polly_without_deployments_is_rejected" {
+run "external_polly_storage_with_in_cluster_redis_is_rejected" {
   command = plan
 
   variables {
-    enable_polly       = true
-    enable_deployments = false
+    enable_polly  = true
+    polly_storage = "external"
+    redis_source  = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "fleet_without_deployments_is_rejected" {
+run "external_insights_storage_with_in_cluster_postgres_is_rejected" {
   command = plan
 
   variables {
-    enable_fleet       = true
-    enable_deployments = false
+    enable_insights  = true
+    insights_storage = "external"
+    postgres_source  = "in-cluster"
   }
 
   expect_failures = [terraform_data.validate_inputs]
 }
 
-# Fleet, standalone Polly, and standalone Insights each take a database on the
-# shared RDS and an index on the shared ElastiCache, so neither can be
-# in-cluster.
-run "fleet_with_in_cluster_postgres_is_rejected" {
-  command = plan
-
-  variables {
-    enable_fleet       = true
-    enable_deployments = true
-    postgres_source    = "in-cluster"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
+# The enable_standalone_* arm. These flags force external storage on their own,
+# whatever the matching *_storage value says.
 
 run "standalone_polly_with_in_cluster_redis_is_rejected" {
   command = plan
