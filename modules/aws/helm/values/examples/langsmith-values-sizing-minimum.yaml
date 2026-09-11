@@ -2,9 +2,9 @@
 # ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD
 #
 # This profile exists to keep LangSmith alive at the lowest possible cost.
-# Single replica, rock-bottom resource requests sized from actual kubectl-top
-# measurements on an idle cluster. The goal is to fit everything
-# on a single small node (e.g. m5.xlarge — 4 vCPU, 16 Gi).
+# Single-replica, rock-bottom requests for the core services, sized from
+# kubectl-top measurements on an idle cluster. Fleet, Chat, and Insights
+# service resources come from their add-on overlays and require extra capacity.
 #
 # WILL break under any meaningful traffic. OOM kills, timeouts, and degraded
 # UX are expected and acceptable. Do not file bugs against this profile.
@@ -137,7 +137,7 @@ operator:
         cpu: "250m"
         memory: "512Mi"
 
-# -- Agent Builder infrastructure ----------------------------------------------
+# -- Fleet infrastructure ------------------------------------------------------
 
 fleetToolServer:
   deployment:
