@@ -289,8 +289,28 @@ _ed25519_private_jwk_gen() {
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
 
+# Hex is RDS-safe (no / @ " ' space) and URI-safe. Terraform still urlencodes
+# the password in connection URLs for env/SSM overrides that use other symbols.
 _ssm_secret "postgres-password" "$_SETUP_DIR/.pg_password" "TF_VAR_postgres_password" \
-  "" "PostgreSQL admin password (RDS forbids: [ '/' '@' '\"' \"'\" space ])" "true"
+  "openssl rand -hex 32" "" "true"
+
+# Reject env/SSM/file overrides that RDS will not accept. The generator above
+# always passes. Catching it here avoids a plan-time validation error later.
+if [[ -n "${TF_VAR_postgres_password:-}" ]]; then
+  _pg_error=""
+  if [[ ${#TF_VAR_postgres_password} -lt 8 || ${#TF_VAR_postgres_password} -gt 128 ]]; then
+    _pg_error="must be 8-128 characters (RDS master password limit)"
+  elif ! printf '%s' "$TF_VAR_postgres_password" | grep -qE "^[^/@\"' ]+$"; then
+    _pg_error="must not contain '/', '@', double quote, single quote, or space"
+  fi
+  if [[ -n "$_pg_error" ]]; then
+    echo "ERROR: PostgreSQL admin password is invalid — ${_pg_error}." >&2
+    echo "       Unset TF_VAR_postgres_password," >&2
+    echo "       delete the SSM parameter at ${_ssm_prefix}/postgres-password," >&2
+    echo "       and re-source this script." >&2
+    return 1
+  fi
+fi
 
 # ── Redis auth token (auto-generated, stable after first deployment) ──────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
