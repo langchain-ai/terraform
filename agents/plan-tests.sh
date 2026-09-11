@@ -82,10 +82,31 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/plan-tests-$provider.XXXXXX") || {
   echo "plan-tests: could not create a temp directory." >&2; exit 2; }
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
-# *.tfvars is excluded so the suite reads only what its test files declare.
-# .terraform is excluded because it is the initialized state of someone else's
-# working directory, not input.
-if ! tar -C "$INFRA" --exclude='.terraform' --exclude='*.tfvars' -cf - . \
+# Gitignored Terraform inputs are excluded so the suite reads only what its
+# test files declare. terraform test auto-loads *.tfvars, *.tfvars.json, and
+# override files; a local lock file or tfstate would also make local runs
+# diverge from CI. .terraform is excluded because it is the initialized state
+# of someone else's working directory, not input.
+if ! tar -C "$INFRA" \
+     --exclude='.terraform' \
+     --exclude='.terraform.lock.hcl' \
+     --exclude='.terraform.tfstate.lock.info' \
+     --exclude='*.tfvars' \
+     --exclude='*.tfvars.json' \
+     --exclude='terraform.tfvars.*' \
+     --exclude='*.tfstate' \
+     --exclude='*.tfstate.*' \
+     --exclude='override.tf' \
+     --exclude='override.tf.json' \
+     --exclude='*_override.tf' \
+     --exclude='*_override.tf.json' \
+     --exclude='crash.log' \
+     --exclude='crash.*.log' \
+     --exclude='.terraformrc' \
+     --exclude='terraform.rc' \
+     --exclude='.DS_Store' \
+     --exclude='plan.out' \
+     -cf - . \
    | tar -C "$WORK" -xf -; then
   echo "plan-tests: could not copy $arg/infra to a temp directory." >&2
   exit 2

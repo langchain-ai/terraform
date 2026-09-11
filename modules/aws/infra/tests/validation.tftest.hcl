@@ -57,12 +57,14 @@ run "names_and_ids_reject_a_malformed_value" {
   command = plan
 
   variables {
-    region                      = "us-east"
-    eks_cluster_version         = "1.31.0"
-    name_prefix                 = "Prod"
-    langsmith_namespace         = "LangSmith"
-    acm_certificate_arn         = "arn:aws:acm:us-east-2:123456789012:certificate"
-    cert_manager_hosted_zone_id = "hostedzone/Z00000000000000000001"
+    region                       = "us-east"
+    eks_cluster_version          = "1.31.0"
+    name_prefix                  = "Prod"
+    langsmith_namespace          = "LangSmith"
+    acm_certificate_arn          = "arn:aws:acm:us-east-2:123456789012:certificate"
+    cert_manager_hosted_zone_id  = "hostedzone/Z00000000000000000001"
+    dns_existing_zone_id         = "hostedzone/Z00000000000000000001"
+    langsmith_helm_chart_version = "0.15.0"
   }
 
   expect_failures = [
@@ -72,6 +74,8 @@ run "names_and_ids_reject_a_malformed_value" {
     var.langsmith_namespace,
     var.acm_certificate_arn,
     var.cert_manager_hosted_zone_id,
+    var.dns_existing_zone_id,
+    var.langsmith_helm_chart_version,
   ]
 }
 
