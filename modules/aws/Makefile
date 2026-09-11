@@ -87,6 +87,12 @@ apply: ## terraform apply (infra)
 
 destroy: ## terraform destroy (infra) — run make uninstall first
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+	@echo ""
+	@echo "  ✔ Infrastructure destroyed."
+	@echo ""
+	@echo "  Next step: delete this deployment's SSM secrets."
+	@echo "    make purge-secrets"
+	@echo ""
 
 teardown-byo-sg: ## Delete supplied SGs from a Terraform-created VPC after make destroy
 	BYO_SECURITY_GROUP_IDS="$(BYO_SECURITY_GROUP_IDS)" $(INFRA_DIR)/scripts/teardown-byo-sg.sh
