@@ -1,0 +1,120 @@
+[
+  {
+    "Sid": "EC2Describe",
+    "Effect": "Allow",
+    "Action": ["ec2:Describe*"],
+    "Resource": "*"
+  },
+  {
+    "Sid": "VPCEndpointAllowMultiRegion",
+    "Effect": "Allow",
+    "Action": ["vpce:AllowMultiRegion"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"]
+  },
+  {
+    "Sid": "EC2CreateWorkloadNetworkResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:CreateSecurityGroup",
+      "ec2:CreateVpcEndpointServiceConfiguration"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateSecurityGroupsInCustomerVpcs",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateSecurityGroup"],
+    "Resource": ${customer_vpc_arns}
+  },
+  {
+    "Sid": "EC2ManageWorkloadNetworkResources",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:ModifyVpcEndpointServiceConfiguration",
+      "ec2:ModifyVpcEndpointServicePermissions",
+      "ec2:AuthorizeSecurityGroupIngress",
+      "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:RevokeSecurityGroupIngress",
+      "ec2:RevokeSecurityGroupEgress"
+    ],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateTagsOnNewSecurityGroups",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:security-group/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "ec2:CreateAction": "CreateSecurityGroup"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateTagsOnNewVpcEndpointServices",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": ["arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"],
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "ec2:CreateAction": "CreateVpcEndpointServiceConfiguration"
+      }
+    }
+  },
+  {
+    "Sid": "EC2CreateTagsOnExistingWorkloadNetworkResources",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2DeleteTagsFromWorkloadNetworkResources",
+    "Effect": "Allow",
+    "Action": ["ec2:DeleteTags"],
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "EC2EBSEncryptionByDefault",
+    "Effect": "Allow",
+    "Action": [
+      "ec2:EnableEbsEncryptionByDefault",
+      "ec2:GetEbsEncryptionByDefault"
+    ],
+    "Resource": "*"
+  }
+]
