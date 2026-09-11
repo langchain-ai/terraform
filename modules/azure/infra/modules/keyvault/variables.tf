@@ -51,7 +51,7 @@ variable "terraform_principal_type" {
   default     = null
 
   validation {
-    condition     = var.terraform_principal_type == null || contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
+    condition     = var.terraform_principal_type == null ? true : contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
     error_message = "terraform_principal_type must be 'User', 'Group', or 'ServicePrincipal'. Omit it entirely (or set null) to let Azure infer the type — an empty string is not a valid opt-out."
   }
 }

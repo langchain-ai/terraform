@@ -6,6 +6,11 @@ output "container_name" {
   value = azurerm_storage_container.container.name
 }
 
+output "storage_account_id" {
+  description = "Resource ID of the LangSmith trace-blob Storage Account."
+  value       = azurerm_storage_account.storage_account.id
+}
+
 output "k8s_managed_identity_client_id" {
   value = var.workload_identity_client_id
 }

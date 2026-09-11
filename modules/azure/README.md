@@ -17,6 +17,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
+| **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`; chart 0.17+) | `terraform -chdir=infra apply` | ~15–30 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.

@@ -164,6 +164,15 @@ subnet, the `Microsoft.DBforPostgreSQL/flexibleServers` delegation on the
 Postgres subnet, and no delegation on the Redis subnet, which holds the Azure
 Managed Redis private endpoint.
 
+`storage_private_endpoint_enabled = true` changes the blob path on either
+create mode: both the trace-blob account and the SmithDB object store move
+behind Private Endpoints and their public endpoints are turned off. The
+endpoints go into the AKS subnet unless `storage_private_endpoint_subnet_id`
+names another, and the AKS subnet keeps its Key Vault service endpoint either
+way. On a VNet that already resolves `privatelink.blob.core.windows.net`, pass
+that zone through `storage_private_dns_zone_id` rather than letting Terraform
+create a second one.
+
 The Application Gateway and bastion subnets are the exception: Terraform carves
 those only out of a VNet it owns, so on this path they are supplied through
 `agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
