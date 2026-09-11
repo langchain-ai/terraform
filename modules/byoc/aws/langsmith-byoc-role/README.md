@@ -14,7 +14,7 @@ This module creates two roles:
 1. An AWS account where the LangSmith data plane will live, and AWS credentials with permission to create IAM roles and policies in it.
 2. Terraform `>= 1.11.0` and the AWS provider `~> 6.0`.
 3. The `control_plane_reconcile_role_arn` provided by LangChain.
-4. An `external_id` value that you generate and provide to LangChain at data plane creation time. It is used in the trust policy `sts:ExternalId` condition.
+4. The external ID provided in the LangSmith UI under **Settings > Data Planes**. Copy this value and pass it as `external_id`; do not generate your own value. It is used in the trust policy `sts:ExternalId` condition and must exactly match the value provided by LangSmith.
 5. For break-glass access, the LangChain engineer Identity Store user IDs and LangChain email addresses provided by LangChain.
 
 Current LangSmith control-plane role values:
@@ -39,6 +39,11 @@ terraform {
 
 provider "aws" {
   region = "us-west-2"
+}
+
+variable "external_id" {
+  description = "External ID copied from Settings > Data Planes in the LangSmith UI."
+  type        = string
 }
 
 module "langsmith_byoc_role" {
@@ -67,6 +72,12 @@ output "role_arns" {
     break_glass = module.langsmith_byoc_role.break_glass_role_arn
   }
 }
+```
+
+Before applying, set the input in your root module's `terraform.tfvars`, replacing the placeholder with the value copied from **Settings > Data Planes**:
+
+```hcl
+external_id = "<external-id-copied-from-langsmith>"
 ```
 
 After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_arn` outputs with the LangChain team.
@@ -111,7 +122,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 |----------|------|----------|---------|-------------|
 | `role_name` | `string` | yes | - | Name of the Crossplane-assumed IAM role created in your account. |
 | `control_plane_reconcile_role_arn` | `string` | yes | - | ARN of the LangSmith control-plane principal trusted to assume the role. |
-| `external_id` | `string` | yes | - | Per-tenant `sts:ExternalId` value. Treat as a secret. |
+| `external_id` | `string` | yes | - | External ID copied from **Settings > Data Planes** in LangSmith. Must match exactly; used for the `sts:ExternalId` trust condition. |
 | `break_glass_identitystore_user_ids` | `list(string)` | no | `[]` | IAM Identity Center user IDs allowed to assume the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
 | `break_glass_source_identities` | `list(string)` | no | `[]` | SourceIdentity values allowed when assuming the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
 | `allow_break_glass_access` | `bool` | no | `false` | Allows approved LangSmith Identity Center users to assume the customer-side break-glass role. |

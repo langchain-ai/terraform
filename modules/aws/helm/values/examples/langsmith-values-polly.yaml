@@ -1,5 +1,5 @@
-# Polly — AI-powered evaluation and monitoring.
-# Requires config.deployment.enabled = true (LangGraph Platform).
+# LangSmith Chat (formerly Polly) — chat for traces, threads, prompts, and experiments.
+# Runs as top-level services and does not require LangSmith Deployments.
 # Encryption key is stored in the langsmith-config K8s Secret (via ESO from SSM).
 #
 # Chart 0.15.1 removed the bundled config.polly path and its validator hard-fails on
