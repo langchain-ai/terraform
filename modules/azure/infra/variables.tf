@@ -649,11 +649,19 @@ variable "postgres_admin_password" {
   default     = ""
 
   # setup-env.sh writes this value raw into secrets.auto.tfvars inside double
-  # quotes, so the characters that would break that file are rejected here.
-  # URL-reserved characters are encoded when connection URLs are constructed.
+  # quotes (unquoted heredoc), so characters that expand in the shell or in
+  # HCL are rejected here. URL-reserved characters are encoded when
+  # connection URLs are constructed.
   validation {
-    condition     = var.postgres_admin_password == "" || can(regex("^[^\"\\\\]*$", var.postgres_admin_password))
-    error_message = "postgres_admin_password must not contain double quotes or backslashes."
+    condition = var.postgres_admin_password == "" || (
+      !strcontains(var.postgres_admin_password, "\"") &&
+      !strcontains(var.postgres_admin_password, "\\") &&
+      !strcontains(var.postgres_admin_password, "$") &&
+      !strcontains(var.postgres_admin_password, "`") &&
+      !strcontains(var.postgres_admin_password, "\n") &&
+      !strcontains(var.postgres_admin_password, "%{")
+    )
+    error_message = "postgres_admin_password must not contain double quotes, backslashes, dollar signs, backticks, newlines, or HCL template markers (%{)."
   }
 }
 
