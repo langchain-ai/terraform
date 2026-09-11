@@ -23,6 +23,9 @@ before the PR does, not a separate standard.
   Validated transitively via `--call-module-type=all`, not as their own roots —
   even the two that carry a `versions.tf` (azure `keyvault`, azure `redis`), so
   the gate identifies a child module by its path, not by depth.
+- `modules/<provider>/infra/tests/*.tftest.hcl` — plan tests for that root, run
+  by `agents/plan-tests.sh`. Mocked providers, so no credentials and no state.
+  Shared provider fixtures live in `tests/mocks/<provider>/*.tfmock.hcl`.
 - Not gated for terraform: `modules/ocp`. The OpenShift port is still stubs
   with no `versions.tf` anywhere, so there is nothing to init against. Its
   shell scripts are covered (CI lints every tracked `*.sh`); the HCL has only
@@ -47,17 +50,27 @@ before the PR does, not a separate standard.
   - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
   - No argument → both, across every root.
+  - Conditional wiring, a `validation` block, or a precondition →
+    `bash agents/plan-tests.sh modules/<provider>`: `terraform test` plans the
+    root against mocked providers, so `length(module.waf) == 0` is assertable
+    with no credentials and no state. `validate` resolves no conditionals and
+    passes a module gated on a variable nothing sets, which is the gap this
+    closes. Suites are `modules/<provider>/infra/tests/*.tftest.hcl`; a new flag
+    or gate needs a run there in both directions.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries
   pre-existing warnings. Override for a one-off run with
   `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
   needs cloud creds and state — never run it without explicit user approval.
-- **CI runs the same script**, one job per provider plus one for the scripts, so
-  a green local run is a green PR. If you change what the gate covers, change
-  `agents/check.sh` rather than the workflow. A new root under an existing
-  `modules/<provider>/` needs no workflow edit; a brand-new provider directory
-  needs a `matrix.provider` entry in `.github/workflows/checks.yaml`.
+- **CI runs the same scripts**, a check job and a plan-tests job per provider
+  plus one for the scripts, so a green local run is a green PR. If you change
+  what the gate covers, change `agents/check.sh` or `agents/plan-tests.sh`
+  rather than the workflow. A new root under an existing `modules/<provider>/`
+  needs no workflow edit; a brand-new provider directory needs a
+  `matrix.provider` entry in both matrices in
+  `.github/workflows/checks.yaml`, and a test suite — `plan-tests.sh` exits 2
+  on a provider that has neither a suite nor an entry in its `SKIP_PROVIDERS`.
 - **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
   initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
   forms slip in from model output unnoticed.
