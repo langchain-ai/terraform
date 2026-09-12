@@ -59,6 +59,9 @@ case "$ARGS" in
   "ad signed-in-user show"*)
     if [ -f "$FIX/no_graph" ]; then exit 1; fi
     emit_file "$FIX/principal_id" "33333333-3333-3333-3333-333333333333" ;;
+  "ad user get-member-groups"*)
+    if [ -f "$FIX/groups_fail" ]; then exit 1; fi
+    emit_file "$FIX/group_ids" "" ;;
   "ad sp show"*)
     if [ -f "$FIX/no_graph" ]; then exit 1; fi
     emit_file "$FIX/sp_principal_id" "44444444-4444-4444-4444-444444444444" ;;
