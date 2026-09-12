@@ -1,0 +1,13 @@
+# Test scaffold inputs. Copy to terraform.tfvars and fill in.
+# Deploys into the EXISTING resource group below; region is inherited from it.
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "rg-langsmith-test"   # your existing RG (region is inherited from it)
+
+# Lock SSH to the jumpbox down to your operator IP (required; no 0.0.0.0/0).
+allowed_ssh_cidr       = "203.0.113.4/32"
+jumpbox_ssh_public_key = "ssh-ed25519 AAAA... you@host"
+
+# Defaults are usually fine:
+# hub_cidr        = "10.0.0.0/16"
+# spoke_cidr      = "10.1.0.0/16"
+# jumpbox_vm_size = "Standard_B2s"
