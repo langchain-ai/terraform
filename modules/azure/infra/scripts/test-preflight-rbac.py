@@ -33,6 +33,7 @@ RG_SCOPE = f"{SUB_SCOPE}/resourceGroups/langsmith-rg-dev"
 VNET_ID = f"{SUB_SCOPE}/resourceGroups/platform-network-rg/providers/Microsoft.Network/virtualNetworks/hub-vnet"
 USER_OID = "33333333-3333-3333-3333-333333333333"
 SP_OID = "44444444-4444-4444-4444-444444444444"
+GROUP_OID = "55555555-5555-5555-5555-555555555555"
 
 OWNER_GUID = "8e3af657a8ff443ca75c2fe8c4bcb635"
 CONTRIB_GUID = "b24988ac618042a0ab8820f7382dd24c"
@@ -208,14 +209,27 @@ CASES = [
         "reject_calls": ["postgres flexible-server list-skus"],
     },
     {
-        "name": "everything permitted passes at both scopes",
+        "name": "group-inherited access is permitted at both scopes",
+        "group_ids": [GROUP_OID],
         "ca_all": ALL_GOOD,
         "expect": [
+            "[✓] checkAccess answered with transitive group membership",
             f"[✓] roleAssignments/write permitted at {SUB_SCOPE}, granted by Owner held at",
             f"[✓] roleAssignments/write permitted at {RG_SCOPE}",
             f"[✓] Every resource type the deployment creates is writable at {SUB_SCOPE}",
         ],
+        "assert_groups": [GROUP_OID],
         "reject": ["[✗]", "Falling back"],
+    },
+    {
+        "name": "a failed group lookup makes a denied result inconclusive",
+        "groups_fail": True,
+        "ca_all": response(write=False),
+        "expect": [
+            "[!] Could not resolve transitive group membership",
+            "This result is inconclusive without transitive group membership.",
+        ],
+        "reject": ["[✗] roleAssignments/write is not permitted"],
     },
     {
         "name": "contributor is named as the granting role when it is the one that answered",
@@ -446,9 +460,11 @@ def build_case(case, index):
         (fixture / "held").write_text(case["held"])
     if "pg_caps_raw" in case:
         (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
+    if "group_ids" in case:
+        (fixture / "group_ids").write_text("\n".join(case["group_ids"]))
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail", "pg_caps_fail", "pg_caps_stderr"):
+                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 
@@ -498,6 +514,15 @@ def run_case(case, index):
             got = json.loads(body_path.read_text())["Subject"]["Attributes"]["ObjectId"]
             if got != case["assert_subject"]:
                 problems.append(f"Subject was {got}, expected {case['assert_subject']}")
+
+    if "assert_groups" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            got = json.loads(body_path.read_text())["Subject"]["Attributes"].get("Groups")
+            if got != case["assert_groups"]:
+                problems.append(f"Groups were {got}, expected {case['assert_groups']}")
 
     if problems:
         rendered = [
