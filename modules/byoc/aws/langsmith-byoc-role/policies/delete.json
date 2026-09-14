@@ -64,6 +64,40 @@
       "Resource": "*"
     }
   ],
+  "vpc_byovpc": [
+    {
+      "Sid": "EC2DeleteManagedWorkloadNetworkResources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteSecurityGroup",
+        "ec2:DeleteVpcEndpointServiceConfigurations"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:${account_id}:security-group/*",
+        "arn:aws:ec2:*:${account_id}:security-group-rule/*",
+        "arn:aws:ec2:*:${account_id}:vpc-endpoint-service/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "langsmith"
+        }
+      }
+    },
+    {
+      "Sid": "EC2TerminateKarpenterInstances",
+      "Effect": "Allow",
+      "Action": ["ec2:TerminateInstances"],
+      "Resource": "arn:aws:ec2:*:${account_id}:instance/*",
+      "Condition": {
+        "Null": {
+          "aws:ResourceTag/karpenter.sh/nodepool": "false"
+        },
+        "StringLike": {
+          "aws:ResourceTag/aws:eks:cluster-name": "*-smith-eks"
+        }
+      }
+    }
+  ],
   "iam": [
     {
       "Sid": "IAMRoleDelete",
