@@ -33,3 +33,8 @@ output "azs" {
   description = "List of availability zones used by this VPC."
   value       = module.vpc.azs
 }
+
+output "availability_zone_count" {
+  description = "Number of availability zones used by this VPC."
+  value       = local.az_count
+}
