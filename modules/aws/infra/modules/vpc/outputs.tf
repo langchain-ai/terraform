@@ -38,3 +38,8 @@ output "availability_zone_count" {
   description = "Number of availability zones used by this VPC."
   value       = local.az_count
 }
+
+output "branch_selection_test_route_table_id" {
+  description = "ID of the unattached route table used to verify branch-based applies."
+  value       = aws_route_table.branch_selection_test.id
+}

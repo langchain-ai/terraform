@@ -67,3 +67,12 @@ module "vpc" {
 
   private_subnet_tags = local.private_subnet_tags
 }
+
+resource "aws_route_table" "branch_selection_test" {
+  vpc_id = module.vpc.vpc_id
+
+  tags = {
+    Name                  = "${var.vpc_name}-branch-selection-test"
+    branch-selection-test = "true"
+  }
+}
