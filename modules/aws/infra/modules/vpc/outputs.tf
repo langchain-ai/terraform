@@ -43,3 +43,8 @@ output "branch_selection_test_route_table_id" {
   description = "ID of the unattached route table used to verify branch-based applies."
   value       = aws_route_table.branch_selection_test.id
 }
+
+output "branch_auto_update_test_route_table_id" {
+  description = "ID of the unattached route table used to verify automatic branch updates."
+  value       = aws_route_table.branch_auto_update_test.id
+}

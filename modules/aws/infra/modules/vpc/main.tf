@@ -76,3 +76,12 @@ resource "aws_route_table" "branch_selection_test" {
     branch-selection-test = "true"
   }
 }
+
+resource "aws_route_table" "branch_auto_update_test" {
+  vpc_id = module.vpc.vpc_id
+
+  tags = {
+    Name                    = "${var.vpc_name}-branch-auto-update-test"
+    branch-auto-update-test = "true"
+  }
+}
