@@ -1,8 +1,29 @@
 # SmithDB on Azure
 
-SmithDB support is optional and targets LangSmith chart 0.17 or newer. Set
-`enable_smithdb = true` to provision its Azure dependencies independently of
-the LangSmith application database and trace-blob account.
+SmithDB support on Azure is optional and starts at the LangSmith chart 0.17
+line. Set `enable_smithdb = true` to provision its Azure dependencies
+independently of the LangSmith application database and trace-blob account.
+
+## Version requirements
+
+Two version numbers apply here, and they are not the same thing.
+
+**LangSmith chart: the 0.17 line, selected explicitly.** The Azure SmithDB
+values first exist in chart 0.17. `deploy.sh` accepts `0.17.x` only. It rejects
+0.16, because the values are absent there, and it rejects 0.18, because the
+module pins a chart line and never crosses a minor on its own. `~0.17.0`,
+`0.17.1` and a 0.17 prerelease all resolve to the 0.17 line and pass.
+
+**Module tag: still `v0.16.*`.** The Azure module ships on the 0.16 tag series,
+where the default chart pin is `~0.16.0`. So on a `v0.16.*` tag, SmithDB needs
+`langsmith_helm_chart_version` set explicitly. `enable_smithdb = true` with no
+chart version fails the deploy rather than installing a chart without SmithDB
+support. Deployments that leave `enable_smithdb = false` are unaffected and
+stay on the 0.16 pin.
+
+This split is temporary. When the module line moves to 0.17, SmithDB becomes an
+ordinary feature of the pinned line, the explicit selection is no longer needed,
+and this section goes away.
 
 ## Infrastructure
 
@@ -62,15 +83,15 @@ that has to run again needs the flag on again, and waits again.
 
 ## Chart contract
 
-Chart 0.17 must support Azure as a SmithDB object-store provider. `make
-init-values` generates the overlay from
+The chart must support Azure as a SmithDB object-store provider, which is why
+the 0.17 line is required. `make init-values` generates the overlay from
 `smithdb_storage_account_name` and `smithdb_storage_container_name`, annotates
 the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
 `azure.workload.identity/use: "true"`.
 
-The Azure module remains pinned to chart 0.16 by default. Select chart 0.17
-explicitly when enabling SmithDB:
+Select the chart line explicitly alongside the flag, as described in
+[Version requirements](#version-requirements):
 
 ```hcl
 enable_smithdb               = true

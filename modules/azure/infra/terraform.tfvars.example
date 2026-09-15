@@ -99,13 +99,18 @@ additional_node_pools = {
   }
 }
 
-# ── SmithDB (optional, chart 0.17+) ──────────────────────────────────────────
+# ── SmithDB (optional) ───────────────────────────────────────────────────────
 # Creates a dedicated PostgreSQL 18 metastore, private Blob container, Azure
 # Workload Identity, and two tainted AKS pools for cache and compute workloads.
 # By default, the SmithDB workload identity authenticates to PostgreSQL through
 # Microsoft Entra ID. To use password authentication instead, supply it outside
 # this file:
 #   export TF_VAR_smithdb_metastore_admin_password='...'
+#
+# Setting this to true also requires an explicit langsmith_helm_chart_version:
+# SmithDB needs a different chart line from the Azure default, so deploy.sh
+# refuses to deploy without one. The error it prints names the exact value to
+# set. See SMITHDB.md, "Version requirements".
 enable_smithdb = false
 
 # Roll out one stage at a time after the infrastructure-only deployment is healthy.

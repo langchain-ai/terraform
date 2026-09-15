@@ -610,7 +610,9 @@ variable "additional_node_pools" {
   }
 }
 
-# ── SmithDB (optional, chart 0.17+) ──────────────────────────────────────────
+# ── SmithDB (optional) ───────────────────────────────────────────────────────
+# SmithDB requires a specific LangSmith chart line. See SMITHDB.md,
+# "Version requirements", and set langsmith_helm_chart_version accordingly.
 
 variable "enable_smithdb" {
   type        = bool
@@ -765,7 +767,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a LangSmith chart version. Azure defaults to the 0.16 line; enable_smithdb requires an explicit 0.17 version."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 

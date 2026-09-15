@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`), so an unpinned deploy never crosses a breaking minor on its own. SmithDB is the one exception and needs the chart line selected explicitly — see [SMITHDB.md](SMITHDB.md#version-requirements). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -17,7 +17,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
-| **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`; chart 0.17+) | `terraform -chdir=infra apply` | ~15–30 min |
+| **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a specific chart line, see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
