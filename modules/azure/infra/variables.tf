@@ -616,7 +616,7 @@ variable "additional_node_pools" {
 
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision Azure infrastructure required by SmithDB: a dedicated PostgreSQL 18 metastore, Blob container, Workload Identity, Premium SSD v2 cache volumes, and a dedicated AKS compute node pool."
+  description = "Provision Azure infrastructure required by SmithDB: a dedicated PostgreSQL 18 metastore, Blob container, Workload Identity, and Premium SSD v2 cache volumes."
   default     = false
 }
 
@@ -708,24 +708,6 @@ variable "smithdb_cache_disk_throughput_mbps" {
     condition     = var.smithdb_cache_disk_throughput_mbps >= 125 && var.smithdb_cache_disk_throughput_mbps <= 1200
     error_message = "smithdb_cache_disk_throughput_mbps must be between 125 and 1200."
   }
-}
-
-variable "smithdb_compute_vm_size" {
-  type        = string
-  description = "AKS VM size for the SmithDB general compute pool."
-  default     = "Standard_D8s_v5"
-}
-
-variable "smithdb_compute_min_count" {
-  type        = number
-  default     = 0
-  description = "Minimum nodes in the SmithDB compute pool."
-}
-
-variable "smithdb_compute_max_count" {
-  type        = number
-  default     = 3
-  description = "Maximum nodes in the SmithDB compute pool."
 }
 
 variable "langsmith_namespace" {

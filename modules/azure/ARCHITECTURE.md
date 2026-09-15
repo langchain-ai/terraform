@@ -252,11 +252,9 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 |------|---------|------|-----|-----|-----|---------|
 | default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
 | large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
-| smithcompute | Standard_D8s_v5 | 8 | 32 GB | 0 | 3 | SmithDB compute workloads — only with `enable_smithdb = true` |
-
 > ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 >
-> The SmithDB compute pool is tainted `smithdb-local/compute=true:NoSchedule`, so nothing else schedules onto it. The matching node label is what the chart's SmithDB overlay selects on. Cache-heavy workloads can run on ordinary AKS nodes because their cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. The compute pool scales from zero. Its name is reserved: `additional_node_pools` cannot define `smithcompute` while `enable_smithdb = true`.
+> SmithDB workloads schedule on ordinary AKS nodes by default. Cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. Use `additional_node_pools` and chart scheduling overrides when workload isolation is required.
 
 ---
 
@@ -281,8 +279,7 @@ and Kubernetes prerequisites only; the chart is a separate deploy pass.
 ```
 Resource Group
 ├── VNet
-│   ├── AKS subnet ──────────────── default + smithcompute node pools
-│   │                               (tainted, scale from zero)
+│   ├── AKS subnet ──────────────── default + optional additional node pools
 │   └── Postgres delegated subnet ─ SmithDB metastore
 │                                   PostgreSQL Flexible Server 18 + "smithdb" database
 │                                   private DNS zone, no public endpoint
