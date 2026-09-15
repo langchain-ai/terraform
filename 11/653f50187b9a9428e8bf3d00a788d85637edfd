@@ -1,0 +1,27 @@
+modules/azure/infra/main.tf
+  s_0d7b32b2530503::t_dc147e669630b1 472-473
+modules/azure/SMITHDB.md
+  s_0d7b32b2530503::t_dc147e669630b1 46-48
+modules/azure/infra/variables.tf
+  s_0d7b32b2530503::t_f1e1de99807e36 619
+modules/azure/ARCHITECTURE.md
+  s_0d7b32b2530503::t_dc147e669630b1 259,284
+modules/azure/infra/tests/validation.tftest.hcl
+  s_0d7b32b2530503::t_755204e48180cd 20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "11653f50187b9a9428e8bf3d00a788d85637edfd",
+  "prompts": {},
+  "sessions": {
+    "s_0d7b32b2530503": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a035f8-f260-7171-a941-1453b8e9dbba",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "ben11211 <nagengast@langchain.dev>"
+    }
+  }
+}
