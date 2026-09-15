@@ -191,14 +191,6 @@ locals {
   aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
 
   smithdb_node_pools = var.enable_smithdb ? {
-    smithcache = {
-      vm_size           = var.smithdb_cache_vm_size
-      min_count         = var.smithdb_cache_min_count
-      max_count         = var.smithdb_cache_max_count
-      kubelet_disk_type = "OS"
-      node_labels       = { "smithdb/cache" = "true" }
-      node_taints       = ["smithdb/cache=true:NoSchedule"]
-    }
     smithcompute = {
       vm_size           = var.smithdb_compute_vm_size
       min_count         = var.smithdb_compute_min_count
@@ -477,8 +469,8 @@ resource "azapi_update_resource" "byo_aks_subnet_endpoints" {
 resource "terraform_data" "validate_network" {
   lifecycle {
     precondition {
-      condition     = !var.enable_smithdb || (!contains(keys(var.additional_node_pools), "smithcache") && !contains(keys(var.additional_node_pools), "smithcompute"))
-      error_message = "additional_node_pools cannot define the reserved SmithDB pool names smithcache or smithcompute when enable_smithdb = true. Configure them through the smithdb_* variables."
+      condition     = !var.enable_smithdb || !contains(keys(var.additional_node_pools), "smithcompute")
+      error_message = "additional_node_pools cannot define the reserved SmithDB pool name smithcompute when enable_smithdb = true. Configure it through the smithdb_compute_* variables."
     }
 
     precondition {

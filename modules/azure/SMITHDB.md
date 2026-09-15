@@ -43,9 +43,9 @@ The Terraform root creates:
   is the source the historical backfill reads. The grant exists only while that
   flag is on, so a steady-state install leaves the identity able to reach
   nothing but its own account; and
-- two autoscaling, tainted AKS node pools: `smithcache` hosts cache-heavy
-  workloads backed by per-pod Premium SSD v2 volumes, and `smithcompute` hosts
-  compute workloads.
+- an autoscaling, tainted `smithcompute` AKS node pool for compute workloads.
+  Cache-heavy workloads use per-pod Premium SSD v2 volumes and can schedule on
+  ordinary AKS nodes.
 
 By default, the same SmithDB workload identity authenticates to PostgreSQL
 through Microsoft Entra ID and is configured as the Flexible Server's Entra

@@ -9,33 +9,6 @@ smithdb:
   # generated overrides select Terraform's Premium SSD v2 StorageClass.
   resourceTier: small
 
-  query:
-    deployment:
-      nodeSelector:
-        smithdb/cache: "true"
-      tolerations:
-        - key: smithdb/cache
-          operator: Equal
-          value: "true"
-          effect: NoSchedule
-  ingestion:
-    deployment:
-      nodeSelector:
-        smithdb/cache: "true"
-      tolerations:
-        - key: smithdb/cache
-          operator: Equal
-          value: "true"
-          effect: NoSchedule
-  compactionWorker:
-    deployment:
-      nodeSelector:
-        smithdb/cache: "true"
-      tolerations:
-        - key: smithdb/cache
-          operator: Equal
-          value: "true"
-          effect: NoSchedule
   compaction:
     deployment:
       nodeSelector:

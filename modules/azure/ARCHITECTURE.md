@@ -252,12 +252,11 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 |------|---------|------|-----|-----|-----|---------|
 | default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
 | large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
-| smithcache | Standard_D16s_v5 | 16 | 64 GB | 0 | 3 | SmithDB cache workloads — only with `enable_smithdb = true` |
 | smithcompute | Standard_D8s_v5 | 8 | 32 GB | 0 | 3 | SmithDB compute workloads — only with `enable_smithdb = true` |
 
 > ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 >
-> The two SmithDB pools are tainted, so nothing else schedules onto them: `smithdb/cache=true:NoSchedule` on `smithcache` and `smithdb-local/compute=true:NoSchedule` on `smithcompute`. The matching node labels are what the chart's SmithDB overlay selects on. Cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. Both pools scale from zero. The names are reserved: `additional_node_pools` cannot define `smithcache` or `smithcompute` while `enable_smithdb = true`.
+> The SmithDB compute pool is tainted `smithdb-local/compute=true:NoSchedule`, so nothing else schedules onto it. The matching node label is what the chart's SmithDB overlay selects on. Cache-heavy workloads can run on ordinary AKS nodes because their cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. The compute pool scales from zero. Its name is reserved: `additional_node_pools` cannot define `smithcompute` while `enable_smithdb = true`.
 
 ---
 
@@ -282,7 +281,7 @@ and Kubernetes prerequisites only; the chart is a separate deploy pass.
 ```
 Resource Group
 ├── VNet
-│   ├── AKS subnet ──────────────── smithcache + smithcompute node pools
+│   ├── AKS subnet ──────────────── default + smithcompute node pools
 │   │                               (tainted, scale from zero)
 │   └── Postgres delegated subnet ─ SmithDB metastore
 │                                   PostgreSQL Flexible Server 18 + "smithdb" database

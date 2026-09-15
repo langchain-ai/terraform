@@ -616,7 +616,7 @@ variable "additional_node_pools" {
 
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision Azure infrastructure required by SmithDB: a dedicated PostgreSQL 18 metastore, Blob container, Workload Identity, and dedicated AKS cache/compute node pools."
+  description = "Provision Azure infrastructure required by SmithDB: a dedicated PostgreSQL 18 metastore, Blob container, Workload Identity, Premium SSD v2 cache volumes, and a dedicated AKS compute node pool."
   default     = false
 }
 
@@ -680,24 +680,6 @@ variable "smithdb_storage_container_name" {
   type        = string
   description = "Dedicated Blob container for SmithDB durable data."
   default     = "smithdb"
-}
-
-variable "smithdb_cache_vm_size" {
-  type        = string
-  description = "AKS VM size for the SmithDB cache workload pool. Cache data is stored on per-pod Azure managed disks."
-  default     = "Standard_D16s_v5"
-}
-
-variable "smithdb_cache_min_count" {
-  type        = number
-  default     = 0
-  description = "Minimum nodes in the SmithDB cache workload pool."
-}
-
-variable "smithdb_cache_max_count" {
-  type        = number
-  default     = 3
-  description = "Maximum nodes in the SmithDB cache workload pool."
 }
 
 variable "smithdb_cache_storage_class_name" {

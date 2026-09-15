@@ -17,7 +17,7 @@ mock_provider "time" {}
 variables {
   subscription_id         = "00000000-0000-0000-0000-000000000000"
   postgres_admin_password = "fixture-not-a-real-secret-Aa1"
-  enable_smithdb           = false
+  enable_smithdb          = false
 }
 
 run "enums_reject_an_unlisted_value" {
