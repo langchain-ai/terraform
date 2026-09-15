@@ -1,0 +1,21 @@
+modules/aws/infra/tests/validation.tftest.hcl
+  s_08b7859c81e12b::t_769a269f108f3e 60-67,77-78
+agents/plan-tests.sh
+  s_08b7859c81e12b::t_268475a97b6d6c 85-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fd99a46a3ee14a96a3590ca5b2920d72b9ce1485",
+  "prompts": {},
+  "sessions": {
+    "s_08b7859c81e12b": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "01305ffb-1940-4efd-854e-b27246db0572",
+        "model": "auto-smart"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

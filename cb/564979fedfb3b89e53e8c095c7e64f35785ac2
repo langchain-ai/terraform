@@ -1,0 +1,19 @@
+.github/workflows/release.yml
+  s_d0c86c800bcef9::t_6ac0ea103c9eb8 46-49,51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "cb564979fedfb3b89e53e8c095c7e64f35785ac2",
+  "prompts": {},
+  "sessions": {
+    "s_d0c86c800bcef9": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "6469a0b2-5be9-4a64-9940-ed84692606aa",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

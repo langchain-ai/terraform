@@ -1,0 +1,28 @@
+modules/aws/infra/scripts/_common.sh
+  s_97bacea139cafe::t_6cec37958c45a6 54-68
+  s_97bacea139cafe::t_a3672bcf3219e9 13
+  s_97bacea139cafe::t_1a4e67b480c815 69-70
+modules/aws/helm/scripts/deploy.sh
+  s_97bacea139cafe::t_42f0fa5c6b9130 126-132
+modules/aws/helm/scripts/test-e2e.sh
+  s_97bacea139cafe::t_72c237b5ed3a9d 41-43
+modules/aws/helm/scripts/init-values.sh
+  s_97bacea139cafe::t_ad21b024c02943 68-69
+  s_97bacea139cafe::t_f81e813b62417f 55-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "490f6fbbcf7284b82363b9d776662434d590f853",
+  "prompts": {},
+  "sessions": {
+    "s_97bacea139cafe": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e32204f9-a43c-4bab-988c-f5ea7d7c1d02",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

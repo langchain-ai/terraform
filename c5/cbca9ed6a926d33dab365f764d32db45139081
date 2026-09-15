@@ -1,0 +1,23 @@
+modules/gcp/infra/modules/k8s-bootstrap/variables.tf
+  s_395d8bafcd6588::t_56f2fb5a6306db 53-58
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_395d8bafcd6588::t_e6f47b56045c6b 263-294
+modules/gcp/infra/main.tf
+  s_395d8bafcd6588::t_ea523517c9cffe 511-515
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "c5cbca9ed6a926d33dab365f764d32db45139081",
+  "prompts": {},
+  "sessions": {
+    "s_395d8bafcd6588": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a90b1619-33b3-49f8-bc23-6344dcc00d63",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

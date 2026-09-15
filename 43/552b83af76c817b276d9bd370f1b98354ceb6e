@@ -1,0 +1,51 @@
+modules/gcp/SMITHDB.md
+  s_ad44067f5211a2::t_1d6e4898ce3c10 1-56,58-59,65-149
+  s_ad44067f5211a2::t_05f838ee416a42 61-64
+  s_ad44067f5211a2::t_56aa88d4354311 57,60
+modules/gcp/ARCHITECTURE.md
+  s_ad44067f5211a2::t_269a850fb60c99 124-131
+modules/gcp/TEARDOWN.md
+  s_ad44067f5211a2::t_de96f09b29180f 131,133-169,175-178,187-188,191-193
+  s_ad44067f5211a2::t_6f6429565c91af 345-348,364-373
+  s_ad44067f5211a2::t_15637b719eeda1 208,211-212
+  s_ad44067f5211a2::t_d60b830f5c3b00 194
+  s_ad44067f5211a2::t_5212ca3a399c91 374
+modules/gcp/README.md
+  s_ad44067f5211a2::t_9b6257ba696c63 404,408-437,441,443,445-446,448,455,457,459,461
+  s_ad44067f5211a2::t_53cc576917e49c 447
+  s_ad44067f5211a2::t_84d68d6e1791af 438-440
+  s_ad44067f5211a2::t_5fec48fa016dc6 486-487
+  s_ad44067f5211a2::t_68ca9e617bb15b 403,405-407
+  s_ad44067f5211a2::t_b0fef52495004b 115-117
+  s_ad44067f5211a2::t_bf9e8e8c827726 352
+  s_ad44067f5211a2::t_2af6af58b65011 484-485
+  s_ad44067f5211a2::t_c658e5e7744138 442,444,449,451-454,456,458,460,462
+  s_ad44067f5211a2::t_2d040149405476 450
+  s_ad44067f5211a2::t_9ce5e44baaeeb2 399
+  s_ad44067f5211a2::t_bd9f98946d4cb2 400-402
+modules/gcp/TEST_CYCLE.md
+  s_ad44067f5211a2::t_d749f79e67cf5d 315-316
+  s_ad44067f5211a2::t_c70e9cf51ef310 290
+  s_ad44067f5211a2::t_750a45bfb24e51 267-289,291-294
+  s_ad44067f5211a2::t_361c595ec4e087 47-50
+  s_ad44067f5211a2::t_88207b49c445a1 295-297
+modules/gcp/SERVICES.md
+  s_ad44067f5211a2::t_11e73a12db5e97 162,166-167
+  s_ad44067f5211a2::t_d2a5e18df79bb4 93-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "43552b83af76c817b276d9bd370f1b98354ceb6e",
+  "prompts": {},
+  "sessions": {
+    "s_ad44067f5211a2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0c33f93-28a3-4b22-85c4-5e0baa2ef557",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

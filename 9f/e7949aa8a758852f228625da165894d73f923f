@@ -1,0 +1,19 @@
+modules/byoc/aws/langsmith-byoc-role/policies/secrets_manager.json
+  s_793ab5af52415b::t_62d8d75226552f 5-8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "9fe7949aa8a758852f228625da165894d73f923f",
+  "prompts": {},
+  "sessions": {
+    "s_793ab5af52415b": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "209d9150-0e7d-4631-ac76-58eee03ae3f3",
+        "model": "grok-4.5"
+      },
+      "human_author": "Joaquin Borggio <joaquin@langchain.dev>"
+    }
+  }
+}

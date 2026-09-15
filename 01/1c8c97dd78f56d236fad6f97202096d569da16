@@ -1,0 +1,37 @@
+modules/gcp/infra/modules/ingress/variables.tf
+  s_ad44067f5211a2::t_e5b6ce8e1a547e 3-19
+modules/gcp/infra/modules/k8s-bootstrap/variables.tf
+  s_ad44067f5211a2::t_1d0ef0d9b6c1a9 8-19
+modules/gcp/infra/main.tf
+  s_ad44067f5211a2::t_642a4cd5297b37 737-740
+  s_ad44067f5211a2::t_5455943236740f 532-535
+  s_ad44067f5211a2::t_b076282e729120 741
+modules/gcp/infra/modules/ingress/main.tf
+  s_ad44067f5211a2::t_46600f7af6e3e9 9-15,18-22,24
+  s_ad44067f5211a2::t_a24748be08ec23 283
+  s_ad44067f5211a2::t_c6ad15b315beab 32
+  s_ad44067f5211a2::t_370c75efa043d7 194
+  s_ad44067f5211a2::t_905367d5f98eac 106
+  s_ad44067f5211a2::t_d885571cff5ba5 253
+  s_ad44067f5211a2::t_03849415de2bbf 16-17,23
+modules/gcp/infra/modules/k8s-bootstrap/main.tf
+  s_ad44067f5211a2::t_d96eb812b9d0b6 422
+  s_ad44067f5211a2::t_4db6360b66ef86 499
+  s_ad44067f5211a2::t_9564a44d3dbbe5 3-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "011c8c97dd78f56d236fad6f97202096d569da16",
+  "prompts": {},
+  "sessions": {
+    "s_ad44067f5211a2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0c33f93-28a3-4b22-85c4-5e0baa2ef557",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

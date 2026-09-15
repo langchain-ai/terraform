@@ -1,0 +1,12 @@
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "5c3eff7f9057170b475e8a0d64a8071d5539bd8d",
+  "prompts": {},
+  "humans": {
+    "h_712f30a2a56c04": {
+      "author": "ben11211 <nagengast@langchain.dev>"
+    }
+  }
+}

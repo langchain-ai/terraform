@@ -1,0 +1,28 @@
+modules/aws/infra/locals.tf
+  s_97bacea139cafe::t_ab1c18165c11dd 42-48
+modules/aws/infra/main.tf
+  s_97bacea139cafe::t_da3ecb843e1fc9 403
+  s_97bacea139cafe::t_5f36b8732feeb4 128-139
+  s_97bacea139cafe::t_e3bdf026cc9b78 553
+  s_97bacea139cafe::t_a1725b03c7d530 422
+modules/aws/infra/variables.tf
+  s_97bacea139cafe::t_8acb05009ec68a 624-628
+modules/aws/infra/outputs.tf
+  s_97bacea139cafe::t_d1e9bc5ea1c34f 248-259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "6865ada8718aad90d61fe0b5d498d89a7b9bb01f",
+  "prompts": {},
+  "sessions": {
+    "s_97bacea139cafe": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e32204f9-a43c-4bab-988c-f5ea7d7c1d02",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

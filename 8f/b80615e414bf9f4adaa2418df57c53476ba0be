@@ -1,0 +1,38 @@
+modules/azure/README.md
+  s_032f2a8bc23303::t_4c579bcf83ee1f 20
+  s_032f2a8bc23303::t_727956c3394835 5
+modules/azure/SERVICES.md
+  s_032f2a8bc23303::t_20d333536409a1 170
+modules/azure/infra/variables.tf
+  s_032f2a8bc23303::t_977629e2be4f40 770
+  s_032f2a8bc23303::t_d94b91aecf2b14 613-615
+modules/azure/ARCHITECTURE.md
+  s_032f2a8bc23303::t_75ae0963c19dc3 255-256,260
+  s_032f2a8bc23303::t_13a8946dfbdd57 259
+  s_032f2a8bc23303::t_42b079f4b44e94 274-332
+modules/azure/helm/values/examples/langsmith-values-smithdb.yaml
+  s_032f2a8bc23303::t_3c7b8a3c29346a 1-2
+modules/azure/infra/terraform.tfvars.example
+  s_032f2a8bc23303::t_3c44aa98df9c91 102,109-113
+modules/azure/SMITHDB.md
+  s_032f2a8bc23303::t_c516b09e5671be 86-87,93-94
+  s_032f2a8bc23303::t_2e228e47c025d7 3-26
+modules/azure/TROUBLESHOOTING.md
+  s_032f2a8bc23303::t_93a324afc086db 722
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8fb80615e414bf9f4adaa2418df57c53476ba0be",
+  "prompts": {},
+  "sessions": {
+    "s_032f2a8bc23303": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "db0f0167-f292-442c-8d04-f2e2f70ce476",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+modules/gcp/infra/terraform.tfvars.example
+  s_ad44067f5211a2::t_9d4f40bc545ff4 405-410,412
+modules/gcp/infra/modules/smithdb-nodes/variables.tf
+  s_ad44067f5211a2::t_9d3a99c0ca3995 57,59,62-68
+modules/gcp/infra/variables.tf
+  s_ad44067f5211a2::t_907cd5ee301274 928-934
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.19",
+  "base_commit_sha": "70885bdbfcb6a1da0b5458afeb5b1f1e46d56d4c",
+  "prompts": {},
+  "sessions": {
+    "s_ad44067f5211a2": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "d0c33f93-28a3-4b22-85c4-5e0baa2ef557",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

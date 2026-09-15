@@ -1,0 +1,43 @@
+modules/gcp/app/locals.tf
+  s_1cb73393c88004::t_4d33303b592912 148-149
+  s_1cb73393c88004::t_1472e298483504 75-80
+  s_1cb73393c88004::t_1c63a032ac876b 147
+  s_1cb73393c88004::t_1e7752b25cfa61 150
+modules/aws/app/main.tf
+  s_1cb73393c88004::t_7cc080346b549d 321-326
+  s_1cb73393c88004::t_7acc99e89feb87 221,224-227
+modules/azure/infra/variables.tf
+  s_1cb73393c88004::t_2c9bd3210ec017 324
+modules/aws/app/terraform.tfvars.example
+  s_1cb73393c88004::t_4d72d86a3e50a0 14
+modules/aws/app/variables.tf
+  s_1cb73393c88004::t_42152eba714c7b 110,112-117
+modules/azure/app/main.tf
+  s_1cb73393c88004::t_41380285b87be9 199,202-203
+modules/azure/app/terraform.tfvars.example
+  s_1cb73393c88004::t_0d512d2c275402 15
+modules/azure/app/variables.tf
+  s_1cb73393c88004::t_0dc2a8a9f10bd2 99,101-106
+modules/gcp/app/main.tf
+  s_1cb73393c88004::t_cd15c9539db6d2 81,84-87
+modules/gcp/app/terraform.tfvars.example
+  s_1cb73393c88004::t_e8ceab39936a58 14
+modules/gcp/app/variables.tf
+  s_1cb73393c88004::t_dda08d4c5885d3 114,116-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4b2880ec4b55280a8a04fa51fdc511c5dcf8dc9d",
+  "prompts": {},
+  "sessions": {
+    "s_1cb73393c88004": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "a77f586f-02a9-4649-be18-d8eb46402624",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
