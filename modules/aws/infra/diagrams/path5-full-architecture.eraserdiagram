@@ -210,7 +210,7 @@ AWS Account [icon: aws, color: blue] {
           // Gateway API / Ingress resources (one active per path)
           Ingress langsmith [icon: kubernetes, color: blue]
           Gateway langsmith-gateway [icon: kubernetes, color: blue]
-          HTTPRoutes [icon: kubernetes, color: blue]
+          HTTPRoute langsmith [icon: kubernetes, color: blue]
           VirtualService langsmith [icon: kubernetes, color: purple]
           TargetGroupBinding [icon: kubernetes, color: blue]
 
@@ -234,29 +234,35 @@ AWS Account [icon: aws, color: blue] {
             langsmith-ingest-queue [icon: server, color: blue]
           }
 
+          // Enabled by either Fleet or full LangSmith Deployments
+          langsmith-host-backend [icon: server, color: green]
+
           // ── LangGraph Deployments (opt-in) ────────────
           // enable_deployments = true in tfvars
           // KEDA scales agent pods based on queue depth
           LangGraph Deployments [color: green] {
-            langsmith-host-backend [icon: server, color: green]
             langsmith-listener [icon: server, color: green]
             langsmith-operator [icon: server, color: green]
             langsmith-agent-pods [icon: server, color: green]
             ScaledObject agent [icon: kubernetes, color: green]
           }
 
-          // ── Agent Builder (opt-in) ────────────────────
-          // enable_agent_builder = true in tfvars
-          Agent Builder [color: pink] {
-            langsmith-agent-builder-tool-server [icon: server, color: pink]
-            langsmith-agent-builder-trigger-server [icon: server, color: pink]
+          // ── Fleet (opt-in) ────────────────────────────
+          // enable_fleet = true in tfvars
+          Fleet [color: pink] {
+            langsmith-standalone-fleet-api-server [icon: server, color: pink]
+            langsmith-standalone-fleet-queue [icon: server, color: pink]
+            langsmith-fleet-tool-server [icon: server, color: pink]
+            langsmith-fleet-trigger-server [icon: server, color: pink]
           }
 
-          // ── Insights / Polly / Clio (opt-in) ──────────
-          // Operator-spawned pods for analytics and insights features
-          Insights [color: gray] {
-            polly [icon: server, color: gray]
-            clio [icon: server, color: gray]
+          // ── Insights / LangSmith Chat (formerly Polly) (opt-in) ──
+          // Top-level chart services for analytics and chat
+          Product Services [color: gray] {
+            langsmith-standalone-polly-api-server [icon: server, color: gray]
+            langsmith-standalone-polly-queue [icon: server, color: gray]
+            langsmith-standalone-insights-api-server [icon: server, color: gray]
+            langsmith-standalone-insights-queue [icon: server, color: gray]
           }
 
           // ── In-cluster data stores (dev/POC ONLY) ─────
@@ -266,6 +272,12 @@ AWS Account [icon: aws, color: blue] {
             langsmith-clickhouse [icon: database, color: red]
             langsmith-redis [icon: database, color: red]
             langsmith-postgres [icon: database, color: red]
+            langsmith-standalone-fleet-postgres [icon: database, color: red]
+            langsmith-standalone-fleet-redis [icon: database, color: red]
+            langsmith-standalone-polly-postgres [icon: database, color: red]
+            langsmith-standalone-polly-redis [icon: database, color: red]
+            langsmith-standalone-insights-postgres [icon: database, color: red]
+            langsmith-standalone-insights-redis [icon: database, color: red]
           }
 
         }
@@ -311,21 +323,17 @@ ALB Internet-Facing > TargetGroupBinding: Path 3 — HTTP :10080 (TLS offloaded)
 TargetGroupBinding > envoy-langsmith-proxy Pods: HTTP :10080 (type: ip)
 envoy-gateway Controller --> envoy-langsmith-proxy Pods: xDS config push
 envoy-gateway Controller --> Gateway langsmith-gateway: watches Gateway API
-Gateway langsmith-gateway --> HTTPRoutes: reconciles route rules
+Gateway langsmith-gateway --> HTTPRoute langsmith: reconciles route
 
 // Path 4: Istio — ALB TGB forwards to istio-ingressgateway
 ALB Internet-Facing > istio-ingressgateway: Path 4 — HTTP (TLS offloaded)
 istiod --> istio-ingressgateway: xDS programs data plane
 istiod --> VirtualService langsmith: reconciles traffic rules
 
-// ── Gateway → LangSmith services ─────────────────────────────
-nginx-ingress-controller > langsmith-frontend: /
-nginx-ingress-controller > langsmith-backend: /api/*
-nginx-ingress-controller > langsmith-platform-backend: /platform-api/*
-envoy-langsmith-proxy Pods > langsmith-frontend: HTTPRoute /
-envoy-langsmith-proxy Pods > langsmith-backend: HTTPRoute /api
-istio-ingressgateway > langsmith-frontend: VirtualService /
-istio-ingressgateway > langsmith-backend: VirtualService /api
+// ── Gateway → frontend ──────────────────────────────────────
+nginx-ingress-controller > langsmith-frontend: Ingress backend
+envoy-langsmith-proxy Pods > langsmith-frontend: HTTPRoute backendRef
+istio-ingressgateway > langsmith-frontend: VirtualService destination
 Ingress langsmith > langsmith-frontend: ALB-native rule /
 
 // ── Frontend internal routing ─────────────────────────────────
@@ -334,6 +342,9 @@ langsmith-frontend > langsmith-platform-backend: /platform-api/*
 langsmith-frontend > langsmith-ace-backend: /ace/*
 langsmith-frontend > langsmith-playground: /playground/*
 langsmith-frontend > langsmith-host-backend: /langgraph/*
+langsmith-frontend > langsmith-standalone-fleet-api-server: Fleet routes
+langsmith-frontend > langsmith-standalone-polly-api-server: Chat routes
+langsmith-frontend > langsmith-standalone-insights-api-server: Insights routes
 
 // ── Backend → external data stores (production path) ──────────
 langsmith-backend > RDS PostgreSQL: :5432 Postgres
@@ -357,8 +368,6 @@ langsmith-ingest-queue > langsmith-clickhouse: :9000 TCP (in-cluster)
 // ── LangGraph Deployments ─────────────────────────────────────
 langsmith-listener > langsmith-operator: event stream
 langsmith-operator > langsmith-agent-pods: spawn managed deployments
-langsmith-operator > polly: spawn insights pod
-langsmith-operator > clio: spawn analytics pod
 keda-operator --> ScaledObject agent: watches queue depth
 ScaledObject agent --> langsmith-agent-pods: scale replicas
 
@@ -406,8 +415,8 @@ Legend [icon: shield, color: gray] {
   Async or Management Path [icon: server, color: gray]
   Core LangSmith Services [icon: server, color: blue]
   LangGraph Deployments optional [icon: server, color: green]
-  Agent Builder optional [icon: server, color: pink]
-  Operator Managed Pods [icon: server, color: gray]
+  Fleet optional [icon: server, color: pink]
+  Product Services [icon: server, color: gray]
   In-Cluster Dev Only Data [icon: database, color: red]
   External Production Data [icon: database, color: blue]
   Secrets and IAM [icon: lock, color: green]

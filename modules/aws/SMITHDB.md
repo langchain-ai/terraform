@@ -38,11 +38,11 @@ Apply infrastructure, then generate values:
 make init-values
 ```
 
-SmithDB requires an explicit stable Helm chart version of 0.16 or newer.
-Infrastructure enablement does not upgrade the normal repository chart line:
+SmithDB requires a stable Helm chart version of 0.16 or newer.
+The deploy script already pins the latest 0.16.x chart (`~0.16.0`):
 
 ```sh
-CHART_VERSION=0.16.21 make deploy
+make deploy
 ```
 
 The generated values deploy SmithDB services with all LangSmith integration
