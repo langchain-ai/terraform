@@ -1,8 +1,30 @@
 # SmithDB on Azure
 
-SmithDB support is optional and targets LangSmith chart 0.17.0-rc.29 or newer. Set
-`enable_smithdb = true` to provision its Azure dependencies independently of
-the LangSmith application database and trace-blob account.
+SmithDB support on Azure is optional and starts at LangSmith chart
+0.17.0-rc.29 on the 0.17 line. Set `enable_smithdb = true` to provision its
+Azure dependencies independently of the LangSmith application database and
+trace-blob account.
+
+## Version requirements
+
+Two version numbers apply here, and they are not the same thing.
+
+**LangSmith chart: 0.17.0-rc.29 or newer on the 0.17 line, selected
+explicitly.** This is the first version with both Azure SmithDB values and the
+per-pod cache PVC contract. `deploy.sh` accepts `0.17.x` only. It rejects 0.16,
+because the Azure values are absent there, and it rejects 0.18, because the
+module pins a chart line and never crosses a minor on its own.
+
+**Module tag: still `v0.16.*`.** The Azure module ships on the 0.16 tag series,
+where the default chart pin is `~0.16.0`. So on a `v0.16.*` tag, SmithDB needs
+`langsmith_helm_chart_version` set explicitly. `enable_smithdb = true` with no
+chart version fails the deploy rather than installing a chart without SmithDB
+support. Deployments that leave `enable_smithdb = false` are unaffected and
+stay on the 0.16 pin.
+
+This split is temporary. When the module line moves to 0.17, SmithDB becomes an
+ordinary feature of the pinned line, the explicit selection is no longer needed,
+and this section goes away.
 
 ## Infrastructure
 
@@ -10,11 +32,17 @@ The Terraform root creates:
 
 - a dedicated private Azure Database for PostgreSQL Flexible Server 18 and an
   empty `smithdb` database;
-- a dedicated Blob Storage account and private container, with Shared Key
-  authentication disabled;
+- a dedicated Blob Storage account and private container. Shared Key stays
+  enabled so the chart's optional static-key path
+  (`smithdb.config.objectStore.azure.accessKeySecretKey`) remains available.
+  The default runtime path does not use it;
 - a SmithDB-only user-assigned identity, federated to the chart-owned SmithDB
   Kubernetes ServiceAccount and scoped to `Storage Blob Data Contributor` on
-  that account; and
+  that account. Set `smithdb_migration_enabled = true` and the identity also
+  receives `Storage Blob Data Reader` on the LangSmith trace-blob account, which
+  is the source the historical backfill reads. The grant exists only while that
+  flag is on, so a steady-state install leaves the identity able to reach
+  nothing but its own account; and
 - two autoscaling, tainted AKS node pools: `smithcache` hosts cache-heavy
   workloads backed by per-pod Premium SSD v2 volumes, and `smithcompute` hosts
   compute workloads.
@@ -39,6 +67,22 @@ Entra mode it contains only the host, database, and username; the chart sets
 so no Storage Account key or SAS token is written to Kubernetes or Terraform
 outputs.
 
+Azure RBAC does not take effect the moment the grant is created. A blob
+data-plane role change needs up to 10 minutes, and the backfill runs from a
+separate Helm pass that an operator can start straight after `terraform apply`
+returns. So the apply that creates the `Storage Blob Data Reader` grant waits
+300 seconds before it hands control back, in
+`time_sleep.smithdb_trace_blob_reader_propagation`. The pause is deliberate. Let
+it finish.
+
+The wait shortens this race and does not remove it. A backfill that reads the
+source account before the grant is effective fails with 403 responses that look
+the same as a missing grant. Confirm the assignment exists with
+`az role assignment list`, wait, and retry before you treat the 403 as a defect.
+
+Setting `smithdb_migration_enabled` back to false removes the grant. A backfill
+that has to run again needs the flag on again, and waits again.
+
 ## Chart contract
 
 Chart 0.17.0-rc.29 or newer supports Azure as a SmithDB object-store provider
@@ -48,8 +92,8 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
 `azure.workload.identity/use: "true"`.
 
-The Azure module remains pinned to chart 0.16 by default. Select chart 0.17
-explicitly when enabling SmithDB:
+Select the chart line explicitly alongside the flag, as described in
+[Version requirements](#version-requirements):
 
 ```hcl
 enable_smithdb               = true
@@ -66,10 +110,22 @@ release `prod` uses `prod-langsmith-smithdb`.
 
 ## Network and sizing notes
 
-The Storage Account firewall admits the AKS subnet through its
-`Microsoft.Storage` service endpoint. PostgreSQL uses the delegated database
-subnet and the VNet's private PostgreSQL DNS zone. SmithDB increases AKS subnet
-IP demand; the root module includes both node pools in its capacity check.
+By default the Storage Account firewall admits the AKS subnet through its
+`Microsoft.Storage` service endpoint. The account keeps its public endpoint and
+denies all other traffic.
+
+Set `storage_private_endpoint_enabled = true` to replace that with a Private
+Endpoint and turn the public endpoint off. The setting covers the LangSmith
+trace-blob account as well, so the two accounts never end up with different
+postures. SmithDB keeps using the same account hostname, which then resolves to
+a VNet address through the `privatelink.blob.core.windows.net` zone. Supply
+`storage_private_dns_zone_id` when the VNet already resolves that zone; Azure
+links a zone name to a VNet once, so creating a second one fails.
+
+PostgreSQL uses the delegated database subnet and the VNet's private PostgreSQL
+DNS zone. SmithDB increases AKS subnet IP demand; the root module includes both
+node pools in its capacity check. Each Private Endpoint takes one further
+address in its subnet.
 
 `Standard_D16s_v5` is the default cache-workload VM. Terraform creates the
 `smithdb-cache-premium-v2` StorageClass with 7,000 IOPS and 1,000 MB/s and the

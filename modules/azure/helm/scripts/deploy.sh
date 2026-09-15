@@ -458,8 +458,18 @@ fi
 # 0.17; deployments without SmithDB retain the existing 0.16 contract.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
 if [[ "$_chart_line" != "$_required_chart_line" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the required chart ${_required_chart_line} line." >&2
-  echo "       SmithDB requires chart 0.17; other Azure deployments remain pinned to 0.16." >&2
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
+  if [[ "$_enable_smithdb" == "true" ]]; then
+    echo "       enable_smithdb = true requires the chart ${_required_chart_line} line, which is not the" >&2
+    echo "       Azure default. Select it explicitly in terraform.tfvars:" >&2
+    echo "         langsmith_helm_chart_version = \"~${_required_chart_line}.0\"" >&2
+    echo "       or for a single deploy:" >&2
+    echo "         CHART_VERSION='~${_required_chart_line}.0' make deploy" >&2
+  else
+    echo "       These values require chart ${_required_chart_line} (engineInsightsAgent, top-level insights/polly)." >&2
+    echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+    echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
+  fi
   exit 1
 fi
 # engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases

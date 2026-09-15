@@ -142,6 +142,35 @@ _sm_get() {
     --quiet 2>/dev/null || true
 }
 
+# ── Rejected value reporting ──────────────────────────────────────────────────
+# Says why a value was rejected and how to recover, without printing the value.
+# The recovery depends on where the value came from. Telling an operator to
+# delete the Secret Manager secret is wrong when the environment variable is the
+# invalid one: the stored secret may be the good value, and deleting it destroys
+# the only copy.
+_sm_report_invalid() {
+  local varname="$1" secret_id="$2" origin="$3" reason="$4"
+  echo "ERROR: $varname is invalid — ${reason}." >&2
+  case "$origin" in
+    env)
+      echo "       The value comes from the $varname environment variable, not from" >&2
+      echo "       Secret Manager. Nothing was written. Clear it and re-source this" >&2
+      echo "       script to fall back to the stored secret:" >&2
+      echo "         unset $varname" >&2
+      ;;
+    secret-manager)
+      echo "       The value comes from Secret Manager secret ${secret_id}." >&2
+      echo "       Add a compliant version, then re-source this script:" >&2
+      echo "         printf '%s' '<new-value>' | gcloud secrets versions add ${secret_id} \\" >&2
+      echo "           --project=${_project_id} --data-file=-" >&2
+      ;;
+    *)
+      echo "       Nothing was written to Secret Manager. Re-source this script and" >&2
+      echo "       supply a compliant value." >&2
+      ;;
+  esac
+}
+
 # ── sm_secret helper ──────────────────────────────────────────────────────────
 # Reads a secret from Secret Manager; prompts or auto-generates if missing;
 # exports as a TF_VAR_* environment variable.
@@ -152,21 +181,35 @@ _sm_get() {
 #   $3  generator    — Shell command that outputs a new value (empty = prompt)
 #   $4  prompt_text  — Prompt string for interactive input
 #   $5  silent       — "true" to hide input (passwords); "false" for plaintext
+#   $6  validator    — optional function name. Receives the value, prints why it
+#                      is rejected and returns non-zero. Every path runs it
+#                      before the value reaches Secret Manager or the
+#                      environment, so an invalid value is never stored.
 _sm_secret() {
   local sm_name="$1"
   local varname="$2"
   local generator="$3"
   local prompt_text="$4"
   local silent="${5:-true}"
+  local validator="${6:-}"
 
   local val=""
+  local _reason=""
   local _secret_id="${_sm_prefix}-${sm_name}"
 
   # 0. Already exported in the environment — use as-is, backfill SM if missing.
   if [[ -n "$(printenv "$varname")" ]]; then
+    val="$(printenv "$varname")"
+    # Check before the backfill, not after. A backfill writes this value to
+    # Secret Manager, so validating later leaves the invalid value stored and
+    # forces the operator to delete the secret to recover.
+    if [[ -n "$validator" ]] && ! _reason=$("$validator" "$val"); then
+      _sm_report_invalid "$varname" "$_secret_id" "env" "$_reason"
+      return 1
+    fi
     if ! _gcloud_bounded secrets describe "$_secret_id" --project="$_project_id" &>/dev/null; then
       echo "  $varname is set in env but missing from Secret Manager — backfilling → ${_secret_id}"
-      if ! _sm_put "$sm_name" "$(printenv "$varname")"; then
+      if ! _sm_put "$sm_name" "$val"; then
         echo "  WARNING: Secret Manager write failed for ${_secret_id}"
         echo "           Ensure secretmanager.googleapis.com is enabled and you have secretmanager.admin."
       fi
@@ -176,6 +219,14 @@ _sm_secret() {
 
   # 1. Try Secret Manager
   val=$(_sm_get "$sm_name") || val=""
+
+  # A stored value can predate this rule, so it gets the same gate. Exporting it
+  # unchecked only moves the failure to helm upgrade, after Pass 1 has built the
+  # whole stack.
+  if [[ -n "$val" && -n "$validator" ]] && ! _reason=$("$validator" "$val"); then
+    _sm_report_invalid "$varname" "$_secret_id" "secret-manager" "$_reason"
+    return 1
+  fi
 
   # 2. Prompt or generate if still empty
   if [[ -z "$val" ]]; then
@@ -191,19 +242,33 @@ _sm_secret() {
         return 1
       fi
     elif [[ -t 0 ]]; then
-      # Interactive terminal — prompt the user
-      if [[ "$silent" == "true" ]]; then
+      # Interactive terminal — prompt the user. A rejected value is re-prompted
+      # rather than fatal: nothing has been stored yet, and re-sourcing this
+      # script to correct a typo re-reads every other secret.
+      local _attempt=0
+      while true; do
+        _attempt=$((_attempt + 1))
         printf "%s: " "$prompt_text"
-        read -rs val
-        echo
-      else
-        printf "%s: " "$prompt_text"
-        read -r val
-      fi
-      if [[ -z "$val" ]]; then
-        echo "  ERROR: No value provided for $varname." >&2
-        return 1
-      fi
+        if [[ "$silent" == "true" ]]; then
+          read -rs val
+          echo
+        else
+          read -r val
+        fi
+        if [[ -z "$val" ]]; then
+          echo "  ERROR: No value provided for $varname." >&2
+          return 1
+        fi
+        if [[ -z "$validator" ]] || _reason=$("$validator" "$val"); then
+          break
+        fi
+        echo "  Rejected: ${_reason}." >&2
+        if (( _attempt >= 3 )); then
+          echo "  ERROR: $varname is still invalid after $_attempt attempts." >&2
+          echo "         Nothing was written to Secret Manager." >&2
+          return 1
+        fi
+      done
     else
       # Non-interactive (CI, piped stdin, redirected) — cannot prompt.
       # Reported on stdout, not stderr: a sandboxed shell that surfaces only
@@ -216,6 +281,13 @@ _sm_secret() {
       echo "           printf '%s' '<value>' | gcloud secrets versions add ${_secret_id} \\"
       echo "             --project=${_project_id} --data-file=-"
       _missing_vars="$_missing_vars $varname"
+      return 1
+    fi
+
+    # Last gate before the write. The interactive path has already checked, so
+    # this catches a generator whose output does not satisfy the rule.
+    if [[ -n "$validator" ]] && ! _reason=$("$validator" "$val"); then
+      _sm_report_invalid "$varname" "$_secret_id" "generated" "$_reason"
       return 1
     fi
 
@@ -298,8 +370,52 @@ _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
 _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
   "_ed25519_private_jwk_gen" "" "true"
 
+# ── Admin password rule ───────────────────────────────────────────────────────
+# templates/validate.yaml rejects a non-compliant password at render time, so
+# without this gate the failure surfaces only after Pass 1 has provisioned the
+# whole stack and deploy.sh reaches helm upgrade. Mirrors the check in the AWS
+# module (setup-env.sh) and Azure (_common.sh:_validate_admin_password).
+#
+# Prints the reason on stdout and returns non-zero. It never prints the
+# password: the caller reports the reason, and the value stays in the variable.
+_validate_admin_password() {
+  local _pw="$1" _len
+  # Count bytes, because the chart's rule is Go's len(), which counts bytes.
+  # ${#_pw} counts characters in a UTF-8 locale and bytes in the C locale, so it
+  # gives the same password two different verdicts on two machines: "Pässwörd12!"
+  # is 13 bytes and the chart takes it, but ${#_pw} reads 11 under
+  # LC_ALL=en_US.UTF-8 and rejects it. The two agree on ASCII.
+  _len=$(printf '%s' "$_pw" | wc -c | tr -d '[:space:]')
+  if (( _len < 12 )); then
+    echo "must be at least 12 bytes long (a non-ASCII character counts as more than one)"
+    return 1
+  fi
+  # The bracket expression lists the symbols the chart accepts: ] first and -
+  # last so both are literal. Writing the class as [...\-] instead would add a
+  # backslash to the set, and a password whose only symbol is a backslash then
+  # passes here and fails the chart.
+  if ! printf '%s' "$_pw" | grep -q '[]!#$%()+,./:?@[^_{~}-]'; then
+    echo 'must contain at least one symbol from !#$%()+,-./:?@[]^_{~}'
+    return 1
+  fi
+  if ! printf '%s' "$_pw" | grep -q '[a-z]'; then
+    echo "must contain at least one lowercase letter"
+    return 1
+  fi
+  if ! printf '%s' "$_pw" | grep -q '[A-Z]'; then
+    echo "must contain at least one uppercase letter"
+    return 1
+  fi
+  return 0
+}
+
+# Single quotes around the prompt: the symbol list holds $ and !, which double
+# quotes would expand and which an earlier form escaped into the visible text.
+# `|| return 1` keeps the abort the rule needs — the value is never exported, so
+# continuing would only move the failure to terraform apply.
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
-  "" "Initial LangSmith admin password" "true"
+  "" 'Initial LangSmith admin password (min 12 bytes, one lowercase, one uppercase, one symbol from !#$%()+,-./:?@[]^_{~})' \
+  "true" "_validate_admin_password" || return 1
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
 # Auto-generated and stored in Secret Manager on first run.
