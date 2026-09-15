@@ -1,0 +1,39 @@
+modules/azure/helm/scripts/init-values.sh
+  s_0d7b32b2530503::t_da40bf098185ce 121,129,604,626-627
+modules/azure/infra/variables.tf
+  s_0d7b32b2530503::t_69def30ce63620 648,650-651,654,657,660,663-691
+modules/azure/README.md
+  s_0d7b32b2530503::t_2f382e7642d0ee 20
+modules/azure/infra/outputs.tf
+  s_0d7b32b2530503::t_2f126bdb977981 134-138
+modules/azure/infra/main.tf
+  s_0d7b32b2530503::t_e03fa85fc61657 184-189,932-939
+modules/azure/infra/terraform.tfvars.example
+  s_0d7b32b2530503::t_da40bf098185ce 120-125
+modules/azure/infra/modules/k8s-bootstrap/outputs.tf
+  s_0d7b32b2530503::t_2f126bdb977981 30-34
+modules/azure/SMITHDB.md
+  s_0d7b32b2530503::t_2f382e7642d0ee 3,18-20,44-45,56,74-77,96
+modules/azure/infra/modules/k8s-bootstrap/variables.tf
+  s_0d7b32b2530503::t_2f126bdb977981 139-156
+modules/azure/helm/values/examples/langsmith-values-smithdb.yaml
+  s_0d7b32b2530503::t_da40bf098185ce 7-9,14,16,23,25,32,34
+modules/azure/infra/modules/k8s-bootstrap/main.tf
+  s_0d7b32b2530503::t_2f126bdb977981 75-98
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "24cbd0571b321a4a88b5dc47871a5ee1e7c0dbd3",
+  "prompts": {},
+  "sessions": {
+    "s_0d7b32b2530503": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a035f8-f260-7171-a941-1453b8e9dbba",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "ben11211 <nagengast@langchain.dev>"
+    }
+  }
+}
