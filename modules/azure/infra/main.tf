@@ -181,12 +181,12 @@ locals {
 
   smithdb_node_pools = var.enable_smithdb ? {
     smithcache = {
-      vm_size           = var.smithdb_instance_store_vm_size
-      min_count         = var.smithdb_instance_store_min_count
-      max_count         = var.smithdb_instance_store_max_count
-      kubelet_disk_type = "Temporary"
-      node_labels       = { "smithdb-local/instance-store" = "true" }
-      node_taints       = ["smithdb-local/instance-store=true:NoSchedule"]
+      vm_size           = var.smithdb_cache_vm_size
+      min_count         = var.smithdb_cache_min_count
+      max_count         = var.smithdb_cache_max_count
+      kubelet_disk_type = "OS"
+      node_labels       = { "smithdb/cache" = "true" }
+      node_taints       = ["smithdb/cache=true:NoSchedule"]
     }
     smithcompute = {
       vm_size           = var.smithdb_compute_vm_size
@@ -929,11 +929,14 @@ module "k8s_bootstrap" {
 
   # SmithDB metastore connection. Keeping this Secret in the bootstrap module
   # ensures it uses that module's AKS-configured Kubernetes provider.
-  enable_smithdb             = var.enable_smithdb
-  smithdb_metastore_host     = var.enable_smithdb ? module.smithdb[0].metastore_host : ""
-  smithdb_metastore_database = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
-  smithdb_metastore_username = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
-  smithdb_metastore_password = var.smithdb_metastore_admin_password
+  enable_smithdb                   = var.enable_smithdb
+  smithdb_metastore_host           = var.enable_smithdb ? module.smithdb[0].metastore_host : ""
+  smithdb_metastore_database       = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
+  smithdb_metastore_username       = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
+  smithdb_metastore_password       = var.smithdb_metastore_admin_password
+  smithdb_cache_storage_class_name = var.smithdb_cache_storage_class_name
+  smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
+  smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
 
   # Ingress controller — drives the NetworkPolicy's allowed source namespace.
   ingress_controller = var.ingress_controller

@@ -4,31 +4,34 @@
 
 smithdb:
   enabled: true
+  # Cache sizes and workload resources come from the chart's small tier. The
+  # generated overrides select Terraform's Premium SSD v2 StorageClass.
+  resourceTier: small
 
   query:
     deployment:
       nodeSelector:
-        smithdb-local/instance-store: "true"
+        smithdb/cache: "true"
       tolerations:
-        - key: smithdb-local/instance-store
+        - key: smithdb/cache
           operator: Equal
           value: "true"
           effect: NoSchedule
   ingestion:
     deployment:
       nodeSelector:
-        smithdb-local/instance-store: "true"
+        smithdb/cache: "true"
       tolerations:
-        - key: smithdb-local/instance-store
+        - key: smithdb/cache
           operator: Equal
           value: "true"
           effect: NoSchedule
   compactionWorker:
     deployment:
       nodeSelector:
-        smithdb-local/instance-store: "true"
+        smithdb/cache: "true"
       tolerations:
-        - key: smithdb-local/instance-store
+        - key: smithdb/cache
           operator: Equal
           value: "true"
           effect: NoSchedule

@@ -136,6 +136,24 @@ variable "smithdb_managed_identity_client_id" {
   default     = ""
 }
 
+variable "smithdb_cache_storage_class_name" {
+  type        = string
+  description = "Name of the StorageClass created for SmithDB cache volumes."
+  default     = "smithdb-cache-premium-v2"
+}
+
+variable "smithdb_cache_disk_iops" {
+  type        = number
+  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume."
+  default     = 7000
+}
+
+variable "smithdb_cache_disk_throughput" {
+  type        = number
+  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume."
+  default     = 1000
+}
+
 # ── Application secrets ───────────────────────────────────────────────────────
 # License key is stored in K8s as langsmith-license secret.
 # Other app secrets (api_key_salt, jwt_secret, admin_password) are written by

@@ -72,6 +72,30 @@ resource "kubernetes_service_account_v1" "smithdb" {
   }
 }
 
+# SmithDB's disk-backed caches use per-pod generic ephemeral PVCs. Premium SSD
+# v2 exposes provisioned IOPS and throughput independently of volume capacity,
+# so the chart's 100-200 GiB cache sizes can meet SmithDB's performance target
+# without being inflated solely to buy more disk performance.
+resource "kubernetes_storage_class_v1" "smithdb_cache" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name = var.smithdb_cache_storage_class_name
+  }
+
+  storage_provisioner    = "disk.csi.azure.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    skuName           = "PremiumV2_LRS"
+    cachingMode       = "None"
+    DiskIOPSReadWrite = tostring(var.smithdb_cache_disk_iops)
+    DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
+  }
+}
+
 # ── Resource Quota ────────────────────────────────────────────────────────────
 # Caps total CPU/memory/pod count for the namespace. Prevents a runaway LangSmith
 # deployment (e.g. KEDA over-scaling) from starving kube-system or other tenants.

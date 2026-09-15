@@ -1,6 +1,6 @@
 # SmithDB on Azure
 
-SmithDB support is optional and targets LangSmith chart 0.17 or newer. Set
+SmithDB support is optional and targets LangSmith chart 0.17.0-rc.29 or newer. Set
 `enable_smithdb = true` to provision its Azure dependencies independently of
 the LangSmith application database and trace-blob account.
 
@@ -15,8 +15,9 @@ The Terraform root creates:
 - a SmithDB-only user-assigned identity, federated to the chart-owned SmithDB
   Kubernetes ServiceAccount and scoped to `Storage Blob Data Contributor` on
   that account; and
-- two autoscaling, tainted AKS node pools: `smithcache` uses the VM temporary
-  disk for SmithDB's local cache and `smithcompute` hosts compute workloads.
+- two autoscaling, tainted AKS node pools: `smithcache` hosts cache-heavy
+  workloads backed by per-pod Premium SSD v2 volumes, and `smithcompute` hosts
+  compute workloads.
 
 By default, the same SmithDB workload identity authenticates to PostgreSQL
 through Microsoft Entra ID and is configured as the Flexible Server's Entra
@@ -40,8 +41,8 @@ outputs.
 
 ## Chart contract
 
-Chart 0.17 must support Azure as a SmithDB object-store provider. `make
-init-values` generates the overlay from
+Chart 0.17.0-rc.29 or newer supports Azure as a SmithDB object-store provider
+and per-pod cache PVCs. `make init-values` generates the overlay from
 `smithdb_storage_account_name` and `smithdb_storage_container_name`, annotates
 the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
@@ -52,7 +53,7 @@ explicitly when enabling SmithDB:
 
 ```hcl
 enable_smithdb               = true
-langsmith_helm_chart_version = "~0.17.0"
+langsmith_helm_chart_version = ">=0.17.0-rc.29 <0.18.0-0"
 ```
 
 The chart is intentionally a separate deployment pass: `terraform apply`
@@ -70,10 +71,10 @@ The Storage Account firewall admits the AKS subnet through its
 subnet and the VNet's private PostgreSQL DNS zone. SmithDB increases AKS subnet
 IP demand; the root module includes both node pools in its capacity check.
 
-`Standard_L16s_v3` is the default cache VM because it has a large local NVMe
-temporary disk. Confirm that the SKU and capacity are available in the target
-region. Changing to a VM without a suitable temporary disk defeats the local
-cache design even if AKS accepts the node-pool configuration.
+`Standard_D16s_v5` is the default cache-workload VM. Terraform creates the
+`smithdb-cache-premium-v2` StorageClass with 7,000 IOPS and 1,000 MB/s and the
+generated Helm overrides select it for SmithDB's per-pod cache PVCs. Premium
+SSD v2 must be available in the cluster's region and zones.
 
 For an attached AKS cluster, Terraform creates the SmithDB pools only when
 `existing_cluster_node_pools_managed = true`. Otherwise create equivalent pools
@@ -92,7 +93,7 @@ Before a real apply, also confirm:
 
 - PostgreSQL 18 and the selected Flexible Server SKU are available in the
   chosen region;
-- the cache VM has adequate temporary-disk capacity;
+- Premium SSD v2 is available in the target region and zones;
 - the AKS subnet has room for both pools at maximum scale; and
 - the chart PR's Azure provider values and workload-identity annotations match
   the outputs listed above.

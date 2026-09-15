@@ -645,22 +645,50 @@ variable "smithdb_storage_container_name" {
   default     = "smithdb"
 }
 
-variable "smithdb_instance_store_vm_size" {
+variable "smithdb_cache_vm_size" {
   type        = string
-  description = "AKS VM size for the SmithDB cache pool. It must expose enough temporary disk for kubelet ephemeral storage."
-  default     = "Standard_L16s_v3"
+  description = "AKS VM size for the SmithDB cache workload pool. Cache data is stored on per-pod Azure managed disks."
+  default     = "Standard_D16s_v5"
 }
 
-variable "smithdb_instance_store_min_count" {
+variable "smithdb_cache_min_count" {
   type        = number
   default     = 0
-  description = "Minimum nodes in the SmithDB temporary-disk cache pool."
+  description = "Minimum nodes in the SmithDB cache workload pool."
 }
 
-variable "smithdb_instance_store_max_count" {
+variable "smithdb_cache_max_count" {
   type        = number
   default     = 3
-  description = "Maximum nodes in the SmithDB temporary-disk cache pool."
+  description = "Maximum nodes in the SmithDB cache workload pool."
+}
+
+variable "smithdb_cache_storage_class_name" {
+  type        = string
+  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes."
+  default     = "smithdb-cache-premium-v2"
+}
+
+variable "smithdb_cache_disk_iops" {
+  type        = number
+  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume."
+  default     = 7000
+
+  validation {
+    condition     = var.smithdb_cache_disk_iops >= 3000 && var.smithdb_cache_disk_iops <= 80000
+    error_message = "smithdb_cache_disk_iops must be between 3000 and 80000."
+  }
+}
+
+variable "smithdb_cache_disk_throughput_mbps" {
+  type        = number
+  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume."
+  default     = 1000
+
+  validation {
+    condition     = var.smithdb_cache_disk_throughput_mbps >= 125 && var.smithdb_cache_disk_throughput_mbps <= 1200
+    error_message = "smithdb_cache_disk_throughput_mbps must be between 125 and 1200."
+  }
 }
 
 variable "smithdb_compute_vm_size" {

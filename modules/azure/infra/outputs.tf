@@ -131,6 +131,11 @@ output "smithdb_metastore_username" {
   value       = var.enable_smithdb ? module.smithdb[0].metastore_username : null
 }
 
+output "smithdb_cache_storage_class_name" {
+  description = "StorageClass used by SmithDB per-pod cache volumes."
+  value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_cache_storage_class_name : null
+}
+
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true
