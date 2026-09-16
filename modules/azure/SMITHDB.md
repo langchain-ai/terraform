@@ -1,19 +1,23 @@
 # SmithDB on Azure
 
-SmithDB support on Azure is optional and starts at LangSmith chart
-0.17.0-rc.29 on the 0.17 line. Set `enable_smithdb = true` to provision its
-Azure dependencies independently of the LangSmith application database and
-trace-blob account.
+SmithDB support on Azure is optional and starts at the LangSmith chart 0.17
+line. Set `enable_smithdb = true` to provision its Azure dependencies
+independently of the LangSmith application database and trace-blob account.
 
 ## Version requirements
 
 Two version numbers apply here, and they are not the same thing.
 
-**LangSmith chart: 0.17.0-rc.29 or newer on the 0.17 line, selected
-explicitly.** This is the first version with both Azure SmithDB values and the
-per-pod cache PVC contract. `deploy.sh` accepts `0.17.x` only. It rejects 0.16,
-because the Azure values are absent there, and it rejects 0.18, because the
-module pins a chart line and never crosses a minor on its own.
+**LangSmith chart: a stable release on the 0.17 line, selected explicitly.**
+The 0.17 line is the first with both the Azure SmithDB values and the per-pod
+cache PVC contract. `deploy.sh` accepts `0.17.x` only. It rejects 0.16, because
+the Azure values are absent there, and it rejects 0.18, because the module pins
+a chart line and never crosses a minor on its own.
+
+Deploy a released 0.17 patch. A `~0.17.0` constraint resolves to the newest
+stable 0.17 release. Prereleases are not a supported configuration here: Helm
+skips them unless asked with `--devel`, and the Azure `deploy.sh` never passes
+that flag, so a prerelease version fails to resolve rather than installing.
 
 **Module tag: still `v0.16.*`.** The Azure module ships on the 0.16 tag series,
 where the default chart pin is `~0.16.0`. So on a `v0.16.*` tag, SmithDB needs
@@ -86,8 +90,8 @@ that has to run again needs the flag on again, and waits again.
 
 ## Chart contract
 
-Chart 0.17.0-rc.29 or newer supports Azure as a SmithDB object-store provider
-and per-pod cache PVCs. `make init-values` generates the overlay from
+The chart 0.17 line supports Azure as a SmithDB object-store provider and
+per-pod cache PVCs. `make init-values` generates the overlay from
 `smithdb_storage_account_name` and `smithdb_storage_container_name`, annotates
 the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
@@ -98,7 +102,7 @@ Select the chart line explicitly alongside the flag, as described in
 
 ```hcl
 enable_smithdb               = true
-langsmith_helm_chart_version = ">=0.17.0-rc.29 <0.18.0-0"
+langsmith_helm_chart_version = "~0.17.0"
 ```
 
 The chart is intentionally a separate deployment pass: `terraform apply`
