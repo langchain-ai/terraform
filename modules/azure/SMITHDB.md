@@ -166,6 +166,14 @@ does support nonzonal Premium SSD v2.
 On an attached AKS cluster, set `availability_zones` to the zones the existing
 nodes already use, and confirm those nodes are zonal before enabling SmithDB.
 
+Adding zones to an already-built cluster does not re-zone it. The module ignores
+zone changes on an existing node pool, so the plan comes back clean, the
+precondition above is satisfied, and the nodes stay where they were. The
+`aks_node_pool_zone_drift` check reports this as a plan warning naming the live
+zones against the requested ones. Read that warning: a nonzonal pool with
+SmithDB enabled gets a cache StorageClass no pod can bind to. Re-zoning means
+rebuilding the pool.
+
 ## Pre-apply review
 
 Run the normal local gate:
