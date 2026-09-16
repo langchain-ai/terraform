@@ -509,6 +509,30 @@ if [[ -n "$_legacy_files" ]]; then
   exit 1
 fi
 
+# Same trap, different keys: a values directory written while SmithDB still had
+# its own node pools keeps selecting smithdb-local/instance-store and
+# smithdb-local/compute. Those pools no longer exist, so every SmithDB pod stays
+# Pending on "node(s) didn't match Pod's node affinity/selector" and nothing in
+# the chart or the scheduler names the file that asked for them. The chart
+# accepts the keys, which is what makes this worth catching here.
+_stale_pool_files=""
+for _vf in "$VALUES_DIR"/*.yaml; do
+  [[ -f "$_vf" ]] || continue
+  if grep -q 'smithdb-local/' "$_vf" 2>/dev/null; then
+    _stale_pool_files+="         $(basename "$_vf")
+"
+  fi
+done
+if [[ -n "$_stale_pool_files" ]]; then
+  echo "ERROR: these values files schedule SmithDB onto node pools that no longer exist:" >&2
+  printf '%s' "$_stale_pool_files" >&2
+  echo "       The smithcache and smithcompute pools were removed when the SmithDB cache" >&2
+  echo "       moved to per-pod Premium SSD v2 volumes, so a smithdb-local/* nodeSelector" >&2
+  echo "       now matches no node and leaves every SmithDB pod Pending." >&2
+  echo "       Delete the files listed above and re-run 'make init-values'." >&2
+  exit 1
+fi
+
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)

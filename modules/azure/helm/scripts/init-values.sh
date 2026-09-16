@@ -692,7 +692,7 @@ smithdb:
       labels:
         azure.workload.identity/use: "true"
   migration:
-    deployment:
+    job:
       labels:
         azure.workload.identity/use: "true"
   langsmith:
