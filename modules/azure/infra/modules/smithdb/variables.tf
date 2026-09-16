@@ -17,6 +17,16 @@ variable "metastore_admin_password" {
 variable "metastore_sku_name" { type = string }
 variable "metastore_storage_mb" { type = number }
 variable "metastore_backup_retention_days" { type = number }
+# Whether this module owns the metastore's PostgreSQL private DNS zone, rather
+# than reusing one the root already has. Passed in as its own flag instead of
+# being derived from private_dns_zone_id: that ID is a resource attribute on the
+# external-Postgres path, unknown until apply, and a count cannot read one. The
+# root computes this from variables alone, the same way it does for the shared
+# blob zone.
+variable "create_private_dns_zone" {
+  type = bool
+}
+
 variable "private_dns_zone_id" {
   type     = string
   default  = null

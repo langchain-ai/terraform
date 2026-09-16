@@ -7,7 +7,19 @@
 # variable. Terraform reports every validation error in one pass, so a group
 # costs one plan and still names the variable whose expected failure is missing.
 
-mock_provider "azurerm" {}
+# azurerm_client_config feeds the metastore's Entra administrator tenant_id, and
+# the provider validates it as a UUID. The generated mock is a random string, so
+# planning the SmithDB path fails on the fixture rather than on the module.
+mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "00000000-0000-0000-0000-000000000000"
+      client_id       = "00000000-0000-0000-0000-000000000000"
+      object_id       = "00000000-0000-0000-0000-000000000000"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
 mock_provider "azapi" {}
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
@@ -116,13 +128,6 @@ run "smithdb_cache_throughput_rejects_more_than_a_quarter_mbps_per_iops" {
 # passes with these inputs, so a failure here can only be the zone rule.
 run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
   command = plan
-
-  # module.smithdb cannot be planned against a mock provider: its private DNS
-  # zone count reads an attribute the mock leaves unknown. The precondition
-  # under test reads only variables, so override the module to reach it.
-  override_module {
-    target = module.smithdb
-  }
 
   variables {
     enable_smithdb     = true

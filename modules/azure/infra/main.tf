@@ -798,7 +798,11 @@ module "smithdb" {
   metastore_sku_name              = var.smithdb_metastore_sku_name
   metastore_storage_mb            = var.smithdb_metastore_storage_mb
   metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
-  private_dns_zone_id             = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  # The flag is derived from a variable so the module's count can read it. The ID
+  # beside it is a resource attribute and is unknown until apply on the external
+  # path, which is why the two are passed separately.
+  create_private_dns_zone = var.postgres_source != "external"
+  private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
 
   storage_account_name = local.smithdb_storage_name
   container_name       = var.smithdb_storage_container_name
