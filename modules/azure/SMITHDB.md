@@ -44,7 +44,9 @@ The Terraform root creates:
   flag is on, so a steady-state install leaves the identity able to reach
   nothing but its own account; and
 - a Premium SSD v2 StorageClass for per-pod cache volumes. SmithDB workloads
-  schedule on ordinary AKS nodes by default.
+  schedule on ordinary AKS nodes by default. The StorageClass is cluster-scoped,
+  so its name carries the deployment suffix unless
+  `smithdb_cache_storage_class_name` names one.
 
 By default, the same SmithDB workload identity authenticates to PostgreSQL
 through Microsoft Entra ID and is configured as the Flexible Server's Entra
@@ -122,19 +124,37 @@ a VNet address through the `privatelink.blob.core.windows.net` zone. Supply
 links a zone name to a VNet once, so creating a second one fails.
 
 PostgreSQL uses the delegated database subnet and the VNet's private PostgreSQL
-DNS zone. SmithDB increases AKS subnet IP demand; the root module includes both
-node pools in its capacity check. Each Private Endpoint takes one further
-address in its subnet.
+DNS zone. Each Private Endpoint takes one further address in its subnet.
 
-`Standard_D16s_v5` is the default cache-workload VM. Terraform creates the
-`smithdb-cache-premium-v2` StorageClass with 7,000 IOPS and 1,000 MB/s and the
-generated Helm overrides select it for SmithDB's per-pod cache PVCs. Premium
-SSD v2 must be available in the cluster's region and zones.
+SmithDB pods run on the default node pool, so they consume its pod and IP
+budget rather than adding a pool of their own. The subnet capacity check counts
+`(default_node_pool_max_count + 1) * (default_node_pool_max_pods + 1)`, which is
+a per-node reservation and already covers anything scheduled onto those nodes.
+What SmithDB does change is how much of that budget is in use, so size the
+default pool for the SmithDB pod count the chart adds and raise
+`default_node_pool_max_count` before enabling ingestion. The capacity check then
+follows the new maximum on its own. Use `additional_node_pools` with chart
+scheduling overrides when SmithDB needs isolation from the rest of LangSmith.
 
-For an attached AKS cluster, Terraform creates the SmithDB pools only when
-`existing_cluster_node_pools_managed = true`. Otherwise create equivalent pools
-outside this root, with the labels and taints shown in `infra/main.tf`, before
-enabling SmithDB in Helm.
+Terraform creates the cache StorageClass with 7,000 IOPS and 1,000 MB/s. The
+generated Helm overrides select it for SmithDB's per-pod cache PVCs.
+`smithdb_cache_disk_iops` and `smithdb_cache_disk_throughput_mbps` tune it,
+within two Azure limits: throughput cannot exceed 0.25 MB/s per provisioned IOPS
+(the root module rejects that combination at plan time), and IOPS is capped by
+volume size, which rises 500 IOPS per GiB above 6 GiB. Cache volume size is a
+chart value, so Terraform cannot check the second limit.
+
+Premium SSD v2 is what makes zones a requirement rather than a preference. In
+most regions that offer availability zones, a Premium SSD v2 disk attaches only
+to a zonal VM, so `enable_smithdb = true` requires `availability_zones` to name
+at least one zone. The root module refuses the combination at plan time, because
+AKS zones apply at creation and carry `ignore_changes` - recovering from a
+nonzonal pool means rebuilding it, not editing a variable. A
+[small set of regions](https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments)
+does support nonzonal Premium SSD v2.
+
+On an attached AKS cluster, set `availability_zones` to the zones the existing
+nodes already use, and confirm those nodes are zonal before enabling SmithDB.
 
 ## Pre-apply review
 
@@ -148,7 +168,12 @@ Before a real apply, also confirm:
 
 - PostgreSQL 18 and the selected Flexible Server SKU are available in the
   chosen region;
-- Premium SSD v2 is available in the target region and zones;
-- the AKS subnet has room for both pools at maximum scale; and
+- Premium SSD v2 is available in the chosen region, and the AKS nodes are zonal.
+  In most regions that offer availability zones a Premium SSD v2 disk attaches
+  only to a zonal VM, so `availability_zones` has to name the zones the nodes
+  run in. Zones apply at cluster creation, so an existing nonzonal pool needs
+  rebuilding rather than a variable change;
+- the default node pool is sized for the SmithDB pods the chart adds, and the
+  AKS subnet holds every pool at maximum scale; and
 - the chart PR's Azure provider values and workload-identity annotations match
   the outputs listed above.

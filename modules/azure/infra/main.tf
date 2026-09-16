@@ -61,6 +61,12 @@ locals {
   langsmith_release_fullname = strcontains(var.langsmith_release_name, "langsmith") ? var.langsmith_release_name : "${var.langsmith_release_name}-langsmith"
   smithdb_service_account    = "${local.langsmith_release_fullname}-smithdb"
 
+  # A StorageClass is cluster-scoped, unlike everything else this module creates
+  # for SmithDB, so two deployments sharing a cluster collide on a fixed name and
+  # the second apply fails on an object the first one owns. Suffix it the same
+  # way as the namespaced resources above.
+  smithdb_cache_storage_class = var.smithdb_cache_storage_class_name != "" ? var.smithdb_cache_storage_class_name : "smithdb-cache-premium-v2${local.name_suffix}${local.uniq_suffix}"
+
   # Key Vault name: max 24 chars, globally unique.
   # Uses the user-supplied keyvault_name or derives from name_prefix. When
   # attaching to a customer-owned vault (create_keyvault = false) the name is
@@ -465,6 +471,34 @@ resource "terraform_data" "validate_network" {
     precondition {
       condition     = var.smithdb_ingestion_enabled || (!var.smithdb_migration_enabled && !var.smithdb_query_enabled)
       error_message = "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true."
+    }
+
+    # Azure allows 0.25 MB/s of throughput per provisioned IOPS, so the two
+    # variable ranges overlap on pairs Azure rejects: 3000 IOPS caps throughput
+    # at 750 MB/s, while 1200 passes its own range check. Without this the disk
+    # is refused when the CSI driver creates the PVC, well after a clean apply,
+    # and the pod reports a provisioning failure naming neither variable.
+    #
+    # Checked here rather than on the variable because a validation block that
+    # reads another variable cannot be evaluated while that variable is itself
+    # invalid, which would hide the throughput range error whenever the IOPS
+    # value is wrong too.
+    precondition {
+      condition     = var.smithdb_cache_disk_throughput_mbps <= var.smithdb_cache_disk_iops * 0.25
+      error_message = "smithdb_cache_disk_throughput_mbps (${var.smithdb_cache_disk_throughput_mbps}) cannot exceed 0.25 MB/s per provisioned IOPS. Azure caps a Premium SSD v2 at 0.25 * smithdb_cache_disk_iops, which is ${var.smithdb_cache_disk_iops * 0.25} MB/s at the configured ${var.smithdb_cache_disk_iops} IOPS. Raise smithdb_cache_disk_iops or lower the throughput."
+    }
+
+    # SmithDB caches sit on Premium SSD v2, and in most regions that offer
+    # availability zones a Premium SSD v2 disk only attaches to a zonal VM. An
+    # empty availability_zones asks Azure to place the pool, which can leave the
+    # nodes nonzonal and the cache PVCs unschedulable - a failure that appears
+    # after a clean apply, as SmithDB pods pending on a disk attach error.
+    # default_node_pool[0].zones also carries ignore_changes and applies at
+    # creation, so recovering from it means rebuilding the pool rather than
+    # editing a variable. Refuse at plan time instead.
+    precondition {
+      condition     = !var.enable_smithdb || length(var.availability_zones) > 0
+      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"]. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips
@@ -1004,7 +1038,7 @@ module "k8s_bootstrap" {
   smithdb_metastore_database       = var.enable_smithdb ? module.smithdb[0].metastore_database : ""
   smithdb_metastore_username       = var.enable_smithdb ? module.smithdb[0].metastore_username : ""
   smithdb_metastore_password       = var.smithdb_metastore_admin_password
-  smithdb_cache_storage_class_name = var.smithdb_cache_storage_class_name
+  smithdb_cache_storage_class_name = local.smithdb_cache_storage_class
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
 

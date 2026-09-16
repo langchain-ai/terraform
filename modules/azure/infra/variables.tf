@@ -684,13 +684,13 @@ variable "smithdb_storage_container_name" {
 
 variable "smithdb_cache_storage_class_name" {
   type        = string
-  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes."
-  default     = "smithdb-cache-premium-v2"
+  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes. A StorageClass is cluster-scoped, so the default empty value derives a per-deployment name from name_prefix and unique_resource_names. Set it only to adopt a specific name."
+  default     = ""
 }
 
 variable "smithdb_cache_disk_iops" {
   type        = number
-  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume."
+  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume. Azure also caps this by volume size: 3000 IOPS is free, and above 6 GiB the ceiling rises 500 IOPS per GiB, so the default needs a cache volume of at least 14 GiB. Cache size is a chart value, so Terraform cannot check it here."
   default     = 7000
 
   validation {
@@ -701,9 +701,13 @@ variable "smithdb_cache_disk_iops" {
 
 variable "smithdb_cache_disk_throughput_mbps" {
   type        = number
-  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume."
+  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume. Azure allows 0.25 MB/s per provisioned IOPS, so raising this past 0.25 * smithdb_cache_disk_iops requires raising the IOPS too."
   default     = 1000
 
+  # The ratio against smithdb_cache_disk_iops is checked on
+  # terraform_data.validate_network, not here. A validation block that reads
+  # another variable cannot be evaluated while that variable is itself invalid,
+  # which would suppress this range error whenever the IOPS value is also wrong.
   validation {
     condition     = var.smithdb_cache_disk_throughput_mbps >= 125 && var.smithdb_cache_disk_throughput_mbps <= 1200
     error_message = "smithdb_cache_disk_throughput_mbps must be between 125 and 1200."

@@ -94,6 +94,44 @@ run "smithdb_cache_performance_rejects_out_of_range_values" {
   ]
 }
 
+# Both values are inside their own range here, and Azure still refuses the pair:
+# 3000 IOPS caps throughput at 750 MB/s. The ratio rule lives on
+# terraform_data.validate_network, so the failure is reported there rather than
+# against either variable. Every other precondition in that block passes with
+# these inputs, so the failure can only be the ratio.
+run "smithdb_cache_throughput_rejects_more_than_a_quarter_mbps_per_iops" {
+  command = plan
+
+  variables {
+    smithdb_cache_disk_iops            = 3000
+    smithdb_cache_disk_throughput_mbps = 1200
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# Not a variable validation: the rule couples enable_smithdb to
+# availability_zones, so it lives on terraform_data.validate_network with the
+# other SmithDB cross-variable rules. Every other precondition in that block
+# passes with these inputs, so a failure here can only be the zone rule.
+run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
+  command = plan
+
+  # module.smithdb cannot be planned against a mock provider: its private DNS
+  # zone count reads an attribute the mock leaves unknown. The precondition
+  # under test reads only variables, so override the module to reach it.
+  override_module {
+    target = module.smithdb
+  }
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
 run "identifier_is_rejected_outright" {
   command = plan
 
