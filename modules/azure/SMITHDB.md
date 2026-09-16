@@ -14,10 +14,16 @@ cache PVC contract. `deploy.sh` accepts `0.17.x` only. It rejects 0.16, because
 the Azure values are absent there, and it rejects 0.18, because the module pins
 a chart line and never crosses a minor on its own.
 
-Deploy a released 0.17 patch. A `~0.17.0` constraint resolves to the newest
-stable 0.17 release. Prereleases are not a supported configuration here: Helm
-skips them unless asked with `--devel`, and the Azure `deploy.sh` never passes
-that flag, so a prerelease version fails to resolve rather than installing.
+Deploy a released 0.17 patch, using a `~0.17.0` constraint to take the newest
+one. Helm leaves prereleases out of a constraint like that, so it selects only
+stable releases. Naming a prerelease exactly does install it, and that is not a
+supported configuration: an RC carries an unreleased application image, so a
+problem found on one cannot be told apart from a problem in the module.
+
+No stable 0.17 chart exists yet. `~0.17.0` therefore resolves to nothing today,
+and `helm search repo langchain/langsmith --versions` lists 0.17 only under
+`--devel`. Treat the constraint above as what to use once 0.17 ships, and
+enable SmithDB on Azure after that.
 
 **Module tag: still `v0.16.*`.** The Azure module ships on the 0.16 tag series,
 where the default chart pin is `~0.16.0`. So on a `v0.16.*` tag, SmithDB needs
