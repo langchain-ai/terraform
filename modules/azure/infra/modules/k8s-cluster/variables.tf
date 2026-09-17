@@ -86,9 +86,12 @@ variable "dns_service_ip" {
 
 variable "additional_node_pools" {
   type = map(object({
-    vm_size   = string
-    min_count = number
-    max_count = number
+    vm_size           = string
+    min_count         = number
+    max_count         = number
+    node_labels       = optional(map(string), {})
+    node_taints       = optional(list(string), [])
+    kubelet_disk_type = optional(string, "OS")
   }))
   description = "Node pools to be created"
   default = {

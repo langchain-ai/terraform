@@ -164,6 +164,15 @@ subnet, the `Microsoft.DBforPostgreSQL/flexibleServers` delegation on the
 Postgres subnet, and no delegation on the Redis subnet, which holds the Azure
 Managed Redis private endpoint.
 
+`storage_private_endpoint_enabled = true` changes the blob path on either
+create mode: both the trace-blob account and the SmithDB object store move
+behind Private Endpoints and their public endpoints are turned off. The
+endpoints go into the AKS subnet unless `storage_private_endpoint_subnet_id`
+names another, and the AKS subnet keeps its Key Vault service endpoint either
+way. On a VNet that already resolves `privatelink.blob.core.windows.net`, pass
+that zone through `storage_private_dns_zone_id` rather than letting Terraform
+create a second one.
+
 The Application Gateway and bastion subnets are the exception: Terraform carves
 those only out of a VNet it owns, so on this path they are supplied through
 `agic_subnet_id` and `bastion_subnet_id` or the feature is rejected at plan time.
@@ -243,8 +252,9 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 |------|---------|------|-----|-----|-----|---------|
 | default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
 | large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
-
 > ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
+>
+> SmithDB workloads schedule on ordinary AKS nodes by default. Cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. Use `additional_node_pools` and chart scheduling overrides when workload isolation is required.
 
 ---
 
@@ -258,6 +268,64 @@ Optional modules are count-controlled — 0 = disabled, 1 = enabled. Enable any 
 | `diagnostics` | `create_diagnostics = true` | Log Analytics workspace + diagnostic settings for AKS, Key Vault, and Blob. Required for production observability. |
 | `bastion` | `create_bastion = true` | Azure Bastion (Standard tier). Secure browser-based SSH to node VMs without a public IP. |
 | `dns` | `create_dns_zone = true` | Azure DNS zone + A record. Required for DNS-01 cert issuance with a custom domain. |
+| `smithdb` | `enable_smithdb = true` | SmithDB metastore, object store, workload identity, and node pools. Needs an explicit chart line — see [SMITHDB.md](SMITHDB.md#version-requirements). |
+
+### SmithDB (`enable_smithdb = true`)
+
+SmithDB gets its own metastore and object store rather than sharing the LangSmith
+application database or trace-blob account. `terraform apply` provisions the Azure
+and Kubernetes prerequisites only; the chart is a separate deploy pass.
+
+```
+Resource Group
+├── VNet
+│   ├── AKS subnet ──────────────── default + optional additional node pools
+│   └── Postgres delegated subnet ─ SmithDB metastore
+│                                   PostgreSQL Flexible Server 18 + "smithdb" database
+│                                   private DNS zone, no public endpoint
+├── SmithDB Storage Account
+│   └── private container ───────── object store
+├── LangSmith Storage Account ───── trace blobs (existing, migration source)
+└── SmithDB user-assigned identity
+    ├── federated to K8s ServiceAccount <release>-smithdb
+    ├── Entra administrator on the metastore server
+    ├── Storage Blob Data Contributor  → SmithDB Storage Account
+    └── Storage Blob Data Reader      → LangSmith Storage Account
+                                         (only while smithdb_migration_enabled = true)
+```
+
+By default the metastore authenticates through Microsoft Entra ID using that same
+identity, so there is no static database password. Supplying
+`TF_VAR_smithdb_metastore_admin_password` selects password authentication instead.
+Object-store access always uses Workload Identity, so no storage key or SAS token
+reaches Kubernetes or Terraform outputs.
+
+The trace-blob read grant is scoped to the migration window on purpose. It exists
+only while `smithdb_migration_enabled = true`, so a steady-state install leaves the
+SmithDB identity able to reach nothing but its own account. Because an Azure blob
+data-plane role change takes up to 10 minutes to become effective, the apply that
+creates the grant holds for 300 seconds in
+`time_sleep.smithdb_trace_blob_reader_propagation` before returning.
+
+Rollout is staged, and the variables enforce the order:
+
+```
+enable_smithdb            ──▶ infrastructure only, no traffic
+  smithdb_ingestion_enabled ──▶ dual-write to SmithDB and ClickHouse
+    smithdb_migration_enabled ──▶ historical backfill from trace blobs
+    smithdb_query_enabled     ──▶ reads served from SmithDB
+```
+
+Validation rules in `infra/main.tf` reject the invalid combinations: the three stage
+gates all require `enable_smithdb = true`, and both `smithdb_migration_enabled` and
+`smithdb_query_enabled` require `smithdb_ingestion_enabled = true`.
+
+One side effect worth knowing before a light deploy: `enable_smithdb = true` forces
+`create_postgres_subnet`, because the metastore is always an external Flexible Server.
+So an otherwise all-in-cluster deployment still gets the delegated Postgres subnet.
+
+For storage network posture, `storage_private_endpoint_enabled` covers the SmithDB
+object store and the LangSmith trace-blob account together, so the two never diverge.
 
 ---
 
