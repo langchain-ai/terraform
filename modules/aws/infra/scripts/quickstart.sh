@@ -682,7 +682,7 @@ fi
 _section "10. Helm Sizing Profile"
 
 echo ""
-printf "  ${DIM}Controls resource requests, replica counts, and HPA ranges for LangSmith pods.${RESET}\n"
+printf "  ${DIM}Controls resource requests, replica counts, and HPA/KEDA autoscaling for LangSmith pods.${RESET}\n"
 
 _ex_sizing=$(_existing "sizing_profile" "")
 _size_default=1
@@ -692,9 +692,9 @@ _size_default=1
 [[ "$PROFILE" == "dev" ]]                 && _size_default=1
 
 _ask_choice --default "$_size_default" "Sizing profile:" \
-  "dev        — single replica, minimal resources (dev/CI/demos)" \
-  "production — multi-replica, HPA autoscaling (~20 users, ~100 traces/sec)" \
-  "production-large — higher baselines (~50 users, ~1000 traces/sec)"
+  "dev        — small baseline with pod autoscaling (dev/CI/demos)" \
+  "production — multi-replica with pod autoscaling (~20 users, ~100 traces/sec)" \
+  "production-large — higher baselines with pod autoscaling (~50 users, ~1000 traces/sec)"
 
 case "$_CHOICE" in
   1) SIZING="dev" ;;
@@ -1061,7 +1061,7 @@ langsmith_namespace = "langsmith"
 
 #------------------------------------------------------------------------------
 # Helm Sizing Profile
-# Controls resource requests, replica counts, and HPA ranges.
+# Controls pod resources, replicas, and HPA/KEDA autoscaling
 # Docs: https://docs.langchain.com/langsmith/self-host-scale
 #------------------------------------------------------------------------------
 sizing_profile = "${SIZING}"
