@@ -65,6 +65,17 @@ AGENT_KEY=$(_kv "langsmith-agent-builder-encryption-key")
 INSIGHTS_KEY=$(_kv "langsmith-insights-encryption-key")
 POLLY_KEY=$(_kv "langsmith-polly-encryption-key")
 
+# The license key is the one value here that nothing has checked since the
+# setup-env prompt (#250). Written as it stands, an empty or malformed value
+# surfaces inside platform-backend at startup as a base64 error that names
+# neither licensing nor this script. Stop here instead, naming the secret.
+if ! _license_err=$(_validate_license_key "$LICENSE_KEY"); then
+  echo "  ERROR: langsmith-license-key in Key Vault '$KV_NAME' failed validation: ${_license_err}" >&2
+  echo "         Fix the vault first, then re-run this script:" >&2
+  echo "           ./scripts/manage-keyvault.sh set langsmith-license-key '<key>'" >&2
+  exit 1
+fi
+
 echo "  All secrets retrieved."
 echo ""
 
