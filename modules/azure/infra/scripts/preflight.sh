@@ -119,6 +119,8 @@ fi
 # reported as if it belonged to the service principal Terraform will use.
 PRINCIPAL_ID=""
 PRINCIPAL_IS_CALLER=1
+GROUPS_RESOLVED=0
+GROUP_IDS=""
 if [ -n "${ARM_CLIENT_ID:-}" ]; then
   PRINCIPAL_KIND="service principal from ARM_CLIENT_ID"
   PRINCIPAL_ID=$(az ad sp show --id "$ARM_CLIENT_ID" --query id -o tsv 2>/dev/null || echo "")
@@ -135,6 +137,13 @@ elif [ "$(az account show --query user.type -o tsv 2>/dev/null || echo "")" = "s
 else
   PRINCIPAL_KIND="signed-in user"
   PRINCIPAL_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
+  if [ -n "$PRINCIPAL_ID" ]; then
+    if GROUP_IDS=$(az ad user get-member-groups --id "$PRINCIPAL_ID" --query '[].id' -o tsv 2>/dev/null); then
+      GROUPS_RESOLVED=1
+    else
+      warn "Could not resolve transitive group membership — denied RBAC results will be treated as inconclusive"
+    fi
+  fi
 fi
 
 if [ -n "$PRINCIPAL_ID" ]; then
@@ -211,9 +220,9 @@ else
 
   # roleAssignments/write is the action that decides; the rest are what a
   # principal without broad resource access trips over first. checkAccess batches,
-  # so all of them cost one request per scope. The object ID goes through
-  # json.dumps into a file rather than onto a command line.
-  python3 - "$PRINCIPAL_ID" > "${RBAC_TMP}/body.json" <<'PY'
+  # so all of them cost one request per scope. The subject attributes go through
+  # json.dumps into a file rather than being interpolated into JSON by the shell.
+  python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
 ACTIONS = [
@@ -228,8 +237,12 @@ ACTIONS = [
     "Microsoft.Cache/redis/write",
 ]
 
+attributes = {"ObjectId": sys.argv[1]}
+if sys.argv[2] == "1":
+    attributes["Groups"] = [group for group in sys.argv[3].splitlines() if group]
+
 print(json.dumps({
-    "Subject": {"Attributes": {"ObjectId": sys.argv[1]}},
+    "Subject": {"Attributes": attributes},
     "Actions": [{"Id": action, "IsDataAction": False} for action in ACTIONS],
 }))
 PY
@@ -434,12 +447,22 @@ PY
         fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
   else
-    pass "checkAccess answered, so the verdicts below are this principal's effective access with deny assignments and ABAC conditions applied"
+    if [ "$GROUPS_RESOLVED" -eq 1 ]; then
+      pass "checkAccess answered with transitive group membership, deny assignments, and ABAC conditions applied"
+    else
+      warn "checkAccess answered without transitive group membership; denied results cover direct assignments only"
+    fi
     while IFS= read -r LINE; do
       case "$LINE" in
         pass\ *) pass "${LINE#pass }" ;;
         warn\ *) warn "${LINE#warn }" ;;
-        fail\ *) fail "${LINE#fail }" ;;
+        fail\ *)
+          if [ "$GROUPS_RESOLVED" -eq 1 ] || [[ "$LINE" == *"deny assignment"* ]]; then
+            fail "${LINE#fail }"
+          else
+            warn "${LINE#fail } This result is inconclusive without transitive group membership."
+          fi
+          ;;
         *) [ -z "$LINE" ] || warn "$LINE" ;;
       esac
     done <<EOF
