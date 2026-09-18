@@ -628,6 +628,20 @@ if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   "${VALUES_ARGS[@]}" \
   --timeout 20m; then
   echo "ERROR: Helm upgrade failed." >&2
+  echo "=== Helm hook diagnostics ===" >&2
+  kubectl get jobs,pods -n "$NAMESPACE" -o wide >&2 || true
+  kubectl describe job -n "$NAMESPACE" \
+    "${RELEASE_NAME}-smithdb-metastore-migration" >&2 || true
+  kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp >&2 || true
+  while IFS= read -r pod; do
+    [[ -n "$pod" ]] || continue
+    kubectl describe -n "$NAMESPACE" "$pod" >&2 || true
+    kubectl logs -n "$NAMESPACE" "$pod" --all-containers --prefix >&2 || true
+  done < <(
+    kubectl get pods -n "$NAMESPACE" \
+      -l "job-name=${RELEASE_NAME}-smithdb-metastore-migration" \
+      -o name 2>/dev/null || true
+  )
   exit 1
 fi
 
