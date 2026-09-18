@@ -308,7 +308,27 @@ fi
 echo ""
 
 pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "$_pg_prompt" optional "$_prev_pg")
-license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "$_license_prompt" "" "$_prev_license")
+# The license key is the one input nothing downstream inspects until
+# platform-backend starts (#250), so its shape is checked here, where the
+# operator still has the right value to hand. Three attempts, like _prompt.
+# A rejected value is not offered again: a bad key kept in secrets.auto.tfvars
+# or in Key Vault would otherwise come back as the default on every run.
+_license_attempt=0
+while :; do
+  license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "$_license_prompt" "" "$_prev_license")
+  if _license_err=$(_validate_license_key "$license_key"); then
+    break
+  fi
+  echo "  ${_license_err}" >&2
+  _license_attempt=$((_license_attempt + 1))
+  if [[ ! -t 0 || $_license_attempt -ge 3 ]]; then
+    echo "ERROR: LANGSMITH_LICENSE_KEY was not accepted." >&2
+    exit 1
+  fi
+  unset LANGSMITH_LICENSE_KEY
+  _prev_license=""
+  _license_prompt="LangSmith license key      "
+done
 admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL" "$_email_prompt" visible "$_prev_email")
 
 echo ""
