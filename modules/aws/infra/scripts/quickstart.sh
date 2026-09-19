@@ -916,6 +916,13 @@ if [[ "$GATEWAY_MODE" == "istio" && "$TLS_MODE" == "1" ]]; then
   fi
 fi
 
+if [[ "$UPDATE_MODE" == "true" && "$_ex_cert_manager" == "true" && "$CREATE_CERT_MANAGER" != "true" ]]; then
+  echo ""
+  _yellow "WARNING"; printf ": this disables the saved Let's Encrypt DNS-01 setup.\n"
+  printf "  Terraform will remove its cert-manager IAM role and DNS-01 certificate resources.\n"
+  _confirm_or_abort "Continue with this HTTPS change?" "n"
+fi
+
 if [[ "$TLS_SOURCE" == "none" && "$PROFILE" == "prod" ]]; then
   echo ""
   _yellow "WARNING"; printf ": Running production without TLS is not recommended.\n"
