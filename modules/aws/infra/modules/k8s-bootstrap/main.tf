@@ -28,6 +28,8 @@ resource "kubernetes_secret" "postgres" {
   # External: connection_url only (chart reads it directly).
   # In-cluster: also include postgres_db/user/password so the Helm chart's
   # in-cluster StatefulSet can initialize the database without manual patching.
+  # Updating data does not restart LangSmith pods. After apply, run
+  # helm/scripts/deploy.sh or kubectl rollout restart so pods load the new URL.
   data = var.postgres_in_cluster_pass != "" ? {
     connection_url    = var.postgres_connection_url
     postgres_db       = var.postgres_in_cluster_db

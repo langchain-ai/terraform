@@ -704,10 +704,9 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 
 locals {
-  # Admin base URL (no database) for the shared RDS instance. Guarded by the
-  # external check so module.postgres[0] is only referenced when it exists.
+  # Encoded admin URL for the shared RDS instance, without a database name.
   standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${var.postgres_password}@${module.postgres[0].address}:${module.postgres[0].port}"
+    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
   ) : ""
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
@@ -722,6 +721,14 @@ locals {
   standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
   standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
   standalone_insights_redis_url = "${local.standalone_redis_base}/${local.redis_db_insights}"
+}
+
+# Recreate standalone_db Jobs when the encoded admin URL changes. Kubernetes
+# Jobs do not rerun when Secret data changes, so a Job that failed on a broken
+# (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
+resource "terraform_data" "postgres_connection_url_revision" {
+  count = var.postgres_source == "external" ? 1 : 0
+  input = sha256(local.postgres_connection_url)
 }
 
 # ── Per-feature logical database creation (in-cluster psql Job) ───────────────
@@ -795,12 +802,20 @@ resource "kubernetes_job_v1" "standalone_db" {
     update = "5m"
   }
 
+  lifecycle {
+    replace_triggered_by = [
+      terraform_data.postgres_connection_url_revision[0]
+    ]
+  }
+
   depends_on = [module.postgres, module.k8s_bootstrap]
 }
 
 # ── Per-feature connection-URL Secrets ────────────────────────────────────────
 # Keys postgres_connection_url / redis_connection_url match what the chart's
 # standalone fleet/polly/insights blocks read via existingSecretName.
+# Secret data updates in place. LangSmith pods keep the previous env until
+# helm/scripts/deploy.sh or kubectl rollout restart.
 
 resource "kubernetes_secret" "fleet_postgres" {
   count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
