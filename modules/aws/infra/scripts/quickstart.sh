@@ -58,8 +58,8 @@ _ask() {
     fi
     read -r _REPLY
     _REPLY="${_REPLY:-$default}"
-    if [[ "$_REPLY" =~ [\`\$\!\\] ]]; then
-      _red "  ERROR: value must not contain \`, \$, !, or \\ characters. Try again."
+    if [[ "$_REPLY" =~ [\`\"\$\!\\] ]]; then
+      _red "  ERROR: enter a plain value without quotes or command characters. Try again."
       continue
     fi
     break
@@ -1526,7 +1526,11 @@ enable_sandboxes = ${ENABLE_SANDBOXES}
 TFVARS
 
 if command -v terraform >/dev/null 2>&1; then
-  terraform fmt "$OUTPUT" >/dev/null
+  if ! terraform fmt "$OUTPUT" >/dev/null; then
+    _red "ERROR"; printf ": %s was written, but Terraform could not format it.\n" "$OUTPUT_DISPLAY"
+    printf "  Fix the errors above, then run from modules/aws: terraform fmt infra/terraform.tfvars\n"
+    exit 1
+  fi
 else
   _yellow "WARNING"; printf ": Terraform is not installed, so %s was not formatted.\n" "$OUTPUT_DISPLAY"
   printf "  Run from modules/aws: terraform fmt infra/terraform.tfvars\n"
