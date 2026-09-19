@@ -548,7 +548,7 @@ All commands are run from `terraform/aws/`. Run `make help` for a quick summary.
 
 ### `make quickstart`
 
-**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. During updates, the wizard shows the existing name prefix, environment, and AWS region but keeps them unchanged because they identify the deployment and its SSM secrets. Other prompts pre-select their current values.
+**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. During updates, the wizard keeps the existing name prefix, environment, and AWS region unchanged because they identify the deployment and its SSM secrets. It also keeps the custom domain unchanged because changing it requires a guided DNS and certificate migration. Other prompts pre-select their current values.
 
 Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, add-ons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu marks the current or default option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
 
