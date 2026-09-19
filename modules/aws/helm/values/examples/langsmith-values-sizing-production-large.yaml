@@ -61,12 +61,10 @@ ingestQueue:
         cpu: "4"
         memory: "8Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 6
-      maxReplicas: 24
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 6
+      maxReplicaCount: 24
 
 queue:
   deployment:
@@ -78,12 +76,10 @@ queue:
         cpu: "4"
         memory: "8Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 6
-      maxReplicas: 24
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 6
+      maxReplicaCount: 24
 
 frontend:
   deployment:

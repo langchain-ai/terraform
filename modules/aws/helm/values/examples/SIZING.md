@@ -6,8 +6,12 @@ Four sizing profiles for different deployment scenarios. Each profile has a corr
 |---|---|---|
 | **Minimum** | Cost parking, idle standby, CI smoke tests, single-user demos | `langsmith-values-sizing-minimum.yaml` |
 | **Dev** | Local dev, integration tests, demos, POCs — a developer actually using the system | `langsmith-values-sizing-dev.yaml` |
-| **Production** | Any environment serving real traffic, multi-replica with HPA | `langsmith-values-sizing-production.yaml` |
+| **Production** | Any environment serving real traffic, multi-replica with HPA/KEDA | `langsmith-values-sizing-production.yaml` |
 | **Production Large** | High-volume (~50 concurrent users, ~1,000 traces/sec), elevated baselines | `langsmith-values-sizing-production-large.yaml` |
+
+Dev and production profiles use KEDA for `queue` and `ingestQueue` (queue target: 10), and HPA for other core services. Node autoscaling is configured separately.
+
+`make init-values` preserves existing sizing files; merge template updates manually. When disabling an autoscaler, also set the component's fixed replica count.
 
 ### Product workloads (Insights, LangSmith Chat (formerly Polly), Fleet)
 
@@ -37,8 +41,7 @@ a small node, but enabling Fleet, Chat, and Insights raises the rendered minimum
 to 8.31 vCPU and 18.3Gi of requested memory before in-cluster databases. It will
 break under meaningful traffic.
 
-Host-backend remains HPA-managed but is capped at one replica; Fleet API retains
-its add-on HPA range of one to five replicas.
+Host-backend and Fleet API server HPAs, plus operator-managed KEDA, are disabled. SmithDB HPAs remain unchanged.
 
 | Component | Minimum Replicas | CPU Request | CPU Limit | Memory Request | Memory Limit |
 |---|---:|---:|---:|---:|---:|
@@ -80,9 +83,7 @@ its add-on HPA range of one to five replicas.
 
 ## Dev
 
-Enough headroom for a developer to run traces, test agents, and use the playground
-without constant OOM kills. Core components start at one replica; host-backend and
-Fleet API retain their add-on HPAs (minimum 1, maximum 5).
+Enough headroom for a developer to run traces, test agents, and use the playground without constant OOM kills. Core components start at one replica; maximums follow `ceil(production_max² / production_large_max)`. Queue KEDA scales 1–5; scaling thresholds use chart/add-on defaults.
 
 | Component | Minimum Replicas | CPU Request | CPU Limit | Memory Request | Memory Limit |
 |---|---:|---:|---:|---:|---:|
@@ -124,10 +125,9 @@ Fleet API retain their add-on HPAs (minimum 1, maximum 5).
 
 ## Production
 
-Multi-replica with HPA autoscaling. Recommended for any environment serving real traffic.
+Multi-replica with HPA/KEDA autoscaling. Recommended for any environment serving real traffic.
 
-Profile-defined HPAs target **50% CPU** and **80% memory** utilization. Fleet API
-keeps the add-on overlay's **70% CPU** target.
+Core autoscalers target **50% CPU** and **80% memory** utilization. Fleet API keeps the add-on overlay's **70% CPU** target.
 
 | Component | Min Replicas | Max Replicas | CPU Request | CPU Limit | Memory Request | Memory Limit |
 |---|---:|---:|---:|---:|---:|---:|
@@ -171,8 +171,7 @@ keeps the add-on overlay's **70% CPU** target.
 
 High-volume deployments with elevated baselines. Based on the High/High pattern from the [LangSmith scale guide](https://docs.langchain.com/langsmith/self-host-scale): ~50 concurrent users, ~1,000 traces/sec.
 
-Profile-defined HPAs target **50% CPU** and **80% memory** utilization. Fleet API
-keeps the add-on overlay's **70% CPU** target.
+Core autoscalers target **50% CPU** and **80% memory** utilization. Fleet API keeps the add-on overlay's **70% CPU** target.
 
 | Component | Min Replicas | Max Replicas | CPU Request | CPU Limit | Memory Request | Memory Limit |
 |---|---:|---:|---:|---:|---:|---:|
