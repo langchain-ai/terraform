@@ -9,6 +9,11 @@ output "postgres_id" {
   value       = azurerm_postgresql_flexible_server.db.id
 }
 
+output "private_dns_zone_id" {
+  description = "Resource ID of the private PostgreSQL DNS zone."
+  value       = azurerm_private_dns_zone.db_dns_zone.id
+}
+
 output "connection_url" {
   description = "The connection URL for the PostgreSQL Flexible Server"
   value       = "postgresql://${local.postgres_login_uri_encoded}:${local.postgres_password_uri_encoded}@${azurerm_postgresql_flexible_server.db.name}.postgres.database.azure.com:5432/${var.database_name}"

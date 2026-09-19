@@ -7,7 +7,19 @@
 # variable. Terraform reports every validation error in one pass, so a group
 # costs one plan and still names the variable whose expected failure is missing.
 
-mock_provider "azurerm" {}
+# azurerm_client_config feeds the metastore's Entra administrator tenant_id, and
+# the provider validates it as a UUID. The generated mock is a random string, so
+# planning the SmithDB path fails on the fixture rather than on the module.
+mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "00000000-0000-0000-0000-000000000000"
+      client_id       = "00000000-0000-0000-0000-000000000000"
+      object_id       = "00000000-0000-0000-0000-000000000000"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
 mock_provider "azapi" {}
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
@@ -17,6 +29,7 @@ mock_provider "time" {}
 variables {
   subscription_id         = "00000000-0000-0000-0000-000000000000"
   postgres_admin_password = "fixture-not-a-real-secret-Aa1"
+  enable_smithdb          = false
 }
 
 run "enums_reject_an_unlisted_value" {
@@ -77,6 +90,51 @@ run "name_prefix_rejects_a_trailing_hyphen" {
   }
 
   expect_failures = [var.name_prefix]
+}
+
+run "smithdb_cache_performance_rejects_out_of_range_values" {
+  command = plan
+
+  variables {
+    smithdb_cache_disk_iops            = 2999
+    smithdb_cache_disk_throughput_mbps = 1201
+  }
+
+  expect_failures = [
+    var.smithdb_cache_disk_iops,
+    var.smithdb_cache_disk_throughput_mbps,
+  ]
+}
+
+# Both values are inside their own range here, and Azure still refuses the pair:
+# 3000 IOPS caps throughput at 750 MB/s. The ratio rule lives on
+# terraform_data.validate_network, so the failure is reported there rather than
+# against either variable. Every other precondition in that block passes with
+# these inputs, so the failure can only be the ratio.
+run "smithdb_cache_throughput_rejects_more_than_a_quarter_mbps_per_iops" {
+  command = plan
+
+  variables {
+    smithdb_cache_disk_iops            = 3000
+    smithdb_cache_disk_throughput_mbps = 1200
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# Not a variable validation: the rule couples enable_smithdb to
+# availability_zones, so it lives on terraform_data.validate_network with the
+# other SmithDB cross-variable rules. Every other precondition in that block
+# passes with these inputs, so a failure here can only be the zone rule.
+run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+  }
+
+  expect_failures = [terraform_data.validate_network]
 }
 
 run "identifier_is_rejected_outright" {

@@ -158,6 +158,18 @@
   ],
   "eks": [
     {
+      "Sid": "SystemTemplateDelete",
+      "Effect": "Allow",
+      "Action": "ec2:DeleteLaunchTemplate",
+      "Resource": "arn:aws:ec2:*:${account_id}:launch-template/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/managed_by": "langsmith",
+          "aws:ResourceTag/type": "system-node"
+        }
+      }
+    },
+    {
       "Sid": "EKSClusterDelete",
       "Effect": "Allow",
       "Action": ["eks:DeleteCluster"],
