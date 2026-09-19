@@ -328,7 +328,10 @@ MANIFEST
     EOT
   }
 
-  depends_on = [terraform_data.letsencrypt_cluster_issuer_dns01]
+  depends_on = [
+    terraform_data.letsencrypt_cluster_issuer_dns01,
+    helm_release.istio_base,
+  ]
 }
 
 # Step 3: Patch Istio Gateway for HTTPS + HTTP redirect.
@@ -412,7 +415,10 @@ MANIFEST
     EOT
   }
 
-  depends_on = [terraform_data.langsmith_certificate]
+  depends_on = [
+    terraform_data.langsmith_certificate,
+    terraform_data.istio_gateway_resource,
+  ]
 }
 
 # ── Envoy Gateway (Kubernetes Gateway API controller) ──────────────────────
