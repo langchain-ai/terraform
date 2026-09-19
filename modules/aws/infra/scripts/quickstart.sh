@@ -147,6 +147,10 @@ _ask_choice() {
       printf "  Selected: %s\n" "$(_green "$selected_option")"
       return
     fi
+    if [[ ! -t 0 ]]; then
+      _red "  Invalid selection."
+      exit 1
+    fi
     _red "  Invalid selection. Try again."
   done
 }
