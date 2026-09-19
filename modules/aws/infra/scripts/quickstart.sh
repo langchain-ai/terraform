@@ -866,7 +866,7 @@ if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
 
   _selected_dns_create_zone="true"
   [[ "$_CHOICE" == "2" ]] && _selected_dns_create_zone="false"
-  if [[ "$UPDATE_MODE" == "true" ]] && \
+  if [[ "$UPDATE_MODE" == "true" && -n "$_ex_domain" && -z "$_ex_acm" ]] && \
      [[ "$_selected_dns_create_zone" != "$_ex_dns_create_zone" ]]; then
     echo ""
     _yellow "WARNING"; printf ": this changes who manages the hosted zone.\n"
