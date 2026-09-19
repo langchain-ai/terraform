@@ -705,6 +705,8 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 
 locals {
   # Encoded admin URL for the shared RDS instance, without a database name.
+  # Spaces are rejected by postgres_password validation, so urlencode() cannot
+  # emit "+" for a space in URI userinfo.
   standalone_pg_base = var.postgres_source == "external" ? (
     "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
   ) : ""
@@ -814,8 +816,8 @@ resource "kubernetes_job_v1" "standalone_db" {
 # ── Per-feature connection-URL Secrets ────────────────────────────────────────
 # Keys postgres_connection_url / redis_connection_url match what the chart's
 # standalone fleet/polly/insights blocks read via existingSecretName.
-# Secret data updates in place. LangSmith pods keep the previous env until
-# helm/scripts/deploy.sh or kubectl rollout restart.
+# Secret data updates in place. Restart the Helm release's deployments after
+# apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
   count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
