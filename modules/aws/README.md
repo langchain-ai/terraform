@@ -548,9 +548,9 @@ All commands are run from `terraform/aws/`. Run `make help` for a quick summary.
 
 ### `make quickstart`
 
-**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. When `terraform.tfvars` already exists the wizard pre-selects your current values at every prompt — press Enter to keep them, or type a different number to change.
+**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. During updates, the wizard shows the existing name prefix, environment, and AWS region but keeps them unchanged because they identify the deployment and its SSM secrets. Other prompts pre-select their current values.
 
-Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, addons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu shows a `(default)` marker on the pre-selected option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
+Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, add-ons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu marks the current or default option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
 
 ```bash
 make quickstart
@@ -924,7 +924,7 @@ These scripts are not exposed as `make` targets but are used internally by the s
 
 ### `infra/scripts/_common.sh`
 
-Shared library sourced by every script. Provides:
+Shared library sourced by scripts that need its shared helpers. Provides:
 - `_parse_tfvar <key>` — extracts a value from `terraform.tfvars` using sed
 - `_tfvar_is_true <key>` — returns 0 if a variable is set to `true` in tfvars
 - `INFRA_DIR` — absolute path to `infra/`, resolved from the sourcing script's location
