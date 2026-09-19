@@ -311,7 +311,7 @@ if [[ -f "$OUTPUT" && "$FRESH" == "false" ]]; then
   printf "  $(_green "✓") QuickStart-managed settings will be pre-filled.\n"
   printf "  $(_yellow "!") Hand-written settings may not carry over.\n"
   printf "  $(_green "✓") The original file will be backed up to: ${DIM}%s${RESET}\n" "$OUTPUT_BACKUP_DISPLAY"
-  _ask_choice "What would you like to do?" \
+  _ask_choice --default 1 "What would you like to do?" \
     "Update — re-run wizard using the existing values" \
     "Start fresh — overwrite everything" \
     "Cancel"
