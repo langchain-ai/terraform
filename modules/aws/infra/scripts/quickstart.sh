@@ -200,6 +200,15 @@ _ask_name_prefix() {
 
 _section() { echo ""; printf "${BOLD}── %s ──${RESET}\n" "$1"; }
 
+_abort_unchanged() {
+  echo "Aborted without changing terraform.tfvars."
+  exit 0
+}
+
+_confirm_or_abort() {
+  _ask_yn "$@" || _abort_unchanged
+}
+
 # Read a value from the existing terraform.tfvars, returning a default if missing.
 _existing() {
   local key="$1" fallback="${2:-}"
@@ -245,10 +254,7 @@ _confirm_storage_change() {
   echo ""
   _yellow "WARNING"; printf ": changing %s from %s to %s does not move existing data.\n" "$service" "$current" "$selected"
   printf "  Terraform may remove data-bearing resources or leave the old data behind.\n"
-  if ! _ask_yn "Continue with this storage change?" "n"; then
-    echo "Aborted without changing terraform.tfvars."
-    exit 0
-  fi
+  _confirm_or_abort "Continue with this storage change?" "n"
 }
 
 # ── Conflict validation ───────────────────────────────────────────────────────
@@ -661,10 +667,7 @@ if [[ "$UPDATE_MODE" == "true" && "$_ex_smithdb" == "true" && "$ENABLE_SMITHDB" 
   echo ""
   _yellow "WARNING"; printf ": disabling SmithDB may remove its metastore, S3 bucket, and storage nodes.\n"
   printf "  QuickStart does not move or preserve the data stored in those resources.\n"
-  if ! _ask_yn "Continue with disabling SmithDB?" "n"; then
-    echo "Aborted without changing terraform.tfvars."
-    exit 0
-  fi
+  _confirm_or_abort "Continue with disabling SmithDB?" "n"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -796,10 +799,7 @@ if [[ "$UPDATE_MODE" == "true" && -n "$_ex_acm" && "$TLS_SOURCE" != "acm" ]]; th
   echo ""
   _yellow "WARNING"; printf ": this removes the saved external ACM certificate ARN.\n"
   printf "  With a custom domain, Terraform may start managing certificate and DNS resources.\n"
-  if ! _ask_yn "Continue only if you have planned that migration?" "n"; then
-    echo "Aborted without changing terraform.tfvars."
-    exit 0
-  fi
+  _confirm_or_abort "Continue only if you have planned that migration?" "n"
 fi
 
 # ACM certificate ownership
@@ -831,10 +831,7 @@ if [[ "$TLS_SOURCE" == "acm" ]]; then
       else
         printf "  Terraform will create a certificate and may also create a hosted zone.\n"
       fi
-      if ! _ask_yn "Continue only if you have planned that migration?" "n"; then
-        echo "Aborted without changing terraform.tfvars."
-        exit 0
-      fi
+      _confirm_or_abort "Continue only if you have planned that migration?" "n"
     fi
 
     if [[ "$_CHOICE" == "2" ]]; then
@@ -875,10 +872,7 @@ if [[ -n "$DOMAIN" && -z "$ACM_ARN" ]]; then
     echo ""
     _yellow "WARNING"; printf ": this changes who manages the hosted zone.\n"
     printf "  Terraform may create or remove the current zone and its DNS records.\n"
-    if ! _ask_yn "Continue only if you have planned the DNS and state migration?" "n"; then
-      echo "Aborted without changing terraform.tfvars."
-      exit 0
-    fi
+    _confirm_or_abort "Continue only if you have planned the DNS and state migration?" "n"
   fi
 
   if [[ "$_selected_dns_create_zone" == "false" ]]; then
@@ -1305,10 +1299,7 @@ _show_summary() {
 _section "Review your configuration"
 _show_summary
 echo ""
-if ! _ask_yn "Write $OUTPUT_DISPLAY?" "y"; then
-  echo "Aborted without changing terraform.tfvars."
-  exit 0
-fi
+_confirm_or_abort "Write $OUTPUT_DISPLAY?" "y"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Write terraform.tfvars
@@ -1574,9 +1565,10 @@ if [[ -n "$DOMAIN" && -z "$ACM_ARN" && "$TLS_SOURCE" == "none" && "$CREATE_CERT_
   echo ""
 fi
 
+printf "  4. Deploy LangSmith:\n"
+printf "     ${CYAN}make init-values && make deploy${RESET}\n"
+
 if [[ "$GATEWAY_MODE" == "istio" ]]; then
-  printf "  4. Deploy LangSmith:\n"
-  printf "     ${CYAN}make init-values && make deploy${RESET}\n"
   echo ""
   printf "  ${DIM}Note: terraform apply installs Istio and creates the Gateway/TargetGroupBinding.${RESET}\n"
   printf "  ${DIM}No separate controller install step needed — handled by k8s-bootstrap.${RESET}\n"
@@ -1584,15 +1576,11 @@ if [[ "$GATEWAY_MODE" == "istio" ]]; then
     printf "  ${DIM}Terraform also installs cert-manager and configures DNS-01 through Route 53.${RESET}\n"
   fi
 elif [[ "$GATEWAY_MODE" == "nginx" ]]; then
-  printf "  4. Deploy LangSmith:\n"
-  printf "     ${CYAN}make init-values && make deploy${RESET}\n"
   echo ""
   printf "  ${DIM}Note: terraform apply installs NGINX ingress-nginx chart and creates a${RESET}\n"
   printf "  ${DIM}TargetGroupBinding to wire the ALB target group to the NGINX controller.${RESET}\n"
   printf "  ${DIM}No separate controller install step needed — handled by k8s-bootstrap.${RESET}\n"
 elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
-  printf "  4. Deploy LangSmith:\n"
-  printf "     ${CYAN}make init-values && make deploy${RESET}\n"
   echo ""
   printf "  ${DIM}Note: terraform apply installs Envoy Gateway and creates the GatewayClass/Gateway.${RESET}\n"
   printf "  ${DIM}No separate controller install step needed — handled by k8s-bootstrap.${RESET}\n"
@@ -1601,9 +1589,6 @@ elif [[ "$GATEWAY_MODE" == "envoy" ]]; then
     printf "  ${DIM}No custom domain was set. The external endpoint is the Terraform-managed ALB.${RESET}\n"
     printf "     ${CYAN}terraform -chdir=infra output -raw alb_dns_name${RESET}\n"
   fi
-else
-  printf "  4. Deploy LangSmith:\n"
-  printf "     ${CYAN}make init-values && make deploy${RESET}\n"
 fi
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
