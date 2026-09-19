@@ -72,23 +72,22 @@ if [[ -f "$SECRETS_FILE" ]]; then
   _prev_email=$(_parse_tfvar_quoted langsmith_admin_email "$SECRETS_FILE") || _prev_email=""
 fi
 
-# Characters that break secrets.auto.tfvars: the file is an unquoted heredoc
-# with the password inside double quotes, so shell expansion and HCL templates
-# must not appear in the value. Keep this in lockstep with the Terraform
-# validation on postgres_admin_password.
+# Characters that break secrets.auto.tfvars: the password is written raw inside
+# an HCL double-quoted string. Shell expansion is not recursive, so ordinary
+# dollar signs and backticks in the expanded value remain literal. Keep this in
+# lockstep with the Terraform validation on postgres_admin_password.
 _tfvars_password_ok() {
   local val="$1"
   [[ "$val" != *'"'* ]] || return 1
   [[ "$val" != *'\'* ]] || return 1
-  [[ "$val" != *'$'* ]] || return 1
-  [[ "$val" != *'`'* ]] || return 1
+  [[ "$val" != *'${'* ]] || return 1
   [[ "$val" != *$'\n'* ]] || return 1
   [[ "$val" != *'%{'* ]] || return 1
   return 0
 }
 
 _tfvars_password_error() {
-  echo "ERROR: PostgreSQL admin password must not contain double quotes, backslashes, dollar signs, backticks, newlines, or %{." >&2
+  echo 'ERROR: PostgreSQL admin password must not contain double quotes, backslashes, newlines, ${, or %{.' >&2
 }
 
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
@@ -314,7 +313,7 @@ if [[ -z "${LANGSMITH_LICENSE_KEY:-}" && -z "$_prev_license" ]]; then
   fi
 fi
 
-_pg_prompt="PostgreSQL admin password (Enter = generate; avoid \" \\ \$ \` %{ )"
+_pg_prompt='PostgreSQL admin password (Enter = generate; avoid " \ ${ %{ )'
 _license_prompt="LangSmith license key      "
 _email_prompt="Initial org admin email    "
 if [[ -n "$_prev_pg" ]]; then
