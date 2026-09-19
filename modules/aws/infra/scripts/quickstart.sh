@@ -27,6 +27,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
 OUTPUT_DISPLAY="modules/aws/infra/terraform.tfvars"
+if [[ "$INFRA_DIR" != "$SCRIPT_DIR/.." ]]; then
+  OUTPUT_DISPLAY="$OUTPUT"
+fi
 OUTPUT_BACKUP_DISPLAY="${OUTPUT_DISPLAY}.backup"
 
 # ── Colors ───────────────────────────────────────────────────────────────────
