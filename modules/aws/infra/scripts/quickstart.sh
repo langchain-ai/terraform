@@ -846,11 +846,12 @@ if [[ "$TLS_SOURCE" == "acm" ]]; then
     fi
   else
     printf "\n  ${DIM}ACM needs a certificate for a domain. Enter an existing certificate ARN.${RESET}\n"
-    while [[ -z "$ACM_ARN" ]]; do
-      _ask "$(_choice_arg "acm_certificate_arn")" "$(_numbered_prompt "9.4" "Existing ACM certificate ARN")" "$_ex_acm"
-      ACM_ARN="$_REPLY"
-      [[ -n "$ACM_ARN" ]] || _red "  ERROR: enter the certificate ARN or choose None for HTTPS."
-    done
+    _ask "$(_choice_arg "acm_certificate_arn")" "$(_numbered_prompt "9.4" "Existing ACM certificate ARN" " — blank = continue with HTTP only")" "$_ex_acm"
+    ACM_ARN="$_REPLY"
+    if [[ -z "$ACM_ARN" ]]; then
+      TLS_SOURCE="none"
+      printf "  Continuing with HTTP only.\n"
+    fi
   fi
 fi
 
