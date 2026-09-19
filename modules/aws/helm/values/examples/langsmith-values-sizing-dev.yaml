@@ -3,8 +3,7 @@
 #
 # Resource profile for non-production environments: local dev, CI pipelines,
 # integration tests (k3d/kind/EKS dev), demos, and short-lived POCs.
-# Single-replica baselines with enough headroom for a developer to use the
-# system. Add-on overlays can retain their own autoscaling policies.
+# Single-replica baselines with HPA/KEDA autoscaling and enough headroom for a developer to use the system. Add-ons retain their own autoscaling policies.
 #
 # For cost parking / idle standby: use langsmith-values-sizing-minimum.yaml
 # For production: use langsmith-values-sizing-production.yaml
@@ -27,6 +26,11 @@
 # -- Application components ----------------------------------------------------
 
 backend:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 2
   e2eTest:
     enabled: false
   deployment:
@@ -40,6 +44,11 @@ backend:
         memory: "2Gi"
 
 frontend:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 10
   deployment:
     replicas: 1
     resources:
@@ -51,6 +60,11 @@ frontend:
         memory: "512Mi"
 
 platformBackend:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 5
   deployment:
     replicas: 1
     resources:
@@ -62,6 +76,11 @@ platformBackend:
         memory: "1Gi"
 
 playground:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 3
   deployment:
     replicas: 1
     resources:
@@ -82,6 +101,11 @@ queue:
       limits:
         cpu: "1"
         memory: "2Gi"
+  autoscaling:
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 5
 
 ingestQueue:
   deployment:
@@ -93,8 +117,18 @@ ingestQueue:
       limits:
         cpu: "1"
         memory: "1Gi"
+  autoscaling:
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      maxReplicaCount: 5
 
 aceBackend:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 3
   deployment:
     replicas: 1
     resources:
@@ -108,6 +142,11 @@ aceBackend:
 # -- Deployments feature components --------------------------------------------
 
 hostBackend:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 10
   deployment:
     replicas: 1
     resources:
@@ -122,6 +161,11 @@ hostBackend:
         memory: "2Gi"
 
 listener:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 10
   deployment:
     replicas: 1
     resources:

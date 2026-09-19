@@ -993,7 +993,7 @@ fi
 _section "12. LangSmith Pod Sizing"
 
 echo ""
-printf "  ${DIM}This saved setting controls resource requests, replicas, and autoscaling for LangSmith pods.${RESET}\n"
+printf "  ${DIM}This saved setting controls resource requests, replica counts, and HPA/KEDA autoscaling for LangSmith pods.${RESET}\n"
 printf "  ${DIM}It is independent of the QuickStart setup preset in Section 1.${RESET}\n"
 
 _ex_sizing=$(_existing "sizing_profile" "")
@@ -1503,7 +1503,7 @@ langsmith_namespace = "langsmith"
 
 #------------------------------------------------------------------------------
 # LangSmith Pod Sizing
-# Controls resource requests, replica counts, and HPA ranges.
+# Controls resource requests, replica counts, and HPA/KEDA autoscaling.
 # Docs: https://docs.langchain.com/langsmith/self-host-scale
 #------------------------------------------------------------------------------
 sizing_profile = "${SIZING}"

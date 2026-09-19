@@ -367,6 +367,42 @@ if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
   echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
 fi
 
+{
+  printf 'langsmith_license_key=%s\n' "${TF_VAR_langsmith_license_key:?}"
+  printf 'api_key_salt=%s\n' "${TF_VAR_langsmith_api_key_salt:?}"
+  printf 'jwt_secret=%s\n' "${TF_VAR_langsmith_jwt_secret:?}"
+  printf 'initial_org_admin_password=%s\n' "${TF_VAR_langsmith_admin_password:?}"
+  printf 'initial_org_admin_email=%s\n' "${LANGSMITH_ADMIN_EMAIL:?}"
+  if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ]]; then
+    printf 'agent_builder_encryption_key=%s\n' "${TF_VAR_langsmith_agent_builder_encryption_key:?}"
+  fi
+  if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+    printf 'insights_encryption_key=%s\n' "${TF_VAR_langsmith_insights_encryption_key:?}"
+  fi
+  if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
+    printf 'polly_encryption_key=%s\n' "${TF_VAR_langsmith_polly_encryption_key:?}"
+  fi
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
+  fi
+} | kubectl create secret generic langsmith-config \
+  --namespace "$NAMESPACE" \
+  --from-env-file=/dev/stdin \
+  --dry-run=client -o yaml | kubectl apply -f -
+VALUES_ARGS+=(
+  --set "config.existingSecretName=langsmith-config"
+  --set-string "config.langsmithLicenseKey="
+  --set-string "config.apiKeySalt="
+  --set-string "config.basicAuth.jwtSecret="
+  --set-string "config.basicAuth.initialOrgAdminPassword="
+  --set-string "config.agentBuilder.encryptionKey="
+  --set-string "fleet.encryptionKey="
+  --set-string "insights.encryptionKey="
+  --set-string "polly.encryptionKey="
+  --set-string "sandboxes.callbackSigningJwk="
+)
+echo "  ✔ langsmith-config secret"
+
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "agent-builder:agent_builder:$_enable_agent_builder"

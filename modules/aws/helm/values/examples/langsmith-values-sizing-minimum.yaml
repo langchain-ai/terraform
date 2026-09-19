@@ -111,8 +111,7 @@ hostBackend:
         memory: "768Mi"
   autoscaling:
     hpa:
-      minReplicas: 1
-      maxReplicas: 1
+      enabled: false
 
 listener:
   deployment:
@@ -138,6 +137,11 @@ operator:
         memory: "512Mi"
 
 # -- Fleet infrastructure ------------------------------------------------------
+
+fleet:
+  apiServer:
+    autoscaling:
+      enabled: false
 
 fleetToolServer:
   deployment:

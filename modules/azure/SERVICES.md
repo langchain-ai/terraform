@@ -167,4 +167,4 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ---
 
-*Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.16 line. Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*
+*Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.16 line for a standard Azure deployment, and the 0.17 line when `enable_smithdb = true` (see [SMITHDB.md](SMITHDB.md#version-requirements)). Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*

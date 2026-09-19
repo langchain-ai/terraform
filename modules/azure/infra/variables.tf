@@ -160,7 +160,7 @@ variable "terraform_principal_type" {
   default     = null
 
   validation {
-    condition     = var.terraform_principal_type == null || contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
+    condition     = var.terraform_principal_type == null ? true : contains(["User", "Group", "ServicePrincipal"], var.terraform_principal_type)
     error_message = "terraform_principal_type must be 'User', 'Group', or 'ServicePrincipal'. Omit it entirely (or set null) to let Azure infer the type — an empty string is not a valid opt-out."
   }
 }
@@ -450,6 +450,41 @@ variable "storage_allowed_ips" {
   default     = []
 }
 
+# ── Blob storage private endpoints ────────────────────────────────────────────
+# Without this, both storage accounts keep a public endpoint that a default-deny
+# firewall filters down to the AKS subnet. That posture depends on the firewall
+# staying correct; a wrong default_action or a stray ip_rules entry exposes the
+# account. A Private Endpoint removes the internet-facing listener instead of
+# filtering it, which is what a customer security review normally asks for.
+
+variable "storage_private_endpoint_enabled" {
+  type        = bool
+  description = "Reach Blob Storage over Private Endpoints and turn off the public endpoint. Applies to both the LangSmith trace-blob account and the SmithDB object store, so the two never diverge. Leaving this false keeps the service-endpoint firewall. Each endpoint bills hourly and consumes one address in its subnet."
+  default     = false
+}
+
+variable "storage_private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the blob Private Endpoints. Empty uses the AKS subnet, which needs no extra address space beyond one IP per endpoint. Supply a dedicated subnet when policy separates endpoints from nodes."
+  default     = ""
+
+  validation {
+    condition     = var.storage_private_endpoint_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.storage_private_endpoint_subnet_id))
+    error_message = "storage_private_endpoint_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+}
+
+variable "storage_private_dns_zone_id" {
+  type        = string
+  description = "Existing privatelink.blob.core.windows.net zone to attach the endpoints to. Empty creates one and links it to the VNet. Azure allows a zone name to be linked to a VNet once, so supply the central zone when the VNet already resolves privatelink.blob.core.windows.net — creating a second one fails the link."
+  default     = ""
+
+  validation {
+    condition     = var.storage_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", var.storage_private_dns_zone_id))
+    error_message = "storage_private_dns_zone_id must be a full privatelink.blob.core.windows.net zone resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  }
+}
+
 # ── AKS node pool sizing guidance ─────────────────────────────────────────────
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)
@@ -558,9 +593,12 @@ variable "aks_dns_service_ip" {
 
 variable "additional_node_pools" {
   type = map(object({
-    vm_size   = string
-    min_count = number
-    max_count = number
+    vm_size           = string
+    min_count         = number
+    max_count         = number
+    node_labels       = optional(map(string), {})
+    node_taints       = optional(list(string), [])
+    kubelet_disk_type = optional(string, "OS")
   }))
   description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
   default = {
@@ -569,6 +607,110 @@ variable "additional_node_pools" {
       min_count = 0
       max_count = 2
     }
+  }
+}
+
+# ── SmithDB (optional) ───────────────────────────────────────────────────────
+# SmithDB requires a specific LangSmith chart line. See SMITHDB.md,
+# "Version requirements", and set langsmith_helm_chart_version accordingly.
+
+variable "enable_smithdb" {
+  type        = bool
+  description = "Provision Azure infrastructure required by SmithDB: a dedicated PostgreSQL 18 metastore, Blob container, Workload Identity, and Premium SSD v2 cache volumes."
+  default     = false
+}
+
+variable "smithdb_ingestion_enabled" {
+  type        = bool
+  description = "Enable LangSmith writes to SmithDB after the infrastructure-only stage is healthy."
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  type        = bool
+  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled."
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  type        = bool
+  description = "Enable SmithDB-backed queries. Requires smithdb_ingestion_enabled."
+  default     = false
+}
+
+variable "smithdb_metastore_admin_username" {
+  type        = string
+  description = "Administrator username for the SmithDB PostgreSQL metastore."
+  default     = "smithdb"
+}
+
+variable "smithdb_metastore_admin_password" {
+  type        = string
+  description = "Optional administrator password for the SmithDB metastore. When null, SmithDB authenticates through Microsoft Entra Workload Identity; when set, password authentication is used."
+  sensitive   = true
+  default     = null
+  nullable    = true
+}
+
+variable "smithdb_metastore_sku_name" {
+  type        = string
+  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore."
+  default     = "GP_Standard_D2ds_v5"
+}
+
+variable "smithdb_metastore_storage_mb" {
+  type        = number
+  description = "Allocated storage for the SmithDB metastore in MiB."
+  default     = 32768
+}
+
+variable "smithdb_metastore_backup_retention_days" {
+  type        = number
+  description = "Automated backup retention for the SmithDB metastore."
+  default     = 7
+}
+
+variable "smithdb_storage_account_name" {
+  type        = string
+  description = "Optional globally unique Storage Account name for SmithDB. Empty derives one from the deployment name."
+  default     = ""
+}
+
+variable "smithdb_storage_container_name" {
+  type        = string
+  description = "Dedicated Blob container for SmithDB durable data."
+  default     = "smithdb"
+}
+
+variable "smithdb_cache_storage_class_name" {
+  type        = string
+  description = "Name of the Premium SSD v2 StorageClass created for SmithDB per-pod cache volumes. A StorageClass is cluster-scoped, so the default empty value derives a per-deployment name from name_prefix and unique_resource_names. Set it only to adopt a specific name."
+  default     = ""
+}
+
+variable "smithdb_cache_disk_iops" {
+  type        = number
+  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume. Azure also caps this by volume size: 3000 IOPS is free, and above 6 GiB the ceiling rises 500 IOPS per GiB, so the default needs a cache volume of at least 14 GiB. Cache size is a chart value, so Terraform cannot check it here."
+  default     = 7000
+
+  validation {
+    condition     = var.smithdb_cache_disk_iops >= 3000 && var.smithdb_cache_disk_iops <= 80000
+    error_message = "smithdb_cache_disk_iops must be between 3000 and 80000."
+  }
+}
+
+variable "smithdb_cache_disk_throughput_mbps" {
+  type        = number
+  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume. Azure allows 0.25 MB/s per provisioned IOPS, so raising this past 0.25 * smithdb_cache_disk_iops requires raising the IOPS too."
+  default     = 1000
+
+  # The ratio against smithdb_cache_disk_iops is checked on
+  # terraform_data.validate_network, not here. A validation block that reads
+  # another variable cannot be evaluated while that variable is itself invalid,
+  # which would suppress this range error whenever the IOPS value is also wrong.
+  validation {
+    condition     = var.smithdb_cache_disk_throughput_mbps >= 125 && var.smithdb_cache_disk_throughput_mbps <= 1200
+    error_message = "smithdb_cache_disk_throughput_mbps must be between 125 and 1200."
   }
 }
 
@@ -621,7 +763,7 @@ variable "langsmith_domain" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin a specific LangSmith Helm chart version for reproducible deploys. Must be on the chart 0.16 line — deploy.sh rejects anything else, because these values use the 0.16 schema. Empty string = use the pinned ~0.16.0 line default."
+  description = "Pin a LangSmith chart version. Empty uses the chart line deploy.sh pins for Azure. enable_smithdb requires an explicit chart line selection; see SMITHDB.md, 'Version requirements'."
   default     = ""
 }
 
