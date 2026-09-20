@@ -475,7 +475,7 @@ variable "sandbox_juicefs_redis_rdb_snapshot_period" {
   default     = null
 
   validation {
-    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null || contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
+    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null ? true : contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
     error_message = "sandbox_juicefs_redis_rdb_snapshot_period must be null, ONE_HOUR, SIX_HOURS, TWELVE_HOURS, or TWENTY_FOUR_HOURS."
   }
 }

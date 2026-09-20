@@ -191,7 +191,7 @@ enable_public_eks_cluster = false
 # min_size guidance:
 #   3  — base LangSmith with no addons. Enough to schedule all core pods
 #         without waiting for the autoscaler to provision new nodes.
-#   6  — recommended if you plan to enable Agent Builder, Deployments, and/or
+#   6  — recommended if you plan to enable Fleet, Deployments, and/or
 #         Insights from the start. All workloads schedule immediately.
 #  10  — max_size ceiling for autoscaler. Adjust based on expected load.
 #
@@ -281,6 +281,11 @@ postgres_skip_final_snapshot = false
 # Backup retention — days to keep automated snapshots. 0 disables backups.
 # postgres_backup_retention_period = 7
 
+# Attach an existing security group instead of letting Terraform create one.
+# Attach-only: Terraform will not write rules onto a supplied group. See
+# "Bring your own security groups" in README.md.
+# postgres_existing_security_group_id = "sg-0123456789abcdef0"
+
 #------------------------------------------------------------------------------
 # REDIS (ElastiCache)
 #------------------------------------------------------------------------------
@@ -308,6 +313,11 @@ redis_instance_type = "cache.m6g.xlarge"
 #   export TF_VAR_redis_auth_token="$(openssl rand -hex 32)"
 # Or let setup-env.sh auto-generate one and store it in SSM:
 #   source ./setup-env.sh
+
+# Attach an existing security group instead of letting Terraform create one.
+# Attach-only: Terraform will not write rules onto a supplied group. See
+# "Bring your own security groups" in README.md.
+# redis_existing_security_group_id = "sg-0123456789abcdef1"
 
 #------------------------------------------------------------------------------
 # SANDBOXES
@@ -374,16 +384,18 @@ clickhouse_source = "in-cluster"
 # Choose how TLS is handled for the LangSmith web UI and API.
 #
 # ┌─────────────────────────────────────────────────────────────────────────────
-# │ RECOMMENDED: Staged deploy with auto-provisioned DNS + ACM
+# │ RECOMMENDED: Staged deploy with a new Route 53 zone + ACM
 # │
-# │ This is the easiest path. Terraform creates a Route 53 hosted zone and
-# │ ACM certificate for your domain. You deploy HTTP first, delegate DNS at
-# │ your own pace, then flip to HTTPS in a second apply.
+# │ This is the default path. Terraform creates a public Route 53 hosted zone
+# │ exactly matching your LangSmith domain and requests an ACM certificate.
+# │ You deploy HTTP first, delegate DNS at your own pace, then flip to HTTPS
+# │ in a second apply.
 # │
 # │ Step 1 — Initial deploy (HTTP, no DNS needed yet):
 # │
 # │   tls_certificate_source = "none"
 # │   langsmith_domain       = "langsmith.example.com"
+# │   dns_create_zone        = true
 # │
 # │   Run: terraform apply
 # │   → Creates all infra (EKS, RDS, ALB, etc.) immediately.
@@ -408,6 +420,24 @@ clickhouse_source = "in-cluster"
 # │   → Adds HTTPS listener, redirects HTTP → HTTPS.
 # │   → Your domain now serves LangSmith over HTTPS.
 # └─────────────────────────────────────────────────────────────────────────────
+#
+# REUSE AN EXISTING PUBLIC ROUTE 53 HOSTED ZONE:
+#   The zone can exactly match langsmith_domain (langsmith.example.com) or be
+#   one of its parents (example.com). Terraform writes the ACM validation CNAME
+#   and LangSmith ALB alias records into that zone; it does not manage the zone.
+#
+#   tls_certificate_source = "none"
+#   langsmith_domain       = "langsmith.example.com"
+#   dns_create_zone        = false
+#   dns_existing_zone_id   = "Z1ABCDEF123456"
+#
+#   If the selected zone is already authoritative, skip the NS delegation step
+#   and wait for the certificate to become ISSUED before switching to "acm".
+#   Public ACM certificates cannot validate through a private hosted zone.
+#
+#   This is not an import path for a zone already managed by this Terraform
+#   state. Migrating an existing deployment from a dedicated zone requires a
+#   separate DNS and state migration; do not only flip dns_create_zone to false.
 #
 # ALTERNATIVE OPTIONS:
 #
@@ -435,10 +465,17 @@ clickhouse_source = "in-cluster"
 # See the staged deploy guide above.
 tls_certificate_source = "none"
 
-# Your domain for LangSmith. When set (without acm_certificate_arn), Terraform
-# auto-provisions a Route 53 hosted zone, ACM certificate, DNS validation
-# records, and an alias record pointing the domain to the ALB.
+# Your domain for LangSmith. When set without acm_certificate_arn, Terraform
+# requests an ACM certificate and creates its validation records plus an ALB
+# alias in either a new or existing Route 53 hosted zone.
 # langsmith_domain = "langsmith.example.com"
+
+# Create a dedicated public hosted zone exactly matching langsmith_domain.
+# Set false to reuse an authoritative public parent or same-name zone instead.
+dns_create_zone = true
+
+# Existing public hosted zone ID, required when dns_create_zone = false.
+# dns_existing_zone_id = "Z1ABCDEF123456"
 
 # Pre-existing ACM certificate ARN — only needed for Option B above.
 # When set, the dns module is skipped (you manage DNS yourself).
@@ -480,6 +517,20 @@ s3_ttl_long_days  = 400    # delete long-lived traces after ~13 months
 langsmith_namespace = "langsmith"
 
 #------------------------------------------------------------------------------
+# HELM CHART VERSION
+#------------------------------------------------------------------------------
+# Pin the chart to an exact patch for reproducible deploys. Empty deploys the
+# latest patch on the pinned 0.16 line, so a rebuild months apart can land on a
+# different chart. Must be a 0.16.x version — deploy.sh refuses anything else.
+#
+# The CHART_VERSION environment variable still overrides this when set:
+#   CHART_VERSION=0.16.11 make deploy
+#
+# List what is published with:
+#   helm search repo langchain/langsmith --versions
+# langsmith_helm_chart_version = "0.16.11"
+
+#------------------------------------------------------------------------------
 # SECURITY ADD-ONS (all optional, all default to off)
 #------------------------------------------------------------------------------
 # These are independent features you can enable for compliance or auditing.
@@ -505,6 +556,13 @@ langsmith_namespace = "langsmith"
 
 # alb_scheme              = "internet-facing"
 # alb_allowed_cidr_blocks = ["0.0.0.0/0"]
+
+# Attach an existing security group to the ALB (or bastion, if create_bastion
+# = true) instead of letting Terraform create one. Attach-only: Terraform
+# will not write rules onto a supplied group. See "Bring your own security
+# groups" in README.md.
+# alb_existing_security_group_id     = "sg-0123456789abcdef2"
+# bastion_existing_security_group_id = "sg-0123456789abcdef3"
 
 # ALB Access Logs — captures every request that hits the ALB:
 #   client IP, request URI, response latency, HTTP status code.
@@ -539,7 +597,7 @@ langsmith_namespace = "langsmith"
 #   Envoy Gateway (default)
 #     enable_envoy_gateway = true
 #     enable_istio_gateway = false
-#     → Chart creates HTTPRoutes (Gateway API); Envoy Gateway proxies traffic.
+#     → Chart creates one HTTPRoute (Gateway API); Envoy Gateway proxies traffic.
 #       Supports split dataplane routing across namespaces.
 #
 #   Istio Gateway
@@ -645,14 +703,14 @@ enable_istio_gateway = false
 # Profiles are based on the LangSmith scale guide:
 #   https://docs.langchain.com/langsmith/self-host-scale
 #
-#   "production"       — Multi-replica with HPA autoscaling. Fits the
+#   "production"       — Multi-replica with HPA/KEDA autoscaling. Fits the
 #                        Medium/Medium pattern (~20 users, ~100 traces/sec).
 #                        Good starting point for most production deployments.
-#   "production-large" — Higher baselines and wider HPA ranges. Fits the
+#   "production-large" — Higher baselines and wider autoscaling ranges. Fits the
 #                        High/High pattern (~50 users, ~1000 traces/sec).
 #                        Use when you know the deployment handles heavy volume.
-#   "dev"              — Single-replica, minimal resources. For local dev, CI
-#                        pipelines, demos, and short-lived POCs. Chart defaults
+#   "dev"              — Single-replica baseline with HPA/KEDA autoscaling. For
+#                        local dev, CI, demos, and short-lived POCs. Chart defaults
 #                        request 1+ CPU per component and 3.5 CPU / 12Gi for
 #                        ClickHouse — without this profile, pods won't schedule
 #                        on small clusters.
@@ -660,21 +718,29 @@ enable_istio_gateway = false
 sizing_profile = "production"
 
 #------------------------------------------------------------------------------
-# LANGGRAPH PLATFORM FEATURES (product addons)
+# LANGSMITH FEATURES (product addons)
 #------------------------------------------------------------------------------
 # These flags control which LangSmith product features are enabled.
 # Each requires the corresponding entitlement in your LangSmith license key.
 # deploy.sh reads these to decide which Helm values overlay files to include.
 #
-# If you're doing a base LangSmith deployment, leave all three as false.
+# For a base LangSmith deployment, leave these flags false.
 #
-#   enable_deployments   — LangGraph Platform (listener, operator, host-backend)
-#   enable_agent_builder — Visual agent builder UI (requires enable_deployments)
-#   enable_insights      — ClickHouse-backed analytics dashboard
+#   enable_deployments — LangSmith Deployments (listener, operator, host-backend)
+#   enable_fleet       — No-code agents; enables its required host-backend
+#   fleet_storage      — Fleet Postgres/Redis: "external" or "in-cluster"
+#   enable_insights    — AI-powered trace analysis
+#   insights_storage   — Insights Postgres/Redis: "external" or "in-cluster"
+#   enable_polly       — LangSmith Chat (formerly Polly)
+#   polly_storage      — Chat Postgres/Redis: "external" or "in-cluster"
 #
 enable_deployments   = false
-enable_agent_builder = false
+enable_fleet         = false
+fleet_storage        = "external" # Or "in-cluster"
 enable_insights      = false
+insights_storage     = "in-cluster" # Or "external"
+enable_polly         = false
+polly_storage        = "in-cluster" # Or "external"
 
 # Extended usage telemetry — sends anonymized usage metrics to LangChain.
 # Default is off. Enable if you want to share usage data.
@@ -689,7 +755,7 @@ enable_usage_telemetry = false
 #
 # Each key corresponds to a feature flag:
 #   Deployments  → enable_deployments   = true
-#   Agent Builder → enable_agent_builder = true
+#   Fleet       → enable_fleet = true (uses the historical Agent Builder encryption-key name)
 #   Insights     → enable_insights      = true
 #
 # Generate a Fernet key (https://cryptography.io/en/latest/fernet/):
@@ -719,8 +785,8 @@ enable_usage_telemetry = false
 #   - the Karpenter controller + SmithDB instance-store + compute NodePools
 #     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
 #
-# Pass 2 requires an explicit stable chart version of 0.16 or newer.
-# Infrastructure enablement never changes the normal chart line automatically.
+# Pass 2 uses the repository's ~0.16.0 pin, which resolves to the latest
+# compatible 0.16.x chart unless CHART_VERSION explicitly overrides it.
 #
 # The generated values initially deploy SmithDB services with ingestion,
 # migration, and query integration disabled. Follow ../SMITHDB.md to enable each
@@ -744,6 +810,14 @@ enable_usage_telemetry = false
 #   smithdb_external_metastore_host     = "my-pg.example.com"
 #   smithdb_external_metastore_username = "smithdb"
 #   export TF_VAR_smithdb_external_metastore_password="..."
+#
+# Or keep smithdb_metastore_source = "create" but attach an existing security
+# group to the metastore RDS instance instead of letting Terraform create one.
+# Attach-only by default; set smithdb_manage_byo_security_group_rules = true
+# to let Terraform still write the required EKS-node ingress rule. See
+# "Bring your own security groups" in README.md.
+# smithdb_existing_metastore_security_group_id = "sg-0123456789abcdef4"
+# smithdb_manage_byo_security_group_rules      = false
 
 # ── Object store (S3) ─────────────────────────────────────────────────────────
 # A shared S3 Gateway endpoint is always associated with the VPC route tables.

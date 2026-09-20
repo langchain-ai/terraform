@@ -9,8 +9,8 @@
 # deployments, start with sizing_profile = "production" and scale up if
 # monitoring shows sustained pressure.
 #
-# Covers ALL chart components including infrastructure (ClickHouse, operator,
-# agent-builder servers) — not just the application pods.
+# Covers core services and shared infrastructure. Fleet, Chat, and Insights
+# service resources and autoscaling come from their separate add-on overlays.
 #
 # Monitor actual usage with:
 #   kubectl top pods -n langsmith
@@ -61,12 +61,10 @@ ingestQueue:
         cpu: "4"
         memory: "8Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 6
-      maxReplicas: 24
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 6
+      maxReplicaCount: 24
 
 queue:
   deployment:
@@ -78,12 +76,10 @@ queue:
         cpu: "4"
         memory: "8Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 6
-      maxReplicas: 24
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 6
+      maxReplicaCount: 24
 
 frontend:
   deployment:
@@ -182,7 +178,7 @@ operator:
         cpu: "2"
         memory: "4Gi"
 
-# -- Agent Builder infrastructure ----------------------------------------------
+# -- Fleet infrastructure ------------------------------------------------------
 
 fleetToolServer:
   deployment:
@@ -203,6 +199,85 @@ fleetTriggerServer:
       limits:
         cpu: "2"
         memory: "4Gi"
+
+# -- SmithDB ---------------------------------------------------------------
+
+smithdb:
+  query:
+    deployment:
+      resources:
+        requests:
+          cpu: "28"
+          memory: "50Gi"
+          ephemeral-storage: "1000Gi"
+        limits:
+          cpu: "28"
+          memory: "50Gi"
+          ephemeral-storage: "1000Gi"
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: "1000Gi"
+    autoscaling:
+      minReplicas: 4
+
+  ingestion:
+    deployment:
+      resources:
+        requests:
+          cpu: "56"
+          memory: "150Gi"
+          ephemeral-storage: "1000Gi"
+        limits:
+          cpu: "56"
+          memory: "150Gi"
+          ephemeral-storage: "1000Gi"
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: "1000Gi"
+    autoscaling:
+      minReplicas: 2
+
+  compaction:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "8"
+          memory: "16Gi"
+        limits:
+          cpu: "8"
+          memory: "16Gi"
+
+  compactionWorker:
+    deployment:
+      resources:
+        requests:
+          cpu: "28"
+          memory: "50Gi"
+          ephemeral-storage: "300Gi"
+        limits:
+          cpu: "28"
+          memory: "50Gi"
+          ephemeral-storage: "300Gi"
+      volumes:
+        - name: local-ssd-storage
+          emptyDir:
+            sizeLimit: "300Gi"
+    autoscaling:
+      minReplicas: 4
+
+  clusterManager:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: "2Gi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
 
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 # High/High pattern: 14+ CPU / 24+ Gi per node, 3-node cluster recommended.
