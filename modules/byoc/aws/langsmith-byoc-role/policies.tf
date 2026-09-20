@@ -2,6 +2,7 @@ locals {
   policy_template_vars = {
     account_id               = local.account_id
     control_plane_account_id = local.control_plane_account_id
+    customer_vpc_arns        = jsonencode(local.customer_vpc_arns)
     role_name                = var.role_name
   }
 
@@ -15,6 +16,7 @@ locals {
   iam_karpenter_eks_profiles_statements = jsondecode(templatefile("${path.module}/policies/iam-karpenter-eks-profiles.json", local.policy_template_vars))
   kms_statements                        = jsondecode(templatefile("${path.module}/policies/kms.json", local.policy_template_vars))
   lambda_statements                     = jsondecode(templatefile("${path.module}/policies/lambda.json", local.policy_template_vars))
+  network_firewall_statements           = jsondecode(templatefile("${path.module}/policies/network_firewall.json", local.policy_template_vars))
   delete_statements                     = jsondecode(templatefile("${path.module}/policies/delete.json", local.policy_template_vars))
   rds_statements                        = jsondecode(templatefile("${path.module}/policies/rds.json", local.policy_template_vars))
   route53_statements                    = jsondecode(templatefile("${path.module}/policies/route53.json", local.policy_template_vars))
@@ -23,6 +25,7 @@ locals {
   s3_statements              = jsondecode(templatefile("${path.module}/policies/s3.json", local.policy_template_vars))
   secrets_manager_statements = jsondecode(templatefile("${path.module}/policies/secrets_manager.json", local.policy_template_vars))
   vpc_statements             = jsondecode(templatefile("${path.module}/policies/vpc.json", local.policy_template_vars))
+  byovpc_vpc_statements      = jsondecode(templatefile("${path.module}/policies/vpc_byovpc.json", local.policy_template_vars))
 
   delete_statements_for_policy = {
     for policy_name, statements in local.delete_statements : policy_name => [
@@ -33,8 +36,16 @@ locals {
   role_policies = {
     # Keep optional delete permissions packed into smaller existing policies so
     # each managed policy stays under IAM's 6,144 character policy size limit.
-    vpc                        = local.vpc_statements
-    ec2-eni                    = concat(local.ec2_eni_statements, local.delete_statements_for_policy.vpc)
+    vpc = concat(
+      [for statement in local.vpc_statements : statement if var.allow_vpc_creation_permissions],
+      [for statement in local.byovpc_vpc_statements : statement if !var.allow_vpc_creation_permissions],
+    )
+    ec2-eni = concat(
+      local.ec2_eni_statements,
+      [for statement in local.network_firewall_statements : statement if var.allow_vpc_creation_permissions],
+      [for statement in local.delete_statements_for_policy.vpc : statement if var.allow_vpc_creation_permissions],
+      [for statement in local.delete_statements_for_policy.vpc_byovpc : statement if !var.allow_vpc_creation_permissions],
+    )
     iam                        = concat(local.iam_statements, local.delete_statements_for_policy.iam)
     iam-karpenter-eks-profiles = concat(local.iam_karpenter_eks_profiles_statements, local.delete_statements_for_policy["iam-karpenter-eks-profiles"])
     eks                        = concat(local.eks_statements, local.delete_statements_for_policy.eks)

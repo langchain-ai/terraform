@@ -81,6 +81,11 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !local.dns_enabled || var.dns_create_zone || var.dns_existing_zone_id != ""
+      error_message = "dns_existing_zone_id is required when the DNS module is enabled and dns_create_zone = false."
+    }
+
+    precondition {
       condition     = var.tls_certificate_source != "letsencrypt" || var.letsencrypt_email != ""
       error_message = "letsencrypt_email is required when tls_certificate_source = 'letsencrypt'."
     }
@@ -100,40 +105,21 @@ resource "terraform_data" "validate_inputs" {
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
 
+    # External Fleet storage uses a dedicated database and logical Redis index on
+    # the shared RDS and ElastiCache instances.
     precondition {
-      condition     = !var.enable_agent_builder || var.enable_deployments
-      error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
+      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_polly || var.enable_deployments
-      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
-    }
-
-    # Standalone agent features (chart v0.15+) run their own api-server + queue against
-    # per-feature databases on the shared RDS/ElastiCache. They do NOT require
-    # enable_deployments, but they DO require external Postgres and Redis to exist.
-    precondition {
-      condition     = !var.enable_fleet || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_fleet requires postgres_source = \"external\" and redis_source = \"external\" (standalone Fleet uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
-    }
-
-    # Fleet's chat UI resolves OAuth provider/token connections through host-backend,
-    # which only exists when Deployments is enabled. Without it the UI 500s on
-    # /v1/platform/fleet/providers/.../connection ("host-backend ... no such host").
-    precondition {
-      condition     = !var.enable_fleet || var.enable_deployments
-      error_message = "enable_fleet requires enable_deployments = true. The Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed when Deployments is enabled."
+      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_standalone_polly || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_polly requires postgres_source = \"external\" and redis_source = \"external\" (standalone Polly uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
-    }
-
-    precondition {
-      condition     = !var.enable_standalone_insights || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_insights requires postgres_source = \"external\" and redis_source = \"external\" (standalone Insights uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
@@ -265,6 +251,8 @@ module "redis" {
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
+
+  existing_security_group_id = var.redis_existing_security_group_id
 }
 
 resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
@@ -332,6 +320,8 @@ module "postgres" {
   deletion_protection                 = var.postgres_deletion_protection
   skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
+
+  existing_security_group_id = var.postgres_existing_security_group_id
 
   depends_on = [module.eks]
 }
@@ -429,18 +419,28 @@ module "cert_manager" {
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
 # Activates whenever langsmith_domain is set (regardless of tls_certificate_source).
-# This lets you deploy with tls_certificate_source = "none" first, delegate
-# NS records at your leisure, then flip to "acm" in a later apply.
+# This lets you deploy with tls_certificate_source = "none" first, finish the
+# selected zone's DNS setup at your leisure, then flip to "acm" in a later apply.
 #
-# When tls_certificate_source != "acm": creates the Route 53 zone, requests
-# the ACM certificate, writes DNS validation records, and creates the alias
-# record — but does NOT block waiting for certificate validation.
+# By default, creates a hosted zone exactly matching langsmith_domain. Set
+# dns_create_zone = false to put the certificate validation and ALB alias
+# records in an existing public parent or same-name hosted zone instead.
+# Only a newly created hosted zone needs NS delegation from its parent.
+#
+# When tls_certificate_source != "acm": requests the ACM certificate, writes
+# DNS validation records, and creates the alias record — but does NOT block
+# waiting for certificate validation.
 #
 # When tls_certificate_source == "acm": additionally blocks until the ACM
-# certificate is validated (NS delegation must be complete), then wires the
-# validated cert into the ALB HTTPS listener.
+# certificate is validated (the selected zone must be authoritative), then
+# wires the validated cert into the ALB HTTPS listener.
 
 locals {
+  insights_enabled          = var.enable_insights || var.enable_standalone_insights
+  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
+  polly_enabled             = var.enable_polly || var.enable_standalone_polly
+  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
 
@@ -449,7 +449,8 @@ module "dns" {
   count  = local.dns_enabled ? 1 : 0
 
   domain_name          = var.langsmith_domain
-  create_zone          = true
+  create_zone          = var.dns_create_zone
+  existing_zone_id     = var.dns_existing_zone_id
   create_certificate   = true
   wait_for_validation  = var.tls_certificate_source == "acm"
   include_wildcard_san = var.dns_include_wildcard_san
@@ -457,6 +458,8 @@ module "dns" {
 
 # Alias record lives here (not in the dns module) to avoid a circular
 # dependency: dns needs nothing from alb, and alb needs dns's cert ARN.
+# The record's zone_id is the selected Route 53 zone; alias.zone_id is the
+# ALB's canonical hosted zone ID required by Route 53 for the alias target.
 resource "aws_route53_record" "langsmith_alb_alias" {
   count   = local.dns_enabled ? 1 : 0
   zone_id = module.dns[0].zone_id
@@ -487,6 +490,8 @@ module "alb" {
   enable_istio_gateway   = var.enable_istio_gateway
   enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
+
+  existing_security_group_id = var.alb_existing_security_group_id
 
   depends_on = [module.vpc]
 }
@@ -581,6 +586,8 @@ module "bastion" {
   ssh_allowed_cidrs   = var.bastion_ssh_allowed_cidrs
   root_volume_size_gb = var.bastion_root_volume_size_gb
   tags                = local.common_tags
+
+  existing_security_group_id = var.bastion_existing_security_group_id
 
   depends_on = [module.vpc, module.eks]
 }
@@ -724,9 +731,9 @@ locals {
 resource "kubernetes_job_v1" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet
-      polly    = var.enable_standalone_polly
-      insights = var.enable_standalone_insights
+      fleet    = var.enable_fleet && var.fleet_storage == "external"
+      polly    = local.polly_external_storage
+      insights = local.insights_external_storage
     } : k => v if v && var.postgres_source == "external"
   }
 
@@ -796,7 +803,7 @@ resource "kubernetes_job_v1" "standalone_db" {
 # standalone fleet/polly/insights blocks read via existingSecretName.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -809,7 +816,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -822,7 +829,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -835,7 +842,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = var.enable_standalone_polly && var.redis_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -848,7 +855,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -861,7 +868,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
@@ -922,6 +929,9 @@ module "smithdb" {
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
+
+  existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
+  manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
 
   depends_on = [module.eks]
 }

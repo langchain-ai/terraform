@@ -1,4 +1,4 @@
-# Polly — standalone path (chart v0.15+).
+# LangSmith Chat (formerly Polly) — external-storage overlay.
 #
 # Adds the external Postgres/Redis wiring on top of the top-level polly block.
 # Does NOT require enable_deployments = true. Since chart 0.15.1 the legacy
@@ -14,13 +14,15 @@
 #
 # Prerequisites:
 #   - chart >= 0.15.0
-#   - Polly entitlement in your LangSmith license
+#   - LangSmith Chat entitlement in your LangSmith license
 #   - postgres_source = "external" and redis_source = "external" in terraform.tfvars
 #   - A 'langsmith_polly' database on RDS — created automatically by terraform apply
 #   - TF_VAR_langsmith_polly_encryption_key set (see infra/scripts/setup-env.sh)
 #     (shared with the legacy enable_polly path — same key, same data)
 #
-# Enable via: enable_standalone_polly = true in terraform.tfvars
+# QuickStart selects this alongside enable_polly when the Backend Services choice
+# uses external PostgreSQL and Redis. Existing configurations keep their current
+# storage model during updates.
 # encryptionKey is injected by init-values.sh into langsmith-values-overrides.yaml.
 
 # NOTE: do not add a `config.polly` block here. Chart 0.15.1+ removed the bundled

@@ -1,12 +1,12 @@
-# Production sizing — multi-replica deployments with HPA autoscaling.
+# Production sizing — multi-replica deployments with HPA and KEDA autoscaling.
 #
 # This is the recommended profile for any environment serving real traffic.
-# Enables horizontal pod autoscaling on all stateless components with
-# reasonable resource requests as starting points. Tune to your workload:
+# Uses KEDA for queue workers and HPA for other supported services.
+# Resource requests are starting points. Tune to your workload:
 #   kubectl top pods -n langsmith
 #
-# Covers ALL chart components including infrastructure (ClickHouse, operator,
-# agent-builder servers) — not just the application pods.
+# Covers core services and shared infrastructure. Fleet, Chat, and Insights
+# service resources and autoscaling come from their separate add-on overlays.
 
 # -- Application components ----------------------------------------------------
 
@@ -54,12 +54,10 @@ ingestQueue:
         cpu: "2"
         memory: "4Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 3
-      maxReplicas: 10
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 3
+      maxReplicaCount: 10
 
 queue:
   deployment:
@@ -71,12 +69,10 @@ queue:
         cpu: "2"
         memory: "4Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 3
-      maxReplicas: 10
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 3
+      maxReplicaCount: 10
 
 frontend:
   deployment:
@@ -175,7 +171,7 @@ operator:
         cpu: "1"
         memory: "2Gi"
 
-# -- Agent Builder infrastructure ----------------------------------------------
+# -- Fleet infrastructure ------------------------------------------------------
 
 fleetToolServer:
   deployment:
@@ -207,6 +203,73 @@ fleetTriggerServer:
       limits:
         cpu: "1"
         memory: "2Gi"
+
+# -- SmithDB ---------------------------------------------------------------
+
+smithdb:
+  query:
+    deployment:
+      resources:
+        requests:
+          cpu: "28"
+          memory: "48Gi"
+          ephemeral-storage: "200Gi"
+        limits:
+          cpu: "28"
+          memory: "48Gi"
+          ephemeral-storage: "200Gi"
+    autoscaling:
+      minReplicas: 1
+
+  ingestion:
+    deployment:
+      resources:
+        requests:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+        limits:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+    autoscaling:
+      minReplicas: 1
+
+  compaction:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: "8Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+
+  compactionWorker:
+    deployment:
+      resources:
+        requests:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+        limits:
+          cpu: "16"
+          memory: "32Gi"
+          ephemeral-storage: "100Gi"
+    autoscaling:
+      minReplicas: 3
+
+  clusterManager:
+    deployment:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "250m"
+          memory: "256Mi"
 
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 

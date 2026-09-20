@@ -60,6 +60,24 @@ variable "allowed_ips" {
 
 variable "allowed_subnet_ids" {
   type        = list(string)
-  description = "Subnet IDs allowlisted via the Microsoft.Storage service endpoint. Typically the AKS subnet so pods can reach the blob data plane while the rest of the internet is denied. The subnet must have service_endpoints = [\"Microsoft.Storage\", ...] configured."
+  description = "Subnet IDs allowlisted via the Microsoft.Storage service endpoint. Typically the AKS subnet so pods can reach the blob data plane while the rest of the internet is denied. The subnet must have service_endpoints = [\"Microsoft.Storage\", ...] configured. Ignored when private_endpoint_enabled is true, because the account then has no public endpoint to filter."
   default     = []
+}
+
+variable "private_endpoint_enabled" {
+  type        = bool
+  description = "Reach this account over a Private Endpoint and turn off its public endpoint. Terraform manages the account through Azure Resource Manager, so provisioning is unaffected."
+  default     = false
+}
+
+variable "private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the Private Endpoint. Required when private_endpoint_enabled is true."
+  default     = ""
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "privatelink.blob.core.windows.net zone the endpoint registers in. Owned by the root module, because a zone name links to a VNet once and both storage accounts share it. Required when private_endpoint_enabled is true."
+  default     = ""
 }
