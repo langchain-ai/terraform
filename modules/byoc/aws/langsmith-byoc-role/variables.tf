@@ -4,7 +4,7 @@ variable "role_name" {
 }
 
 variable "external_id" {
-  description = "External ID required to assume this role."
+  description = "External ID copied from Settings > Data Planes in the LangSmith UI, required to assume this role."
   type        = string
 }
 
@@ -62,4 +62,21 @@ variable "allow_delete_permissions" {
   description = "Grant the role permissions needed to delete LangSmith-managed resources."
   type        = bool
   default     = false
+}
+
+variable "allow_vpc_creation_permissions" {
+  description = "Grant permissions to create and manage the base VPC network. Disable when the customer supplies the VPC, subnets, routing, gateways, endpoints, and flow logs."
+  type        = bool
+  default     = true
+}
+
+variable "vpc_ids" {
+  description = "VPC IDs in which Crossplane may create tagged workload security groups when base VPC creation permissions are disabled."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for vpc_id in var.vpc_ids : can(regex("^vpc-[0-9a-f]+$", vpc_id))])
+    error_message = "Every vpc_ids entry must be a valid VPC ID."
+  }
 }

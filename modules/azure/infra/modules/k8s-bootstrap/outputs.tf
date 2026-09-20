@@ -22,3 +22,13 @@ output "redis_secret_name" {
   description = "Name of the Kubernetes secret holding the Redis connection URL"
   value       = var.use_external_redis ? kubernetes_secret_v1.redis[0].metadata[0].name : null
 }
+
+output "smithdb_metastore_secret_name" {
+  description = "Name of the Kubernetes Secret holding the SmithDB metastore connection fields."
+  value       = var.enable_smithdb ? kubernetes_secret_v1.smithdb_metastore[0].metadata[0].name : null
+}
+
+output "smithdb_cache_storage_class_name" {
+  description = "Name of the Premium SSD v2 StorageClass for SmithDB cache volumes."
+  value       = var.enable_smithdb ? kubernetes_storage_class_v1.smithdb_cache[0].metadata[0].name : null
+}

@@ -46,10 +46,11 @@ lint_scripts() {
 # CI leg can scope itself to modules/<provider> without carrying a second copy
 # of the rule. A root is any directory with its own versions.tf, minus the
 # internal child modules under modules/<provider>/<root>/modules/<child>/:
-# those are validated transitively via --call-module-type=all, and three of them
-# (azure keyvault, redis, k8s-cluster) do carry a versions.tf, so depth alone cannot
-# tell them apart from a root. Depth varies anyway, modules/aws/infra is two
-# levels down and modules/byoc/aws/langsmith-byoc-role is three.
+# those are validated transitively via --call-module-type=all, and four of them
+# (azure keyvault, redis, k8s-cluster, smithdb) do carry a versions.tf, so depth
+# alone cannot tell them apart from a root. Depth varies anyway,
+# modules/aws/infra is two levels down and modules/byoc/aws/langsmith-byoc-role
+# is three.
 discover_roots() {
   local versions
   while IFS= read -r versions; do

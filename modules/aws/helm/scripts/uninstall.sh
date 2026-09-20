@@ -176,7 +176,7 @@ kubectl delete clustersecretstore langsmith-ssm --ignore-not-found
 echo ""
 
 # ── Clean up operator-managed resources ──────────────────────────────────────
-# platform-backend creates agent-builder and LangGraph resources at runtime with
+# platform-backend creates Fleet and LangGraph resources at runtime with
 # no Helm owner reference. Target only LangSmith resources by label so workloads
 # from other teams sharing this namespace are not affected.
 # Bounded by --timeout so a pod that cannot terminate does not block the run

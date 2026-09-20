@@ -21,6 +21,8 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 
 Each provider directory is a self-contained deployment with a `Makefile`, an `infra/` Terraform layout, Helm values, and operator scripts. The shared module structure is described in [`modules/README.md`](modules/README.md).
 
+For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byoc/README.md) for the customer-side IAM role and AWS VPC reference modules.
+
 ## What you get
 
 - **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.

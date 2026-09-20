@@ -122,7 +122,6 @@ sizing_profile      = "dev"
 
 #── Features (all off for test clusters) ─────────────────────────────────────
 enable_deployments   = false
-enable_agent_builder = false
 enable_insights      = false
 enable_polly         = false
 
