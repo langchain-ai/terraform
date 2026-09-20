@@ -399,6 +399,8 @@ make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 
 `init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
+Pod autoscaling is built into the `dev`, `production`, and `production-large` sizing templates; `minimum` keeps core services fixed while retaining SmithDB HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
+
 ---
 
 ## Envoy Gateway (Gateway API)
