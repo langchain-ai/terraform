@@ -27,7 +27,7 @@ For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byo
 
 - **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.
 - **Provider-specific secret handling.** AWS application secrets flow from SSM Parameter Store through [External Secrets Operator](https://external-secrets.io/); Azure application secrets flow from Key Vault through `infra/scripts/create-k8s-secrets.sh`; GCP application secrets flow from Secret Manager into generated Helm values. Terraform also creates Kubernetes Secrets containing infrastructure credentials on all three clouds, so those values remain in Terraform state — protect the state backend. See the [secret flow and state table](modules/README.md#secret-flow-and-state).
-- **Sizing profiles:** `minimum`, `dev`, `production`, and `production-large` — selected with a single variable. `default` uses the chart defaults without a sizing overlay.
+- **Sizing profiles:** `minimum`, `dev`, `production`, and `production-large` — selected with a single variable. Setting `sizing_profile = "default"` skips the sizing overlay; the provider's base values and other overrides still apply.
 - **Enterprise feature toggles:**
   - LangGraph Platform / Deployments
   - Agent Builder
