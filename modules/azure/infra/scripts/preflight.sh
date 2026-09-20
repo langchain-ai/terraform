@@ -141,7 +141,7 @@ else
     if GROUP_IDS=$(az ad user get-member-groups --id "$PRINCIPAL_ID" --query '[].id' -o tsv 2>/dev/null); then
       GROUPS_RESOLVED=1
     else
-      warn "Could not resolve transitive group membership — denied RBAC results will be treated as inconclusive"
+      warn "Azure group-based permissions could not be verified. Before deploying, confirm this identity's access at the subscription and resource group scopes in Azure Access control (IAM) > Check access. The denied results below may be incomplete."
     fi
   fi
 fi
@@ -450,17 +450,17 @@ PY
     if [ "$GROUPS_RESOLVED" -eq 1 ]; then
       pass "checkAccess answered with transitive group membership, deny assignments, and ABAC conditions applied"
     else
-      warn "checkAccess answered without transitive group membership; denied results cover direct assignments only"
+      warn "Azure evaluated only permissions assigned directly to this identity; group-based permissions were not included"
     fi
     while IFS= read -r LINE; do
       case "$LINE" in
         pass\ *) pass "${LINE#pass }" ;;
         warn\ *) warn "${LINE#warn }" ;;
         fail\ *)
-          if [ "$GROUPS_RESOLVED" -eq 1 ] || [[ "$LINE" == *"deny assignment"* ]]; then
+          if [ "$GROUPS_RESOLVED" -eq 1 ]; then
             fail "${LINE#fail }"
           else
-            warn "${LINE#fail } This result is inconclusive without transitive group membership."
+            warn "${LINE#fail } This denial could not be confirmed because group-based permissions were unavailable."
           fi
           ;;
         *) [ -z "$LINE" ] || warn "$LINE" ;;

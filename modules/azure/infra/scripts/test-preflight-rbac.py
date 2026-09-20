@@ -226,10 +226,24 @@ CASES = [
         "groups_fail": True,
         "ca_all": response(write=False),
         "expect": [
-            "[!] Could not resolve transitive group membership",
-            "This result is inconclusive without transitive group membership.",
+            "[!] Azure group-based permissions could not be verified.",
+            "Before deploying, confirm this identity's access at the subscription and resource group scopes in Azure Access control (IAM) > Check access.",
+            "This denial could not be confirmed because group-based permissions were unavailable.",
         ],
         "reject": ["[✗] roleAssignments/write is not permitted"],
+        "exit_code": 0,
+    },
+    {
+        "name": "a failed group lookup makes a deny assignment inconclusive",
+        "groups_fail": True,
+        "ca_all": response(write=False, deny=DENY),
+        "expect": [
+            "[!] roleAssignments/write is denied at",
+            'deny assignment "Landing zone RBAC lock"',
+            "This denial could not be confirmed because group-based permissions were unavailable.",
+        ],
+        "reject": ["[✗] roleAssignments/write is denied"],
+        "exit_code": 0,
     },
     {
         "name": "contributor is named as the granting role when it is the one that answered",
@@ -257,6 +271,7 @@ CASES = [
             'deny assignment "Landing zone RBAC lock"',
             "override every role assignment including Owner",
         ],
+        "exit_code": 1,
     },
     {
         "name": "an inactive PIM role turns the failure into an activation step",
@@ -493,6 +508,10 @@ def run_case(case, index):
     calls = calls_path.read_text() if calls_path.exists() else ""
 
     problems = []
+    if "exit_code" in case and proc.returncode != case["exit_code"]:
+        problems.append(
+            f"exit code was {proc.returncode}, expected {case['exit_code']}"
+        )
     for needle in case.get("expect", []):
         if needle not in output:
             problems.append(f"missing: {needle}")
