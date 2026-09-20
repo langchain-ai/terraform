@@ -51,6 +51,8 @@ _project_id=$(_tfvars_parse "project_id")
 _name_prefix=$(_tfvars_parse "name_prefix")
 _environment=$(_tfvars_parse "environment")
 _region=$(_tfvars_parse "region")
+_enable_sandboxes=$(grep -E '^\s*enable_sandboxes\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
+  | sed 's/.*=[[:space:]]*\([^[:space:]#]*\).*/\1/') || _enable_sandboxes="false"
 _region="${_region:-us-west2}"
 
 if [[ -z "$_project_id" ]]; then
@@ -367,8 +369,10 @@ _sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
 _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
 
-_sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
-  "_ed25519_private_jwk_gen" "" "true"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
+    "_ed25519_private_jwk_gen" "" "true"
+fi
 
 # ── Admin password rule ───────────────────────────────────────────────────────
 # templates/validate.yaml rejects a non-compliant password at render time, so
@@ -467,7 +471,9 @@ echo "  postgres_password = (hidden — SM: ${_sm_prefix}-postgres-password)"
 echo "  license_key       = (hidden — SM: ${_sm_prefix}-langsmith-license-key)"
 echo "  api_key_salt      = (hidden — SM: ${_sm_prefix}-api-key-salt)"
 echo "  jwt_secret        = (hidden — SM: ${_sm_prefix}-jwt-secret)"
-echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
+fi
 echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"
