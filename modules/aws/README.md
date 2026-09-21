@@ -548,9 +548,9 @@ All commands are run from `terraform/aws/`. Run `make help` for a quick summary.
 
 ### `make quickstart`
 
-**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. When `terraform.tfvars` already exists the wizard pre-selects your current values at every prompt — press Enter to keep them, or type a different number to change.
+**When to use:** First time setting up a new deployment, or any time you want to update `terraform.tfvars`. During updates, the wizard keeps the existing name prefix, environment, and AWS region unchanged because they identify the deployment and its SSM secrets. It also keeps the custom domain unchanged because changing it requires a guided DNS and certificate migration. Other prompts pre-select their current values.
 
-Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, addons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu shows a `(default)` marker on the pre-selected option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
+Runs `infra/scripts/quickstart.sh` — an interactive wizard that asks you questions (name prefix, region, TLS method, external vs in-cluster services, add-ons) and writes a ready-to-use `infra/terraform.tfvars` file. Each menu marks the current or default option and accepts Enter to confirm it, so re-runs are fast. Saves you from editing the example file by hand.
 
 ```bash
 make quickstart
@@ -583,7 +583,7 @@ For each secret it follows this priority order:
 
 | SSM key | How it's set | Notes |
 |---|---|---|
-| `postgres-password` | You enter it | Terraform sets RDS with this password |
+| `postgres-password` | Auto-generated (`openssl rand -hex 32`) | RDS master password. Hex avoids RDS-forbidden `/ @ " ' space`. Override with `TF_VAR_postgres_password`; setup-env.sh rejects a value RDS will not accept. |
 | `redis-auth-token` | Auto-generated (`openssl rand -hex 32`) | ElastiCache requires hex, not base64 |
 | `langsmith-api-key-salt` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all API keys |
 | `langsmith-jwt-secret` | Auto-generated (`openssl rand -base64 32`) | **Never change** — invalidates all sessions |
@@ -597,6 +597,14 @@ For each secret it follows this priority order:
 Fernet keys are: `openssl rand -base64 32 | tr "+/" "-_"` (URL-safe base64, as required by the LangGraph platform).
 
 After running, you'll see a summary of all values (masked) and the SSM prefix. Terraform then reads the secrets as `TF_VAR_*` variables during `plan` / `apply`.
+
+If an apply updates `langsmith-postgres` or the Fleet/Polly/Insights Postgres secrets (for example after password URL-encoding), restart every deployment in the Helm release so its pods load the new `connection_url`:
+
+```bash
+kubectl rollout restart deployment -n langsmith -l "app.kubernetes.io/instance=langsmith"
+```
+
+Running `./helm/scripts/deploy.sh` alone is not enough because it explicitly restarts only the frontend. Terraform recreates a failed `langsmith-standalone-*-db-init` Job when the encoded admin URL changes. The Job skips `CREATE DATABASE` when the database already exists.
 
 > **Why SSM?** Secrets are never in git or `.tfvars`. ESO reads them from SSM at runtime and syncs them into the `langsmith-config` Kubernetes Secret that the Helm chart mounts.
 
@@ -924,7 +932,7 @@ These scripts are not exposed as `make` targets but are used internally by the s
 
 ### `infra/scripts/_common.sh`
 
-Shared library sourced by every script. Provides:
+Shared library sourced by scripts that need its shared helpers. Provides:
 - `_parse_tfvar <key>` — extracts a value from `terraform.tfvars` using sed
 - `_tfvar_is_true <key>` — returns 0 if a variable is set to `true` in tfvars
 - `INFRA_DIR` — absolute path to `infra/`, resolved from the sourcing script's location

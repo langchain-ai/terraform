@@ -27,8 +27,10 @@ mock_provider "null" {}
 mock_provider "time" {}
 
 variables {
-  subscription_id         = "00000000-0000-0000-0000-000000000000"
-  postgres_admin_password = "fixture-not-a-real-secret-Aa1"
+  subscription_id = "00000000-0000-0000-0000-000000000000"
+  # Every printable ASCII punctuation character that survives raw HCL string
+  # serialization. Double quotes and backslashes are covered by rejection runs.
+  postgres_admin_password = "Aa1 !$#%&'()*+,-./:;<=>?@[]^_`{|}~"
   enable_smithdb          = false
 }
 
@@ -58,6 +60,56 @@ run "enums_reject_an_unlisted_value" {
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
   ]
+}
+
+run "postgres_password_rejects_a_double_quote" {
+  command = plan
+
+  variables {
+    postgres_admin_password = "fixture-\"-not-a-real-secret-Aa1"
+  }
+
+  expect_failures = [var.postgres_admin_password]
+}
+
+run "postgres_password_rejects_a_backslash" {
+  command = plan
+
+  variables {
+    postgres_admin_password = "fixture-\\-not-a-real-secret-Aa1"
+  }
+
+  expect_failures = [var.postgres_admin_password]
+}
+
+run "postgres_password_rejects_a_newline" {
+  command = plan
+
+  variables {
+    postgres_admin_password = "fixture-\n-not-a-real-secret-Aa1"
+  }
+
+  expect_failures = [var.postgres_admin_password]
+}
+
+run "postgres_password_rejects_an_hcl_interpolation_opener" {
+  command = plan
+
+  variables {
+    postgres_admin_password = "fixture-$${template}-not-a-real-secret-Aa1"
+  }
+
+  expect_failures = [var.postgres_admin_password]
+}
+
+run "postgres_password_rejects_an_hcl_directive_opener" {
+  command = plan
+
+  variables {
+    postgres_admin_password = "fixture-%%{template}-not-a-real-secret-Aa1"
+  }
+
+  expect_failures = [var.postgres_admin_password]
 }
 
 run "resource_ids_reject_a_bare_name" {
