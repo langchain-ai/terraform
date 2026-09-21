@@ -1,5 +1,6 @@
 output "connection_url" {
-  value     = "postgres://${aws_db_instance.this.username}:${coalesce(aws_db_instance.this.password, "IMPORTED")}@${aws_db_instance.this.endpoint}/${aws_db_instance.this.db_name}"
+  # Root validation rejects spaces, so urlencode() cannot emit "+" for a space.
+  value     = "postgres://${aws_db_instance.this.username}:${urlencode(coalesce(aws_db_instance.this.password, "IMPORTED"))}@${aws_db_instance.this.endpoint}/${aws_db_instance.this.db_name}"
   sensitive = true
 }
 

@@ -367,7 +367,7 @@ Secrets stored at `/langsmith/myco-dev/`:
 
 | Parameter | Auto-generated | Rotatable |
 |-----------|---------------|-----------|
-| `postgres-password` | No (prompted) | Yes, with app restart |
+| `postgres-password` | Yes (hex-32) | Yes, with app restart |
 | `redis-auth-token` | Yes (hex-32) | Yes, with app restart |
 | `langsmith-api-key-salt` | Yes (base64-32) | **Never** — invalidates all API keys |
 | `langsmith-jwt-secret` | Yes (base64-32) | **Never** — invalidates all sessions |

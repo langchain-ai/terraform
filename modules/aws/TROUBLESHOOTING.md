@@ -537,7 +537,7 @@ If either was entered and the script failed afterwards, clear them first (or ope
 unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
 ```
 
-Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently; only what is missing is prompted for.
+Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently. Missing generated secrets (including postgres-password) are created; remaining gaps are prompted.
 
 ---
 
