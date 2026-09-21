@@ -92,6 +92,59 @@ _validate_admin_password() {
   fi
 }
 
+# ── License key validation ───────────────────────────────────────────────────
+# Two shapes reach platform-backend. An online key is `lcl_` plus the key body,
+# which the backend exchanges with Beacon at startup (smith-go tests only the
+# prefix). An offline key is a three-part JWT whose first part is a base64url
+# JSON header carrying the alg member RFC 7515 requires. Anything else is parsed
+# as a JWT and fails inside the pod with an error that names neither the prompt
+# nor licensing (#250), so the shape is checked here, where the operator still
+# has the right value in front of them. Shape only: no signature check, and the
+# body-length floor on lcl_ keys is a typo guard rather than a specification.
+_b64url_decode() {
+  local s="${1//-/+}"
+  s="${s//_//}"
+  case $(( ${#s} % 4 )) in
+    1) return 1 ;;
+    2) s="${s}==" ;;
+    3) s="${s}=" ;;
+  esac
+  printf '%s' "$s" | base64 -d 2>/dev/null
+}
+
+_validate_license_key() {
+  local key="$1" err="" header="" header_json="" dots=""
+  # A JWS header is a JSON object and must carry alg (RFC 7515 §4.1.1). Kept in
+  # a variable: bash 3.2 treats a quoted regex literally, and this one has quotes.
+  local header_re='^\{.*"alg"[[:space:]]*:.*\}$'
+
+  case "$key" in
+    "")                 err="cannot be empty" ;;
+    *[[:space:]]*)      err="contains whitespace; paste the key on its own" ;;
+    http://*|https://*) err="looks like a URL, not a license key. Paste the key itself, not the link it was shared in" ;;
+    lcl_*)
+      if [[ ! "${key#lcl_}" =~ ^[A-Za-z0-9_-]{16,}$ ]]; then
+        err="is too short, or has characters outside A-Z a-z 0-9 - _, for an lcl_ key"
+      fi ;;
+    *)
+      dots="${key//[^.]/}"
+      if [[ ${#dots} -ne 2 ]]; then
+        err="is not a LangSmith license key: expected lcl_<key>, or an offline token with exactly three dot-separated parts"
+      else
+        header="${key%%.*}"
+        if [[ ! "$header" =~ ^[A-Za-z0-9_-]+$ ]] || ! header_json=$(_b64url_decode "$header") \
+           || [[ ! "$header_json" =~ $header_re ]]; then
+          err="has three parts, but its first part is not a base64url JSON header with an alg member, so it is not an offline license token"
+        fi
+      fi ;;
+  esac
+
+  if [[ -n "$err" ]]; then
+    echo "License key ${err}."
+    return 1
+  fi
+}
+
 # ── values-overrides.yaml staleness stamp ────────────────────────────────────
 # terraform.tfvars keys whose value init-values.sh bakes into
 # values-overrides.yaml. That file is generated once and `make deploy` never
