@@ -789,6 +789,20 @@ variable "postgres_admin_password" {
   description = "The password of the Postgres administrator. Set via: source setup-env.sh"
   sensitive   = true
   default     = ""
+
+  # setup-env.sh rejects values that cannot be written raw inside an HCL
+  # double-quoted string. This matching validation protects TF_VAR and other
+  # direct input paths. URL-reserved characters are encoded in connection URLs.
+  validation {
+    condition = var.postgres_admin_password == "" || (
+      !strcontains(var.postgres_admin_password, "\"") &&
+      !strcontains(var.postgres_admin_password, "\\") &&
+      !strcontains(var.postgres_admin_password, "\n") &&
+      !strcontains(var.postgres_admin_password, "$${") &&
+      !strcontains(var.postgres_admin_password, "%%{")
+    )
+    error_message = "postgres_admin_password must not contain double quotes, backslashes, newlines, or HCL template markers ($${ or %%{)."
+  }
 }
 
 # ── LangSmith secrets ─────────────────────────────────────────────────────────
