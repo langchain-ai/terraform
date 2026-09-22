@@ -105,19 +105,14 @@ With `allow_delete_permissions = true`, BYOVPC mode permits deletion of tagged w
 
 Set `allow_iam_management_permissions = false` when supplying your own IAM
 resources, for example with the [BYOIAM module](../byoiam/README.md). The default
-is `true`, preserving managed IAM provisioning.
+is `true`, preserving LangChain-managed IAM provisioning.
 
-The Crossplane role retains IAM reads, policy simulation, and `PassRole` with
-existing role-name and AWS service restrictions. It no longer receives IAM
+The data plane management role then no longer has IAM
 creation, tagging, policy attachment, inline-policy, policy-version,
 instance-profile mutation, or deletion permissions, including service-linked
-role creation. `allow_delete_permissions = true` still permits non-IAM teardown
-but does not restore IAM writes.
+role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
 
-Pre-create the required roles, policies, instance profiles, and service-linked
-roles, and configure Crossplane to observe them before disabling IAM management.
-This switch removes grants from the Crossplane policies; it does not add an
-explicit deny or change the separate break-glass role.
+When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
 ### Enabling break-glass assume-role access
 
