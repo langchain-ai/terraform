@@ -70,6 +70,12 @@ variable "allow_vpc_creation_permissions" {
   default     = true
 }
 
+variable "allow_iam_management_permissions" {
+  description = "Grant IAM creation, mutation, and deletion permissions. Disable when the customer supplies roles, policies, instance profiles, and service-linked roles; IAM reads, scoped PassRole, and policy simulation remain available."
+  type        = bool
+  default     = true
+}
+
 variable "vpc_ids" {
   description = "VPC IDs in which Crossplane may create tagged workload security groups when base VPC creation permissions are disabled."
   type        = set(string)
