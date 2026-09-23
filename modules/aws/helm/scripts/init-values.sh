@@ -296,8 +296,19 @@ elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; 
 fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+SANDBOX_JUICEFS_CACHE_DIRS=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
+  # Instance-store NVMe mounts on the sandbox-host nodes, e.g. /mnt/juicefs-cache0.
+  # The list is empty when the nodes have no spare local NVMe, and the chart then
+  # caches under its default /var/cache/juicefs on the root volume. Kept as a
+  # space-separated string: an empty array trips set -u on the macOS bash 3.2.
+  _cache_dirs_json=$(terraform -chdir="$INFRA_DIR" output -json sandbox_juicefs_host_cache_dirs 2>/dev/null) || _cache_dirs_json=""
+  for _dir in $(printf '%s\n' "$_cache_dirs_json" | sed -e 's/[][" ]//g' -e 's/,/ /g'); do
+    if [[ "$_dir" == /* ]]; then
+      SANDBOX_JUICEFS_CACHE_DIRS+="${SANDBOX_JUICEFS_CACHE_DIRS:+ }${_dir}"
+    fi
+  done
 fi
 
 echo "Product addons (from terraform.tfvars):"
@@ -468,7 +479,7 @@ else
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+  echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}; cache: ${SANDBOX_JUICEFS_CACHE_DIRS:-chart default})"
 else
   echo "  ✗ Sandboxes (enable_sandboxes = false)"
 fi
@@ -722,20 +733,30 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
+  _sandbox_cache_dirs_block=""
+  if [[ -n "$SANDBOX_JUICEFS_CACHE_DIRS" ]]; then
+    _sandbox_cache_dirs_block="
+    hostMount:
+      cacheDirs:"
+    for _dir in $SANDBOX_JUICEFS_CACHE_DIRS; do
+      _sandbox_cache_dirs_block+="
+        - \"${_dir}\""
+    done
+  fi
+  # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
+  # under the same ServiceAccount, so the bucket role goes on sandboxHost.
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   juicefs:
-    csi:
-      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-      node:
-        serviceAccount:
-          annotations:
-            eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\"
+    existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"${_sandbox_cache_dirs_block}
   sandboxHost:
     deployment:
       nodeSelector:
-        sandbox.langsmith.com/host: \"true\""
+        sandbox.langsmith.com/host: \"true\"
+    serviceAccount:
+      annotations:
+        eks.amazonaws.com/role-arn: \"${IRSA_ROLE_ARN}\""
 fi
 
 # ── Write langsmith-values-overrides.yaml ─────────────────────────────────────

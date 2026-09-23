@@ -154,7 +154,7 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # Requirements:
 #   - gke_use_autopilot = false. Autopilot does not support the required
 #     dedicated nested-virtualization node pool.
-#   - enable_gcp_iam_module = true so the JuiceFS CSI node service account can
+#   - enable_gcp_iam_module = true so the sandbox-host service account can
 #     access the shared GCS bucket via Workload Identity.
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
 #     The default is n2-standard-8, which matches the tested live
@@ -166,7 +166,7 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # When sandboxes are enabled, the module creates a restricted sandbox-host node
 # service account and assigns it only the standard GKE node/telemetry roles.
 # JuiceFS object-store access stays on the Workload Identity service account
-# used by the JuiceFS CSI node service account, not on the node identity.
+# bound to the sandbox-host Kubernetes service account, not on the node identity.
 #
 # enable_sandboxes = true
 # sandbox_juicefs_redis_memory_size = 5

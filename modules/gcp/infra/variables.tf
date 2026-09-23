@@ -481,13 +481,13 @@ variable "sandbox_juicefs_redis_rdb_snapshot_period" {
 }
 
 variable "sandbox_juicefs_csi_config_secret_name" {
-  description = "Kubernetes Secret name containing JuiceFS CSI config. Created in the LangSmith namespace when enable_sandboxes = true."
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
   type        = string
   default     = "juicefs-csi-config"
 }
 
 variable "sandbox_juicefs_csi_config_secret_revision" {
-  description = "Revision for the write-only JuiceFS CSI config Secret. Increment to intentionally rewrite the secret."
+  description = "Revision for the write-only sandbox JuiceFS config Secret. Increment to intentionally rewrite the secret. The chart does not restart sandbox-host for an in-place rewrite, so restart it after the apply."
   type        = number
   default     = 1
 }

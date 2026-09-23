@@ -186,7 +186,7 @@ resource "terraform_data" "validate_inputs" {
 
     precondition {
       condition     = !var.enable_sandboxes || var.enable_gcp_iam_module
-      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the JuiceFS CSI node service account can access the shared GCS bucket."
+      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the sandbox-host service account can reach the shared GCS bucket through Workload Identity."
     }
 
     precondition {
@@ -594,6 +594,12 @@ module "iam" {
     "langsmith-standalone-polly-queue",
     "langsmith-standalone-insights-api-server",
     "langsmith-standalone-insights-queue",
+    # Chart 0.17 mounts sandbox JuiceFS inside sandbox-host, and the chart's JuiceFS
+    # format Job runs under the same ServiceAccount.
+    "langsmith-sandbox-host",
+    # Chart 0.16 JuiceFS CSI node ServiceAccount. Keep it through the 0.16 to 0.17
+    # upgrade: terraform apply runs before helm upgrade removes the driver, and the
+    # old mount pods read the bucket until then.
     "juicefs-csi-node-sa",
   ]
   gcs_bucket_name = module.storage.bucket_name
@@ -663,8 +669,10 @@ module "k8s_bootstrap" {
   resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
   resource_quota_extra_pods      = local.smithdb_quota_extra_pods
 
-  # The JuiceFS CSI driver runs at system-node-critical / system-cluster-critical,
-  # which GKE admits only into a namespace holding a PriorityClass-scoped quota.
+  # The chart 0.16 JuiceFS CSI driver runs at system-node-critical /
+  # system-cluster-critical, which GKE admits only into a namespace holding a
+  # PriorityClass-scoped quota. Chart 0.17 has no driver. Keep the quota through the
+  # upgrade so a driver pod rescheduled before helm upgrade removes it is admitted.
   allow_critical_priority_pods = var.enable_sandboxes
 
   # Host-networked sandbox-host must reach platform-backend, and the CNI dictates how:

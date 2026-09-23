@@ -534,7 +534,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   fi
 
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -598,7 +598,7 @@ fi
 
 if [[ "$_tfvars_drive_addons" != "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -887,21 +887,22 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
+  # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
+  # under the same ServiceAccount, so the Workload Identity binding goes on
+  # sandboxHost. infra binds langsmith-sandbox-host to the LangSmith GSA.
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
   juicefs:
-    csi:
-      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-      node:
-        serviceAccount:
-          annotations:
-            iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+    existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
   sandboxHost:
     deployment:
       nodeSelector:
-        sandbox.langsmith.com/host: \"true\""
+        sandbox.langsmith.com/host: \"true\"
+    serviceAccount:
+      annotations:
+        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\""
   _sandbox_top_level_block="
 images:
   sandboxHostImage:

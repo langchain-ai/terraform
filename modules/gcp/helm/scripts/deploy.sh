@@ -108,12 +108,34 @@ _chart_version_supports_sandboxes() {
   esac
 }
 
-_validate_sandbox_values_file() {
-  local values_file="$1"
+# Prints "legacy" when the sandboxes block still carries the chart 0.16
+# sandboxes.juicefs.csi keys, "ok" when it has the generated chart 0.17 keys, and
+# "missing" otherwise. Chart 0.17 ignores a leftover csi block, and its own
+# validation then fails the release on sandboxes.juicefs.redis.metaURL, which names
+# neither the values file nor the fix. Keep identical to the AWS copy.
+_sandbox_values_state() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    /^  enabled:[ \t]*true[ \t]*$/ { enabled = 1 }
+    child == "juicefs:" && /^    csi:/ { legacy = 1 }
+    child == "juicefs:" && /^    existingSecretName:[ \t]*"?[^" \t]+"?[ \t]*$/ { secret = 1 }
+    END { print (legacy ? "legacy" : (enabled && secret ? "ok" : "missing")) }
+  ' "$1"
+}
 
-  if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file" \
+_validate_sandbox_values_file() {
+  local values_file="$1" state
+
+  state="$(_sandbox_values_state "$values_file")"
+  if [[ "$state" == "legacy" ]]; then
+    echo "ERROR: $(basename "$values_file") carries sandboxes.juicefs.csi, the chart 0.16 sandbox schema." >&2
+    echo "       Chart 0.17 has no JuiceFS CSI driver and ignores that block." >&2
+    echo "       Run: ./helm/scripts/init-values.sh to regenerate it." >&2
+    exit 1
+  fi
+  if [[ "$state" != "ok" ]] \
     || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: ./helm/scripts/init-values.sh after applying infra." >&2
@@ -242,6 +264,34 @@ echo ""
 # Validate tools/credentials and cluster connectivity.
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
+
+# Chart 0.16 mounted sandbox volumes through a bundled JuiceFS CSI driver, which
+# chart 0.17 deletes. If the upgrade removes the driver while those volumes are
+# mounted, kubelet can no longer unmount them and the old sandbox-host pods hang in
+# Terminating on juicefs.com/finalizer. Draining needs the driver alive, so stop
+# here until no JuiceFS claim or mount pod is left. Checked whatever
+# enable_sandboxes says: turning the flag off does not remove a running driver.
+# Keep identical to the AWS copy.
+if kubectl get daemonset juicefs-csi-node -n "$NAMESPACE" >/dev/null 2>&1; then
+  _jfs_workloads=$(kubectl get deployments,statefulsets -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -E 'sandbox-host$' || true)
+  _jfs_pvcs=$(kubectl get pvc -n "$NAMESPACE" -o name 2>/dev/null | grep -Ei 'juicefs|smithbox' || true)
+  _jfs_mount_pods=$(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -i 'juicefs' | grep -Eiv '/juicefs-csi-(node|controller)' || true)
+  if [[ -n "${_jfs_pvcs}${_jfs_mount_pods}" ]]; then
+    echo "ERROR: namespace $NAMESPACE still mounts sandbox volumes through the chart 0.16 JuiceFS CSI driver." >&2
+    echo "       Chart 0.17 removes that driver, and upgrading now leaves the old sandbox-host pods" >&2
+    echo "       stuck in Terminating. Drain the volumes while the driver still runs, then re-run:" >&2
+    while IFS= read -r _obj; do
+      [[ -z "$_obj" ]] && continue
+      echo "         kubectl delete -n $NAMESPACE $_obj" >&2
+    done < <(printf '%s\n%s\n' "$_jfs_workloads" "$_jfs_pvcs")
+    echo "         kubectl get pods -n $NAMESPACE | grep juicefs   # wait until only juicefs-csi-* pods remain" >&2
+    echo "       Running sandboxes stop. Their data stays in object storage and Redis, and chart 0.17" >&2
+    echo "       mounts the same JuiceFS volume." >&2
+    exit 1
+  fi
+fi
 
 # ── Pre-deploy Gateway IP staleness check ────────────────────────────────────
 # If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
