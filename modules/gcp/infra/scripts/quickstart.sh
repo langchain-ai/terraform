@@ -617,6 +617,6 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
   printf "  ${DIM}SmithDB needs chart 0.16 or newer, which the deploy pin already targets.${RESET}\n"
   printf "  ${DIM}To name an exact patch instead:${RESET}\n"
-  printf "     ${CYAN}CHART_VERSION=0.16.3 make deploy${RESET}\n"
+  printf "     ${CYAN}CHART_VERSION=0.17.0 make deploy${RESET}\n"
 fi
 echo ""

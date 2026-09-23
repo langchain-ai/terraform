@@ -366,13 +366,9 @@ enable_usage_telemetry = false
 # Requires GKE Standard. Autopilot manages its own node pools, so the dedicated
 # Local SSD pools do not exist there and SmithDB pods would stay Pending.
 #
-# Enabling the infrastructure does NOT move the chart line. Pass 2 needs an
-# explicit chart version of 0.16 or newer:
-#   CHART_VERSION=0.16.0 make deploy
-# The 0.16 line has published release candidates only, so an exact prerelease
-# tag is required; ranges like "~0.16.0" match no chart and are rejected.
-# List what exists with:
-#   helm search repo langchain/langsmith --versions --devel
+# Pass 2 deploys on the pinned ~0.17.0 chart line, which already carries SmithDB,
+# so no chart version needs to be set. List what is published with:
+#   helm search repo langchain/langsmith --versions
 #------------------------------------------------------------------------------
 enable_smithdb = false
 

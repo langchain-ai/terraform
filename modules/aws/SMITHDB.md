@@ -39,7 +39,7 @@ make init-values
 ```
 
 SmithDB requires a stable Helm chart version of 0.16 or newer.
-The deploy script already pins the latest 0.16.x chart (`~0.16.0`):
+The deploy script already pins the latest 0.17.x chart (`~0.17.0`):
 
 ```sh
 make deploy

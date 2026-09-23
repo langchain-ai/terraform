@@ -201,14 +201,14 @@ Then deploy:
 make deploy
 ```
 
-SmithDB needs chart 0.16 or newer. `deploy.sh` already pins the 0.16 line and
+SmithDB needs chart 0.16 or newer. `deploy.sh` already pins the 0.17 line and
 refuses anything off it, so there is nothing SmithDB-specific to set. To name an
-exact patch rather than the latest on the line, pass `CHART_VERSION=0.16.3`.
+exact patch rather than the latest on the line, pass `CHART_VERSION=0.17.0`.
 
 The historical backfill needs 0.16.6 or newer, which is where the migration Job
-started following `config.blobStorage.engine` for its source blob store.
-`deploy.sh` rejects an earlier patch when `smithdb_migration_enabled` is true. The
-other two gates work on any patch of the line. Check what is published with:
+started following `config.blobStorage.engine` for its source blob store. The 0.17
+line carries that behavior, so all three gates work on any patch of the pinned
+line. Check what is published with:
 
 ```sh
 helm search repo langchain/langsmith --versions
@@ -302,8 +302,8 @@ fetch those objects to rewrite them into `.vortex` segments.
 
 Two pieces make that work, and they sit on opposite sides of the boundary:
 
-1) The chart selects the provider. From chart 0.16.6 the migration Job follows
-`config.blobStorage.engine`, so a GCS engine renders
+1) The chart selects the provider. From chart 0.16.6, and on every 0.17 chart, the
+migration Job follows `config.blobStorage.engine`, so a GCS engine renders
 `SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE: gcs` with a bucket and a root
 folder and no credential fields at all. The Job then authenticates as the Pod's
 Workload Identity principal. Nothing is needed in the values files for this.
@@ -319,8 +319,8 @@ Chart 0.16.5 and earlier asked for the `s3` provider whatever the engine said,
 and wired the credentials to `blob_storage_access_key` and
 `blob_storage_secret_access_key`. On GCP those two are empty by design, so the
 backfill AWS4-signed every read with an empty secret and `storage.googleapis.com`
-answered `403 SignatureDoesNotMatch`. `deploy.sh` refuses to deploy a patch below
-0.16.6 while `smithdb_migration_enabled` is true, rather than let that resurface.
+answered `403 SignatureDoesNotMatch`. The module pins the 0.17 line, which cannot
+resolve to one of those patches.
 
 Either way, a failure here is easy to misread. The Job reports `Running`, the pod
 stays `2/2 Running`, the metastore and the Auth Proxy are both healthy, and the

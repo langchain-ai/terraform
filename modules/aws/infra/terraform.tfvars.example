@@ -520,15 +520,15 @@ langsmith_namespace = "langsmith"
 # HELM CHART VERSION
 #------------------------------------------------------------------------------
 # Pin the chart to an exact patch for reproducible deploys. Empty deploys the
-# latest patch on the pinned 0.16 line, so a rebuild months apart can land on a
-# different chart. Must be a 0.16.x version — deploy.sh refuses anything else.
+# latest patch on the pinned 0.17 line, so a rebuild months apart can land on a
+# different chart. Must be a 0.17.x version — deploy.sh refuses anything else.
 #
 # The CHART_VERSION environment variable still overrides this when set:
-#   CHART_VERSION=0.16.11 make deploy
+#   CHART_VERSION=0.17.0 make deploy
 #
 # List what is published with:
 #   helm search repo langchain/langsmith --versions
-# langsmith_helm_chart_version = "0.16.11"
+# langsmith_helm_chart_version = "0.17.0"
 
 #------------------------------------------------------------------------------
 # SECURITY ADD-ONS (all optional, all default to off)
@@ -785,8 +785,8 @@ enable_usage_telemetry = false
 #   - the Karpenter controller + SmithDB instance-store + compute NodePools
 #     (SmithDB requires local NVMe SSDs; Karpenter RAID0s the NVMe automatically)
 #
-# Pass 2 uses the repository's ~0.16.0 pin, which resolves to the latest
-# compatible 0.16.x chart unless CHART_VERSION explicitly overrides it.
+# Pass 2 uses the repository's ~0.17.0 pin, which resolves to the latest
+# compatible 0.17.x chart unless CHART_VERSION explicitly overrides it.
 #
 # The generated values initially deploy SmithDB services with ingestion,
 # migration, and query integration disabled. Follow ../SMITHDB.md to enable each

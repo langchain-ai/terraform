@@ -8,33 +8,23 @@ independently of the LangSmith application database and trace-blob account.
 
 Two version numbers apply here, and they are not the same thing.
 
-**LangSmith chart: a stable release on the 0.17 line, selected explicitly.**
+**LangSmith chart: a stable release on the 0.17 line.**
 The 0.17 line is the first with both the Azure SmithDB values and the per-pod
 cache PVC contract. `deploy.sh` accepts `0.17.x` only. It rejects 0.16, because
 the Azure values are absent there, and it rejects 0.18, because the module pins
 a chart line and never crosses a minor on its own.
 
-Deploy a released 0.17 patch, using a `~0.17.0` constraint to take the newest
-one. Helm leaves prereleases out of a constraint like that, so it selects only
-stable releases. Naming a prerelease exactly does install it, and that is not a
-supported configuration: an RC carries an unreleased application image, so a
-problem found on one cannot be told apart from a problem in the module.
+The default pin, `~0.17.0`, takes the newest released 0.17 patch. Helm leaves
+prereleases out of a constraint like that, so it selects only stable releases.
+Naming a prerelease exactly does install it, and that is not a supported
+configuration: an RC carries an unreleased application image, so a problem found
+on one cannot be told apart from a problem in the module.
 
-No stable 0.17 chart exists yet. `~0.17.0` therefore resolves to nothing today,
-and `helm search repo langchain/langsmith --versions` lists 0.17 only under
-`--devel`. Treat the constraint above as what to use once 0.17 ships, and
-enable SmithDB on Azure after that.
-
-**Module tag: still `v0.16.*`.** The Azure module ships on the 0.16 tag series,
-where the default chart pin is `~0.16.0`. So on a `v0.16.*` tag, SmithDB needs
-`langsmith_helm_chart_version` set explicitly. `enable_smithdb = true` with no
-chart version fails the deploy rather than installing a chart without SmithDB
-support. Deployments that leave `enable_smithdb = false` are unaffected and
-stay on the 0.16 pin.
-
-This split is temporary. When the module line moves to 0.17, SmithDB becomes an
-ordinary feature of the pinned line, the explicit selection is no longer needed,
-and this section goes away.
+**Module tag: `v0.17.*`.** SmithDB is an ordinary feature of the pinned line, so
+it needs no chart selection of its own. Leave `langsmith_helm_chart_version`
+empty to take the newest 0.17 patch, or set it to name one. A `v0.16.*` tag
+cannot deploy SmithDB on Azure: its pin is `~0.16.0`, and the 0.16 chart has no
+Azure SmithDB values.
 
 ## Infrastructure
 
