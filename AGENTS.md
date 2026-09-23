@@ -8,10 +8,10 @@ before the PR does, not a separate standard.
 
 ## Layout
 
-- `modules/<provider>/{infra,app}` — each is its own Terraform root: own
-  `versions.tf`, `backend.tf`, state. `infra/` provisions the cloud foundation;
-  `app/` Helm-deploys LangSmith. `aws`, `azure`, and `gcp` have both.
-- `modules/byoc/aws/langsmith-byoc-role/` — a seventh root, one level deeper
+- `modules/<provider>/infra` — its own Terraform root: own `versions.tf`,
+  `backend.tf`, state. It provisions the cloud foundation. `aws`, `azure`, and
+  `gcp` each have one.
+- `modules/byoc/aws/langsmith-byoc-role/` — another root, one level deeper
   than the rest: the customer-side IAM role and break-glass role for BYOC.
   Gated like the others, so run the checks after touching the policies.
 - `modules/<provider>/helm/scripts/` — the shell drivers (`deploy.sh`,
@@ -21,13 +21,15 @@ before the PR does, not a separate standard.
   (networking, k8s-cluster, postgres, redis, storage, dns, secrets, iam…).
   Local `source = "./modules/..."` only; no registry module publishing here.
   Validated transitively via `--call-module-type=all`, not as their own roots —
-  even the two that carry a `versions.tf` (azure `keyvault`, azure `redis`), so
-  the gate identifies a child module by its path, not by depth.
+  even the four that carry a `versions.tf` (azure `keyvault`, `redis`,
+  `k8s-cluster`, and `smithdb`), so the gate identifies a child module by its
+  path, not by depth.
 - `modules/<provider>/infra/tests/*.tftest.hcl` — plan tests for that root, run
   by `agents/plan-tests.sh`. Mocked providers, so no credentials and no state.
-  Shared provider fixtures live in `tests/mocks/<provider>/*.tfmock.hcl`.
-- Not gated for terraform: `modules/ocp`. The OpenShift port is still stubs
-  with no `versions.tf` anywhere, so there is nothing to init against. Its
+  Shared provider fixtures live in
+  `modules/<provider>/infra/tests/mocks/<provider>/*.tfmock.hcl`.
+- Not gated for terraform: `modules/ocp`. It has provider requirements in
+  `infra/main.tf`, but no `versions.tf` for root discovery. Its
   shell scripts are covered (CI lints every tracked `*.sh`); the HCL has only
   `terraform fmt -check`. Edit with extra care.
 - `.terraform.lock.hcl`, `*.tfvars`, `*.tfstate*` are gitignored per provider
