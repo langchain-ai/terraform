@@ -648,12 +648,12 @@ variable "letsencrypt_email" {
 
 variable "langsmith_helm_chart_version" {
   type        = string
-  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.16.11\". Empty deploys the latest patch on the pinned 0.16 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.17.0\". Empty deploys the latest patch on the pinned 0.17 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
   default     = ""
 
   validation {
-    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.16\\.", var.langsmith_helm_chart_version))
-    error_message = "langsmith_helm_chart_version must be empty or a 0.16.x version — deploy.sh refuses anything off the pinned chart line."
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.17\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.17.x version — deploy.sh refuses anything off the pinned chart line."
   }
 }
 

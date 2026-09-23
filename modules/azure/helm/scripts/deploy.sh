@@ -22,7 +22,7 @@
 #
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh
-#   CHART_VERSION=0.16.0 ./helm/scripts/deploy.sh
+#   CHART_VERSION=0.17.0 ./helm/scripts/deploy.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -436,8 +436,7 @@ echo ""
 _chart_source="langchain/langsmith"
 # Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
 # We pin the chart line so an unpinned deploy cannot silently jump a breaking
-# minor. The existing Azure path remains on 0.16; SmithDB requires an explicit
-# 0.17 selection until the provider-wide default advances.
+# minor.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
@@ -448,39 +447,18 @@ fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
-_required_chart_line="0.16"
-if [[ "$_enable_smithdb" == "true" ]]; then
-  _required_chart_line="0.17"
-fi
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
+_required_chart_line="0.17"
 
-# Select the chart line explicitly. The SmithDB Azure values first appear in
-# 0.17; deployments without SmithDB retain the existing 0.16 contract.
+# These values target chart 0.17, where the SmithDB Azure values first appear.
+# Refuse any other line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
 if [[ "$_chart_line" != "$_required_chart_line" ]]; then
   echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
-  if [[ "$_enable_smithdb" == "true" ]]; then
-    echo "       enable_smithdb = true requires the chart ${_required_chart_line} line, which is not the" >&2
-    echo "       Azure default. Select it explicitly in terraform.tfvars:" >&2
-    echo "         langsmith_helm_chart_version = \"~${_required_chart_line}.0\"" >&2
-    echo "       or for a single deploy:" >&2
-    echo "         CHART_VERSION='~${_required_chart_line}.0' make deploy" >&2
-  else
-    echo "       These values require chart ${_required_chart_line} (engineInsightsAgent, top-level insights/polly)." >&2
-    echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
-    echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
-  fi
+  echo "       These values require chart ${_required_chart_line} (SmithDB values, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+  echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
   exit 1
-fi
-# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
-# are on the 0.16 line but still drop the block silently.
-if [[ "$_required_chart_line" == "0.16" && "$CHART_VERSION" == *-* ]]; then
-  _rc="${CHART_VERSION##*-rc.}"
-  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
-    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
-    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
-    exit 1
-  fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
