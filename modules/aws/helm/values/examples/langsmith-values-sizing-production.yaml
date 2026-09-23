@@ -258,7 +258,7 @@ smithdb:
           memory: "32Gi"
           ephemeral-storage: "100Gi"
     autoscaling:
-      minReplicas: 3
+      minReplicas: 1
 
   clusterManager:
     deployment:
