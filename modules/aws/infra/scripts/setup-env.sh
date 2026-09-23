@@ -26,6 +26,40 @@ export AWS_PAGER=""
 # setup-env.sh lives in infra/scripts/ but terraform.tfvars lives in infra/.
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
+# ── terraform.tfvars parser ───────────────────────────────────────────────────
+# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
+# apply-eso.sh and deploy.sh decide whether the sandbox secrets are expected by
+# calling the _common.sh copy, so a gate that disagrees leaves the
+# ExternalSecret pointing at an SSM parameter nothing created, which fails the
+# whole langsmith-config sync. _common.sh is not sourced here because it also
+# defines pass/info/fail and _aws, which this script must not leak into the
+# caller's interactive shell.
+_parse_tfvar() {
+  local key="$1"
+  local tfvars_file="$_SETUP_DIR/terraform.tfvars"
+  local raw val
+  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
+  [[ -n "$raw" ]] || return 1
+  # Quoted string: key = "value"
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  if [[ -z "$val" ]]; then
+    # Unquoted value: key = true / key = 42 / key = {} / key = ["m5.2xlarge"]
+    # Strip any trailing `# comment` BEFORE collapsing whitespace, otherwise
+    # `enable_fleet = true # note` parses to `true#note` and breaks _tfvar_is_true
+    # (migration issue #1).
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"[]')
+  fi
+  [[ -n "$val" ]] || return 1
+  echo "$val"
+}
+
+# Returns 0 if KEY = true or "true" in terraform.tfvars.
+_tfvar_is_true() {
+  local val
+  val=$(_parse_tfvar "$1") || return 1
+  [[ "$val" == "true" ]]
+}
+
 # ── AWS ───────────────────────────────────────────────────────────────────────
 # Ensure AWS_PROFILE or AWS credentials are set before sourcing.
 # Region is read from terraform.tfvars if present; falls back to AWS_REGION env var.
@@ -50,8 +84,10 @@ _name_prefix=$(grep -E '^\s*name_prefix\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/d
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
 _environment=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _environment="${LANGSMITH_ENV:-dev}"
-_enable_sandboxes=$(grep -E '^\s*enable_sandboxes\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*\([^[:space:]#]*\).*/\1/') || _enable_sandboxes="false"
+_enable_sandboxes=false
+if _tfvar_is_true "enable_sandboxes"; then
+  _enable_sandboxes=true
+fi
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
   return 1

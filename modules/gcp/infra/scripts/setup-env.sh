@@ -42,17 +42,34 @@ fi
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # ── Read project/env from terraform.tfvars ────────────────────────────────────
-_tfvars_parse() {
-  grep -E "^\s*${1}\s*=" "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
+# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
+# deploy.sh and init-values.sh decide whether the sandbox secret is expected by
+# calling the _common.sh copy, so a gate that disagrees omits a secret they
+# require. _common.sh is not sourced here because it also defines
+# pass/info/fail, which this script must not leak into the caller's shell.
+_parse_tfvar() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null || true
 }
 
-_project_id=$(_tfvars_parse "project_id")
-_name_prefix=$(_tfvars_parse "name_prefix")
-_environment=$(_tfvars_parse "environment")
-_region=$(_tfvars_parse "region")
-_enable_sandboxes=$(grep -E '^\s*enable_sandboxes\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*\([^[:space:]#]*\).*/\1/') || _enable_sandboxes="false"
+_tfvar_is_true() {
+  [[ "$(_parse_tfvar "$1")" == "true" ]]
+}
+
+_project_id=$(_parse_tfvar "project_id")
+_name_prefix=$(_parse_tfvar "name_prefix")
+_environment=$(_parse_tfvar "environment")
+_region=$(_parse_tfvar "region")
+_enable_sandboxes=false
+if _tfvar_is_true "enable_sandboxes"; then
+  _enable_sandboxes=true
+fi
 _region="${_region:-us-west2}"
 
 if [[ -z "$_project_id" ]]; then
