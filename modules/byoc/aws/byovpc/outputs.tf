@@ -1,24 +1,22 @@
 output "langsmith_network_config" {
   description = "Network identifiers to provide when creating the LangSmith data plane."
   value = {
-    vpc_id                 = aws_vpc.this.id
+    vpc_id                 = local.vpc_id
     availability_zones     = local.availability_zones
-    private_app_subnet_ids = [for az in local.availability_zones : aws_subnet.private_app[az].id]
-    private_db_subnet_ids  = [for az in local.availability_zones : aws_subnet.private_db[az].id]
-    public_subnet_ids = var.publicly_accessible ? [
-      for az in local.availability_zones : aws_subnet.public[az].id
-    ] : []
+    private_app_subnet_ids = local.private_app_subnet_ids
+    private_db_subnet_ids  = local.private_db_subnet_ids
+    public_subnet_ids      = local.public_subnet_ids
   }
 }
 
 output "vpc_id" {
-  description = "ID of the created VPC."
-  value       = aws_vpc.this.id
+  description = "ID of the created or supplied VPC."
+  value       = local.vpc_id
 }
 
 output "vpc_cidr_block" {
-  description = "IPv4 CIDR block of the created VPC."
-  value       = aws_vpc.this.cidr_block
+  description = "Primary IPv4 CIDR block of the created or supplied VPC."
+  value       = var.vpc_cidr_block
 }
 
 output "availability_zones" {
@@ -28,39 +26,37 @@ output "availability_zones" {
 
 output "private_app_subnet_ids" {
   description = "Ordered IDs of the private application subnets."
-  value       = [for az in local.availability_zones : aws_subnet.private_app[az].id]
+  value       = local.private_app_subnet_ids
 }
 
 output "private_db_subnet_ids" {
   description = "Ordered IDs of the isolated database subnets."
-  value       = [for az in local.availability_zones : aws_subnet.private_db[az].id]
+  value       = local.private_db_subnet_ids
 }
 
 output "public_subnet_ids" {
   description = "Ordered IDs of the public subnets, or an empty list when publicly_accessible is false."
-  value = var.publicly_accessible ? [
-    for az in local.availability_zones : aws_subnet.public[az].id
-  ] : []
+  value       = local.public_subnet_ids
 }
 
 output "private_app_route_table_ids" {
-  description = "Ordered IDs of the private application route tables."
-  value       = [for az in local.availability_zones : aws_route_table.private_app[az].id]
+  description = "Ordered IDs of module-created application route tables; empty when application subnets are supplied."
+  value       = [for az in local.availability_zones : aws_route_table.private_app[az].id if contains(keys(aws_route_table.private_app), az)]
 }
 
 output "private_db_route_table_ids" {
-  description = "IDs of the isolated database route tables."
-  value       = [aws_route_table.private_db.id]
+  description = "IDs of module-created database route tables; empty when database subnets are supplied."
+  value       = aws_route_table.private_db[*].id
 }
 
 output "public_route_table_ids" {
-  description = "IDs of the public route tables, or an empty list when publicly_accessible is false."
-  value       = var.publicly_accessible ? [aws_route_table.public[0].id] : []
+  description = "IDs of module-created public route tables; empty when public subnets are supplied or disabled."
+  value       = aws_route_table.public[*].id
 }
 
 output "internet_gateway_id" {
-  description = "ID of the Internet Gateway, or null when it is not created."
-  value       = try(aws_internet_gateway.this[0].id, null)
+  description = "ID of the created or supplied Internet Gateway, or null when neither is configured."
+  value       = local.internet_gateway_id
 }
 
 output "nat_gateway_id" {

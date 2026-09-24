@@ -12,10 +12,10 @@ locals {
 resource "aws_vpc_endpoint" "s3" {
   count = var.enable_vpc_endpoints ? 1 : 0
 
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = local.vpc_id
   service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [for az in local.availability_zones : aws_route_table.private_app[az].id]
+  route_table_ids   = [for table in aws_route_table.private_app : table.id]
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-s3-endpoint"
@@ -27,7 +27,7 @@ resource "aws_security_group" "interface_endpoints" {
 
   name        = "${var.name}-smith-vpc-endpoint-sg"
   description = "Security group for VPC interface endpoints"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-vpc-endpoint-sg"
@@ -52,10 +52,10 @@ resource "aws_vpc_security_group_ingress_rule" "interface_endpoints_https" {
 resource "aws_vpc_endpoint" "interface" {
   for_each = var.enable_vpc_endpoints ? toset(var.interface_endpoint_services) : toset([])
 
-  vpc_id              = aws_vpc.this.id
+  vpc_id              = local.vpc_id
   service_name        = "com.amazonaws.${data.aws_region.current.region}.${each.value}"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [for az in local.availability_zones : aws_subnet.private_app[az].id]
+  subnet_ids          = local.private_app_subnet_ids
   security_group_ids  = [aws_security_group.interface_endpoints[0].id]
   private_dns_enabled = true
 
@@ -67,11 +67,11 @@ resource "aws_vpc_endpoint" "interface" {
 resource "aws_vpc_endpoint" "control_plane" {
   count = var.enable_control_plane_privatelink ? 1 : 0
 
-  vpc_id              = aws_vpc.this.id
+  vpc_id              = local.vpc_id
   service_name        = local.control_plane_service_name
   service_region      = local.control_plane_service_region
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [for az in local.availability_zones : aws_subnet.private_app[az].id]
+  subnet_ids          = local.private_app_subnet_ids
   security_group_ids  = [aws_security_group.interface_endpoints[0].id]
   private_dns_enabled = false
 
@@ -86,7 +86,7 @@ resource "aws_route53_zone" "control_plane" {
   name = each.value
 
   vpc {
-    vpc_id = aws_vpc.this.id
+    vpc_id = local.vpc_id
   }
 
   tags = merge(local.tags, {
