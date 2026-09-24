@@ -161,7 +161,7 @@ resource "aws_s3_bucket_policy" "flow_logs" {
 resource "aws_flow_log" "this" {
   count = var.enable_vpc_flow_logs ? 1 : 0
 
-  vpc_id                   = aws_vpc.this.id
+  vpc_id                   = local.vpc_id
   log_destination          = aws_s3_bucket.flow_logs[0].arn
   log_destination_type     = "s3"
   traffic_type             = "ALL"
