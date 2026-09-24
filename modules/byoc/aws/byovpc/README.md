@@ -116,64 +116,41 @@ PrivateLink targets the LangSmith AWS control-plane endpoint service in `us-east
 
 ## Use an existing VPC
 
-Set `existing_vpc_id` to create the surrounding networking in a VPC you already own. Set `vpc_cidr_block` to its primary IPv4 CIDR; the module checks that they match and that DNS support and DNS hostnames are enabled. The same RFC1918 `/16`–`/18` requirement applies.
+Set `existing_vpc_id` and match `vpc_cidr_block` to its primary CIDR. The VPC must have DNS support and DNS hostnames enabled. Choose unused subnet ranges:
 
 ```hcl
 module "langsmith_byovpc" {
   source = "../terraform/modules/byoc/aws/byovpc"
 
-  name               = "langsmith-production"
   existing_vpc_id     = "vpc-0123456789abcdef0"
   vpc_cidr_block      = "10.20.0.0/16"
   availability_zones = ["us-east-1a", "us-east-1b"]
 
-  # Choose unused ranges inside the VPC for the new subnets.
   private_app_subnet_cidrs = ["10.20.0.0/18", "10.20.64.0/18"]
   private_db_subnet_cidrs  = ["10.20.128.0/24", "10.20.129.0/24"]
 
-  # Reuse the Internet Gateway already attached to this VPC.
   create_internet_gateway      = false
   existing_internet_gateway_id = "igw-0123456789abcdef0"
 }
 ```
 
-The module creates new subnets, route tables, associations, and (by default) a regional NAT gateway and S3-backed VPC flow logs. Public subnets and endpoints remain opt-in. It does not import or change existing subnets, route tables, VPC settings, or the default security group. Ensure the existing default security group is appropriately restricted.
-
-- Subnet CIDRs must be unused, non-overlapping ranges within the VPC. Automatic CIDR allocation is unchanged and does not discover existing subnets; supply explicit overrides when the default layout is already occupied.
-- If the VPC has no Internet Gateway, leave `create_internet_gateway = true` and omit `existing_internet_gateway_id` to create one. AWS permits only one attached Internet Gateway per VPC.
-- For centralized egress, set both `create_internet_gateway = false` and `create_nat_gateway = false`, omit `existing_internet_gateway_id`, and manage egress routes separately. New public subnets require a created or supplied Internet Gateway.
-- Flow logs cover the entire VPC, including existing workloads. Disable `enable_vpc_flow_logs` if suitable logging already exists.
-- Before enabling endpoints or PrivateLink, check for existing endpoints and private DNS zones that would conflict with the new ones.
-
-Leaving `existing_vpc_id = null` preserves the original behavior. State-address moves preserve the VPC and default security group when upgrading an existing deployment in that mode. Switching an already-applied deployment from a module-created VPC to an existing VPC is **not** an ownership migration: it plans removal of the managed VPC and may replace dependent resources. Handle any ownership migration separately before changing modes.
+This creates the surrounding networking while leaving VPC settings and its default security group unmanaged. Omit the gateway inputs to create a new Internet Gateway if none is attached. Flow logs cover the entire VPC; disable them if logging already exists.
 
 ### Reuse existing subnets
 
-Supply IDs independently for any tier, with one subnet per explicitly configured availability zone in the same order. Omitted tiers are created as usual. Supplied subnets must belong to `existing_vpc_id`, match the selected AZs, and be unique across tiers. Do not also supply CIDR overrides for a reused tier.
+Replace a tier's CIDR inputs with subnet IDs from the same VPC, one per AZ in `availability_zones` order. Omitted tiers are created normally:
 
 ```hcl
-module "langsmith_byovpc" {
-  source = "../terraform/modules/byoc/aws/byovpc"
-
-  existing_vpc_id     = "vpc-0123456789abcdef0"
-  vpc_cidr_block      = "10.20.0.0/16"
-  availability_zones = ["us-east-1a", "us-east-1b"]
-
-  existing_private_app_subnet_ids = ["subnet-00000000000000001", "subnet-00000000000000002"]
-  existing_private_db_subnet_ids  = ["subnet-00000000000000003", "subnet-00000000000000004"]
-
-  create_internet_gateway = false
-  create_nat_gateway      = false
-}
+existing_private_app_subnet_ids = ["subnet-00000000000000001", "subnet-00000000000000002"]
+existing_private_db_subnet_ids  = ["subnet-00000000000000003", "subnet-00000000000000004"]
+create_nat_gateway             = false
 ```
 
-To reuse public subnets, also set `publicly_accessible = true` and `existing_public_subnet_ids`.
+Public subnet reuse also requires `publicly_accessible = true`. Supplied subnets retain their routing and tags; you manage egress, database isolation, and load-balancer discovery tags. Application subnet reuse requires NAT creation disabled.
 
-The module leaves supplied subnets' tags, settings, route tables, and associations untouched. You manage their application egress, database isolation, public routes, and load-balancer discovery tags (`kubernetes.io/role/internal-elb` for application subnets and `kubernetes.io/role/elb` for public subnets). Supplying application subnet IDs requires `create_nat_gateway = false`; disable Internet Gateway creation too when it is already managed elsewhere.
+Outputs and Interface/PrivateLink endpoints use the selected subnets. Route-table outputs and S3 Gateway endpoint associations cover only module-created tables; manage S3 associations for reused subnets separately using `s3_gateway_endpoint_id`.
 
-Subnet outputs and Interface/PrivateLink endpoints use the selected subnet IDs. Route-table outputs contain only module-created tables and are empty for reused tiers. The optional S3 Gateway endpoint attaches only to module-created application route tables. With reused application subnets, manage its route-table associations separately using `s3_gateway_endpoint_id`.
-
-As with VPC ownership, switching a previously created subnet tier to supplied IDs is not an ownership migration; migrate its Terraform state separately first.
+Switching existing deployments from created resources to supplied IDs requires a separate state migration to avoid planned deletions.
 
 ## Inputs
 
@@ -186,9 +163,9 @@ All inputs are optional. Full types and validation rules are in [`variables.tf`]
 | `existing_internet_gateway_id` | `null` | Reuse a gateway attached to the supplied VPC; requires `create_internet_gateway = false`. |
 | `vpc_cidr_block` | `"10.0.0.0/16"` | Primary network-aligned RFC1918 IPv4 prefix, `/16`–`/18`; must match a supplied VPC. |
 | `availability_zones` | `[]` | Automatically select up to three AZs, or supply two or three unique AZ names. |
-| `existing_private_app_subnet_ids` | `null` | Reuse application subnets and their routing, in explicit AZ order; requires NAT creation disabled. |
-| `existing_private_db_subnet_ids` | `null` | Reuse database subnets and their routing, in explicit AZ order. |
-| `existing_public_subnet_ids` | `null` | Reuse public subnets and their routing, in explicit AZ order; requires `publicly_accessible`. |
+| `existing_private_app_subnet_ids` | `null` | Application subnets in AZ order; requires `create_nat_gateway = false`. |
+| `existing_private_db_subnet_ids` | `null` | Database subnets in AZ order. |
+| `existing_public_subnet_ids` | `null` | Public subnets in AZ order; requires `publicly_accessible`. |
 | `private_app_subnet_cidrs` | `null` | Override application subnet CIDRs in AZ order. |
 | `private_db_subnet_cidrs` | `null` | Override isolated database subnet CIDRs in AZ order. |
 | `public_subnet_cidrs` | `null` | Override public subnet CIDRs in AZ order. |
