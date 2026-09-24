@@ -33,6 +33,7 @@ RG_SCOPE = f"{SUB_SCOPE}/resourceGroups/langsmith-rg-dev"
 VNET_ID = f"{SUB_SCOPE}/resourceGroups/platform-network-rg/providers/Microsoft.Network/virtualNetworks/hub-vnet"
 USER_OID = "33333333-3333-3333-3333-333333333333"
 SP_OID = "44444444-4444-4444-4444-444444444444"
+GROUP_OID = "55555555-5555-5555-5555-555555555555"
 
 OWNER_GUID = "8e3af657a8ff443ca75c2fe8c4bcb635"
 CONTRIB_GUID = "b24988ac618042a0ab8820f7382dd24c"
@@ -299,15 +300,42 @@ CASES = [
         "reject_calls": ["postgres flexible-server list-skus"],
     },
     {
-        "name": "everything permitted passes at both scopes",
+        "name": "group-inherited access is permitted at both scopes",
+        "group_ids": [GROUP_OID],
         "ca_all": ALL_GOOD,
         # One line per verdict, not per scope: these two scopes agree, so they
         # are named together. Splitting them back out fails here.
         "expect": [
+            "[✓] checkAccess answered with transitive group membership",
             f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE}, granted by Owner held at",
             f"[✓] Every resource action the deployment needs is permitted at {SUB_SCOPE} and {RG_SCOPE}",
         ],
+        "assert_groups": [GROUP_OID],
         "reject": ["[✗]", "Falling back"],
+    },
+    {
+        "name": "a failed group lookup makes a denied result inconclusive",
+        "groups_fail": True,
+        "ca_all": response(write=False),
+        "expect": [
+            "[!] Azure group-based permissions could not be verified.",
+            "Before deploying, confirm this identity's access at the subscription and resource group scopes in Azure Access control (IAM) > Check access.",
+            "This denial could not be confirmed because group-based permissions were unavailable.",
+        ],
+        "reject": ["[✗] roleAssignments/write is not permitted"],
+        "exit_code": 0,
+    },
+    {
+        "name": "a failed group lookup makes a deny assignment inconclusive",
+        "groups_fail": True,
+        "ca_all": response(write=False, deny=DENY),
+        "expect": [
+            "[!] roleAssignments/write is denied at",
+            'deny assignment "Landing zone RBAC lock"',
+            "This denial could not be confirmed because group-based permissions were unavailable.",
+        ],
+        "reject": ["[✗] roleAssignments/write is denied"],
+        "exit_code": 0,
     },
     {
         "name": "contributor is named as the granting role when it is the one that answered",
@@ -335,6 +363,7 @@ CASES = [
             'deny assignment "Landing zone RBAC lock"',
             "override every role assignment including Owner",
         ],
+        "exit_code": 1,
     },
     {
         "name": "an inactive PIM role turns the failure into an activation step",
@@ -845,9 +874,11 @@ def build_case(case, index):
         (infra / "terraform.tfstate").write_text(
             json.dumps({"version": 4, "resources": resources})
         )
+    if "group_ids" in case:
+        (fixture / "group_ids").write_text("\n".join(case["group_ids"]))
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail", "pg_caps_fail", "pg_caps_stderr"):
+                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 
@@ -876,6 +907,10 @@ def run_case(case, index):
     calls = calls_path.read_text() if calls_path.exists() else ""
 
     problems = []
+    if "exit_code" in case and proc.returncode != case["exit_code"]:
+        problems.append(
+            f"exit code was {proc.returncode}, expected {case['exit_code']}"
+        )
     for needle in case.get("expect", []):
         if needle not in output:
             problems.append(f"missing: {needle}")
@@ -913,6 +948,15 @@ def run_case(case, index):
             for action in case.get("reject_actions", []):
                 if action in sent:
                     problems.append(f"unexpectedly asked about: {action}")
+
+    if "assert_groups" in case:
+        body_path = fixture / "last_body.json"
+        if not body_path.exists():
+            problems.append("no checkAccess body was sent")
+        else:
+            got = json.loads(body_path.read_text())["Subject"]["Attributes"].get("Groups")
+            if got != case["assert_groups"]:
+                problems.append(f"Groups were {got}, expected {case['assert_groups']}")
 
     if problems:
         rendered = [

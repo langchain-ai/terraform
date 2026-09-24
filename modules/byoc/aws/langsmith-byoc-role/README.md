@@ -14,7 +14,7 @@ This module creates two roles:
 1. An AWS account where the LangSmith data plane will live, and AWS credentials with permission to create IAM roles and policies in it.
 2. Terraform `>= 1.11.0` and the AWS provider `~> 6.0`.
 3. The `control_plane_reconcile_role_arn` provided by LangChain.
-4. An `external_id` value that you generate and provide to LangChain at data plane creation time. It is used in the trust policy `sts:ExternalId` condition.
+4. The external ID provided in the LangSmith UI under **Settings > Data Planes**. Copy this value and pass it as `external_id`; do not generate your own value. It is used in the trust policy `sts:ExternalId` condition and must exactly match the value provided by LangSmith.
 5. For break-glass access, the LangChain engineer Identity Store user IDs and LangChain email addresses provided by LangChain.
 
 Current LangSmith control-plane role values:
@@ -39,6 +39,11 @@ terraform {
 
 provider "aws" {
   region = "us-west-2"
+}
+
+variable "external_id" {
+  description = "External ID copied from Settings > Data Planes in the LangSmith UI."
+  type        = string
 }
 
 module "langsmith_byoc_role" {
@@ -69,11 +74,45 @@ output "role_arns" {
 }
 ```
 
+Before applying, set the input in your root module's `terraform.tfvars`, replacing the placeholder with the value copied from **Settings > Data Planes**:
+
+```hcl
+external_id = "<external-id-copied-from-langsmith>"
+```
+
 After `terraform apply`, share the `crossplane_role_arn` and `break_glass_role_arn` outputs with the LangChain team.
 
 We recommend keeping Terraform state in remote storage when possible, rather than storing it only on a local workstation.
 
 By default, the Crossplane role does not include permissions to delete LangSmith-managed resources. Set `allow_delete_permissions = true` before teardown to grant those resource deletion permissions.
+
+### Customer-supplied VPC (BYOVPC)
+
+Set the following inputs when the customer manages the base network, using the VPC IDs supplied to LangSmith:
+
+```hcl
+allow_vpc_creation_permissions = false
+vpc_ids                        = [module.langsmith_byovpc.vpc_id]
+```
+
+Here `module.langsmith_byovpc` is an instance of the [`BYOVPC reference module`](../byovpc/README.md). For an existing VPC, supply its ID directly. At least one VPC ID is required.
+
+This removes permissions to create or manage VPCs, subnets, Internet and NAT gateways, Elastic IPs, route tables and routes, network ACLs, customer-side VPC endpoints, VPC flow logs, and Network Firewall. It retains EC2 discovery, tagged workload security groups, PrivateLink endpoint services, and workload ENI detachment. Security-group creation is limited to the supplied VPC IDs in your account.
+
+With `allow_delete_permissions = true`, BYOVPC mode permits deletion of tagged workload security groups and endpoint services, plus termination of matching Karpenter instances. It does not restore base-network deletion permissions. `allow_vpc_creation_permissions` defaults to `true` for compatibility with LangSmith-managed VPCs.
+
+### Customer-managed IAM (BYOIAM)
+
+Set `allow_iam_management_permissions = false` when supplying your own IAM
+resources, for example with the [BYOIAM module](../byoiam/README.md). The default
+is `true`, preserving LangChain-managed IAM provisioning.
+
+The data plane management role then no longer has IAM
+creation, tagging, policy attachment, inline-policy, policy-version,
+instance-profile mutation, or deletion permissions, including service-linked
+role creation. `allow_delete_permissions = true` still allows non-IAM teardown.
+
+When using this configuration, you will need to pre-create the required roles, policies, instance profiles, and service-linked roles before deploying a data plane.
 
 ### Enabling break-glass assume-role access
 
@@ -111,7 +150,7 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 |----------|------|----------|---------|-------------|
 | `role_name` | `string` | yes | - | Name of the Crossplane-assumed IAM role created in your account. |
 | `control_plane_reconcile_role_arn` | `string` | yes | - | ARN of the LangSmith control-plane principal trusted to assume the role. |
-| `external_id` | `string` | yes | - | Per-tenant `sts:ExternalId` value. Treat as a secret. |
+| `external_id` | `string` | yes | - | External ID copied from **Settings > Data Planes** in LangSmith. Must match exactly; used for the `sts:ExternalId` trust condition. |
 | `break_glass_identitystore_user_ids` | `list(string)` | no | `[]` | IAM Identity Center user IDs allowed to assume the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
 | `break_glass_source_identities` | `list(string)` | no | `[]` | SourceIdentity values allowed when assuming the customer-side break-glass role. Empty lists are replaced with a non-matching dummy value in the trust policy. |
 | `allow_break_glass_access` | `bool` | no | `false` | Allows approved LangSmith Identity Center users to assume the customer-side break-glass role. |
@@ -120,6 +159,9 @@ This grants the additional Route 53 public-zone permissions needed for ACM DNS-0
 | `tags` | `map(string)` | no | `{}` | Tags applied to all roles and policies. |
 | `allow_public_ingress` | `bool` | no | `false` | Grants the Route 53 public-zone permissions needed when exposing the data plane on the public internet. |
 | `allow_delete_permissions` | `bool` | no | `false` | Grants permissions needed to delete LangSmith-managed resources during teardown. |
+| `allow_vpc_creation_permissions` | `bool` | no | `true` | Grants base-network management permissions. Set to `false` for a customer-supplied VPC. |
+| `allow_iam_management_permissions` | `bool` | no | `true` | Grants IAM creation, mutation, and deletion permissions. Set to `false` for customer-managed IAM. |
+| `vpc_ids` | `set(string)` | no | `[]` | Customer VPC IDs allowed for tagged workload security-group creation; required when `allow_vpc_creation_permissions = false`. |
 
 ## Outputs
 
@@ -138,8 +180,8 @@ The attached permissions are split into managed policies, scoped to the AWS surf
 
 | Policy suffix | Surface |
 |---------------|---------|
-| `-vpc` | VPC, subnets, NAT, route tables, endpoints, security groups, VPC flow logs |
-| `-ec2-eni` | `DetachNetworkInterface` on data-plane ENIs (Karpenter node teardown) |
+| `-vpc` | Base networking by default; reduced workload security-group and endpoint-service permissions in BYOVPC mode |
+| `-ec2-eni` | Workload ENI detachment, Network Firewall in managed-network mode, and optional network/Karpenter deletion permissions |
 | `-iam` | IAM role lifecycle for the data plane (EKS, IRSA, Karpenter, etc.) |
 | `-iam-karpenter-eks-profiles` | EC2 instance profiles for Karpenter and EKS, plus the Karpenter controller customer-managed policy |
 | `-eks` | EKS cluster, node groups, add-ons |

@@ -37,18 +37,61 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
+
+# Defined here rather than further down because CHART_VERSION resolution below
+# needs it, and the chart-line guard runs before the old definition site.
+_parse_tfvar() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
+}
 VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 # Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
 # Override with the CHART_VERSION env var for an exact patch if needed.
+#
+# Read the pin from the Terraform output, not from terraform.tfvars. That file is
+# only one of Terraform's variable sources, and not the highest priority one, so
+# a parse of the file alone misses a value set in an .auto.tfvars file, a
+# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_helm_chart_version, and
+# Helm then installs a different chart than the applied configuration declares.
+# The output is a plain string and carries no secret.
+#
+# The read fails when the state carries outputs but not this one, which is a
+# state applied before this output existed, and when terraform cannot run at all.
+# Fall back to the file parse there, so an older state keeps its documented pin.
+# An empty result is an answer rather than a failure: it means no pin, so let the
+# chart line default below apply. A tree with no state at all also reads as
+# empty, and the cluster_name check further down stops that run regardless.
+_chart_version_pin_source="terraform output"
+if ! _chart_version_pin=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_helm_chart_version 2>/dev/null); then
+  _chart_version_pin_source="terraform.tfvars"
+  _chart_version_pin=$(_parse_tfvar "langsmith_helm_chart_version") || _chart_version_pin=""
+fi
+
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
-# a different chart than the branch intends.
+# a different chart than the branch intends, and name the version that an unset
+# returns to, which is the pin when there is one.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
-  echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment."
+  if [[ -n "$_chart_version_pin" ]]; then
+    echo "      It overrides langsmith_helm_chart_version=${_chart_version_pin} (${_chart_version_pin_source})."
+    echo "      Run 'unset CHART_VERSION' to deploy ${_chart_version_pin}."
+  else
+    echo "      It overrides the ~0.16.0 chart line pin."
+    echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
+  fi
+elif [[ -n "$_chart_version_pin" ]]; then
+  CHART_VERSION="$_chart_version_pin"
+  echo "Chart version pinned by langsmith_helm_chart_version (${_chart_version_pin_source}): ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
@@ -133,16 +176,6 @@ fi
 # Values are cut at the closing quote, or at an inline # for bare booleans and
 # numbers, so a commented flag line still reads as a flag. Keep identical to the
 # other copies of this function.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 
 # SmithDB needs chart 0.16 or newer, which the line guard above already
@@ -214,9 +247,68 @@ echo ""
 # If the Envoy Gateway IP has changed since last deploy (e.g. after Gateway
 # resource recreation), warn the operator and update values-overrides.yaml
 # to prevent the Deployments operator from hitting stale endpoints.
+#
+# This only applies to IP-based installs. When langsmith_domain is set,
+# config.hostname must remain the DNS name: Terraform creates the Gateway
+# listener with that hostname, so rewriting the chart's hostname to the IP
+# leaves no intersection between the HTTPRoute and the listener. The route then
+# reports NoMatchingListenerHostname and every request 404s behind an otherwise
+# valid TLS certificate. The AWS module already guards this the same way.
+#
+# Read the domain from the Terraform output, not from terraform.tfvars. That
+# file is only one of Terraform's variable sources and not the highest priority
+# one, so a file parse misses a value set in an .auto.tfvars file, a
+# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_domain. Reading empty
+# there takes this branch for a domain-based install and rewrites the hostname
+# to the Gateway IP — the exact failure this guard exists to prevent. A domain
+# name is not a secret.
+#
+# A read failure means the state predates the langsmith_domain output, so fall
+# back to the file parse. An empty result from a successful read is an answer:
+# no domain is configured, so this is an IP-based install.
+if ! _langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
+  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+fi
 _live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
-if [[ -n "$_live_gateway_ip" ]]; then
+if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
+  # Domain-based install: never rewrite the hostname. Surface a DNS mismatch
+  # instead, since that is the actual thing an operator needs to fix.
+  #
+  # Only claim a resolution result when a resolver is actually available —
+  # otherwise an absent dig would report "does not resolve yet" for a domain that
+  # resolves perfectly well.
+  if command -v dig >/dev/null 2>&1; then
+    # Compare the whole A-record set against the one Gateway address. Taking a
+    # single record instead ties the verdict to the order the resolver happens
+    # to return, which rotates: a domain answering with both the Gateway IP and
+    # a stale one then passes on some runs and warns on others, and a run that
+    # passes hides that part of the traffic never reaches this cluster.
+    # Keep only IPv4 literals, since dig prints the CNAME target as well when
+    # the name is an alias.
+    _resolved_ips=$(dig +short "$_langsmith_domain" A 2>/dev/null \
+      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') || _resolved_ips=""
+    if [[ -z "$_resolved_ips" ]]; then
+      echo "NOTE: ${_langsmith_domain} does not resolve yet."
+      echo "      Point its DNS A record at ${_live_gateway_ip} — TLS issuance and"
+      echo "      ingress stay pending until it does."
+      echo ""
+    elif ! printf '%s\n' "$_resolved_ips" | grep -qxF "$_live_gateway_ip"; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ips//$'\n'/, }, not the"
+      echo "         Gateway IP ${_live_gateway_ip}. Update the DNS A record."
+      echo ""
+    elif [[ $(printf '%s\n' "$_resolved_ips" | wc -l) -gt 1 ]]; then
+      echo "WARNING: ${_langsmith_domain} resolves to ${_resolved_ips//$'\n'/, }."
+      echo "         Only ${_live_gateway_ip} is this Gateway. Requests that take one of"
+      echo "         the other addresses do not reach it. Remove the stale A records."
+      echo ""
+    fi
+  else
+    echo "NOTE: Gateway IP is ${_live_gateway_ip}; config.hostname stays"
+    echo "      ${_langsmith_domain}. Install dig to have this checked against DNS."
+    echo ""
+  fi
+elif [[ -n "$_live_gateway_ip" ]]; then
   _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
     | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
   if [[ -n "$_configured_hostname" && "$_configured_hostname" != "$_live_gateway_ip" ]]; then
@@ -307,6 +399,42 @@ if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
   echo "         tool/trigger servers, but chart 0.16 removed the bundled agent-bootstrap Job that" >&2
   echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
 fi
+
+{
+  printf 'langsmith_license_key=%s\n' "${TF_VAR_langsmith_license_key:?}"
+  printf 'api_key_salt=%s\n' "${TF_VAR_langsmith_api_key_salt:?}"
+  printf 'jwt_secret=%s\n' "${TF_VAR_langsmith_jwt_secret:?}"
+  printf 'initial_org_admin_password=%s\n' "${TF_VAR_langsmith_admin_password:?}"
+  printf 'initial_org_admin_email=%s\n' "${LANGSMITH_ADMIN_EMAIL:?}"
+  if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ]]; then
+    printf 'agent_builder_encryption_key=%s\n' "${TF_VAR_langsmith_agent_builder_encryption_key:?}"
+  fi
+  if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
+    printf 'insights_encryption_key=%s\n' "${TF_VAR_langsmith_insights_encryption_key:?}"
+  fi
+  if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
+    printf 'polly_encryption_key=%s\n' "${TF_VAR_langsmith_polly_encryption_key:?}"
+  fi
+  if [[ "$_enable_sandboxes" == "true" ]]; then
+    printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
+  fi
+} | kubectl create secret generic langsmith-config \
+  --namespace "$NAMESPACE" \
+  --from-env-file=/dev/stdin \
+  --dry-run=client -o yaml | kubectl apply -f -
+VALUES_ARGS+=(
+  --set "config.existingSecretName=langsmith-config"
+  --set-string "config.langsmithLicenseKey="
+  --set-string "config.apiKeySalt="
+  --set-string "config.basicAuth.jwtSecret="
+  --set-string "config.basicAuth.initialOrgAdminPassword="
+  --set-string "config.agentBuilder.encryptionKey="
+  --set-string "fleet.encryptionKey="
+  --set-string "insights.encryptionKey="
+  --set-string "polly.encryptionKey="
+  --set-string "sandboxes.callbackSigningJwk="
+)
+echo "  ✔ langsmith-config secret"
 
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"

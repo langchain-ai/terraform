@@ -42,6 +42,12 @@ variable "vpc_cidr_block" {
   description = "VPC CIDR block. Used to scope security group egress rules to within the VPC."
 }
 
+variable "existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the ALB instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound HTTP/HTTPS (per allowed_cidr_blocks) and outbound to the VPC CIDR."
+  default     = null
+}
+
 variable "tags" {
   type        = map(string)
   description = "Tags to apply to all resources"

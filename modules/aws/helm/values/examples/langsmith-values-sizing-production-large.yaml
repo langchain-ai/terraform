@@ -9,8 +9,8 @@
 # deployments, start with sizing_profile = "production" and scale up if
 # monitoring shows sustained pressure.
 #
-# Covers ALL chart components including infrastructure (ClickHouse, operator,
-# agent-builder servers) — not just the application pods.
+# Covers core services and shared infrastructure. Fleet, Chat, and Insights
+# service resources and autoscaling come from their separate add-on overlays.
 #
 # Monitor actual usage with:
 #   kubectl top pods -n langsmith
@@ -61,12 +61,10 @@ ingestQueue:
         cpu: "4"
         memory: "8Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 6
-      maxReplicas: 24
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 6
+      maxReplicaCount: 24
 
 queue:
   deployment:
@@ -78,12 +76,10 @@ queue:
         cpu: "4"
         memory: "8Gi"
   autoscaling:
-    hpa:
+    keda:
       enabled: true
-      minReplicas: 6
-      maxReplicas: 24
-      targetCPUUtilizationPercentage: 50
-      targetMemoryUtilizationPercentage: 80
+      minReplicaCount: 6
+      maxReplicaCount: 24
 
 frontend:
   deployment:
@@ -182,7 +178,7 @@ operator:
         cpu: "2"
         memory: "4Gi"
 
-# -- Agent Builder infrastructure ----------------------------------------------
+# -- Fleet infrastructure ------------------------------------------------------
 
 fleetToolServer:
   deployment:

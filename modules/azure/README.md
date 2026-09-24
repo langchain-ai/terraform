@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`), so an unpinned deploy never crosses a breaking minor on its own. SmithDB is the one exception and needs the chart line selected explicitly — see [SMITHDB.md](SMITHDB.md#version-requirements). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -17,6 +17,7 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
 | **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
+| **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a stable chart release on the 0.17 line; see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
 | **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
@@ -437,6 +438,7 @@ Key behaviors:
 Collects the values Terraform itself needs and writes them to `infra/secrets.auto.tfvars` (gitignored, chmod 600). Terraform picks this file up automatically — no shell exports needed.
 
 - Prompts for the PostgreSQL admin password, the LangSmith license key, and the admin email
+- Rejects a license key that is not one, and re-asks. Two shapes pass: an `lcl_` key, or an offline three-part token. A pasted share URL is named as such, because that is the mistake that otherwise reaches the pod as a base64 error
 - Skips any prompt whose env var is already set (`LANGSMITH_PG_PASSWORD`, `LANGSMITH_LICENSE_KEY`, `LANGSMITH_ADMIN_EMAIL`)
 - On a re-run, offers the value already in `secrets.auto.tfvars` as each default — press Enter to keep it. Secrets are shown as their last four characters only. If the file is gone, the license key comes back from Key Vault
 - Resolves the Key Vault name from `terraform output keyvault_name`, falling back before the first apply to `_derive_kv_name` (`infra/scripts/_common.sh`), which mirrors `local.keyvault_name` — e.g. `ls-kv-demo-a1b2c3` with `unique_resource_names = true`, or `langsmith-kv-demo` without. The output is what covers `create_keyvault = false`, where the name is the customer's and nothing derives it
