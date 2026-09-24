@@ -1,5 +1,5 @@
 variable "existing_vpc_id" {
-  description = "Existing VPC to use instead of creating one. Its DNS support and DNS hostnames must be enabled, and vpc_cidr_block must match its primary CIDR. Its default security group is left unmanaged."
+  description = "Existing VPC to use instead of creating one."
   type        = string
   default     = null
 
@@ -26,19 +26,19 @@ variable "existing_internet_gateway_id" {
 }
 
 variable "existing_private_app_subnet_ids" {
-  description = "Existing private application subnet IDs in explicit availability_zones order. Null creates new subnets; supplied subnets retain their routing and tags."
+  description = "Existing private application subnet IDs in explicit availability_zones order. Null creates new subnets"
   type        = list(string)
   default     = null
 }
 
 variable "existing_private_db_subnet_ids" {
-  description = "Existing isolated database subnet IDs in explicit availability_zones order. Null creates new subnets; supplied subnets retain their routing and tags."
+  description = "Existing database subnet IDs in explicit availability_zones order. Null creates new subnets."
   type        = list(string)
   default     = null
 }
 
 variable "existing_public_subnet_ids" {
-  description = "Existing public subnet IDs in explicit availability_zones order. Null creates new subnets; supplied subnets retain their routing and tags."
+  description = "Existing public subnet IDs in explicit availability_zones order. Null creates new subnets."
   type        = list(string)
   default     = null
 }
