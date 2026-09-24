@@ -73,13 +73,13 @@ locals {
   ]...)
 
   private_app_subnet_ids = var.existing_private_app_subnet_ids == null ? [
-    for az in local.availability_zones : aws_subnet.private_app[az].id
+    for az in local.availability_zones : aws_subnet.private_app[az].id if contains(keys(aws_subnet.private_app), az)
   ] : [for index, id in var.existing_private_app_subnet_ids : data.aws_subnet.existing["private_app:${index}"].id]
   private_db_subnet_ids = var.existing_private_db_subnet_ids == null ? [
-    for az in local.availability_zones : aws_subnet.private_db[az].id
+    for az in local.availability_zones : aws_subnet.private_db[az].id if contains(keys(aws_subnet.private_db), az)
   ] : [for index, id in var.existing_private_db_subnet_ids : data.aws_subnet.existing["private_db:${index}"].id]
   public_subnet_ids = !var.publicly_accessible ? [] : (var.existing_public_subnet_ids == null ? [
-    for az in local.availability_zones : aws_subnet.public[az].id
+    for az in local.availability_zones : aws_subnet.public[az].id if contains(keys(aws_subnet.public), az)
   ] : [for index, id in var.existing_public_subnet_ids : data.aws_subnet.existing["public:${index}"].id])
 
   tags = merge(
@@ -340,7 +340,7 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route" "public_internet_gateway" {
-  count = local.create_public_subnets ? 1 : 0
+  count = local.create_public_subnets && (var.create_internet_gateway || var.existing_internet_gateway_id != null) ? 1 : 0
 
   route_table_id         = aws_route_table.public[0].id
   destination_cidr_block = "0.0.0.0/0"
