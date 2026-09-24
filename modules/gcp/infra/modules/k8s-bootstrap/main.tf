@@ -243,13 +243,14 @@ resource "kubernetes_resource_quota" "langsmith" {
 # quota with a matching scopeSelector already exists — which is how GKE keeps
 # those classes inside kube-system (see its own gcp-critical-pods quota).
 #
-# The JuiceFS CSI driver the sandbox feature depends on uses both: the
+# The chart 0.16 JuiceFS CSI driver for sandboxes uses both: the
 # juicefs-csi-node DaemonSet is system-node-critical and the
 # juicefs-csi-controller StatefulSet is system-cluster-critical. Without this
 # quota neither is ever created — the DaemonSet reports desired N, current 0
 # with the rejection recorded only on the controller object, csi.juicefs.com
 # never registers on any node, and sandbox-host sits in ContainerCreating on a
-# FailedMount that names a missing CSI driver rather than a quota.
+# FailedMount that names a missing CSI driver rather than a quota. Chart 0.17
+# has no CSI driver; the quota stays for the upgrade from chart 0.16.
 #
 # The pod ceiling matches GKE's own quota for these classes: this object exists
 # to grant the capability, not to cap it. The unscoped langsmith-quota above

@@ -77,7 +77,7 @@ variable "resource_quota_extra_pods" {
 }
 
 variable "allow_critical_priority_pods" {
-  description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the JuiceFS CSI driver the sandbox feature depends on: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Leave false when sandboxes are disabled."
+  description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the chart 0.16 JuiceFS CSI driver used by sandboxes: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Chart 0.17 has no CSI driver; keep it through the upgrade from chart 0.16. Leave false when sandboxes are disabled."
   type        = bool
   default     = false
 }
