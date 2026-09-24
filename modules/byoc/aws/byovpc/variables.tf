@@ -25,6 +25,24 @@ variable "existing_internet_gateway_id" {
   }
 }
 
+variable "existing_private_app_subnet_ids" {
+  description = "Existing private application subnet IDs in explicit availability_zones order. Null creates new subnets; supplied subnets retain their routing and tags."
+  type        = list(string)
+  default     = null
+}
+
+variable "existing_private_db_subnet_ids" {
+  description = "Existing isolated database subnet IDs in explicit availability_zones order. Null creates new subnets; supplied subnets retain their routing and tags."
+  type        = list(string)
+  default     = null
+}
+
+variable "existing_public_subnet_ids" {
+  description = "Existing public subnet IDs in explicit availability_zones order. Null creates new subnets; supplied subnets retain their routing and tags."
+  type        = list(string)
+  default     = null
+}
+
 variable "name" {
   description = "Name prefix for the VPC and its resources."
   type        = string

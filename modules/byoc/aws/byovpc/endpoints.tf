@@ -15,7 +15,7 @@ resource "aws_vpc_endpoint" "s3" {
   vpc_id            = local.vpc_id
   service_name      = "com.amazonaws.${data.aws_region.current.region}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [for az in local.availability_zones : aws_route_table.private_app[az].id]
+  route_table_ids   = [for table in aws_route_table.private_app : table.id]
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-s3-endpoint"
@@ -55,7 +55,7 @@ resource "aws_vpc_endpoint" "interface" {
   vpc_id              = local.vpc_id
   service_name        = "com.amazonaws.${data.aws_region.current.region}.${each.value}"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [for az in local.availability_zones : aws_subnet.private_app[az].id]
+  subnet_ids          = local.private_app_subnet_ids
   security_group_ids  = [aws_security_group.interface_endpoints[0].id]
   private_dns_enabled = true
 
@@ -71,7 +71,7 @@ resource "aws_vpc_endpoint" "control_plane" {
   service_name        = local.control_plane_service_name
   service_region      = local.control_plane_service_region
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [for az in local.availability_zones : aws_subnet.private_app[az].id]
+  subnet_ids          = local.private_app_subnet_ids
   security_group_ids  = [aws_security_group.interface_endpoints[0].id]
   private_dns_enabled = false
 
