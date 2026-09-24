@@ -1,3 +1,30 @@
+variable "existing_vpc_id" {
+  description = "Existing VPC to use instead of creating one. Its DNS support and DNS hostnames must be enabled, and vpc_cidr_block must match its primary CIDR. Its default security group is left unmanaged."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.existing_vpc_id == null || can(regex("^vpc-([0-9a-f]{8}|[0-9a-f]{17})$", var.existing_vpc_id))
+    error_message = "existing_vpc_id must be null or a valid VPC ID."
+  }
+}
+
+variable "existing_internet_gateway_id" {
+  description = "Internet Gateway already attached to existing_vpc_id. Set create_internet_gateway to false to reuse it for NAT and public subnet routing."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.existing_internet_gateway_id == null || can(regex("^igw-([0-9a-f]{8}|[0-9a-f]{17})$", var.existing_internet_gateway_id))
+    error_message = "existing_internet_gateway_id must be null or a valid Internet Gateway ID."
+  }
+
+  validation {
+    condition     = var.existing_internet_gateway_id == null || (!var.create_internet_gateway && var.existing_vpc_id != null)
+    error_message = "existing_internet_gateway_id requires existing_vpc_id and create_internet_gateway = false."
+  }
+}
+
 variable "name" {
   description = "Name prefix for the VPC and its resources."
   type        = string
@@ -10,7 +37,7 @@ variable "name" {
 }
 
 variable "vpc_cidr_block" {
-  description = "RFC1918 IPv4 CIDR block for the VPC. LangSmith supports network-aligned prefixes from /16 through /18."
+  description = "RFC1918 primary IPv4 CIDR block for the created or existing VPC. LangSmith supports network-aligned prefixes from /16 through /18."
   type        = string
   default     = "10.0.0.0/16"
 
@@ -100,7 +127,7 @@ variable "public_subnet_cidrs" {
 }
 
 variable "create_internet_gateway" {
-  description = "Create an Internet Gateway. Required by the module-managed regional NAT and public subnets."
+  description = "Create an Internet Gateway. Disable when supplying existing_internet_gateway_id or managing egress separately."
   type        = bool
   default     = true
 }

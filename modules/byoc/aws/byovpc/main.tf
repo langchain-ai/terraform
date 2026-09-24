@@ -8,6 +8,9 @@ data "aws_availability_zones" "available" {
 data "aws_region" "current" {}
 
 locals {
+  vpc_id              = var.existing_vpc_id == null ? aws_vpc.this[0].id : data.aws_vpc.existing[0].id
+  internet_gateway_id = var.existing_internet_gateway_id == null ? try(aws_internet_gateway.this[0].id, null) : data.aws_internet_gateway.existing[0].id
+
   availability_zones = length(var.availability_zones) > 0 ? var.availability_zones : slice(
     data.aws_availability_zones.available.names,
     0,
@@ -61,7 +64,47 @@ locals {
   )
 }
 
+data "aws_vpc" "existing" {
+  count = var.existing_vpc_id == null ? 0 : 1
+  id    = var.existing_vpc_id
+
+  lifecycle {
+    postcondition {
+      condition     = self.cidr_block == var.vpc_cidr_block
+      error_message = "vpc_cidr_block must match the existing VPC's primary IPv4 CIDR block."
+    }
+    postcondition {
+      condition     = self.enable_dns_support && self.enable_dns_hostnames
+      error_message = "The existing VPC must have DNS support and DNS hostnames enabled."
+    }
+  }
+}
+
+data "aws_internet_gateway" "existing" {
+  count               = var.existing_internet_gateway_id == null ? 0 : 1
+  internet_gateway_id = var.existing_internet_gateway_id
+
+  lifecycle {
+    postcondition {
+      condition     = anytrue([for attachment in self.attachments : attachment.vpc_id == var.existing_vpc_id])
+      error_message = "The existing Internet Gateway must be attached to existing_vpc_id."
+    }
+  }
+}
+
+moved {
+  from = aws_vpc.this
+  to   = aws_vpc.this[0]
+}
+
+moved {
+  from = aws_default_security_group.this
+  to   = aws_default_security_group.this[0]
+}
+
 resource "aws_vpc" "this" {
+  count = var.existing_vpc_id == null ? 1 : 0
+
   cidr_block           = var.vpc_cidr_block
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -69,7 +112,10 @@ resource "aws_vpc" "this" {
   tags = merge(local.tags, {
     Name = "${var.name}-smith-vpc"
   })
+}
 
+# These checks must run even when the VPC is supplied by the caller.
+resource "terraform_data" "validate_inputs" {
   lifecycle {
     precondition {
       condition     = local.availability_zone_count >= 2 && local.availability_zone_count <= 3
@@ -90,12 +136,12 @@ resource "aws_vpc" "this" {
       error_message = "Provide exactly one private-app and private-DB CIDR per selected AZ, plus one public CIDR per AZ when publicly_accessible is true."
     }
     precondition {
-      condition     = !var.create_nat_gateway || var.create_internet_gateway
-      error_message = "create_nat_gateway requires create_internet_gateway because AWS regional public NAT gateways require an attached Internet Gateway."
+      condition     = !var.create_nat_gateway || var.create_internet_gateway || var.existing_internet_gateway_id != null
+      error_message = "create_nat_gateway requires create_internet_gateway or existing_internet_gateway_id because AWS regional public NAT gateways require an attached Internet Gateway."
     }
     precondition {
-      condition     = !var.publicly_accessible || var.create_internet_gateway
-      error_message = "publicly_accessible requires create_internet_gateway."
+      condition     = !var.publicly_accessible || var.create_internet_gateway || var.existing_internet_gateway_id != null
+      error_message = "publicly_accessible requires create_internet_gateway or existing_internet_gateway_id."
     }
     precondition {
       condition     = !var.enable_vpc_endpoints || length(var.interface_endpoint_services) > 0
@@ -107,7 +153,7 @@ resource "aws_vpc" "this" {
 resource "aws_subnet" "private_app" {
   for_each = local.private_app_subnets
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   availability_zone       = each.key
   cidr_block              = each.value
   map_public_ip_on_launch = false
@@ -122,7 +168,7 @@ resource "aws_subnet" "private_app" {
 resource "aws_subnet" "private_db" {
   for_each = local.private_db_subnets
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   availability_zone       = each.key
   cidr_block              = each.value
   map_public_ip_on_launch = false
@@ -136,7 +182,7 @@ resource "aws_subnet" "private_db" {
 resource "aws_subnet" "public" {
   for_each = local.public_subnets
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   availability_zone       = each.key
   cidr_block              = each.value
   map_public_ip_on_launch = false
@@ -151,7 +197,7 @@ resource "aws_subnet" "public" {
 resource "aws_internet_gateway" "this" {
   count = var.create_internet_gateway ? 1 : 0
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-igw"
@@ -161,20 +207,20 @@ resource "aws_internet_gateway" "this" {
 resource "aws_nat_gateway" "this" {
   count = var.create_nat_gateway ? 1 : 0
 
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = local.vpc_id
   availability_mode = "regional"
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-nat"
   })
 
-  depends_on = [aws_internet_gateway.this]
+  depends_on = [aws_internet_gateway.this, data.aws_internet_gateway.existing]
 }
 
 resource "aws_route_table" "private_app" {
   for_each = local.private_app_subnets
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-rt-private-app-${local.availability_zone_suffixes[each.key]}"
@@ -198,7 +244,7 @@ resource "aws_route_table_association" "private_app" {
 }
 
 resource "aws_route_table" "private_db" {
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-rt-private-db"
@@ -216,7 +262,7 @@ resource "aws_route_table_association" "private_db" {
 resource "aws_route_table" "public" {
   count = var.publicly_accessible ? 1 : 0
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-rt-public"
@@ -229,7 +275,7 @@ resource "aws_route" "public_internet_gateway" {
 
   route_table_id         = aws_route_table.public[0].id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.this[0].id
+  gateway_id             = local.internet_gateway_id
 }
 
 resource "aws_route_table_association" "public" {
@@ -240,7 +286,9 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_default_security_group" "this" {
-  vpc_id = aws_vpc.this.id
+  count = var.existing_vpc_id == null ? 1 : 0
+
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-default-sg"

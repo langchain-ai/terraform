@@ -1,6 +1,6 @@
 # AWS BYOVPC reference module
 
-This module creates a standardized AWS VPC for LangSmith BYOC. Use it directly or copy and adapt it to your networking requirements. LangSmith validates the supplied network configuration during data-plane creation.
+This module creates standardized AWS networking for LangSmith BYOC, either in a new VPC or in an existing VPC you supply. Use it directly or copy and adapt it to your networking requirements. LangSmith validates the supplied network configuration during data-plane creation.
 
 The module provisions networking only. Create the customer-side IAM role separately with [`langsmith-byoc-role`](../langsmith-byoc-role/README.md).
 
@@ -114,6 +114,39 @@ module "langsmith_byovpc" {
 
 PrivateLink targets the LangSmith AWS control-plane endpoint service in `us-east-2` and creates private DNS zones for both `aws.api.smith.langchain.com` and `beacon.aws.langchain.com`. Confirm endpoint-service access and cross-region availability with LangChain before enabling it.
 
+## Use an existing VPC
+
+Set `existing_vpc_id` to create the surrounding networking in a VPC you already own. Set `vpc_cidr_block` to its primary IPv4 CIDR; the module checks that they match and that DNS support and DNS hostnames are enabled. The same RFC1918 `/16`–`/18` requirement applies.
+
+```hcl
+module "langsmith_byovpc" {
+  source = "../terraform/modules/byoc/aws/byovpc"
+
+  name               = "langsmith-production"
+  existing_vpc_id     = "vpc-0123456789abcdef0"
+  vpc_cidr_block      = "10.20.0.0/16"
+  availability_zones = ["us-east-1a", "us-east-1b"]
+
+  # Choose unused ranges inside the VPC for the new subnets.
+  private_app_subnet_cidrs = ["10.20.0.0/18", "10.20.64.0/18"]
+  private_db_subnet_cidrs  = ["10.20.128.0/24", "10.20.129.0/24"]
+
+  # Reuse the Internet Gateway already attached to this VPC.
+  create_internet_gateway      = false
+  existing_internet_gateway_id = "igw-0123456789abcdef0"
+}
+```
+
+The module creates new subnets, route tables, associations, and (by default) a regional NAT gateway and S3-backed VPC flow logs. Public subnets and endpoints remain opt-in. It does not import or change existing subnets, route tables, VPC settings, or the default security group. Ensure the existing default security group is appropriately restricted.
+
+- Subnet CIDRs must be unused, non-overlapping ranges within the VPC. Automatic CIDR allocation is unchanged and does not discover existing subnets; supply explicit overrides when the default layout is already occupied.
+- If the VPC has no Internet Gateway, leave `create_internet_gateway = true` and omit `existing_internet_gateway_id` to create one. AWS permits only one attached Internet Gateway per VPC.
+- For centralized egress, set both `create_internet_gateway = false` and `create_nat_gateway = false`, omit `existing_internet_gateway_id`, and manage egress routes separately. Public subnets require a created or supplied Internet Gateway.
+- Flow logs cover the entire VPC, including existing workloads. Disable `enable_vpc_flow_logs` if suitable logging already exists.
+- Before enabling endpoints or PrivateLink, check for existing endpoints and private DNS zones that would conflict with the new ones.
+
+Leaving `existing_vpc_id = null` preserves the original behavior. State-address moves preserve the VPC and default security group when upgrading an existing deployment in that mode. Switching an already-applied deployment from a module-created VPC to an existing VPC is **not** an ownership migration: it plans removal of the managed VPC and may replace dependent resources. Handle any ownership migration separately before changing modes.
+
 ## Inputs
 
 All inputs are optional. Full types and validation rules are in [`variables.tf`](variables.tf).
@@ -121,7 +154,9 @@ All inputs are optional. Full types and validation rules are in [`variables.tf`]
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `name` | `"dataplane"` | Resource prefix, 2–32 lowercase letters, digits, or hyphens. |
-| `vpc_cidr_block` | `"10.0.0.0/16"` | Network-aligned RFC1918 IPv4 prefix, `/16`–`/18`. |
+| `existing_vpc_id` | `null` | Use an existing VPC and leave its default security group unmanaged. |
+| `existing_internet_gateway_id` | `null` | Reuse a gateway attached to the supplied VPC; requires `create_internet_gateway = false`. |
+| `vpc_cidr_block` | `"10.0.0.0/16"` | Primary network-aligned RFC1918 IPv4 prefix, `/16`–`/18`; must match a supplied VPC. |
 | `availability_zones` | `[]` | Automatically select up to three AZs, or supply two or three unique AZ names. |
 | `private_app_subnet_cidrs` | `null` | Override application subnet CIDRs in AZ order. |
 | `private_db_subnet_cidrs` | `null` | Override isolated database subnet CIDRs in AZ order. |

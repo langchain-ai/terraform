@@ -1,7 +1,7 @@
 output "langsmith_network_config" {
   description = "Network identifiers to provide when creating the LangSmith data plane."
   value = {
-    vpc_id                 = aws_vpc.this.id
+    vpc_id                 = local.vpc_id
     availability_zones     = local.availability_zones
     private_app_subnet_ids = [for az in local.availability_zones : aws_subnet.private_app[az].id]
     private_db_subnet_ids  = [for az in local.availability_zones : aws_subnet.private_db[az].id]
@@ -12,13 +12,13 @@ output "langsmith_network_config" {
 }
 
 output "vpc_id" {
-  description = "ID of the created VPC."
-  value       = aws_vpc.this.id
+  description = "ID of the created or supplied VPC."
+  value       = local.vpc_id
 }
 
 output "vpc_cidr_block" {
-  description = "IPv4 CIDR block of the created VPC."
-  value       = aws_vpc.this.cidr_block
+  description = "Primary IPv4 CIDR block of the created or supplied VPC."
+  value       = var.vpc_cidr_block
 }
 
 output "availability_zones" {
@@ -59,8 +59,8 @@ output "public_route_table_ids" {
 }
 
 output "internet_gateway_id" {
-  description = "ID of the Internet Gateway, or null when it is not created."
-  value       = try(aws_internet_gateway.this[0].id, null)
+  description = "ID of the created or supplied Internet Gateway, or null when neither is configured."
+  value       = local.internet_gateway_id
 }
 
 output "nat_gateway_id" {
