@@ -41,6 +41,7 @@ tls_certificate_source       = "letsencrypt"
 letsencrypt_email            = "you@example.com"
 default_node_pool_min_count  = 3       # critical — autoscaler starts here; 1 causes pod pending
 default_node_pool_max_pods   = 60      # immutable — must be set before first apply
+aks_network_mode             = "overlay" # Azure CNI Overlay + Cilium; creation-time, see README "Network mode"
 ```
 
 All other defaults are fine for testing. A typical dev config uses:

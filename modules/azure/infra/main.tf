@@ -170,12 +170,29 @@ locals {
   aks_service_cidr   = var.aks_service_cidr != "" ? var.aks_service_cidr : "10.0.64.0/20"
   aks_dns_service_ip = var.aks_dns_service_ip != "" ? var.aks_dns_service_ip : cidrhost(local.aks_service_cidr, 10)
 
+  # ── AKS network mode ────────────────────────────────────────────────────────
+  # The provider takes null for node-subnet mode and "overlay" for overlay, and
+  # pod_cidr may only be set in overlay mode, so both are derived from the one
+  # operator-facing variable. The data plane follows the mode unless named:
+  # Cilium needs overlay, and Cilium's policy engine has to be Cilium too.
+  aks_overlay             = var.aks_network_mode == "overlay"
+  aks_network_plugin_mode = local.aks_overlay ? "overlay" : null
+  aks_pod_cidr            = local.aks_overlay ? var.aks_pod_cidr : null
+  aks_network_dataplane   = var.aks_network_dataplane != "" ? var.aks_network_dataplane : (local.aks_overlay ? "cilium" : "azure")
+  aks_network_policy      = local.aks_network_dataplane == "cilium" ? "cilium" : "azure"
+
+  # Ranges Azure keeps for itself on every AKS cluster; an overlay pod range that
+  # touches one is refused at creation. Listed once so the check and its message
+  # agree on what was compared.
+  aks_reserved_cidrs = ["169.254.0.0/16", "172.30.0.0/16", "172.31.0.0/16", "192.0.2.0/24"]
+
   # ── AKS subnet capacity ─────────────────────────────────────────────────────
-  # Azure CNI is a flat network here (network_plugin = "azure", no overlay mode),
-  # so nodes and pods both draw IPs from this subnet. Azure's formula is
-  # (nodes + surge) + ((nodes + surge) * max_pods), which factors to
+  # In node-subnet mode nodes and pods both draw IPs from this subnet. Azure's
+  # formula is (nodes + surge) + ((nodes + surge) * max_pods), which factors to
   # (nodes + surge) * (max_pods + 1). One surge node per pool covers upgrades.
   # Additional pools do not set max_pods, so they get the Azure CNI default.
+  # In overlay mode pods come from aks_pod_cidr and only the nodes count here,
+  # at one address each.
   aks_default_pool_max_pods = 30
 
   # Held per pool rather than as a single total, so the number and the error
@@ -184,17 +201,22 @@ locals {
     {
       default = {
         nodes              = var.default_node_pool_max_count + 1
-        addresses_per_node = var.default_node_pool_max_pods + 1
+        addresses_per_node = local.aks_overlay ? 1 : var.default_node_pool_max_pods + 1
       }
     },
     {
       for name, pool in local.effective_node_pools : name => {
         nodes              = pool.max_count + 1
-        addresses_per_node = local.aks_default_pool_max_pods + 1
+        addresses_per_node = local.aks_overlay ? 1 : local.aks_default_pool_max_pods + 1
       }
     }
   )
   aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+
+  # Overlay hands every node a /24 of the pod range, so the range's capacity is
+  # counted in nodes, surge included, across every pool.
+  aks_node_total             = sum([for pool in local.aks_pool_sizing : pool.nodes])
+  aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
   effective_node_pools = var.additional_node_pools
 
@@ -230,6 +252,10 @@ locals {
   byo_vnet_parts     = split("/", var.vnet_id)
   vnet_address_space = coalesce(one(data.azurerm_virtual_network.byo_vnet[*].address_space), [])
 
+  # The address space of whichever VNet the nodes will sit in, for the overlay
+  # pod-range check: the one Terraform creates, or the one supplied.
+  aks_vnet_spaces = var.create_vnet ? tolist(coalesce(module.vnet.address_space, [])) : tolist(local.vnet_address_space)
+
   # Every prefix Terraform is about to carve, tagged with the variable that set
   # it so a failure names what to change. A service running in-cluster carves
   # nothing, so its prefix is left out rather than checked pointlessly.
@@ -246,10 +272,14 @@ locals {
   # address, and the last address is that plus the host count.
   measured_cidrs = distinct(concat(
     local.vnet_address_space,
+    local.aks_vnet_spaces,
     [for entry in local.carved_prefixes : entry.prefix],
     [local.aks_service_cidr],
     # A single address, measured as a /32 so the bounds below cover it too.
     ["${local.aks_dns_service_ip}/32"],
+    # The overlay pod range and everything it must stay clear of.
+    [var.aks_pod_cidr],
+    local.aks_reserved_cidrs,
   ))
   cidr_first = { for cidr in local.measured_cidrs : cidr => sum([
     for i, octet in split(".", cidrhost(cidr, 0)) : tonumber(octet) * pow(256, 3 - i)
@@ -282,6 +312,19 @@ locals {
     local.cidr_first["${local.aks_dns_service_ip}/32"] < local.cidr_first[local.aks_service_cidr] ||
     local.cidr_first["${local.aks_dns_service_ip}/32"] > local.cidr_last[local.aks_service_cidr]
   )
+
+  # In overlay mode the pod range is private to the cluster but still routed on
+  # every node, so it has to stay clear of the VNet, the ClusterIP range and the
+  # ranges AKS reserves. Each neighbour is named so the message says which one.
+  aks_pod_cidr_neighbours = local.aks_overlay ? merge(
+    { for space in local.aks_vnet_spaces : "the VNet address space ${space}" => space },
+    { "aks_service_cidr ${local.aks_service_cidr}" = local.aks_service_cidr },
+    { for range in local.aks_reserved_cidrs : "the AKS reserved range ${range}" => range },
+  ) : {}
+  aks_pod_cidr_conflicts = [
+    for name, cidr in local.aks_pod_cidr_neighbours : name
+    if local.cidr_first[var.aks_pod_cidr] <= local.cidr_last[cidr] && local.cidr_last[var.aks_pod_cidr] >= local.cidr_first[cidr]
+  ]
 
   # ── Common tags ─────────────────────────────────────────────────────────────
   # Applied to every Azure resource in every sub-module.
@@ -595,15 +638,51 @@ resource "terraform_data" "validate_network" {
       condition = local.aks_usable_ips >= local.aks_required_ips
       error_message = join("\n", concat(
         [
-          "The AKS subnet holds ${local.aks_usable_ips} usable addresses, short of the ${local.aks_required_ips} that Azure CNI needs for the configured node pools. Nodes and pods both draw IPs from this subnet, at (max_count + 1) nodes x (max_pods + 1) addresses per pool:",
+          "The AKS subnet holds ${local.aks_usable_ips} usable addresses, short of the ${local.aks_required_ips} that Azure CNI needs for the configured node pools. ${local.aks_overlay ? "In overlay mode only nodes draw IPs from this subnet, one each, at (max_count + 1) per pool:" : "Nodes and pods both draw IPs from this subnet, at (max_count + 1) nodes x (max_pods + 1) addresses per pool:"}",
           "",
         ],
         local.aks_demand_rows,
         [
           "",
-          "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
+          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
         ]
       ))
+    }
+
+    # Two combinations the provider rejects at apply, checked here rather than
+    # on the variables so that each variable's own enum error still shows when
+    # the other variable is wrong too.
+    precondition {
+      condition     = local.aks_network_dataplane != "cilium" || local.aks_overlay
+      error_message = "aks_network_dataplane = \"cilium\" requires aks_network_mode = \"overlay\". Azure CNI Powered by Cilium runs on overlay (or pod-subnet) IPAM, not on node-subnet mode."
+    }
+
+    precondition {
+      condition     = var.aks_support_plan != "AKSLongTermSupport" || var.aks_sku_tier == "Premium"
+      error_message = "aks_support_plan = \"AKSLongTermSupport\" requires aks_sku_tier = \"Premium\"."
+    }
+
+    # Azure refuses an overlay pod range that overlaps the VNet, the ClusterIP
+    # range or its own reserved ranges, but only at cluster creation, after the
+    # resource group, VNet, Key Vault and storage have already been applied.
+    precondition {
+      condition = length(local.aks_pod_cidr_conflicts) == 0
+      error_message = join(" ", [
+        "aks_pod_cidr (${var.aks_pod_cidr}) overlaps ${join(", ", local.aks_pod_cidr_conflicts)}.",
+        "The overlay pod range is private to the cluster but is routed on every node, so it must not overlap the VNet address space, anything peered or on-premises, aks_service_cidr, or the ranges AKS reserves (${join(", ", local.aks_reserved_cidrs)}).",
+        "Pick a range outside all of them; 10.244.0.0/16 is the AKS default and is only wrong when your VNet or a peer uses it.",
+      ])
+    }
+
+    # Each node takes a /24 from the pod range, so a small range caps the node
+    # count the same way a small subnet does in node-subnet mode: the cluster
+    # starts, and the autoscaler stalls once the range is spent.
+    precondition {
+      condition = !local.aks_overlay || local.aks_node_total <= local.aks_pod_cidr_node_capacity
+      error_message = join(" ", [
+        "aks_pod_cidr (${var.aks_pod_cidr}) holds ${local.aks_pod_cidr_node_capacity} /24 blocks, one per node, but the configured pools can reach ${local.aks_node_total} nodes (max_count + 1 surge node per pool).",
+        "Widen the range: a /${24 - ceil(log(local.aks_node_total, 2))} holds ${local.aks_node_total} nodes. Or lower a pool's max_count.",
+      ])
     }
 
     # 10.0.64.0/20 only avoids the VNet that Terraform builds. Inside someone
@@ -692,6 +771,18 @@ module "aks" {
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
+  # Network mode, data plane and tier, derived above from the operator-facing
+  # variables. All four are creation-time choices; a mode change on an existing
+  # cluster is refused by terraform_data.aks_network_mode_guard below, which
+  # reads the mode the module recorded at the first apply.
+  network_plugin_mode          = local.aks_network_plugin_mode
+  pod_cidr                     = local.aks_pod_cidr
+  network_data_plane           = local.aks_network_dataplane
+  network_policy               = local.aks_network_policy
+  allow_network_mode_migration = var.aks_allow_network_mode_migration
+  sku_tier                     = var.aks_sku_tier
+  support_plan                 = var.aks_support_plan
+
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
   # On a pre-existing cluster whose node pools the customer owns, pass an empty
   # map so Terraform doesn't attach pools to a cluster it doesn't manage.
@@ -735,6 +826,35 @@ module "aks" {
   authorized_ip_ranges = var.aks_authorized_ip_ranges
 
   tags = local.common_tags
+}
+
+# ── AKS network mode guard ────────────────────────────────────────────────────
+# A mode change on a cluster that already exists is Microsoft's one-way
+# migration from node-subnet to overlay: every node pool is reimaged at once,
+# Azure Network Policy Manager must be uninstalled first, and there is no way
+# back. The provider would run it as an in-place update from a one-line tfvars
+# edit, so it is refused unless the operator says so. module.aks records the
+# mode of the first apply; on that first apply the record is unknown, the check
+# defers to apply time and then compares equal values. A failing precondition
+# anywhere fails the plan, so this needs no dependency edge into the cluster.
+resource "terraform_data" "aks_network_mode_guard" {
+  input = var.aks_network_mode
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.aks_allow_network_mode_migration
+        || !var.create_cluster
+        || module.aks.created_network_mode == null
+        || module.aks.created_network_mode == var.aks_network_mode
+      )
+      error_message = join(" ", [
+        "aks_network_mode is changing from ${coalesce(module.aks.created_network_mode, "unknown")} to ${var.aks_network_mode} on a cluster Terraform already created.",
+        "Azure applies this as a one-way migration that reimages every node pool at once; it requires Azure Network Policy Manager to be uninstalled first and Kubernetes 1.27 or later, and it cannot be reversed.",
+        "Set aks_allow_network_mode_migration = true to run it deliberately, or revert aks_network_mode. For a production cluster, build a new cluster in the new mode instead.",
+      ])
+    }
+  }
 }
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────

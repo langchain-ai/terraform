@@ -84,3 +84,30 @@ output "agw_id" {
   description = "Resource ID of the Application Gateway, for the diagnostics module to attach a setting to. Null when no gateway is created."
   value       = one(azurerm_application_gateway.agw[*].id)
 }
+
+output "created_network_mode" {
+  description = "The Azure CNI IPAM mode this module created the cluster in, node-subnet or overlay, as recorded on the first apply. null when create_cluster = false."
+  value       = one(terraform_data.network_mode[*].output)
+}
+
+output "network_profile" {
+  description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane and policy engine. null when create_cluster = false."
+  # Keyed off the flag rather than the resource object: a comparison against the
+  # whole object would carry its sensitive kube-config marks into this output.
+  value = !var.create_cluster ? null : {
+    network_plugin_mode = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_plugin_mode)
+    pod_cidr            = one(azurerm_kubernetes_cluster.main[*].network_profile[0].pod_cidr)
+    network_data_plane  = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_data_plane)
+    network_policy      = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_policy)
+  }
+}
+
+output "sku_tier" {
+  description = "The AKS tier the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].sku_tier)
+}
+
+output "support_plan" {
+  description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
+}

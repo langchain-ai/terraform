@@ -57,6 +57,8 @@ default_node_pool_vm_size   = "Standard_D8s_v3"
 default_node_pool_min_count = 3
 default_node_pool_max_count = 6
 default_node_pool_max_pods  = 60
+aks_network_mode            = "overlay"         # Azure CNI Overlay with Cilium: pods from aks_pod_cidr, the subnet holds nodes only
+aks_sku_tier                = "Standard"       # uptime SLA; Free has none
 
 additional_node_pools = {
   large = {

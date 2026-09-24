@@ -178,3 +178,88 @@ run "in_cluster_redis_plans_nothing" {
     error_message = "redis_source = in-cluster still planned Azure Managed Redis"
   }
 }
+
+# ── AKS network mode, data plane and tier ────────────────────────────────────
+# What reaches the cluster resource from the one operator-facing mode variable.
+
+run "overlay_mode_plans_cilium_and_the_pod_range" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+  }
+
+  assert {
+    condition     = module.aks.network_profile.network_plugin_mode == "overlay"
+    error_message = "aks_network_mode = overlay did not set network_plugin_mode = overlay"
+  }
+  assert {
+    condition     = module.aks.network_profile.pod_cidr == "10.244.0.0/16"
+    error_message = "overlay mode did not pass aks_pod_cidr through as pod_cidr"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_data_plane == "cilium"
+    error_message = "overlay mode did not default the data plane to cilium"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_policy == "cilium"
+    error_message = "the cilium data plane did not select the cilium policy engine"
+  }
+  assert {
+    condition     = module.aks.sku_tier == "Standard"
+    error_message = "the default tier is not Standard"
+  }
+}
+
+run "overlay_mode_can_keep_the_azure_data_plane" {
+  command = plan
+
+  variables {
+    aks_network_mode      = "overlay"
+    aks_network_dataplane = "azure"
+  }
+
+  assert {
+    condition     = module.aks.network_profile.network_data_plane == "azure"
+    error_message = "aks_network_dataplane = azure was overridden"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_policy == "azure"
+    error_message = "the azure data plane did not select the azure policy engine"
+  }
+}
+
+run "node_subnet_mode_plans_the_flat_profile" {
+  command = plan
+
+  variables {
+    aks_network_mode = "node-subnet"
+  }
+
+  assert {
+    condition     = module.aks.network_profile.network_plugin_mode == null
+    error_message = "node-subnet mode set a network_plugin_mode"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_data_plane == "azure"
+    error_message = "node-subnet mode did not keep the azure data plane"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_policy == "azure"
+    error_message = "node-subnet mode did not keep the azure policy engine"
+  }
+}
+
+run "premium_tier_with_long_term_support_is_passed_through" {
+  command = plan
+
+  variables {
+    aks_sku_tier     = "Premium"
+    aks_support_plan = "AKSLongTermSupport"
+  }
+
+  assert {
+    condition     = module.aks.sku_tier == "Premium" && module.aks.support_plan == "AKSLongTermSupport"
+    error_message = "tier and support plan did not reach the cluster"
+  }
+}

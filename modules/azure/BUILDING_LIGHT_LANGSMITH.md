@@ -171,6 +171,7 @@ clickhouse_source = "in-cluster"  # chart-managed StatefulSet — right choice f
 default_node_pool_vm_size   = "Standard_DS4_v2"
 default_node_pool_max_count = 3     # autoscaler can add nodes if pods are pending
 default_node_pool_max_pods  = 60    # AKS default of 30 is too low — LangSmith needs ~25 pods
+aks_network_mode            = "overlay"  # pods from a private range; the subnet holds nodes only
 
 # No additional node pool needed for light deploy.
 # The standard deploy creates a "large" pool (Standard_D16s_v3) for ClickHouse,

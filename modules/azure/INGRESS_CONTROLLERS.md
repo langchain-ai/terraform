@@ -165,9 +165,12 @@ create_dns_zone        = true
 - cert-manager issues TLS via DNS-01 (HTTP-01 incompatible with AGW path rewriting)
 - Three role assignments automated by Terraform: Reader on RG, Contributor on AGW, Network Contributor
   on the VNet (see `agic_network_contributor_scope` below to narrow that one)
-- The namespace NetworkPolicy admits the gateway by the address range of its subnet. In Azure CNI
-  mode AGW connects to pod IPs from that subnet rather than from a namespace, so unlike every other
-  controller here there is no source namespace to allow
+- The namespace NetworkPolicy admits the gateway by the address range of its subnet. AGW connects
+  to pod IPs from that subnet rather than from a namespace, so unlike every other controller here
+  there is no source namespace to allow. This holds in both network modes: the gateway's source
+  address is its own subnet either way, and the rule is an `ipBlock` on that subnet, which the
+  Cilium data plane enforces (Cilium's limitation is `ipBlock` selecting node or pod addresses,
+  which this rule does not do)
 
 **RBAC timing — known issue:** The AKS AGIC addon creates its managed identity during cluster
 provisioning, but the identity requires ~5 minutes to register in Azure AD before role assignments

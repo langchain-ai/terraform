@@ -3,9 +3,13 @@
 # Purpose: Azure Kubernetes Service cluster for running LangSmith workloads.
 #
 # Key design decisions:
-#   • Azure CNI network plugin: pods get IPs directly from the subnet, enabling
-#     full VNet connectivity (pods can reach PostgreSQL/Redis by private IP).
-#     Tradeoff: uses more IPs than kubenet, but required for private DB access.
+#   • Azure CNI network plugin, in one of two IPAM modes. Overlay (Microsoft's
+#     recommendation) gives pods addresses from a private pod_cidr and keeps
+#     the subnet for nodes; node-subnet mode gives pods VNet addresses and
+#     needs a subnet sized for nodes x pods. Either way pods reach
+#     PostgreSQL/Redis over the VNet (overlay traffic leaves the node SNATed).
+#   • Data plane: Cilium (eBPF, Microsoft's recommendation, needs overlay) or
+#     Azure Network Policy Manager, whose Linux support ends 2028-09-30.
 #   • OIDC issuer + Workload Identity: allows Kubernetes service accounts to
 #     federate with Azure AD and assume Managed Identities — used by LangSmith
 #     pods to authenticate to Azure Blob Storage without static keys.
@@ -223,6 +227,27 @@ provider "helm" {
 # and the ingress controller run here.
 # count = 0 when attaching to a pre-existing cluster (create_cluster = false);
 # see data.azurerm_kubernetes_cluster.existing above for that path.
+# Records the IPAM mode the cluster was created with, so a later edit of the
+# mode is caught before Azure runs it as a migration. ignore_changes on input
+# keeps the recorded value at what the first apply wrote; triggers_replace
+# re-records it only when the operator has set allow_network_mode_migration,
+# which is the one path on which the change is meant to reach the cluster.
+# Both mode strings are spelled out here rather than passing null through,
+# because terraform_data stores null as "no value" and the comparison would
+# then never fire. The comparison itself lives in the root module
+# (terraform_data.aks_network_mode_guard), where a failing precondition is
+# reachable by the test suite; this resource is the memory it reads.
+resource "terraform_data" "network_mode" {
+  count = var.create_cluster ? 1 : 0
+
+  input            = coalesce(var.network_plugin_mode, "node-subnet")
+  triggers_replace = var.allow_network_mode_migration ? [coalesce(var.network_plugin_mode, "node-subnet")] : []
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
 resource "azurerm_kubernetes_cluster" "main" {
   count               = var.create_cluster ? 1 : 0
   name                = var.cluster_name
@@ -231,6 +256,13 @@ resource "azurerm_kubernetes_cluster" "main" {
   dns_prefix          = var.cluster_name
   kubernetes_version  = var.kubernetes_version
   tags                = merge(var.tags, { module = "aks" })
+
+  # Free has no SLA. Standard carries the financially backed uptime SLA (99.95%
+  # when the control plane spans availability zones) and is where a production
+  # cluster starts; Premium adds long-term support. The provider updates the tier
+  # in place, so an existing cluster moves tiers without a rebuild.
+  sku_tier     = var.sku_tier
+  support_plan = var.support_plan
 
   role_based_access_control_enabled = true
 
@@ -261,7 +293,8 @@ resource "azurerm_kubernetes_cluster" "main" {
     # Setting to 60 fits all passes on 1 node, avoiding autoscaler scale-out and vCPU quota pressure.
     max_pods = var.default_node_pool_max_pods
 
-    # Nodes live in the main subnet; Azure CNI assigns pod IPs from this range.
+    # Nodes live in the main subnet. In node-subnet mode pods take their IPs
+    # from it too; in overlay mode they come from pod_cidr instead.
     vnet_subnet_id = var.subnet_id
 
     # Temporary node pool name used during node pool upgrades/rotations.
@@ -293,17 +326,23 @@ resource "azurerm_kubernetes_cluster" "main" {
     }
   }
 
-  # Azure CNI: pods get IPs directly from the VNet subnet, giving them full
-  # network reachability to PostgreSQL/Redis without any NAT.
+  # Azure CNI in the mode the root module selected. network_plugin_mode = null
+  # is node-subnet mode: pods get VNet addresses and reach PostgreSQL/Redis
+  # without NAT. "overlay" gives pods addresses from pod_cidr, a range private
+  # to the cluster; pod traffic to the VNet leaves the node with the node's
+  # address, which is what the Blob firewall and Key Vault ACLs allowlist.
   # service_cidr must NOT overlap with the VNet or any peered network.
-  # network_policy = "azure" enables the Azure NetworkPolicy engine so
-  # NetworkPolicy resources actually deny traffic — without it, NetworkPolicy
-  # objects are accepted by the API but never enforced.
+  # A network_policy engine is what makes NetworkPolicy resources deny traffic;
+  # without one they are accepted by the API and never enforced. With the
+  # Cilium data plane the engine has to be Cilium as well.
   network_profile {
-    network_plugin = "azure"
-    network_policy = "azure"
-    service_cidr   = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
-    dns_service_ip = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+    network_plugin      = "azure"
+    network_plugin_mode = var.network_plugin_mode
+    pod_cidr            = var.pod_cidr
+    network_data_plane  = var.network_data_plane
+    network_policy      = var.network_policy
+    service_cidr        = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
+    dns_service_ip      = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
   }
 
   # Key Vault CSI Secrets Store driver — enables pods to mount secrets from
