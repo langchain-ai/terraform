@@ -8,6 +8,9 @@ data "aws_availability_zones" "available" {
 data "aws_region" "current" {}
 
 locals {
+  vpc_id              = var.existing_vpc_id == null ? aws_vpc.this[0].id : data.aws_vpc.existing[0].id
+  internet_gateway_id = var.existing_internet_gateway_id == null ? try(aws_internet_gateway.this[0].id, null) : data.aws_internet_gateway.existing[0].id
+
   availability_zones = length(var.availability_zones) > 0 ? var.availability_zones : slice(
     data.aws_availability_zones.available.names,
     0,
@@ -42,16 +45,42 @@ locals {
 
   private_app_subnets = {
     for index, az in local.availability_zones : az => local.private_app_subnet_cidrs[index]
-    if try(local.private_app_subnet_cidrs[index], null) != null
+    if var.existing_private_app_subnet_ids == null && try(local.private_app_subnet_cidrs[index], null) != null
   }
   private_db_subnets = {
     for index, az in local.availability_zones : az => local.private_db_subnet_cidrs[index]
-    if try(local.private_db_subnet_cidrs[index], null) != null
+    if var.existing_private_db_subnet_ids == null && try(local.private_db_subnet_cidrs[index], null) != null
   }
   public_subnets = {
     for index, az in local.availability_zones : az => local.public_subnet_cidrs[index]
-    if var.publicly_accessible && try(local.public_subnet_cidrs[index], null) != null
+    if local.create_public_subnets && try(local.public_subnet_cidrs[index], null) != null
   }
+
+  create_public_subnets = var.publicly_accessible && var.existing_public_subnet_ids == null
+
+  subnet_tiers = {
+    private_app = { ids = var.existing_private_app_subnet_ids, cidrs = var.private_app_subnet_cidrs }
+    private_db  = { ids = var.existing_private_db_subnet_ids, cidrs = var.private_db_subnet_cidrs }
+    public      = { ids = var.existing_public_subnet_ids, cidrs = var.public_subnet_cidrs }
+  }
+  existing_subnets = merge([
+    for tier, config in local.subnet_tiers : {
+      for index, id in(config.ids == null ? [] : config.ids) : "${tier}:${index}" => {
+        id                = id
+        availability_zone = try(var.availability_zones[index], "")
+      }
+    }
+  ]...)
+
+  private_app_subnet_ids = var.existing_private_app_subnet_ids == null ? [
+    for az in local.availability_zones : aws_subnet.private_app[az].id if contains(keys(aws_subnet.private_app), az)
+  ] : [for index, id in var.existing_private_app_subnet_ids : data.aws_subnet.existing["private_app:${index}"].id]
+  private_db_subnet_ids = var.existing_private_db_subnet_ids == null ? [
+    for az in local.availability_zones : aws_subnet.private_db[az].id if contains(keys(aws_subnet.private_db), az)
+  ] : [for index, id in var.existing_private_db_subnet_ids : data.aws_subnet.existing["private_db:${index}"].id]
+  public_subnet_ids = !var.publicly_accessible ? [] : (var.existing_public_subnet_ids == null ? [
+    for az in local.availability_zones : aws_subnet.public[az].id if contains(keys(aws_subnet.public), az)
+  ] : [for index, id in var.existing_public_subnet_ids : data.aws_subnet.existing["public:${index}"].id])
 
   tags = merge(
     var.tags,
@@ -61,7 +90,64 @@ locals {
   )
 }
 
+data "aws_vpc" "existing" {
+  count = var.existing_vpc_id == null ? 0 : 1
+  id    = var.existing_vpc_id
+
+  lifecycle {
+    postcondition {
+      condition     = self.cidr_block == var.vpc_cidr_block
+      error_message = "vpc_cidr_block must match the existing VPC's primary IPv4 CIDR block."
+    }
+    postcondition {
+      condition     = self.enable_dns_support && self.enable_dns_hostnames
+      error_message = "The existing VPC must have DNS support and DNS hostnames enabled."
+    }
+  }
+}
+
+data "aws_internet_gateway" "existing" {
+  count               = var.existing_internet_gateway_id == null ? 0 : 1
+  internet_gateway_id = var.existing_internet_gateway_id
+
+  lifecycle {
+    postcondition {
+      condition     = anytrue([for attachment in self.attachments : attachment.vpc_id == var.existing_vpc_id])
+      error_message = "The existing Internet Gateway must be attached to existing_vpc_id."
+    }
+  }
+}
+
+data "aws_subnet" "existing" {
+  for_each = local.existing_subnets
+  id       = each.value.id
+
+  lifecycle {
+    postcondition {
+      condition     = self.vpc_id == var.existing_vpc_id && self.availability_zone == each.value.availability_zone
+      error_message = "Every supplied subnet must belong to existing_vpc_id and match its position in availability_zones."
+    }
+  }
+}
+
+moved {
+  from = aws_route_table.private_db
+  to   = aws_route_table.private_db[0]
+}
+
+moved {
+  from = aws_vpc.this
+  to   = aws_vpc.this[0]
+}
+
+moved {
+  from = aws_default_security_group.this
+  to   = aws_default_security_group.this[0]
+}
+
 resource "aws_vpc" "this" {
+  count = var.existing_vpc_id == null ? 1 : 0
+
   cidr_block           = var.vpc_cidr_block
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -69,8 +155,35 @@ resource "aws_vpc" "this" {
   tags = merge(local.tags, {
     Name = "${var.name}-smith-vpc"
   })
+}
 
+# These checks must run even when the VPC is supplied by the caller.
+resource "terraform_data" "validate_inputs" {
   lifecycle {
+    precondition {
+      condition = alltrue([
+        for tier in local.subnet_tiers : tier.ids == null ? true : (
+          var.existing_vpc_id != null && length(var.availability_zones) >= 2 &&
+          length(tier.ids) == length(var.availability_zones) && tier.cidrs == null
+        )
+      ])
+      error_message = "Supplied subnet IDs require existing_vpc_id, explicit availability_zones, one subnet per AZ, and no CIDR override for that tier."
+    }
+    precondition {
+      condition = (
+        length(distinct([for subnet in local.existing_subnets : subnet.id])) == length(local.existing_subnets) &&
+        alltrue([for subnet in local.existing_subnets : can(regex("^subnet-([0-9a-f]{8}|[0-9a-f]{17})$", subnet.id))])
+      )
+      error_message = "Supplied subnet IDs must be valid and unique across all tiers."
+    }
+    precondition {
+      condition     = var.existing_public_subnet_ids == null || var.publicly_accessible
+      error_message = "existing_public_subnet_ids requires publicly_accessible = true."
+    }
+    precondition {
+      condition     = var.existing_private_app_subnet_ids == null || !var.create_nat_gateway
+      error_message = "Set create_nat_gateway = false when supplying application subnets; their egress routing remains caller-managed."
+    }
     precondition {
       condition     = local.availability_zone_count >= 2 && local.availability_zone_count <= 3
       error_message = "The selected AWS region must expose at least two standard availability zones; at most three are used."
@@ -83,19 +196,19 @@ resource "aws_vpc" "this" {
     }
     precondition {
       condition = (
-        length(local.private_app_subnet_cidrs) == local.availability_zone_count &&
-        length(local.private_db_subnet_cidrs) == local.availability_zone_count &&
-        (!var.publicly_accessible || length(local.public_subnet_cidrs) == local.availability_zone_count)
+        (var.existing_private_app_subnet_ids != null || length(local.private_app_subnet_cidrs) == local.availability_zone_count) &&
+        (var.existing_private_db_subnet_ids != null || length(local.private_db_subnet_cidrs) == local.availability_zone_count) &&
+        (!local.create_public_subnets || length(local.public_subnet_cidrs) == local.availability_zone_count)
       )
       error_message = "Provide exactly one private-app and private-DB CIDR per selected AZ, plus one public CIDR per AZ when publicly_accessible is true."
     }
     precondition {
-      condition     = !var.create_nat_gateway || var.create_internet_gateway
-      error_message = "create_nat_gateway requires create_internet_gateway because AWS regional public NAT gateways require an attached Internet Gateway."
+      condition     = !var.create_nat_gateway || var.create_internet_gateway || var.existing_internet_gateway_id != null
+      error_message = "create_nat_gateway requires create_internet_gateway or existing_internet_gateway_id because AWS regional public NAT gateways require an attached Internet Gateway."
     }
     precondition {
-      condition     = !var.publicly_accessible || var.create_internet_gateway
-      error_message = "publicly_accessible requires create_internet_gateway."
+      condition     = !local.create_public_subnets || var.create_internet_gateway || var.existing_internet_gateway_id != null
+      error_message = "Creating public subnets requires create_internet_gateway or existing_internet_gateway_id."
     }
     precondition {
       condition     = !var.enable_vpc_endpoints || length(var.interface_endpoint_services) > 0
@@ -107,7 +220,7 @@ resource "aws_vpc" "this" {
 resource "aws_subnet" "private_app" {
   for_each = local.private_app_subnets
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   availability_zone       = each.key
   cidr_block              = each.value
   map_public_ip_on_launch = false
@@ -122,7 +235,7 @@ resource "aws_subnet" "private_app" {
 resource "aws_subnet" "private_db" {
   for_each = local.private_db_subnets
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   availability_zone       = each.key
   cidr_block              = each.value
   map_public_ip_on_launch = false
@@ -136,7 +249,7 @@ resource "aws_subnet" "private_db" {
 resource "aws_subnet" "public" {
   for_each = local.public_subnets
 
-  vpc_id                  = aws_vpc.this.id
+  vpc_id                  = local.vpc_id
   availability_zone       = each.key
   cidr_block              = each.value
   map_public_ip_on_launch = false
@@ -151,7 +264,7 @@ resource "aws_subnet" "public" {
 resource "aws_internet_gateway" "this" {
   count = var.create_internet_gateway ? 1 : 0
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-igw"
@@ -161,20 +274,20 @@ resource "aws_internet_gateway" "this" {
 resource "aws_nat_gateway" "this" {
   count = var.create_nat_gateway ? 1 : 0
 
-  vpc_id            = aws_vpc.this.id
+  vpc_id            = local.vpc_id
   availability_mode = "regional"
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-nat"
   })
 
-  depends_on = [aws_internet_gateway.this]
+  depends_on = [aws_internet_gateway.this, data.aws_internet_gateway.existing]
 }
 
 resource "aws_route_table" "private_app" {
   for_each = local.private_app_subnets
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-rt-private-app-${local.availability_zone_suffixes[each.key]}"
@@ -198,7 +311,9 @@ resource "aws_route_table_association" "private_app" {
 }
 
 resource "aws_route_table" "private_db" {
-  vpc_id = aws_vpc.this.id
+  count = var.existing_private_db_subnet_ids == null ? 1 : 0
+
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-rt-private-db"
@@ -210,13 +325,13 @@ resource "aws_route_table_association" "private_db" {
   for_each = local.private_db_subnets
 
   subnet_id      = aws_subnet.private_db[each.key].id
-  route_table_id = aws_route_table.private_db.id
+  route_table_id = aws_route_table.private_db[0].id
 }
 
 resource "aws_route_table" "public" {
-  count = var.publicly_accessible ? 1 : 0
+  count = local.create_public_subnets ? 1 : 0
 
-  vpc_id = aws_vpc.this.id
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-rt-public"
@@ -225,11 +340,11 @@ resource "aws_route_table" "public" {
 }
 
 resource "aws_route" "public_internet_gateway" {
-  count = var.publicly_accessible ? 1 : 0
+  count = local.create_public_subnets && (var.create_internet_gateway || var.existing_internet_gateway_id != null) ? 1 : 0
 
   route_table_id         = aws_route_table.public[0].id
   destination_cidr_block = "0.0.0.0/0"
-  gateway_id             = aws_internet_gateway.this[0].id
+  gateway_id             = local.internet_gateway_id
 }
 
 resource "aws_route_table_association" "public" {
@@ -240,7 +355,9 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_default_security_group" "this" {
-  vpc_id = aws_vpc.this.id
+  count = var.existing_vpc_id == null ? 1 : 0
+
+  vpc_id = local.vpc_id
 
   tags = merge(local.tags, {
     Name = "${var.name}-smith-default-sg"

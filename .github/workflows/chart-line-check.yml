@@ -6,7 +6,7 @@ name: Chart Line Check
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'cutover/**']
     paths:
       - 'modules/**/helm/scripts/deploy.sh'
       - '.github/scripts/chart-line.sh'

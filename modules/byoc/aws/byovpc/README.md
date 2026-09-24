@@ -1,6 +1,6 @@
 # AWS BYOVPC reference module
 
-This module creates a standardized AWS VPC for LangSmith BYOC. Use it directly or copy and adapt it to your networking requirements. LangSmith validates the supplied network configuration during data-plane creation.
+This module creates standardized AWS networking for LangSmith BYOC, either in a new VPC or in an existing VPC you supply. Use it directly or copy and adapt it to your networking requirements. LangSmith validates the supplied network configuration during data-plane creation.
 
 The module provisions networking only. Create the customer-side IAM role separately with [`langsmith-byoc-role`](../langsmith-byoc-role/README.md).
 
@@ -114,6 +114,44 @@ module "langsmith_byovpc" {
 
 PrivateLink targets the LangSmith AWS control-plane endpoint service in `us-east-2` and creates private DNS zones for both `aws.api.smith.langchain.com` and `beacon.aws.langchain.com`. Confirm endpoint-service access and cross-region availability with LangChain before enabling it.
 
+## Use an existing VPC
+
+Set `existing_vpc_id` and match `vpc_cidr_block` to its primary CIDR. The VPC must have DNS support and DNS hostnames enabled. Choose unused subnet ranges:
+
+```hcl
+module "langsmith_byovpc" {
+  source = "../terraform/modules/byoc/aws/byovpc"
+
+  existing_vpc_id     = "vpc-0123456789abcdef0"
+  vpc_cidr_block      = "10.20.0.0/16"
+  availability_zones = ["us-east-1a", "us-east-1b"]
+
+  private_app_subnet_cidrs = ["10.20.0.0/18", "10.20.64.0/18"]
+  private_db_subnet_cidrs  = ["10.20.128.0/24", "10.20.129.0/24"]
+
+  create_internet_gateway      = false
+  existing_internet_gateway_id = "igw-0123456789abcdef0"
+}
+```
+
+This creates the surrounding networking while leaving VPC settings and its default security group unmanaged. Omit the gateway inputs to create a new Internet Gateway if none is attached. Flow logs cover the entire VPC; disable them if logging already exists.
+
+### Reuse existing subnets
+
+Replace a tier's CIDR inputs with subnet IDs from the same VPC, one per AZ in `availability_zones` order. Omitted tiers are created normally:
+
+```hcl
+existing_private_app_subnet_ids = ["subnet-00000000000000001", "subnet-00000000000000002"]
+existing_private_db_subnet_ids  = ["subnet-00000000000000003", "subnet-00000000000000004"]
+create_nat_gateway             = false
+```
+
+Public subnet reuse also requires `publicly_accessible = true`. Supplied subnets retain their routing and tags; you manage egress, database isolation, and load-balancer discovery tags. Application subnet reuse requires NAT creation disabled.
+
+Outputs and Interface/PrivateLink endpoints use the selected subnets. Route-table outputs and S3 Gateway endpoint associations cover only module-created tables; manage S3 associations for reused subnets separately using `s3_gateway_endpoint_id`.
+
+Switching existing deployments from created resources to supplied IDs requires a separate state migration to avoid planned deletions.
+
 ## Inputs
 
 All inputs are optional. Full types and validation rules are in [`variables.tf`](variables.tf).
@@ -121,8 +159,13 @@ All inputs are optional. Full types and validation rules are in [`variables.tf`]
 | Input | Default | Purpose |
 | --- | --- | --- |
 | `name` | `"dataplane"` | Resource prefix, 2–32 lowercase letters, digits, or hyphens. |
-| `vpc_cidr_block` | `"10.0.0.0/16"` | Network-aligned RFC1918 IPv4 prefix, `/16`–`/18`. |
+| `existing_vpc_id` | `null` | Use an existing VPC and leave its default security group unmanaged. |
+| `existing_internet_gateway_id` | `null` | Reuse a gateway attached to the supplied VPC; requires `create_internet_gateway = false`. |
+| `vpc_cidr_block` | `"10.0.0.0/16"` | Primary network-aligned RFC1918 IPv4 prefix, `/16`–`/18`; must match a supplied VPC. |
 | `availability_zones` | `[]` | Automatically select up to three AZs, or supply two or three unique AZ names. |
+| `existing_private_app_subnet_ids` | `null` | Application subnets in AZ order; requires `create_nat_gateway = false`. |
+| `existing_private_db_subnet_ids` | `null` | Database subnets in AZ order. |
+| `existing_public_subnet_ids` | `null` | Public subnets in AZ order; requires `publicly_accessible`. |
 | `private_app_subnet_cidrs` | `null` | Override application subnet CIDRs in AZ order. |
 | `private_db_subnet_cidrs` | `null` | Override isolated database subnet CIDRs in AZ order. |
 | `public_subnet_cidrs` | `null` | Override public subnet CIDRs in AZ order. |

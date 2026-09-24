@@ -9,7 +9,7 @@
 # Where am I?              make status
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -46,6 +46,9 @@ quickstart: ## Interactive setup wizard — generates terraform.tfvars
 
 test-quickstart: ## Unit-test the quickstart wizard's resume layer (no Azure, no prompts)
 	$(INFRA_DIR)/scripts/test-quickstart-state.sh
+
+test-license-key: ## Unit-test the license key check shared by setup-env, k8s-secrets and keyvault set (no Azure)
+	$(INFRA_DIR)/scripts/test-license-key.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh

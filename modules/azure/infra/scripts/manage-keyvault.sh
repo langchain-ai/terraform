@@ -188,6 +188,17 @@ cmd_set() {
     fi
   fi
 
+  # Validate license key shape (shared rules — see _common.sh). This is the
+  # documented way to correct a bad key (#250, #251), so it must not accept the
+  # same paste the prompt now refuses.
+  if [[ "$key" == "langsmith-license-key" ]]; then
+    if ! _lk_err=$(_validate_license_key "$val"); then
+      _red "ERROR"; echo ": $_lk_err"
+      echo "  platform-backend would fail at startup with a base64 error."
+      exit 1
+    fi
+  fi
+
   az keyvault secret set \
     --vault-name "$KV_NAME" \
     --name "$key" \

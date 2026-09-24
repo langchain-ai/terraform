@@ -33,7 +33,7 @@ locals {
     ]
   }
 
-  role_policies = {
+  unfiltered_role_policies = {
     # Keep optional delete permissions packed into smaller existing policies so
     # each managed policy stays under IAM's 6,144 character policy size limit.
     vpc = concat(
@@ -60,6 +60,37 @@ locals {
       local.delete_statements_for_policy.dns,
       var.allow_public_ingress ? local.delete_statements_for_policy["dns-public"] : [],
     )
+  }
+
+  byoiam_allowed_actions = [
+    "iam:GetRole",
+    "iam:ListAttachedRolePolicies",
+    "iam:ListRolePolicies",
+    "iam:GetRolePolicy",
+    "iam:ListInstanceProfilesForRole",
+    "iam:GetInstanceProfile",
+    "iam:GetPolicy",
+    "iam:GetPolicyVersion",
+    "iam:ListPolicyVersions",
+    "iam:PassRole",
+    "iam:SimulatePrincipalPolicy",
+  ]
+
+  # Filter after composing teardown permissions so enabling deletes cannot
+  # restore IAM writes. Mixed statements retain their permitted read actions.
+  filtered_role_policies = {
+    for name, statements in local.unfiltered_role_policies : name => [
+      for statement in statements : merge(statement, {
+        Action = [for action in flatten([statement.Action]) : action if
+          var.allow_iam_management_permissions || !startswith(lower(action), "iam:") || contains(local.byoiam_allowed_actions, action)
+        ]
+      })
+    ]
+  }
+  role_policies = {
+    for name, statements in local.filtered_role_policies : name => [
+      for statement in statements : statement if length(statement.Action) > 0
+    ]
   }
 }
 

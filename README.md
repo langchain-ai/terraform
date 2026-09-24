@@ -19,15 +19,15 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 | GCP | [`modules/gcp/`](modules/gcp/README.md) | GKE | GA |
 | OpenShift | [`modules/ocp/`](modules/ocp/README.md) | OCP / ROSA | Preview |
 
-Each provider directory is a self-contained deployment with a `Makefile`, an `infra/` Terraform layout, Helm values, and operator scripts. The shared module structure is described in [`modules/README.md`](modules/README.md).
+The AWS, Azure, and GCP directories are self-contained deployments with a `Makefile`, an `infra/` Terraform layout, Helm values, and provider-specific operator scripts. The OpenShift preview follows its own layout. See [`modules/README.md`](modules/README.md) for the differences between providers.
 
 For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byoc/README.md) for the customer-side IAM role and AWS VPC reference modules.
 
 ## What you get
 
 - **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.
-- **Secrets via your cloud's native store** (AWS SSM, Azure Key Vault, GCP Secret Manager), synced into Kubernetes by [External Secrets Operator](https://external-secrets.io/) — no secrets in git, no secrets in `tfvars`.
-- **Sizing profiles:** `dev`, `production`, `production-large` — selected with a single variable.
+- **Provider-specific secret handling.** AWS application secrets flow from SSM Parameter Store through [External Secrets Operator](https://external-secrets.io/); Azure application secrets flow from Key Vault through `infra/scripts/create-k8s-secrets.sh`; GCP application secrets flow from Secret Manager into generated Helm values. Terraform also creates Kubernetes Secrets containing infrastructure credentials on all three clouds, so those values remain in Terraform state — protect the state backend. See the [secret flow and state table](modules/README.md#secret-flow-and-state).
+- **Sizing profiles:** `minimum`, `dev`, `production`, and `production-large` — selected with a single variable. Setting `sizing_profile = "default"` skips the sizing overlay; the provider's base values and other overrides still apply.
 - **Enterprise feature toggles:**
   - LangGraph Platform / Deployments
   - Agent Builder
@@ -52,7 +52,7 @@ For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byo
 1. **Check out the latest release tag, not `main`** — see [Versioning and releases](#versioning-and-releases) for the one-line command. `main` is the development branch and may move under you.
 2. Pick the provider folder above and read its `README.md`.
 3. Install the prerequisites it lists (Terraform ≥ 1.11.0, `kubectl`, `helm`, and your cloud CLI).
-4. Run the interactive wizard (`make quickstart` on AWS; equivalent setup on Azure / GCP).
+4. Run the interactive wizard (`make quickstart` on AWS, Azure, or GCP).
 5. `make apply` → `make deploy`.
 
 A typical first deployment takes 20–30 minutes end-to-end.

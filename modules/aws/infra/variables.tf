@@ -214,17 +214,20 @@ variable "postgres_password" {
     Password for the postgres database. Required when postgres_source = 'external'.
     Set via TF_VAR_postgres_password env var.
 
-    When using setup-env.sh: auto-generated on first run and stored in SSM Parameter Store
-    (/langsmith/{base_name}/postgres-password). On subsequent runs, the value is read from SSM —
-    local .pg_password files are only used as a bootstrap fallback when SSM is unreachable.
-    To rotate, update SSM directly and run terraform apply -target=module.postgres.
+    When using setup-env.sh: auto-generated on first run (openssl rand -hex 32) and stored
+    in SSM Parameter Store (/langsmith/{base_name}/postgres-password). On subsequent runs,
+    the value is read from SSM. Local .pg_password files are only a bootstrap fallback when
+    SSM is unreachable. To rotate, update SSM and run terraform apply -target=module.postgres.
+
+    RDS forbids '/', '@', double quote, single quote, and space. Connection URLs percent-encode
+    the password so other reserved URI characters still parse.
   EOT
   default     = ""
   sensitive   = true
 
   validation {
-    condition     = var.postgres_password == "" || can(regex("^[^/@\"' ]+$", var.postgres_password))
-    error_message = "RDS master password must not contain '/', '@', '\"', single quotes, or spaces."
+    condition     = var.postgres_password == "" || can(regex("^[^/@\"' ]{8,128}$", var.postgres_password))
+    error_message = "RDS master password must be 8-128 characters and must not contain '/', '@', '\"', single quotes, or spaces."
   }
 }
 
@@ -740,7 +743,7 @@ variable "langsmith_jwt_secret" {
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), or 'default' (chart defaults, no sizing file)."
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
   default     = "default"
 
   validation {

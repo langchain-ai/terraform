@@ -60,7 +60,10 @@
       "arn:aws:iam::${account_id}:role/*-smith-privatelink-lambda-role",
       "arn:aws:iam::${account_id}:role/*-smith-lbc-role",
       "arn:aws:iam::${account_id}:role/*-smith-ch-backup-role",
-      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role"
+      "arn:aws:iam::${account_id}:role/*-smith-juicefs-csi-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smithdb-metastore-monitoring-role",
+      "arn:aws:iam::${account_id}:role/*-smith-smithdb-iam-role",
+      "arn:aws:iam::${account_id}:role/*-smith-smithdb-setup-iam-role"
     ]
   },
   {
