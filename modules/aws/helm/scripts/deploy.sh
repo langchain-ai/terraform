@@ -739,6 +739,8 @@ echo ""
 echo "Access LangSmith:"
 echo "  Port-forward:  kubectl port-forward svc/${RELEASE_NAME}-frontend -n ${NAMESPACE} 8080:80"
 echo "  Then open:     http://localhost:8080"
-if [[ -n "${_active_host:-}" ]]; then
+if [[ -n "${_langsmith_domain:-}" ]]; then
+  echo "  URL:           https://${_langsmith_domain}"
+elif [[ -n "${_active_host:-}" ]]; then
   echo "  URL:           http://${_active_host}"
 fi
