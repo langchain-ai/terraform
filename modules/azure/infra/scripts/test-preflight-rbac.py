@@ -206,6 +206,19 @@ DNS = "langsmith-dev-ls"
 
 ALL_GOOD = response()
 
+# The quota fixtures mirror a real eastus answer: the node family nearly spent,
+# the regional total roomy, and the default Postgres family untouched.
+NODE_POOL_D4 = "\n".join([
+    'default_node_pool_vm_size   = "Standard_D4s_v3"',
+    "default_node_pool_min_count = 2",
+    "default_node_pool_max_count = 5",
+])
+USAGE_DEFAULT = [
+    ("standardDSv3Family", 48, 64),
+    ("cores", 72, 288),
+    ("standardDDSv4Family", 0, 10),
+]
+
 CASES = [
     {
         "name": "Postgres capabilities validate the configured version and SKU",
@@ -804,6 +817,85 @@ CASES = [
         "ca_all": ALL_GOOD,
         "expect": ["[✗] ARM_SUBSCRIPTION_ID is 99999999", "every check in this script reads"],
     },
+    {
+        # The floor fits and the ceiling does not: the cluster creates, and the
+        # autoscaler stops short. Postgres sits in its own family here, so it
+        # adds to the regional total only.
+        "name": "a node pool whose maximum exceeds the family quota warns",
+        "tfvars_extra": NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "vm_usage": USAGE_DEFAULT,
+        "expect": [
+            "[!] standardDSv3Family quota in eastus: 16 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 20 at the node pool maximum",
+            "[✓] cores quota in eastus: 216 of 288 vCPUs free (2-5 × Standard_D4s_v3 plus Postgres needs up to 22)",
+            "[✓] standardDDSv4Family quota in eastus: 10 of 10 vCPUs free (GP_Standard_D2ds_v4 needs 2)",
+        ],
+        "reject": ["[✗] standardDSv3Family"],
+    },
+    {
+        "name": "a node pool whose minimum exceeds the family quota fails",
+        "tfvars_extra": NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDSv3Family", 60, 64)] + USAGE_DEFAULT[1:],
+        "expect": [
+            "[✗] standardDSv3Family quota in eastus: 4 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 8 at the node pool minimum",
+        ],
+    },
+    {
+        # Nodes and Postgres in one family draw on the same quota, so the check
+        # has to add them together or it passes a config the apply rejects.
+        "name": "Postgres counts against the node family when they share it",
+        "tfvars_extra": "\n".join([
+            'default_node_pool_vm_size   = "Standard_D4ds_v4"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDDSv4Family", 0, 8), ("cores", 0, 100)],
+        "expect": [
+            "[!] standardDDSv4Family quota in eastus: 8 of 8 vCPUs free, 1-2 × Standard_D4ds_v4 plus Postgres needs 10 at the node pool maximum",
+        ],
+    },
+    {
+        "name": "an attached cluster needs no node pool quota",
+        "tfvars_extra": "create_cluster = false\n" + NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "vm_usage": USAGE_DEFAULT,
+        "expect": ["[✓] create_cluster = false — no node pool quota required"],
+        "reject": ["standardDSv3Family quota", "cores quota"],
+    },
+    {
+        # redis_location moves only the cluster, so that is the region the
+        # offering check has to ask about.
+        "name": "the Managed Redis region check follows redis_location",
+        "tfvars_extra": 'redis_location = "eastus2"',
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US 2", "West US 2"],
+        "expect": ["[✓] Azure Managed Redis is offered in eastus2"],
+        "reject": ["offered in eastus (", "[✗] Azure Managed Redis"],
+    },
+    {
+        "name": "a redis_location that does not offer Managed Redis fails",
+        "tfvars_extra": 'redis_location = "eastus2"',
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US"],
+        "expect": ["[✗] Azure Managed Redis is not offered in eastus2"],
+    },
+    {
+        "name": "Managed Redis is checked in location when redis_location is unset",
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US"],
+        "expect": ["[✓] Azure Managed Redis is offered in eastus"],
+    },
+    {
+        # A custom domain replaces the cloudapp.azure.com name, so a missing
+        # dns_label is the expected shape, not something to flag.
+        "name": "a custom domain does not warn about a missing dns_label",
+        "tfvars_extra": 'langsmith_domain = "ls.example.com"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] Custom domain ls.example.com — no public IP DNS label to check"],
+        "reject": ["dns_label not set"],
+    },
 ]
 
 
@@ -856,6 +948,12 @@ def build_case(case, index):
         (fixture / "pg_caps.json").write_text(case["pg_caps_raw"])
     if "name_availability" in case:
         (fixture / "name_availability.json").write_text(json.dumps(case["name_availability"]))
+    if "vm_usage" in case:
+        (fixture / "vm_usage").write_text(
+            "".join(f"{name}\t{used}\t{limit}\n" for name, used, limit in case["vm_usage"])
+        )
+    if "amr_regions" in case:
+        (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
     for key in ("kv_deleted", "redis_hit", "dns_held"):
         if key in case:
             (fixture / key).write_text(str(case[key]))

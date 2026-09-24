@@ -1106,7 +1106,6 @@ _run_section_6() {
     DNS_LABEL=""; LANGSMITH_DOMAIN=""; LE_EMAIL=""
   fi
 
-  CREATE_DNS_ZONE="false"
   if [[ "$TLS_SOURCE" == "dns01" ]]; then
     CREATE_DNS_ZONE="true"
     echo ""
@@ -1114,6 +1113,22 @@ _run_section_6() {
     _hint "NS records at your registrar → cert-manager writes TXT records to Azure DNS →"
     _hint "Let's Encrypt validates ownership → cert is issued automatically."
     _hint "create_dns_zone = true will be set."
+  elif [[ -n "$LANGSMITH_DOMAIN" ]]; then
+    # HTTP-01 does not need the zone, but a custom domain still needs an A
+    # record somewhere. Forcing false here left users no wizard path to it.
+    echo ""
+    _hint "Terraform can host ${LANGSMITH_DOMAIN} in an Azure DNS zone and point it at the"
+    _hint "ingress IP. You delegate the zone's NS records at your registrar once."
+    _hint "Answer no if you manage the A record in another DNS provider."
+    local zone_default="y"
+    _answered 6 && [[ "$CREATE_DNS_ZONE" != "true" ]] && zone_default="n"
+    if _ask_yn "Create an Azure DNS zone for ${LANGSMITH_DOMAIN}?" "$zone_default"; then
+      CREATE_DNS_ZONE="true"
+    else
+      CREATE_DNS_ZONE="false"
+    fi
+  else
+    CREATE_DNS_ZONE="false"
   fi
 }
 

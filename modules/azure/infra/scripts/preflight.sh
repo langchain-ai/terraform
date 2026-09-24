@@ -13,7 +13,7 @@
 #   3. Required resource providers are registered
 #   4. The identity Terraform will use can write role assignments
 #   5. Subscription offer type is not blocked from provisioning Postgres
-#   6. Regional vCPU quota covers the configured Postgres SKU family
+#   6. Regional vCPU quota covers the node pool and the Postgres SKU family
 #   7. terraform.tfvars exists with required fields populated, and any cluster or
 #      Key Vault it attaches to rather than creates is really there
 #   8. The configured Postgres version and SKU are offered in the region
@@ -834,7 +834,7 @@ else
   esac
 fi
 
-# ── 6. Regional quota for the database SKU family ─────────────────────────────
+# ── 6. Regional vCPU quota for the node pool and database SKU families ────────
 # `az postgres flexible-server list-skus` reports what a region offers, not what
 # this subscription may create. A family at quota 0 fails the apply with
 # ErrCode_InsufficientVCPUQuota once AKS exists, and clearing it takes a quota
@@ -845,6 +845,10 @@ fi
 # rejects its scope, so Compute is the only surface that answers. Fresh
 # subscriptions routinely ship the v5 families at 0, so the
 # LocationIsOfferRestricted workaround below can trade one failure for another.
+#
+# The AKS default node pool draws on the same per-family quota and on the
+# regional total ("cores"). Its minimum count must fit or the cluster create
+# fails; its maximum only caps how far the autoscaler can scale out.
 echo ""
 echo "── Regional Quota ────────────────────────────────────"
 
@@ -852,6 +856,70 @@ POSTGRES_SOURCE=$(_tfvar postgres_source || echo "external")
 REDIS_SOURCE=$(_tfvar redis_source || echo "external")
 QUOTA_LOCATION=$(_tfvar location || echo "eastus")
 POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
+CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
+NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v3")
+NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
+NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
+
+# Map a VM size to its Compute quota family. Standard_D2ds_v4 -> letter D, suffix
+# ds, version 4 -> standardDDSv4Family. B-series is the one family that is not a
+# transform of the size (B1ms lands in standardBSFamily). tr rather than ${var^^}:
+# bash 3.2. Empty when the size does not fit the pattern.
+_quota_family() {
+  local size="$1" letter suffix version
+  case "$size" in
+    Standard_B*) echo "standardBSFamily"; return ;;
+  esac
+  letter=$(printf '%s\n' "$size" | sed -n 's/^Standard_\([A-Za-z]\)[0-9].*/\1/p')
+  suffix=$(printf '%s\n' "$size" | sed -n 's/^Standard_[A-Za-z][0-9]*\([a-z]*\)_v[0-9]*$/\1/p')
+  version=$(printf '%s\n' "$size" | sed -n 's/.*_v\([0-9]*\)$/\1/p')
+  if [ -n "$letter" ] && [ -n "$version" ]; then
+    echo "standard$(printf '%s%s' "$letter" "$suffix" | tr '[:lower:]' '[:upper:]')v${version}Family"
+  fi
+}
+
+# vCPU count is the leading digits of the size: Standard_D2ds_v4 needs 2.
+_sku_vcpus() {
+  printf '%s\n' "$1" | sed -n 's/^Standard_[A-Za-z]\([0-9]*\).*/\1/p'
+}
+
+# One list-usage call serves every family below. tsv keeps this jq-free; az is
+# all this section needs. The limit comes back as a string, which tsv flattens.
+USAGE_ROWS=""
+_usage_loaded=0
+# Echo "used<TAB>limit" for a quota name, empty when the region has no such row.
+_quota_row() {
+  if [ "$_usage_loaded" -eq 0 ]; then
+    USAGE_ROWS=$(az vm list-usage -l "$QUOTA_LOCATION" --only-show-errors \
+      --query "[].[name.value,currentValue,limit]" -o tsv 2>/dev/null || echo "")
+    _usage_loaded=1
+  fi
+  printf '%s\n' "$USAGE_ROWS" | awk -F'\t' -v k="$1" '$1 == k { print $2 "\t" $3; exit }'
+}
+
+# Verdict for a quota row against the vCPUs the node pool needs at its minimum
+# (the floor, which blocks the apply) and at its maximum (the ceiling, which only
+# caps scale-out).
+_node_quota_verdict() {
+  local key="$1" floor="$2" ceiling="$3" what="$4" row used limit free
+  row=$(_quota_row "$key")
+  used=$(printf '%s\n' "$row" | cut -f1)
+  limit=$(printf '%s\n' "$row" | cut -f2)
+  if ! printf '%s|%s\n' "$used" "$limit" | grep -qE '^[0-9]+\|[0-9]+$'; then
+    warn "${QUOTA_LOCATION} reports no ${key} quota entry — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+    return
+  fi
+  free=$((limit - used))
+  if [ "$free" -lt "$floor" ]; then
+    fail "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${floor} at the node pool minimum"
+    warn "  Request an increase under Subscriptions > Usage + quotas, or lower default_node_pool_min_count"
+  elif [ "$free" -lt "$ceiling" ]; then
+    warn "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${ceiling} at the node pool maximum"
+    warn "  The autoscaler stops short of default_node_pool_max_count = ${NODE_MAX}; request more quota or lower it"
+  else
+    pass "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free (${what} needs up to ${ceiling})"
+  fi
+}
 
 # With no tfvars the defaults describe a region and SKU nobody picked, and
 # failing on those sends someone to request quota they may not need. Section 7
@@ -859,6 +927,8 @@ POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
 #
 # Both values reach an az invocation, so each is held to the shape Azure accepts
 # and dropped if it does not fit.
+PG_FAMILY=""
+PG_VCPUS=0
 if [ ! -f "$TFVARS" ]; then
   warn "terraform.tfvars not found — skipping quota checks until a region and SKU are set"
 elif ! printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
@@ -870,36 +940,16 @@ elif ! printf '%s\n' "$POSTGRES_SKU" | grep -qE '^(B|GP|MO)_Standard_[A-Za-z0-9_
 else
   # Derive the quota family from the SKU name, then trust it only if the API
   # reports a family by that name; a miss warns rather than invents a failure.
-  # B-series is the one family that is not a transform of the size (B1ms lands in
-  # standardBSFamily). tr rather than ${var^^}: bash 3.2.
   SIZE="${POSTGRES_SKU#*_}"
-  case "$SIZE" in
-    Standard_B*)
-      QUOTA_FAMILY="standardBSFamily"
-      ;;
-    *)
-      # Standard_D2ds_v4 -> letter D, suffix ds, version 4 -> standardDDSv4Family
-      SKU_LETTER=$(printf '%s\n' "$SIZE" | sed -n 's/^Standard_\([A-Za-z]\)[0-9].*/\1/p')
-      SKU_SUFFIX=$(printf '%s\n' "$SIZE" | sed -n 's/^Standard_[A-Za-z][0-9]*\([a-z]*\)_v[0-9]*$/\1/p')
-      SKU_VERSION=$(printf '%s\n' "$SIZE" | sed -n 's/.*_v\([0-9]*\)$/\1/p')
-      if [ -n "$SKU_LETTER" ] && [ -n "$SKU_VERSION" ]; then
-        QUOTA_FAMILY="standard$(printf '%s%s' "$SKU_LETTER" "$SKU_SUFFIX" | tr '[:lower:]' '[:upper:]')v${SKU_VERSION}Family"
-      else
-        QUOTA_FAMILY=""
-      fi
-      ;;
-  esac
-
-  # vCPU count is the leading digits of the size: Standard_D2ds_v4 needs 2.
-  SKU_VCPUS=$(printf '%s\n' "$SIZE" | sed -n 's/^Standard_[A-Za-z]\([0-9]*\).*/\1/p')
+  QUOTA_FAMILY=$(_quota_family "$SIZE")
+  SKU_VCPUS=$(_sku_vcpus "$SIZE")
 
   if [ -z "$QUOTA_FAMILY" ] || [ -z "$SKU_VCPUS" ]; then
     warn "Could not map ${POSTGRES_SKU} to a quota family — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
   else
-    # QUOTA_FAMILY is alphanumeric by construction, so it is safe in the JMESPath
-    # filter. tsv keeps this jq-free; az is all this section needs.
-    QUOTA_ROW=$(az vm list-usage -l "$QUOTA_LOCATION" --only-show-errors \
-      --query "[?name.value=='${QUOTA_FAMILY}'].[currentValue,limit]" -o tsv 2>/dev/null || echo "")
+    PG_FAMILY="$QUOTA_FAMILY"
+    PG_VCPUS="$SKU_VCPUS"
+    QUOTA_ROW=$(_quota_row "$QUOTA_FAMILY")
 
     if [ -z "$QUOTA_ROW" ]; then
       warn "${QUOTA_LOCATION} reports no ${QUOTA_FAMILY} quota entry — confirm ${POSTGRES_SKU} is offered there"
@@ -922,16 +972,50 @@ else
   fi
 fi
 
+# The node pool check. Postgres counts against the regional total always, and
+# against the node family too when both land in the same one.
+if [ ! -f "$TFVARS" ] || ! printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+  :   # already reported above
+elif [ "$CREATE_CLUSTER" = "false" ]; then
+  pass "create_cluster = false — no node pool quota required"
+elif ! printf '%s\n' "$NODE_VM_SIZE" | grep -qE '^Standard_[A-Za-z0-9_]+$' \
+  || ! printf '%s|%s\n' "$NODE_MIN" "$NODE_MAX" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  warn "terraform.tfvars: node pool size or counts are not literals preflight can read — skipping the node pool quota check"
+else
+  NODE_FAMILY=$(_quota_family "$NODE_VM_SIZE")
+  NODE_VCPUS=$(_sku_vcpus "$NODE_VM_SIZE")
+  if [ -z "$NODE_FAMILY" ] || [ -z "$NODE_VCPUS" ]; then
+    warn "Could not map ${NODE_VM_SIZE} to a quota family — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+  else
+    NODE_WHAT="${NODE_MIN}-${NODE_MAX} × ${NODE_VM_SIZE}"
+    FAMILY_EXTRA=0
+    if [ "$PG_FAMILY" = "$NODE_FAMILY" ]; then
+      FAMILY_EXTRA="$PG_VCPUS"
+      NODE_WHAT="${NODE_WHAT} plus Postgres"
+    fi
+    _node_quota_verdict "$NODE_FAMILY" \
+      $((NODE_MIN * NODE_VCPUS + FAMILY_EXTRA)) $((NODE_MAX * NODE_VCPUS + FAMILY_EXTRA)) "$NODE_WHAT"
+    CORES_WHAT="${NODE_MIN}-${NODE_MAX} × ${NODE_VM_SIZE}"
+    [ "$PG_VCPUS" -gt 0 ] && CORES_WHAT="${CORES_WHAT} plus Postgres"
+    _node_quota_verdict "cores" \
+      $((NODE_MIN * NODE_VCPUS + PG_VCPUS)) $((NODE_MAX * NODE_VCPUS + PG_VCPUS)) "$CORES_WHAT"
+  fi
+fi
+
 # Azure Managed Redis has neither a quota surface nor a capacity API: a region
 # offering redisEnterprise can still refuse the create with InsufficientCapacity,
 # discoverable only by trying. That the resource type reaches the region is all
 # that is knowable up front. Provider metadata returns display names ("East US"),
-# so normalize before comparing.
+# so normalize before comparing. redis_location moves only the cluster, so that
+# is the region to check when it is set.
+AMR_LOCATION=$(_tfvar redis_location || echo "")
+[ "$AMR_LOCATION" = "null" ] && AMR_LOCATION=""
+AMR_LOCATION="${AMR_LOCATION:-$QUOTA_LOCATION}"
 if [ ! -f "$TFVARS" ]; then
   :   # already reported above
 elif [ "$REDIS_SOURCE" = "in-cluster" ]; then
   pass "redis_source = in-cluster — no Managed Redis region check needed"
-elif printf '%s\n' "$QUOTA_LOCATION" | grep -qE '^[a-z0-9]+$'; then
+elif printf '%s\n' "$AMR_LOCATION" | grep -qE '^[a-z0-9]+$'; then
   # JSON, not tsv, so the shape can be checked before the answer becomes a
   # verdict: a tsv line is indistinguishable from an error string, and a "not
   # offered" built on one blocks a deploy over a parse. Only a JSON array of
@@ -954,10 +1038,10 @@ print('\\n'.join(names))
 
   if [ -z "$AMR_REGIONS" ]; then
     warn "Could not read Microsoft.Cache regions — skipping the Managed Redis region check"
-  elif printf '%s\n' "$AMR_REGIONS" | grep -qx "$QUOTA_LOCATION"; then
-    pass "Azure Managed Redis is offered in ${QUOTA_LOCATION} (capacity is not queryable ahead of the apply)"
+  elif printf '%s\n' "$AMR_REGIONS" | grep -qx "$AMR_LOCATION"; then
+    pass "Azure Managed Redis is offered in ${AMR_LOCATION} (capacity is not queryable ahead of the apply)"
   else
-    fail "Azure Managed Redis is not offered in ${QUOTA_LOCATION}"
+    fail "Azure Managed Redis is not offered in ${AMR_LOCATION}"
     warn "  Offered regions: $(printf '%s' "$AMR_REGIONS" | tr '\n' ' ')"
   fi
 fi
@@ -1388,6 +1472,10 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
       "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
       "" "available" \
       63 "Shorten var.dns_label." "$DNS_OWNED"
+  elif LANGSMITH_DOMAIN=$(_tfvar langsmith_domain); then
+    # A custom domain replaces the <label>.<region>.cloudapp.azure.com name, so
+    # there is no Azure-scoped name left to collide.
+    pass "Custom domain ${LANGSMITH_DOMAIN} — no public IP DNS label to check"
   else
     warn "dns_label not set — skipping DNS label check"
   fi

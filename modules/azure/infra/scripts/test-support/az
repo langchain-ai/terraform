@@ -54,8 +54,16 @@ case "$ARGS" in
     emit_file "$FIX/user_name" "app-id-here" ;;
   "account show")
     emit_file "$FIX/account.json" '{"name":"stub-sub","id":"11111111-1111-1111-1111-111111111111","tenantId":"22222222-2222-2222-2222-222222222222","user":{"name":"stub@example.com","type":"user"}}' ;;
+  "provider show -n Microsoft.Cache --query resourceTypes"*)
+    # The Managed Redis region list. Without a fixture the answer is not JSON,
+    # which preflight reports as unreadable and skips.
+    emit_file "$FIX/amr_regions.json" "Registered" ;;
   "provider show"*)
     echo "Registered" ;;
+  "vm list-usage -l "*)
+    # name<TAB>used<TAB>limit rows, as the tsv query returns them.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/vm_usage" ]; then cat "$FIX/vm_usage"; else exit 1; fi ;;
   "ad signed-in-user show"*)
     if [ -f "$FIX/no_graph" ]; then exit 1; fi
     emit_file "$FIX/principal_id" "33333333-3333-3333-3333-333333333333" ;;
