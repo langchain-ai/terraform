@@ -13,7 +13,7 @@ name: Release (auto-tag on merge)
 
 on:
   push:
-    branches: [main]
+    branches: [main, release/0.16]
     paths:
       - 'modules/**'
   workflow_dispatch:
@@ -148,3 +148,22 @@ jobs:
           echo "DRY RUN - would create tag: $NEXT"
           echo "Chart line: $LINE"
           echo "Changed providers: $PROVIDERS"
+      - name: Assert the branch matches the chart line
+        if: steps.skipcheck.outputs.skip != 'true'
+        env:
+          LINE: ${{ steps.line.outputs.line }}
+          REF: ${{ github.ref_name }}
+        run: |
+          case "$REF" in
+            main) ;;
+            release/*)
+              if [[ "$REF" != "release/${LINE}" ]]; then
+                echo "::error::$REF carries chart line ${LINE}; refusing to tag" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::only main and release/* may cut tags, not $REF" >&2
+              exit 1
+              ;;
+          esac
