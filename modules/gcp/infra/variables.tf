@@ -961,7 +961,7 @@ variable "enable_usage_telemetry" {
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, Local SSD + compute node pools). Requires an explicit chart version of 0.16 or newer in Pass 2, and GKE Standard rather than Autopilot."
+  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, Local SSD + compute node pools). Pass 2 uses the repository's pinned 0.17 chart line. Requires GKE Standard rather than Autopilot."
   default     = false
 }
 

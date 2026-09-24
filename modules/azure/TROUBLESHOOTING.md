@@ -719,10 +719,10 @@ Error: UPGRADE FAILED: post-upgrade hooks failed: resource Job/langsmith/langsmi
 
 **Cause:** LangSmith DB migrations are one-way (Alembic forward-only). A newer chart version applies schema migrations that older chart versions don't know about. Downgrading the chart leaves the DB at a revision the older app image can't locate.
 
-**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy. It must be on the chart line `deploy.sh` requires, which rejects anything else because the generated values target one schema. That line is 0.16 for a standard Azure deployment, and 0.17 when `enable_smithdb = true` — see [SMITHDB.md](SMITHDB.md#version-requirements):
+**Fix:** Roll forward to the version you were on (or newer). Set `langsmith_helm_chart_version` in `terraform.tfvars` and re-deploy. It must be on the chart line `deploy.sh` requires, which rejects anything else because the generated values target one schema. That line is 0.17 — see [SMITHDB.md](SMITHDB.md#version-requirements). A deployment that runs a 0.17 chart cannot roll back to the 0.16 line; the `release/0.16` modules are for installs that never left it:
 ```hcl
 # terraform.tfvars
-langsmith_helm_chart_version = "0.16.0"   # pin to working version
+langsmith_helm_chart_version = "0.17.0"   # pin to working version
 ```
 ```bash
 make init-values && make deploy

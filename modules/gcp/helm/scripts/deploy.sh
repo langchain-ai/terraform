@@ -54,7 +54,7 @@ VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
+# Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 #
 # Read the pin from the Terraform output, not from terraform.tfvars. That file is
@@ -86,14 +86,14 @@ if [[ -n "${CHART_VERSION:-}" ]]; then
     echo "      It overrides langsmith_helm_chart_version=${_chart_version_pin} (${_chart_version_pin_source})."
     echo "      Run 'unset CHART_VERSION' to deploy ${_chart_version_pin}."
   else
-    echo "      It overrides the ~0.16.0 chart line pin."
+    echo "      It overrides the ~0.17.0 chart line pin."
     echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
   fi
 elif [[ -n "$_chart_version_pin" ]]; then
   CHART_VERSION="$_chart_version_pin"
   echo "Chart version pinned by langsmith_helm_chart_version (${_chart_version_pin_source}): ${CHART_VERSION}"
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -143,29 +143,19 @@ _validate_sandbox_values_file() {
   fi
 }
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# These values use the chart 0.17 schema: the 0.16 layout (engineInsightsAgent,
+# top-level insights/polly, no backend.agentBootstrap) plus the sandbox-host
+# JuiceFS mount that replaced sandboxes.juicefs.csi. Chart 0.16 has no host-mount
+# keys, and chart 0.15 silently drops the external Insights Postgres/Redis wiring.
+# Chart 0.18 has not been validated against them. Refuse anything off the 0.17
+# line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_chart_line" != "0.17" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
+  echo "       These values require chart 0.17 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.17.0 make deploy" >&2
   exit 1
-fi
-# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
-# are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
-  _rc="${CHART_VERSION##*-rc.}"
-  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
-    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
-    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
-    exit 1
-  fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
@@ -591,11 +581,11 @@ echo "Deploying LangSmith (sizing: ${_sizing_profile})..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
-# --devel is required for pre-release chart versions (any 0.15.x or 0.16.x
-# release candidate). Helm silently skips any version carrying a semver prerelease
-# component without it. Keyed off the prerelease component itself rather than a
-# list of known tags, so forms like -rc22 or -alpha-3 are not missed; the part
-# after a + is build metadata and never makes a version a prerelease.
+# --devel is required for pre-release chart versions (any release candidate).
+# Helm silently skips any version carrying a semver prerelease component without
+# it. Keyed off the prerelease component itself rather than a list of known tags,
+# so forms like -rc22 or -alpha-3 are not missed; the part after a + is build
+# metadata and never makes a version a prerelease.
 _devel_flag=""
 if [[ "${CHART_VERSION%%+*}" == *-* ]]; then
   _devel_flag="--devel"
@@ -609,32 +599,6 @@ echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolv
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
-fi
-
-# The historical backfill reads the LangSmith traces bucket, and before chart
-# 0.16.6 the migration Job asked for the s3 provider whatever
-# config.blobStorage.engine said. On GCP that means AWS4-signing every read with
-# the empty blob_storage_access_key, so storage.googleapis.com answers 403
-# SignatureDoesNotMatch. The Job still reports Running while every task fails and
-# the taskdb marks those failures non-retryable, so the visible symptom is
-# planned-row progress stuck at 0% with nothing naming the chart version.
-#
-# This module used to carry a values override for that. It does not any more, so
-# refuse the combination rather than let it fail in a way nobody attributes to a
-# pinned patch. Only this one gate is affected; the others work on any 0.16 patch,
-# which is why the check sits here rather than beside the chart-line guard above.
-if [[ "$_smithdb_migration_enabled" == "true" ]]; then
-  _mig_patch="${_resolved_chart#0.16.}"
-  _mig_patch="${_mig_patch%%-*}"
-  if [[ "$_mig_patch" =~ ^[0-9]+$ && "$_mig_patch" -lt 6 ]]; then
-    echo "ERROR: smithdb_migration_enabled = true needs chart 0.16.6 or newer; resolved $_resolved_chart." >&2
-    echo "       Earlier patches point the backfill's source blob store at s3 even when" >&2
-    echo "       config.blobStorage.engine is GCS, so every read of the traces bucket fails" >&2
-    echo "       with 403 SignatureDoesNotMatch while the Job still reports Running." >&2
-    echo "       Leave CHART_VERSION unset to take the latest 0.16.x, or name 0.16.6+:" >&2
-    echo "         CHART_VERSION=0.16.6 make deploy" >&2
-    exit 1
-  fi
 fi
 
 # A Job's spec.template is immutable, and the backfill Job is a plain resource

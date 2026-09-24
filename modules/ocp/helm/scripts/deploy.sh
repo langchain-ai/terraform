@@ -12,40 +12,30 @@ HELM_DIR="$SCRIPT_DIR/.."
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
+# Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.17.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# These values use the chart 0.17 schema, which keeps the 0.16 layout:
+# engineInsightsAgent, the top-level insights/polly blocks, and no
+# backend.agentBootstrap. Chart 0.15 ignores those keys instead of rejecting them,
+# so it renders cleanly while silently dropping the external Insights
+# Postgres/Redis wiring. Chart 0.18 has not been validated against them. Refuse
+# anything off the 0.17 line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 $0" >&2
+if [[ "$_chart_line" != "0.17" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
+  echo "       These values require chart 0.17 (engineInsightsAgent, top-level insights/polly)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.17.0 $0" >&2
   exit 1
-fi
-# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
-# are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
-  _rc="${CHART_VERSION##*-rc.}"
-  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
-    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
-    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
-    exit 1
-  fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh

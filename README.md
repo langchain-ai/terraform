@@ -61,22 +61,22 @@ A typical first deployment takes 20–30 minutes end-to-end.
 
 This repository is released as **global tags** `vMAJOR.MINOR.PATCH`. Always deploy from a tag — never from a branch.
 
-- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.16.0`, meaning the latest `0.16.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.17`). You always get the newest patch within the line.
-- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.16.4` does not mean chart `0.16.4`.
+- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.17.0`, meaning the latest `0.17.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.18`). You always get the newest patch within the line.
+- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.17.4` does not mean chart `0.17.4`.
 
-Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.16.x` are not valid):
+Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.17.x` are not valid):
 
 ```bash
 git fetch --tags
-git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
+git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"
 ```
 
 If you would rather download than clone, every release has a source archive — one URL per release, covering all providers:
 
 ```bash
-TAG=v0.16.0     # latest v0.16.* — see GitHub Releases below
+TAG=v0.17.0     # latest v0.17.* — see GitHub Releases below
 curl -sL "https://github.com/langchain-ai/terraform/archive/refs/tags/${TAG}.zip" -o "${TAG}.zip"
-unzip "${TAG}.zip"     # extracts terraform-0.16.0/
+unzip "${TAG}.zip"     # extracts terraform-0.17.0/
 ```
 
 GitHub generates these archives on request, so don't pin a checksum of one; clone and check out the tag if you need bit-for-bit reproducibility.
@@ -84,26 +84,29 @@ GitHub generates these archives on request, so don't pin a checksum of one; clon
 What this means for you:
 
 - Pin to a tag for reproducible infrastructure; re-run the command above to move to a newer patch within the line as fixes land.
-- Moving to a new chart line is an explicit switch to the matching tag series (`git tag -l 'v0.17.*'`).
-- **Staying on the previous line is supported.** `0.15` is maintained on the `release/0.15` branch and still receives `v0.15.*` tags, so you can take fixes without moving to `0.16`. See [Maintenance branches](#maintenance-branches).
+- Moving to a new chart line is an explicit switch to the matching tag series (`git tag -l 'v0.18.*'`).
+- **Staying on the previous line is supported.** `0.16` is maintained on the `release/0.16` branch and still receives `v0.16.*` tags, so you can take fixes without moving to `0.17`. See [Maintenance branches](#maintenance-branches).
 - Browse all releases in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 - Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch.
 
-### The 0.16 chart line
+### The 0.17 chart line
 
-These modules carry the chart 0.16 values schema: `engineInsightsAgent`, the top-level
-`insights` / `polly` blocks, and no `backend.agentBootstrap`. Chart 0.15 ignores those
-keys instead of rejecting them, so it would render cleanly while quietly dropping the
-external Insights database wiring, and chart 0.17 has not been validated against them.
-Each `deploy.sh` therefore refuses anything outside the 0.16 line rather than deploying
-a half-configured release, and `CHART_VERSION` can only narrow the pin to a 0.16 patch:
+These modules carry the chart 0.17 values schema. It keeps the 0.16 layout
+(`engineInsightsAgent`, the top-level `insights` / `polly` blocks, and no
+`backend.agentBootstrap`) and moves sandboxes off the removed JuiceFS CSI driver onto
+JuiceFS mounts owned by `sandbox-host`. Chart 0.16 has no keys for those mounts, and
+chart 0.18 has not been validated against these values. Each `deploy.sh` therefore
+refuses anything outside the 0.17 line rather than deploying a half-configured release,
+and `CHART_VERSION` can only narrow the pin to a 0.17 patch:
 
 ```bash
-cd modules/aws && make apply && make init-values && CHART_VERSION="0.16.0" make deploy
+cd modules/aws && make apply && make init-values && CHART_VERSION="0.17.0" make deploy
 ```
 
-Read [MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md) before upgrading an existing
-install — the values schema changed in ways the chart rejects outright.
+Read [MIGRATION-0.16-to-0.17.md](MIGRATION-0.16-to-0.17.md) before upgrading an existing
+install. An install still on chart 0.15 also needs
+[MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md), because those schema changes
+carry over to 0.17.
 
 ### Maintenance branches
 
@@ -114,15 +117,16 @@ their own series without colliding.
 
 | Chart line | Releases from | Tag series | Status |
 | --- | --- | --- | --- |
-| 0.16 | `main` | `v0.16.*` | current |
+| 0.17 | `main` | `v0.17.*` | current |
+| 0.16 | `release/0.16` | `v0.16.*` | maintenance |
 | 0.15 | `release/0.15` | `v0.15.*` | maintenance |
 
-Deploying or upgrading within the 0.15 line works exactly as before — check out its latest
-tag, not the branch:
+Deploying or upgrading within a maintenance line works exactly as before — check out its
+latest tag, not the branch:
 
 ```bash
 git fetch --tags
-git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"
+git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
 ```
 
 Report an issue against the line you are running. Fixes land on `main` first and are
