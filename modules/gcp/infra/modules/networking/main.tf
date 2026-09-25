@@ -92,12 +92,19 @@ resource "google_compute_global_address" "private_ip_range" {
   description   = "Private IP range for VPC peering (${var.environment})"
 }
 
+# The delete of this connection fails for some time after Cloud SQL or
+# Memorystore is deleted ("Producer services ... are still using this
+# connection"), because Google releases the producer resources later. ABANDON
+# removes the connection from state with no API call. The reserved range and
+# the VPC then delete with the peering still active, and the VPC delete removes
+# the peering. TEARDOWN.md (A6) gives the steps if the destroy still stops.
 resource "google_service_networking_connection" "private_vpc_connection" {
   count = var.enable_private_service_connection ? 1 : 0
 
   network                 = google_compute_network.vpc.id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_ip_range[0].name]
+  deletion_policy         = "ABANDON"
 
   timeouts {
     create = "30m"
