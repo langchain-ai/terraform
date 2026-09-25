@@ -967,6 +967,13 @@ variable "enable_polly" {
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
+variable "enable_sso_oidc" {
+  type        = bool
+  description = "Enable SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID, Okta, Auth0, Google Workspace, etc. all work through the same generic client_id/secret/issuer_url. Client ID/secret/issuer URL are read by create-k8s-secrets.sh from Key Vault (langsmith-oauth-client-id, langsmith-oauth-client-secret, langsmith-oauth-issuer-url), not from this variable. Parsed by init-values.sh. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
+  default     = false
+}
+
 variable "enable_fleet" {
   type        = bool
   description = <<-EOT
