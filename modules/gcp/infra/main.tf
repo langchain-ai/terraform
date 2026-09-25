@@ -153,7 +153,7 @@ resource "terraform_data" "validate_inputs" {
     # The proxy takes the instance's connection name as its only positional
     # argument, and that is knowable only for an instance this module created.
     precondition {
-      condition     = !var.smithdb_metastore_use_auth_proxy || var.smithdb_metastore_source == "create"
+      condition     = !local.smithdb_metastore_use_auth_proxy || var.smithdb_metastore_source == "create"
       error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_source = 'create'. For an external instance, including AlloyDB, configure the proxy sidecar directly in the Helm values - see the metastore TLS section of SMITHDB.md."
     }
 
@@ -161,8 +161,45 @@ resource "terraform_data" "validate_inputs" {
     # to 127.0.0.1 inside the Pod, where a TLS handshake has no server to meet
     # and the connection fails outright rather than degrading.
     precondition {
-      condition     = !var.smithdb_metastore_use_auth_proxy || !var.smithdb_metastore_use_ssl
-      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_use_ssl = false. The proxy holds the TLS session to Cloud SQL; the SmithDB-to-proxy hop is Pod loopback and is plaintext by design."
+      condition     = !local.smithdb_metastore_use_auth_proxy || !local.smithdb_metastore_use_ssl
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_use_ssl = false. The proxy holds the TLS session to Cloud SQL; the SmithDB-to-proxy hop is Pod loopback and is plaintext by design. The proxy is the default for a created metastore, so remove smithdb_metastore_use_ssl = true."
+    }
+
+    # Without the proxy, a created metastore works only in mode 2. Direct TLS
+    # from SmithDB fails with UnknownIssuer, and ENCRYPTED_ONLY refuses plaintext.
+    precondition {
+      condition = !var.enable_smithdb || var.smithdb_metastore_source != "create" || local.smithdb_metastore_use_auth_proxy || (
+        !local.smithdb_metastore_use_ssl && var.smithdb_metastore_ssl_mode == "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      )
+      error_message = "smithdb_metastore_use_auth_proxy = false on a created metastore requires smithdb_metastore_use_ssl = false and smithdb_metastore_ssl_mode = 'ALLOW_UNENCRYPTED_AND_ENCRYPTED' (mode 2, test and staging only). Direct TLS from SmithDB to Cloud SQL fails with UnknownIssuer. See the metastore TLS section of SMITHDB.md."
+    }
+
+    # minimal has no SmithDB node pools, so no node has Local SSD for the cache.
+    precondition {
+      condition     = !var.enable_smithdb || !local.smithdb_minimal || local.smithdb_network_disk
+      error_message = "smithdb_sizing = 'minimal' requires smithdb_cache_storage = 'network-disk'. Leave smithdb_cache_storage unset, or select a larger smithdb_sizing."
+    }
+
+    # network-disk cache volumes are Hyperdisk Balanced. E2, N1, N2, and N2D
+    # cannot attach them, and C4 and N4 need a Hyperdisk boot disk, which the
+    # SmithDB pools do not use. A C3 type without -lssd also rejects Local SSD.
+    precondition {
+      condition     = !local.smithdb_create_cache_storage_class || (can(regex("^c3d?-", local.smithdb_instance_store_machine_type)) && local.smithdb_instance_store_local_ssd_count == 0)
+      error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D cache machine type and smithdb_instance_store_local_ssd_count = 0. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
+    }
+
+    # In network-disk mode, the backfill Job takes its 100Gi of ephemeral
+    # storage from the cache pool boot disk.
+    precondition {
+      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || local.smithdb_instance_store_disk_size >= 300
+      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_instance_store_disk_size >= 300 for the 100Gi backfill Job. The resolved boot disk is ${local.smithdb_instance_store_disk_size} GB."
+    }
+
+    # local-ssd puts each cache in an emptyDir, so the cache pool needs Local SSD
+    # ephemeral storage. That is an explicit count, or a type that bundles it.
+    precondition {
+      condition     = !local.smithdb_dedicated_pools || local.smithdb_network_disk || local.smithdb_instance_store_local_ssd_count > 0 || endswith(local.smithdb_instance_store_machine_type, "lssd")
+      error_message = "smithdb_cache_storage = 'local-ssd' requires Local SSD on the cache pool: smithdb_instance_store_local_ssd_count > 0, or a machine type that ends in lssd. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
     }
 
     precondition {
@@ -170,13 +207,13 @@ resource "terraform_data" "validate_inputs" {
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
     }
 
-    # Autopilot manages node pools itself, so the dedicated Local SSD pools this
-    # module creates do not exist there and the overlay's nodeSelector would
-    # never match — SmithDB pods would sit Pending indefinitely. Autopilot needs
+    # Autopilot manages node pools itself, so the dedicated SmithDB pools this
+    # module creates do not exist there and the sizing file's nodeSelector would
+    # never match — SmithDB pods would stay Pending indefinitely. Autopilot needs
     # the cloud.google.com/gke-ephemeral-storage-local-ssd nodeSelector instead.
     precondition {
       condition     = !var.enable_smithdb || !var.gke_use_autopilot
-      error_message = "enable_smithdb is not supported with gke_use_autopilot = true. SmithDB needs the dedicated Local SSD node pools this module creates on GKE Standard. See the SmithDB section of README.md."
+      error_message = "enable_smithdb is not supported with gke_use_autopilot = true. SmithDB needs the dedicated SmithDB node pools this module creates on GKE Standard. See the SmithDB section of README.md."
     }
 
     precondition {
@@ -461,10 +498,11 @@ module "storage" {
 #------------------------------------------------------------------------------
 # SmithDB Module (Optional, enable_smithdb)
 #
-# SmithDB is the in-chart columnar store/query engine (chart 0.16+). It needs
+# SmithDB is the in-chart columnar store/query engine (chart 0.17). It needs
 # three things from the cloud: a dedicated Postgres metastore, its own object
-# store, and node-local SSD cache capacity. This module owns the first two plus
-# the Workload Identity binding; the node pools are in module.smithdb_nodes.
+# store, and cache capacity (node Local SSD or network disk). This module owns
+# the first two plus the Workload Identity binding; the node pools are in
+# module.smithdb_nodes, and the network-disk StorageClass is in k8s-bootstrap.
 #------------------------------------------------------------------------------
 module "smithdb" {
   source = "./modules/smithdb"
@@ -485,13 +523,13 @@ module "smithdb" {
   metastore_source            = var.smithdb_metastore_source
   metastore_instance_name     = local.smithdb_metastore_instance_name
   metastore_database_version  = var.smithdb_metastore_database_version
-  metastore_tier              = var.smithdb_metastore_tier
+  metastore_tier              = local.smithdb_metastore_tier
   metastore_disk_size         = var.smithdb_metastore_disk_size
   metastore_high_availability = var.smithdb_metastore_high_availability
 
   metastore_deletion_protection = var.smithdb_metastore_deletion_protection
   metastore_ssl_mode            = var.smithdb_metastore_ssl_mode
-  metastore_use_auth_proxy      = var.smithdb_metastore_use_auth_proxy
+  metastore_use_auth_proxy      = local.smithdb_metastore_use_auth_proxy
   metastore_master_username     = var.smithdb_metastore_master_username
   metastore_master_password     = var.smithdb_metastore_master_password
 
@@ -520,13 +558,13 @@ module "smithdb" {
 
 #------------------------------------------------------------------------------
 # SmithDB Node Pools (Optional, enable_smithdb)
-# Local SSD-backed ephemeral storage for the SmithDB cache, plus a compute pool.
-# Not created on Autopilot, where Google manages node pools; see the SmithDB
-# section of README.md for the Autopilot path.
+# A cache pool (Local SSD, or none in network-disk mode) plus a compute pool.
+# Not created for smithdb_sizing = minimal, or on Autopilot, where Google
+# manages node pools; see the SmithDB section of README.md for that path.
 #------------------------------------------------------------------------------
 module "smithdb_nodes" {
   source = "./modules/smithdb-nodes"
-  count  = var.enable_smithdb && !var.gke_use_autopilot ? 1 : 0
+  count  = local.smithdb_dedicated_pools ? 1 : 0
 
   project_id   = var.project_id
   region       = var.region
@@ -536,13 +574,13 @@ module "smithdb_nodes" {
   node_service_account_email = var.gke_node_service_account_email
   node_locations             = var.smithdb_node_locations
 
-  instance_store_machine_type    = var.smithdb_instance_store_machine_type
-  instance_store_local_ssd_count = var.smithdb_instance_store_local_ssd_count
-  instance_store_disk_size_gb    = var.smithdb_instance_store_disk_size
+  instance_store_machine_type    = local.smithdb_instance_store_machine_type
+  instance_store_local_ssd_count = local.smithdb_instance_store_local_ssd_count
+  instance_store_disk_size_gb    = local.smithdb_instance_store_disk_size
   instance_store_min_nodes       = var.smithdb_instance_store_min_nodes
   instance_store_max_nodes       = var.smithdb_instance_store_max_nodes
 
-  compute_machine_type = var.smithdb_compute_machine_type
+  compute_machine_type = local.smithdb_compute_machine_type
   compute_disk_size_gb = var.smithdb_compute_disk_size
   compute_min_nodes    = var.smithdb_compute_min_nodes
   compute_max_nodes    = var.smithdb_compute_max_nodes
@@ -668,6 +706,9 @@ module "k8s_bootstrap" {
   resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
   resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
   resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
+  create_smithdb_cache_storage_class = local.smithdb_create_cache_storage_class
+  smithdb_cache_storage_class_name   = local.smithdb_cache_storage_class
 
   # The chart 0.16 JuiceFS CSI driver runs at system-node-critical /
   # system-cluster-critical, which GKE admits only into a namespace holding a
@@ -861,7 +902,7 @@ resource "kubernetes_secret" "standalone_insights_redis" {
 }
 
 #------------------------------------------------------------------------------
-# SmithDB metastore Secret (chart 0.16+)
+# SmithDB metastore Secret (chart 0.17)
 # Created here so it exists before Helm runs. The chart reads it through
 # smithdb.config.existingSecretName and the per-field *SecretKey mappings
 # generated into the SmithDB values overrides.
@@ -879,7 +920,7 @@ resource "kubernetes_secret" "smithdb_metastore" {
   # proxy authenticates the transport, the password still authenticates the
   # database session.
   data = {
-    smithdb_metastore_db_host     = var.smithdb_metastore_use_auth_proxy ? "127.0.0.1" : module.smithdb[0].metastore_host
+    smithdb_metastore_db_host     = local.smithdb_metastore_use_auth_proxy ? "127.0.0.1" : module.smithdb[0].metastore_host
     smithdb_metastore_db_name     = module.smithdb[0].metastore_database
     smithdb_metastore_db_username = module.smithdb[0].metastore_username
     smithdb_metastore_db_password = module.smithdb[0].metastore_password

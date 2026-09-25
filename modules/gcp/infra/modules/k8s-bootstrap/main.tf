@@ -211,10 +211,10 @@ locals {
     "pods"            = tostring(local.langsmith_resource_quota_base_pods + var.resource_quota_extra_pods)
   }
 
-  # The headroom is doubled on the limits side. SmithDB sets requests equal to
-  # limits, so the requests side binds first, but a feature admitted on requests
-  # must not then be rejected on limits. Doubling also keeps the same 2x
-  # requests-to-limits ratio the base figures use.
+  # The headroom is doubled on the limits side, so a feature admitted on
+  # requests is not then rejected on limits. Doubling also keeps the same 2x
+  # requests-to-limits ratio the base figures use. The root sizes the SmithDB
+  # extra for both sides, because some SmithDB pods have limits above requests.
   langsmith_resource_quota_limits = {
     "limits.cpu"    = tostring(local.langsmith_resource_quota_base_limit_cpu + (var.resource_quota_extra_cpu * 2))
     "limits.memory" = "${local.langsmith_resource_quota_base_limit_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
@@ -295,6 +295,33 @@ resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
       type            = "Container"
       default_request = var.default_container_requests
     }
+  }
+}
+
+#------------------------------------------------------------------------------
+# SmithDB cache StorageClass (network-disk mode)
+# The chart gives each SmithDB cache pod a PVC from smithdb.cache.storageClassName.
+# Hyperdisk Balanced sets IOPS and throughput apart from capacity, so each volume
+# gets 7000 IOPS and 1000 MiB/s. WaitForFirstConsumer puts each disk in the zone
+# of its pod.
+#------------------------------------------------------------------------------
+resource "kubernetes_storage_class_v1" "smithdb_cache" {
+  count = var.create_smithdb_cache_storage_class ? 1 : 0
+
+  metadata {
+    name   = var.smithdb_cache_storage_class_name
+    labels = merge(var.labels, { "component" = "smithdb-cache" })
+  }
+
+  storage_provisioner    = "pd.csi.storage.gke.io"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    type                             = "hyperdisk-balanced"
+    provisioned-iops-on-create       = "7000"
+    provisioned-throughput-on-create = "1000Mi"
   }
 }
 

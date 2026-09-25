@@ -223,7 +223,7 @@ Terraform destroys in dependency order:
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
 - Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
-- GKE cluster and node pools, including the SmithDB Local SSD and compute pools
+- GKE cluster and node pools, including the SmithDB cache and compute pools
 - VPC, subnet, Cloud Router, Cloud NAT
 
 > **Note on `source infra/scripts/setup-env.sh`:** Terraform needs `TF_VAR_postgres_password` even during destroy for provider validation. If the Secret Manager secret no longer exists, set it manually: `export TF_VAR_postgres_password="any-placeholder"`

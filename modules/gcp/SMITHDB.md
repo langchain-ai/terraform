@@ -1,35 +1,48 @@
 # SmithDB on GCP
 
-This module provides GCP reference infrastructure and Helm values for SmithDB.
-SmithDB is optional and runs alongside ClickHouse in the LangSmith v16 release.
+This module provides GCP reference infrastructure and Helm values for SmithDB on
+LangSmith chart 0.17. SmithDB is optional and runs alongside ClickHouse, in the
+same namespace and Helm release. To upgrade an install that ran SmithDB on chart
+0.16, read [Upgrade from chart 0.16](#upgrade-from-chart-016) first.
 
 ## What is provisioned
 
 With `enable_smithdb = true`, the infrastructure pass creates:
 
-- a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP, or wiring for
-  dedicated BYO Postgres (including AlloyDB);
+- a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP, with a tier
+  that follows the size, or wiring for dedicated BYO Postgres (including
+  AlloyDB);
 - a dedicated GCS object-store bucket with uniform bucket-level access and
   public access prevention;
-- a dedicated GCP service account bound to the chart's SmithDB Kubernetes
-  service account through Workload Identity, holding `roles/storage.objectAdmin`
-  scoped to that one bucket;
-- two GKE node pools - a Local SSD-backed pool for the cache-heavy workloads and
-  a compute pool for the support workloads - both autoscaling from zero;
-- the `smithdb-metastore` and `smithdb-taskdb` Kubernetes Secrets.
+- a GCP service account for SmithDB, bound through Workload Identity, with
+  `roles/storage.objectAdmin` on that bucket only;
+- two GKE node pools that autoscale from zero, cache and compute (none for
+  `minimal`);
+- a Hyperdisk Balanced StorageClass in `network-disk` mode (not for `minimal`);
+- the `smithdb-metastore` and `smithdb-taskdb` Kubernetes Secrets;
+- the output `smithdb_helm_values`, which `make init-values` writes to
+  `helm/values/langsmith-values-smithdb-sizing.yaml`.
 
-Object-store traffic stays on Google's network: the subnet has Private Google
-Access enabled, so pods on private nodes reach `storage.googleapis.com` without
-egressing through Cloud NAT.
-
-SmithDB requires GKE Standard. Autopilot cannot run the dedicated Local SSD node
-pools, and `enable_smithdb = true` with `gke_use_autopilot = true` fails at plan
-time.
+Object-store traffic uses Private Google Access, not Cloud NAT. SmithDB requires
+GKE Standard: `enable_smithdb = true` with `gke_use_autopilot = true` fails at
+plan time.
 
 ## Configure infrastructure
 
-Set `enable_smithdb = true` in `infra/terraform.tfvars`. Managed resources are
-the default. For BYO Postgres:
+Set `enable_smithdb = true` in `infra/terraform.tfvars`, or answer yes in
+`make quickstart`. Then select the size and the cache mode:
+
+```sh
+make smithdb-configure SIZING=small CACHE=local-ssd
+make deploy-all
+```
+
+`make smithdb-configure` writes `smithdb_sizing` and `smithdb_cache_storage` to
+`infra/terraform.tfvars`. `CACHE` is optional. With no `CACHE`, the current
+`smithdb_cache_storage` stays. For `SIZING=minimal` with no `CACHE`, the script
+writes `null`, so a later size change gets the default cache mode, `local-ssd`.
+
+For BYO Postgres:
 
 ```hcl
 smithdb_metastore_source            = "external"
@@ -38,117 +51,199 @@ smithdb_external_metastore_username = "smithdb"
 ```
 
 Supply `TF_VAR_smithdb_external_metastore_password` outside the tfvars file. The
-Postgres database and the GCS bucket must both be dedicated to SmithDB - do not
-point them at the LangSmith application database or blob-storage bucket.
+Postgres database and the GCS bucket must both be dedicated to SmithDB. Do not
+use the LangSmith application database or blob-storage bucket.
+
+## Sizing
+
+`smithdb_sizing` sets the chart `resourceTier`, the explicit resources, the
+replicas, the node pool shapes, the namespace quota headroom, and the default
+tier of a created metastore. When it is unset, it follows `sizing_profile`:
+`minimum` gives `minimal`, `dev` and `default` give `small`, `production` gives
+`medium`, and `production-large` gives `large`.
+
+The component rows are per replica, as CPU / memory / cache size:
+
+| | `minimal` | `small` | `medium` | `large` |
+|---|---|---|---|---|
+| Throughput: ingest / query QPS | development only | 10 / 10 | 100 / 40 | 1000 / 100 |
+| Chart `resourceTier` | `small`, explicit resources | `small` | `medium` | `large` |
+| Replicas: `query` / `ingestion` / `compactionWorker` | 1 / 1 / 1 | 1 / 1 / 1 | 1 / 1 / 1 | 4 / 2 / 4 |
+| `query` | 1 / 2Gi / 200Gi | 4 / 8Gi / 200Gi | 28 / 48Gi / 200Gi | 28 / 50Gi / 1000Gi |
+| `ingestion` | 1 / 2Gi / 100Gi | 4 / 8Gi / 100Gi | 16 / 32Gi / 100Gi | 56 / 150Gi / 1000Gi |
+| `compactionWorker` | 1 / 2Gi / 100Gi | 8 / 16Gi / 100Gi | 16 / 32Gi / 100Gi | 28 / 50Gi / 300Gi |
+| `compaction` | 500m / 1Gi | 2 / 4Gi | 4 / 8Gi | 8 / 16Gi |
+| `clusterManager` | 250m / 256Mi | 250m / 256Mi | 250m / 256Mi | 2 / 2Gi |
+| Sum at these replicas (pods) | 3.75 / 7.25Gi (5) | 18.25 / 36.25Gi (5) | 64.25 / 120.25Gi (5) | 346 / 718Gi (12) |
+| Backfill Job (CPU / memory / ephemeral) | 1 / 4Gi / 10Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi |
+| Backfill taskdb, requests; limits | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi |
+| Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
+| Cache pool, `local-ssd` (boot disk) | not allowed | n2-standard-16, 2 LSSD (100 GB) | n2-standard-32, 4 LSSD (100 GB) | n2-standard-64, 8 LSSD (100 GB) |
+| Cache pool, `network-disk` (boot disk) | no pool; `standard-rwo` | c3-standard-22 (300 GB) | c3-standard-44 (300 GB) | c3-standard-88 (300 GB) |
+| Compute pool | no pool | n2-standard-8 | n2-standard-8 | n2-standard-16 |
+| Metastore: docs vCPU / memory; default Cloud SQL tier (vCPU / memory) | not in the docs; `db-custom-2-8192` (2 / 8Gi) | 2 / 16Gi; `db-custom-4-16384` (4 / 16Gi) | 4 / 32Gi; `db-custom-6-32768` (6 / 32Gi) | 8 / 64Gi; `db-custom-10-65536` (10 / 64Gi) |
+| Quota headroom: CPU / memory / pods | 7 / 11Gi / 12 | 27 / 53Gi / 12 | 93 / 169Gi / 12 | 404 / 870Gi / 26 |
+| Quota headroom with the backfill | 10 / 19Gi / 20 | 37 / 90Gi / 20 | 103 / 206Gi / 20 | 414 / 906Gi / 34 |
+
+- The throughput and replica rows come from the SmithDB sizing table in the
+  [LangSmith self-hosted docs](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
+  The replicas are the HPA `minReplicas` of the three cache components.
+  `compaction` and `clusterManager` have no HPA and run one replica.
+  `smithdb_tier_replicas` in `infra/locals.tf` is the code copy.
+- The `small`, `medium`, and `large` component rows come from chart 0.17.0-rc.42
+  `templates/_helpers.tpl` (`langsmith.smithdb.tierResources`), where requests
+  equal limits. The chart tier sets these per-replica values only, not the
+  replicas. `smithdb_tiers` in `infra/locals.tf` is the code copy.
+- `minimal` values are requests, and its limits are 2x. `minimal` runs on the
+  general node pool, so that pool must have room for it. Use `minimal` only for
+  development and test.
+- The taskdb row is the chart default for each size. The module sets no taskdb
+  resources.
+- A backfill on a test cluster ran with the `minimal` resources of the five
+  components and of the backfill Job. The taskdb had the chart default
+  resources.
+- The quota rows include the Auth Proxy sidecar
+  (`terraform -chdir=infra output smithdb_quota_extra`).
+- The metastore row is for a created metastore
+  (`smithdb_metastore_source = "create"`). The docs values come from the
+  section "Metastore capacity" in
+  [SmithDB scale](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
+  The docs baseline tiers do not include the metastore.
+- A Cloud SQL custom tier (`db-custom-*`, Enterprise edition) has 1 vCPU or an
+  even number of vCPU, and at most 6.5 GB of memory for each vCPU. So each
+  default tier has more vCPU than the docs value, to get the docs memory.
+  `minimal` keeps the earlier default. `smithdb_metastore_tier_defaults` in
+  `infra/locals.tf` is the code copy.
+- A `smithdb_metastore_tier` value that you set replaces the default, also after
+  a size change. An external metastore does not use the tier. Then
+  `terraform -chdir=infra output smithdb_metastore_tier` reports that the
+  output is not found, because Terraform does not store a null output.
+- A tier change takes the metastore offline for less than 60 seconds. The docs
+  tell you to monitor the database resource use and the transaction latency
+  during the rollout.
+
+`large` runs 10 cache pods. On `n2-standard-64` (`local-ssd`), each `ingestion`
+pod uses one node, and each other node holds two 28 CPU pods. That is about 6
+cache nodes, plus 1 node for the backfill Job. On `c3-standard-88`
+(`network-disk`), it is about 4 cache nodes, plus 1 for the backfill Job. The
+compute pool needs 1 node. `smithdb_instance_store_max_nodes` (default 3) is per
+zone, so 3 zones give a maximum of 9 cache nodes. If you set
+`smithdb_node_locations` to one zone, set `smithdb_instance_store_max_nodes` to
+7 or more. `make preflight` checks the quota at the maximum node count. For
+`large` with `local-ssd` in 3 zones, that is 720 N2 vCPU and 27,000 GB of Local
+SSD.
+
+The pool rows are defaults. A `smithdb_instance_store_*` or
+`smithdb_compute_machine_type` value that you set replaces them, also after a
+size change. Terraform does not check that a pinned value fits the size:
+
+- The machine type must have more vCPU than the largest pod on the pool. For
+  example, the `medium` query pod requests 28 CPU, so `n2-standard-16` cannot
+  hold it.
+- An N2 cache pool takes only these Local SSD counts (375 GB each):
+  - 12-20 vCPU: 2, 4, 8, 16, or 24.
+  - 22-40 vCPU: 4, 8, 16, or 24.
+  - 42-80 vCPU: 8, 16, or 24.
+
+  Compute Engine rejects other counts when it creates the pool. That happens
+  after Terraform deletes the old pool.
+- C3 and Z3 `-lssd` types have a fixed count. Set
+  `smithdb_instance_store_local_ssd_count = 0` for them.
+
+Terraform rejects `local-ssd` when the cache pool has no Local SSD: a count of 0
+on a type that does not end in `lssd`. It also rejects `network-disk` with the
+backfill when the boot disk is below 300 GB, because the Job requests 100Gi.
+
+A change of the machine type, the Local SSD count, or the cache mode replaces
+the node pool, and each cache starts empty. Object storage keeps the data.
+
+## Cache storage
+
+`query`, `ingestion`, and `compactionWorker` keep a cache at `/data`. With no
+cache values, chart 0.17 gives each pod a PVC from the default StorageClass. On
+GKE, that class is `standard-rwo`, which is below the
+[cache floor](https://docs.langchain.com/langsmith/self-host-smithdb-infrastructure#cache-storage)
+of 7000 IOPS and 1000 MiB/s. The generated sizing file always sets the cache.
+
+### local-ssd
+
+Use `local-ssd` for production. Each cache is an `emptyDir` on node Local SSD.
+The cache pool uses the GKE Local SSD-backed *ephemeral storage* mode, so the
+Local SSD capacity is node allocatable `ephemeral-storage`. Raw block Local SSD
+does not back `emptyDir`, and the cache then goes to the boot disk with no error.
+
+For each cache component, the sizing file sets this cache block:
+
+- the cache pool pin;
+- `volumes: [{name: cache, emptyDir: {sizeLimit: <cache size>}}]`;
+- `resources` with `ephemeral-storage` in `requests` and `limits`. The chart
+  requires them for an `emptyDir` cache.
+
+### network-disk
+
+Each cache is a per-pod Hyperdisk Balanced volume. `modules/k8s-bootstrap`
+creates the class `smithdb-cache<suffix>`: `pd.csi.storage.gke.io`,
+`type: hyperdisk-balanced`, 7000 provisioned IOPS, 1000 MiB/s provisioned
+throughput, `WaitForFirstConsumer`, `Delete`, and volume expansion. The chart
+sizes each volume from the tier.
+
+- The cache machine type must be C3 or C3D, with 0 Local SSD. E2, N1, N2, and
+  N2D cannot attach Hyperdisk Balanced, and C4 and N4 need a Hyperdisk boot
+  disk. Terraform rejects other types.
+- All Hyperdisk and Persistent Disk volumes on a node share one VM throughput
+  limit. For c3-standard-22 that limit is 1800 MiB/s, so three 1000 MiB/s cache
+  volumes on one node cannot all get full throughput.
+
+### minimal
+
+`minimal` runs SmithDB on the general node pool with reduced resources and one
+replica for each cache component. Each cache is a PVC from the GKE built-in
+`standard-rwo` class. Terraform rejects `minimal` with `local-ssd`.
 
 ## Metastore TLS on GCP
 
 ### Why a direct TLS connection fails
 
-SmithDB 0.16 cannot verify a Cloud SQL certificate. Point it straight at an
-`ENCRYPTED_ONLY` instance with `smithdb_metastore_use_ssl = true` and the query,
-ingestion, and compaction pods crashloop on
-`InvalidCertificate(UnknownIssuer)`.
+SmithDB cannot verify a Cloud SQL server certificate. With direct TLS
+(`smithdb_metastore_use_ssl = true`) to an `ENCRYPTED_ONLY` instance, the query,
+ingestion, and compaction pods crash in a loop on
+`InvalidCertificate(UnknownIssuer)`. Cloud SQL presents a per-instance
+self-signed CA, SmithDB has no CA path setting, and the server certificate has
+no IP SAN. The metastore migration hook uses libpq with `sslmode=require`, which
+does not verify, so the hook succeeds while the services fail.
 
-Cloud SQL presents a per-instance self-signed CA and the services verify the
-chain against the public trust store, so validation cannot succeed. The service
-config exposes a single `use_ssl` boolean with no CA path and no
-encrypt-without-verify mode, and injecting the CA would not help either: the
-server certificate carries no IP SAN while SmithDB connects to the private IP,
-so verification would fail on the hostname instead.
+### Mode 1: Cloud SQL Auth Proxy sidecar (default)
 
-The metastore migration hook is the one component unaffected, because it
-connects through libpq with `sslmode=require`, which encrypts without verifying.
-Expect the hook to succeed while every service fails against the same database.
-That asymmetry is diagnostic, not a sign the database is misconfigured.
+For `smithdb_metastore_source = "create"`, the proxy is the default: an unset
+`smithdb_metastore_use_auth_proxy` resolves to `true`, and an unset
+`smithdb_metastore_use_ssl` resolves to `false`. Terraform rejects
+`smithdb_metastore_use_ssl = true` with the proxy. You can pin the image with
+`smithdb_auth_proxy_image`.
 
-Two modes work around this. Both keep the instance itself at
-`ssl_mode = "ENCRYPTED_ONLY"` or better.
+The sidecar holds the TLS session to Cloud SQL as the pod's Workload Identity
+principal, and SmithDB connects to it on `127.0.0.1`. Terraform grants
+`roles/cloudsql.client`. `make init-values` writes the sidecar into
+`smithdb.commonInitContainers`, so it is in every SmithDB Deployment and both
+Jobs, including the pre-install hook. It uses `--private-ip`, because the
+metastore has no public IP, and a `startupProbe`, so SmithDB starts after the
+proxy listens. Its argument is the instance connection name, so the proxy
+requires a created metastore. For an external instance, see [AlloyDB](#alloydb).
 
-### Mode 1: Cloud SQL Auth Proxy sidecar (production)
+### Mode 2: relaxed instance, no TLS (test and staging only)
 
 ```hcl
-smithdb_metastore_use_auth_proxy = true
+smithdb_metastore_use_auth_proxy = false
+smithdb_metastore_ssl_mode       = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
 smithdb_metastore_use_ssl        = false
-# Optional; defaults to a pinned tag.
-smithdb_auth_proxy_image         = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
 ```
 
-A Cloud SQL Auth Proxy sidecar runs in every SmithDB Pod. It authenticates to
-the Cloud SQL Admin API as the pod's Workload Identity principal, holds the TLS
-session to the instance, and serves plaintext on the Pod loopback. SmithDB
-connects to `127.0.0.1`, which is why `smithdb_metastore_use_ssl` must be
-`false` - the hop the proxy secures is the one leaving the Pod, and a TLS
-handshake against the loopback has no server to meet. Terraform rejects the two
-set together rather than letting it fail at connect time.
-
-```mermaid
-flowchart LR
-  subgraph pod [SmithDB Pod]
-    svc[SmithDB container]
-    proxy[cloud-sql-proxy sidecar]
-  end
-  svc -->|"127.0.0.1:5432 plaintext"| proxy
-  proxy -->|"IAM auth + TLS"| sql[("Cloud SQL metastore
-  ENCRYPTED_ONLY")]
-```
-
-Terraform does the rest: it grants the SmithDB service account
-`roles/cloudsql.client`, writes `127.0.0.1` into the `smithdb-metastore` secret's
-host key, and exposes the instance connection name.  `init-values.sh` reads
-those outputs and generates the sidecar into
-`langsmith-values-smithdb-overrides.yaml`. Nothing here needs hand-editing.
-
-The generated args include `--private-ip`, which is not optional here. The Cloud
-SQL Auth Proxy dials the instance's public IP by default, and this module creates
-the metastore with `ipv4_enabled = false`, so without the flag the proxy starts
-cleanly, passes its health checks, accepts the loopback connection and only then
-fails the outbound dial with `instance does not have IP of type "PUBLIC"`. The
-SmithDB container sees a connection reset rather than a proxy that refused to
-start, which points the investigation at the wrong container. Note the asymmetry
-if you are comparing against the AlloyDB path below: `alloydb-auth-proxy`
-defaults to private IP and needs a flag for the public or PSC cases instead.
-
-The sidecar is emitted under `smithdb.commonInitContainers`, not under the
-per-component `smithdb.<service>.deployment.sidecars`. That distinction matters:
-`deployment.sidecars` exists, but the chart only wires it into the SmithDB
-Deployments, and the `metastore-migration` pre-install hook Job is not a
-Deployment. The hook runs before any Deployment exists, so a per-Deployment
-sidecar leaves the one component that must reach the metastore first with no
-proxy to connect through. `commonInitContainers` is injected into every SmithDB
-Deployment and both Jobs, the hook included.
-
-The container carries `restartPolicy: Always`, which makes it a native sidecar
-rather than an init container. In the hook Job that is what allows completion:
-the kubelet stops a native sidecar once the Job's main container exits, whereas
-a plain init container would block the Job from ever starting its work and a
-non-native sidecar would hold the Job Running forever.
-
-Requires `smithdb_metastore_source = "create"`. The proxy takes the instance
-connection name as its only positional argument, and that is knowable only for
-an instance this module created. For an external instance, see below.
-
-### Mode 2: relaxed instance, no TLS (test and staging)
-
-```hcl
-smithdb_metastore_ssl_mode = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
-smithdb_metastore_use_ssl  = false
-```
-
-Traffic stays on a private IP inside the VPC and never leaves it, which is
-acceptable for a test or staging stack. It is not a production posture: the
-metastore hop is unencrypted, and the instance accepts unencrypted connections
-from anything else that reaches it on the VPC. Prefer mode 1 anywhere the data
-matters.
-
-Revisit both once SmithDB accepts a CA bundle or a non-verifying SSL mode, at
-which point TLS can go back on directly and the sidecar becomes optional.
+The metastore hop is not encrypted. On a created metastore, Terraform rejects
+`smithdb_metastore_use_auth_proxy = false` without the other two values.
 
 ### AlloyDB
 
-AlloyDB is documented, not provisioned - this module creates Cloud SQL. Route it
-through the external metastore path and configure its proxy in the Helm values
-by hand:
+This module creates Cloud SQL, not AlloyDB. Use the external metastore path and
+add the AlloyDB proxy to the Helm values yourself:
 
 ```hcl
 smithdb_metastore_source            = "external"
@@ -158,335 +253,270 @@ smithdb_external_metastore_username = "smithdb"
 smithdb_metastore_use_ssl           = false
 ```
 
-Then add the sidecar to `helm/values/langsmith-values-smithdb.yaml`, which
-`init-values.sh` copies once and leaves alone thereafter. The shape is identical
-to the Cloud SQL one, with the AlloyDB image and its fully qualified instance
-path as the positional argument:
+Add the sidecar to `smithdb.commonInitContainers` in
+`helm/values/langsmith-values-smithdb.yaml`. The chart example
+`examples/smithdb_alloydb_auth_proxy.yaml` has the container, the probes, and the
+security context. Its positional argument is the full instance path
+`projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE`. The
+SmithDB service account needs `roles/alloydb.client`, which Terraform does not
+grant for an external instance.
 
-```yaml
-smithdb:
-  commonInitContainers:
-    - name: alloydb-auth-proxy
-      image: gcr.io/alloydb-connectors/alloydb-auth-proxy:1.15.2
-      restartPolicy: Always
-      args:
-        - "--address=127.0.0.1"
-        - "--port=5432"
-        - "--structured-logs"
-        - "--health-check"
-        - "--http-address=0.0.0.0"
-        - "--http-port=9090"
-        # Add --auto-iam-authn for AlloyDB IAM database authentication,
-        # and --psc or --public-ip when not on the default private IP path.
-        - "projects/PROJECT/locations/REGION/clusters/CLUSTER/instances/INSTANCE"
-```
+## Deploy
 
-The chart ships this as `examples/smithdb_alloydb_auth_proxy.yaml`, including
-the probes and security context worth copying with it. The AlloyDB service
-account needs `roles/alloydb.client` rather than `roles/cloudsql.client`, and
-because the instance is external, Terraform grants neither - do it alongside
-whatever provisions the cluster.
+`make deploy-all` runs `make apply`, `make init-values`, and `make deploy`.
+`deploy.sh` loads the SmithDB values files in this order, and a
+later file wins:
 
-## Deploy SmithDB services
+1. `langsmith-values-smithdb-sizing.yaml`: generated from
+   `terraform output smithdb_helm_values`. Do not edit it.
+2. `langsmith-values-smithdb.yaml`: copied once from `helm/values/examples/`.
+   Your edits go here. Helm replaces lists, so write a complete `volumes` list.
+3. `langsmith-values-smithdb-overrides.yaml`: generated with the bucket,
+   Workload Identity, metastore mapping, Auth Proxy, and gates.
 
-Apply infrastructure, then generate values:
+`deploy.sh` stops before Helm in these cases:
 
-```sh
-make init-values
-```
-
-Then deploy:
-
-```sh
-make deploy
-```
-
-SmithDB needs chart 0.16 or newer. `deploy.sh` already pins the 0.17 line and
-refuses anything off it, so there is nothing SmithDB-specific to set. To name an
-exact patch rather than the latest on the line, pass `CHART_VERSION=0.17.0`.
-
-The historical backfill needs 0.16.6 or newer, which is where the migration Job
-started following `config.blobStorage.engine` for its source blob store. The 0.17
-line carries that behavior, so all three gates work on any patch of the pinned
-line. Check what is published with:
-
-```sh
-helm search repo langchain/langsmith --versions
-```
+- A SmithDB values file is missing. `deploy.sh` tells you to run
+  `init-values.sh`.
+- The overlay has the chart 0.16 values `local-ssd-storage` or
+  `smithdb.migration.deployment`. `deploy.sh` names each value.
+- The backfill Job differs from the render. `deploy.sh` names the Job and the
+  differences, and prints the `kubectl delete job` command.
 
 ## Staged rollout
 
-The generated values deploy the SmithDB services with every LangSmith
-integration gate disabled:
+Keep ClickHouse enabled in every phase. `make smithdb-phase` writes the three
+Terraform gates for one phase. Run `make deploy-all` after each phase.
+`make smithdb-status` shows the phase, the resolved size, the SmithDB pods,
+Jobs, and PVCs, and the backfill progress, and changes nothing.
 
-```yaml
-smithdb:
-  langsmith:
-    ingestion:
-      enabled: false
-    migration:
-      enabled: false
-    query:
-      enabled: false
-```
+| Phase | Command | ingestion / migration / query |
+|---|---|---|
+| Off | `make smithdb-phase PHASE=off` | false / false / false |
+| Dual write | `make smithdb-phase PHASE=dual-write` | true / false / false |
+| Backfill | `make smithdb-phase PHASE=backfill [START_TIME=<RFC 3339>]` | true / true / false |
+| Cutover | `make smithdb-phase PHASE=cutover [FORCE=true]` | true / false / true |
 
-Set `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, and
-`smithdb_query_enabled` in `infra/terraform.tfvars`. Terraform enforces that
-migration and query each require ingestion.
-Apply and validate each stage separately, and keep ClickHouse enabled throughout
-LangSmith v16.
+`smithdb_ingestion_enabled` defaults to `false`, so a chart upgrade does not
+start dual write. `make quickstart` writes `true` for a new install.
 
-1) All gates off. The services come up and the metastore migration Job runs.
-Confirm the pods schedule onto the expected pools and can reach both Postgres
-and the bucket before going further.
+1) Dual write. LangSmith writes to ClickHouse and SmithDB, and reads stay on
+ClickHouse. The query Deployment serves the mutations path, so it must be
+healthy. Confirm that segments arrive in the bucket.
 
-2) `smithdb_ingestion_enabled = true`. LangSmith writes traces to SmithDB as
-well as ClickHouse. Reads still come from ClickHouse.
+2) Backfill, to copy the ClickHouse history. The phase adds the migration Job on
+the cache pool and a taskdb Postgres on the compute pool (the general pool for
+`minimal`). The backfill also reads the traces bucket; see
+[Backfill access](#backfill-access-to-the-traces-bucket).
 
-3) `smithdb_migration_enabled = true`, if you need historical data. This renders
-the migration Job plus an in-chart taskdb Postgres StatefulSet for migration task
-state, and is the most node-hungry gate of the three.
+- Time window. On a test cluster with chart 0.17.0-rc.38, an empty start time
+  covered only about the last 14 days. The chart values comment gives 400 days.
+  Set `START_TIME` to a time before the oldest trace that you want.
+- Duration. On a test cluster, about 10,000 rows took about 2 hours, with more
+  than 30 minutes near 95%. That plateau is not a stall. A task whose window
+  includes the last hour stays `pending` by design.
+- Completion. The backfill is complete when every row of the taskdb table
+  `migration_jobs` has `promoted_at`. Do not use the percent or the pod phase.
 
-The Job requests 8 CPU, 16Gi, and 100Gi of ephemeral storage, so the values overlay
-pins it to the Local SSD pool; a core node can satisfy neither the CPU nor the
-ephemeral storage. Since the three cache workloads already request 12 of an
-n2-standard-16's ~15.9 allocatable CPU, the autoscaler adds a second Local SSD node
-for the Job, so keep `smithdb_instance_store_max_nodes` at 2 or more while this gate
-is on.
+3) Cutover. Reads move to SmithDB, and the deploy removes the migration Job and
+the taskdb, with its PVC and task state. `PHASE=cutover` refuses until every
+`migration_jobs` row has `promoted_at`. It also refuses when the table is empty
+or when it cannot read the table. Add `FORCE=true` only when you did not run a
+backfill. On a test cluster, an early cutover showed fewer runs than ClickHouse.
 
-The taskdb StatefulSet requests 2 CPU and 4Gi as of chart 0.16.0-rc.26 (earlier
-release candidates left it unconstrained) and is not pinned, so it lands on the core
-pool and may push that pool to scale up too. Check `gke_max_nodes` has room before
-enabling this gate.
-
-The separate `metastore-migration` Helm hook stays unpinned on the core pool by
-design - it runs before any SmithDB pod exists, so nothing would trigger a scale-up
-from zero.
-
-The backfill also reads outside its own bucket, which is covered under
-"Backfill access to the traces bucket" below.
-
-4) `smithdb_query_enabled = true`. Reads move to SmithDB.
-
-Follow the installation guide provided by LangChain for the validation steps at
-each stage.
+4) Rollback. `PHASE=dual-write` moves reads back to ClickHouse, which has all
+the data. `PHASE=off` stops the writes to SmithDB. SmithDB then misses the
+traces written while it is off, so run a backfill before the next cutover.
 
 ## Verification
 
 ```sh
-kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
+make smithdb-status
 kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
-
-# The cache mount must be on Local SSD, not the boot disk.
+kubectl get pvc -n langsmith
 kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 
-# Once ingestion is on, segments should start landing in the bucket.
+# After dual write starts, segments arrive at the bucket root.
 gcloud storage ls "gs://$(terraform -chdir=infra output -raw smithdb_object_store_bucket)/**"
 ```
 
-Local SSD only backs the cache because the node pool uses GKE's Local SSD-backed
-*ephemeral storage* mode. With raw block Local SSD the `emptyDir` would silently
-fall back to the boot disk and cache I/O would be slow, which is why the `df -h`
-check matters.
-
-Segments land at the bucket root under `<tenant-id>/<session-id>/`. There is no
-`smithdb/` prefix, even though the chart sets a `ROOT_FOLDER` of `smithdb` on the
-GCS object store, so list the whole bucket rather than a prefix.
+- `local-ssd`: no `*-cache` PVCs, and `df -h /data` shows about the Local SSD
+  capacity. Do the check in `ingestion` and `compaction-worker` too. A size near
+  the boot disk means raw block Local SSD.
+- `network-disk`: one `<pod>-cache` PVC for each cache pod, on
+  `smithdb-cache<suffix>`. `minimal`: the same, on `standard-rwo`.
 
 ## Backfill access to the traces bucket
 
-The historical backfill is the one SmithDB workload that reads outside its own
-bucket. LangSmith offloads large run payloads - inputs, outputs and errors - to
-the traces bucket and keeps only a key in ClickHouse, so the backfill has to
-fetch those objects to rewrite them into `.vortex` segments.
+The backfill reads the large run payloads that LangSmith keeps in the traces
+bucket. The migration Job follows `config.blobStorage.engine`, so a GCS engine renders
+`SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE: gcs` with no credential fields,
+and the Job uses Workload Identity. `modules/smithdb` grants the SmithDB service
+account `roles/storage.objectViewer` on the traces bucket while
+`smithdb_migration_enabled = true`. Do not use a GCS HMAC key: it puts a static
+credential into Terraform state and a Kubernetes Secret.
 
-Two pieces make that work, and they sit on opposite sides of the boundary:
-
-1) The chart selects the provider. From chart 0.16.6, and on every 0.17 chart, the
-migration Job follows `config.blobStorage.engine`, so a GCS engine renders
-`SMITHDB_MIGRATION__BLOB_STORE_DEFAULT__TYPE: gcs` with a bucket and a root
-folder and no credential fields at all. The Job then authenticates as the Pod's
-Workload Identity principal. Nothing is needed in the values files for this.
-
-2) Terraform grants the access. `modules/smithdb` holds
-`roles/storage.objectViewer` for the SmithDB service account on the traces
-bucket. Read-only, bucket-scoped, and created only with the migration gate, so a
-steady-state install keeps a service account that can reach nothing but its own
-bucket. Helm cannot create a GCP IAM binding, so the chart behaviour alone is not
-sufficient - the grant has to live here.
-
-Chart 0.16.5 and earlier asked for the `s3` provider whatever the engine said,
-and wired the credentials to `blob_storage_access_key` and
-`blob_storage_secret_access_key`. On GCP those two are empty by design, so the
-backfill AWS4-signed every read with an empty secret and `storage.googleapis.com`
-answered `403 SignatureDoesNotMatch`. The module pins the 0.17 line, which cannot
-resolve to one of those patches.
-
-Either way, a failure here is easy to misread. The Job reports `Running`, the pod
-stays `2/2 Running`, the metastore and the Auth Proxy are both healthy, and the
-only symptom is that planned-row progress never leaves 0%. Check the task state
-rather than the pod phase:
+When this access fails, the Job is `Running`, the pod is `2/2 Running`, and
+progress stays at 0%. Check the task state:
 
 ```sh
-POD=$(kubectl get pod -n langsmith -l job-name=langsmith-smithdb-migration \
-  -o jsonpath='{.items[0].metadata.name}')
-
-kubectl exec -n langsmith "$POD" -c migration -- \
-  ./smithdb migrate --self-hosted diagnose status
-kubectl exec -n langsmith "$POD" -c migration -- \
-  ./smithdb migrate --self-hosted diagnose failures
+POD=$(kubectl get pod -n langsmith -l job-name=langsmith-smithdb-migration -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n langsmith "$POD" -c migration -- ./smithdb migrate --self-hosted diagnose status
+kubectl exec -n langsmith "$POD" -c migration -- ./smithdb migrate --self-hosted diagnose failures
+# Failures are non-retryable. After you correct the access, reset them:
+kubectl exec -n langsmith "$POD" -c migration -- ./smithdb migrate --self-hosted diagnose retry-failed --all --yes
 ```
 
-Failures are recorded as non-retryable, so they survive a Job restart. After
-fixing access, reset them or the tasks stay failed:
+## Upgrade from chart 0.16
+
+Do steps 1 to 4 before `make apply`. With the upgrade path in
+`MIGRATION-0.16-to-0.17.md`, do them before its step 3. Its steps 3 to 5 then
+run `make apply`, `make init-values`, and `make deploy`.
+
+1) Select the size. An unset `smithdb_sizing` now follows `sizing_profile`, so
+`production` gives `medium`, `production-large` gives `large`, and `minimum`
+gives `minimal` with no pools.
+For `medium`, Terraform replaces the cache pool with `n2-standard-32` and 4
+Local SSD. The compute pool stays `n2-standard-8`.
+For `large`, Terraform replaces the cache pool with `n2-standard-64` and 8
+Local SSD, and the compute pool with `n2-standard-16`. `large` runs 12 SmithDB
+pods that request about 350 vCPU. To stay smaller, set `smithdb_sizing` to
+`medium` or `small`. To keep the 0.16 pool (n2-standard-16, 2 Local SSD) and
+the chart tier `small`:
 
 ```sh
-kubectl exec -n langsmith "$POD" -c migration -- \
-  ./smithdb migrate --self-hosted diagnose retry-failed --all --yes
+make smithdb-configure SIZING=small CACHE=local-ssd
 ```
 
-Do not solve this with a GCS HMAC key. It works, but it puts a long-lived static
-credential into Terraform state and into a Kubernetes Secret, for a bucket the
-pod can already reach through its own identity.
+This command does not keep the metastore tier. See the next paragraph.
 
-A task whose window covers the last hour or so stays `pending` rather than being
-claimed. That is the worker pool's recent-runs safety delay, not a fault.
+An unset `smithdb_metastore_tier` now also follows the size. For `small`,
+`medium`, and `large`, `make apply` changes a created metastore from
+`db-custom-2-8192` to the tier in the [sizing table](#sizing). The change takes
+the instance offline for less than 60 seconds. To keep the old tier, set this
+line in `infra/terraform.tfvars`:
 
-## Upgrading with the backfill Job in place
+```hcl
+smithdb_metastore_tier = "db-custom-2-8192"
+```
 
-A Job's `spec.template` is immutable, and the backfill Job is a plain resource
-rather than a Helm hook, so nothing recreates it. Once it exists, any change to
-its pod template fails the upgrade - a chart bump moving the Auth Proxy image, a
-values change here, a different metastore secret. The API server rejects the
-apply and Helm prints the entire PodSpec on one line, ending in `field is
-immutable`. That message names neither the Job nor the remedy.
+If `terraform.tfvars` already sets `smithdb_metastore_tier`, the tier does not
+change. `minimal` and an external metastore do not change.
 
-`deploy.sh` compares the rendered template with the live one and stops first,
-naming what changed. Clear it by deleting the Job, then deploy again:
+2) Check the metastore TLS values. The proxy is now the default for a created
+metastore. Remove `smithdb_metastore_use_ssl = true`. To keep mode 2, set
+`smithdb_metastore_use_auth_proxy = false`.
+
+3) Replace the overlay. `make init-values` copies
+`langsmith-values-smithdb.yaml` only when it is missing, and the 0.16 copy has
+`local-ssd-storage` and `smithdb.migration.deployment`. Save your edits and
+delete the file. The next `make init-values` creates it again. Then put back
+only the edits that do not set `nodeSelector`, `tolerations`, `volumes`,
+`volumeMounts`, or `resources`.
+
+4) Delete a completed backfill Job. The chart keeps a finished Job for 7 days,
+and a chart upgrade changes its pod template. See
+[Immutable migration Job](#immutable-migration-job).
+
+5) Run `make apply`, `make init-values`, and `make deploy`. For a release
+candidate, use `CHART_VERSION=0.17.0-rc.N make deploy`. Then do the checks in
+[Verification](#verification).
+
+### Direct Helm upgrades
+
+A direct `helm upgrade`, for example with values from `helm get values`, does
+not load the sizing file. Remove the 0.16 keys: the `local-ssd-storage`
+volumes, the `/data` `volumeMounts` (chart 0.17 mounts `cache` at `/data`), and
+`smithdb.migration.deployment`. Then pass the Terraform output last, so that it
+sets the full [cache block](#local-ssd) on `query`, `ingestion`, and
+`compactionWorker`:
 
 ```sh
-kubectl delete job langsmith-smithdb-migration -n langsmith \
-  --cascade=foreground --wait=true
+terraform -chdir=infra output -raw smithdb_helm_values > smithdb-sizing.yaml
+helm upgrade langsmith langchain/langsmith -n langsmith --version <0.17 version> \
+  -f current-values.yaml -f smithdb-sizing.yaml
 ```
 
-Deleting the Job is not the same as losing the backfill. Task state lives in the
-taskdb StatefulSet, which the chart keeps, so a fresh Job re-plans and resumes.
-`--cascade=foreground` matters on a tight namespace quota: the old 8-CPU pod has
-to be gone before the new one can be admitted. The delete is left to the operator
-rather than done automatically, because it terminates a backfill that may be
-mid-flight.
+A rename of the volume on `query` only is not enough: `ingestion` and
+`compactionWorker` then get PVCs on the default class, with no error.
 
 ## Namespace quota headroom
 
-`modules/k8s-bootstrap` puts a `ResourceQuota` on the LangSmith namespace, and
-SmithDB does not fit inside the base figures. The root adds headroom
-automatically from `enable_smithdb` and `smithdb_migration_enabled`, so there is
-nothing to set by hand:
+`modules/k8s-bootstrap` puts the `langsmith-quota` ResourceQuota on the
+namespace. Terraform adds SmithDB headroom from the resolved size for:
 
-| Configuration | requests.cpu | requests.memory | pods |
-| --- | --- | --- | --- |
-| LangSmith only | 50 | 120Gi | 100 |
-| SmithDB services | 70 | 158Gi | 112 |
-| SmithDB plus backfill | 79 | 176Gi | 120 |
+- the replicas of each component in the [sizing table](#sizing);
+- one surge copy of the largest pod, for a rolling update;
+- the Auth Proxy sidecars;
+- the backfill Job and the taskdb, in the backfill phase.
 
-The headroom covers steady-state SmithDB (14.25 CPU / 28.25Gi across five
-Deployments), one Auth Proxy sidecar per pod, a rolling-update surge allowance
-for one extra copy of the largest pod, and the backfill Job's 8 CPU / 16Gi.
+Some SmithDB pods have limits above requests, so the extra covers both sides.
+The quota rows of the [sizing table](#sizing) show the results.
 
-The surge allowance matters more than it looks. Without it an upgrade wedges
-rather than failing: the replacement pod is refused on quota, so the old pod
-never terminates, and Helm waits on a rollout that cannot progress. Neither the
-`FailedCreate` event on the ReplicaSet nor the Job that reports `Running` with no
-pod names SmithDB or the quota as the cause.
+Without surge room, an upgrade stops with no clear error: the quota refuses the
+new pod (a `FailedCreate` event on the ReplicaSet), and Helm waits.
 
-To check headroom on a live cluster:
+The headroom limits HPA scale-out above the minimum replicas. A scale-out gets
+only the surge room and the unused part of the base quota. The quota then
+refuses the next pod, with a `FailedCreate` event on the ReplicaSet. To check the
+quota, run `kubectl describe resourcequota langsmith-quota -n langsmith`.
+
+## Troubleshooting
+
+### taskdb Pending on a zonal PVC
+
+The taskdb PVC is a zonal disk. The taskdb stays `Pending` with `volume node
+affinity conflict` when the compute pool cannot add a node in that zone. A PVC
+from chart 0.16 can be in any zone of the general pool.
 
 ```sh
-kubectl get resourcequota langsmith-quota -n langsmith
-kubectl describe resourcequota langsmith-quota -n langsmith
+kubectl get pvc -n langsmith | grep taskdb-postgres
+kubectl describe pv <VOLUME> | grep -A4 'Node Affinity'
 ```
 
-If the extra room is not wanted - a shared cluster with its own governance, for
-example - `resource_quota_extra_cpu`, `resource_quota_extra_memory_gi` and
-`resource_quota_extra_pods` on `modules/k8s-bootstrap` accept explicit figures.
-Both are bounded: a namespace quota is a guardrail against a runaway HPA, so it
-is not meant to be raised until every pod fits.
+Add that zone to `smithdb_node_locations`, or increase
+`smithdb_compute_max_nodes`, then run `make apply`.
 
-## Sizing
+### Immutable migration Job
 
-At chart defaults the three cache workloads request 4 CPU each and 200Gi
-(query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage.
-That is 12 CPU against the ~15.9 allocatable vCPU of an `n2-standard-16`, and
-roughly 430 GB allocatable ephemeral storage, which the default 2 Local SSDs
-(750 GB raw) cover with headroom. If you override the resource requests upward
-in `helm/values/langsmith-values-smithdb.yaml`, raise
-`smithdb_instance_store_local_ssd_count` to match, or replicas will sit Pending.
+`helm upgrade` fails with `field is immutable`. A Job's pod template cannot
+change, and a chart version change (the `helm.sh/chart` label), a values change,
+or a new proxy image changes it. `deploy.sh` finds the difference first and prints:
 
-The count is not free-form. Compute Engine accepts only specific Local SSD
-counts per machine type: for N2 at 12-20 vCPU, including the default
-`n2-standard-16`, the legal set is 2, 4, 8, 16 or 24. A value in between, such
-as 3, is rejected when the node pool is created - after the plan has passed, so
-it surfaces as an apply failure rather than a validation error. Terraform
-validates the variable against that set up front to keep the failure at plan
-time.
-
-## Provisioning node pools outside this module
-
-`enable_smithdb` creates both pools against the cluster this module manages, so
-nothing below is needed on that path. The snippets are the portable form of what
-the module builds, for running SmithDB on a GKE cluster provisioned elsewhere.
-Whatever creates the pools, they have to carry the labels and taints the
-generated Helm values select on, or the SmithDB pods sit Pending with no node to
-match.
-
-Cache pool. `ephemeral_storage_local_ssd_config` is the part that matters:
-
-```hcl
-resource "google_container_node_pool" "smithdb_instance_store" {
-  name     = "smithdb-lssd"
-  project  = var.project_id
-  location = var.region
-  cluster  = var.cluster_name
-
-  autoscaling {
-    min_node_count = 0
-    max_node_count = 3
-  }
-
-  node_config {
-    machine_type = "n2-standard-16"
-    disk_size_gb = 100
-    disk_type    = "pd-balanced"
-    image_type   = "COS_CONTAINERD"
-
-    # 2, 4, 8, 16 or 24 for N2 at 12-20 vCPU. Not 3.
-    ephemeral_storage_local_ssd_config {
-      local_ssd_count = 2
-    }
-
-    # Required, or the SmithDB pods cannot assume their GCP service account.
-    workload_metadata_config {
-      mode = "GKE_METADATA"
-    }
-
-    labels = {
-      "smithdb-local/instance-store" = "true"
-    }
-
-    taint {
-      key    = "smithdb-local/instance-store"
-      value  = "true"
-      effect = "NO_SCHEDULE"
-    }
-  }
-}
+```sh
+kubectl delete job langsmith-smithdb-migration -n langsmith --cascade=foreground --wait=true
 ```
 
-Compute pool, for `compaction` and `clusterManager`. Same shape with no Local
-SSD, `smithdb-local/compute` in place of `smithdb-local/instance-store`, and a
-smaller machine type such as `n2-standard-8`.
+The taskdb keeps the task state, so a new Job continues the backfill.
 
-The equivalent as a one-liner, useful for adding a pool to an existing cluster:
+### UnknownIssuer
+
+The rendered values have `useSsl: true` without the Auth Proxy. Terraform
+rejects that mode for a created metastore, so run `make apply`,
+`make init-values`, and `make deploy`. For a direct Helm upgrade, add
+`-f helm/values/langsmith-values-smithdb-overrides.yaml` after the current
+values. For an external Cloud SQL instance, use mode 2, or add a proxy as in
+[AlloyDB](#alloydb). See [Metastore TLS on GCP](#metastore-tls-on-gcp).
+
+### Shared Cloud SQL instance: cloudsqlsuperuser
+
+Every BUILT_IN user of a Cloud SQL instance is a member of `cloudsqlsuperuser`,
+so `REVOKE ... FROM PUBLIC` does not isolate the SmithDB user on a shared
+instance. Make the SmithDB user the owner of its database, run
+`REVOKE cloudsqlsuperuser FROM smithdb;`, and test access in both directions.
+
+### Cache volumes grow with HPA replicas
+
+In `network-disk` mode, each HPA replica of a cache component gets its own PVC
+at the tier cache size. Each PVC adds disk cost, and the replicas on a node
+share its throughput limit. `large` starts with 10 cache PVCs, 7200Gi in total.
+`minimal` caps each HPA at one replica.
+
+## Node pools outside this module
+
+For SmithDB on a GKE cluster that something else provisions, create pools with
+the labels and taints that the sizing file selects. Without them, the SmithDB
+pods stay `Pending`. The `small` cache pool in `local-ssd` mode:
 
 ```sh
 gcloud container node-pools create smithdb-lssd \
@@ -499,37 +529,23 @@ gcloud container node-pools create smithdb-lssd \
   --node-taints smithdb-local/instance-store=true:NoSchedule
 ```
 
-Two things are easy to get wrong here, and both fail quietly rather than loudly:
-
-1) Use the *ephemeral storage* Local SSD mode, not raw block
-(`--local-nvme-ssd-block` / `local_nvme_ssd_block_config`). Only the ephemeral
-storage mode combines the disks into the filesystem kubelet uses, which is what
-makes the capacity appear as node-allocatable `ephemeral-storage` and back
-`emptyDir`. With raw block the pods still schedule, but SmithDB's cache lands on
-the boot disk and everything is merely slow. `kubectl exec ... -- df -h /data`
-is how you tell the difference.
-
-2) `local_ssd_count` must be a member of the machine family's fixed set. It is
-validated at node pool creation, not at plan time, so an illegal count fails
-partway through an apply.
-
-Both pools can sit at zero when SmithDB is off; the taints keep other workloads
-away and the autoscaler brings them up when tolerating pods appear.
-
-On Autopilot there are no node pools to create, which is why `enable_smithdb`
-rejects `gke_use_autopilot` at plan time. Running SmithDB there means replacing
-the overlay's nodeSelector with Autopilot's own
-`cloud.google.com/gke-ephemeral-storage-local-ssd` selector and letting Google
-size the nodes. That path is untested here.
+- Use `--ephemeral-storage-local-ssd`, not `--local-nvme-ssd-block`. With raw
+  block Local SSD, the cache goes to the boot disk.
+- For `network-disk`, use a C3 or C3D type with a 300 GB boot disk and no Local
+  SSD. Create the class from [network-disk](#network-disk), and set
+  `smithdb.cache.storageClassName`.
+- The compute pool has no Local SSD, a smaller type, and the label and taint
+  `smithdb-local/compute`.
+- On Autopilot, the nodeSelector must change to
+  `cloud.google.com/gke-ephemeral-storage-local-ssd`. This path is not tested.
 
 ## Production notes
 
+- Use `local-ssd` for the cache.
 - Keep Cloud SQL deletion protection and backups enabled.
 - Keep `smithdb_bucket_force_destroy = false`.
 - Set `smithdb_bucket_kms_key` to use CMEK. The module grants the Cloud Storage
-  service agent `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key; if the
-  key lives in another project, that project's IAM policy must allow the grant.
-- Do not place object-store credentials in Helm values. Pods authenticate
-  through Workload Identity, and the chart's GCS path has no credential fields.
-- The metastore and taskdb passwords are generated by Terraform and only ever
-  written into Kubernetes Secrets. They are deliberately not root outputs.
+  service agent `roles/cloudkms.cryptoKeyEncrypterDecrypter` on that key.
+- Do not put object-store credentials in Helm values. Pods use Workload Identity.
+- Terraform writes the metastore and taskdb passwords only into Kubernetes
+  Secrets. They are not root outputs.

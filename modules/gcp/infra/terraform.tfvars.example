@@ -353,18 +353,18 @@ enable_polly = false
 enable_usage_telemetry = false
 
 #------------------------------------------------------------------------------
-# Optional: SmithDB (chart 0.16+, early access)
+# Optional: SmithDB (chart 0.17, early access)
 #
-# SmithDB is the in-chart columnar store and query engine that replaces
-# ClickHouse for trace storage. Enabling it provisions:
+# SmithDB is the in-chart columnar store and query engine that runs alongside
+# ClickHouse. Enabling it provisions:
 #   - a dedicated Cloud SQL Postgres metastore on a private IP
 #   - a dedicated single-region GCS bucket for .vortex segments
 #   - a least-privilege GCP service account bound to the chart's SmithDB KSA
 #     via Workload Identity (objectAdmin on that bucket only)
-#   - two GKE node pools: one Local SSD-backed for the cache, one for compute
+#   - two GKE node pools, cache and compute (none for smithdb_sizing = "minimal")
 #
 # Requires GKE Standard. Autopilot manages its own node pools, so the dedicated
-# Local SSD pools do not exist there and SmithDB pods would stay Pending.
+# SmithDB pools do not exist there and SmithDB pods would stay Pending.
 #
 # Pass 2 deploys on the pinned ~0.17.0 chart line, which already carries SmithDB,
 # so no chart version needs to be set. List what is published with:
@@ -372,23 +372,28 @@ enable_usage_telemetry = false
 #------------------------------------------------------------------------------
 enable_smithdb = false
 
+# --- Sizing ----------------------------------------------------------------
+# minimal, small, medium, or large, and local-ssd or network-disk. Unset, the
+# size follows sizing_profile and the cache follows the size:
+#   minimum -> minimal, dev and default -> small, production -> medium,
+#   production-large -> large (12 SmithDB pods, about 350 vCPU).
+# small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
+# size resolves to: modules/gcp/SMITHDB.md#sizing. Set both with
+#   make smithdb-configure SIZING=<size> CACHE=<mode>
+# smithdb_sizing        = "small"
+# smithdb_cache_storage = "local-ssd"
+
 # --- Staged rollout ---------------------------------------------------------
-# The services deploy detached from LangSmith and each gate is a separate,
-# validated stage. Apply one at a time; migration and query both require
-# ingestion, and Terraform enforces that. ClickHouse stays enabled throughout.
-#
-#   1) All gates false. Services come up, the metastore migration Job runs.
-#      Confirm pods land on the SmithDB pools and reach Postgres and the bucket.
-#   2) smithdb_ingestion_enabled = true. LangSmith writes to SmithDB as well as
-#      ClickHouse; reads stay on ClickHouse. Confirm segments land in the bucket.
-#   3) smithdb_migration_enabled = true, if you need historical data. Renders the
-#      migration Job plus an in-chart taskdb Postgres StatefulSet. The Job asks
-#      for 8 CPU and is unpinned, so the core node pool needs room. The backfill
-#      itself is owned by LangChain Product/Engineering.
-#   4) smithdb_query_enabled = true. Reads move to SmithDB.
-# smithdb_ingestion_enabled = false
+# Migration and query both require ingestion, and Terraform enforces that.
+# ClickHouse stays enabled throughout. make smithdb-phase writes the three gates
+# for one phase: off, dual-write, backfill, or cutover (SMITHDB.md#staged-rollout).
+# The default stays false, so an existing install does not start dual write on
+# upgrade; make quickstart writes true for a new install.
+# smithdb_ingestion_enabled = true
 # smithdb_migration_enabled = false
 # smithdb_query_enabled     = false
+# Backfill start time, RFC 3339. Empty keeps the chart default window.
+# smithdb_migration_start_time = "2026-01-01T00:00:00Z"
 
 # Must match the Helm release name used in Pass 2. Chart-created service account
 # names derive from it, and the Workload Identity binding is scoped to that exact
@@ -404,28 +409,34 @@ enable_smithdb = false
 # operational Postgres.
 # smithdb_metastore_source              = "create"
 # smithdb_metastore_database_version    = "POSTGRES_18"  # SmithDB requires PG 18+
-# smithdb_metastore_tier                = "db-custom-2-8192"
+# Unset, the tier of a created metastore follows smithdb_sizing: minimal
+# db-custom-2-8192, small db-custom-4-16384, medium db-custom-6-32768, large
+# db-custom-10-65536. A tier change takes the instance offline for less than
+# 60 seconds. Set db-custom-2-8192 to keep the tier of an earlier install.
+# smithdb_metastore_tier                = "db-custom-4-16384"
 # smithdb_metastore_disk_size           = 50
 # smithdb_metastore_high_availability   = false
-# smithdb_metastore_use_ssl             = true
 
 # --- Metastore TLS ----------------------------------------------------------
-# Two supported modes. Both keep the instance at ssl_mode = ENCRYPTED_ONLY.
+# Unset, both values follow smithdb_metastore_source: the Auth Proxy for
+# "create", direct TLS for "external".
 #
-# 1) Auth Proxy (recommended). A Cloud SQL Auth Proxy sidecar runs in every
-#    SmithDB Pod and holds the TLS session to Cloud SQL; SmithDB dials it on
-#    127.0.0.1, so its own hop is plaintext by design and use_ssl must be false.
-#    Terraform grants the SmithDB service account roles/cloudsql.client and
-#    points the secret's host key at the loopback. Requires source = "create".
+# 1) Auth Proxy (default for a created metastore). A Cloud SQL Auth Proxy
+#    sidecar runs in every SmithDB Pod and holds the TLS session to Cloud SQL.
+#    SmithDB dials it on 127.0.0.1, so its own hop is plaintext by design and
+#    use_ssl must be false. Terraform grants the SmithDB service account
+#    roles/cloudsql.client and points the secret's host key at the loopback.
+#    Requires source = "create".
 # smithdb_metastore_use_auth_proxy      = true
 # smithdb_metastore_use_ssl             = false
 # Pin the tag. A floating one would change the proxy under a running release.
 # smithdb_auth_proxy_image              = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
 #
-# 2) Direct TLS. SmithDB does not trust the Cloud SQL server CA, so a direct
-#    connection to an ENCRYPTED_ONLY instance fails the handshake. Reaching it
-#    without the proxy means relaxing the instance and turning TLS off, which
-#    is a test/staging posture only:
+# 2) Relaxed instance, no TLS (test and staging only). SmithDB does not trust
+#    the Cloud SQL server CA, so a direct TLS connection to an ENCRYPTED_ONLY
+#    instance fails the handshake. Without the proxy, relax the instance and
+#    turn TLS off:
+# smithdb_metastore_use_auth_proxy      = false
 # smithdb_metastore_ssl_mode            = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
 # smithdb_metastore_use_ssl             = false
 # See the metastore TLS section of SMITHDB.md.
@@ -462,30 +473,22 @@ enable_smithdb = false
 # smithdb_bucket_versioning_enabled = false
 
 # --- Node pools -------------------------------------------------------------
-# The cache pool uses GKE's Local SSD-backed *ephemeral storage* mode, which is
-# what makes the capacity show up as node allocatable ephemeral-storage and back
-# the emptyDir volumes the SmithDB cache writes to. Raw block Local SSD does not.
+# Unset shape variables take the defaults for the size and cache mode
+# (SMITHDB.md#sizing). A value set here wins, also after a size change.
 #
-# Machine type generation matters:
-#   - N2/N2D (default): you choose the disk count below (375 GB each).
-#   - C3/C4/Z3 "-lssd" types: the count is fixed by the machine type. Set
-#     smithdb_instance_store_local_ssd_count = 0 or the pool fails to create.
+# In local-ssd mode the cache pool uses GKE's Local SSD-backed *ephemeral
+# storage* mode. That mode makes the capacity show up as node allocatable
+# ephemeral-storage and back the emptyDir cache. Raw block Local SSD does not.
+# C3 and Z3 "-lssd" types have a fixed disk count: set
+# smithdb_instance_store_local_ssd_count = 0 for them. network-disk requires a
+# C3 or C3D type with 0 Local SSD.
 #
 # The cluster is regional. An unpinned pool tries every zone in the region and
 # fails if the machine type or disk count is unavailable in any of them, so pin
 # smithdb_node_locations after checking availability with:
 #   gcloud compute machine-types list --filter="name=n2-standard-16 AND zone~^us-west2"
 # smithdb_node_locations = ["us-west2-a", "us-west2-b"]
-
-# At chart defaults the three cache workloads request 4 CPU each and 200Gi
-# (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage,
-# so all three fit on one n2-standard-16 (~15.9 allocatable vCPU). The default
-# 2 x 375 GB = 750 GB raw covers that with headroom.
 #
-# The disk count is not free-form: Compute Engine accepts only specific values
-# per machine type, and n2-standard-16 (an N2 with 12-20 vCPU) takes 2, 4, 8, 16
-# or 24. A value like 3 is rejected when the node pool is created. Step up to 4
-# if you override the resource requests upward in the values overlay.
 # smithdb_instance_store_machine_type    = "n2-standard-16"
 # smithdb_instance_store_local_ssd_count = 2
 # smithdb_instance_store_min_nodes       = 0   # scale to zero when SmithDB is idle
@@ -498,6 +501,8 @@ enable_smithdb = false
 # Optional: Helm Sizing Profile
 # Controls which langsmith-values-sizing-{profile}.yaml overlay deploy.sh loads.
 # Run `make init-values` after changing this — it copies the sizing file from examples/.
+# With enable_smithdb = true and smithdb_sizing unset, it also sets the SmithDB
+# size (production-large gives SmithDB large), so run `make deploy-all` instead.
 #
 #   "default"          — chart defaults (no overlay); suitable for quick tests
 #   "minimum"          — absolute floor; fits e2-standard-4; not for production

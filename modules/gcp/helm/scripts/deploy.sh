@@ -17,8 +17,9 @@
 #   8. langsmith-values-fleet.yaml                      — Fleet standalone v0.15+ (if enable_fleet)
 #   9. langsmith-values-standalone-polly.yaml           — Polly standalone v0.15+ (if enable_standalone_polly)
 #  10. langsmith-values-standalone-insights.yaml        — Insights standalone v0.15+ (if enable_standalone_insights)
-#  11. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
-#  12. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
+#  11. langsmith-values-smithdb-sizing.yaml             — SmithDB sizing and placement, from terraform output (if enable_smithdb)
+#  12. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
+#  13. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
 #
 # Generate values files: ./helm/scripts/init-values.sh
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -190,7 +191,7 @@ fi
 # other copies of this function.
 _tfvar_is_true() { local v; v=$(_parse_tfvar "$1"); [[ "$v" == "true" ]]; }
 
-# SmithDB needs chart 0.16 or newer, which the line guard above already
+# SmithDB on this module needs chart 0.17, which the line guard above already
 # guarantees for every deploy, so there is no SmithDB-specific version gate
 # here. These flags drive the values chain and the rollout wait below.
 _smithdb_enabled=false
@@ -517,18 +518,57 @@ for entry in "${_addon_gate[@]}"; do
   fi
 done
 
-# SmithDB last, so its overrides beat every sizing and addon file above.
+# Prints each chart 0.16 SmithDB value in a values file. Chart 0.17 rejects
+# them, and its error does not name the file. Chart 0.17 has no deployment key
+# at any depth under smithdb.migration. Keys can be quoted, and a flow-style
+# smithdb line is also read for the volume name.
+_smithdb_legacy_values() {
+  awk '
+    { sub(/[ \t]+#.*$/, "") }
+    /^[ \t]*(#|$)/ { next }
+    { match($0, /^ */); ind = RLENGTH }
+    ind == 0 { sdb = ($0 ~ /^.?smithdb.?:/); child = -1; if (sdb && /local-ssd-storage/) ssd = 1; next }
+    !sdb { next }
+    /local-ssd-storage/ { ssd = 1 }
+    child < 0 { child = ind }
+    ind <= child { mig = ($0 ~ /^[ \t]*.?migration.?:/); next }
+    mig && /^[ \t]*.?deployment.?:/ { dep = 1 }
+    END {
+      if (ssd) print "the volume name local-ssd-storage (chart 0.17 requires cache)"
+      if (dep) print "smithdb.migration.deployment (chart 0.17 uses smithdb.migration.job)"
+    }
+  ' "$1"
+}
+
+# SmithDB last, so its overrides beat every sizing and addon file above. The
+# generated sizing file goes first, so the hand-edited overlay can override it.
 if [[ "$_smithdb_enabled" == "true" ]]; then
+  _smithdb_sizing_file="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
 
-  if [[ ! -f "$_smithdb_file" || ! -f "$_smithdb_overrides_file" ]]; then
+  if [[ ! -f "$_smithdb_sizing_file" || ! -f "$_smithdb_file" || ! -f "$_smithdb_overrides_file" ]]; then
     echo "ERROR: enable_smithdb = true but the SmithDB values files are missing." >&2
     echo "Run: ./helm/scripts/init-values.sh" >&2
     exit 1
   fi
 
-  VALUES_ARGS+=(-f "$_smithdb_file" -f "$_smithdb_overrides_file")
+  # init-values.sh copies the overlay only once, so a chart 0.16 copy stays.
+  _smithdb_legacy=$(_smithdb_legacy_values "$_smithdb_file")
+  if [[ -n "$_smithdb_legacy" ]]; then
+    echo "ERROR: langsmith-values-smithdb.yaml has chart 0.16 SmithDB values that chart 0.17 rejects:" >&2
+    sed 's/^/         /' <<< "$_smithdb_legacy" >&2
+    echo "       The sizing file now sets the cache volume, resources, and placement." >&2
+    echo "       Save a copy of your edits, then replace the overlay with the 0.17 example:" >&2
+    echo "         cp helm/values/langsmith-values-smithdb.yaml helm/values/langsmith-values-smithdb-0.16.yaml" >&2
+    echo "         cp helm/values/examples/langsmith-values-smithdb.yaml helm/values/langsmith-values-smithdb.yaml" >&2
+    echo "       Then add back only the edits that do not set nodeSelector, tolerations," >&2
+    echo "       volumes, volumeMounts, or resources." >&2
+    exit 1
+  fi
+
+  VALUES_ARGS+=(-f "$_smithdb_sizing_file" -f "$_smithdb_file" -f "$_smithdb_overrides_file")
+  echo "  ✔ langsmith-values-smithdb-sizing.yaml"
   echo "  ✔ langsmith-values-smithdb.yaml"
   echo "  ✔ langsmith-values-smithdb-overrides.yaml"
 elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then
@@ -611,7 +651,9 @@ fi
 # Compare the template Helm is about to send with the one on the cluster, and
 # stop first if they differ. Only the fields Helm controls are compared, because
 # the live object also carries controller-uid labels and API-server defaults that
-# would otherwise read as drift on every run.
+# would otherwise read as drift on every run. The pod template also carries the
+# label helm.sh/chart=langsmith-<version>, so every chart version change fails
+# the apply. That check needs only kubectl.
 #
 # Deleting the Job is safe and is not the same as losing the backfill: task state
 # lives in the taskdb StatefulSet, which the chart keeps, so a fresh Job re-plans
@@ -622,18 +664,29 @@ if [[ "$_smithdb_migration_enabled" == "true" ]] \
   && kubectl get job "$_migration_job" -n "$NAMESPACE" >/dev/null 2>&1; then
 
   _live_job=$(kubectl get job "$_migration_job" -n "$NAMESPACE" -o json 2>/dev/null) || _live_job=""
+
+  # The label value as templates/_helpers.tpl "langsmith.chart" builds it.
+  _drift=""
+  _next_chart_label="langsmith-${_resolved_chart//+/_}"
+  _live_chart_label=$(kubectl get job "$_migration_job" -n "$NAMESPACE" \
+    -o jsonpath='{.spec.template.metadata.labels.helm\.sh/chart}' 2>/dev/null) || _live_chart_label=""
+  if [[ -n "$_live_chart_label" && "$_live_chart_label" != "$_next_chart_label" ]]; then
+    _drift="         - pod template label helm.sh/chart ${_live_chart_label} -> ${_next_chart_label}"
+  fi
+
   # helm template emits YAML, and kubectl converts it to JSON without needing a
   # YAML library on the host. Both sides can fail for unrelated reasons, in which
-  # case the check is skipped rather than allowed to block a deploy.
+  # case the check is skipped rather than allowed to block a deploy. The render
+  # uses the resolved version, the same one that the chart label check uses.
   _next_job=$(helm template "$RELEASE_NAME" langchain/langsmith \
     --namespace "$NAMESPACE" \
-    ${CHART_VERSION:+--version "$CHART_VERSION"} \
+    --version "$_resolved_chart" \
     ${_devel_flag} \
     "${VALUES_ARGS[@]}" \
     --show-only templates/smithdb/migration-job.yaml 2>/dev/null \
     | kubectl create --dry-run=client -o json -f - 2>/dev/null) || _next_job=""
 
-  if [[ -n "$_live_job" && -n "$_next_job" ]]; then
+  if [[ -z "$_drift" && -n "$_live_job" && -n "$_next_job" ]]; then
     _drift=$(LIVE_JOB="$_live_job" NEXT_JOB="$_next_job" python3 -c '
 import json, os
 
@@ -661,10 +714,15 @@ def signature(pod):
             }
     return out
 
-live = signature(json.loads(os.environ["LIVE_JOB"])["spec"]["template"]["spec"])
-nxt = signature(json.loads(os.environ["NEXT_JOB"])["spec"]["template"]["spec"])
+live_pod = json.loads(os.environ["LIVE_JOB"])["spec"]["template"]["spec"]
+next_pod = json.loads(os.environ["NEXT_JOB"])["spec"]["template"]["spec"]
+live = signature(live_pod)
+nxt = signature(next_pod)
 
 reasons = []
+for field in ("nodeSelector", "tolerations"):
+    if (live_pod.get(field) or None) != (next_pod.get(field) or None):
+        reasons.append("pod %s changed" % field)
 for name in sorted(set(live) | set(nxt)):
     if name not in live:
         reasons.append("container %s is new" % name)
@@ -688,18 +746,18 @@ for name in sorted(set(live) | set(nxt)):
 
 print("\n".join("         - " + r for r in reasons))
 ' 2>/dev/null) || _drift=""
+  fi
 
-    if [[ -n "$_drift" ]]; then
-      echo "ERROR: the existing $_migration_job Job does not match what this deploy renders," >&2
-      echo "       and a Job's pod template cannot be changed in place:" >&2
-      echo "$_drift" >&2
-      echo "       Delete the Job, then deploy again. Backfill progress is kept in the" >&2
-      echo "       taskdb, so a fresh Job resumes rather than starting over:" >&2
-      echo "         kubectl delete job $_migration_job -n $NAMESPACE --cascade=foreground --wait=true" >&2
-      echo "       Failures already recorded are non-retryable and survive the delete:" >&2
-      echo "         ./smithdb migrate --self-hosted diagnose retry-failed --all --yes" >&2
-      exit 1
-    fi
+  if [[ -n "$_drift" ]]; then
+    echo "ERROR: the existing $_migration_job Job does not match what this deploy renders," >&2
+    echo "       and a Job's pod template cannot be changed in place:" >&2
+    echo "$_drift" >&2
+    echo "       Delete the Job, then deploy again. Backfill progress is kept in the" >&2
+    echo "       taskdb, so a fresh Job resumes rather than starting over:" >&2
+    echo "         kubectl delete job $_migration_job -n $NAMESPACE --cascade=foreground --wait=true" >&2
+    echo "       Failures already recorded are non-retryable and survive the delete:" >&2
+    echo "         ./smithdb migrate --self-hosted diagnose retry-failed --all --yes" >&2
+    exit 1
   fi
 fi
 
@@ -738,7 +796,7 @@ fi
 [[ "$_enable_standalone_insights" == "true" ]] && _core_deployments+=("langsmith-standalone-insights-api-server")
 
 # SmithDB pods wait on the cluster autoscaler adding a node to the tainted
-# Local SSD pool, which is slower than a normal rollout on a warm cluster.
+# SmithDB pools, which is slower than a normal rollout on a warm cluster.
 _smithdb_deployments=()
 if [[ "$_smithdb_enabled" == "true" ]]; then
   _smithdb_deployments=(
@@ -763,7 +821,7 @@ done
 if [[ ${#_smithdb_deployments[@]} -gt 0 ]]; then
   for dep in "${_smithdb_deployments[@]}"; do
     if ! kubectl rollout status "deployment/$dep" -n "$NAMESPACE" --timeout=10m 2>/dev/null; then
-      echo "  ⏳ $dep not ready within 10m (Local SSD nodes may still be provisioning)"
+      echo "  ⏳ $dep not ready within 10m (SmithDB nodes may still be provisioning)"
       _all_ready=false
     fi
   done
@@ -788,6 +846,7 @@ else
     echo "         advertise enough allocatable ephemeral-storage:"
     echo "           kubectl get nodes -l smithdb-local/instance-store=true"
     echo "           kubectl get node NODE -o jsonpath='{.status.allocatable.ephemeral-storage}'"
+    echo "         In network-disk mode, check the cache volumes: kubectl get pvc -n $NAMESPACE"
   fi
 fi
 
@@ -838,8 +897,9 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo "SmithDB services are deployed. LangSmith integration advances in stages,"
   echo "driven by infra/terraform.tfvars; ClickHouse stays enabled throughout."
   echo "  ingestion: $_smithdb_ingestion_enabled   migration: $_smithdb_migration_enabled   query: $_smithdb_query_enabled"
+  echo "  Status and backfill progress: make smithdb-status"
   echo ""
-  echo "  Verify the cache mount is on Local SSD, not the boot disk:"
+  echo "  Verify the cache mount (Local SSD for local-ssd, a PVC for network-disk):"
   echo "    kubectl exec -n $NAMESPACE deploy/${RELEASE_NAME}-smithdb-query -- df -h /data"
   echo ""
   echo "  Confirm the metastore migration Job completed:"
@@ -849,7 +909,6 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     echo "  Confirm segments are landing in the bucket:"
     echo "    gcloud storage ls gs://\$(terraform -chdir=$INFRA_DIR output -raw smithdb_object_store_bucket)/**"
   else
-    echo "  Advance to the next stage by setting smithdb_ingestion_enabled = true in"
-    echo "  $INFRA_DIR/terraform.tfvars, then re-running: make init-values && make deploy"
+    echo "  Advance to the next stage with: make smithdb-phase PHASE=dual-write && make deploy-all"
   fi
 fi

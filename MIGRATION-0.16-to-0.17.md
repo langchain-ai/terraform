@@ -4,9 +4,13 @@ These modules wrap the LangSmith Helm chart, so a chart minor bump changes the
 values files the modules ship. This note covers what changed, what you have to do,
 and what the modules now do for you.
 
-The 0.16 values schema carries over to 0.17. The one change the modules absorb is
-sandboxes: chart 0.17 removes the bundled JuiceFS CSI driver. A deployment with
-`enable_sandboxes = false` only moves the chart pin.
+Most of the 0.16 values schema carries over to 0.17. The modules absorb two changes:
+
+- Sandboxes: chart 0.17 removes the bundled JuiceFS CSI driver (sections 1 and 2).
+- SmithDB on GCP: chart 0.17 changes the cache and migration values (section 3).
+
+A deployment with `enable_sandboxes = false` and `enable_smithdb = false` only moves
+the chart pin.
 
 ## Status of the 0.17 line
 
@@ -109,11 +113,54 @@ object storage and Redis. Chart 0.17 mounts the same volume through the same Sec
 Run `make deploy` again after the drain. The check passes once no claim or mount pod
 is left, and the upgrade then removes the driver.
 
+## 3) SmithDB on GCP
+
+This section applies to `enable_smithdb = true` on GCP. The AWS SmithDB overlay is
+not yet fixed for chart 0.17: it still sets `smithdb.migration.deployment`, which
+chart 0.17 rejects, and it sets no cache volume.
+
+| chart 0.16 | chart 0.17 |
+|---|---|
+| With no cache values, each cache is an `emptyDir` | With no cache values, each cache is a per-pod PVC from `smithdb.cache.storageClassName`, or the cluster default class (`standard-rwo` on GKE, too slow for the cache) |
+| The GCP overlay names the `/data` volume `local-ssd-storage` | The volume must be named `cache` |
+| `smithdb.migration.deployment` | `smithdb.migration.job`. The chart fails on the old key |
+
+The GCP module now writes the SmithDB tier, resources, HPA minimum replicas, cache
+volumes, and node placement to the generated `langsmith-values-smithdb-sizing.yaml`.
+The Cloud SQL Auth Proxy is now the default for a created metastore.
+
+- Check the size. An unset `smithdb_sizing` follows `sizing_profile`.
+  - An existing `production` install resolves to `medium`. Terraform then replaces
+    the cache pool with `n2-standard-32` and 4 Local SSD. The compute pool stays
+    `n2-standard-8`.
+  - An existing `production-large` install resolves to `large`. Terraform then
+    replaces the cache pool with `n2-standard-64` and 8 Local SSD, and the compute
+    pool with `n2-standard-16`. `large` runs 12 SmithDB pods that request about
+    350 vCPU. To avoid this, set `smithdb_sizing = "medium"` or `"small"`.
+  - A `minimum` install resolves to `minimal` and has no SmithDB node pools.
+  - To keep the 0.16 pool (n2-standard-16, 2 Local SSD), set
+    `smithdb_sizing = "small"`: `make smithdb-configure SIZING=small CACHE=local-ssd`.
+- Check the metastore tier. An unset `smithdb_metastore_tier` now follows the size.
+  - For a created metastore, the tier goes from `db-custom-2-8192` to
+    `db-custom-4-16384` for `small`, `db-custom-6-32768` for `medium`, and
+    `db-custom-10-65536` for `large`. `minimal` keeps `db-custom-2-8192`.
+  - `make apply` then resizes the Cloud SQL instance. The resize takes the instance
+    offline for less than 60 seconds.
+  - To keep the old tier, set `smithdb_metastore_tier = "db-custom-2-8192"`.
+  - An external metastore does not change.
+
+Then do the other steps in
+[Upgrade from chart 0.16](modules/gcp/SMITHDB.md#upgrade-from-chart-016): the
+metastore TLS values, the overlay, and the backfill Job. That section also covers
+a direct `helm upgrade`.
+
 ## Upgrade path
 
 1) Take a database backup. Chart downgrades are not supported, so 0.17 to 0.16 is not
    a rollback path - see [Self-host upgrades](https://docs.langchain.com/langsmith/self-host-upgrades).
-2) Check out a `v0.17.*` tag.
+2) Check out a `v0.17.*` tag. With SmithDB on GCP, make the `terraform.tfvars` and
+   overlay changes of section 3 before step 3. Steps 3 to 5 then run `make apply`,
+   `make init-values`, and `make deploy`.
 3) Run `make apply`. On GCP with sandboxes, this adds the `langsmith-sandbox-host`
    Workload Identity binding.
 4) Run `make init-values` so the generated overrides file is regenerated in the 0.17

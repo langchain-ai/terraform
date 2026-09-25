@@ -276,8 +276,10 @@ if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ]];
 fi
 # Granting roles/cloudsql.client to the SmithDB service account is a
 # project-level IAM policy write, which setIamPolicy covers. The apply fails at
-# that binding, well after the instance exists, without it.
-if [[ "$ENABLE_SMITHDB" == "true" && "$(_tfvar "smithdb_metastore_use_auth_proxy")" == "true" ]]; then
+# that binding, well after the instance exists, without it. The proxy is the
+# default for a created metastore, and Terraform rejects it for an external one.
+if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" \
+  && "$(_tfvar "smithdb_metastore_use_auth_proxy")" != "false" ]]; then
   case " ${CONDITIONAL_PERMISSIONS[*]-} " in
     *" resourcemanager.projects.setIamPolicy "*) ;;
     *) CONDITIONAL_PERMISSIONS+=("resourcemanager.projects.setIamPolicy") ;;
@@ -409,14 +411,40 @@ _check_quota "CPUS" 8 "any 2-node cluster"
 # SmithDB adds two autoscaling pools. max_nodes is per zone, so the worst case is
 # max_nodes x zones x vCPU per pool — that is the number that has to fit under the
 # per-family quota, which is far tighter than the aggregate CPUS quota.
-if [[ "$ENABLE_SMITHDB" == "true" ]]; then
-  _is_type=$(_tfvar "smithdb_instance_store_machine_type"); _is_type="${_is_type:-n2-standard-16}"
-  _cm_type=$(_tfvar "smithdb_compute_machine_type");         _cm_type="${_cm_type:-n2-standard-8}"
+#
+# An unset pool variable takes the default for the SmithDB size and cache mode.
+# terraform output shows the last apply, not a pending tfvars change, so this
+# repeats local.smithdb_sizing_by_profile and local.smithdb_pool_defaults from
+# infra/locals.tf. Keep them in step.
+_tfvar_or() { local v; v=$(_tfvar "$1"); [[ -z "$v" || "$v" == "null" ]] && v="$2"; printf '%s' "$v"; }
+_sdb_default_sizing=small
+case "$(_tfvar "sizing_profile")" in
+  minimum)          _sdb_default_sizing=minimal ;;
+  production)       _sdb_default_sizing=medium ;;
+  production-large) _sdb_default_sizing=large ;;
+esac
+_sdb_sizing=$(_tfvar_or "smithdb_sizing" "$_sdb_default_sizing")
+_sdb_cache=$(_tfvar_or "smithdb_cache_storage" "$([[ "$_sdb_sizing" == "minimal" ]] && echo network-disk || echo local-ssd)")
+case "$_sdb_sizing/$_sdb_cache" in
+  small/local-ssd)     _sdb_pools="n2-standard-16 2 n2-standard-8" ;;
+  medium/local-ssd)    _sdb_pools="n2-standard-32 4 n2-standard-8" ;;
+  large/local-ssd)     _sdb_pools="n2-standard-64 8 n2-standard-16" ;;
+  small/network-disk)  _sdb_pools="c3-standard-22 0 n2-standard-8" ;;
+  medium/network-disk) _sdb_pools="c3-standard-44 0 n2-standard-8" ;;
+  large/network-disk)  _sdb_pools="c3-standard-88 0 n2-standard-16" ;;
+  *)                   _sdb_pools="" ;;  # minimal: no SmithDB node pools
+esac
+
+if [[ "$ENABLE_SMITHDB" == "true" && -z "$_sdb_pools" ]]; then
+  printf "\n"
+  info "SmithDB is enabled with smithdb_sizing = ${_sdb_sizing}: no SmithDB node pools, so no pool quota checks."
+elif [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  read -r _def_is_type _def_ssd_count _def_cm_type <<< "$_sdb_pools"
+  _is_type=$(_tfvar_or "smithdb_instance_store_machine_type" "$_def_is_type")
+  _cm_type=$(_tfvar_or "smithdb_compute_machine_type" "$_def_cm_type")
   _is_max=$(_tfvar "smithdb_instance_store_max_nodes");      _is_max="${_is_max:-3}"
   _cm_max=$(_tfvar "smithdb_compute_max_nodes");             _cm_max="${_cm_max:-3}"
-  # Fallbacks must track the Terraform defaults in infra/variables.tf, or an
-  # unset tfvar is checked against a quota figure the apply will never request.
-  _ssd_count=$(_tfvar "smithdb_instance_store_local_ssd_count"); _ssd_count="${_ssd_count:-2}"
+  _ssd_count=$(_tfvar_or "smithdb_instance_store_local_ssd_count" "$_def_ssd_count")
 
   # Counts entries in the smithdb_node_locations list; unset means the pools span
   # every zone the region has, which is 3 for all current regions.
@@ -428,7 +456,7 @@ if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   fi
 
   printf "\n"
-  info "SmithDB is enabled — checking node pool quota at full autoscale (${_zones} zone(s))"
+  info "SmithDB is enabled (${_sdb_sizing}, ${_sdb_cache}) — checking node pool quota at full autoscale (${_zones} zone(s))"
 
   # Tally the pools per machine family before checking anything. Both pools
   # default to N2, and a per-family quota is consumed by their sum, so checking
