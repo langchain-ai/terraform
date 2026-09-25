@@ -12,6 +12,8 @@ provider "aws" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -348,6 +350,53 @@ resource "aws_iam_role_policy" "langsmith_s3" {
           module.storage.bucket_arn,
           "${module.storage.bucket_arn}/*",
         ]
+      }
+    ]
+  })
+}
+
+# Lets backend/platformBackend/queue/etc. pods (all sharing the langsmith IRSA
+# role) call Bedrock models directly via workload identity instead of static
+# AWS keys. Not scoped to specific model IDs, since self-hosted customers pick
+# models at runtime via LangSmith config, not Terraform.
+#
+# foundation-model is granted across all regions (not just var.region): a
+# cross-region inference profile (the "us."/"global." prefix on model IDs like
+# us.anthropic.claude-opus-5) fans requests out to underlying foundation models
+# in whichever region it lands the request, e.g. us-east-1, even when called
+# from us-west-2 — confirmed by AccessDeniedException naming a foundation-model
+# ARN outside var.region. inference-profile is also wildcarded across regions
+# for the same reason (covers "global." profiles alongside geography-scoped
+# ones like "us.", "eu.").
+resource "aws_iam_role_policy" "langsmith_bedrock" {
+  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+
+  name = "langsmith-bedrock-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*",
+        ]
+      },
+      {
+        Sid    = "BedrockListModels"
+        Effect = "Allow"
+        Action = [
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+        ]
+        Resource = "*"
       }
     ]
   })
