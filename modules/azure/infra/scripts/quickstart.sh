@@ -203,6 +203,13 @@ _load_tfvars() {
   _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
   [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
 
+  # Every run since the mode became a choice writes aks_network_mode, so an
+  # absent key means a tfvars from before it, whose cluster runs the module
+  # default of that time. Seeding overlay here would ask for the one-way
+  # migration on the next apply; the guard would refuse it, but the wizard
+  # should not be the one asking.
+  NETWORK_MODE="node-subnet"
+
   # `identifier` is read before `name_prefix` so that a tfvars carrying both
   # lets the current key win. Accepting the retired key matters more here than
   # elsewhere: dropping it would leave NAME_PREFIX at its "dev" default and

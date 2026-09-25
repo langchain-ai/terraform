@@ -271,7 +271,6 @@ locals {
   # to its numeric bounds and compare those. cidrhost(x, 0) is the network
   # address, and the last address is that plus the host count.
   measured_cidrs = distinct(concat(
-    local.vnet_address_space,
     local.aks_vnet_spaces,
     [for entry in local.carved_prefixes : entry.prefix],
     [local.aks_service_cidr],
@@ -315,14 +314,14 @@ locals {
 
   # In overlay mode the pod range is private to the cluster but still routed on
   # every node, so it has to stay clear of the VNet, the ClusterIP range and the
-  # ranges AKS reserves. Each neighbour is named so the message says which one.
-  aks_pod_cidr_neighbours = local.aks_overlay ? merge(
+  # ranges AKS reserves. Each neighbor is named so the message says which one.
+  aks_pod_cidr_neighbors = local.aks_overlay ? merge(
     { for space in local.aks_vnet_spaces : "the VNet address space ${space}" => space },
     { "aks_service_cidr ${local.aks_service_cidr}" = local.aks_service_cidr },
     { for range in local.aks_reserved_cidrs : "the AKS reserved range ${range}" => range },
   ) : {}
   aks_pod_cidr_conflicts = [
-    for name, cidr in local.aks_pod_cidr_neighbours : name
+    for name, cidr in local.aks_pod_cidr_neighbors : name
     if local.cidr_first[var.aks_pod_cidr] <= local.cidr_last[cidr] && local.cidr_last[var.aks_pod_cidr] >= local.cidr_first[cidr]
   ]
 
@@ -772,16 +771,18 @@ module "aks" {
   default_node_pool_max_pods  = var.default_node_pool_max_pods
 
   # Network mode, data plane and tier, derived above from the operator-facing
-  # variables. All four are creation-time choices; a mode change on an existing
-  # cluster is refused by terraform_data.aks_network_mode_guard below, which
-  # reads the mode the module recorded at the first apply.
-  network_plugin_mode          = local.aks_network_plugin_mode
-  pod_cidr                     = local.aks_pod_cidr
-  network_data_plane           = local.aks_network_dataplane
-  network_policy               = local.aks_network_policy
-  allow_network_mode_migration = var.aks_allow_network_mode_migration
-  sku_tier                     = var.aks_sku_tier
-  support_plan                 = var.aks_support_plan
+  # variables. The tier and support plan update in place. The mode, the pod
+  # range and the data plane are fixed at creation, short of the two one-way
+  # migrations Azure runs in place (node-subnet to overlay, the Azure data plane
+  # to Cilium): the provider applies every other change by replacing the
+  # cluster, so terraform_data.aks_network_mode_guard below compares these with
+  # the profile the cluster runs and refuses a change that was not asked for.
+  network_plugin_mode = local.aks_network_plugin_mode
+  pod_cidr            = local.aks_pod_cidr
+  network_data_plane  = local.aks_network_dataplane
+  network_policy      = local.aks_network_policy
+  sku_tier            = var.aks_sku_tier
+  support_plan        = var.aks_support_plan
 
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
   # On a pre-existing cluster whose node pools the customer owns, pass an empty
@@ -828,30 +829,112 @@ module "aks" {
   tags = local.common_tags
 }
 
-# ── AKS network mode guard ────────────────────────────────────────────────────
-# A mode change on a cluster that already exists is Microsoft's one-way
-# migration from node-subnet to overlay: every node pool is reimaged at once,
-# Azure Network Policy Manager must be uninstalled first, and there is no way
-# back. The provider would run it as an in-place update from a one-line tfvars
-# edit, so it is refused unless the operator says so. module.aks records the
-# mode of the first apply; on that first apply the record is unknown, the check
-# defers to apply time and then compares equal values. A failing precondition
-# anywhere fails the plan, so this needs no dependency edge into the cluster.
+# ── AKS network guard ─────────────────────────────────────────────────────────
+# Some network_profile edits reach an existing cluster as Microsoft's one-way
+# migrations (node-subnet to overlay; the Azure data plane to Cilium), each of
+# which reimages every node pool at once, and the provider applies the rest
+# (overlay back to node-subnet, Cilium back to Azure, a new pod range) by
+# replacing the cluster and everything installed on it. Any of them would
+# follow from a one-line tfvars edit. So the requested profile is compared with
+# the one Azure reports for the cluster (module.aks reads it at plan time; null
+# until the cluster exists), and a change is refused unless
+# aks_allow_network_mode_migration is set, and then only in the direction Azure
+# migrates, one change per apply, with Microsoft's prerequisite met. The read
+# depends on variables alone, so every condition here is known at plan and a
+# failure stops the plan before anything is applied.
+locals {
+  aks_live           = var.create_cluster ? module.aks.live_network_profile : null
+  aks_live_mode      = local.aks_live == null ? null : local.aks_live.mode
+  aks_live_dataplane = local.aks_live == null ? null : local.aks_live.dataplane
+  aks_live_policy    = local.aks_live == null ? null : local.aks_live.policy
+  aks_live_pod_cidr  = local.aks_live == null ? null : local.aks_live.pod_cidr
+
+  aks_mode_changing      = local.aks_live != null && local.aks_live_mode != var.aks_network_mode
+  aks_dataplane_changing = local.aks_live != null && local.aks_live_dataplane != local.aks_network_dataplane
+  # Only a range change within overlay mode counts: the migration into overlay
+  # sets the range for the first time.
+  aks_pod_cidr_changing = local.aks_live != null && local.aks_live_mode == "overlay" && local.aks_overlay && local.aks_live_pod_cidr != null && local.aks_live_pod_cidr != var.aks_pod_cidr
+  # The direction and prerequisite checks below speak only once the operator
+  # has asked for a migration; without the flag the first message of each pair
+  # is the whole answer.
+  aks_migration_asked = var.aks_allow_network_mode_migration
+}
+
 resource "terraform_data" "aks_network_mode_guard" {
-  input = var.aks_network_mode
+  input = {
+    mode      = var.aks_network_mode
+    dataplane = local.aks_network_dataplane
+    pod_cidr  = local.aks_pod_cidr
+  }
 
   lifecycle {
+    # A mode change is refused until the operator asks for it.
     precondition {
-      condition = (
-        var.aks_allow_network_mode_migration
-        || !var.create_cluster
-        || module.aks.created_network_mode == null
-        || module.aks.created_network_mode == var.aks_network_mode
-      )
+      condition = !local.aks_mode_changing || local.aks_migration_asked
       error_message = join(" ", [
-        "aks_network_mode is changing from ${coalesce(module.aks.created_network_mode, "unknown")} to ${var.aks_network_mode} on a cluster Terraform already created.",
-        "Azure applies this as a one-way migration that reimages every node pool at once; it requires Azure Network Policy Manager to be uninstalled first and Kubernetes 1.27 or later, and it cannot be reversed.",
-        "Set aks_allow_network_mode_migration = true to run it deliberately, or revert aks_network_mode. For a production cluster, build a new cluster in the new mode instead.",
+        "aks_network_mode is changing from ${coalesce(local.aks_live_mode, "unknown")} to ${var.aks_network_mode} on a cluster that already exists.",
+        "Azure applies node-subnet to overlay as a one-way migration that reimages every node pool at once and cannot be reversed; the provider applies overlay to node-subnet by replacing the cluster.",
+        "Revert aks_network_mode to keep the cluster as it is. To run the migration deliberately, set aks_allow_network_mode_migration = true. For a production cluster, build a new cluster in the new mode instead.",
+      ])
+    }
+
+    # With the flag, only the direction Azure migrates.
+    precondition {
+      condition = !(local.aks_mode_changing && local.aks_migration_asked) || (local.aks_live_mode == "node-subnet" && var.aks_network_mode == "overlay")
+      error_message = join(" ", [
+        "aks_network_mode is changing from ${coalesce(local.aks_live_mode, "unknown")} to ${var.aks_network_mode}, and Azure has no migration in that direction: the provider would replace the cluster, and everything installed on it, on apply.",
+        "aks_allow_network_mode_migration does not permit this. Revert aks_network_mode, or build a new cluster in the mode you want.",
+      ])
+    }
+
+    # Microsoft's prerequisite for the overlay migration: no network policy
+    # engine installed, unless the data plane is already Cilium, whose policy
+    # engine is part of the data plane and is not uninstalled.
+    precondition {
+      condition = !(local.aks_mode_changing && local.aks_migration_asked) || local.aks_live_policy == "none" || local.aks_live_dataplane == "cilium"
+      error_message = join(" ", [
+        "The cluster runs ${coalesce(local.aks_live_policy, "unknown")} as its network policy engine, and Azure refuses the overlay migration while Azure Network Policy Manager or Calico is installed.",
+        "Uninstalling it first (az aks update --network-policy none) leaves the cluster without a policy engine, which this module cannot express: it sets network_policy on every cluster it creates, so the next apply would try to reinstall the engine, and the provider applies that by replacing the cluster.",
+        "A cluster this module created in node-subnet mode therefore has no in-place path to overlay through Terraform. Build a new cluster in overlay mode and move the release to it.",
+      ])
+    }
+
+    # A data plane change is refused until the operator asks for it.
+    precondition {
+      condition = !local.aks_dataplane_changing || local.aks_migration_asked
+      error_message = join(" ", [
+        "aks_network_dataplane is changing from ${coalesce(local.aks_live_dataplane, "unknown")} to ${local.aks_network_dataplane} on a cluster that already exists.",
+        "Azure applies azure to cilium as a one-way update that reimages every node pool at once and replaces the policy engine with Cilium's; the provider applies cilium to azure by replacing the cluster.",
+        var.aks_network_dataplane == "" ? "The value is the default for aks_network_mode = \"${var.aks_network_mode}\"; set aks_network_dataplane = \"${coalesce(local.aks_live_dataplane, "azure")}\" explicitly to keep the cluster as it is." : "Revert aks_network_dataplane to keep the cluster as it is.",
+        "To run the update deliberately, set aks_allow_network_mode_migration = true.",
+      ])
+    }
+
+    # With the flag, only the direction Azure updates in place.
+    precondition {
+      condition = !(local.aks_dataplane_changing && local.aks_migration_asked) || (local.aks_live_dataplane == "azure" && local.aks_network_dataplane == "cilium")
+      error_message = join(" ", [
+        "aks_network_dataplane is changing from ${coalesce(local.aks_live_dataplane, "unknown")} to ${local.aks_network_dataplane}, and Azure has no update in that direction: the provider would replace the cluster, and everything installed on it, on apply.",
+        "aks_allow_network_mode_migration does not permit this. Revert aks_network_dataplane, or build a new cluster with the data plane you want.",
+      ])
+    }
+
+    # Microsoft runs the two migrations as separate operations.
+    precondition {
+      condition = !(local.aks_mode_changing && local.aks_dataplane_changing && local.aks_migration_asked)
+      error_message = join(" ", [
+        "aks_network_mode (${coalesce(local.aks_live_mode, "unknown")} to ${var.aks_network_mode}) and aks_network_dataplane (${coalesce(local.aks_live_dataplane, "unknown")} to ${local.aks_network_dataplane}) are both changing.",
+        "Azure does not update the IPAM mode and the data plane in one operation; run them as two applies, in either order.",
+        "Overlay mode defaults the data plane to cilium, so to migrate the mode first set aks_network_dataplane = \"${coalesce(local.aks_live_dataplane, "azure")}\" explicitly for this apply, then change it in the next.",
+      ])
+    }
+
+    # The pod range is fixed once overlay is running.
+    precondition {
+      condition = !local.aks_pod_cidr_changing
+      error_message = join(" ", [
+        "aks_pod_cidr is changing from ${coalesce(local.aks_live_pod_cidr, "unknown")} to ${var.aks_pod_cidr} on a cluster that already runs overlay mode.",
+        "Azure does not change a cluster's pod range, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_pod_cidr, or build a new cluster with the range you want.",
       ])
     }
   }

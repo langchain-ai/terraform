@@ -611,8 +611,11 @@ variable "additional_node_pools" {
 }
 
 # ── AKS network mode, data plane and tier ────────────────────────────────────
-# All four are creation-time choices on a production cluster. The mode default
-# is node-subnet so that no existing deployment moves on upgrade; the templates
+# The mode, the pod range and the data plane are decided at creation: Azure
+# migrates a cluster in place only from node-subnet to overlay and from the
+# Azure data plane to Cilium, and the provider replaces the cluster for any
+# other change. The tier and support plan update in place. The mode default is
+# node-subnet so that no existing deployment moves on upgrade; the templates
 # and the quickstart write overlay for new ones.
 
 variable "aks_network_mode" {
@@ -667,7 +670,7 @@ variable "aks_network_dataplane" {
 
 variable "aks_allow_network_mode_migration" {
   type        = bool
-  description = "Permit an aks_network_mode change on a cluster Terraform already created. Off, the change is refused at plan, because Azure applies it as a one-way node-subnet to overlay migration that reimages every node pool at once, requires Azure Network Policy Manager to be uninstalled first and Kubernetes 1.27 or later, and cannot be reversed. For a production cluster, build a new one in the new mode instead."
+  description = "Permit an aks_network_mode or aks_network_dataplane change on a cluster that already exists, in the two directions Azure migrates in place: node-subnet to overlay, and the azure data plane to cilium. Each reimages every node pool at once and cannot be reversed, Azure runs them as separate operations (one per apply), and the overlay migration requires no network policy engine on the cluster, which rules out a node-subnet cluster this module created. Off, any change to the mode, the data plane or aks_pod_cidr on an existing cluster is refused at plan. For a production cluster, build a new one in the new configuration instead."
   default     = false
 }
 

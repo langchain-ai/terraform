@@ -171,12 +171,13 @@ variable "availability_zones" {
 # ── Network mode, data plane and tier ────────────────────────────────────────
 # The root module derives these from aks_network_mode, aks_network_dataplane,
 # aks_sku_tier and aks_support_plan and validates the combinations there. This
-# module passes them to the cluster and guards the one change that is not an
-# in-place update: flipping the IPAM mode of a cluster that already exists.
+# module passes them to the cluster and reads back the profile the cluster
+# runs (live_network_profile), which the root compares against before a change
+# that Azure would run as a migration or the provider as a replacement.
 
 variable "network_plugin_mode" {
   type        = string
-  description = "Azure CNI IPAM mode. null is node-subnet mode, where pods take VNet addresses from subnet_id. \"overlay\" gives pods addresses from pod_cidr and leaves the subnet to the nodes. Changing it on an existing cluster is Microsoft's one-way migration, which reimages every node pool; see allow_network_mode_migration."
+  description = "Azure CNI IPAM mode. null is node-subnet mode, where pods take VNet addresses from subnet_id. \"overlay\" gives pods addresses from pod_cidr and leaves the subnet to the nodes. Changing it on an existing cluster is Microsoft's one-way migration, which reimages every node pool; the root module refuses it unless asked."
   default     = null
 
   validation {
@@ -211,12 +212,6 @@ variable "network_policy" {
     condition     = contains(["azure", "calico", "cilium"], var.network_policy)
     error_message = "network_policy must be \"azure\", \"calico\" or \"cilium\"."
   }
-}
-
-variable "allow_network_mode_migration" {
-  type        = bool
-  description = "Permit a network_plugin_mode change on a cluster this module already created. Off, the change is refused before plan, because Azure applies it as a one-way migration that reimages every node pool at once and first requires Azure Network Policy Manager to be uninstalled."
-  default     = false
 }
 
 variable "sku_tier" {

@@ -227,25 +227,33 @@ provider "helm" {
 # and the ingress controller run here.
 # count = 0 when attaching to a pre-existing cluster (create_cluster = false);
 # see data.azurerm_kubernetes_cluster.existing above for that path.
-# Records the IPAM mode the cluster was created with, so a later edit of the
-# mode is caught before Azure runs it as a migration. ignore_changes on input
-# keeps the recorded value at what the first apply wrote; triggers_replace
-# re-records it only when the operator has set allow_network_mode_migration,
-# which is the one path on which the change is meant to reach the cluster.
-# Both mode strings are spelled out here rather than passing null through,
-# because terraform_data stores null as "no value" and the comparison would
-# then never fire. The comparison itself lives in the root module
-# (terraform_data.aks_network_mode_guard), where a failing precondition is
-# reachable by the test suite; this resource is the memory it reads.
-resource "terraform_data" "network_mode" {
-  count = var.create_cluster ? 1 : 0
-
-  input            = coalesce(var.network_plugin_mode, "node-subnet")
-  triggers_replace = var.allow_network_mode_migration ? [coalesce(var.network_plugin_mode, "node-subnet")] : []
-
-  lifecycle {
-    ignore_changes = [input]
+# Reads the network profile the cluster runs today, so the root module can
+# refuse a tfvars edit that Azure would apply as a one-way migration, or that
+# the provider would apply by replacing the cluster. It is a list at
+# subscription scope rather than a GET by ID because a GET on a cluster that
+# does not exist yet fails the plan, while a list that finds nothing is the
+# "no cluster yet" answer a first apply needs. Its inputs are variables only,
+# so the read happens during plan and never defers to apply, where the cluster
+# update it exists to stop could already be under way. The comparison lives in
+# the root module (terraform_data.aks_network_mode_guard), where a failing
+# precondition is reachable by the test suite. Read-only GET, no writes.
+data "azapi_resource_list" "clusters" {
+  count     = var.create_cluster ? 1 : 0
+  type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    clusters = "value[].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
   }
+}
+
+locals {
+  # The cluster this module manages, if Azure already has it. Azure treats
+  # resource group and cluster names case-insensitively, so this does too.
+  # try() covers a mocked provider, whose output has no such shape.
+  live_cluster = one([
+    for c in try(data.azapi_resource_list.clusters[0].output.clusters, []) : c
+    if lower(c.name) == lower(var.cluster_name) && lower(split("/", c.id)[4]) == lower(var.resource_group_name)
+  ])
 }
 
 resource "azurerm_kubernetes_cluster" "main" {

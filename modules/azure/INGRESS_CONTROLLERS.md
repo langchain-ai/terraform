@@ -171,6 +171,11 @@ create_dns_zone        = true
   address is its own subnet either way, and the rule is an `ipBlock` on that subnet, which the
   Cilium data plane enforces (Cilium's limitation is `ipBlock` selecting node or pod addresses,
   which this rule does not do)
+- AGIC in overlay mode is not yet exercised by this module's test cluster, which runs nginx.
+  Microsoft's Azure CNI Overlay page no longer lists Application Gateway Ingress Controller among
+  the overlay limitations, but nothing here has confirmed the gateway reaching overlay pod
+  addresses; until a test does, treat `ingress_controller = "agic"` with `aks_network_mode =
+  "overlay"` as unverified
 
 **RBAC timing — known issue:** The AKS AGIC addon creates its managed identity during cluster
 provisioning, but the identity requires ~5 minutes to register in Azure AD before role assignments

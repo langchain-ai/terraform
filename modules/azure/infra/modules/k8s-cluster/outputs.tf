@@ -85,9 +85,14 @@ output "agw_id" {
   value       = one(azurerm_application_gateway.agw[*].id)
 }
 
-output "created_network_mode" {
-  description = "The Azure CNI IPAM mode this module created the cluster in, node-subnet or overlay, as recorded on the first apply. null when create_cluster = false."
-  value       = one(terraform_data.network_mode[*].output)
+output "live_network_profile" {
+  description = "The network profile Azure reports for the cluster at plan time: mode (node-subnet or overlay), data plane, policy engine (none when no engine is installed) and pod range (null in node-subnet mode). null until the cluster exists, and when create_cluster = false."
+  value = local.live_cluster == null ? null : {
+    mode      = coalesce(try(local.live_cluster.mode, null), "node-subnet")
+    dataplane = coalesce(try(local.live_cluster.dataplane, null), "azure")
+    policy    = coalesce(try(local.live_cluster.policy, null), "none")
+    pod_cidr  = try(local.live_cluster.pod_cidr, null)
+  }
 }
 
 output "network_profile" {

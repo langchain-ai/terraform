@@ -138,13 +138,19 @@ location        = "westus2"
 owner           = "platform team"
 create_waf      = true
 EOF
-PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; eval "$NAME_VAR="
+PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; NETWORK_MODE="overlay"; eval "$NAME_VAR="
 _load_tfvars
 eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "acme"
 eq "PROFILE read from the header"    "$PROFILE"     "prod"
 eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
 eq "CREATE_WAF read"                 "$CREATE_WAF"  "true"
+# A tfvars from before the mode was a choice deploys the module default of
+# that time; seeding overlay would write a migration into it on save.
+eq "absent aks_network_mode is node-subnet" "$NETWORK_MODE" "node-subnet"
+printf 'aks_network_mode = "overlay"\n' >> "$OUTPUT"
+_load_tfvars
+eq "present aks_network_mode is read"      "$NETWORK_MODE" "overlay"
 
 echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state

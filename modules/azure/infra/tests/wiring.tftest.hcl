@@ -7,7 +7,15 @@
 # that quietly stops covering anything.
 
 mock_provider "azurerm" {}
-mock_provider "azapi" {}
+# The cluster module lists the subscription's AKS clusters to read the one it
+# manages; the generated mock has no such shape, so give it an empty list.
+mock_provider "azapi" {
+  mock_data "azapi_resource_list" {
+    defaults = {
+      output = { clusters = [] }
+    }
+  }
+}
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
 mock_provider "null" {}
