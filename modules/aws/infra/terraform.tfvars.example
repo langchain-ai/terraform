@@ -767,6 +767,16 @@ enable_usage_telemetry = false
 # matching depends on the OIDC provider this creates.
 enable_sso_oidc = false
 
+# Lets backend/platformBackend/queue/etc. pods call Bedrock models directly
+# via the shared LangSmith IRSA role's workload identity, instead of static
+# AWS access keys pasted into LangSmith's model provider config. Requires
+# create_langsmith_irsa_role = true (the default). Not scoped to specific
+# model IDs — self-hosted customers pick models at runtime via LangSmith's
+# own model configuration UI, not Terraform. Each model still needs access
+# granted separately in the Bedrock console (Model access page) — this flag
+# only grants the IAM permission to call whatever's already enabled there.
+enable_bedrock_access = false
+
 #------------------------------------------------------------------------------
 # LANGGRAPH PLATFORM ENCRYPTION KEYS (optional — for addons only)
 #------------------------------------------------------------------------------
