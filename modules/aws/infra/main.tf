@@ -1163,3 +1163,53 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 
   depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
 }
+
+# ── Long-lived-stream timeout override ───────────────────────────────────────
+# Envoy Gateway applies an effective 15s response timeout to the LangSmith
+# chart's own catch-all HTTPRoute (chart's http_route.yaml has no timeouts
+# field and no way to set one via values). Several SSE/streaming surfaces
+# regularly run longer than that, so Envoy resets the HTTP/2 stream mid-response
+# (response_flags=UT, response_code_details=response_timeout) even though the
+# backend already returned 200 and is still streaming — the browser sees
+# net::ERR_HTTP2_PROTOCOL_ERROR. Covers:
+#   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
+#     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
+#   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#
+# A second HTTPRoute on the same Gateway+hostname with more specific path
+# matches takes precedence over the chart's "/" catch-all per Gateway API
+# merge/precedence rules (longer prefix wins), without touching the chart's
+# own route. timeouts.request: 0s disables the request timeout for just
+# these path prefixes; every other path keeps Envoy Gateway's default.
+#
+# kubectl_manifest (not kubernetes_manifest) for the same reason as the
+# SmithDB Karpenter CRs above: it defers schema validation to apply time, so
+# terraform plan succeeds even before the Gateway API CRDs are installed
+# (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+resource "kubectl_manifest" "fleet_stream_httproute" {
+  count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "langsmith-fleet-streams"
+      namespace = var.langsmith_namespace
+    }
+    spec = {
+      parentRefs = [{ name = "langsmith-gateway" }]
+      hostnames  = [var.langsmith_domain]
+      rules = [{
+        matches = [
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
+          { path = { type = "PathPrefix", value = "/api-host/v2" } },
+        ]
+        backendRefs = [{ name = "langsmith-frontend", port = 80 }]
+        timeouts    = { request = "0s" }
+      }]
+    }
+  })
+
+  depends_on = [module.k8s_bootstrap]
+}
