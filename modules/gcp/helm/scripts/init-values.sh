@@ -397,6 +397,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_sso_oidc=false
 _tfvars_drive_addons=false
 
 # Resolve encryption keys up front so the standalone copy+inject blocks below
@@ -415,6 +416,7 @@ _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;             
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
 
 _sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
@@ -967,6 +969,31 @@ insights:
   fi
 fi
 
+# ── SSO/OIDC login (optional) ─────────────────────────────────────────────────
+# WARNING: enable only after the initial install has completed with basic auth
+# and you've confirmed org-admin access — flipping this on before an admin
+# account exists locks you out of the UI.
+_oauth_block=""
+_basic_auth_enabled_block=""
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _oauth_client_id="${TF_VAR_langsmith_oauth_client_id:-}"
+  _oauth_client_secret="${TF_VAR_langsmith_oauth_client_secret:-}"
+  _oauth_issuer_url="${TF_VAR_langsmith_oauth_issuer_url:-}"
+  if [[ -z "$_oauth_client_id" || -z "$_oauth_client_secret" || -z "$_oauth_issuer_url" ]]; then
+    echo "ERROR: enable_sso_oidc = true but OIDC credentials are not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  _basic_auth_enabled_block="
+    enabled: false"
+  _oauth_block="
+  oauth:
+    enabled: true
+    oauthClientId: \"${_oauth_client_id}\"
+    oauthClientSecret: \"${_oauth_client_secret}\"
+    oauthIssuerUrl: \"${_oauth_issuer_url}\""
+fi
+
 # ── Agent defaults ────────────────────────────────────────────────────────────
 # Chart 0.16 ships insights.enabled and polly.enabled as true. Without an explicit
 # false a base install grows two agent deployments nobody asked for, and because
@@ -1049,9 +1076,9 @@ config:
   langsmithLicenseKey: "${LANGSMITH_LICENSE_KEY}"
   apiKeySalt: "${API_KEY_SALT}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
-  basicAuth:
+  basicAuth:${_basic_auth_enabled_block}
     jwtSecret: "${JWT_SECRET}"
-    initialOrgAdminPassword: "${ADMIN_PASSWORD}"
+    initialOrgAdminPassword: "${ADMIN_PASSWORD}"${_oauth_block}
 ${_addon_keys_block}
   deployment:
     # URL used by the operator to build agent deployment endpoints.
