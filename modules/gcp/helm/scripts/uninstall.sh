@@ -216,10 +216,22 @@ echo ""
 # available so their reclaim policy can remove the disks before the GKE cluster
 # is destroyed. The chart deletes the SmithDB backfill claim
 # (data-langsmith-smithdb-taskdb-postgres-*) with its StatefulSet. The pattern
-# also matches it, in case it is still there. The Postgres and Redis pattern
-# starts with data-$RELEASE_NAME-, so the claims of other workloads in a shared
-# namespace do not match.
-_data_pvcs=$(_names_matching pvc "clickhouse|^data-${RELEASE_NAME}-.*(postgres|redis)-[0-9]+\$")
+# also matches the taskdb claim, in case the claim is still there.
+#
+# The Postgres and Redis pattern matches only the chart claim names of this
+# release: data-<prefix>-[<component>-](postgres|redis)-<ordinal>. The chart
+# prefix is RELEASE_NAME when the name contains "langsmith", and
+# RELEASE_NAME-langsmith when the name does not. The claims of another release
+# do not match, also when its name starts with RELEASE_NAME (for example
+# langsmith-dev). When the release name is longer than 13 characters, the chart
+# can shorten the add-on claim names, and the pattern does not match them.
+_chart_prefix="$RELEASE_NAME"
+[[ "$RELEASE_NAME" == *langsmith* ]] || _chart_prefix="${RELEASE_NAME}-langsmith"
+# Escape each dot, because a dot in an extended regex matches any character.
+_prefix_re=$(printf '%s' "$_chart_prefix" | sed 's/[.]/\\./g')
+_db_claim_re="^data-${_prefix_re}-"
+_db_claim_re+="((standalone-(fleet|insights|polly)|smithdb-taskdb)-)?(postgres|redis)-[0-9]+\$"
+_data_pvcs=$(_names_matching pvc "clickhouse|${_db_claim_re}")
 if [[ -n "$_data_pvcs" ]]; then
   if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
     echo "Deleting in-cluster data PVCs (reclaims GCE PD while CSI is available)..."

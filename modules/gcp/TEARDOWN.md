@@ -92,7 +92,7 @@ cd terraform/gcp
 
 **Sandboxes and JuiceFS (chart 0.16 releases):** Chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
 
-**In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track them, and `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. During a SmithDB backfill, the taskdb has a claim too (`data-langsmith-smithdb-taskdb-postgres-*`). The chart deletes it with its StatefulSet, and the script deletes it if it is still there. The script deletes only the Postgres and Redis claims whose names start with `data-<RELEASE_NAME>-`.
+**In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track the disks. `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. During a SmithDB backfill, the taskdb has a claim too (`data-langsmith-smithdb-taskdb-postgres-*`). The chart deletes the taskdb claim with its StatefulSet. The script deletes the taskdb claim if the claim is still there. For Postgres and Redis, the script deletes only the chart claims of the release in `RELEASE_NAME`. The claims of another release in the namespace do not match, for example the claims of `langsmith-dev` when `RELEASE_NAME` is `langsmith`. When the release name is longer than 13 characters, the chart can shorten the add-on claim names. The script does not delete a claim with a shortened name, so check for `pvc-*` disks in A8.
 
 For full infrastructure teardown, delete the claims during uninstall. The CSI driver can then reclaim the disks before Terraform destroys GKE:
 
@@ -228,7 +228,7 @@ make destroy
 ```
 
 Terraform destroys in dependency order:
-- The Envoy Gateway `Gateway`, before the Envoy Gateway release and the cluster. The step waits up to 5 minutes for the LoadBalancer Service to go, so that GKE deletes the load balancer while the cluster exists. When the cluster is not reachable, the step does nothing.
+- The Envoy Gateway `Gateway`, before the Envoy Gateway release and the cluster (only when `install_ingress = true` and `ingress_type = "envoy"`). The step waits up to 5 minutes for the LoadBalancer Service to go, so that GKE deletes the load balancer while the cluster exists. When the cluster is not reachable, the step does nothing.
 - k8s-bootstrap (KEDA, cert-manager Helm releases)
 - Cloud SQL PostgreSQL instance
 - SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)
@@ -236,7 +236,7 @@ Terraform destroys in dependency order:
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
 - Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
 - GKE cluster and node pools, including the SmithDB Local SSD and compute pools
-- Private service connection: removed from state only (`deletion_policy = "ABANDON"`). The VPC delete removes its peering.
+- Private service connection (only when `postgres_source` or `redis_source` is `"external"`, when `enable_sandboxes = true`, or when the module creates the SmithDB metastore): removed from state only (`deletion_policy = "ABANDON"`). The VPC delete removes its peering.
 - VPC, subnet, Cloud Router, Cloud NAT
 
 > **Note on `source infra/scripts/setup-env.sh`:** Terraform needs `TF_VAR_postgres_password` even during destroy for provider validation. If the Secret Manager secret no longer exists, set it manually: `export TF_VAR_postgres_password="any-placeholder"`
@@ -247,23 +247,28 @@ Terraform destroys in dependency order:
 
 Two leftovers can stop the VPC delete. Look at the resource that the error names.
 
-**A `k8s-*` firewall rule.** GKE can leave the shared `k8s-<cluster-id>-node-http-hc` rule on the VPC, also after the Gateway delete. Find it with the firewall check in A8, delete it as in B8 step 3, and run `make destroy` again.
+**A `k8s-*` firewall rule.** GKE can leave the shared `k8s-<cluster-id>-node-http-hc` rule on the VPC, also after the Gateway delete. Find the rule with the firewall check in A8. Delete the rule as in B8 step 3. Run `make destroy` again.
 
-**The private service connection peering.** After a Cloud SQL or Memorystore delete, Google keeps the producer resources for some time, and the connection delete fails with `Producer services (e.g. CloudSQL, Cloud Memstore, etc.) are still using this connection`. When the state has `deletion_policy = "ABANDON"`, `terraform destroy` removes the connection from state with no API call. The reserved range and the VPC then delete with the peering `servicenetworking-googleapis-com` still active, and the VPC delete removes the peering. A test with no producer instances confirmed this. The test did not delete Cloud SQL or Memorystore first.
+**The private service connection peering.** After a Cloud SQL or Memorystore delete, Google keeps the producer resources for some time. During that time, the connection delete fails with `Producer services (e.g. CloudSQL, Cloud Memstore, etc.) are still using this connection`. When the state has `deletion_policy = "ABANDON"`, `terraform destroy` removes the connection from state with no API call. The reserved range and the VPC then delete with the peering `servicenetworking-googleapis-com` still active, and the VPC delete removes the peering. A test with no producer instances confirmed that the VPC delete removes the peering. The test did not delete Cloud SQL or Memorystore first.
 
-If the destroy stops on the VPC or on the reserved range `<name_prefix>-<environment>-vpc-private-ip`, and the error names the peering, do these steps before you run `make destroy` again:
+If the destroy stops on the VPC or on the reserved range `<name_prefix>-<environment>-vpc-private-ip`, and the error names the peering, set these variables first:
 
-1. Do the producer checks in B8 ("Known issue — private service connection will not delete"). Delete any instance that the checks show.
+```bash
+PROJECT_ID="<your-project-id>"
+VPC_NAME="<name_prefix>-<environment>-vpc"
+```
+
+Then do these steps before you run `make destroy` again:
+
+1. Do the producer checks in B8 ("Known issue — private service connection will not delete"). The checks use a substring match, so they can also show instances on other VPCs. Delete an instance only when the last part of its network value is exactly `$VPC_NAME`.
 2. Remove the peering. After the producer wait, use the supported command:
 
    ```bash
-   PROJECT_ID="<your-project-id>"
-   VPC_NAME="<name_prefix>-<environment>-vpc"
    gcloud services vpc-peerings delete --network="$VPC_NAME" \
      --service=servicenetworking.googleapis.com --project "$PROJECT_ID"
    ```
 
-   During the producer wait (up to four days after a Cloud SQL delete), that command fails with the same error. If the VPC is deleted permanently and nothing will use its name again, remove the peering at the Compute Engine layer. Read "Last resort" in B8 first:
+   During the producer wait (up to four days after a Cloud SQL delete), that command fails with the same error. If the VPC is deleted permanently and nothing will use its name again, remove the peering at the Compute Engine layer. Read "Last resort — remove the peering at the Compute Engine layer" in B8 first:
 
    ```bash
    gcloud compute networks peerings delete servicenetworking-googleapis-com \
@@ -454,7 +459,8 @@ kubectl config current-context     # must be gke_<project>_<region>_<PREFIX>-gke
 > keeps the active `kubectl` context, prints the context it is about to act on, and asks
 > for confirmation. It removes the JuiceFS and sandbox volumes before the Helm release,
 > while the CSI driver can still unmount them, and it keeps the in-cluster ClickHouse,
-> Postgres, and Redis data PVCs unless `DELETE_DATA_PVCS=true`. `RELEASE_NAME` and `NAMESPACE` override the defaults.
+> Postgres, and Redis data PVCs unless `DELETE_DATA_PVCS=true`. `RELEASE_NAME` and
+> `NAMESPACE` override the defaults.
 >
 > ```bash
 > gcloud container clusters get-credentials "$PREFIX-gke" \
@@ -507,7 +513,8 @@ while IFS= read -r _obj; do
   [[ -z "$_obj" ]] && continue
   kubectl delete "$_obj" -n langsmith --timeout=120s
 done < <(kubectl get pvc -n langsmith -o name 2>/dev/null \
-  | grep -Ei 'clickhouse|/data-langsmith-.*(postgres|redis)-[0-9]+$' || true)
+  | grep -Ei 'clickhouse|/data-langsmith-((standalone-(fleet|insights|polly)|smithdb-taskdb)-)?(postgres|redis)-[0-9]+$' \
+  || true)
 
 # 7. Remaining bootstrap releases. Delete the Gateway first, so that GKE deletes
 #    its load balancer. Run the get command again until it shows no Service.

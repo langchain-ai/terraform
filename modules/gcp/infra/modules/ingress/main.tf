@@ -233,7 +233,8 @@ resource "null_resource" "apply_gateway" {
 #
 # The step is not on apply_gateway, because a Gateway change replaces that
 # resource. A destroy step there would delete the Gateway and release its IP on
-# each change. These triggers change only with the cluster or the Gateway name.
+# each change. These triggers change only with the project, the region, the
+# cluster name, or the Gateway name.
 #
 # A destroy provisioner can read only self, so the triggers hold the cluster
 # coordinates. The step exits 0 when the cluster is already gone, and
