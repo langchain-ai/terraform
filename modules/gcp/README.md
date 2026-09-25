@@ -400,6 +400,80 @@ helm upgrade langsmith langchain/langsmith \
 
 ---
 
+## Sandboxes (chart 0.17)
+
+Sandboxes run agent code in Firecracker microVMs on a dedicated `sandbox-host` node
+pool. The sandbox file system is JuiceFS: data goes to the LangSmith GCS bucket, and
+metadata goes to a dedicated Memorystore Redis.
+
+### Requirements
+
+- Standard GKE. Autopilot cannot run the nested-virtualization pool.
+- `enable_gcp_iam_module = true`.
+- A machine type with nested virtualization, such as N2.
+
+### Enable
+
+1. Set `enable_sandboxes = true` in `terraform.tfvars`.
+2. Run `source infra/scripts/setup-env.sh`. The script creates the callback signing key.
+3. Run `make deploy-all`.
+
+### Host size
+
+The machine type follows `sizing_profile` unless you set `sandbox_host_machine_type`:
+
+| `sizing_profile` | `sandbox_host_machine_type` |
+|---|---|
+| `production`, `production-large` | `n2-standard-32` |
+| every other profile | `n2-standard-8` |
+
+- The pool is regional, so `sandbox_host_node_count`, `sandbox_host_min_node_count`
+  and `sandbox_host_max_node_count` are per zone.
+- `sandbox_host_min_node_count` defaults to `0`. The autoscaler keeps only the nodes
+  that sandbox-host needs: one node for each replica, and the chart default is 1
+  replica.
+- After a node or zone failure, Kubernetes waits 5 minutes (the default unreachable
+  toleration) and then replaces the sandbox-host pod. The autoscaler adds a node in
+  a healthy zone, and the node pulls the sandbox-host image. Recovery takes about
+  10 minutes. Running sandboxes on the failed node stop.
+- Set `sandbox_host_min_node_count = 1` to keep an idle node in every zone. Recovery
+  is then faster, because no node creation is necessary. Each extra zone costs one
+  idle node.
+- The `juicefs-format` Job prefers a sandbox-host node, but it can run on any Linux
+  node. It does not wait for a sandbox-host node when the pool is at 0 nodes.
+- sandbox-host has the pod annotation
+  `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler does
+  not remove a node that runs sandboxes.
+- `sandbox_host_ephemeral_local_ssd_count` (default `0`) adds local SSDs for kubelet
+  and container runtime storage. The JuiceFS host cache stays at
+  `/var/cache/juicefs` on the boot disk, so these disks do not speed up sandbox file
+  I/O. Compute Engine accepts only specific counts. An N2 machine with 22-40 vCPU
+  takes 4, 8, 16 or 24.
+
+### Identity
+
+- `sandbox-host` runs on the host network. GKE does not give Workload Identity to
+  host-network pods, so the JuiceFS mount uses the `<name>-sbox-node` service
+  account. Terraform grants that account `roles/storage.objectAdmin` on the bucket,
+  with an IAM condition that limits it to objects under `<sandbox_juicefs_name>/`.
+  Sandbox nodes run untrusted code, and the bucket also holds trace data.
+- The `juicefs-format` Job uses the pod network and the `langsmith-sandbox-host`
+  Workload Identity binding.
+- `deploy.sh` sets `images.sandboxHostImage.tag` from the chart `appVersion` on each
+  deploy. Do not set `sandbox_host_image_tag`.
+
+### Verify
+
+```bash
+kubectl get jobs -n langsmith -l app.kubernetes.io/component=juicefs-format
+kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
+kubectl logs -n langsmith -l app=sandbox-host -c sandbox-host --tail=-1 | grep -i "juicefs mount ready"
+```
+
+To upgrade from chart 0.16, see [MIGRATION-0.16-to-0.17.md](../../MIGRATION-0.16-to-0.17.md).
+
+---
+
 ## SmithDB (chart 0.16+)
 
 SmithDB is the in-chart columnar store and query engine that runs alongside ClickHouse in the LangSmith v16 release. It runs in the LangSmith namespace as part of the same Helm release - it cannot be split into its own namespace or cluster.

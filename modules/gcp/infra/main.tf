@@ -186,7 +186,7 @@ resource "terraform_data" "validate_inputs" {
 
     precondition {
       condition     = !var.enable_sandboxes || var.enable_gcp_iam_module
-      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the sandbox-host service account can reach the shared GCS bucket through Workload Identity."
+      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the juicefs-format Job can reach the shared GCS bucket through the langsmith-sandbox-host Workload Identity binding."
     }
 
     precondition {
@@ -245,6 +245,34 @@ resource "google_project_iam_member" "sandbox_host_node" {
   project = var.project_id
   role    = each.value
   member  = google_service_account.sandbox_host_node[0].member
+}
+
+# sandbox-host runs with hostNetwork: true, and GKE does not give Workload
+# Identity to host-network pods. Their metadata requests reach the Compute
+# Engine metadata server and get this node service account. The JuiceFS mount
+# in sandbox-host therefore reads and writes the bucket as this identity, not
+# as langsmith-sandbox-host. The juicefs-format Job uses the pod network, so it
+# still needs the Workload Identity binding in module.iam.
+#
+# Sandbox nodes run untrusted code, and the bucket also holds trace data. The
+# condition limits this identity to the JuiceFS prefix: object access under
+# <sandbox_juicefs_name>/ and list calls with that prefix. The expression uses
+# local.bucket_name, the name module.storage creates, so the plan can show it.
+resource "google_storage_bucket_iam_member" "sandbox_host_node_juicefs" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  bucket = module.storage.bucket_name
+  role   = "roles/storage.objectAdmin"
+  member = google_service_account.sandbox_host_node[0].member
+
+  condition {
+    title       = "juicefs-prefix-only"
+    description = "Sandbox node access limited to the JuiceFS prefix."
+    expression = join(" || ", [
+      "resource.name.startsWith(\"projects/_/buckets/${local.bucket_name}/objects/${var.sandbox_juicefs_name}/\")",
+      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"${var.sandbox_juicefs_name}/\")",
+    ])
+  }
 }
 
 #------------------------------------------------------------------------------
@@ -319,7 +347,7 @@ module "gke_cluster" {
   sandbox_host_node_count                = var.sandbox_host_node_count
   sandbox_host_min_node_count            = var.sandbox_host_min_node_count
   sandbox_host_max_node_count            = var.sandbox_host_max_node_count
-  sandbox_host_machine_type              = var.sandbox_host_machine_type
+  sandbox_host_machine_type              = local.sandbox_host_machine_type
   sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb
   sandbox_host_ephemeral_local_ssd_count = var.sandbox_host_ephemeral_local_ssd_count
   sandbox_host_node_service_account_email = (
@@ -594,8 +622,9 @@ module "iam" {
     "langsmith-standalone-polly-queue",
     "langsmith-standalone-insights-api-server",
     "langsmith-standalone-insights-queue",
-    # Chart 0.17 mounts sandbox JuiceFS inside sandbox-host, and the chart's JuiceFS
-    # format Job runs under the same ServiceAccount.
+    # The chart's juicefs-format Job runs as langsmith-sandbox-host on the pod
+    # network. sandbox-host itself runs on the host network and uses the node
+    # service account (see google_storage_bucket_iam_member.sandbox_host_node_juicefs).
     "langsmith-sandbox-host",
     # Chart 0.16 JuiceFS CSI node ServiceAccount. Keep it through the 0.16 to 0.17
     # upgrade: terraform apply runs before helm upgrade removes the driver, and the

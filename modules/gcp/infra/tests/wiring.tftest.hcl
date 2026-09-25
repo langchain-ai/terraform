@@ -58,6 +58,10 @@ run "optional_modules_absent_when_flags_are_false" {
     error_message = "enable_sandboxes = false still planned the JuiceFS Redis"
   }
   assert {
+    condition     = length(google_storage_bucket_iam_member.sandbox_host_node_juicefs) == 0
+    error_message = "enable_sandboxes = false still planned the sandbox node bucket grant"
+  }
+  assert {
     condition     = length(module.smithdb) == 0
     error_message = "enable_smithdb = false still planned SmithDB"
   }
@@ -170,10 +174,127 @@ run "enable_sandboxes_adds_the_juicefs_redis" {
     enable_sandboxes = true
   }
 
+  # The IAM condition embeds the bucket name, which carries the random suffix.
+  # A fixed suffix makes the expression known at plan time.
+  override_resource {
+    target          = random_id.suffix
+    override_during = plan
+    values          = { hex = "0a1b2c3d" }
+  }
+
   assert {
     condition     = length(module.sandbox_juicefs_redis) == 1
     error_message = "enable_sandboxes = true did not plan the JuiceFS Redis"
   }
+
+  # hostNetwork sandbox-host mounts JuiceFS as the node service account, so the
+  # bucket grant must exist for that identity, not only the WI binding.
+  assert {
+    condition     = length(google_storage_bucket_iam_member.sandbox_host_node_juicefs) == 1
+    error_message = "enable_sandboxes = true did not grant the sandbox node service account on the JuiceFS bucket"
+  }
+  assert {
+    condition     = google_storage_bucket_iam_member.sandbox_host_node_juicefs[0].role == "roles/storage.objectAdmin"
+    error_message = "the sandbox node bucket grant is not roles/storage.objectAdmin"
+  }
+  # Sandbox nodes run untrusted code, and the bucket also holds trace data, so
+  # the grant must stay limited to the JuiceFS prefix.
+  assert {
+    condition = strcontains(
+      google_storage_bucket_iam_member.sandbox_host_node_juicefs[0].condition[0].expression,
+      "projects/_/buckets/langsmith-plan-tests-ls-prod-traces-0a1b2c3d/objects/sandbox-juicefs/\")",
+    )
+    error_message = "the sandbox node bucket grant is not limited to the JuiceFS object prefix"
+  }
+  assert {
+    condition = strcontains(
+      google_storage_bucket_iam_member.sandbox_host_node_juicefs[0].condition[0].expression,
+      "objectListPrefix\", \"\").startsWith(\"sandbox-juicefs/\")",
+    )
+    error_message = "the sandbox node bucket grant does not limit list calls to the JuiceFS prefix"
+  }
+}
+
+# ── Sandbox-host pool size ──────────────────────────────────────────────────
+
+run "sandbox_host_machine_type_is_small_outside_production" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "dev"
+  }
+
+  assert {
+    condition     = output.sandbox_host_machine_type == "n2-standard-8"
+    error_message = "sizing_profile = dev did not resolve the sandbox-host machine type to n2-standard-8"
+  }
+}
+
+run "sandbox_host_machine_type_is_large_for_production" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "production"
+  }
+
+  assert {
+    condition     = output.sandbox_host_machine_type == "n2-standard-32"
+    error_message = "sizing_profile = production did not resolve the sandbox-host machine type to n2-standard-32"
+  }
+}
+
+run "sandbox_host_machine_type_production_large_matches_production" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "production-large"
+  }
+
+  assert {
+    condition     = output.sandbox_host_machine_type == "n2-standard-32"
+    error_message = "sizing_profile = production-large did not resolve like production"
+  }
+}
+
+run "sandbox_host_machine_type_explicit_value_wins" {
+  command = plan
+
+  variables {
+    enable_sandboxes          = true
+    sizing_profile            = "production"
+    sandbox_host_machine_type = "n2-standard-8"
+  }
+
+  assert {
+    condition     = output.sandbox_host_machine_type == "n2-standard-8"
+    error_message = "an explicit sandbox_host_machine_type did not override sizing_profile"
+  }
+}
+
+# The per-zone minimum defaults to 0, so a max of 0 plans. An explicit minimum
+# above the max fails the precondition.
+run "sandbox_host_max_zero_is_allowed_with_the_default_minimum" {
+  command = plan
+
+  variables {
+    enable_sandboxes            = true
+    sandbox_host_max_node_count = 0
+  }
+}
+
+run "sandbox_host_max_below_min_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes            = true
+    sandbox_host_min_node_count = 1
+    sandbox_host_max_node_count = 0
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
 }
 
 # ── SmithDB ──────────────────────────────────────────────────────────────────

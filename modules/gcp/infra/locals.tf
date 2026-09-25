@@ -34,6 +34,13 @@ locals {
     "roles/stackdriver.resourceMetadata.writer",
   ])
 
+  # The sandbox-host machine type follows sizing_profile unless it is set.
+  sandbox_host_production_profile = contains(["production", "production-large"], var.sizing_profile)
+  sandbox_host_machine_type = coalesce(
+    var.sandbox_host_machine_type,
+    local.sandbox_host_production_profile ? "n2-standard-32" : "n2-standard-8",
+  )
+
   # Cloud SQL
   postgres_instance_name = "${local.base_name}-pg${local.suffix}"
   postgres_database_name = "langsmith"

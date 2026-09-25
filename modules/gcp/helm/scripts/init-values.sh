@@ -416,14 +416,9 @@ _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;  
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
 
-_sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ -z "$_sandbox_host_image_tag" ]]; then
-    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
-    exit 1
-  fi
   if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
     echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
@@ -880,16 +875,24 @@ redis:
 fi
 
 _sandbox_config_block=""
-_sandbox_top_level_block=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_service_url_block=""
   if [[ -n "$_sandbox_service_url_base_url" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
-  # sandbox-host mounts JuiceFS itself, and the chart's JuiceFS format Job runs
-  # under the same ServiceAccount, so the Workload Identity binding goes on
-  # sandboxHost. infra binds langsmith-sandbox-host to the LangSmith GSA.
+  # The chart's JuiceFS format Job runs under the sandbox-host ServiceAccount, so
+  # the Workload Identity annotation goes on sandboxHost. infra binds
+  # langsmith-sandbox-host to the LangSmith GSA. sandbox-host itself runs on the
+  # host network, gets the node service account instead, and mounts JuiceFS
+  # through the bucket grant that infra gives that account.
+  # images.sandboxHostImage.tag is not written here: deploy.sh sets it from the
+  # appVersion of the chart it resolves, so it cannot lag a chart upgrade.
+  # safe-to-evict=false stops the cluster autoscaler from removing a node that
+  # runs sandbox-host (and its sandbox VMs) to consolidate the pool.
+  # The format Job needs no KVM and no host path, and its deadline is 300 s. The
+  # sandbox-host pool can be at 0 nodes. So the Job prefers a sandbox node, but
+  # it can also run on any Linux node and does not wait for a new node to boot.
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
@@ -900,13 +903,23 @@ sandboxes:
     deployment:
       nodeSelector:
         sandbox.langsmith.com/host: \"true\"
+      podAnnotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: \"false\"
     serviceAccount:
       annotations:
-        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\""
-  _sandbox_top_level_block="
-images:
-  sandboxHostImage:
-    tag: \"${_sandbox_host_image_tag}\""
+        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+  juicefsFormatJob:
+    nodeSelector:
+      kubernetes.io/os: linux
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: sandbox.langsmith.com/host
+                  operator: In
+                  values: [\"true\"]"
 fi
 
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
@@ -1077,7 +1090,6 @@ ${_external_services_block}
 ${_fleet_key_block}
 ${_standalone_polly_key_block}
 ${_standalone_insights_key_block}
-${_sandbox_top_level_block}
 ${_agent_defaults_block}
 YAML
 
