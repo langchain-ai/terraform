@@ -216,6 +216,8 @@ If you deployed before this change:
 
 `make seed-secrets` is a no-op on an already-populated vault, so running it on an upgraded deployment is safe.
 
+Insights and LangSmith Chat (Polly) now deploy only when enabled. To keep them on an existing deployment, set `enable_insights = true` and `enable_polly = true` in `terraform.tfvars`, then run `make init-values` before the next `make deploy`. The frontend Service also drops its own public IP, so LangSmith is reachable only through the ingress.
+
 ---
 
 ## Quick Start
