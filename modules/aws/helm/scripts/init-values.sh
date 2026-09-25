@@ -252,7 +252,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
-_enable_entra_oauth=false
+_enable_sso_oidc=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
@@ -261,7 +261,7 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
-_tfvar_is_true "enable_entra_oauth"         && _enable_entra_oauth=true
+_tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
@@ -784,13 +784,15 @@ config:
   # for ingress/HTTPRoute/VirtualService host matching.
   hostname: "${_protocol}://${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
-$( [[ "$_enable_entra_oauth" == "true" ]] && cat <<'OAUTH'
+$( [[ "$_enable_sso_oidc" == "true" ]] && cat <<'OAUTH'
   # Client id/secret/issuer URL come from the ESO-synced langsmith-config secret
   # (SSM: oauth-client-id, oauth-client-secret, oauth-issuer-url) — apply-eso.sh
   # only adds those secretKeys when present in SSM. authType is already "mixed"
-  # in the base values file, which this requires for a client secret.
+  # in the base values file, which this requires for a client secret. Works
+  # with any standard OIDC provider (Entra ID, Okta, Auth0, Google Workspace,
+  # etc.) — nothing here is Entra-specific.
   # Chart validation rejects basicAuth and oauth both enabled, so SSO-only.
-  # WARNING: only set enable_entra_oauth = true after the initial install —
+  # WARNING: only set enable_sso_oidc = true after the initial install —
   # confirm org-admin login with basic auth first. Enabling this before an
   # admin account exists locks you out of the UI the moment basicAuth is
   # disabled below. Set up SCIM (if you're using it) after this, not

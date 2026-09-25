@@ -840,9 +840,9 @@ variable "enable_usage_telemetry" {
 }
 
 # tflint-ignore: terraform_unused_declarations
-variable "enable_entra_oauth" {
+variable "enable_sso_oidc" {
   type        = bool
-  description = "Enable OIDC login via Microsoft Entra ID (config.oauth.enabled). Client ID/secret/issuer URL are read by apply-eso.sh from SSM (oauth-client-id, oauth-client-secret, oauth-issuer-url), not from this variable. Parsed by init-values.sh. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
+  description = "Enable SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID, Okta, Auth0, Google Workspace, etc. all work through the same generic client_id/secret/issuer_url. Client ID/secret/issuer URL are read by apply-eso.sh from SSM (oauth-client-id, oauth-client-secret, oauth-issuer-url), not from this variable. Parsed by init-values.sh. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
   default     = false
 }
 
