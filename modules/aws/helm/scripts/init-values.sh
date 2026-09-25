@@ -263,6 +263,47 @@ _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
 _tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
 
+# Fail fast rather than let this surface later as a CreateContainerConfigError.
+# apply-eso.sh gates the whole oauth block (client id/secret/issuer url) behind
+# a single existence check on oauth-client-secret and silently skips syncing
+# any of them if it's missing — but this script unconditionally disables
+# basicAuth the moment enable_sso_oidc is true, regardless of SSM state. With
+# no admin login path and secretKeyRef optional: false on the missing key,
+# backend/platformBackend would otherwise just fail to start with no message
+# pointing back at the actual cause.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _sso_ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
+  _sso_timeout_bin=""
+  for _t in timeout gtimeout; do
+    if command -v "$_t" >/dev/null 2>&1; then _sso_timeout_bin="$_t"; break; fi
+  done
+  _sso_check() {
+    if [[ -n "$_sso_timeout_bin" ]]; then
+      "$_sso_timeout_bin" 10 aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text >/dev/null 2>&1
+    else
+      aws ssm get-parameter --region "$_region" --name "$1" --query Parameter.Name --output text >/dev/null 2>&1
+    fi
+  }
+  _sso_missing=""
+  for _key in oauth-client-id oauth-client-secret oauth-issuer-url; do
+    _sso_check "${_sso_ssm_prefix}/${_key}" || _sso_missing="$_sso_missing ${_sso_ssm_prefix}/${_key}"
+  done
+  if [[ -n "$_sso_missing" ]]; then
+    echo "ERROR: enable_sso_oidc = true but the following SSM parameters are missing:" >&2
+    for _m in $_sso_missing; do echo "         $_m" >&2; done
+    echo "" >&2
+    echo "       basicAuth is disabled the moment this flag is on, so without these," >&2
+    echo "       backend/platformBackend would fail to start (CreateContainerConfigError)" >&2
+    echo "       instead of failing here with a clear reason." >&2
+    echo "" >&2
+    echo "       Populate all three, then re-run:" >&2
+    echo "         ./infra/scripts/manage-ssm.sh set oauth-client-id '<value>'" >&2
+    echo "         ./infra/scripts/manage-ssm.sh set oauth-client-secret '<value>'" >&2
+    echo "         ./infra/scripts/manage-ssm.sh set oauth-issuer-url '<value>'" >&2
+    exit 1
+  fi
+fi
+
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
   echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
