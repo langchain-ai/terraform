@@ -51,6 +51,13 @@ if [[ ! -f "$OVERRIDES_FILE" ]]; then
   action "make init-values  (generates it from terraform outputs)"
   exit 1
 fi
+# init-values writes insights.enabled and polly.enabled into every overrides file
+# it generates. A file without them predates that, and may be missing other
+# settings init-values writes now.
+if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_FILE"; then
+  warn "values-overrides.yaml has no insights/polly block, so it predates the current init-values"
+  action "make init-values  (regenerates it; re-apply any hand edits afterward)"
+fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
 _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {

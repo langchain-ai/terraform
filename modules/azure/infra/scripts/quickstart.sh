@@ -1121,8 +1121,10 @@ _run_section_6() {
     # HTTP-01 does not need the zone, but a custom domain still needs an A
     # record somewhere. Forcing false here left users no wizard path to it.
     echo ""
-    _hint "Terraform can host ${LANGSMITH_DOMAIN} in an Azure DNS zone and point it at the"
-    _hint "ingress IP. You delegate the zone's NS records at your registrar once."
+    _hint "Terraform can host ${LANGSMITH_DOMAIN} in an Azure DNS zone. You delegate the"
+    _hint "zone's NS records at your registrar once. The A record comes after the deploy:"
+    _hint "make status shows the ingress IP; set it as ingress_ip in terraform.tfvars and"
+    _hint "run make apply again."
     _hint "Answer no if you manage the A record in another DNS provider."
     local zone_default="y"
     _answered 6 && [[ "$CREATE_DNS_ZONE" != "true" ]] && zone_default="n"
