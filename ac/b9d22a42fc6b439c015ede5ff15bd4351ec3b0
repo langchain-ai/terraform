@@ -1,0 +1,32 @@
+modules/aws/infra/terraform.tfvars.example
+  s_2926a993332809::t_16983ce4fe7d02 749-759
+modules/aws/helm/scripts/init-values.sh
+  s_2926a993332809::t_e16a80ab66f795 787-791,795-798
+  s_2926a993332809::t_aee1688d530e33 792-794
+  s_2926a993332809::t_e98df46b1c94b3 255,264
+modules/aws/infra/variables.tf
+  s_2926a993332809::t_b84b40d0e77471 843-845
+  s_2926a993332809::t_1d194a6ad19853 840-842
+  s_2926a993332809::t_63869a22077e37 846
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "acb9d22a42fc6b439c015ede5ff15bd4351ec3b0",
+  "prompts": {},
+  "humans": {
+    "h_7fade051511db5": {
+      "author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  },
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}
