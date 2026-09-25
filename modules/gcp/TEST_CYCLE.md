@@ -274,15 +274,15 @@ terraform -chdir=infra output smithdb_node_pools
 kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
 kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
 
-# The cache mount must be Local SSD, not the boot disk.
+# local-ssd: the cache mount must be Local SSD, not the boot disk.
+# network-disk and minimal: /data is a per-pod PVC (kubectl get pvc -n langsmith).
 kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 ```
 
 Deploy with all three integration gates disabled first. Confirm the metastore
-migration Job completes - it reads its own `smithdb.metastoreMigration.useSsl`
-leaf rather than the one the services use, so a failure here while the services
-are fine usually means the two disagree. With
-`smithdb_metastore_use_auth_proxy = true`, also confirm the hook Job carried the
+migration Job completes - on chart 0.17 it reads the same
+`smithdb.config.metastore.useSsl` value as the services. With the Auth Proxy
+(the default for a created metastore), also confirm the hook Job carried the
 sidecar and still reached Complete:
 
 ```bash
@@ -299,6 +299,7 @@ Render checks worth running before any apply, one per gate state:
 ```bash
 helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.17.0}" -n langsmith \
   -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-smithdb-sizing.yaml \
   -f helm/values/langsmith-values-smithdb.yaml \
   -f helm/values/langsmith-values-smithdb-overrides.yaml >/dev/null
 ```

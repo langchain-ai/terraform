@@ -125,7 +125,7 @@ sizing_profile = "production"   # default | minimum | dev | production | product
 | `production` | Multi-replica with HPA — recommended for real workloads |
 | `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
 
-After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`. With SmithDB enabled and `smithdb_sizing` unset, the profile also sets the SmithDB size, so run `make deploy-all` ([SMITHDB.md](SMITHDB.md#sizing)).
 
 > **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
 

@@ -35,6 +35,11 @@ output "metastore_instance_name" {
   value       = local.create_metastore ? google_sql_database_instance.metastore[0].name : null
 }
 
+output "metastore_tier" {
+  description = "Cloud SQL tier of the metastore instance, or null when using an external metastore."
+  value       = local.create_metastore ? google_sql_database_instance.metastore[0].settings[0].tier : null
+}
+
 output "metastore_connection_name" {
   description = "Cloud SQL connection name (PROJECT:REGION:INSTANCE) for the metastore, or null when using an external metastore. This is the positional argument the Cloud SQL Auth Proxy takes."
   value       = local.create_metastore ? google_sql_database_instance.metastore[0].connection_name : null

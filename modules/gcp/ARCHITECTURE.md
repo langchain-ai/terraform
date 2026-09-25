@@ -123,9 +123,16 @@ For GCS access using HMAC keys (S3-compatible API), create a service account key
 
 ## Optional SmithDB path
 
-SmithDB stays disabled by default. When enabled, Pass 1 adds a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP, a dedicated GCS object store, a SmithDB-specific service account with its own Workload Identity binding scoped to that one bucket, and two GKE Standard node pools - one Local SSD-backed for the cache-heavy workloads and one for compute. Object-store traffic uses the subnet's Private Google Access rather than Cloud NAT.
+SmithDB stays disabled by default. When enabled, Pass 1 adds:
 
-Pass 2 deploys the services on the pinned 0.17 chart line with ingestion, migration, and query integration all disabled. See [SMITHDB.md](SMITHDB.md).
+- a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP;
+- a dedicated GCS object store;
+- a SmithDB service account with its own Workload Identity binding, scoped to that one bucket;
+- two GKE Standard node pools: a cache pool (node Local SSD, or Hyperdisk volumes in `network-disk` mode) and a compute pool. `smithdb_sizing = "minimal"` creates no pools.
+
+Object-store traffic uses the subnet's Private Google Access rather than Cloud NAT.
+
+Pass 2 deploys the services on the pinned 0.17 chart line. The Terraform gates for ingestion, migration, and query default to disabled; `make quickstart` starts a new install with ingestion. See [SMITHDB.md](SMITHDB.md).
 
 ---
 

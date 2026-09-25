@@ -114,12 +114,13 @@ gcp/
 │       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
 │       ├── secrets/        ← Secret Manager secrets for credentials (optional via flags)
 │       ├── smithdb/        ← SmithDB metastore, object-store bucket, Workload Identity SA (optional)
-│       └── smithdb-nodes/  ← SmithDB Local SSD + compute GKE node pools (optional)
+│       └── smithdb-nodes/  ← SmithDB cache + compute GKE node pools (optional)
 │   └── scripts/
 │       ├── _common.sh          ← Shared helpers (tfvar parser, color/status helpers)
 │       ├── preflight.sh        ← Pre-Terraform tooling/auth/API checks
 │       ├── quickstart.sh       ← Interactive setup wizard — generates terraform.tfvars
 │       ├── setup-env.sh        ← Exports TF_VAR_* secrets from Secret Manager (source it)
+│       ├── smithdb.sh          ← SmithDB size, rollout phase, and status (make smithdb-*)
 │       ├── status.sh           ← Deployment health check — tells you what to run next
 │       ├── manage-secrets.sh   ← Secret Manager CRUD (list/get/set/validate/delete)
 │       └── tf-run.sh           ← Terraform wrapper that auto-sources setup-env.sh
@@ -396,13 +397,13 @@ helm upgrade langsmith langchain/langsmith \
 | `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
 | `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |
 | `dns_create_certificate` | `true` | Create a Google-managed cert when DNS module is enabled |
-| `enable_smithdb` | `false` | Wires `modules/smithdb` + `modules/smithdb-nodes` — see [SmithDB](#smithdb-chart-016) and [SMITHDB.md](SMITHDB.md) |
+| `enable_smithdb` | `false` | Wires `modules/smithdb` + `modules/smithdb-nodes` — see [SmithDB](#smithdb-chart-017) and [SMITHDB.md](SMITHDB.md) |
 
 ---
 
-## SmithDB (chart 0.16+)
+## SmithDB (chart 0.17)
 
-SmithDB is the in-chart columnar store and query engine that runs alongside ClickHouse in the LangSmith v16 release. It runs in the LangSmith namespace as part of the same Helm release - it cannot be split into its own namespace or cluster.
+SmithDB is the in-chart columnar store and query engine that runs alongside ClickHouse on LangSmith chart 0.17. It runs in the LangSmith namespace as part of the same Helm release - it cannot be split into its own namespace or cluster.
 
 See [SMITHDB.md](SMITHDB.md) for the full deployment and staged-rollout guide. The rest of this section covers the GCP-specific design decisions.
 
@@ -410,22 +411,22 @@ Setting `enable_smithdb = true` provisions four things:
 
 | Resource | Module | Notes |
 |---|---|---|
-| Cloud SQL Postgres metastore | `modules/smithdb` | Dedicated instance on a private IP, `POSTGRES_18` by default |
+| Cloud SQL Postgres metastore | `modules/smithdb` | Dedicated instance on a private IP, `POSTGRES_18` by default, with a tier that follows `smithdb_sizing` |
 | GCS object-store bucket | `modules/smithdb` | Single-region, uniform access, no lifecycle deletes |
 | Workload Identity service account | `modules/smithdb` | `roles/storage.objectAdmin` on that bucket only |
-| Two GKE node pools | `modules/smithdb-nodes` | One Local SSD-backed for the cache, one for compute |
+| Two GKE node pools | `modules/smithdb-nodes` | A cache pool and a compute pool; none for `smithdb_sizing = "minimal"` |
 
 ### Requirements and constraints
 
-1) **Postgres 18 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, `smithdb_metastore_use_auth_proxy = true` runs a Cloud SQL Auth Proxy sidecar so the instance can stay `ENCRYPTED_ONLY`; AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
+1) **Postgres 18 or later, on a dedicated and empty database.** The chart's metastore migration Job owns the schema. Never point this at the LangSmith operational Postgres. `smithdb_metastore_source = "external"` brings your own. On a module-created Cloud SQL instance, a Cloud SQL Auth Proxy sidecar (the default) keeps the instance at `ENCRYPTED_ONLY`. AlloyDB uses the same shape through the external path. See [SMITHDB.md](SMITHDB.md) for both.
 
 2) **A dedicated object-storage bucket, single-region, in the cluster's region.** Multi-region and dual-region buckets add replication cost and unpredictable tail latency on segment reads. The module deliberately creates no object-expiry lifecycle rules and no versioning: SmithDB owns the lifecycle of its own segments, and expiring them independently makes data unavailable. Compaction already reclaims dead segments.
 
-3) **GKE Standard, not Autopilot.** Autopilot manages its own node pools, so the dedicated Local SSD pools do not exist there and SmithDB pods would sit Pending against a `nodeSelector` that never matches. The module fails at plan time rather than letting that happen.
+3) **GKE Standard, not Autopilot.** Autopilot manages its own node pools, so the dedicated SmithDB pools do not exist there. SmithDB pods would then stay Pending against a `nodeSelector` that never matches. The module fails at plan time rather than letting that happen.
 
-4) **Local SSD-backed ephemeral storage, not raw block.** The cache pool uses `ephemeral_storage_local_ssd_config`, which is the mode that makes the disks part of the filesystem kubelet reports as allocatable `ephemeral-storage` and that backs `emptyDir`. Raw block Local SSD does not, and a disk mounted at an arbitrary host path does not back `emptyDir` at all - the cache would silently fall back to the boot disk.
+4) **Local SSD-backed ephemeral storage, not raw block.** In `local-ssd` mode, the cache pool uses `ephemeral_storage_local_ssd_config`. That mode makes the disks part of the filesystem that kubelet reports as allocatable `ephemeral-storage`, and that filesystem backs `emptyDir`. Raw block Local SSD does not. A disk mounted at an arbitrary host path does not back `emptyDir` at all. The cache then goes to the boot disk with no error.
 
-5) **Machine type generation changes the disk count semantics.** N2/N2D take an explicit `smithdb_instance_store_local_ssd_count` (375 GB per disk). C3/C4/Z3 `-lssd` types have a fixed count implied by the machine type and require `smithdb_instance_store_local_ssd_count = 0`.
+5) **Machine type generation changes the disk count semantics.** N2/N2D take an explicit `smithdb_instance_store_local_ssd_count` (375 GB per disk). C3 and Z3 `-lssd` types have a fixed count implied by the machine type and require `smithdb_instance_store_local_ssd_count = 0`. C4 needs a Hyperdisk boot disk, which the SmithDB pools do not use.
 
 6) **Pin the pool zones.** The cluster is regional, so an unpinned pool tries every zone in the region and fails if the machine type or disk count is unavailable in any of them. Check availability, then set `smithdb_node_locations`.
 
@@ -441,7 +442,7 @@ Adding a private `googleapis.com` DNS zone would pin resolution to `private.goog
 
 ### Chart version
 
-SmithDB needs chart 0.16 or newer. `deploy.sh` pins the 0.17 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
+SmithDB on this module needs chart 0.17. `deploy.sh` pins the 0.17 line and refuses anything off it, so enabling SmithDB needs no version handling of its own. To name an exact patch instead of the latest on the line:
 
 ```bash
 CHART_VERSION=0.17.0 make deploy
@@ -449,17 +450,18 @@ CHART_VERSION=0.17.0 make deploy
 
 List what is published with `helm search repo langchain/langsmith --versions`.
 
-### Staged rollout
+### Sizing and staged rollout
 
-The services deploy with every LangSmith integration gate off. Advance them one at a time through `smithdb_ingestion_enabled`, then `smithdb_migration_enabled`, then `smithdb_query_enabled` in `infra/terraform.tfvars`, applying and validating each stage separately. Terraform enforces that migration and query both require ingestion. ClickHouse stays enabled throughout v16.
+`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The three gates `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, and `smithdb_query_enabled` move SmithDB through dual write, backfill, and cutover. ClickHouse stays enabled in every phase.
 
-The historical ClickHouse to SmithDB backfill is owned by LangChain Product/Engineering; this module only wires the gate and the credentials it needs. Enabling it renders the migration Job plus an in-chart taskdb Postgres StatefulSet for migration task state, backed by the Terraform-created `smithdb-taskdb` secret. The Job requests 8 CPU and is deliberately left unpinned, so it lands on the core node pool - make sure that pool has room.
+```bash
+make smithdb-configure SIZING=small CACHE=local-ssd    # size and cache mode
+make smithdb-phase PHASE=dual-write                    # off | dual-write | backfill | cutover
+make smithdb-status                                    # read-only
+make deploy-all                                        # after each change
+```
 
-See [SMITHDB.md](SMITHDB.md) for the per-stage validation steps.
-
-### Sizing
-
-At chart defaults the three cache workloads request 4 CPU each and 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker) of ephemeral storage, so one `n2-standard-16` with the default 2 Local SSDs (750 GB raw) holds all three with headroom. The values overlay in `helm/values/examples/` carries scheduling only and leaves sizing to the chart; if you override the resource requests upward, raise `smithdb_instance_store_local_ssd_count` to match or replicas will sit Pending. Legal counts for N2 at 12-20 vCPU are 2, 4, 8, 16 and 24 - not 3.
+See [SMITHDB.md](SMITHDB.md) for the sizing table, the phases, and the upgrade from chart 0.16.
 
 ---
 
