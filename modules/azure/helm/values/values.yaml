@@ -23,6 +23,13 @@ ingress:
 istioGateway:
   enabled: false
 
+# The chart defaults this to LoadBalancer, which gives the frontend its own public
+# IP serving plain HTTP around the ingress. Every ingress controller here reaches
+# it inside the cluster, so it needs no address of its own.
+frontend:
+  service:
+    type: ClusterIP
+
 config:
   authType: "mixed"
   # Tells the chart to read every LangSmith secret (license, jwt, salt, admin
