@@ -40,6 +40,16 @@ variable "resource_group_name" {
 
 # ── RBAC ──────────────────────────────────────────────────────────────────────
 
+variable "tenant_id" {
+  type        = string
+  description = "Entra tenant ID the Key Vault authenticates against. Pass data.azurerm_client_config.current.tenant_id from the root."
+}
+
+variable "terraform_principal_id" {
+  type        = string
+  description = "Object ID of the identity running `terraform apply` (az login user or service principal). Gets 'Key Vault Secrets Officer' when manage_terraform_admin_assignment is true. Pass data.azurerm_client_config.current.object_id from the root: read inside this module, the module-level depends_on defers it to apply time and the grant plans as a replace."
+}
+
 variable "managed_identity_principal_id" {
   type        = string
   description = "Principal ID of the user-assigned managed identity used by LangSmith K8s pods. Gets 'Key Vault Secrets User' role to read secrets at runtime."

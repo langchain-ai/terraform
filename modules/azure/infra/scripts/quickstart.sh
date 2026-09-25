@@ -419,6 +419,10 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_bastion)              && CREATE_BASTION="$_TF_VAL"
+  # Also written only when true. Section 6 defaults its zone prompt to this, so
+  # without the read, Enter on a re-edit drops the zone and the next apply
+  # destroys it.
+  _TF_VAL=$(_parse_tfvar create_dns_zone)             && CREATE_DNS_ZONE="$_TF_VAL"
   [[ "$CREATE_VNET" == "false" ]] && {
     VNET_ID=$(_tfvar vnet_id)
     AKS_SUBNET_ID=$(_tfvar aks_subnet_id)
@@ -1106,7 +1110,6 @@ _run_section_6() {
     DNS_LABEL=""; LANGSMITH_DOMAIN=""; LE_EMAIL=""
   fi
 
-  CREATE_DNS_ZONE="false"
   if [[ "$TLS_SOURCE" == "dns01" ]]; then
     CREATE_DNS_ZONE="true"
     echo ""
@@ -1114,6 +1117,24 @@ _run_section_6() {
     _hint "NS records at your registrar → cert-manager writes TXT records to Azure DNS →"
     _hint "Let's Encrypt validates ownership → cert is issued automatically."
     _hint "create_dns_zone = true will be set."
+  elif [[ -n "$LANGSMITH_DOMAIN" ]]; then
+    # HTTP-01 does not need the zone, but a custom domain still needs an A
+    # record somewhere. Forcing false here left users no wizard path to it.
+    echo ""
+    _hint "Terraform can host ${LANGSMITH_DOMAIN} in an Azure DNS zone. You delegate the"
+    _hint "zone's NS records at your registrar once. The A record comes after the deploy:"
+    _hint "make status shows the ingress IP; set it as ingress_ip in terraform.tfvars and"
+    _hint "run make apply again."
+    _hint "Answer no if you manage the A record in another DNS provider."
+    local zone_default="y"
+    _answered 6 && [[ "$CREATE_DNS_ZONE" != "true" ]] && zone_default="n"
+    if _ask_yn "Create an Azure DNS zone for ${LANGSMITH_DOMAIN}?" "$zone_default"; then
+      CREATE_DNS_ZONE="true"
+    else
+      CREATE_DNS_ZONE="false"
+    fi
+  else
+    CREATE_DNS_ZONE="false"
   fi
 }
 

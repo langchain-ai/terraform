@@ -1170,15 +1170,9 @@ The AWS and GCP `deploy.sh` do this automatically on the first 0.16 deploy. See
 
 **Symptom:** `langsmith-listener` pods repeatedly crash. `kubectl describe pod` shows `Reason: OOMKilled` / `Exit Code: 137`. Cluster memory looks fine overall.
 
-**Cause:** The `langsmith-values-sizing-dev.yaml` sets `listener.deployment.resources.limits.memory: 512Mi`. When Deployments (Pass 3) are enabled, the listener is heavier and exceeds this limit.
+**Cause:** `make deploy` loads the sizing file last, so its listener limit wins over the `langsmith-values-agent-deploys.yaml` overlay. The `dev` and `production` profiles cap the listener at 2Gi and `minimum` caps it at 1536Mi. When Deployments (Pass 3) are enabled, the listener is heavier and can exceed that limit.
 
-**Fix:** The `langsmith-values-agent-deploys.yaml` overlay (loaded after the sizing file) correctly sets `listener.deployment.resources.limits.memory: 4Gi`. Verify both files are in your values chain:
-
-```
-make deploy   # values chain: values.yaml → overrides → sizing-dev → agent-deploys
-```
-
-If you see only the sizing file without agent-deploys, re-run `make init-values` to regenerate the overlay files.
+**Fix:** Set `sizing_profile = "production-large"` in `terraform.tfvars`, which gives the listener 4Gi, then run `make init-values` and `make deploy`. To stay on your profile, raise `listener.deployment.resources.limits.memory` in `helm/values/langsmith-values-sizing-<profile>.yaml` and run `make deploy`. `make init-values` copies the sizing file again, so repeat the edit after each run.
 
 **Key gotcha — `resources` vs `deployment.resources`:** The LangSmith chart uses `listener.deployment.resources` (not `listener.resources`) for container resource limits. Setting `listener.resources` in an overlay file is silently ignored. Always use the `deployment.resources` path.
 

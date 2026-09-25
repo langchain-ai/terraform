@@ -137,14 +137,18 @@ $NAME_TFKEY = "acme"
 location        = "westus2"
 owner           = "platform team"
 create_waf      = true
+langsmith_domain = "langsmith.acme.com"
+create_dns_zone = true
 EOF
-PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; eval "$NAME_VAR="
+PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; CREATE_DNS_ZONE="false"; eval "$NAME_VAR="
 _load_tfvars
 eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "acme"
 eq "PROFILE read from the header"    "$PROFILE"     "prod"
 eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
 eq "CREATE_WAF read"                 "$CREATE_WAF"  "true"
+# Section 6 defaults its zone prompt to this value on a re-edit.
+eq "CREATE_DNS_ZONE read"            "$CREATE_DNS_ZONE" "true"
 
 echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state

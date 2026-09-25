@@ -27,10 +27,6 @@
 #   run `terraform apply` again — the second apply will succeed.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Current Azure identity running Terraform (az login user or service principal).
-# Used to grant the deployer permission to create/update Key Vault secrets.
-data "azurerm_client_config" "current" {}
-
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 resource "azurerm_key_vault" "langsmith" {
@@ -39,7 +35,7 @@ resource "azurerm_key_vault" "langsmith" {
   name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
-  tenant_id           = data.azurerm_client_config.current.tenant_id
+  tenant_id           = var.tenant_id
   sku_name            = "standard"
 
   # RBAC mode: access controlled by Azure role assignments on this vault's
@@ -137,7 +133,7 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
 
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = var.terraform_principal_id
   principal_type       = var.terraform_principal_type
 }
 

@@ -9,12 +9,12 @@
 # Values files loaded (in order, last wins):
 #   1. values.yaml                               — base Azure config (always)
 #   2. values-overrides.yaml                     — env-specific: hostname, WI, blob (required)
-#   3. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
-#   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
-#   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
-#   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
-#   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   3. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
+#   4. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
+#   5. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #4)
+#   6. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
+#   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
 #   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -50,6 +50,13 @@ if [[ ! -f "$OVERRIDES_FILE" ]]; then
   fail "values-overrides.yaml not found"
   action "make init-values  (generates it from terraform outputs)"
   exit 1
+fi
+# init-values writes insights.enabled and polly.enabled into every overrides file
+# it generates. A file without them predates that, and may be missing other
+# settings init-values writes now.
+if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_FILE"; then
+  warn "values-overrides.yaml has no insights/polly block, so it predates the current init-values"
+  action "make init-values  (regenerates it; re-apply any hand edits afterward)"
 fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
@@ -371,25 +378,6 @@ fi
 VALUES_ARGS+=(-f "$OVERRIDES_FILE")
 echo "  ✔ values-overrides.yaml"
 
-# Sizing profile
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
-      echo "     Use sizing_profile = production for production deployments."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: base values defaults (sizing_profile = default)"
-fi
-
 # Addon overlays
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
@@ -419,6 +407,27 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# Sizing profile. Loaded after the addon overlays because agent-deploys carries
+# its own hostBackend/listener/operator resources for the default profile, and
+# loaded before it those overrode whatever profile was chosen.
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ -f "$_sizing_file" ]]; then
+    VALUES_ARGS+=(-f "$_sizing_file")
+    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
+    if [[ "$_sizing_profile" == "minimum" ]]; then
+      echo ""
+      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
+      echo "     Use sizing_profile = production for production deployments."
+      echo ""
+    fi
+  else
+    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
+  fi
+else
+  echo "  ○ sizing: base values defaults (sizing_profile = default)"
+fi
 
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"

@@ -15,8 +15,10 @@
 # For actual dev work: use langsmith-values-sizing-dev.yaml
 # For production:      use langsmith-values-sizing-production.yaml
 #
-# Resource numbers sourced from SIZING.md — Minimum profile.
-# Total reserved: 2.9 vCPU / 7.6Gi  |  Limits: 9.7 vCPU / 15.3Gi
+# Requests start from those idle measurements, raised where a
+# component could not start at the measured idle figure.
+# With Deployments and Fleet on, the requests come to ~3.2 vCPU before system
+# pods, so plan on two D4s_v3 nodes rather than one.
 # ============================================================================
 
 # -- Application components ----------------------------------------------------
@@ -28,11 +30,19 @@ backend:
     replicas: 1
     resources:
       requests:
-        cpu: "50m"
+        # Requests are what the scheduler packs by. At 50m every pod fit on the
+        # first node while the backend alone used ~300m, and nothing moved once
+        # the autoscaler added more nodes.
+        cpu: "250m"
         memory: "576Mi"
       limits:
-        cpu: "500m"
+        # At 500m it bound its port after the 60s startup budget and crash-looped
+        # even on an idle node.
+        cpu: "1"
         memory: "1Gi"
+    startupProbe:
+      failureThreshold: 12
+      timeoutSeconds: 10
 
 frontend:
   deployment:
@@ -81,7 +91,7 @@ queue:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "250m"
         memory: "768Mi"
       limits:
         cpu: "1"
@@ -117,10 +127,16 @@ hostBackend:
     resources:
       requests:
         cpu: "100m"
-        memory: "384Mi"
+        # Idles at ~480Mi. Below that the HPA's 80% memory target reads every
+        # replica as over and scales straight to its maximum.
+        memory: "640Mi"
       limits:
         cpu: "500m"
-        memory: "768Mi"
+        memory: "1Gi"
+  # langsmith-values-agent-deploys.yaml turns the HPA on; one replica here.
+  autoscaling:
+    hpa:
+      enabled: false
 
 listener:
   deployment:
@@ -152,10 +168,12 @@ fleetToolServer:
     resources:
       requests:
         cpu: "500m"
-        memory: "768Mi"
+        memory: "1Gi"
       limits:
-        cpu: "1"
-        memory: "1536Mi"
+        # The chart's own limits. Under 1 CPU / 1536Mi its uvicorn workers died
+        # and respawned on every start until the startup probe gave up.
+        cpu: "2"
+        memory: "4Gi"
 
 fleetTriggerServer:
   deployment:
@@ -167,6 +185,28 @@ fleetTriggerServer:
       limits:
         cpu: "250m"
         memory: "384Mi"
+
+# The chart sets no resources on these two, so they otherwise get the namespace
+# LimitRange's 100m request while each uses ~500m starting up.
+fleet:
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
 
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # ClickHouse is the one component that actually uses its resources.
