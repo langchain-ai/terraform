@@ -228,6 +228,27 @@ sizing_profile = "production"
 # Pass 5 — Polly (AI eval / monitoring agent)
 # enable_polly = true
 
+# SSO login via any standard OIDC provider — Entra ID (Azure AD), Okta,
+# Auth0, Google Workspace, etc. all work through the same generic
+# client_id/secret/issuer_url. Default is off (basic auth). When enabled,
+# disables config.basicAuth and requires the client ID/secret/issuer URL to
+# already be populated in Key Vault before the first deploy — see
+# infra/scripts/manage-keyvault.sh — under:
+#   langsmith-oauth-client-id
+#   langsmith-oauth-client-secret
+#   langsmith-oauth-issuer-url
+# (for Entra ID, issuer URL is https://login.microsoftonline.com/<tenant-id>/v2.0
+# — the /v2.0 suffix is required, not the tenant-specific /common/ endpoint;
+# other providers publish their own issuer URL in their OIDC discovery doc).
+#
+# WARNING: leave this false for the initial install. Deploy first with
+# basic auth and confirm you can log in as the org admin, then flip this to
+# true and redeploy. Turning it on before an admin account exists locks you
+# out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# Set up SCIM (if you're using it) after this, not before — SCIM's user
+# matching depends on the OIDC provider this creates.
+# enable_sso_oidc = false
+
 # ── Optional modules ──────────────────────────────────────────────────────────
 # Each is independently toggleable — safe to add after initial deploy.
 # create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)

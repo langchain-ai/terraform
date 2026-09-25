@@ -265,6 +265,7 @@ _enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_bu
 _enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
 _enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
 _enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
+_enable_sso_oidc=$(_parse_tfvar "enable_sso_oidc") || _enable_sso_oidc="false"
 
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
@@ -274,6 +275,7 @@ info "enable_insights      = $_enable_insights"
 info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 info "enable_smithdb       = $_enable_smithdb"
+info "enable_sso_oidc      = $_enable_sso_oidc"
 echo ""
 echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
 
@@ -305,6 +307,54 @@ fi
 if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
   fail "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true"
   exit 1
+fi
+
+# ── SSO/OIDC secret guard ───────────────────────────────────────────────────
+# Fail fast rather than let this surface later as a CreateContainerConfigError.
+# create-k8s-secrets.sh only adds oauth_client_id/secret/issuer_url to
+# langsmith-config-secret when they exist in Key Vault — but this script
+# unconditionally disables config.basicAuth the moment enable_sso_oidc is true,
+# regardless of Key Vault state. With no admin login path and secretKeyRef
+# optional: false on the missing key, backend/platformBackend would otherwise
+# just fail to start with no message pointing back at the actual cause.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) || [[ -z "$KV_NAME" ]]; then
+    KV_NAME=$(_derive_kv_name)
+  fi
+  _sso_timeout_bin=""
+  for _t in timeout gtimeout; do
+    if command -v "$_t" >/dev/null 2>&1; then _sso_timeout_bin="$_t"; break; fi
+  done
+  _sso_az() {
+    if [[ -n "$_sso_timeout_bin" ]]; then
+      "$_sso_timeout_bin" 10 az "$@"
+    else
+      az "$@"
+    fi
+  }
+  _sso_check() {
+    _sso_az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query name --output tsv >/dev/null 2>&1
+  }
+  _sso_missing=""
+  for _key in langsmith-oauth-client-id langsmith-oauth-client-secret langsmith-oauth-issuer-url; do
+    _sso_check "$_key" || _sso_missing="$_sso_missing $_key"
+  done
+  if [[ -n "$_sso_missing" ]]; then
+    fail "enable_sso_oidc = true but the following Key Vault secrets are missing from '$KV_NAME':"
+    for _m in $_sso_missing; do
+      echo "         $_m" >&2
+    done
+    echo "" >&2
+    echo "       basicAuth is disabled the moment this flag is on, so without these," >&2
+    echo "       backend/platformBackend would fail to start (CreateContainerConfigError)" >&2
+    echo "       instead of failing here with a clear reason." >&2
+    echo "" >&2
+    echo "       Populate all three, then re-run:" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-client-id '<value>'" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-client-secret '<value>'" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-issuer-url '<value>'" >&2
+    exit 1
+  fi
 fi
 
 # ── Generate values-overrides.yaml ────────────────────────────────────────
@@ -340,6 +390,28 @@ else
   _ingress_block='ingress:
   enabled: true'"${_ingress_class:+
   ingressClassName: \"${_ingress_class}\"}"
+fi
+
+# Build auth block — basicAuth (chart default) and oauth (SSO) are mutually
+# exclusive per chart validation. Client id/secret/issuer URL are never
+# written here: the chart reads them from the langsmith-config-secret K8s
+# secret (config.existingSecretName, set below) at keys oauth_client_id /
+# oauth_client_secret / oauth_issuer_url, which create-k8s-secrets.sh
+# populates from Key Vault. Works with any standard OIDC provider (Entra ID,
+# Okta, Auth0, Google Workspace, etc.) — nothing here is Entra-specific.
+# WARNING: only set enable_sso_oidc = true after the initial install —
+# confirm org-admin login with basic auth first. Enabling this before an
+# admin account exists locks you out of the UI the moment basicAuth is
+# disabled below. Set up SCIM (if you're using it) after this, not before —
+# SCIM's user matching depends on the OIDC provider this creates.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _auth_block='  basicAuth:
+    enabled: false
+  oauth:
+    enabled: true'
+else
+  _auth_block='  basicAuth:
+    enabled: true'
 fi
 
 # Build postgres block
@@ -398,8 +470,7 @@ config:
   authType: "mixed"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
   existingSecretName: "langsmith-config-secret"
-  basicAuth:
-    enabled: true
+${_auth_block}
   blobStorage:
     enabled: true
     engine: "Azure"
