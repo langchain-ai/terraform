@@ -252,6 +252,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_entra_oauth=false
 _tfvar_is_true "enable_deployments"    && _enable_deployments=true
 _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
@@ -260,6 +261,7 @@ _tfvar_is_true "enable_fleet"               && _enable_fleet=true
 _tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
 _tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
+_tfvar_is_true "enable_entra_oauth"         && _enable_entra_oauth=true
 
 _fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
 if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
@@ -782,6 +784,18 @@ config:
   # for ingress/HTTPRoute/VirtualService host matching.
   hostname: "${_protocol}://${HOSTNAME}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
+$( [[ "$_enable_entra_oauth" == "true" ]] && cat <<'OAUTH'
+  # Client id/secret/issuer URL come from the ESO-synced langsmith-config secret
+  # (SSM: oauth-client-id, oauth-client-secret, oauth-issuer-url) — apply-eso.sh
+  # only adds those secretKeys when present in SSM. authType is already "mixed"
+  # in the base values file, which this requires for a client secret.
+  # Chart validation rejects basicAuth and oauth both enabled, so SSO-only.
+  basicAuth:
+    enabled: false
+  oauth:
+    enabled: true
+OAUTH
+)
   deployment:
     # URL used by the operator to build agent deployment endpoints.
     # Must match config.hostname with correct protocol — wrong value keeps

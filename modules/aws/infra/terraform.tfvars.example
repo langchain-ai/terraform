@@ -746,6 +746,17 @@ polly_storage        = "in-cluster" # Or "external"
 # Default is off. Enable if you want to share usage data.
 enable_usage_telemetry = false
 
+# Microsoft Entra ID (Azure AD) SSO login via OIDC. Default is off (basic
+# auth). When enabled, disables config.basicAuth and requires the client
+# ID/secret/issuer URL to already be populated in SSM before the first
+# deploy — see infra/scripts/setup-env.sh — under:
+#   /langsmith/<name_prefix>-<environment>/oauth-client-id
+#   /langsmith/<name_prefix>-<environment>/oauth-client-secret
+#   /langsmith/<name_prefix>-<environment>/oauth-issuer-url
+# (issuer URL is https://login.microsoftonline.com/<tenant-id>/v2.0 — the
+# /v2.0 suffix is required, not the tenant-specific /common/ endpoint).
+enable_entra_oauth = false
+
 #------------------------------------------------------------------------------
 # LANGGRAPH PLATFORM ENCRYPTION KEYS (optional — for addons only)
 #------------------------------------------------------------------------------

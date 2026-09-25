@@ -840,6 +840,13 @@ variable "enable_usage_telemetry" {
 }
 
 # tflint-ignore: terraform_unused_declarations
+variable "enable_entra_oauth" {
+  type        = bool
+  description = "Enable OIDC login via Microsoft Entra ID (config.oauth.enabled). Client ID/secret/issuer URL are read by apply-eso.sh from SSM (oauth-client-id, oauth-client-secret, oauth-issuer-url), not from this variable. Parsed by init-values.sh. Requires authType 'mixed' (already the default in the base values)."
+  default     = false
+}
+
+# tflint-ignore: terraform_unused_declarations
 variable "sandbox_service_url_base_url" {
   type        = string
   description = "Optional base URL used by init-values.sh to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
