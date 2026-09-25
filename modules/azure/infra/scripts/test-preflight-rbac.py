@@ -207,11 +207,14 @@ DNS = "langsmith-dev-ls"
 ALL_GOOD = response()
 
 # The quota fixtures mirror a real eastus answer: the node family nearly spent,
-# the regional total roomy, and the default Postgres family untouched.
+# the regional total roomy, and the default Postgres family untouched. The empty
+# additional_node_pools keeps the variable's default large pool out of the sums,
+# so these cases isolate the default pool.
 NODE_POOL_D4 = "\n".join([
     'default_node_pool_vm_size   = "Standard_D4s_v3"',
     "default_node_pool_min_count = 2",
     "default_node_pool_max_count = 5",
+    "additional_node_pools       = {}",
 ])
 USAGE_DEFAULT = [
     ("standardDSv3Family", 48, 64),
@@ -826,7 +829,7 @@ CASES = [
         "ca_all": ALL_GOOD,
         "vm_usage": USAGE_DEFAULT,
         "expect": [
-            "[!] standardDSv3Family quota in eastus: 16 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 20 at the node pool maximum",
+            "[!] standardDSv3Family quota in eastus: 16 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 20 at the node pools' maximum",
             "[✓] cores quota in eastus: 216 of 288 vCPUs free (2-5 × Standard_D4s_v3 plus Postgres needs up to 22)",
             "[✓] standardDDSv4Family quota in eastus: 10 of 10 vCPUs free (GP_Standard_D2ds_v4 needs 2)",
         ],
@@ -838,7 +841,7 @@ CASES = [
         "ca_all": ALL_GOOD,
         "vm_usage": [("standardDSv3Family", 60, 64)] + USAGE_DEFAULT[1:],
         "expect": [
-            "[✗] standardDSv3Family quota in eastus: 4 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 8 at the node pool minimum",
+            "[✗] standardDSv3Family quota in eastus: 4 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 8 at the node pools' minimum",
         ],
     },
     {
@@ -849,11 +852,61 @@ CASES = [
             'default_node_pool_vm_size   = "Standard_D4ds_v4"',
             "default_node_pool_min_count = 1",
             "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
         ]),
         "ca_all": ALL_GOOD,
         "vm_usage": [("standardDDSv4Family", 0, 8), ("cores", 0, 100)],
         "expect": [
-            "[!] standardDDSv4Family quota in eastus: 8 of 8 vCPUs free, 1-2 × Standard_D4ds_v4 plus Postgres needs 10 at the node pool maximum",
+            "[!] standardDDSv4Family quota in eastus: 8 of 8 vCPUs free, 1-2 × Standard_D4ds_v4 plus Postgres needs 10 at the node pools' maximum",
+        ],
+    },
+    {
+        # Left unset, additional_node_pools is the variable's default: one D16s_v3
+        # pool scaling 0-2, in the same family as the D4s_v3 default pool.
+        "name": "the default large pool counts toward its family and cores",
+        "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDSv3Family", 0, 64), ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
+        "expect": [
+            "[✓] standardDSv3Family quota in eastus: 64 of 64 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 needs up to 52)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 plus Postgres needs up to 54)",
+        ],
+    },
+    {
+        # Each pool fits its family on its own; together they overrun it, which
+        # the default-pool-only check passed.
+        "name": "additional pools in the node family add to its quota",
+        "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3] + [
+            "additional_node_pools = {",
+            '  gpu-ish = { vm_size = "Standard_D8s_v3", min_count = 1, max_count = 3 }',
+            "  batch = {",
+            '    vm_size   = "Standard_E4ds_v4" # memory heavy',
+            "    min_count = 0",
+            "    max_count = 4",
+            '    node_labels = { "workload" = "batch" }',
+            "  }",
+            "}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDSv3Family", 0, 40), ("cores", 0, 288),
+                     ("standardDDSv4Family", 0, 10), ("standardEDSv4Family", 0, 32)],
+        "expect": [
+            "[!] standardDSv3Family quota in eastus: 40 of 40 vCPUs free, 2-5 × Standard_D4s_v3, gpu-ish 1-3 × Standard_D8s_v3 needs 44 at the node pools' maximum",
+            "[✓] standardEDSv4Family quota in eastus: 32 of 32 vCPUs free (batch 0-4 × Standard_E4ds_v4 needs up to 16)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, gpu-ish 1-3 × Standard_D8s_v3, batch 0-4 × Standard_E4ds_v4 plus Postgres needs up to 62)",
+        ],
+        "reject": ["[✗] standardDSv3Family"],
+    },
+    {
+        "name": "an additional_node_pools map on one line warns and checks the default pool only",
+        "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3] + [
+            'additional_node_pools = { big = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 } }',
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": USAGE_DEFAULT,
+        "expect": [
+            "additional_node_pools is not in a shape preflight can read",
+            "[!] standardDSv3Family quota in eastus: 16 of 64 vCPUs free, 2-5 × Standard_D4s_v3 needs 20 at the node pools' maximum",
         ],
     },
     {

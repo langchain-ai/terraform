@@ -13,7 +13,7 @@
 #   3. Required resource providers are registered
 #   4. The identity Terraform will use can write role assignments
 #   5. Subscription offer type is not blocked from provisioning Postgres
-#   6. Regional vCPU quota covers the node pool and the Postgres SKU family
+#   6. Regional vCPU quota covers the node pools and the Postgres SKU family
 #   7. terraform.tfvars exists with required fields populated, and any cluster or
 #      Key Vault it attaches to rather than creates is really there
 #   8. The configured Postgres version and SKU are offered in the region
@@ -846,9 +846,10 @@ fi
 # subscriptions routinely ship the v5 families at 0, so the
 # LocationIsOfferRestricted workaround below can trade one failure for another.
 #
-# The AKS default node pool draws on the same per-family quota and on the
-# regional total ("cores"). Its minimum count must fit or the cluster create
-# fails; its maximum only caps how far the autoscaler can scale out.
+# The AKS node pools, default and additional, draw on the same per-family quota
+# and on the regional total ("cores"). Their minimum counts must fit or the
+# cluster create fails; their maximums only cap how far the autoscaler can scale
+# out.
 echo ""
 echo "── Regional Quota ────────────────────────────────────"
 
@@ -897,9 +898,49 @@ _quota_row() {
   printf '%s\n' "$USAGE_ROWS" | awk -F'\t' -v k="$1" '$1 == k { print $2 "\t" $3; exit }'
 }
 
-# Verdict for a quota row against the vCPUs the node pool needs at its minimum
-# (the floor, which blocks the apply) and at its maximum (the ceiling, which only
-# caps scale-out).
+# Echo one "name<TAB>vm_size<TAB>min_count<TAB>max_count" line per additional
+# node pool in terraform.tfvars, nothing for an empty map, and the variable's
+# default (keep it in step with variables.tf) when the key is absent. Returns 1
+# for a shape it cannot read, such as the whole map on one line.
+_additional_pools() {
+  if ! grep -qE '^[[:space:]]*additional_node_pools[[:space:]]*=' "$TFVARS" 2>/dev/null; then
+    printf 'large\tStandard_D16s_v3\t0\t2\n'
+    return 0
+  fi
+  local rows
+  rows=$(awk '
+    !found { if ($0 ~ /^[[:space:]]*additional_node_pools[[:space:]]*=/) found = 1; else next }
+    {
+      line = $0; sub(/#.*/, "", line)
+      if (depth == 1 && !inpool && line ~ /^[[:space:]]*"?[A-Za-z0-9_-]+"?[[:space:]]*=[[:space:]]*\{/) {
+        name = line; sub(/^[[:space:]]*"?/, "", name); sub(/"?[[:space:]]*=.*/, "", name)
+        inpool = 1; vm = ""; mn = ""; mx = ""
+      }
+      if (inpool) {
+        if (match(line, /vm_size[[:space:]]*=[[:space:]]*"[^"]*"/)) { s = substr(line, RSTART, RLENGTH); sub(/[^"]*"/, "", s); sub(/"$/, "", s); vm = s }
+        if (match(line, /min_count[[:space:]]*=[[:space:]]*[0-9]+/)) { s = substr(line, RSTART, RLENGTH); sub(/.*=[[:space:]]*/, "", s); mn = s }
+        if (match(line, /max_count[[:space:]]*=[[:space:]]*[0-9]+/)) { s = substr(line, RSTART, RLENGTH); sub(/.*=[[:space:]]*/, "", s); mx = s }
+      }
+      t = line; gsub(/"[^"]*"/, "", t)
+      opens = gsub(/\{/, "{", t); closes = gsub(/\}/, "}", t)
+      if (depth == 0 && opens > 1) { print "BAD"; exit }
+      depth += opens - closes
+      if (inpool && depth <= 1) { print name "\t" vm "\t" mn "\t" mx; inpool = 0 }
+      if (depth <= 0) { closed = 1; exit }
+    }
+    END { if (found && !closed) print "BAD" }
+  ' "$TFVARS")
+  [ -z "$rows" ] && return 0
+  printf '%s\n' "$rows" | awk -F'\t' '
+    NF != 4 || $2 !~ /^Standard_[A-Za-z0-9_]+$/ || $3 !~ /^[0-9]+$/ || $4 !~ /^[0-9]+$/ { bad = 1 }
+    END { exit bad }
+  ' || return 1
+  printf '%s\n' "$rows"
+}
+
+# Verdict for a quota row against the vCPUs the node pools need at their minimum
+# (the floor, which blocks the apply) and at their maximum (the ceiling, which
+# only caps scale-out).
 _node_quota_verdict() {
   local key="$1" floor="$2" ceiling="$3" what="$4" row used limit free
   row=$(_quota_row "$key")
@@ -911,11 +952,11 @@ _node_quota_verdict() {
   fi
   free=$((limit - used))
   if [ "$free" -lt "$floor" ]; then
-    fail "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${floor} at the node pool minimum"
-    warn "  Request an increase under Subscriptions > Usage + quotas, or lower default_node_pool_min_count"
+    fail "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${floor} at the node pools' minimum"
+    warn "  Request an increase under Subscriptions > Usage + quotas, or lower a node pool's min_count"
   elif [ "$free" -lt "$ceiling" ]; then
-    warn "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${ceiling} at the node pool maximum"
-    warn "  The autoscaler stops short of default_node_pool_max_count = ${NODE_MAX}; request more quota or lower it"
+    warn "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free, ${what} needs ${ceiling} at the node pools' maximum"
+    warn "  The autoscaler stops short of the node pools' max_count; request more quota or lower one"
   else
     pass "${key} quota in ${QUOTA_LOCATION}: ${free} of ${limit} vCPUs free (${what} needs up to ${ceiling})"
   fi
@@ -987,18 +1028,55 @@ else
   if [ -z "$NODE_FAMILY" ] || [ -z "$NODE_VCPUS" ]; then
     warn "Could not map ${NODE_VM_SIZE} to a quota family — check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
   else
-    NODE_WHAT="${NODE_MIN}-${NODE_MAX} × ${NODE_VM_SIZE}"
-    FAMILY_EXTRA=0
-    if [ "$PG_FAMILY" = "$NODE_FAMILY" ]; then
-      FAMILY_EXTRA="$PG_VCPUS"
-      NODE_WHAT="${NODE_WHAT} plus Postgres"
+    # One "family<TAB>floor<TAB>ceiling<TAB>label" row per pool, default first.
+    POOL_ROWS=$(printf '%s\t%s\t%s\t%s' "$NODE_FAMILY" $((NODE_MIN * NODE_VCPUS)) \
+      $((NODE_MAX * NODE_VCPUS)) "${NODE_MIN}-${NODE_MAX} × ${NODE_VM_SIZE}")
+    if EXTRA_POOLS=$(_additional_pools); then
+      while IFS="$(printf '\t')" read -r p_name p_size p_min p_max; do
+        [ -n "$p_name" ] || continue
+        p_family=$(_quota_family "$p_size")
+        p_vcpus=$(_sku_vcpus "$p_size")
+        if [ -z "$p_family" ] || [ -z "$p_vcpus" ]; then
+          warn "Could not map node pool ${p_name} (${p_size}) to a quota family — it is left out of the checks below"
+          continue
+        fi
+        POOL_ROWS="${POOL_ROWS}
+$(printf '%s\t%s\t%s\t%s' "$p_family" $((p_min * p_vcpus)) $((p_max * p_vcpus)) "${p_name} ${p_min}-${p_max} × ${p_size}")"
+      done <<EOF
+$EXTRA_POOLS
+EOF
+    else
+      warn "terraform.tfvars: additional_node_pools is not in a shape preflight can read — checking the default node pool only"
     fi
-    _node_quota_verdict "$NODE_FAMILY" \
-      $((NODE_MIN * NODE_VCPUS + FAMILY_EXTRA)) $((NODE_MAX * NODE_VCPUS + FAMILY_EXTRA)) "$NODE_WHAT"
-    CORES_WHAT="${NODE_MIN}-${NODE_MAX} × ${NODE_VM_SIZE}"
+
+    # Pools that share a family share its quota. Postgres adds to the family it
+    # shares, and to the regional total always.
+    POOL_FAMILIES=$(printf '%s\n' "$POOL_ROWS" | cut -f1 | awk '!seen[$0]++')
+    while read -r fam; do
+      FAM_ROW=$(printf '%s\n' "$POOL_ROWS" | awk -F'\t' -v f="$fam" '
+        $1 == f { lo += $2; hi += $3; what = what (what ? ", " : "") $4 }
+        END { print lo "\t" hi "\t" what }')
+      FAM_FLOOR=$(printf '%s\n' "$FAM_ROW" | cut -f1)
+      FAM_CEILING=$(printf '%s\n' "$FAM_ROW" | cut -f2)
+      FAM_WHAT=$(printf '%s\n' "$FAM_ROW" | cut -f3)
+      if [ "$PG_FAMILY" = "$fam" ]; then
+        FAM_FLOOR=$((FAM_FLOOR + PG_VCPUS))
+        FAM_CEILING=$((FAM_CEILING + PG_VCPUS))
+        FAM_WHAT="${FAM_WHAT} plus Postgres"
+      fi
+      _node_quota_verdict "$fam" "$FAM_FLOOR" "$FAM_CEILING" "$FAM_WHAT"
+    done <<EOF
+$POOL_FAMILIES
+EOF
+
+    ALL_ROW=$(printf '%s\n' "$POOL_ROWS" | awk -F'\t' '
+      { lo += $2; hi += $3; what = what (what ? ", " : "") $4 }
+      END { print lo "\t" hi "\t" what }')
+    CORES_WHAT=$(printf '%s\n' "$ALL_ROW" | cut -f3)
     [ "$PG_VCPUS" -gt 0 ] && CORES_WHAT="${CORES_WHAT} plus Postgres"
     _node_quota_verdict "cores" \
-      $((NODE_MIN * NODE_VCPUS + PG_VCPUS)) $((NODE_MAX * NODE_VCPUS + PG_VCPUS)) "$CORES_WHAT"
+      $(( $(printf '%s\n' "$ALL_ROW" | cut -f1) + PG_VCPUS )) \
+      $(( $(printf '%s\n' "$ALL_ROW" | cut -f2) + PG_VCPUS )) "$CORES_WHAT"
   fi
 fi
 
