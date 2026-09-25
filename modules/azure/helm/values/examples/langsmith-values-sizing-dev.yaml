@@ -105,6 +105,11 @@ hostBackend:
       limits:
         cpu: "1"
         memory: "1Gi"
+  # langsmith-values-agent-deploys.yaml turns the HPA on for the default profile;
+  # loaded after it, this profile keeps one replica on dev-sized requests.
+  autoscaling:
+    hpa:
+      enabled: false
 
 listener:
   deployment:

@@ -50,21 +50,6 @@ _render() {
   done
 }
 
-TFVARS="${INFRA_DIR}/terraform.tfvars"
-
-# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh, which
-# preflight.sh deliberately does not source. Returns 1 on an absent key, so
-# callers pick their own default rather than inherit an empty one.
-_tfvar() {
-  local raw val
-  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
-  [ -n "$raw" ] || return 1
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
-  [ -n "$val" ] || return 1
-  echo "$val"
-}
-
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  LangSmith Azure — Pre-flight Checks"
@@ -473,7 +458,7 @@ def balanced(text):
 
 
 def write_clause(flat):
-    """The top-level clause of a normalised condition that constrains write.
+    """The top-level clause of a normalized condition that constrains write.
 
     Conditions are `!(ActionMatches{<action>}) OR <constraint>` groups joined by
     AND, and a constraint carries ANDs of its own, so the split tracks
@@ -1442,7 +1427,7 @@ else
   # checkNameAvailability has no notion of ownership: a name this deployment
   # holds reports "taken" exactly like a stranger's, so state decides which it
   # is. Preflight runs before `terraform init`, so `state pull` only answers on
-  # an initialised backend — fall back to the local file, and treat no state as
+  # an initialized backend — fall back to the local file, and treat no state as
   # the first run, where every name genuinely has to be free.
   STATE_JSON=$(terraform -chdir="$INFRA_DIR" state pull </dev/null 2>/dev/null || true)
   if [ -z "$STATE_JSON" ] && [ -f "${INFRA_DIR}/terraform.tfstate" ]; then

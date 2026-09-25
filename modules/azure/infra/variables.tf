@@ -54,7 +54,7 @@ variable "name_suffix_salt" {
   default     = ""
 
   # Hashed, never appended, so the length costs nothing against the
-  # 24-character name cap. Bounded only to keep it recognisable as a counter.
+  # 24-character name cap. Bounded only to keep it recognizable as a counter.
   validation {
     condition     = can(regex("^[a-zA-Z0-9]{0,8}$", var.name_suffix_salt))
     error_message = "name_suffix_salt must be 0-8 alphanumeric characters (e.g. \"2\")."
@@ -504,6 +504,14 @@ variable "redis_clustering_policy" {
   type        = string
   description = "AMR clustering policy. OSSCluster selects the LangSmith cluster client; EnterpriseCluster the standalone client with clusterSafeMode. Change it only for an AMR instance that is already on EnterpriseCluster."
   default     = "OSSCluster"
+
+  # The child module validates the same two values, but with redis_source =
+  # in-cluster it has count 0 and a typo would pass unremarked; the root says so
+  # on the variable the operator set.
+  validation {
+    condition     = contains(["OSSCluster", "EnterpriseCluster"], var.redis_clustering_policy)
+    error_message = "redis_clustering_policy must be \"OSSCluster\" or \"EnterpriseCluster\"."
+  }
 }
 
 variable "redis_high_availability" {

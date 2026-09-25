@@ -1051,7 +1051,7 @@ def build_case(case, index):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
-    # Preflight reads the local state file when no backend is initialised, which
+    # Preflight reads the local state file when no backend is initialized, which
     # is the state a customer running `make preflight` before `make init` is in.
     if "tfstate_names" in case or "tfstate_dns_labels" in case:
         resources = [

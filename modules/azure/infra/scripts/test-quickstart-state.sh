@@ -117,6 +117,24 @@ done < assigned.txt
 [[ -z "$MISSING" ]] && ok "every assigned variable is whitelisted" \
   || bad "assigned by _load_tfvars but missing from _STATE_KEYS:$MISSING"
 
+echo "2b. _WRITER_KEYS covers every key the writer emits"
+# The preserve loop copies any key outside _WRITER_KEYS from the previous file
+# into the "Kept from your previous terraform.tfvars" block, so a key the writer
+# emits but does not own lands twice on a re-edit and no plan can parse the
+# result. Scrape the writer's heredoc and echo lines from _WRITER_KEYS onward.
+WRITER_START=$(grep -n '^_WRITER_KEYS=' "$SRC" | cut -d: -f1)
+sed -n "${WRITER_START},\$p" "$SRC" \
+  | grep -oE '^[a-z_][a-z0-9_]* += |echo "[a-z_][a-z0-9_]* += ' \
+  | sed -E 's/^echo "//; s/ *= *$//' | sort -u > emitted.txt
+ECOUNT=$(wc -l < emitted.txt | tr -d ' ')
+[[ "$ECOUNT" -ge 40 ]] && ok "scraped $ECOUNT emitted keys" \
+  || bad "scraped only $ECOUNT emitted keys — the scrape pattern has drifted"
+WKEYS=" $(sed -n '/^_WRITER_KEYS="/,/"$/p' "$SRC" | tr -d '"' | sed 's/_WRITER_KEYS=//' | tr '\n' ' ') "
+WMISSING=""
+while read -r k; do [[ "$WKEYS" == *" $k "* ]] || WMISSING="$WMISSING $k"; done < emitted.txt
+[[ -z "$WMISSING" ]] && ok "every emitted key is in _WRITER_KEYS" \
+  || bad "emitted by the writer but missing from _WRITER_KEYS:$WMISSING"
+
 echo "3. A key outside the whitelist is ignored"
 NOT_A_KEY="untouched"
 printf 'NOT_A_KEY=clobbered\nPROFILE=dev\n' > "$STATE_FILE"

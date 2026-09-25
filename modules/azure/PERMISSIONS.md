@@ -129,6 +129,22 @@ terraform -chdir=infra state rm '<address>'   # once per address listed
 
 Then set the flag, and confirm `terraform plan` reports no change to the vault's secrets. `make seed-secrets` is write-once, so running it afterwards skips both and the vault keeps the values it already had.
 
+On a deployment created with the flag on, the two addresses are `module.keyvault.azurerm_key_vault_secret.postgres_admin_password[0]` and `module.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]`; on one from before the count, the first is un-indexed, which is why the list above is read rather than typed.
+
+### Turning it on after seeding
+
+The other direction needs a migration too. With `keyvault_manage_secrets = false`, `make seed-secrets` wrote `postgres-admin-password` and `langsmith-license-key` outside Terraform; setting the flag to true afterwards makes Terraform try to create both and fail with "already exists - to be managed via Terraform this resource needs to be imported". Import them first, by their versioned URIs:
+
+```bash
+KV=<vault name>
+terraform -chdir=infra import 'module.keyvault.azurerm_key_vault_secret.postgres_admin_password[0]' \
+  "$(az keyvault secret show --vault-name "$KV" --name postgres-admin-password --query id -o tsv)"
+terraform -chdir=infra import 'module.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]' \
+  "$(az keyvault secret show --vault-name "$KV" --name langsmith-license-key --query id -o tsv)"
+```
+
+Then set the flag and confirm `terraform plan` shows both secrets unchanged. A `secrets.auto.tfvars` value that differs from the seeded one plans an update, which is the rotation you would expect from the flag.
+
 ## Restrict which roles the deployer can assign
 
 Security teams that will not grant unconditional role-assignment rights can attach an ABAC condition to `Role Based Access Control Administrator` that allows only the role definition IDs in the preceding table. Include every ID that applies to your configuration. A condition that omits one produces a partial deployment: assignments for the allowed roles succeed, and the first disallowed role returns 403 while earlier resources remain created.

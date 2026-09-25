@@ -219,6 +219,10 @@ If you deployed before this change:
 
 Insights and LangSmith Chat (Polly) now deploy only when enabled. To keep them on an existing deployment, set `enable_insights = true` and `enable_polly = true` in `terraform.tfvars`, then run `make init-values` before the next `make deploy`. The frontend Service also drops its own public IP, so LangSmith is reachable only through the ingress.
 
+Run `make apply` before `make deploy` after this change. `init-values.sh` now reads the `redis_cluster_enabled` output and the two new keys in `langsmith-redis-secret`, and on state from before this change it stops with "Run terraform apply first" rather than render the wrong Redis client. The clustering policy itself has not changed: the module has provisioned Azure Managed Redis as `OSSCluster` since it gained the service, and the chart's cluster client is what that policy needs; the standalone client the values used to render could not follow the server's `MOVED` redirects, which is the ingestion outage #212 fixed. The node URIs carry `ssl_check_hostname=false` because Managed Redis returns node addresses that are not in the endpoint certificate's SAN list; TLS stays on, hostname verification does not.
+
+`keyvault_manage_secrets` needs a state step in either direction on a deployment that already exists: `terraform state rm` before turning it off, `terraform import` before turning it on after `make seed-secrets` wrote the two secrets. Both procedures are in PERMISSIONS.md under "Deploy without Key Vault access".
+
 ---
 
 ## Quick Start

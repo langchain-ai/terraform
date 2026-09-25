@@ -47,7 +47,7 @@ source "$SCRIPT_DIR/_common.sh"
 _name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
 _kv_name=$(terraform output -raw keyvault_name 2>/dev/null || true)
 case "$_kv_name" in
-  "" | *[![:alnum:]-]*) _kv_name=$(_require_kv_name) ;;
+  "" | *[![:alnum:]-]*) _kv_name=$(_require_kv_name) || exit 1 ;;
 esac
 
 # LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.
