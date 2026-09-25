@@ -419,6 +419,10 @@ _load_tfvars() {
   _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
   _TF_VAL=$(_parse_tfvar create_bastion)              && CREATE_BASTION="$_TF_VAL"
+  # Also written only when true. Section 6 defaults its zone prompt to this, so
+  # without the read, Enter on a re-edit drops the zone and the next apply
+  # destroys it.
+  _TF_VAL=$(_parse_tfvar create_dns_zone)             && CREATE_DNS_ZONE="$_TF_VAL"
   [[ "$CREATE_VNET" == "false" ]] && {
     VNET_ID=$(_tfvar vnet_id)
     AKS_SUBNET_ID=$(_tfvar aks_subnet_id)
