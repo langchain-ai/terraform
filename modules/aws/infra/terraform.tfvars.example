@@ -755,6 +755,13 @@ enable_usage_telemetry = false
 #   /langsmith/<name_prefix>-<environment>/oauth-issuer-url
 # (issuer URL is https://login.microsoftonline.com/<tenant-id>/v2.0 — the
 # /v2.0 suffix is required, not the tenant-specific /common/ endpoint).
+#
+# WARNING: leave this false for the initial install. Deploy first with
+# basic auth and confirm you can log in as the org admin, then flip this to
+# true and redeploy. Turning it on before an admin account exists locks you
+# out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# Set up SCIM (if you're using it) after this, not before — SCIM's user
+# matching depends on the OIDC provider this creates.
 enable_entra_oauth = false
 
 #------------------------------------------------------------------------------

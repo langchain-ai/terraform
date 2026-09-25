@@ -790,6 +790,11 @@ $( [[ "$_enable_entra_oauth" == "true" ]] && cat <<'OAUTH'
   # only adds those secretKeys when present in SSM. authType is already "mixed"
   # in the base values file, which this requires for a client secret.
   # Chart validation rejects basicAuth and oauth both enabled, so SSO-only.
+  # WARNING: only set enable_entra_oauth = true after the initial install —
+  # confirm org-admin login with basic auth first. Enabling this before an
+  # admin account exists locks you out of the UI the moment basicAuth is
+  # disabled below. Set up SCIM (if you're using it) after this, not
+  # before — SCIM's user matching depends on the OIDC provider this creates.
   basicAuth:
     enabled: false
   oauth:
