@@ -58,6 +58,10 @@ run "optional_modules_absent_when_flags_are_false" {
     error_message = "enable_sandboxes = false still planned the JuiceFS Redis"
   }
   assert {
+    condition     = length(google_storage_bucket_iam_member.sandbox_host_node_juicefs) == 0
+    error_message = "enable_sandboxes = false still planned the sandbox node bucket grant"
+  }
+  assert {
     condition     = length(module.smithdb) == 0
     error_message = "enable_smithdb = false still planned SmithDB"
   }
@@ -170,9 +174,147 @@ run "enable_sandboxes_adds_the_juicefs_redis" {
     enable_sandboxes = true
   }
 
+  # The IAM condition embeds the bucket name, which carries the random suffix.
+  # A fixed suffix makes the expression known at plan time.
+  override_resource {
+    target          = random_id.suffix
+    override_during = plan
+    values          = { hex = "0a1b2c3d" }
+  }
+
   assert {
     condition     = length(module.sandbox_juicefs_redis) == 1
     error_message = "enable_sandboxes = true did not plan the JuiceFS Redis"
+  }
+
+  # hostNetwork sandbox-host mounts JuiceFS as the node service account, so the
+  # bucket grant must exist for that identity, not only the WI binding.
+  assert {
+    condition     = length(google_storage_bucket_iam_member.sandbox_host_node_juicefs) == 1
+    error_message = "enable_sandboxes = true did not grant the sandbox node service account on the JuiceFS bucket"
+  }
+  assert {
+    condition     = google_storage_bucket_iam_member.sandbox_host_node_juicefs[0].role == "roles/storage.objectAdmin"
+    error_message = "the sandbox node bucket grant is not roles/storage.objectAdmin"
+  }
+  # Sandbox nodes run untrusted code, and the bucket also holds trace data, so
+  # the grant must stay limited to the JuiceFS prefix.
+  assert {
+    condition = strcontains(
+      google_storage_bucket_iam_member.sandbox_host_node_juicefs[0].condition[0].expression,
+      "projects/_/buckets/langsmith-plan-tests-ls-prod-traces-0a1b2c3d/objects/sandbox-juicefs/\")",
+    )
+    error_message = "the sandbox node bucket grant is not limited to the JuiceFS object prefix"
+  }
+  assert {
+    condition = strcontains(
+      google_storage_bucket_iam_member.sandbox_host_node_juicefs[0].condition[0].expression,
+      "objectListPrefix\", \"\").startsWith(\"sandbox-juicefs/\")",
+    )
+    error_message = "the sandbox node bucket grant does not limit list calls to the JuiceFS prefix"
+  }
+}
+
+# ── Sandbox-host pool size follows sizing_profile ────────────────────────────
+
+run "sandbox_host_pool_is_small_outside_production" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "dev"
+  }
+
+  assert {
+    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-8" && output.sandbox_host_node_pool_sizing.min_node_count == 1
+    error_message = "sizing_profile = dev did not resolve the sandbox-host pool to n2-standard-8 with a per-zone minimum of 1"
+  }
+}
+
+run "sandbox_host_pool_is_large_and_scales_from_zero_for_production" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "production"
+  }
+
+  assert {
+    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-32" && output.sandbox_host_node_pool_sizing.min_node_count == 0
+    error_message = "sizing_profile = production did not resolve the sandbox-host pool to n2-standard-32 with a per-zone minimum of 0"
+  }
+}
+
+run "sandbox_host_pool_production_large_matches_production" {
+  command = plan
+
+  variables {
+    enable_sandboxes = true
+    sizing_profile   = "production-large"
+  }
+
+  assert {
+    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-32" && output.sandbox_host_node_pool_sizing.min_node_count == 0
+    error_message = "sizing_profile = production-large did not resolve like production"
+  }
+}
+
+run "sandbox_host_pool_each_variable_overrides_only_itself" {
+  command = plan
+
+  variables {
+    enable_sandboxes          = true
+    sizing_profile            = "production"
+    sandbox_host_machine_type = "n2-standard-8"
+  }
+
+  assert {
+    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-8" && output.sandbox_host_node_pool_sizing.min_node_count == 0
+    error_message = "a machine type override changed the per-zone minimum, or was ignored"
+  }
+}
+
+run "sandbox_host_pool_explicit_minimum_wins" {
+  command = plan
+
+  variables {
+    enable_sandboxes            = true
+    sizing_profile              = "production"
+    sandbox_host_min_node_count = 1
+  }
+
+  assert {
+    condition     = output.sandbox_host_node_pool_sizing.min_node_count == 1
+    error_message = "an explicit sandbox_host_min_node_count did not override sizing_profile"
+  }
+}
+
+# The max >= min precondition reads the resolved per-zone minimum, so the same
+# max passes where the profile resolves the minimum to 0 and fails where it is 1.
+run "sandbox_host_max_below_resolved_min_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes            = true
+    sizing_profile              = "dev"
+    sandbox_host_max_node_count = 0
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "sandbox_host_max_zero_is_allowed_when_min_resolves_to_zero" {
+  command = plan
+
+  variables {
+    enable_sandboxes            = true
+    sizing_profile              = "production"
+    sandbox_host_max_node_count = 0
+  }
+
+  assert {
+    condition     = output.sandbox_host_node_pool_sizing.min_node_count == 0
+    error_message = "sizing_profile = production did not resolve the per-zone minimum to 0"
   }
 }
 

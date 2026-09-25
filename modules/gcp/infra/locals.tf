@@ -34,6 +34,19 @@ locals {
     "roles/stackdriver.resourceMetadata.writer",
   ])
 
+  # Sandbox-host pool size follows sizing_profile unless the variables are set.
+  # The pool is regional, so a per-zone minimum of 1 keeps one node in every
+  # zone. Production nodes are large, so production scales from 0 instead.
+  sandbox_host_production_profile = contains(["production", "production-large"], var.sizing_profile)
+  sandbox_host_machine_type = coalesce(
+    var.sandbox_host_machine_type,
+    local.sandbox_host_production_profile ? "n2-standard-32" : "n2-standard-8",
+  )
+  sandbox_host_min_node_count = coalesce(
+    var.sandbox_host_min_node_count,
+    local.sandbox_host_production_profile ? 0 : 1,
+  )
+
   # Cloud SQL
   postgres_instance_name = "${local.base_name}-pg${local.suffix}"
   postgres_database_name = "langsmith"

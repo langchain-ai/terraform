@@ -59,7 +59,22 @@ What the modules do for you:
   service account (GCP) is now written to the sandbox-host ServiceAccount.
 - On GCP, Terraform binds `langsmith-sandbox-host` to the LangSmith service account
   through Workload Identity, so run `terraform apply` before the deploy. The binding
-  for the old `juicefs-csi-node-sa` stays through the upgrade.
+  for the old `juicefs-csi-node-sa` stays through the upgrade. The `juicefs-format`
+  Job uses this binding.
+- On GCP, `sandbox-host` runs on the host network, and GKE does not give Workload
+  Identity to host-network pods. The JuiceFS mount therefore uses the sandbox node
+  service account (`<name>-sbox-node`). `terraform apply` now grants that account
+  `roles/storage.objectAdmin` on the bucket, limited by an IAM condition to objects
+  under `<sandbox_juicefs_name>/`. Without the grant, JuiceFS gets 403 from GCS.
+- On GCP, `deploy.sh` sets `images.sandboxHostImage.tag` from the chart
+  `appVersion`, as on AWS. `sandbox_host_image_tag` is ignored, so remove it from
+  `terraform.tfvars`. Before, a tag from chart 0.16 kept the old `sandbox-host`
+  image, and the `juicefs-format` Job used that image too.
+- On GCP, the sandbox-host pool size now follows `sizing_profile`. With
+  `production` or `production-large` and no explicit values, `terraform apply`
+  changes the pool to `n2-standard-32` with a per-zone minimum of 0. GKE recreates
+  every sandbox-host node for the machine type change, so running sandboxes stop.
+  See step 3.
 - On AWS, when the sandbox-host nodes have spare instance-store NVMe
   (`sandbox_host_local_nvme_bootstrap_enabled` with more than one device),
   `init-values.sh` passes those mounts (`/mnt/juicefs-cache*`) as
@@ -115,7 +130,13 @@ is left, and the upgrade then removes the driver.
    a rollback path - see [Self-host upgrades](https://docs.langchain.com/langsmith/self-host-upgrades).
 2) Check out a `v0.17.*` tag.
 3) Run `make apply`. On GCP with sandboxes, this adds the `langsmith-sandbox-host`
-   Workload Identity binding.
+   Workload Identity binding and the bucket grant for the sandbox node service
+   account. With `sizing_profile` set to `production` or `production-large`, and
+   no `sandbox_host_machine_type` in `terraform.tfvars`, first set
+   `sandbox_host_machine_type = "n2-standard-8"`. The pin keeps the current
+   sandbox-host nodes and their mounted chart 0.16 volumes until the drain in
+   step 5. After step 6, remove the pin. Then run `make apply` again. GKE recreates
+   every sandbox-host node, and running sandboxes stop.
 4) Run `make init-values` so the generated overrides file is regenerated in the 0.17
    shape.
 5) Deploy: `make deploy`. If sandboxes ran on chart 0.16, the first run stops and
@@ -125,6 +146,6 @@ is left, and the upgrade then removes the driver.
 
 ```bash
 kubectl get jobs -n langsmith -l app.kubernetes.io/component=juicefs-format
-kubectl rollout status deployment/langsmith-sandbox-host -n langsmith --timeout=10m
+kubectl rollout status deployment -n langsmith -l app=sandbox-host --timeout=10m
 kubectl get daemonset,statefulset -n langsmith | grep juicefs-csi   # expect no output
 ```

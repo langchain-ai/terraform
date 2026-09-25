@@ -140,6 +140,14 @@ output "sandbox_juicefs_bucket_url" {
   value       = var.enable_sandboxes ? module.storage.bucket_url : null
 }
 
+output "sandbox_host_node_pool_sizing" {
+  description = "Resolved sandbox-host machine type and per-zone minimum node count (from sizing_profile unless set explicitly)"
+  value = var.enable_sandboxes ? {
+    machine_type   = local.sandbox_host_machine_type
+    min_node_count = local.sandbox_host_min_node_count
+  } : null
+}
+
 output "sandbox_host_node_service_account_email" {
   description = "Restricted GCP service account email assigned to sandbox-host GKE nodes"
   value       = var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null

@@ -135,8 +135,7 @@ _validate_sandbox_values_file() {
     echo "       Run: ./helm/scripts/init-values.sh to regenerate it." >&2
     exit 1
   fi
-  if [[ "$state" != "ok" ]] \
-    || ! grep -Eq '^[[:space:]]{2}sandboxHostImage:[[:space:]]*$' "$values_file"; then
+  if [[ "$state" != "ok" ]]; then
     echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
     echo "       Run: ./helm/scripts/init-values.sh after applying infra." >&2
     exit 1
@@ -593,12 +592,32 @@ fi
 
 # Resolve the pin to a concrete version and print it. Without this the only place
 # the installed version shows up is `helm list`, after the release is already out.
-_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
-  | awk '/^version:/{print $2}') || _resolved_chart=""
+_chart_metadata=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null) || _chart_metadata=""
+_resolved_chart=$(awk '/^version:/{print $2}' <<<"$_chart_metadata")
 echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
+fi
+
+# Chart 0.17 fails the release when images.sandboxHostImage.tag is empty. A tag
+# pinned in a file lags every chart upgrade. The old sandbox-host image then runs,
+# and the juicefs-format Job uses the same image. So set the tag from the
+# appVersion of the resolved chart on every deploy, as the AWS module does.
+# --set-string overrides any tag that an older init-values.sh wrote into a file.
+# helm upgrade below installs the same resolved version, so the tag matches it.
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sandbox_host_image_tag=$(awk '/^appVersion:/{print $2}' <<<"$_chart_metadata")
+  if [[ -z "$_sandbox_host_image_tag" ]]; then
+    echo "ERROR: chart $_resolved_chart does not declare an appVersion for the sandbox-host image." >&2
+    exit 1
+  fi
+  VALUES_ARGS+=(--set-string "images.sandboxHostImage.tag=$_sandbox_host_image_tag")
+  echo "Sandboxes: sandbox-host image tag=$_sandbox_host_image_tag (chart appVersion)"
+  _legacy_sandbox_tag=$(_parse_tfvar "sandbox_host_image_tag") || _legacy_sandbox_tag=""
+  if [[ -n "$_legacy_sandbox_tag" && "$_legacy_sandbox_tag" != "$_sandbox_host_image_tag" ]]; then
+    echo "  ⚠️  sandbox_host_image_tag = \"$_legacy_sandbox_tag\" in terraform.tfvars is ignored. Remove it."
+  fi
 fi
 
 # A Job's spec.template is immutable, and the backfill Job is a plain resource
@@ -706,7 +725,7 @@ fi
 if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   --namespace "$NAMESPACE" \
   --create-namespace \
-  ${CHART_VERSION:+--version "$CHART_VERSION"} \
+  --version "$_resolved_chart" \
   ${_devel_flag} \
   "${VALUES_ARGS[@]}" \
   --timeout 20m; then
@@ -770,8 +789,46 @@ if [[ ${#_smithdb_deployments[@]} -gt 0 ]]; then
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if ! kubectl rollout status deployment/sandbox-host -n "$NAMESPACE" --timeout=5m 2>/dev/null; then
-    echo "  ⏳ sandbox-host not ready within 5m (sandbox-host nodes may still be starting)"
+  # The format Job name carries a hash, so select it by label. It writes to the
+  # bucket through the langsmith-sandbox-host Workload Identity binding. Helm
+  # does not run a failed Job again when the manifest is unchanged, so a failed
+  # Job must be deleted before the next deploy.
+  _format_selector="app.kubernetes.io/instance=${RELEASE_NAME},app.kubernetes.io/component=juicefs-format"
+  _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+    -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  _format_waited=true
+  if [[ "$_format_failed" != *True* ]] \
+    && ! kubectl wait --for=condition=complete job -n "$NAMESPACE" -l "$_format_selector" --timeout=5m 2>/dev/null; then
+    _format_waited=false
+    _format_failed=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
+  fi
+  if [[ "$_format_failed" == *True* ]]; then
+    echo "  ✗ The JuiceFS format Job for release ${RELEASE_NAME} failed."
+    echo "     Check the langsmith-sandbox-host Workload Identity binding (run: make apply):"
+    echo "     kubectl logs -n $NAMESPACE -l $_format_selector"
+    echo "     Then delete the Job and deploy again. Helm creates it again:"
+    echo "     kubectl delete job -n $NAMESPACE -l $_format_selector && make deploy"
+    _all_ready=false
+  elif ! kubectl get job -n "$NAMESPACE" -l "$_format_selector" -o name 2>/dev/null | grep -q .; then
+    echo "  ⏳ No JuiceFS format Job found for release ${RELEASE_NAME}."
+    _all_ready=false
+  elif [[ "$_format_waited" == "false" ]]; then
+    echo "  ⏳ The JuiceFS format Job for release ${RELEASE_NAME} is not complete within 5m."
+    echo "     kubectl get jobs -n $NAMESPACE -l $_format_selector"
+    _all_ready=false
+  fi
+
+  # Helm's fullname can include the chart name or an override, so select by the
+  # release labels. rollout status exits 0 when nothing matches, so check first.
+  _sandbox_host_selector="app.kubernetes.io/instance=${RELEASE_NAME},app=sandbox-host"
+  if ! kubectl get deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" -o name 2>/dev/null | grep -q .; then
+    echo "  ⏳ No sandbox-host Deployment found for release ${RELEASE_NAME}."
+    _all_ready=false
+  elif ! kubectl rollout status deployment -n "$NAMESPACE" -l "$_sandbox_host_selector" --timeout=5m 2>/dev/null; then
+    echo "  ⏳ sandbox-host for release ${RELEASE_NAME} not ready within 5m (sandbox-host nodes may still be starting)."
+    echo "     If JuiceFS does not mount, check the sandbox node bucket grant (run: make apply):"
+    echo "     kubectl logs -n $NAMESPACE -l $_sandbox_host_selector -c sandbox-host --tail=50"
     _all_ready=false
   fi
 fi
