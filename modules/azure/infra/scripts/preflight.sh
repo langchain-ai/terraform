@@ -863,12 +863,15 @@ NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
 NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
 
 # Map a VM size to its Compute quota family. Standard_D2ds_v4 -> letter D, suffix
-# ds, version 4 -> standardDDSv4Family. B-series is the one family that is not a
-# transform of the size (B1ms lands in standardBSFamily). tr rather than ${var^^}:
-# bash 3.2. Empty when the size does not fit the pattern.
+# ds, version 4 -> standardDDSv4Family. The v1 B-series is the one family that is
+# not a transform of the size (B1ms lands in standardBSFamily); B2s_v2 follows the
+# pattern. Azure cases these names unevenly (standardBsv2Family beside
+# standardDASv5Family), so _quota_row matches without regard to case. tr rather
+# than ${var^^}: bash 3.2. Empty when the size does not fit the pattern.
 _quota_family() {
   local size="$1" letter suffix version
   case "$size" in
+    Standard_B*_v[0-9]*) ;;
     Standard_B*) echo "standardBSFamily"; return ;;
   esac
   letter=$(printf '%s\n' "$size" | sed -n 's/^Standard_\([A-Za-z]\)[0-9].*/\1/p')
@@ -886,16 +889,32 @@ _sku_vcpus() {
 
 # One list-usage call serves every family below. tsv keeps this jq-free; az is
 # all this section needs. The limit comes back as a string, which tsv flattens.
+# Call _load_usage in this shell, never inside $(...), or the result is lost with
+# the subshell. It returns 1 when az fails or answers with nothing, warning the
+# first time only, so a throttled call or an unregistered Compute provider does
+# not read as a missing quota row.
 USAGE_ROWS=""
-_usage_loaded=0
+USAGE_STATE="unread"
+_load_usage() {
+  case "$USAGE_STATE" in
+    ok) return 0 ;;
+    failed) return 1 ;;
+  esac
+  USAGE_ROWS=$(az vm list-usage -l "$QUOTA_LOCATION" --only-show-errors \
+    --query "[].[name.value,currentValue,limit]" -o tsv 2>/dev/null) || USAGE_ROWS=""
+  if [ -n "$USAGE_ROWS" ]; then
+    USAGE_STATE="ok"
+    return 0
+  fi
+  USAGE_STATE="failed"
+  warn "Could not read Compute quotas in ${QUOTA_LOCATION} — skipping the quota checks"
+  warn "  Retry, or check by hand: az vm list-usage -l ${QUOTA_LOCATION} -o table"
+  return 1
+}
 # Echo "used<TAB>limit" for a quota name, empty when the region has no such row.
 _quota_row() {
-  if [ "$_usage_loaded" -eq 0 ]; then
-    USAGE_ROWS=$(az vm list-usage -l "$QUOTA_LOCATION" --only-show-errors \
-      --query "[].[name.value,currentValue,limit]" -o tsv 2>/dev/null || echo "")
-    _usage_loaded=1
-  fi
-  printf '%s\n' "$USAGE_ROWS" | awk -F'\t' -v k="$1" '$1 == k { print $2 "\t" $3; exit }'
+  printf '%s\n' "$USAGE_ROWS" | awk -F'\t' -v k="$1" \
+    'tolower($1) == tolower(k) { print $2 "\t" $3; exit }'
 }
 
 # Echo one "name<TAB>vm_size<TAB>min_count<TAB>max_count" line per additional
@@ -978,6 +997,8 @@ elif [ "$POSTGRES_SOURCE" = "in-cluster" ]; then
   pass "postgres_source = in-cluster — no Flexible Server quota required"
 elif ! printf '%s\n' "$POSTGRES_SKU" | grep -qE '^(B|GP|MO)_Standard_[A-Za-z0-9_]+$'; then
   warn "terraform.tfvars: postgres_sku_name '${POSTGRES_SKU}' is not a Flexible Server SKU — skipping quota check"
+elif ! _load_usage; then
+  :   # _load_usage warned
 else
   # Derive the quota family from the SKU name, then trust it only if the API
   # reports a family by that name; a miss warns rather than invents a failure.
@@ -1022,6 +1043,8 @@ elif [ "$CREATE_CLUSTER" = "false" ]; then
 elif ! printf '%s\n' "$NODE_VM_SIZE" | grep -qE '^Standard_[A-Za-z0-9_]+$' \
   || ! printf '%s|%s\n' "$NODE_MIN" "$NODE_MAX" | grep -qE '^[0-9]+\|[0-9]+$'; then
   warn "terraform.tfvars: node pool size or counts are not literals preflight can read — skipping the node pool quota check"
+elif ! _load_usage; then
+  :   # _load_usage warned, or the Postgres check above already did
 else
   NODE_FAMILY=$(_quota_family "$NODE_VM_SIZE")
   NODE_VCPUS=$(_sku_vcpus "$NODE_VM_SIZE")
@@ -1122,6 +1145,8 @@ print('\\n'.join(names))
     fail "Azure Managed Redis is not offered in ${AMR_LOCATION}"
     warn "  Offered regions: $(printf '%s' "$AMR_REGIONS" | tr '\n' ' ')"
   fi
+else
+  warn "'${AMR_LOCATION}' is not a region name (such as eastus) — skipping the Managed Redis region check"
 fi
 
 # ── 7. terraform.tfvars ───────────────────────────────────────────────────────

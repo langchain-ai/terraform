@@ -910,6 +910,38 @@ CASES = [
         ],
     },
     {
+        # The v1 Burstable Postgres SKU keeps the standardBSFamily shortcut; a
+        # B*_v2 node size takes the generic transform, and Azure's lowercase
+        # "sv2" still matches. Both checks share the one list-usage call.
+        "name": "B-series v2 node pools use their own quota family",
+        "tfvars_extra": "\n".join([
+            'postgres_sku_name           = "B_Standard_B1ms"',
+            'default_node_pool_vm_size   = "Standard_B4s_v2"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardBSFamily", 0, 10), ("standardBsv2Family", 0, 20), ("cores", 0, 100)],
+        "expect": [
+            "[✓] standardBSFamily quota in eastus: 10 of 10 vCPUs free (B_Standard_B1ms needs 1)",
+            "[✓] standardBSv2Family quota in eastus: 20 of 20 vCPUs free (1-2 × Standard_B4s_v2 needs up to 8)",
+        ],
+        "reject": ["reports no"],
+        "call_counts": {"vm list-usage": 1},
+    },
+    {
+        # A failed list-usage call is not a missing quota row. It warns once and
+        # the node pool check does not ask again.
+        "name": "a failed quota read warns once and skips the quota checks",
+        "tfvars_extra": NODE_POOL_D4,
+        "ca_all": ALL_GOOD,
+        "expect": ["[!] Could not read Compute quotas in eastus — skipping the quota checks"],
+        "reject": ["reports no", "quota in eastus:"],
+        "call_counts": {"vm list-usage": 1},
+        "output_counts": {"Could not read Compute quotas": 1},
+    },
+    {
         "name": "an attached cluster needs no node pool quota",
         "tfvars_extra": "create_cluster = false\n" + NODE_POOL_D4,
         "ca_all": ALL_GOOD,
@@ -933,6 +965,14 @@ CASES = [
         "ca_all": ALL_GOOD,
         "amr_regions": ["East US"],
         "expect": ["[✗] Azure Managed Redis is not offered in eastus2"],
+    },
+    {
+        "name": "a redis_location that is a display name warns instead of passing silently",
+        "tfvars_extra": 'redis_location = "East US"',
+        "ca_all": ALL_GOOD,
+        "amr_regions": ["East US"],
+        "expect": ["is not a region name (such as eastus) — skipping the Managed Redis region check"],
+        "reject": ["Azure Managed Redis is"],
     },
     {
         "name": "Managed Redis is checked in location when redis_location is unset",
@@ -1074,6 +1114,14 @@ def run_case(case, index):
     for needle in case.get("reject_calls", []):
         if needle in calls:
             problems.append(f"unexpectedly requested: {needle}")
+    for needle, want in case.get("call_counts", {}).items():
+        got = calls.count(needle)
+        if got != want:
+            problems.append(f"requested {needle} {got} time(s), expected {want}")
+    for needle, want in case.get("output_counts", {}).items():
+        got = output.count(needle)
+        if got != want:
+            problems.append(f"printed {needle} {got} time(s), expected {want}")
 
     if "assert_subject" in case:
         body_path = fixture / "last_body.json"
