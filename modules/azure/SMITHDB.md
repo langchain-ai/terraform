@@ -137,9 +137,10 @@ PostgreSQL uses the delegated database subnet and the VNet's private PostgreSQL
 DNS zone. Each Private Endpoint takes one further address in its subnet.
 
 SmithDB pods run on the default node pool, so they consume its pod and IP
-budget rather than adding a pool of their own. The subnet capacity check counts
+budget rather than adding a pool of their own. In node-subnet mode the subnet capacity check counts
 `(default_node_pool_max_count + 1) * (default_node_pool_max_pods + 1)`, which is
-a per-node reservation and already covers anything scheduled onto those nodes.
+a per-node reservation and already covers anything scheduled onto those nodes;
+in overlay mode it counts nodes only, and the pods draw from `aks_pod_cidr`.
 What SmithDB does change is how much of that budget is in use, so size the
 default pool for the SmithDB pod count the chart adds and raise
 `default_node_pool_max_count` before enabling ingestion. The capacity check then

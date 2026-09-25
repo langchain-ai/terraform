@@ -2,12 +2,15 @@ terraform {
   required_version = ">= 1.11.0"
 
   required_providers {
-    # 4.27 is the release that accepts Microsoft.Network/applicationGateways as a
-    # subnet service_delegation name, which the AGIC subnet needs. Older 4.x rejects
-    # it during validation, before any API call.
+    # 4.59 is the release on which the two network changes the guard permits are
+    # in-place updates rather than replacements: 4.58.0 made network_data_plane and
+    # network_policy updatable to cilium, 4.59.0 added calico to cilium. On an
+    # older 4.x, aks_allow_network_upgrade = true would replace the cluster, the
+    # outcome the guard exists to stop. (4.27 was the previous floor: the release
+    # that accepts Microsoft.Network/applicationGateways as a subnet delegation.)
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 4.27.0, < 5.0.0"
+      version = ">= 4.59.0, < 5.0.0"
     }
     # Azure Managed Redis (Microsoft.Cache/redisEnterprise) Balanced SKUs aren't
     # reliably exposed by azurerm yet — the redis module provisions AMR via azapi.

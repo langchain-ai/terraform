@@ -20,7 +20,15 @@ mock_provider "azurerm" {
     }
   }
 }
-mock_provider "azapi" {}
+# The cluster module lists the subscription's AKS clusters to read the one it
+# manages; the generated mock has no such shape, so give it an empty list.
+mock_provider "azapi" {
+  mock_data "azapi_resource_list" {
+    defaults = {
+      output = { clusters = [] }
+    }
+  }
+}
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
 mock_provider "null" {}
@@ -240,4 +248,164 @@ run "aks_dns_service_ip_rejects_a_non_address" {
   }
 
   expect_failures = [var.aks_dns_service_ip]
+}
+
+# ── AKS network mode, data plane and tier ────────────────────────────────────
+
+run "aks_network_enums_reject_an_unlisted_value" {
+  command = plan
+
+  variables {
+    aks_network_mode      = "kubenet"
+    aks_network_dataplane = "calico"
+    aks_sku_tier          = "Basic"
+    aks_support_plan      = "Extended"
+  }
+
+  expect_failures = [
+    var.aks_network_mode,
+    var.aks_network_dataplane,
+    var.aks_sku_tier,
+    var.aks_support_plan,
+  ]
+}
+
+run "aks_pod_cidr_rejects_a_non_cidr" {
+  command = plan
+
+  variables {
+    aks_pod_cidr = "10.244.0.0"
+  }
+
+  expect_failures = [var.aks_pod_cidr]
+}
+
+run "aks_pod_cidr_rejects_a_host_address" {
+  command = plan
+
+  variables {
+    aks_pod_cidr = "10.244.0.5/16"
+  }
+
+  expect_failures = [var.aks_pod_cidr]
+}
+
+run "aks_pod_cidr_rejects_a_range_smaller_than_a_24" {
+  command = plan
+
+  variables {
+    aks_pod_cidr = "10.244.0.0/26"
+  }
+
+  expect_failures = [var.aks_pod_cidr]
+}
+
+# Cross-variable rules are preconditions on terraform_data.validate_network, so
+# that is the object expected to fail.
+
+run "cilium_requires_overlay_mode" {
+  command = plan
+
+  variables {
+    aks_network_mode      = "node-subnet"
+    aks_network_dataplane = "cilium"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "long_term_support_requires_the_premium_tier" {
+  command = plan
+
+  variables {
+    aks_sku_tier     = "Standard"
+    aks_support_plan = "AKSLongTermSupport"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# The three overlay preconditions live on terraform_data.validate_network with
+# the subnet capacity check, so that is the object expected to fail.
+
+run "overlay_pod_cidr_rejects_an_overlap_with_the_vnet" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+    aks_pod_cidr     = "10.0.0.0/16" # the created VNet is 10.0.0.0/17
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "overlay_pod_cidr_rejects_an_aks_reserved_range" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+    aks_pod_cidr     = "172.30.0.0/16" # clear of the VNet and the ClusterIP range; reserved by AKS
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "overlay_pod_cidr_rejects_too_small_a_range_for_the_pools" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+    aks_pod_cidr     = "10.244.0.0/22" # four /24s; the pools below reach 11 + 3 nodes with surge
+    # Pinned rather than inherited: terraform test auto-loads a terraform.tfvars
+    # from this directory when one exists, and the capacity arithmetic below
+    # assumes these pools.
+    default_node_pool_max_count = 10
+    default_node_pool_max_pods  = 60
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# The same /27 AKS subnet (27 usable addresses) is enough for the pinned pools'
+# 14 nodes in overlay mode and nowhere near the 11 x 61 + 3 x 31 addresses
+# node-subnet mode needs. Both runs together show the capacity check switches
+# with the mode.
+
+run "overlay_subnet_capacity_counts_nodes_only" {
+  command = plan
+
+  variables {
+    aks_network_mode          = "overlay"
+    aks_subnet_address_prefix = ["10.0.0.0/27"]
+    # Pinned rather than inherited: terraform test auto-loads a terraform.tfvars
+    # from this directory when one exists, and the capacity arithmetic below
+    # assumes these pools.
+    default_node_pool_max_count = 10
+    default_node_pool_max_pods  = 60
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+}
+
+run "node_subnet_capacity_counts_pods_too" {
+  command = plan
+
+  variables {
+    aks_network_mode          = "node-subnet"
+    aks_subnet_address_prefix = ["10.0.0.0/27"]
+    # Pinned rather than inherited: terraform test auto-loads a terraform.tfvars
+    # from this directory when one exists, and the capacity arithmetic below
+    # assumes these pools.
+    default_node_pool_max_count = 10
+    default_node_pool_max_pods  = 60
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
 }

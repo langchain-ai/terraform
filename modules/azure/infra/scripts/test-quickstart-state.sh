@@ -80,6 +80,17 @@ eq "COST_CENTER keeps space"   "$COST_CENTER"   "CC-9 / dept 4"
 eq "PG_ADMIN_USER survives"    "$PG_ADMIN_USER" "ls_admin"
 eq "CREATE_WAF survives"       "$CREATE_WAF"    "true"
 
+# A checkpoint written before the network mode was a choice has no NETWORK_MODE
+# line; that deployment runs node-subnet, and the resumed session must not carry
+# the top-level default of overlay into its tfvars.
+printf 'SECTION=4\nANSWERED=1 2 3\n' > "$STATE_FILE"
+NETWORK_MODE="overlay"
+_load_state
+eq "old checkpoint seeds node-subnet"  "$NETWORK_MODE" "node-subnet"
+printf 'SECTION=4\nNETWORK_MODE=overlay\n' > "$STATE_FILE"
+_load_state
+eq "checkpoint with a mode keeps it"   "$NETWORK_MODE" "overlay"
+
 echo "2. _STATE_KEYS covers every variable _load_tfvars assigns"
 # _load_state drops a key that is missing from the whitelist without saying so,
 # and _save_state never writes it, so a rename that lands in one place and not
@@ -138,13 +149,19 @@ location        = "westus2"
 owner           = "platform team"
 create_waf      = true
 EOF
-PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; eval "$NAME_VAR="
+PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; NETWORK_MODE="overlay"; eval "$NAME_VAR="
 _load_tfvars
 eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "acme"
 eq "PROFILE read from the header"    "$PROFILE"     "prod"
 eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
 eq "CREATE_WAF read"                 "$CREATE_WAF"  "true"
+# A tfvars from before the mode was a choice deploys the module default of
+# that time; seeding overlay would write a migration into it on save.
+eq "absent aks_network_mode is node-subnet" "$NETWORK_MODE" "node-subnet"
+printf 'aks_network_mode = "overlay"\n' >> "$OUTPUT"
+_load_tfvars
+eq "present aks_network_mode is read"      "$NETWORK_MODE" "overlay"
 
 echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state

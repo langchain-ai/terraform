@@ -143,6 +143,7 @@ NODE_VM_SIZE NODE_MIN NODE_MAX INGRESS_CONTROLLER
 ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
 CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
 AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+NETWORK_MODE AKS_SKU_TIER
 CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION"
 
 # Sections the user has actually been through. Profile-driven defaults apply
@@ -178,6 +179,12 @@ _load_state() {
     done
     [[ "$found" == "true" ]] && eval "$key=\$val"
   done < "$STATE_FILE"
+  # A checkpoint written before the network mode was a choice has no NETWORK_MODE
+  # line, and that deployment runs the module default of its day. Left alone, the
+  # resumed session would carry the top-level default of overlay into a
+  # node-subnet deployment's tfvars, the migration request _load_tfvars refuses
+  # to write.
+  grep -q '^NETWORK_MODE=' "$STATE_FILE" || NETWORK_MODE="node-subnet"
 }
 
 # Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
@@ -202,6 +209,13 @@ _load_tfvars() {
   _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
   [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
 
+  # Every run since the mode became a choice writes aks_network_mode, so an
+  # absent key means a tfvars from before it, whose cluster runs the module
+  # default of that time. Seeding overlay here would ask for the one-way
+  # migration on the next apply; the guard would refuse it, but the wizard
+  # should not be the one asking.
+  NETWORK_MODE="node-subnet"
+
   # `identifier` is read before `name_prefix` so that a tfvars carrying both
   # lets the current key win. Accepting the retired key matters more here than
   # elsewhere: dropping it would leave NAME_PREFIX at its "dev" default and
@@ -212,7 +226,7 @@ _load_tfvars() {
            agw_sku_tier tls_certificate_source dns_label langsmith_domain \
            letsencrypt_email postgres_source redis_source clickhouse_source \
            sizing_profile postgres_admin_username postgres_database_name \
-           amr_sku; do
+           amr_sku aks_network_mode aks_sku_tier; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
@@ -236,6 +250,8 @@ _load_tfvars() {
       postgres_admin_username)   PG_ADMIN_USER="$_TF_VAL" ;;
       postgres_database_name)    PG_DB_NAME="$_TF_VAL" ;;
       amr_sku)                   AMR_SKU="$_TF_VAL" ;;
+      aks_network_mode)          NETWORK_MODE="$_TF_VAL" ;;
+      aks_sku_tier)              AKS_SKU_TIER="$_TF_VAL" ;;
     esac
   done
   # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
@@ -521,7 +537,7 @@ _run_section_3() {
   done
 
   _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
-    "Holds AKS node and pod IPs (Azure CNI). An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+    "Holds the AKS nodes, and in node-subnet mode the pods too; a /24 is enough in overlay mode. An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
   AKS_SUBNET_ID="$_SUBNET_ID"; AKS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
 
   _ask_subnet "PostgreSQL" "postgres_subnet_address_prefix" "10.0.32.0/20" \
@@ -579,6 +595,8 @@ NODE_VM_SIZE="Standard_D4s_v3"
 NODE_MIN=2
 NODE_MAX=5
 NODE_MAX_PODS=60
+NETWORK_MODE="overlay"
+AKS_SKU_TIER="Standard"
 
 _run_section_4() {
   _section "4. AKS Cluster"
@@ -607,15 +625,58 @@ _run_section_4() {
   _ask_int "Node pool max count (autoscaler ceiling)" "$max_default"
   NODE_MAX="$_REPLY"
 
-  # Azure CNI draws pod IPs from the AKS subnet, so this multiplies the subnet
-  # size: the cluster needs (max_count + 1) x (max_pods + 1) addresses. It is one
-  # of the two knobs the capacity check tells operators to lower, so it needs to
-  # be reachable from here.
-  _hint "Max pods per node multiplies the AKS subnet requirement, at"
-  _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
-  _hint "lower it if your subnet is fixed and tight."
+  # Overlay is Microsoft's recommendation and keeps the AKS subnet to nodes
+  # only. node-subnet is the flat network earlier deployments run in. Both are
+  # creation-time choices: moving a cluster between them is a one-way migration
+  # that reimages every node pool, so the wizard asks rather than assuming.
+  _hint "Network mode. overlay (recommended): pods take addresses from a private"
+  _hint "10.244.0.0/16 range, Cilium enforces NetworkPolicy, and the AKS subnet"
+  _hint "holds nodes only, so a /24 is plenty. node-subnet: pods take VNet"
+  _hint "addresses and the subnet must hold (max count + 1) x (max pods + 1)"
+  _hint "addresses per pool."
+  local mode_choice=""
+  _answered 4 && mode_choice="$(_index_of "$NETWORK_MODE" overlay node-subnet)"
+  _ask_choice --default "$mode_choice" \
+    "Which network mode?" \
+    "overlay      — Azure CNI Overlay with Cilium (recommended)" \
+    "node-subnet  — Azure CNI node subnet (flat network, legacy)"
+  case "$_CHOICE" in
+    1) NETWORK_MODE="overlay" ;;
+    2) NETWORK_MODE="node-subnet" ;;
+  esac
+
+  if [[ "$NETWORK_MODE" == "node-subnet" ]]; then
+    # Azure CNI draws pod IPs from the AKS subnet, so this multiplies the subnet
+    # size: the cluster needs (max_count + 1) x (max_pods + 1) addresses. It is
+    # one of the two knobs the capacity check tells operators to lower, so it
+    # needs to be reachable from here.
+    _hint "Max pods per node multiplies the AKS subnet requirement, at"
+    _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
+    _hint "lower it if your subnet is fixed and tight."
+  else
+    _hint "Max pods per node. 60 suits most deployments; overlay allows up to 250"
+    _hint "and the value no longer sizes the AKS subnet."
+  fi
   _ask_int "Max pods per node" "60"
   NODE_MAX_PODS="$_REPLY"
+
+  # Free has no SLA. Standard is where a production cluster starts; the tier is
+  # updated in place, so this one is safe to change later.
+  _hint "Tier. Standard carries the financially backed uptime SLA (99.95% across"
+  _hint "availability zones) and is the production choice. Free has no SLA and"
+  _hint "suits a throwaway cluster. Premium adds long-term Kubernetes support."
+  local tier_choice=""
+  _answered 4 && tier_choice="$(_index_of "$AKS_SKU_TIER" Standard Free Premium)"
+  _ask_choice --default "$tier_choice" \
+    "Which AKS tier?" \
+    "Standard — uptime SLA (recommended)" \
+    "Free     — no SLA" \
+    "Premium  — Standard plus long-term support"
+  case "$_CHOICE" in
+    1) AKS_SKU_TIER="Standard" ;;
+    2) AKS_SKU_TIER="Free" ;;
+    3) AKS_SKU_TIER="Premium" ;;
+  esac
 }
 
 # -- 5. Ingress Controller ---------------------------------------------------
@@ -692,6 +753,13 @@ _run_section_5() {
     _hint "Switching an existing deployment to AGIC updates the cluster in place — the"
     _hint "add-on is an argument on the cluster resource, not a new cluster."
     _hint "With a VNet you own, supply the Application Gateway subnet."
+    if [[ "$NETWORK_MODE" == "overlay" ]]; then
+      echo ""
+      _yellow "NOTE"; printf ": AGIC with the overlay network mode is not yet verified by this module.\n"
+      _hint "Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here)"
+      _hint "except in Azure Government and Azure China, where it is unsupported. Confirm ingress on"
+      _hint "the cluster before relying on it, or choose nginx, where every TLS path is validated."
+    fi
   fi
 }
 
@@ -1177,6 +1245,7 @@ while true; do
     [[ -n "$BASTION_SUBNET_ID" ]] && printf "  %-24s %s\n" "   Bastion subnet:" "reuse   $BASTION_SUBNET_ID"
   fi
   printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX  max_pods=$NODE_MAX_PODS"
+  printf "  %-24s %s\n" "   Network / tier:"   "$NETWORK_MODE  tier=$AKS_SKU_TIER"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
   [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
   [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
@@ -1288,6 +1357,8 @@ default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
 default_node_pool_max_pods  = ${NODE_MAX_PODS}
+aks_network_mode            = "${NETWORK_MODE}"
+aks_sku_tier                = "${AKS_SKU_TIER}"
 
 #------------------------------------------------------------------------------
 # Ingress

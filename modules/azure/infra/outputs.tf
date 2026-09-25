@@ -245,3 +245,15 @@ output "dns_nameservers" {
   description = "Azure nameservers for the DNS zone — configure at your registrar"
   value       = var.create_dns_zone ? module.dns[0].nameservers : []
 }
+
+output "aks_network" {
+  description = "Effective AKS network mode, pod range, data plane, policy engine and tier, as planned or created. null for an attached cluster."
+  value = module.aks.network_profile == null ? null : {
+    mode         = coalesce(module.aks.network_profile.network_plugin_mode, "node-subnet")
+    pod_cidr     = module.aks.network_profile.pod_cidr
+    data_plane   = module.aks.network_profile.network_data_plane
+    policy       = module.aks.network_profile.network_policy
+    sku_tier     = module.aks.sku_tier
+    support_plan = module.aks.support_plan
+  }
+}

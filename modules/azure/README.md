@@ -83,6 +83,7 @@ Terraform also warns when `location` doesn't match the cluster's region, since K
 These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
 
 - `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
+- `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
 - `availability_zones`, for the cluster only — PostgreSQL still uses it
@@ -930,6 +931,62 @@ sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
 automatically as the eleventh address unless you set one, and plan rejects a
 value outside the range — worth knowing if you set both by hand, because
 changing the range strands an address written against the old one.
+
+### Network mode, data plane and tier
+
+AKS runs Azure CNI in one of two IPAM modes, chosen at creation with
+`aks_network_mode`:
+
+| Mode | Where pod IPs come from | AKS subnet must hold | Data plane default |
+|------|-------------------------|----------------------|--------------------|
+| `overlay` | `aks_pod_cidr` (default `10.244.0.0/16`), a range private to the cluster | nodes only: `(max_count + 1)` per pool, so a `/24` carries 251 nodes | Cilium |
+| `node-subnet` | the AKS subnet, alongside the nodes | `(max_count + 1) x (max_pods + 1)` per pool: a 10-node pool at 60 pods needs a `/22` | Azure Network Policy Manager |
+
+Overlay is Microsoft's recommendation for most clusters and what the templates
+and the quickstart write. The variable defaults to `node-subnet` so that a
+deployment created before this option existed does not move on its next apply.
+Overlay pod traffic leaves the node with the node's address, so the Blob
+firewall, Key Vault ACLs and Postgres/Redis private endpoints see the same
+source they see today, and the capacity precondition switches to counting
+nodes.
+
+The pod range never appears in the VNet, but it is routed on every node, so
+plan refuses one that overlaps the VNet address space, `aks_service_cidr`, or
+the ranges AKS reserves (`169.254.0.0/16`, `172.30.0.0/16`, `172.31.0.0/16`,
+`192.0.2.0/24`). Check it against anything peered or reachable on-premises
+yourself; Terraform cannot see those. Each node takes a `/24` from it, so plan
+also refuses a range with fewer `/24`s than the pools can reach nodes.
+
+`aks_network_dataplane` picks Cilium in overlay mode and Azure Network Policy
+Manager in node-subnet mode unless you name one. Cilium (Azure CNI Powered by
+Cilium) enforces NetworkPolicy with eBPF, needs overlay mode and Kubernetes
+1.31 or later, and is what Microsoft now recommends; Azure Network Policy
+Manager loses Linux support on 2028-09-30. The one NetworkPolicy this module
+creates, the namespace rule that admits the ingress gateway by its subnet,
+works on both. Cilium's documented limitation is that `ipBlock` rules cannot
+select node or pod addresses, which that rule does not do.
+
+**Changing the network profile of an existing cluster is refused.** At plan
+time Terraform reads the profile the cluster runs (mode, data plane, policy
+engine, pod range) and a precondition fails the plan when the requested one
+differs. Two changes are Azure updates applied in place, each reimaging every
+node pool: the Azure data plane to Cilium (the policy engine follows), and
+installing a policy engine where none runs; set `aks_allow_network_upgrade =
+true` to run one of those deliberately. Everything else is refused with or
+without the flag. The provider applies overlay back to node-subnet, Cilium back
+to Azure, a policy engine swapped or removed, and a new `aks_pod_cidr` by
+replacing the cluster and everything installed on it. Azure's node-subnet to
+overlay migration is in place, but only on a cluster with no policy engine, and
+this module sets one on every cluster it creates, so through Terraform the
+migration and the engine's install would be a single apply, which Microsoft
+does not support. For a new mode, build a new cluster in it and move the
+release, which is the right answer for a production cluster in any case.
+
+`aks_sku_tier` defaults to `Standard`, the tier with the financially backed
+uptime SLA (99.95% when `availability_zones` spans zones), and is updated in
+place, so an existing cluster moves tiers on its next apply. `Free` has no SLA
+and suits a throwaway cluster; `Premium` adds long-term Kubernetes support,
+selected with `aks_support_plan = "AKSLongTermSupport"`.
 
 ### What a subnet you supply must already have
 

@@ -234,6 +234,8 @@ clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 default_node_pool_vm_size   = "Standard_D8s_v3"
 default_node_pool_max_count = 12
 default_node_pool_max_pods  = 60
+aks_network_mode            = "overlay"   # Azure CNI Overlay + Cilium (node-subnet = legacy flat network)
+aks_sku_tier                = "Standard"  # uptime SLA; Free has none
 
 # ── TLS (pick one approach) ───────────────────────────────────────────────────
 # Option A — HTTP only (quickstart default, zero setup — validated ✅)
