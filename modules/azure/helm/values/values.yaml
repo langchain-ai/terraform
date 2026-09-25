@@ -34,3 +34,11 @@ config:
     enabled: true
     engine: "Azure"
     # azureStorageAccountName + azureStorageContainerName are set in the overrides layer.
+
+# The chart enables both by default, and deploy.sh only ever layers an overlay
+# on top when enable_insights / enable_polly is true. Off here, so false means off.
+insights:
+  enabled: false
+
+polly:
+  enabled: false
