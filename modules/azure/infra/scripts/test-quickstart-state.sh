@@ -80,6 +80,17 @@ eq "COST_CENTER keeps space"   "$COST_CENTER"   "CC-9 / dept 4"
 eq "PG_ADMIN_USER survives"    "$PG_ADMIN_USER" "ls_admin"
 eq "CREATE_WAF survives"       "$CREATE_WAF"    "true"
 
+# A checkpoint written before the network mode was a choice has no NETWORK_MODE
+# line; that deployment runs node-subnet, and the resumed session must not carry
+# the top-level default of overlay into its tfvars.
+printf 'SECTION=4\nANSWERED=1 2 3\n' > "$STATE_FILE"
+NETWORK_MODE="overlay"
+_load_state
+eq "old checkpoint seeds node-subnet"  "$NETWORK_MODE" "node-subnet"
+printf 'SECTION=4\nNETWORK_MODE=overlay\n' > "$STATE_FILE"
+_load_state
+eq "checkpoint with a mode keeps it"   "$NETWORK_MODE" "overlay"
+
 echo "2. _STATE_KEYS covers every variable _load_tfvars assigns"
 # _load_state drops a key that is missing from the whitelist without saying so,
 # and _save_state never writes it, so a rename that lands in one place and not

@@ -620,7 +620,7 @@ variable "additional_node_pools" {
 
 variable "aks_network_mode" {
   type        = string
-  description = "Azure CNI IPAM mode. overlay is Microsoft's recommendation for most clusters: pods take addresses from aks_pod_cidr, a range private to the cluster, and the AKS subnet holds nodes only, so a /24 carries a pool total of 251 nodes. node-subnet (the default, so that existing deployments do not move) gives pods VNet addresses and needs a subnet of (max_count + 1) x (max_pods + 1) addresses per pool. Changing the mode on an existing cluster is Microsoft's one-way migration, which reimages every node pool at once; see aks_allow_network_mode_migration."
+  description = "Azure CNI IPAM mode. overlay is Microsoft's recommendation for most clusters: pods take addresses from aks_pod_cidr, a range private to the cluster, and the AKS subnet holds nodes only, so a /24 carries a pool total of 251 nodes. node-subnet (the default, so that existing deployments do not move) gives pods VNet addresses and needs a subnet of (max_count + 1) x (max_pods + 1) addresses per pool. The mode is fixed at creation: Azure's one-way migration to overlay requires no network policy engine on the cluster, which this module always installs, so a mode change on an existing cluster is refused at plan; see aks_allow_network_upgrade."
   default     = "node-subnet"
 
   validation {
@@ -668,9 +668,9 @@ variable "aks_network_dataplane" {
   }
 }
 
-variable "aks_allow_network_mode_migration" {
+variable "aks_allow_network_upgrade" {
   type        = bool
-  description = "Permit an aks_network_mode or aks_network_dataplane change on a cluster that already exists, in the two directions Azure migrates in place: node-subnet to overlay, and the azure data plane to cilium. Each reimages every node pool at once and cannot be reversed, Azure runs them as separate operations (one per apply), and the overlay migration requires no network policy engine on the cluster, which rules out a node-subnet cluster this module created. Off, any change to the mode, the data plane or aks_pod_cidr on an existing cluster is refused at plan. For a production cluster, build a new one in the new configuration instead."
+  description = "Permit the two network changes Azure applies in place on a cluster that already exists: the azure data plane to cilium (the policy engine follows), and installing a network policy engine where none runs. Each reimages every node pool at once. Off, any change to the mode, the data plane, the policy engine or aks_pod_cidr on an existing cluster is refused at plan. The mode never changes through this module: Azure's node-subnet to overlay migration requires no policy engine on the cluster and the module sets one on every cluster it creates. For a new mode, data plane direction or pod range, build a new cluster."
   default     = false
 }
 

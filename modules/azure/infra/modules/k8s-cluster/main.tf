@@ -234,15 +234,18 @@ provider "helm" {
 # does not exist yet fails the plan, while a list that finds nothing is the
 # "no cluster yet" answer a first apply needs. Its inputs are variables only,
 # so the read happens during plan and never defers to apply, where the cluster
-# update it exists to stop could already be under way. The comparison lives in
-# the root module (terraform_data.aks_network_mode_guard), where a failing
-# precondition is reachable by the test suite. Read-only GET, no writes.
+# update it exists to stop could already be under way. The query keeps only the
+# cluster with this name, so state holds one entry and not every cluster the
+# caller can read; the resource group is matched in Terraform below, since a
+# name can repeat across groups. The comparison lives in the root module
+# (terraform_data.aks_network_mode_guard), where a failing precondition is
+# reachable by the test suite. Read-only GET, no writes.
 data "azapi_resource_list" "clusters" {
   count     = var.create_cluster ? 1 : 0
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
   }
 }
 

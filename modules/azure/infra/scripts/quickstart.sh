@@ -179,6 +179,12 @@ _load_state() {
     done
     [[ "$found" == "true" ]] && eval "$key=\$val"
   done < "$STATE_FILE"
+  # A checkpoint written before the network mode was a choice has no NETWORK_MODE
+  # line, and that deployment runs the module default of its day. Left alone, the
+  # resumed session would carry the top-level default of overlay into a
+  # node-subnet deployment's tfvars, the migration request _load_tfvars refuses
+  # to write.
+  grep -q '^NETWORK_MODE=' "$STATE_FILE" || NETWORK_MODE="node-subnet"
 }
 
 # Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
@@ -747,6 +753,13 @@ _run_section_5() {
     _hint "Switching an existing deployment to AGIC updates the cluster in place — the"
     _hint "add-on is an argument on the cluster resource, not a new cluster."
     _hint "With a VNet you own, supply the Application Gateway subnet."
+    if [[ "$NETWORK_MODE" == "overlay" ]]; then
+      echo ""
+      _yellow "NOTE"; printf ": AGIC with the overlay network mode is not yet verified by this module.\n"
+      _hint "Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here)"
+      _hint "except in Azure Government and Azure China, where it is unsupported. Confirm ingress on"
+      _hint "the cluster before relying on it, or choose nginx, where every TLS path is validated."
+    fi
   fi
 }
 

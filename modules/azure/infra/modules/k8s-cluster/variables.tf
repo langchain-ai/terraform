@@ -177,7 +177,7 @@ variable "availability_zones" {
 
 variable "network_plugin_mode" {
   type        = string
-  description = "Azure CNI IPAM mode. null is node-subnet mode, where pods take VNet addresses from subnet_id. \"overlay\" gives pods addresses from pod_cidr and leaves the subnet to the nodes. Changing it on an existing cluster is Microsoft's one-way migration, which reimages every node pool; the root module refuses it unless asked."
+  description = "Azure CNI IPAM mode. null is node-subnet mode, where pods take VNet addresses from subnet_id. \"overlay\" gives pods addresses from pod_cidr and leaves the subnet to the nodes. Changing it on an existing cluster is Microsoft's one-way migration, which needs a cluster with no policy engine; the root module refuses it."
   default     = null
 
   validation {

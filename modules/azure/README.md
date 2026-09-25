@@ -966,22 +966,21 @@ creates, the namespace rule that admits the ingress gateway by its subnet,
 works on both. Cilium's documented limitation is that `ipBlock` rules cannot
 select node or pod addresses, which that rule does not do.
 
-**Changing the mode, the data plane or the pod range on an existing cluster is
-refused.** Azure migrates a cluster in place in two directions only, node-subnet
-to overlay and the Azure data plane to Cilium, each a one-way operation that
-reimages every node pool at once; the provider applies every other change
-(overlay back to node-subnet, Cilium back to Azure, a new `aks_pod_cidr`) by
-replacing the cluster and everything installed on it. At plan time Terraform
-reads the profile the cluster runs and a precondition fails the plan when the
-requested one differs. Set `aks_allow_network_mode_migration = true` to run
-one of the two migrations deliberately, one per apply, since Azure does not run
-both in one operation (overlay defaults the data plane to Cilium, so set
-`aks_network_dataplane = "azure"` explicitly while migrating the mode). The
-overlay migration also requires no network policy engine on the cluster, and
-this module installs one on every cluster it creates, so a cluster it built in
-node-subnet mode has no in-place path to overlay: build a new cluster in the
-new mode and move the release, which is the right answer for a production
-cluster in any case.
+**Changing the network profile of an existing cluster is refused.** At plan
+time Terraform reads the profile the cluster runs (mode, data plane, policy
+engine, pod range) and a precondition fails the plan when the requested one
+differs. Two changes are Azure updates applied in place, each reimaging every
+node pool: the Azure data plane to Cilium (the policy engine follows), and
+installing a policy engine where none runs; set `aks_allow_network_upgrade =
+true` to run one of those deliberately. Everything else is refused with or
+without the flag. The provider applies overlay back to node-subnet, Cilium back
+to Azure, a policy engine swapped or removed, and a new `aks_pod_cidr` by
+replacing the cluster and everything installed on it. Azure's node-subnet to
+overlay migration is in place, but only on a cluster with no policy engine, and
+this module sets one on every cluster it creates, so through Terraform the
+migration and the engine's install would be a single apply, which Microsoft
+does not support. For a new mode, build a new cluster in it and move the
+release, which is the right answer for a production cluster in any case.
 
 `aks_sku_tier` defaults to `Standard`, the tier with the financially backed
 uptime SLA (99.95% when `availability_zones` spans zones), and is updated in

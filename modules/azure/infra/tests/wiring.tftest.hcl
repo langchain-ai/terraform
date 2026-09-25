@@ -271,3 +271,18 @@ run "premium_tier_with_long_term_support_is_passed_through" {
     error_message = "tier and support plan did not reach the cluster"
   }
 }
+
+# ── AGIC with overlay ────────────────────────────────────────────────────────
+# Nothing has confirmed Application Gateway reaching overlay pod addresses, so the
+# pairing warns (a check, not a precondition) and the plan proceeds.
+
+run "agic_with_overlay_warns" {
+  command = plan
+
+  variables {
+    ingress_controller = "agic"
+    aks_network_mode   = "overlay"
+  }
+
+  expect_failures = [check.agic_with_overlay_unverified]
+}
