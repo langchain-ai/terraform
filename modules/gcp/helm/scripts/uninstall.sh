@@ -33,9 +33,9 @@ INFRA_DIR="$HELM_DIR/../infra"
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 DELETE_TIMEOUT="${DELETE_TIMEOUT:-120s}"
-# In-cluster ClickHouse holds trace data, so its claim is kept by default.
-# Set this to true when the cluster is going away. The GCE PD CSI driver can
-# then reclaim the disk before Terraform removes the GKE cluster.
+# In-cluster ClickHouse, Postgres, and Redis hold data, so their claims are
+# kept by default. Set this to true when the cluster is going away. The GCE PD
+# CSI driver can then reclaim the disks before Terraform removes the GKE cluster.
 DELETE_DATA_PVCS="${DELETE_DATA_PVCS:-false}"
 
 # Names of resources of type $1 whose name matches extended regex $2.
@@ -138,9 +138,9 @@ echo "  - Helm release '$RELEASE_NAME' from namespace '$NAMESPACE'"
 echo "  - Operator-managed LangSmith resources in namespace '$NAMESPACE'"
 echo "  - JuiceFS / sandbox volumes (while CSI is still present)"
 if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
-  echo "  - ClickHouse data PVCs - TRACE DATA IS DELETED (DELETE_DATA_PVCS=true)"
+  echo "  - In-cluster data PVCs (ClickHouse, Postgres, Redis) - DATA IS DELETED (DELETE_DATA_PVCS=true)"
 else
-  echo "  - Keeps ClickHouse data PVCs (set DELETE_DATA_PVCS=true to delete)"
+  echo "  - Keeps in-cluster data PVCs: ClickHouse, Postgres, Redis (set DELETE_DATA_PVCS=true to delete)"
 fi
 echo ""
 printf "Proceed? [y/N] "
@@ -207,13 +207,34 @@ _force_clear_stuck_pods
 echo ""
 
 # ── Reclaim dynamically provisioned GCE PD before Terraform destroy ──────────
-# data-langsmith-clickhouse-* uses the premium-rwo storage class and GCE PD CSI.
-# Terraform does not track the disk. Delete the claim while CSI is available so
-# its reclaim policy can remove the disk before the GKE cluster is destroyed.
-_data_pvcs=$(_names_matching pvc 'clickhouse')
+# In-cluster ClickHouse, Postgres, and Redis keep their data on GCE PD CSI
+# claims: data-langsmith-clickhouse-*, data-langsmith-postgres-*, and
+# data-langsmith-redis-*. The in-cluster Postgres and Redis of the Fleet,
+# Insights, and Polly add-ons use claims such as
+# data-langsmith-standalone-polly-redis-0. helm uninstall does not delete these
+# claims, and Terraform does not track the disks. Delete the claims while CSI is
+# available so their reclaim policy can remove the disks before the GKE cluster
+# is destroyed. The chart deletes the SmithDB backfill claim
+# (data-langsmith-smithdb-taskdb-postgres-*) with its StatefulSet. The pattern
+# also matches the taskdb claim, in case the claim is still there.
+#
+# The Postgres and Redis pattern matches only the chart claim names of this
+# release: data-<prefix>-[<component>-](postgres|redis)-<ordinal>. The chart
+# prefix is RELEASE_NAME when the name contains "langsmith", and
+# RELEASE_NAME-langsmith when the name does not. The claims of another release
+# do not match, also when its name starts with RELEASE_NAME (for example
+# langsmith-dev). When the release name is longer than 13 characters, the chart
+# can shorten the add-on claim names, and the pattern does not match them.
+_chart_prefix="$RELEASE_NAME"
+[[ "$RELEASE_NAME" == *langsmith* ]] || _chart_prefix="${RELEASE_NAME}-langsmith"
+# Escape each dot, because a dot in an extended regex matches any character.
+_prefix_re=$(printf '%s' "$_chart_prefix" | sed 's/[.]/\\./g')
+_db_claim_re="^data-${_prefix_re}-"
+_db_claim_re+="((standalone-(fleet|insights|polly)|smithdb-taskdb)-)?(postgres|redis)-[0-9]+\$"
+_data_pvcs=$(_names_matching pvc "clickhouse|${_db_claim_re}")
 if [[ -n "$_data_pvcs" ]]; then
   if [[ "$DELETE_DATA_PVCS" == "true" ]]; then
-    echo "Deleting ClickHouse data PVCs (reclaims GCE PD while CSI is available)..."
+    echo "Deleting in-cluster data PVCs (reclaims GCE PD while CSI is available)..."
     while IFS= read -r _pvc; do
       [[ -z "$_pvc" ]] && continue
       echo "  deleting PVC $_pvc"
@@ -221,7 +242,7 @@ if [[ -n "$_data_pvcs" ]]; then
         --ignore-not-found --timeout="$DELETE_TIMEOUT" || true
     done <<< "$_data_pvcs"
   else
-    echo "Keeping ClickHouse data PVCs (DELETE_DATA_PVCS is not true):"
+    echo "Keeping in-cluster data PVCs (DELETE_DATA_PVCS is not true):"
     echo "$_data_pvcs" | sed 's|^|  |'
     echo "  These are dynamically provisioned GCE Persistent Disks that Terraform"
     echo "  does not track. Before 'terraform destroy', delete them so the disks"
