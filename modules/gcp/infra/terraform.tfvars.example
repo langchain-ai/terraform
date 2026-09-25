@@ -352,6 +352,20 @@ enable_polly = false
 # Enables additional product analytics sent back to LangChain
 enable_usage_telemetry = false
 
+# SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID,
+# Okta, Auth0, Google Workspace, etc. all work through the same generic
+# client_id/secret/issuer_url.
+# Client ID/secret/issuer URL are stored in Secret Manager by setup-env.sh
+# (oauth-client-id, oauth-client-secret, oauth-issuer-url) and read into
+# TF_VAR_langsmith_oauth_client_id/secret/issuer_url — set this to true, then
+# re-source setup-env.sh, before running init-values.sh.
+# WARNING: enable only after the initial install has completed with basic
+# auth and you've confirmed org-admin access — this disables config.basicAuth,
+# and flipping it on before an admin account exists locks you out of the UI.
+# Set up SCIM (if you're using it) after this, since SCIM's user matching
+# depends on the OIDC provider this creates.
+enable_sso_oidc = false
+
 #------------------------------------------------------------------------------
 # Optional: SmithDB (chart 0.16+, early access)
 #
