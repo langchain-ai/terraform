@@ -890,6 +890,9 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   # appVersion of the chart it resolves, so it cannot lag a chart upgrade.
   # safe-to-evict=false stops the cluster autoscaler from removing a node that
   # runs sandbox-host (and its sandbox VMs) to consolidate the pool.
+  # The format Job needs no KVM and no host path, and its deadline is 300 s. The
+  # sandbox-host pool can be at 0 nodes. So the Job prefers a sandbox node, but
+  # it can also run on any Linux node and does not wait for a new node to boot.
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
@@ -904,7 +907,19 @@ sandboxes:
         cluster-autoscaler.kubernetes.io/safe-to-evict: \"false\"
     serviceAccount:
       annotations:
-        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\""
+        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+  juicefsFormatJob:
+    nodeSelector:
+      kubernetes.io/os: linux
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: sandbox.langsmith.com/host
+                  operator: In
+                  values: [\"true\"]"
 fi
 
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────

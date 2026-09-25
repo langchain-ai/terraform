@@ -387,9 +387,10 @@ variable "sandbox_host_node_count" {
 }
 
 variable "sandbox_host_min_node_count" {
-  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true. null (default) follows sizing_profile: production and production-large use 0, so a regional pool does not keep an idle n2-standard-32 in every zone; every other profile uses 1. The autoscaler adds a node when sandbox-host is Pending."
+  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true. The pool is regional, so a minimum of 1 keeps one node in every zone. The default of 0 lets the autoscaler keep only the nodes that sandbox-host needs, one for each replica. When sandbox-host is Pending, the autoscaler adds a node in a healthy zone."
   type        = number
-  default     = null
+  default     = 0
+  nullable    = false
 }
 
 variable "sandbox_host_max_node_count" {

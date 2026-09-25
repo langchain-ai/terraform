@@ -190,7 +190,7 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
-      condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= local.sandbox_host_min_node_count
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= var.sandbox_host_min_node_count
       error_message = "sandbox_host_max_node_count must be greater than or equal to sandbox_host_min_node_count."
     }
   }
@@ -345,7 +345,7 @@ module "gke_cluster" {
   # virtualization and are isolated from the default LangSmith workload pool.
   enable_sandbox_host_node_pool          = var.enable_sandboxes
   sandbox_host_node_count                = var.sandbox_host_node_count
-  sandbox_host_min_node_count            = local.sandbox_host_min_node_count
+  sandbox_host_min_node_count            = var.sandbox_host_min_node_count
   sandbox_host_max_node_count            = var.sandbox_host_max_node_count
   sandbox_host_machine_type              = local.sandbox_host_machine_type
   sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb

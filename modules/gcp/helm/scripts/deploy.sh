@@ -804,9 +804,19 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
       -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].status}' 2>/dev/null) || _format_failed=""
   fi
   if [[ "$_format_failed" == *True* ]]; then
-    echo "  ✗ The JuiceFS format Job for release ${RELEASE_NAME} failed."
-    echo "     Check the langsmith-sandbox-host Workload Identity binding (run: make apply):"
-    echo "     kubectl logs -n $NAMESPACE -l $_format_selector"
+    _format_reason=$(kubectl get job -n "$NAMESPACE" -l "$_format_selector" \
+      -o jsonpath='{.items[*].status.conditions[?(@.type=="Failed")].reason}' 2>/dev/null) || _format_reason=""
+    echo "  ✗ The JuiceFS format Job for release ${RELEASE_NAME} failed (${_format_reason:-no reason})."
+    case "$_format_reason" in
+      *DeadlineExceeded*)
+        echo "     The Job did not finish in 300 s. Look for FailedScheduling or a slow image pull:"
+        echo "     kubectl describe job -n $NAMESPACE -l $_format_selector"
+        ;;
+      *)
+        echo "     Check the langsmith-sandbox-host Workload Identity binding (run: make apply):"
+        echo "     kubectl logs -n $NAMESPACE -l $_format_selector"
+        ;;
+    esac
     echo "     Then delete the Job and deploy again. Helm creates it again:"
     echo "     kubectl delete job -n $NAMESPACE -l $_format_selector && make deploy"
     _all_ready=false

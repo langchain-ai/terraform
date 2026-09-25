@@ -420,18 +420,27 @@ metadata goes to a dedicated Memorystore Redis.
 
 ### Host size
 
-The pool follows `sizing_profile`. Each variable in the table overrides only its own
-value:
+The machine type follows `sizing_profile` unless you set `sandbox_host_machine_type`:
 
-| `sizing_profile` | `sandbox_host_machine_type` | `sandbox_host_min_node_count` (per zone) |
-|---|---|---|
-| `production`, `production-large` | `n2-standard-32` | `0` |
-| every other profile | `n2-standard-8` | `1` |
+| `sizing_profile` | `sandbox_host_machine_type` |
+|---|---|
+| `production`, `production-large` | `n2-standard-32` |
+| every other profile | `n2-standard-8` |
 
 - The pool is regional, so `sandbox_host_node_count`, `sandbox_host_min_node_count`
-  and `sandbox_host_max_node_count` are per zone. A minimum of 1 keeps one node in
-  every zone. With a minimum of 0, the autoscaler adds a node when sandbox-host is
-  Pending, and removes idle nodes.
+  and `sandbox_host_max_node_count` are per zone.
+- `sandbox_host_min_node_count` defaults to `0`. The autoscaler keeps only the nodes
+  that sandbox-host needs: one node for each replica, and the chart default is 1
+  replica.
+- After a node or zone failure, Kubernetes waits 5 minutes (the default unreachable
+  toleration) and then replaces the sandbox-host pod. The autoscaler adds a node in
+  a healthy zone, and the node pulls the sandbox-host image. Recovery takes about
+  10 minutes. Running sandboxes on the failed node stop.
+- Set `sandbox_host_min_node_count = 1` to keep an idle node in every zone. Recovery
+  is then faster, because no node creation is necessary. Each extra zone costs one
+  idle node.
+- The `juicefs-format` Job prefers a sandbox-host node, but it can run on any Linux
+  node. It does not wait for a sandbox-host node when the pool is at 0 nodes.
 - sandbox-host has the pod annotation
   `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so the autoscaler does
   not remove a node that runs sandboxes.

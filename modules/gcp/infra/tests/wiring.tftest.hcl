@@ -215,9 +215,9 @@ run "enable_sandboxes_adds_the_juicefs_redis" {
   }
 }
 
-# ── Sandbox-host pool size follows sizing_profile ────────────────────────────
+# ── Sandbox-host pool size ──────────────────────────────────────────────────
 
-run "sandbox_host_pool_is_small_outside_production" {
+run "sandbox_host_machine_type_is_small_outside_production" {
   command = plan
 
   variables {
@@ -226,12 +226,12 @@ run "sandbox_host_pool_is_small_outside_production" {
   }
 
   assert {
-    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-8" && output.sandbox_host_node_pool_sizing.min_node_count == 1
-    error_message = "sizing_profile = dev did not resolve the sandbox-host pool to n2-standard-8 with a per-zone minimum of 1"
+    condition     = output.sandbox_host_machine_type == "n2-standard-8"
+    error_message = "sizing_profile = dev did not resolve the sandbox-host machine type to n2-standard-8"
   }
 }
 
-run "sandbox_host_pool_is_large_and_scales_from_zero_for_production" {
+run "sandbox_host_machine_type_is_large_for_production" {
   command = plan
 
   variables {
@@ -240,12 +240,12 @@ run "sandbox_host_pool_is_large_and_scales_from_zero_for_production" {
   }
 
   assert {
-    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-32" && output.sandbox_host_node_pool_sizing.min_node_count == 0
-    error_message = "sizing_profile = production did not resolve the sandbox-host pool to n2-standard-32 with a per-zone minimum of 0"
+    condition     = output.sandbox_host_machine_type == "n2-standard-32"
+    error_message = "sizing_profile = production did not resolve the sandbox-host machine type to n2-standard-32"
   }
 }
 
-run "sandbox_host_pool_production_large_matches_production" {
+run "sandbox_host_machine_type_production_large_matches_production" {
   command = plan
 
   variables {
@@ -254,12 +254,12 @@ run "sandbox_host_pool_production_large_matches_production" {
   }
 
   assert {
-    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-32" && output.sandbox_host_node_pool_sizing.min_node_count == 0
+    condition     = output.sandbox_host_machine_type == "n2-standard-32"
     error_message = "sizing_profile = production-large did not resolve like production"
   }
 }
 
-run "sandbox_host_pool_each_variable_overrides_only_itself" {
+run "sandbox_host_machine_type_explicit_value_wins" {
   command = plan
 
   variables {
@@ -269,53 +269,32 @@ run "sandbox_host_pool_each_variable_overrides_only_itself" {
   }
 
   assert {
-    condition     = output.sandbox_host_node_pool_sizing.machine_type == "n2-standard-8" && output.sandbox_host_node_pool_sizing.min_node_count == 0
-    error_message = "a machine type override changed the per-zone minimum, or was ignored"
+    condition     = output.sandbox_host_machine_type == "n2-standard-8"
+    error_message = "an explicit sandbox_host_machine_type did not override sizing_profile"
   }
 }
 
-run "sandbox_host_pool_explicit_minimum_wins" {
+# The per-zone minimum defaults to 0, so a max of 0 plans. An explicit minimum
+# above the max fails the precondition.
+run "sandbox_host_max_zero_is_allowed_with_the_default_minimum" {
   command = plan
 
   variables {
     enable_sandboxes            = true
-    sizing_profile              = "production"
+    sandbox_host_max_node_count = 0
+  }
+}
+
+run "sandbox_host_max_below_min_is_rejected" {
+  command = plan
+
+  variables {
+    enable_sandboxes            = true
     sandbox_host_min_node_count = 1
-  }
-
-  assert {
-    condition     = output.sandbox_host_node_pool_sizing.min_node_count == 1
-    error_message = "an explicit sandbox_host_min_node_count did not override sizing_profile"
-  }
-}
-
-# The max >= min precondition reads the resolved per-zone minimum, so the same
-# max passes where the profile resolves the minimum to 0 and fails where it is 1.
-run "sandbox_host_max_below_resolved_min_is_rejected" {
-  command = plan
-
-  variables {
-    enable_sandboxes            = true
-    sizing_profile              = "dev"
     sandbox_host_max_node_count = 0
   }
 
   expect_failures = [terraform_data.validate_inputs]
-}
-
-run "sandbox_host_max_zero_is_allowed_when_min_resolves_to_zero" {
-  command = plan
-
-  variables {
-    enable_sandboxes            = true
-    sizing_profile              = "production"
-    sandbox_host_max_node_count = 0
-  }
-
-  assert {
-    condition     = output.sandbox_host_node_pool_sizing.min_node_count == 0
-    error_message = "sizing_profile = production did not resolve the per-zone minimum to 0"
-  }
 }
 
 # ── SmithDB ──────────────────────────────────────────────────────────────────

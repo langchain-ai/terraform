@@ -175,14 +175,15 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # For SaaS-like production scale:
 # sandbox_juicefs_redis_memory_size = 20
 # sandbox_juicefs_redis_rdb_snapshot_period = "ONE_HOUR"
-# Node counts are per zone: the sandbox-host pool is regional.
+# Node counts are per zone: the sandbox-host pool is regional. The default
+# minimum of 0 keeps only the nodes that sandbox-host needs. Set 1 to keep an
+# idle node in every zone for faster recovery after a node or zone failure.
 # sandbox_host_node_count = 1
-# sandbox_host_min_node_count = 1
+# sandbox_host_min_node_count = 0
 # sandbox_host_max_node_count = 5
-# Host size follows sizing_profile when these stay unset. Each one overrides
-# only its own value:
-#   production, production-large -> n2-standard-32, min 0 nodes per zone
-#   every other profile          -> n2-standard-8,  min 1 node per zone
+# The machine type follows sizing_profile when it stays unset:
+#   production, production-large -> n2-standard-32
+#   every other profile          -> n2-standard-8
 # sandbox_host_machine_type = "n2-standard-8"
 # Optional: requests injected into sandbox containers that omit them. These
 # values preserve namespace request-quota accounting without imposing limits

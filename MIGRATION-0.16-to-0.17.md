@@ -55,8 +55,9 @@ and its metadata carry over.
 
 What the modules do for you:
 
-- The bucket identity moves with the mount. The IRSA role (AWS) or Workload Identity
-  service account (GCP) is now written to the sandbox-host ServiceAccount.
+- The bucket identity moves to the sandbox-host ServiceAccount. The IRSA role (AWS)
+  or Workload Identity service account (GCP) is now written there. On GCP, only the
+  `juicefs-format` Job uses it (see the next items).
 - On GCP, Terraform binds `langsmith-sandbox-host` to the LangSmith service account
   through Workload Identity, so run `terraform apply` before the deploy. The binding
   for the old `juicefs-csi-node-sa` stays through the upgrade. The `juicefs-format`
@@ -70,11 +71,18 @@ What the modules do for you:
   `appVersion`, as on AWS. `sandbox_host_image_tag` is ignored, so remove it from
   `terraform.tfvars`. Before, a tag from chart 0.16 kept the old `sandbox-host`
   image, and the `juicefs-format` Job used that image too.
-- On GCP, the sandbox-host pool size now follows `sizing_profile`. With
-  `production` or `production-large` and no explicit values, `terraform apply`
-  changes the pool to `n2-standard-32` with a per-zone minimum of 0. GKE recreates
-  every sandbox-host node for the machine type change, so running sandboxes stop.
-  See step 3.
+- On GCP, the sandbox-host machine type now follows `sizing_profile`. With
+  `production` or `production-large` and no `sandbox_host_machine_type`,
+  `terraform apply` changes the pool to `n2-standard-32`. GKE recreates every
+  sandbox-host node for the machine type change, so running sandboxes stop. See
+  step 3.
+- On GCP, `sandbox_host_min_node_count` now defaults to 0 per zone, not 1. With no
+  explicit value, the autoscaler removes the empty sandbox-host nodes after
+  `terraform apply`, and keeps the nodes that run sandbox-host. `make init-values`
+  adds the `cluster-autoscaler.kubernetes.io/safe-to-evict: "false"` annotation to
+  sandbox-host, so run `make init-values` and `make deploy` soon after
+  `make apply`. To keep one node in every zone, set
+  `sandbox_host_min_node_count = 1`.
 - On AWS, when the sandbox-host nodes have spare instance-store NVMe
   (`sandbox_host_local_nvme_bootstrap_enabled` with more than one device),
   `init-values.sh` passes those mounts (`/mnt/juicefs-cache*`) as
