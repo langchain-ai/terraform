@@ -72,3 +72,19 @@ removed {
     destroy = false
   }
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# State migration: postgres_admin_password gained `count`
+#
+# var.manage_secrets makes its state address indexed. Without this `moved` block,
+# deployments that applied earlier plan a destroy-then-create on an upgrade that
+# changes nothing else. langsmith_license_key had a `count` already, so it needs
+# no equivalent.
+#
+# Safe to delete once every deployment has applied once on this version.
+# ══════════════════════════════════════════════════════════════════════════════
+
+moved {
+  from = azurerm_key_vault_secret.postgres_admin_password
+  to   = azurerm_key_vault_secret.postgres_admin_password[0]
+}

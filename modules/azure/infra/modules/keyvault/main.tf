@@ -27,10 +27,6 @@
 #   run `terraform apply` again — the second apply will succeed.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Current Azure identity running Terraform (az login user or service principal).
-# Used to grant the deployer permission to create/update Key Vault secrets.
-data "azurerm_client_config" "current" {}
-
 # ── Key Vault ─────────────────────────────────────────────────────────────────
 
 resource "azurerm_key_vault" "langsmith" {
@@ -39,7 +35,7 @@ resource "azurerm_key_vault" "langsmith" {
   name                = var.name
   location            = var.location
   resource_group_name = var.resource_group_name
-  tenant_id           = data.azurerm_client_config.current.tenant_id
+  tenant_id           = var.tenant_id
   sku_name            = "standard"
 
   # RBAC mode: access controlled by Azure role assignments on this vault's
@@ -137,7 +133,7 @@ resource "azurerm_role_assignment" "terraform_kv_admin" {
 
   scope                = local.vault_id
   role_definition_name = "Key Vault Secrets Officer"
-  principal_id         = data.azurerm_client_config.current.object_id
+  principal_id         = var.terraform_principal_id
   principal_type       = var.terraform_principal_type
 }
 
@@ -173,10 +169,11 @@ resource "azurerm_role_assignment" "managed_identity_kv_reader" {
 # Only the deployer's grant is worth waiting on, because the secret writes below
 # are what would 403 without it. The managed-identity grant is read at runtime by
 # pods that start long after this apply, and an access grant that came from
-# outside this apply propagated long ago.
+# outside this apply propagated long ago. manage_secrets = false leaves no
+# writes to wait for either way.
 
 resource "time_sleep" "wait_for_rbac" {
-  count = var.manage_terraform_admin_assignment ? 1 : 0
+  count = var.manage_terraform_admin_assignment && var.manage_secrets ? 1 : 0
 
   create_duration = "30s"
   depends_on      = [azurerm_role_assignment.terraform_kv_admin]
@@ -196,10 +193,17 @@ resource "time_sleep" "wait_for_rbac" {
 # vault by infra/scripts/seed-keyvault-secrets.sh after apply — matching how the
 # AWS module writes SSM and the GCP module writes Secret Manager.
 #
+# var.manage_secrets = false writes neither, for a deployer with no Key Vault
+# data-plane access; seed-keyvault-secrets.sh writes all nine afterwards.
+# Flipping it on a live deployment deletes both from the vault — `terraform
+# state rm` them first. See PERMISSIONS.md.
+#
 # Naming convention: kebab-case, matching the TF variable names.
 # Scripts read these by name: az keyvault secret show --name <name>
 
 resource "azurerm_key_vault_secret" "postgres_admin_password" {
+  count = var.manage_secrets ? 1 : 0
+
   name         = "postgres-admin-password"
   value        = var.postgres_admin_password
   key_vault_id = local.vault_id
@@ -210,7 +214,7 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
 }
 
 resource "azurerm_key_vault_secret" "langsmith_license_key" {
-  count        = var.langsmith_license_key != "" ? 1 : 0
+  count        = var.manage_secrets && var.langsmith_license_key != "" ? 1 : 0
   name         = "langsmith-license-key"
   value        = var.langsmith_license_key
   key_vault_id = local.vault_id

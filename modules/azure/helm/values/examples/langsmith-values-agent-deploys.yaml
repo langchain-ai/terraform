@@ -17,10 +17,11 @@ config:
     tlsEnabled: false  # populated by init-values.sh
 
 # Resource sizing for shared components (backend, frontend, playground, aceBackend)
-# is handled by the sizing files (langsmith-values-sizing-{production,production-large,dev}.yaml).
-# Do not set replicaCount or resources for those components here — it silently
-# overrides HPA/autoscaling settings from the sizing file because this file
-# is loaded after them in Helm's values merge order.
+# is handled by the sizing files (langsmith-values-sizing-*.yaml). The resources
+# and autoscaling below apply only with sizing_profile = "default": deploy.sh
+# loads the sizing file after this one, and every sizing file sets hostBackend,
+# listener, and operator, so any other profile wins over them. A new sizing file
+# must set all three too.
 
 hostBackend:
   enabled: true

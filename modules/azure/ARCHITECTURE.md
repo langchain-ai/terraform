@@ -239,7 +239,7 @@ Pass 2 — Application
 
 ## Resource Sizing
 
-Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for the full resource tables — CPU requests/limits, memory requests/limits, replica counts, and HPA ranges for every component across all four profiles.
+Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for total CPU and memory per profile. Each profile's values file holds its per-component resources and HPA ranges.
 
 | Profile | Use case | Set via |
 |---------|---------|---------|

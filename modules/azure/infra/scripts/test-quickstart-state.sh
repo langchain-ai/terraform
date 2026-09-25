@@ -148,14 +148,18 @@ $NAME_TFKEY = "acme"
 location        = "westus2"
 owner           = "platform team"
 create_waf      = true
+langsmith_domain = "langsmith.acme.com"
+create_dns_zone = true
 EOF
-PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; NETWORK_MODE="overlay"; eval "$NAME_VAR="
+PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; NETWORK_MODE="overlay"; CREATE_DNS_ZONE="false"; eval "$NAME_VAR="
 _load_tfvars
 eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "acme"
 eq "PROFILE read from the header"    "$PROFILE"     "prod"
 eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
 eq "CREATE_WAF read"                 "$CREATE_WAF"  "true"
+# Section 6 defaults its zone prompt to this value on a re-edit.
+eq "CREATE_DNS_ZONE read"            "$CREATE_DNS_ZONE" "true"
 # A tfvars from before the mode was a choice deploys the module default of
 # that time; seeding overlay would write a migration into it on save.
 eq "absent aks_network_mode is node-subnet" "$NETWORK_MODE" "node-subnet"
@@ -169,6 +173,25 @@ eval "$NAME_VAR="; PROFILE=""
 _load_state
 eq "name survives the full trip"    "${!NAME_VAR}" "acme"
 eq "profile survives the full trip" "$PROFILE"     "prod"
+
+echo "7. A trailing comment on a bare value is not part of the value"
+# terraform.tfvars.example ships annotated keys, so a copied file reaches here
+# with them. An unstripped comment makes every boolean read as neither true nor
+# false, and _derive_kv_name then names a vault that does not exist.
+cat > "$OUTPUT" << EOF
+subscription_id       = "sub-1"
+$NAME_TFKEY           = "acme"
+create_waf            = false  # the dev subscription has no WAF quota
+blob_ttl_short_days   = 21     # short-lived trace payloads
+create_keyvault       = false  # attach to the platform vault
+existing_keyvault_name = "corp-shared-kv"
+unique_resource_names = true
+EOF
+CREATE_WAF="true"; BLOB_TTL_SHORT_DAYS=""
+_load_tfvars
+eq "annotated boolean loses its comment" "$CREATE_WAF"          "false"
+eq "annotated integer loses its comment" "$BLOB_TTL_SHORT_DAYS" "21"
+eq "attach mode survives the comment"    "$(_derive_kv_name)"   "corp-shared-kv"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
