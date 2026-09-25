@@ -309,12 +309,14 @@ the cache pool and a taskdb Postgres on the compute pool (the general pool for
 `minimal`). The backfill also reads the traces bucket; see
 [Backfill access](#backfill-access-to-the-traces-bucket).
 
-- Time window. On a test cluster with chart 0.17.0-rc.38, an empty start time
-  covered only about the last 14 days. The chart values comment gives 400 days.
-  Set `START_TIME` to a time before the oldest trace that you want.
+- Time window. An empty start time keeps the chart default window. On chart
+  0.17.0-rc.42, the default window is 400 days, and the migration Job log shows
+  the window. To copy all history, set `START_TIME` to a time before the oldest
+  trace.
 - Duration. On a test cluster, about 10,000 rows took about 2 hours, with more
   than 30 minutes near 95%. That plateau is not a stall. A task whose window
-  includes the last hour stays `pending` by design.
+  includes the last hour stays `pending` by design. For in-cluster ClickHouse,
+  see [Slow backfill on in-cluster ClickHouse](#slow-backfill-on-in-cluster-clickhouse).
 - Completion. The backfill is complete when every row of the taskdb table
   `migration_jobs` has `promoted_at`. Do not use the percent or the pod phase.
 
@@ -488,6 +490,19 @@ kubectl delete job langsmith-smithdb-migration -n langsmith --cascade=foreground
 ```
 
 The taskdb keeps the task state, so a new Job continues the backfill.
+
+### Slow backfill on in-cluster ClickHouse
+
+The migration Job logs `ClickHouse telemetry degraded; reducing migration
+concurrency`, with an error about `system.asynchronous_metric_log`. The
+in-cluster ClickHouse does not have that table. The Job then runs with
+`crawl_limit: 1`, and tasks can stay unclaimed for a long time. On a test
+cluster with chart 0.17.0-rc.42, 2 tasks stayed unclaimed for 57 minutes.
+No module variable changes this behavior.
+
+```sh
+kubectl logs job/langsmith-smithdb-migration -n langsmith | grep 'telemetry degraded'
+```
 
 ### UnknownIssuer
 
