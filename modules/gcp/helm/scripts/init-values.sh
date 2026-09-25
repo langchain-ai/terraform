@@ -867,18 +867,24 @@ else
 fi
 
 # ── In-cluster postgres/redis overrides ───────────────────────────────────────
+# values.yaml names the Secrets that k8s-bootstrap creates for Cloud SQL and
+# Memorystore. k8s-bootstrap creates them only for external services. The chart
+# uses existingSecretName whenever it is set, so clear it here, and the chart
+# creates its own in-cluster Secret.
 _external_services_block=""
 if [[ "$_postgres_source" == "in-cluster" ]]; then
   _external_services_block+="
 postgres:
   external:
-    enabled: false"
+    enabled: false
+    existingSecretName: \"\""
 fi
 if [[ "$_redis_source" == "in-cluster" ]]; then
   _external_services_block+="
 redis:
   external:
-    enabled: false"
+    enabled: false
+    existingSecretName: \"\""
 fi
 
 _sandbox_config_block=""

@@ -220,6 +220,74 @@ resource "null_resource" "apply_gateway" {
 }
 
 #------------------------------------------------------------------------------
+# Gateway delete on destroy
+#------------------------------------------------------------------------------
+# Envoy Gateway gives the Gateway a LoadBalancer Service. Without this step,
+# terraform destroy removes the Envoy Gateway release and the GKE cluster while
+# that Service still holds a Google Cloud load balancer, and GKE can leave load
+# balancer resources and k8s-* firewall rules on the VPC. GKE recommends that
+# you delete LoadBalancer Services before the cluster. This step deletes the
+# Gateway and waits for the Service to go, before the release and the cluster
+# are destroyed. GKE can still leave the shared k8s-<cluster-id>-node-http-hc
+# rule, so TEARDOWN.md tells the operator to check for it.
+#
+# The step is not on apply_gateway, because a Gateway change replaces that
+# resource. A destroy step there would delete the Gateway and release its IP on
+# each change. These triggers change only with the project, the region, the
+# cluster name, or the Gateway name.
+#
+# A destroy provisioner can read only self, so the triggers hold the cluster
+# coordinates. The step exits 0 when the cluster is already gone, and
+# on_failure = continue stops a kubectl error from blocking the destroy.
+resource "null_resource" "delete_gateway_on_destroy" {
+  count = var.ingress_type == "envoy" ? 1 : 0
+
+  triggers = {
+    project_id   = var.project_id
+    region       = var.region
+    cluster_name = var.cluster_name
+    gateway_name = var.gateway_name
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    command    = <<-EOT
+      KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+      export KUBECONFIG
+      trap 'rm -f "$KUBECONFIG"' EXIT
+      if ! gcloud container clusters get-credentials ${self.triggers.cluster_name} \
+        --region ${self.triggers.region} --project ${self.triggers.project_id} --quiet; then
+        echo "Cluster ${self.triggers.cluster_name} is not reachable. Skipping the Gateway delete."
+        exit 0
+      fi
+      kubectl delete gateway ${self.triggers.gateway_name} -n envoy-gateway-system \
+        --ignore-not-found --timeout=120s || true
+      # Envoy Gateway deletes the proxy Service. GKE removes the Service only
+      # after it deletes the load balancer.
+      i=0
+      while [ "$i" -lt 60 ]; do
+        if ! SVC=$(kubectl get svc -n envoy-gateway-system \
+          -l gateway.envoyproxy.io/owning-gateway-name=${self.triggers.gateway_name} \
+          -o name 2>/dev/null); then
+          echo "WARNING: cannot list the Gateway Services. See TEARDOWN.md."
+          exit 0
+        fi
+        if [ -z "$SVC" ]; then
+          exit 0
+        fi
+        i=$((i + 1))
+        echo "Waiting for the Gateway LoadBalancer Service to go... ($i/60)"
+        sleep 5
+      done
+      echo "WARNING: the Gateway LoadBalancer Service is still present. See TEARDOWN.md."
+    EOT
+  }
+
+  depends_on = [helm_release.envoy_gateway, null_resource.apply_gateway]
+}
+
+#------------------------------------------------------------------------------
 # ReferenceGrant for cross-namespace secret access
 #------------------------------------------------------------------------------
 locals {

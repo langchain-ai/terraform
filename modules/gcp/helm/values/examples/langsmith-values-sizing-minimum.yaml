@@ -17,6 +17,17 @@
 # ============================================================================
 
 # -- Application components ----------------------------------------------------
+#
+# The core HPAs are pinned to 1 replica. The base values.yaml turns on 7 of
+# these HPAs with higher bounds (queue: min 3, max 10, 50% CPU target). This
+# file pins ingestQueue too. The CPU requests in this file are small, so the
+# HPA reads normal load as several hundred percent and scales out until the
+# nodes have no free CPU.
+#
+# backend, hostBackend, and playground import many Python modules at startup.
+# Their CPU limits are higher than the other limits here, so that each one
+# starts inside its startup probe. playground also gets a longer probe
+# (30 x 10 s, not 6 x 10 s).
 
 backend:
   e2eTest:
@@ -28,8 +39,13 @@ backend:
         cpu: "50m"
         memory: "576Mi"
       limits:
-        cpu: "500m"
+        cpu: "2"
         memory: "1Gi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 frontend:
   deployment:
@@ -41,6 +57,11 @@ frontend:
       limits:
         cpu: "250m"
         memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 platformBackend:
   deployment:
@@ -52,6 +73,11 @@ platformBackend:
       limits:
         cpu: "250m"
         memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 playground:
   deployment:
@@ -61,8 +87,19 @@ playground:
         cpu: "25m"
         memory: "384Mi"
       limits:
-        cpu: "250m"
+        cpu: "1"
         memory: "512Mi"
+    startupProbe:
+      httpGet:
+        path: "/ok"
+        port: 1988
+      failureThreshold: 30
+      periodSeconds: 10
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 queue:
   deployment:
@@ -74,6 +111,11 @@ queue:
       limits:
         cpu: "1"
         memory: "1536Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 ingestQueue:
   deployment:
@@ -85,6 +127,11 @@ ingestQueue:
       limits:
         cpu: "250m"
         memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 aceBackend:
   deployment:
@@ -96,6 +143,11 @@ aceBackend:
       limits:
         cpu: "250m"
         memory: "256Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 # -- Deployments feature components --------------------------------------------
 
@@ -107,8 +159,13 @@ hostBackend:
         cpu: "50m"
         memory: "512Mi"
       limits:
-        cpu: "500m"
+        cpu: "2"
         memory: "768Mi"
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 1
+      maxReplicas: 1
 
 listener:
   deployment:
