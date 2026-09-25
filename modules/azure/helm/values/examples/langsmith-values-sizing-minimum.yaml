@@ -15,9 +15,9 @@
 # For actual dev work: use langsmith-values-sizing-dev.yaml
 # For production:      use langsmith-values-sizing-production.yaml
 #
-# Resource numbers sourced from SIZING.md — Minimum profile, raised where a
+# Requests start from those idle measurements, raised where a
 # component could not start at the measured idle figure.
-# With Deployments and Fleet on, the requests come to ~3.4 vCPU before system
+# With Deployments and Fleet on, the requests come to ~3.2 vCPU before system
 # pods, so plan on two D4s_v3 nodes rather than one.
 # ============================================================================
 

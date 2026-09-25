@@ -708,7 +708,7 @@ The live file for your specific deployment. Generated fresh from Terraform outpu
 
 ### Sizing files — Resource profiles
 
-See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for full resource tables — CPU, memory, replicas, and HPA ranges for every component across all profiles.
+See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for total CPU and memory per profile. Each sizing file holds its per-component resources and HPA ranges.
 
 `make init-values` copies one of these to `helm/values/` based on `sizing_profile` in `terraform.tfvars`.
 
