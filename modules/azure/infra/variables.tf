@@ -670,7 +670,7 @@ variable "aks_network_dataplane" {
 
 variable "aks_allow_network_upgrade" {
   type        = bool
-  description = "Permit the two network changes Azure applies in place on a cluster that already exists: the azure data plane to cilium (the policy engine follows), and installing a network policy engine where none runs. Each reimages every node pool at once. Off, any change to the mode, the data plane, the policy engine or aks_pod_cidr on an existing cluster is refused at plan. The mode never changes through this module: Azure's node-subnet to overlay migration requires no policy engine on the cluster and the module sets one on every cluster it creates. For a new mode, data plane direction or pod range, build a new cluster."
+  description = "Permit the two network changes Azure applies in place on a cluster that already exists: the azure data plane to cilium (the policy engine follows), and installing a network policy engine where none runs. Each reimages every node pool at once, and both are in-place updates only on azurerm 4.59.0 or later, which versions.tf requires. Off, any change to the mode, the data plane, the policy engine or aks_pod_cidr on an existing cluster is refused at plan. The mode never changes through this module: Azure's node-subnet to overlay migration requires no policy engine on the cluster and the module sets one on every cluster it creates. For a new mode, data plane direction or pod range, build a new cluster."
   default     = false
 }
 
