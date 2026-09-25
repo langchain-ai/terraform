@@ -971,11 +971,20 @@ resource "time_sleep" "smithdb_trace_blob_reader_propagation" {
 # after apply, so they never enter Terraform state. Run `make seed-secrets`
 # between `make apply` and `make k8s-secrets`.
 
+# Read here rather than inside the keyvault module: its module-level depends_on
+# defers every data source in it while module.blob has changes pending, which
+# made the deployer's object_id unknown at plan time and replaced its grant.
+data "azurerm_client_config" "current" {}
+
 module "keyvault" {
   source              = "./modules/keyvault"
   name                = local.keyvault_name
   location            = var.location
   resource_group_name = azurerm_resource_group.resource_group.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+
+  # The identity running apply, granted Secrets Officer so it can write secrets.
+  terraform_principal_id = data.azurerm_client_config.current.object_id
 
   # Bring-your-own Key Vault: attach to a customer-owned vault instead of
   # creating one. The module writes its secrets into that vault and changes
