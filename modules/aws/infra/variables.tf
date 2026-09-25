@@ -564,6 +564,12 @@ variable "create_langsmith_irsa_role" {
   default     = true
 }
 
+variable "enable_bedrock_access" {
+  type        = bool
+  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true."
+  default     = false
+}
+
 variable "eks_cluster_enabled_log_types" {
   type        = list(string)
   description = "EKS control plane log types to enable. Logs go to CloudWatch. Set to [] to disable."
