@@ -134,7 +134,7 @@ k8s-secrets: ## Create langsmith-config-secret from Key Vault (all 8 keys)
 init-values: ## Generate Helm values from Terraform outputs (run after terraform apply)
 	$(HELM_DIR)/scripts/init-values.sh
 
-deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + addons)
+deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + addons + sizing)
 	$(HELM_DIR)/scripts/deploy.sh
 
 uninstall: ## Uninstall LangSmith Helm release

@@ -6,7 +6,18 @@
 # so a default change shows up as a failing assertion here and not as a test
 # that quietly stops covering anything.
 
-mock_provider "azurerm" {}
+# Fixed client_config so the Key Vault run below can compare the deployer's
+# object_id by value. The generated mock is a random string.
+mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "00000000-0000-0000-0000-000000000000"
+      client_id       = "00000000-0000-0000-0000-000000000000"
+      object_id       = "11111111-1111-1111-1111-111111111111"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
 # The cluster module lists the subscription's AKS clusters to read the one it
 # manages; the generated mock has no such shape, so give it an empty list.
 mock_provider "azapi" {
@@ -102,7 +113,8 @@ run "create_dns_zone_adds_only_dns" {
   command = plan
 
   variables {
-    create_dns_zone = true
+    create_dns_zone  = true
+    langsmith_domain = "langsmith.example.com"
   }
 
   assert {
@@ -285,4 +297,23 @@ run "agic_with_overlay_warns" {
   }
 
   expect_failures = [check.agic_with_overlay_unverified]
+}
+# ── Key Vault deployer grant ─────────────────────────────────────────────────
+# module.keyvault carries a module-level depends_on, which defers every data
+# source inside it while any dependency has changes pending. Read there, the
+# deployer's object_id is unknown at plan time and the grant plans as a replace
+# whenever module.blob changes. Read in the root, it is known.
+
+run "keyvault_deployer_grant_principal_known_at_plan" {
+  command = plan
+
+  variables {
+    create_keyvault                            = true
+    keyvault_manage_terraform_admin_assignment = true
+  }
+
+  assert {
+    condition     = module.keyvault.terraform_admin_principal_id == "11111111-1111-1111-1111-111111111111"
+    error_message = "The Key Vault deployer grant's principal_id is not the client_config object_id at plan time"
+  }
 }

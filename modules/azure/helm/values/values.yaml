@@ -23,6 +23,16 @@ ingress:
 istioGateway:
   enabled: false
 
+# The chart defaults this to LoadBalancer, which gives the frontend its own public
+# IP serving plain HTTP around the ingress. Every ingress controller here reaches
+# it inside the cluster, so it needs no address of its own. With
+# ingress_controller = "none", route your own ingress to the langsmith-frontend
+# Service, or run `kubectl port-forward svc/langsmith-frontend 8080:80` for a
+# first check.
+frontend:
+  service:
+    type: ClusterIP
+
 config:
   authType: "mixed"
   # Tells the chart to read every LangSmith secret (license, jwt, salt, admin
@@ -34,3 +44,11 @@ config:
     enabled: true
     engine: "Azure"
     # azureStorageAccountName + azureStorageContainerName are set in the overrides layer.
+
+# The chart enables both by default, and deploy.sh only ever layers an overlay
+# on top when enable_insights / enable_polly is true. Off here, so false means off.
+insights:
+  enabled: false
+
+polly:
+  enabled: false

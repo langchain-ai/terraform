@@ -8,8 +8,8 @@
 # For production: use langsmith-values-sizing-production.yaml
 #   (sizing_profile = "production" in terraform.tfvars)
 #
-# Resource numbers sourced from SIZING.md — Dev profile.
-# Total reserved: 7.3 vCPU / 18.5Gi  |  Limits: 17.0 vCPU / 37.0Gi
+# Totals for every profile are in SIZING.md.
+# Total reserved: 4.0 vCPU / 12.2Gi  |  Limits: 10.0 vCPU / 24.5Gi (core, no add-ons)
 # ============================================================================
 
 # -- Application components ----------------------------------------------------
@@ -105,6 +105,11 @@ hostBackend:
       limits:
         cpu: "1"
         memory: "1Gi"
+  # langsmith-values-agent-deploys.yaml turns the HPA on for the default profile;
+  # loaded after it, this profile keeps one replica on dev-sized requests.
+  autoscaling:
+    hpa:
+      enabled: false
 
 listener:
   deployment:

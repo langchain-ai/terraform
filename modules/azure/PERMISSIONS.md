@@ -16,6 +16,38 @@ Resource group scope is enough only if the resource group already exists and you
 
 `Role Based Access Control Administrator` is the narrower of the two role-assignment roles. It grants `Microsoft.Authorization/roleAssignments/write` without the broader access-management rights that `User Access Administrator` carries.
 
+## Run as a service principal
+
+The deploying identity does not have to be your `az login` user. Two routes make it a service principal, and they are not interchangeable.
+
+**`az login --service-principal`.** Prefer this one. Terraform and the CLI both authenticate as the principal, so the `make` targets that reach Key Vault through `az` (`setup-env`, `k8s-secrets`, `keyvault`) act as the same identity Terraform does.
+
+```bash
+az login --service-principal \
+  --username "$APP_ID" \
+  --password "$CLIENT_SECRET" \
+  --tenant "$TENANT_ID"
+az account set --subscription "$SUBSCRIPTION_ID"
+```
+
+**`ARM_*` environment variables.** The azurerm provider reads these before it falls back to the CLI, so they override whatever `az login` holds. This is the CI route, where the pipeline sets them from a secret store.
+
+```bash
+export ARM_CLIENT_ID="$APP_ID"
+export ARM_CLIENT_SECRET="$CLIENT_SECRET"
+export ARM_TENANT_ID="$TENANT_ID"
+```
+
+`ARM_SUBSCRIPTION_ID` is optional, because the provider takes the subscription from `subscription_id` in `terraform.tfvars`. Set it only to the same value: `make preflight` fails when it disagrees with the active `az` subscription, since every check the script runs would then describe a different subscription than the deployment.
+
+Grant the principal the roles in the table above at subscription scope, the same as any other deploying identity. `make preflight` resolves whichever route is in effect and prints the object ID Terraform will present, so run it after switching. Resolving that object ID takes a directory read (`az ad sp show`); without one the preflight reports the identity but downgrades its RBAC verdict to a warning. The apply itself does not need the directory read.
+
+### Key Vault needs both identities to be the same principal
+
+Terraform grants `Key Vault Secrets Officer` on the vault to the identity the azurerm provider authenticates as, and that grant is what lets it write the application secrets. The Key Vault scripts are a separate path: they reach the same vault through `az`, as the `az login` identity.
+
+Set `ARM_CLIENT_ID` while `az login` holds a user and those are two different principals. Terraform succeeds, the vault grant lands on the service principal, and `make setup-env` then fails with a 403 on the vault data plane. Either log in as the principal, or grant `Key Vault Secrets Officer` on the vault to the operator who runs the scripts as well.
+
 ## Verify access before the first apply
 
 Run `make preflight` for the automated version of this check. It resolves the identity Terraform will authenticate as, confirms that identity can write role assignments, and reports PIM-eligible roles, ABAC conditions, and deny assignments. Use the manual probe below to inspect a specific action or a principal other than your own.
@@ -66,7 +98,52 @@ The deployment creates the following assignments. Each one requires `Microsoft.A
 | `Network Contributor` | `4d97b98b-1d4f-4787-a291-c67834d212e7` | Virtual network | AGIC identity | `ingress_controller = "agic"` |
 | `Virtual Machine Administrator Login` | `1c0163c0-47e6-4577-8991-ea5c82e286e4` | Bastion VM | Operators | Bastion module is enabled |
 
-The Key Vault assignment to the deploying identity is self-granting: Terraform gives itself `Key Vault Secrets Officer` so that it can then write the application secrets through the Key Vault data plane. The vault runs in RBAC mode, so no access policy path exists as a fallback.
+The Key Vault assignment to the deploying identity is self-granting: Terraform gives itself `Key Vault Secrets Officer` so that it can then write `postgres-admin-password` and `langsmith-license-key` through the Key Vault data plane. The vault runs in RBAC mode, so no access policy path exists as a fallback. Set `keyvault_manage_secrets = false` to drop both writes, and `keyvault_manage_terraform_admin_assignment = false` alongside it to drop the grant they exist for, as below.
+
+## Deploy without Key Vault access
+
+Two settings take Key Vault out of the deploying identity's requirements:
+
+```hcl
+keyvault_manage_terraform_admin_assignment = false  # skip the self-grant
+keyvault_manage_secrets                    = false  # write no secrets
+```
+
+The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all nine secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
+
+This does not remove the deployment's need for `roleAssignments/write` altogether. `Storage Blob Data Contributor` on the storage account is not optional, because LangSmith pods need it at runtime, and it has no toggle. A deployer who holds no role-assignment rights at all still fails there.
+
+### Turning it off on a deployment that already applied
+
+Leaving `keyvault_manage_secrets` at its default needs no migration. Setting it to false afterwards does, because Terraform reads `count = 0` as "delete these two secrets from the vault". Nothing breaks at the moment of the delete, since no runtime path reads the vault — the failure surfaces later, when `make k8s-secrets` cannot read `langsmith-license-key` to build `langsmith-config-secret`. Soft delete keeps both recoverable for the vault's retention window.
+
+Drop them from state first, which leaves the vault untouched. Read the addresses out of state rather than typing them: `postgres_admin_password` is un-indexed on deployments that last applied before this flag existed and `[0]` after, while `langsmith_license_key` carried a `count` already and is `[0]` either way:
+
+```bash
+terraform -chdir=infra state list | grep azurerm_key_vault_secret
+```
+
+```bash
+terraform -chdir=infra state rm '<address>'   # once per address listed
+```
+
+Then set the flag, and confirm `terraform plan` reports no change to the vault's secrets. `make seed-secrets` is write-once, so running it afterwards skips both and the vault keeps the values it already had.
+
+On a deployment created with the flag on, the two addresses are `module.keyvault.azurerm_key_vault_secret.postgres_admin_password[0]` and `module.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]`; on one from before the count, the first is un-indexed, which is why the list above is read rather than typed.
+
+### Turning it on after seeding
+
+The other direction needs a migration too. With `keyvault_manage_secrets = false`, `make seed-secrets` wrote `postgres-admin-password` and `langsmith-license-key` outside Terraform; setting the flag to true afterwards makes Terraform try to create both and fail with "already exists - to be managed via Terraform this resource needs to be imported". Import them first, by their versioned URIs:
+
+```bash
+KV=<vault name>
+terraform -chdir=infra import 'module.keyvault.azurerm_key_vault_secret.postgres_admin_password[0]' \
+  "$(az keyvault secret show --vault-name "$KV" --name postgres-admin-password --query id -o tsv)"
+terraform -chdir=infra import 'module.keyvault.azurerm_key_vault_secret.langsmith_license_key[0]' \
+  "$(az keyvault secret show --vault-name "$KV" --name langsmith-license-key --query id -o tsv)"
+```
+
+Then set the flag and confirm `terraform plan` shows both secrets unchanged. A `secrets.auto.tfvars` value that differs from the seeded one plans an update, which is the rotation you would expect from the flag.
 
 ## Restrict which roles the deployer can assign
 

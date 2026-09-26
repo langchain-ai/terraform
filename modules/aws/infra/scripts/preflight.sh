@@ -310,6 +310,19 @@ if [[ -n "$AWS_VERSION" && "$AWS_VERSION" -lt 2 ]]; then
   exit 1
 fi
 
+# The documented floor is Helm 3.12, and deploy.sh picks the apply mode from the
+# major, so 3.12+ and 4.x both work. Checked here rather than at the last step of
+# Pass 2, where a wrong version fails after every resource is already metered.
+HELM_VERSION=$(helm version --template '{{.Version}}' 2>/dev/null | sed 's/^v//') || HELM_VERSION=""
+HELM_MAJOR=${HELM_VERSION%%.*}
+HELM_MINOR=$(echo "$HELM_VERSION" | cut -s -d. -f2)
+if ! echo "${HELM_MAJOR}|${HELM_MINOR}" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  info "helm: could not parse a version from '${HELM_VERSION:-no output}', so the 3.12 minimum is unverified"
+elif [[ "$HELM_MAJOR" -lt 3 ]] || { [[ "$HELM_MAJOR" -eq 3 ]] && [[ "$HELM_MINOR" -lt 12 ]]; }; then
+  error "Helm 3.12+ required (found ${HELM_VERSION}). Upgrade: https://helm.sh/docs/intro/install/"
+  exit 1
+fi
+
 printf "\n"
 info "=== LangSmith AWS Preflight (Pass 1 — pre-Terraform) ==="
 info "Default mode: READ-ONLY. Use --create-test-resources to test resource creation."
