@@ -153,6 +153,39 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 
 ---
 
+### Deploying to Azure Government
+
+Set the cloud in `terraform.tfvars` and point the Azure CLI at the same one before `make preflight`:
+
+```hcl
+azure_environment = "usgovernment"
+location          = "usgovvirginia"
+redis_source      = "in-cluster"
+```
+
+```bash
+az cloud set --name AzureUSGovernment
+az login
+```
+
+`azure_environment` sets the `azurerm` and `azapi` provider environment and picks the names that differ between the clouds:
+
+| | `public` (default) | `usgovernment` |
+|---|---|---|
+| PostgreSQL private DNS zone | `privatelink.postgres.database.azure.com` | `privatelink.postgres.database.usgovcloudapi.net` |
+| Blob private DNS zone | `privatelink.blob.core.windows.net` | `privatelink.blob.core.usgovcloudapi.net` |
+| Public IP DNS label | `<label>.<region>.cloudapp.azure.com` | `<label>.<region>.cloudapp.usgovcloudapi.net` |
+| Blob endpoint in Helm values | chart default | `azureStorageServiceUrlOverride` from the `storage_blob_endpoint` output |
+| cert-manager `azureDNS` environment | `AzurePublicCloud` | `AzureUSGovernmentCloud` |
+
+The zone names are Microsoft's recommended names from the [private endpoint DNS reference](https://learn.microsoft.com/azure/private-link/private-endpoint-dns#government). `make preflight` fails when the CLI's active cloud does not match `azure_environment`.
+
+Limits in Azure Government:
+
+- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
+- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+
+
 ## Prerequisites
 
 ### Required tools
