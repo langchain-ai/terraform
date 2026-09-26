@@ -1,0 +1,20 @@
+# bootstrap/terraform.tfvars.example
+#
+# Run this root FROM THE JUMPBOX after the infra/ root has been applied.
+# The jumpbox has network-level access to the private AKS API server.
+# The Terraform state for this root is independent of infra/ — there is no
+# shared remote state between the two roots.
+#
+# Steps:
+#   1. Apply modules/azure-private/infra first (provisions AKS, Key Vault, etc.)
+#   2. SSH to the jumpbox and clone this repo.
+#   3. cd modules/azure-private/bootstrap
+#   4. cp terraform.tfvars.example terraform.tfvars  && edit terraform.tfvars
+#   5. terraform init && terraform apply
+
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "rg-langsmith-prod"
+
+# Suffix that was passed as `identifier` when applying infra/.
+# Leave empty ("") if infra was applied without an identifier.
+identifier = "-prod"
