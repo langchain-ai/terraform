@@ -69,6 +69,31 @@ _tfvar_is_true() {
   [[ "$val" == "true" ]]
 }
 
+# ── Azure cloud ──────────────────────────────────────────────────────────────
+# azure_environment from terraform.tfvars, public when unset. The names below
+# mirror local.azure_clouds in infra/main.tf; keep the two in step.
+_azure_environment() {
+  local val
+  val=$(_parse_tfvar azure_environment) || val="public"
+  echo "$val"
+}
+
+# Suffix Azure appends to a public IP DNS label: <label>.<region>.<suffix>.
+_azure_cloudapp_suffix() {
+  case "$(_azure_environment)" in
+    usgovernment) echo "cloudapp.usgovcloudapi.net" ;;
+    *) echo "cloudapp.azure.com" ;;
+  esac
+}
+
+# cert-manager's azureDNS solver names the cloud its own way.
+_cert_manager_azure_environment() {
+  case "$(_azure_environment)" in
+    usgovernment) echo "AzureUSGovernmentCloud" ;;
+    *) echo "AzurePublicCloud" ;;
+  esac
+}
+
 # ── Admin password rules ─────────────────────────────────────────────────────
 # The LangSmith Helm chart's auth-bootstrap job rejects an initial org admin
 # password without a symbol, and it fails ~10 minutes into the release rather

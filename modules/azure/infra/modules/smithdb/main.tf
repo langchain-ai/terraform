@@ -9,7 +9,7 @@ data "azurerm_client_config" "current" {}
 
 resource "azurerm_private_dns_zone" "smithdb" {
   count               = local.create_private_dns_zone ? 1 : 0
-  name                = "privatelink.postgres.database.azure.com"
+  name                = var.private_dns_zone_name
   resource_group_name = var.resource_group_name
   tags                = merge(var.tags, { module = "smithdb" })
 }

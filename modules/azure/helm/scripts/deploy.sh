@@ -73,13 +73,15 @@ info "Active context: $(kubectl config current-context)"
 echo ""
 
 # ── Set DNS label annotation on the ingress LoadBalancer service ──────────
-# Azure assigns <dns_label>.<region>.cloudapp.azure.com to the public IP only when
+# Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
+# in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
 # Works for ALL ingress controllers — nginx, istio, istio-addon, envoy-gateway.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_cloudapp_suffix=$(_azure_cloudapp_suffix)
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
     nginx)
@@ -109,7 +111,7 @@ if [[ -n "$_dns_label" ]]; then
     kubectl annotate svc "$_lb_svc" -n "$_lb_ns" \
       "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" \
       --overwrite &>/dev/null
-    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.cloudapp.azure.com"
+    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.${_cloudapp_suffix}"
   elif [[ -n "$_lb_svc" ]]; then
     warn "${_lb_svc} not found in ${_lb_ns} — DNS label not set (run make apply first)"
   fi
@@ -122,7 +124,7 @@ _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
   _le_namespace=$(_parse_tfvar "langsmith_namespace") || _le_namespace="langsmith"
-  _le_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _le_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
 
@@ -213,7 +215,7 @@ spec:
           subscriptionID: ${_subscription_id}
           resourceGroupName: ${_dns_rg}
           hostedZoneName: ${_dns_zone}
-          environment: AzurePublicCloud
+          environment: $(_cert_manager_azure_environment)
           managedIdentity:
             clientID: ${_cert_manager_client_id}
 EOF
@@ -241,7 +243,7 @@ fi
 # but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
   _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
@@ -562,7 +564,7 @@ fi
 # HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
-  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _eg_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
 
