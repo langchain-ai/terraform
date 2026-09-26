@@ -113,6 +113,27 @@ locals {
   # address per endpoint and no new reachability.
   storage_private_endpoint_subnet_id = var.storage_private_endpoint_subnet_id != "" ? var.storage_private_endpoint_subnet_id : local.aks_subnet_id
 
+  # Names that differ between commercial Azure and Azure Government. Zone names
+  # are Microsoft's recommended names from the private endpoint DNS reference
+  # (learn.microsoft.com/azure/private-link/private-endpoint-dns, 2026-08-11);
+  # a private endpoint only registers its record automatically in a zone with
+  # exactly this name. The cloudapp suffix is what Azure appends to a public IP
+  # DNS label. Managed Redis has no Government zone because the service is not
+  # offered there; redis_source refuses that combination at plan.
+  azure_clouds = {
+    public = {
+      postgres_private_dns_zone = "privatelink.postgres.database.azure.com"
+      blob_private_dns_zone     = "privatelink.blob.core.windows.net"
+      cloudapp_suffix           = "cloudapp.azure.com"
+    }
+    usgovernment = {
+      postgres_private_dns_zone = "privatelink.postgres.database.usgovcloudapi.net"
+      blob_private_dns_zone     = "privatelink.blob.core.usgovcloudapi.net"
+      cloudapp_suffix           = "cloudapp.usgovcloudapi.net"
+    }
+  }
+  azure_cloud = local.azure_clouds[var.azure_environment]
+
   # Both accounts share one privatelink.blob.core.windows.net zone. Azure links
   # a zone name to a VNet once, so the root owns it and hands the ID to each
   # module instead of letting both create their own.
@@ -970,6 +991,8 @@ module "postgres" {
   vnet_id             = local.vnet_id # needed to link the private DNS zone
   subnet_id           = local.postgres_subnet_id
 
+  private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
+
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
   database_name  = var.postgres_database_name
@@ -1002,15 +1025,17 @@ module "smithdb" {
   source = "./modules/smithdb"
   count  = var.enable_smithdb ? 1 : 0
 
-  name                 = local.smithdb_name
-  location             = var.location
-  resource_group_name  = azurerm_resource_group.resource_group.name
-  vnet_id              = local.vnet_id
-  subnet_id            = local.postgres_subnet_id
-  aks_subnet_id        = local.aks_subnet_id
-  oidc_issuer_url      = module.aks.oidc_issuer_url
-  namespace            = var.langsmith_namespace
-  service_account_name = local.smithdb_service_account
+  name                = local.smithdb_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+  vnet_id             = local.vnet_id
+
+  private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
+  subnet_id             = local.postgres_subnet_id
+  aks_subnet_id         = local.aks_subnet_id
+  oidc_issuer_url       = module.aks.oidc_issuer_url
+  namespace             = var.langsmith_namespace
+  service_account_name  = local.smithdb_service_account
 
   metastore_admin_username        = var.smithdb_metastore_admin_username
   metastore_admin_password        = var.smithdb_metastore_admin_password
@@ -1059,13 +1084,13 @@ module "redis" {
 
 # ── Blob private DNS ──────────────────────────────────────────────────────────
 # Shared by the LangSmith trace-blob account and the SmithDB object store. The
-# account keeps its usual <name>.blob.core.windows.net hostname; this zone is
+# account keeps its usual <name>.blob.<cloud suffix> hostname; this zone is
 # what makes that name resolve to the Private Endpoint address inside the VNet.
 # Skipped when the operator supplies a central zone.
 
 resource "azurerm_private_dns_zone" "blob" {
   count               = local.create_blob_private_dns_zone ? 1 : 0
-  name                = "privatelink.blob.core.windows.net"
+  name                = local.azure_cloud.blob_private_dns_zone
   resource_group_name = azurerm_resource_group.resource_group.name
   tags                = local.common_tags
 }

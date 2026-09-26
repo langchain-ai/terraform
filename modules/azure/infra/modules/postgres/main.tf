@@ -100,10 +100,10 @@ resource "azurerm_postgresql_flexible_server_database" "fleet" {
 }
 
 # Private DNS zone for PostgreSQL name resolution within the VNet.
-# Resolves: <server-name>.postgres.database.azure.com → private IP.
+# Resolves: <server-name>.postgres.database.<cloud suffix> → private IP.
 # Without this zone, AKS pods cannot resolve the database hostname.
 resource "azurerm_private_dns_zone" "db_dns_zone" {
-  name                = "privatelink.postgres.database.azure.com"
+  name                = var.private_dns_zone_name
   resource_group_name = var.resource_group_name
   tags                = merge(var.tags, { module = "postgres" })
 }

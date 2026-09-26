@@ -37,3 +37,8 @@ output "metastore_username" {
   description = "Username SmithDB uses to connect to the metastore."
   value       = local.use_entra_auth ? azurerm_user_assigned_identity.smithdb.name : var.metastore_admin_username
 }
+
+output "storage_blob_endpoint" {
+  description = "Blob service endpoint of the SmithDB object-store account, as Azure reports it for this cloud."
+  value       = azurerm_storage_account.smithdb.primary_blob_endpoint
+}
