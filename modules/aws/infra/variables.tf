@@ -564,6 +564,12 @@ variable "create_langsmith_irsa_role" {
   default     = true
 }
 
+variable "enable_bedrock_access" {
+  type        = bool
+  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true."
+  default     = false
+}
+
 variable "eks_cluster_enabled_log_types" {
   type        = list(string)
   description = "EKS control plane log types to enable. Logs go to CloudWatch. Set to [] to disable."
@@ -836,6 +842,13 @@ variable "enable_standalone_insights" {
 variable "enable_usage_telemetry" {
   type        = bool
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED). Parsed by init-values.sh."
+  default     = false
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "enable_sso_oidc" {
+  type        = bool
+  description = "Enable SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID, Okta, Auth0, Google Workspace, etc. all work through the same generic client_id/secret/issuer_url. Client ID/secret/issuer URL are read by apply-eso.sh from SSM (oauth-client-id, oauth-client-secret, oauth-issuer-url), not from this variable. Parsed by init-values.sh. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
   default     = false
 }
 

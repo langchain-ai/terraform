@@ -47,6 +47,12 @@ _tfvars_parse() {
     | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
 }
 
+# Booleans in terraform.tfvars are unquoted (enable_x = true), so the
+# quoted-string extraction above doesn't apply — match the bare word instead.
+_tfvars_is_true() {
+  grep -E "^\s*${1}\s*=\s*true\s*(#.*)?$" "$_SETUP_DIR/terraform.tfvars" >/dev/null 2>&1
+}
+
 _project_id=$(_tfvars_parse "project_id")
 _name_prefix=$(_tfvars_parse "name_prefix")
 _environment=$(_tfvars_parse "environment")
@@ -416,6 +422,21 @@ _validate_admin_password() {
 _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
   "" 'Initial LangSmith admin password (min 12 bytes, one lowercase, one uppercase, one symbol from !#$%()+,-./:?@[]^_{~})' \
   "true" "_validate_admin_password" || return 1
+
+# ── SSO/OIDC login (optional) ─────────────────────────────────────────────────
+# Unlike the secrets above, these can't be auto-generated — they come from an
+# external identity provider (Entra ID, Okta, Auth0, etc.), so only prompt for
+# them when enable_sso_oidc = true in terraform.tfvars. Every other secret in
+# this script runs unconditionally because a generator makes that harmless;
+# these three would otherwise force an unrelated prompt on every fresh setup.
+if _tfvars_is_true "enable_sso_oidc"; then
+  _sm_secret "oauth-client-id" "TF_VAR_langsmith_oauth_client_id" \
+    "" "OIDC client ID (from your identity provider's app registration)" "false" || return 1
+  _sm_secret "oauth-client-secret" "TF_VAR_langsmith_oauth_client_secret" \
+    "" "OIDC client secret" "true" || return 1
+  _sm_secret "oauth-issuer-url" "TF_VAR_langsmith_oauth_issuer_url" \
+    "" "OIDC issuer URL (e.g. https://login.microsoftonline.com/<tenant-id>/v2.0 for Entra ID)" "false" || return 1
+fi
 
 # ── LangGraph Platform Encryption Keys (optional) ────────────────────────────
 # Auto-generated and stored in Secret Manager on first run.
