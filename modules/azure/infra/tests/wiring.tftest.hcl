@@ -317,3 +317,35 @@ run "keyvault_deployer_grant_principal_known_at_plan" {
     error_message = "The Key Vault deployer grant's principal_id is not the client_config object_id at plan time"
   }
 }
+
+# ── Blob private DNS zone ────────────────────────────────────────────────────
+# Azure links a zone name to a VNet once, so a supplied central zone must stop
+# Terraform creating a second one.
+
+run "storage_private_endpoints_create_the_blob_zone" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+    storage_private_dns_zone_id      = ""
+  }
+
+  assert {
+    condition     = length(azurerm_private_dns_zone.blob) == 1 && length(azurerm_private_dns_zone_virtual_network_link.blob) == 1
+    error_message = "storage_private_endpoint_enabled = true with no zone supplied did not plan the blob zone and its VNet link"
+  }
+}
+
+run "a_supplied_blob_zone_is_not_created_again" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+    storage_private_dns_zone_id      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  }
+
+  assert {
+    condition     = length(azurerm_private_dns_zone.blob) == 0 && length(azurerm_private_dns_zone_virtual_network_link.blob) == 0
+    error_message = "A supplied storage_private_dns_zone_id still planned a second blob zone"
+  }
+}
