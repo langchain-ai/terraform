@@ -1003,11 +1003,13 @@ locals {
     if lower(split("/", a.id)[4]) == lower(local.resource_group_name)
   }
 
+  # An account Azure does not have yet reads as its requested value, so it never
+  # counts as a change. lookup() rather than an index guarded by &&: Terraform
+  # before 1.12 evaluates both operands, and versions.tf allows 1.11.
   storage_zone_changes = [
     for name, want in local.storage_guarded_accounts :
-    "${want.variable} on ${name} is ${local.storage_live_skus[lower(name)]} in Azure and ${want.requested} here"
-    if contains(keys(local.storage_live_skus), lower(name)) &&
-    contains(["ZRS", "GZRS", "RAGZRS"], local.storage_live_skus[lower(name)]) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
+    "${want.variable} on ${name} is ${lookup(local.storage_live_skus, lower(name), want.requested)} in Azure and ${want.requested} here"
+    if contains(["ZRS", "GZRS", "RAGZRS"], lookup(local.storage_live_skus, lower(name), want.requested)) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
   ]
 }
 
