@@ -903,6 +903,15 @@ operator:
   serviceAccount:
     annotations:
       eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
+
+# Playground calls model providers directly (e.g. Bedrock via workload
+# identity) to test prompts interactively — needs the same IRSA role as
+# backend/platformBackend, or it silently falls back to the node's instance
+# role and gets AccessDeniedException on any Bedrock call.
+playground:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "${IRSA_ROLE_ARN}"
 # langsmith-ksa is used by operator-spawned agent deployment pods and must also
 # carry the IRSA annotation. Apply it after Helm creates the service account:
 #   kubectl annotate serviceaccount langsmith-ksa -n langsmith \
