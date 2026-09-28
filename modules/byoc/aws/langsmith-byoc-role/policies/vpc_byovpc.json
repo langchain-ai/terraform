@@ -1,5 +1,11 @@
 [
   {
+    "Sid": "Route53AssociateVpcs",
+    "Effect": "Allow",
+    "Action": ["route53:AssociateVPCWithHostedZone"],
+    "Resource": "arn:aws:ec2:*:*:vpc/*"
+  },
+  {
     "Sid": "EC2Describe",
     "Effect": "Allow",
     "Action": ["ec2:Describe*"],

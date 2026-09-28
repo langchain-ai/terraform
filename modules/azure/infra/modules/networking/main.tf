@@ -4,7 +4,7 @@
 #
 # Network layout (defaults):
 #   VNet          10.0.0.0/17   — overall address space (32 k IPs)
-#   AKS subnet    10.0.0.0/19   — node & pod IPs (Azure CNI, 8 k IPs)
+#   AKS subnet    10.0.0.0/19   — node IPs, plus pod IPs in node-subnet mode (8 k IPs)
 #   Postgres      10.0.32.0/20  — delegated to PostgreSQL Flexible Server (4 k IPs)
 #   Redis         10.0.48.0/20  — Premium Redis requires a dedicated subnet (4 k IPs)
 #   K8s svc CIDR  10.0.64.0/20  — defined in AKS module, must NOT overlap VNet ranges
@@ -39,8 +39,9 @@ locals {
 }
 
 # The top-level VNet that all LangSmith resources share.
-# Azure CNI places AKS node & pod IPs directly in the subnet address space,
-# so the main subnet must be large enough for max_nodes * max_pods_per_node.
+# In node-subnet mode Azure CNI places node and pod IPs in the AKS subnet, so it
+# must hold max_nodes * max_pods_per_node; in overlay mode only the nodes draw
+# from it and pods come from aks_pod_cidr, which is not part of the VNet.
 resource "azurerm_virtual_network" "vnet" {
   count               = var.create_vnet ? 1 : 0
   name                = var.network_name

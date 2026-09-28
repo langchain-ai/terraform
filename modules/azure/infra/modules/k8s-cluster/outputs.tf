@@ -84,3 +84,35 @@ output "agw_id" {
   description = "Resource ID of the Application Gateway, for the diagnostics module to attach a setting to. Null when no gateway is created."
   value       = one(azurerm_application_gateway.agw[*].id)
 }
+
+output "live_network_profile" {
+  description = "The network profile Azure reports for the cluster at plan time: mode (node-subnet or overlay), data plane, policy engine (none when no engine is installed) and pod range (null in node-subnet mode). null until the cluster exists, and when create_cluster = false."
+  value = local.live_cluster == null ? null : {
+    mode      = coalesce(try(local.live_cluster.mode, null), "node-subnet")
+    dataplane = coalesce(try(local.live_cluster.dataplane, null), "azure")
+    policy    = coalesce(try(local.live_cluster.policy, null), "none")
+    pod_cidr  = try(local.live_cluster.pod_cidr, null)
+  }
+}
+
+output "network_profile" {
+  description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane and policy engine. null when create_cluster = false."
+  # Keyed off the flag rather than the resource object: a comparison against the
+  # whole object would carry its sensitive kube-config marks into this output.
+  value = !var.create_cluster ? null : {
+    network_plugin_mode = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_plugin_mode)
+    pod_cidr            = one(azurerm_kubernetes_cluster.main[*].network_profile[0].pod_cidr)
+    network_data_plane  = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_data_plane)
+    network_policy      = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_policy)
+  }
+}
+
+output "sku_tier" {
+  description = "The AKS tier the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].sku_tier)
+}
+
+output "support_plan" {
+  description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
+}

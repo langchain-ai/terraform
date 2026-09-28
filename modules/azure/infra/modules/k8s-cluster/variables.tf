@@ -168,6 +168,74 @@ variable "availability_zones" {
   default     = []
 }
 
+# ── Network mode, data plane and tier ────────────────────────────────────────
+# The root module derives these from aks_network_mode, aks_network_dataplane,
+# aks_sku_tier and aks_support_plan and validates the combinations there. This
+# module passes them to the cluster and reads back the profile the cluster
+# runs (live_network_profile), which the root compares against before a change
+# that Azure would run as a migration or the provider as a replacement.
+
+variable "network_plugin_mode" {
+  type        = string
+  description = "Azure CNI IPAM mode. null is node-subnet mode, where pods take VNet addresses from subnet_id. \"overlay\" gives pods addresses from pod_cidr and leaves the subnet to the nodes. Changing it on an existing cluster is Microsoft's one-way migration, which needs a cluster with no policy engine; the root module refuses it."
+  default     = null
+
+  validation {
+    condition     = var.network_plugin_mode == null || var.network_plugin_mode == "overlay"
+    error_message = "network_plugin_mode must be null (node-subnet) or \"overlay\"."
+  }
+}
+
+variable "pod_cidr" {
+  type        = string
+  description = "Pod address range in overlay mode, private to the cluster. Must be null in node-subnet mode, where the provider rejects it."
+  default     = null
+}
+
+variable "network_data_plane" {
+  type        = string
+  description = "\"azure\" or \"cilium\" (Azure CNI Powered by Cilium). Cilium needs overlay mode and Kubernetes 1.31 or later, and going from Cilium back to Azure recreates the cluster."
+  default     = "azure"
+
+  validation {
+    condition     = contains(["azure", "cilium"], var.network_data_plane)
+    error_message = "network_data_plane must be \"azure\" or \"cilium\"."
+  }
+}
+
+variable "network_policy" {
+  type        = string
+  description = "NetworkPolicy engine: \"azure\" (Azure Network Policy Manager), \"calico\" or \"cilium\". The provider requires \"cilium\" when network_data_plane is \"cilium\"."
+  default     = "azure"
+
+  validation {
+    condition     = contains(["azure", "calico", "cilium"], var.network_policy)
+    error_message = "network_policy must be \"azure\", \"calico\" or \"cilium\"."
+  }
+}
+
+variable "sku_tier" {
+  type        = string
+  description = "AKS pricing tier for the control plane: \"Free\" (no SLA), \"Standard\" (financially backed uptime SLA; 99.95% with availability zones) or \"Premium\" (Standard plus long-term support). Updated in place."
+  default     = "Standard"
+
+  validation {
+    condition     = contains(["Free", "Standard", "Premium"], var.sku_tier)
+    error_message = "sku_tier must be \"Free\", \"Standard\" or \"Premium\"."
+  }
+}
+
+variable "support_plan" {
+  type        = string
+  description = "\"KubernetesOfficial\" or \"AKSLongTermSupport\". Long-term support requires sku_tier = \"Premium\"."
+  default     = "KubernetesOfficial"
+
+  validation {
+    condition     = contains(["KubernetesOfficial", "AKSLongTermSupport"], var.support_plan)
+    error_message = "support_plan must be \"KubernetesOfficial\" or \"AKSLongTermSupport\"."
+  }
+}
+
 variable "dns_label" {
   type        = string
   description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."

@@ -48,9 +48,71 @@ variable "unique_resource_names" {
   default     = false
 }
 
+variable "name_suffix_salt" {
+  type        = string
+  description = "Rotation counter mixed into the per-subscription hash on the globally-unique names. Bump it (\"\" → \"2\" → \"3\") when a previous deployment burned those names: a soft-deleted Key Vault holds its name for the whole retention window, and Managed Redis exposes no way to check availability before applying. All four names rotate together; the resource group, VNet and AKS names are unaffected. DESTRUCTIVE on an existing deployment — changing it renames Postgres, Redis, Storage and Key Vault, which Terraform executes as destroy-and-recreate, losing Postgres and Storage data. To dodge a single collision instead, pin that one name below. No effect when unique_resource_names = false."
+  default     = ""
+
+  # Hashed, never appended, so the length costs nothing against the
+  # 24-character name cap. Bounded only to keep it recognizable as a counter.
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9]{0,8}$", var.name_suffix_salt))
+    error_message = "name_suffix_salt must be 0-8 alphanumeric characters (e.g. \"2\")."
+  }
+}
+
 # ── Explicit name overrides ───────────────────────────────────────────────────
 # Each defaults to "" meaning "derive it". Set one to pin an existing resource's
-# name, or to work around a collision without renaming the whole deployment.
+# name, to work around a collision without renaming the whole deployment, or to
+# meet a naming standard the derivation does not produce.
+#
+# Changing any of these after an apply renames the resource, which Terraform
+# executes as destroy-and-recreate. Set them on a first deployment.
+
+variable "name_base" {
+  type        = string
+  description = "First segment of every derived resource name, before the resource word (\"ls-rg-prod\", \"langsmith-rg-prod\"). Empty uses \"ls\" when unique_resource_names is true and \"langsmith\" when it is false. A corporate prefix set here reaches every resource at once, which is usually what a naming standard asks for; the per-resource overrides below are for pinning one name."
+  default     = ""
+
+  # Same rule as name_prefix, and for the same reason: this segment leads every
+  # name, so Key Vault's "must start with a letter" is the binding constraint.
+  validation {
+    condition     = var.name_base == "" || can(regex("^[a-z][a-z0-9]*(-[a-z0-9]+)*$", var.name_base))
+    error_message = "name_base must start with a lowercase letter and contain only lowercase letters, digits, and non-repeating internal hyphens."
+  }
+
+  # No length rule here. A cap on this variable alone can only guess: it cannot
+  # see name_prefix, which counts against the same limit, and it cannot see the
+  # per-resource overrides that make the limit moot. The preconditions in main.tf
+  # measure the assembled name against the ceiling that actually applies to it.
+}
+
+variable "resource_group_name" {
+  type        = string
+  description = "Name for the resource group every LangSmith resource lands in. Unique within the subscription, 1-90 chars. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "vnet_name" {
+  type        = string
+  description = "Name for the VNet Terraform creates. Unique within the resource group, 2-64 chars. Ignored when create_vnet = false, where vnet_id names the network instead. Empty derives from the naming scheme."
+  default     = ""
+}
+
+variable "cluster_name" {
+  type        = string
+  description = "Name for the AKS cluster this module creates. Unique within the resource group, 1-63 chars. Empty derives from the naming scheme. To attach to a cluster you already own, set create_cluster = false and existing_cluster_name instead."
+  default     = ""
+
+  # Both variables name a cluster, and main.tf can only honor one: cluster_name
+  # names the cluster this module creates, existing_cluster_name identifies one
+  # it looks up. Setting the wrong one for the mode is a config an operator can
+  # write and Terraform would otherwise accept, discarding it without a word.
+  validation {
+    condition     = var.cluster_name == "" || var.create_cluster
+    error_message = "cluster_name applies only when this module creates the cluster, and create_cluster is false. Set existing_cluster_name to name the cluster to attach to, and leave cluster_name empty."
+  }
+}
 
 variable "postgres_name" {
   type        = string
@@ -99,6 +161,14 @@ variable "keyvault_name" {
   description = "Name for the Azure Key Vault. Globally unique, 3-24 chars. Empty derives it from the naming scheme. Only used when create_keyvault = true."
   default     = ""
   # When empty, main.tf computes: "${local.name_base}-kv${local.name_suffix}${local.uniq_suffix}"
+
+  # "Only used when create_keyvault = true" was already the rule, in prose. This
+  # enforces it, so the ignored setting fails at plan instead of at whatever
+  # point the operator notices the vault is not the one they named.
+  validation {
+    condition     = var.keyvault_name == "" || var.create_keyvault
+    error_message = "keyvault_name applies only when this module creates the Key Vault, and create_keyvault is false. Set existing_keyvault_name to name the vault to attach to, and leave keyvault_name empty."
+  }
 }
 
 variable "create_keyvault" {
@@ -111,6 +181,11 @@ variable "existing_keyvault_name" {
   type        = string
   description = "Name of the pre-existing Key Vault to attach to. Required when create_keyvault = false; leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
+
+  validation {
+    condition     = var.existing_keyvault_name == "" || !var.create_keyvault
+    error_message = "existing_keyvault_name applies only when attaching to a Key Vault you already own, and create_keyvault is true. Set create_keyvault = false to attach, or use keyvault_name to pin the name of the vault this module creates."
+  }
 }
 
 variable "existing_keyvault_resource_group_name" {
@@ -131,6 +206,12 @@ variable "keyvault_manage_managed_identity_assignment" {
   default     = null
 }
 
+variable "keyvault_manage_secrets" {
+  type        = bool
+  description = "Whether Terraform writes postgres-admin-password and langsmith-license-key into the vault. False writes neither, so apply needs no Key Vault data-plane access at all and `make seed-secrets` writes all nine secrets afterwards under your own credentials. Set it where the deployer cannot hold Key Vault Secrets Officer, or where keyvault_default_action = \"Deny\" blocks the machine running apply. Flipping it to false on a deployment that already applied deletes both secrets from the vault, so drop them from state first. See PERMISSIONS.md."
+  default     = true
+}
+
 variable "keyvault_purge_protection" {
   type        = bool
   description = "Enable purge protection on Key Vault. Set false for dev environments where you need to destroy and recreate. Always true for production."
@@ -139,7 +220,7 @@ variable "keyvault_purge_protection" {
 
 variable "keyvault_default_action" {
   type        = string
-  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — first apply creates ~10 secrets via the data plane and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate keyvault_allowed_ips."
+  description = "Default action for the Key Vault data-plane firewall. \"Allow\" (default) keeps the starter UX working — apply and `make seed-secrets` write nine secrets via the data plane, and \"Deny\" without operator IP allowlisting blocks that. Production deployments set \"Deny\" and populate keyvault_allowed_ips."
   default     = "Allow"
 
   validation {
@@ -219,6 +300,11 @@ variable "existing_cluster_name" {
   type        = string
   description = "Name of the pre-existing AKS cluster to attach to. Required when create_cluster = false, leaving it empty fails the plan rather than falling back to a derived name."
   default     = ""
+
+  validation {
+    condition     = var.existing_cluster_name == "" || !var.create_cluster
+    error_message = "existing_cluster_name applies only when attaching to a cluster you already own, and create_cluster is true. Set create_cluster = false to attach, or use cluster_name to pin the name of the cluster this module creates."
+  }
 }
 
 variable "existing_cluster_resource_group_name" {
@@ -316,7 +402,7 @@ variable "manage_byo_subnet_service_endpoints" {
 
 variable "aks_subnet_address_prefix" {
   type        = list(string)
-  description = "Prefix for the AKS subnet, used when Terraform creates it. Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. The default is sized for the VNet Terraform builds; under create_vnet = false it must fall inside your VNet's address space, which plan also checks."
+  description = "Prefix for the AKS subnet, used when Terraform creates it. In node-subnet mode (the aks_network_mode default) Azure CNI puts node and pod IPs in this range, so it needs (max_count + 1) * (max_pods + 1) addresses per node pool, which is 764 at the default sizing. Terraform checks this at plan time, because an undersized subnet applies cleanly and then stalls the autoscaler. The default is sized for the VNet Terraform builds; under create_vnet = false it must fall inside your VNet's address space, which plan also checks. In overlay mode only nodes draw from it, so a /24 holds a pool total of 251 nodes and the default is far larger than needed."
   default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
@@ -414,6 +500,20 @@ variable "amr_sku" {
   default     = "Balanced_B1"
 }
 
+variable "redis_clustering_policy" {
+  type        = string
+  description = "AMR clustering policy. OSSCluster selects the LangSmith cluster client; EnterpriseCluster the standalone client with clusterSafeMode. Change it only for an AMR instance that is already on EnterpriseCluster."
+  default     = "OSSCluster"
+
+  # The child module validates the same two values, but with redis_source =
+  # in-cluster it has count 0 and a typo would pass unremarked; the root says so
+  # on the variable the operator set.
+  validation {
+    condition     = contains(["OSSCluster", "EnterpriseCluster"], var.redis_clustering_policy)
+    error_message = "redis_clustering_policy must be \"OSSCluster\" or \"EnterpriseCluster\"."
+  }
+}
+
 variable "redis_high_availability" {
   type        = bool
   description = "Zone-redundant HA for Azure Managed Redis (primary + replica across nodes). Required for the AMR SLA, so set true for production. Unsupported on Balanced_B0."
@@ -436,12 +536,32 @@ variable "blob_ttl_short_days" {
   type        = number
   description = "The number of days to keep short-lived blobs"
   default     = 14
+
+  # The wizard asks for this now, so it takes whatever an operator types. Azure
+  # wants a whole number of days and rejects anything else when the lifecycle
+  # policy is written — after the storage account already exists.
+  validation {
+    condition     = var.blob_ttl_short_days >= 1 && floor(var.blob_ttl_short_days) == var.blob_ttl_short_days
+    error_message = "blob_ttl_short_days must be a whole number of days, 1 or greater."
+  }
 }
 
 variable "blob_ttl_long_days" {
   type        = number
   description = "The number of days to keep long-lived blobs"
   default     = 400
+
+  validation {
+    condition     = var.blob_ttl_long_days >= 1 && floor(var.blob_ttl_long_days) == var.blob_ttl_long_days
+    error_message = "blob_ttl_long_days must be a whole number of days, 1 or greater."
+  }
+
+  # Separate lifecycle rules on separate blob prefixes, so Azure accepts the
+  # inverted pair and silently deletes the data meant to be kept longest first.
+  validation {
+    condition     = var.blob_ttl_long_days >= var.blob_ttl_short_days
+    error_message = "blob_ttl_long_days must be greater than or equal to blob_ttl_short_days — long-lived blobs cannot be deleted sooner than short-lived ones."
+  }
 }
 
 variable "storage_allowed_ips" {
@@ -527,7 +647,7 @@ variable "default_node_pool_max_count" {
 
 variable "default_node_pool_max_pods" {
   type        = number
-  description = "Max pods per node in the default pool. AKS Azure CNI default is 30 — too low for LangSmith. Pass 2 alone needs ~32 pods (17 LangSmith + 15 system). Set to 60 to fit full multi-pass deployments on a single node. Immutable — changing requires node pool recreation."
+  description = "Max pods per node in the default pool. AKS Azure CNI default is 30 — too low for LangSmith. Pass 2 alone needs ~32 pods (17 LangSmith + 15 system). Set to 60 to fit full multi-pass deployments on a single node. Immutable — changing requires node pool recreation. In overlay mode this no longer sizes the AKS subnet: every node takes a /24 of aks_pod_cidr whatever its max_pods, up to the overlay ceiling of 250."
   default     = 60
 }
 
@@ -607,6 +727,94 @@ variable "additional_node_pools" {
       min_count = 0
       max_count = 2
     }
+  }
+}
+
+# ── AKS network mode, data plane and tier ────────────────────────────────────
+# The mode, the pod range and the data plane are decided at creation: Azure
+# migrates a cluster in place only from node-subnet to overlay and from the
+# Azure data plane to Cilium, and the provider replaces the cluster for any
+# other change. The tier and support plan update in place. The mode default is
+# node-subnet so that no existing deployment moves on upgrade; the templates
+# and the quickstart write overlay for new ones.
+
+variable "aks_network_mode" {
+  type        = string
+  description = "Azure CNI IPAM mode. overlay is Microsoft's recommendation for most clusters: pods take addresses from aks_pod_cidr, a range private to the cluster, and the AKS subnet holds nodes only, so a /24 carries a pool total of 251 nodes. node-subnet (the default, so that existing deployments do not move) gives pods VNet addresses and needs a subnet of (max_count + 1) x (max_pods + 1) addresses per pool. The mode is fixed at creation: Azure's one-way migration to overlay requires no network policy engine on the cluster, which this module always installs, so a mode change on an existing cluster is refused at plan; see aks_allow_network_upgrade."
+  default     = "node-subnet"
+
+  validation {
+    condition     = contains(["node-subnet", "overlay"], var.aks_network_mode)
+    error_message = "aks_network_mode must be \"node-subnet\" or \"overlay\"."
+  }
+}
+
+variable "aks_pod_cidr" {
+  type        = string
+  description = "Pod address range in overlay mode; ignored in node-subnet mode. It never appears in the VNet, but it must not overlap the VNet's address space, anything peered or reachable on-premises, aks_service_cidr, or the ranges AKS reserves (169.254.0.0/16, 172.30.0.0/16, 172.31.0.0/16, 192.0.2.0/24). Every node takes a /24 from it, so it needs one /24 per (max_count + 1) across all pools: the /16 default carries 256 nodes."
+  default     = "10.244.0.0/16"
+
+  # Same three checks as aks_service_cidr, for the same reasons: the overlap
+  # math splits on "." and subtracts the prefix from 32, so anything that is not
+  # an IPv4 network address has to be refused here where the message can name
+  # the variable. The prefix bound is the overlay's own: a node draws a /24.
+  validation {
+    condition     = can(cidrnetmask(var.aks_pod_cidr))
+    error_message = "aks_pod_cidr must be an IPv4 CIDR range such as 10.244.0.0/16."
+  }
+
+  validation {
+    condition     = try(var.aks_pod_cidr == cidrsubnet(var.aks_pod_cidr, 0, 0), true)
+    error_message = "aks_pod_cidr (${var.aks_pod_cidr}) has host bits set. Use ${try(cidrsubnet(var.aks_pod_cidr, 0, 0), "the network address")}."
+  }
+
+  validation {
+    condition     = try(tonumber(split("/", var.aks_pod_cidr)[1]) <= 24, true)
+    error_message = "aks_pod_cidr (${var.aks_pod_cidr}) is smaller than a /24. Azure CNI Overlay assigns each node a /24 from this range, so the range itself has to be a /24 or larger; a /16 carries 256 nodes."
+  }
+}
+
+variable "aks_network_dataplane" {
+  type        = string
+  description = "Network data plane: cilium (Azure CNI Powered by Cilium) or azure (Azure Network Policy Manager). Empty picks cilium in overlay mode and azure in node-subnet mode. Cilium is Microsoft's recommendation, enforces NetworkPolicy with eBPF and needs overlay mode and Kubernetes 1.31 or later; its one documented limitation is that ipBlock rules cannot select node or pod addresses, which the policies this module creates do not do. Azure Network Policy Manager loses Linux support on 2028-09-30. Choose at creation: moving to Cilium later is a second node reimage, and moving off it recreates the cluster."
+  default     = ""
+
+  # Cilium's dependency on overlay mode is checked as a precondition in main.tf,
+  # not here: a validation that reads aks_network_mode cannot be evaluated while
+  # that variable is itself invalid, which would hide this variable's own errors.
+  validation {
+    condition     = contains(["", "azure", "cilium"], var.aks_network_dataplane)
+    error_message = "aks_network_dataplane must be \"cilium\", \"azure\" or empty (pick by mode)."
+  }
+}
+
+variable "aks_allow_network_upgrade" {
+  type        = bool
+  description = "Permit the two network changes Azure applies in place on a cluster that already exists: the azure data plane to cilium (the policy engine follows), and installing a network policy engine where none runs. Each reimages every node pool at once, and both are in-place updates only on azurerm 4.59.0 or later, which versions.tf requires. Off, any change to the mode, the data plane, the policy engine or aks_pod_cidr on an existing cluster is refused at plan. The mode never changes through this module: Azure's node-subnet to overlay migration requires no policy engine on the cluster and the module sets one on every cluster it creates. For a new mode, data plane direction or pod range, build a new cluster."
+  default     = false
+}
+
+variable "aks_sku_tier" {
+  type        = string
+  description = "AKS pricing tier for the control plane. Free has no SLA and suits throwaway clusters. Standard (the default) carries the financially backed uptime SLA, 99.95% when availability_zones spans zones and 99.9% otherwise, and unlocks larger clusters. Premium adds long-term support for Kubernetes versions (see aks_support_plan). Updated in place, so an existing cluster changes tier without a rebuild."
+  default     = "Standard"
+
+  validation {
+    condition     = contains(["Free", "Standard", "Premium"], var.aks_sku_tier)
+    error_message = "aks_sku_tier must be \"Free\", \"Standard\" or \"Premium\"."
+  }
+}
+
+variable "aks_support_plan" {
+  type        = string
+  description = "KubernetesOfficial (the default) or AKSLongTermSupport, which keeps a Kubernetes version supported for two years and requires aks_sku_tier = \"Premium\"."
+  default     = "KubernetesOfficial"
+
+  # The Premium dependency is a precondition in main.tf, for the same reason as
+  # aks_network_dataplane's.
+  validation {
+    condition     = contains(["KubernetesOfficial", "AKSLongTermSupport"], var.aks_support_plan)
+    error_message = "aks_support_plan must be \"KubernetesOfficial\" or \"AKSLongTermSupport\"."
   }
 }
 
@@ -754,8 +962,17 @@ variable "letsencrypt_email" {
 
 variable "langsmith_domain" {
   type        = string
-  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in Helm values and ingress TLS configuration."
+  description = "Hostname for the LangSmith deployment (e.g. langsmith.example.com). Used in Helm values and ingress TLS configuration. Required for DNS-01."
   default     = ""
+
+  # DNS-01 proves ownership through TXT records in a zone Terraform creates, so
+  # there is nothing to prove without a domain: the DNS module takes an empty
+  # zone name and the certificate never issues. The dns_label path produces an
+  # Azure-owned cloudapp.azure.com name, which is HTTP-01 only.
+  validation {
+    condition     = var.langsmith_domain != "" || !(var.tls_certificate_source == "dns01" || var.create_dns_zone)
+    error_message = "langsmith_domain is required when tls_certificate_source = \"dns01\" or create_dns_zone = true. dns_label cannot stand in for it — Azure owns that zone, so cert-manager cannot write the challenge record."
+  }
 }
 
 # No Terraform resource reads this. helm/scripts/deploy.sh parses it out of
@@ -928,9 +1145,7 @@ variable "postgres_geo_redundant_backup" {
 }
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
-# These variables are declared here only to prevent Terraform from warning
-# about undeclared variables in terraform.tfvars. They are read by
-# helm/scripts/init-values.sh and helm/scripts/deploy.sh.
+# Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
