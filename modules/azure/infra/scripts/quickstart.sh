@@ -499,6 +499,44 @@ printf "${DIM}  Answer each question. Review and change any answer before writin
 # -- 1. Profile --------------------------------------------------------------
 PROFILE="dev"
 
+# The cloud: a value already set (a resumed tfvars or checkpoint, or kept
+# through "start fresh") wins, then TF_VAR_azure_environment, then the Azure
+# CLI's active cloud. Run once at startup, after resume and start fresh, so a
+# checkpoint that skips section 2, or one saved before this key existed, still
+# gets a cloud. Preflight requires the CLI to match, so a mismatch is flagged.
+_resolve_azure_environment() {
+  local _cli_cloud _cloud_src="the existing terraform.tfvars"
+  case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
+    AzureUSGovernment) _cli_cloud="usgovernment" ;;
+    *)                 _cli_cloud="public" ;;
+  esac
+  if [[ -z "$AZURE_ENVIRONMENT" ]]; then
+    case "${TF_VAR_azure_environment:-}" in
+      public|usgovernment) AZURE_ENVIRONMENT="$TF_VAR_azure_environment"; _cloud_src="TF_VAR_azure_environment" ;;
+      *)                   AZURE_ENVIRONMENT="$_cli_cloud";             _cloud_src="the Azure CLI" ;;
+    esac
+  fi
+  if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
+    _hint "Azure cloud: Azure Government (from ${_cloud_src}). Writing azure_environment = \"usgovernment\"."
+  fi
+  if [[ "$AZURE_ENVIRONMENT" != "$_cli_cloud" ]]; then
+    _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight will fail until you run: az cloud set --name %s && az login\n" \
+      "$AZURE_ENVIRONMENT" "$_cli_cloud" "$([[ "$AZURE_ENVIRONMENT" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
+  fi
+}
+
+# Azure Managed Redis is not offered in Azure Government, and redis_source =
+# "external" fails at plan there, so Redis runs in-cluster whatever was picked.
+# Postgres keeps the operator's choice. Called from section 7, and at startup
+# for a resumed checkpoint that will not pass through section 7 again.
+_gov_redis_in_cluster() {
+  if [[ "$(_azure_environment)" == "usgovernment" && "$REDIS_SOURCE" == "external" ]]; then
+    REDIS_SOURCE="in-cluster"
+    echo ""
+    _hint "Azure Government: Azure Managed Redis is not offered there, so Redis runs in-cluster."
+  fi
+}
+
 _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
@@ -577,28 +615,6 @@ _run_section_2() {
   # Defaults come from the current values, so a resumed or re-entered section
   # prefills what you answered before. Profile-driven defaults apply only when
   # the field is still untouched, so switching profiles never eats an edit.
-  # The cloud: a value already set (a resumed tfvars, or kept through "start
-  # fresh") wins, then TF_VAR_azure_environment, then the Azure CLI's active
-  # cloud. Preflight requires the CLI to match, so a mismatch is flagged here.
-  local _cli_cloud _cloud_src="the existing terraform.tfvars"
-  case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
-    AzureUSGovernment) _cli_cloud="usgovernment" ;;
-    *)                 _cli_cloud="public" ;;
-  esac
-  if [[ -z "$AZURE_ENVIRONMENT" ]]; then
-    case "${TF_VAR_azure_environment:-}" in
-      public|usgovernment) AZURE_ENVIRONMENT="$TF_VAR_azure_environment"; _cloud_src="TF_VAR_azure_environment" ;;
-      *)                   AZURE_ENVIRONMENT="$_cli_cloud";             _cloud_src="the Azure CLI" ;;
-    esac
-  fi
-  if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
-    _hint "Azure cloud: Azure Government (from ${_cloud_src}). Writing azure_environment = \"usgovernment\"."
-  fi
-  if [[ "$AZURE_ENVIRONMENT" != "$_cli_cloud" ]]; then
-    _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight will fail until you run: az cloud set --name %s && az login\n" \
-      "$AZURE_ENVIRONMENT" "$_cli_cloud" "$([[ "$AZURE_ENVIRONMENT" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
-  fi
-
   AUTO_SUB="$SUBSCRIPTION_ID"
   if [[ -z "$AUTO_SUB" ]] && command -v az &>/dev/null; then
     AUTO_SUB=$(az account show --query id --output tsv 2>/dev/null) || AUTO_SUB=""
@@ -1308,14 +1324,7 @@ _run_section_7() {
     fi
   fi
 
-  # Azure Managed Redis is not offered in Azure Government, and redis_source =
-  # "external" fails at plan there, so whatever was picked above, Redis runs
-  # in-cluster. Postgres keeps the operator's choice.
-  if [[ "$(_azure_environment)" == "usgovernment" && "$REDIS_SOURCE" == "external" ]]; then
-    REDIS_SOURCE="in-cluster"
-    echo ""
-    _hint "Azure Government: Azure Managed Redis is not offered there, so Redis runs in-cluster."
-  fi
+  _gov_redis_in_cluster
 
   # Without this prompt every quickstart deployment silently took the Balanced_B0
   # module default, which some regions cannot allocate.
@@ -1587,6 +1596,9 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
     3) echo "Aborted."; exit 0 ;;
   esac
 fi
+
+_resolve_azure_environment
+_gov_redis_in_cluster
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Run sections — Enter advances, b goes back, r jumps to review, q saves & quits

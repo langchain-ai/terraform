@@ -811,6 +811,17 @@ CASES = [
         "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
     },
     {
+        # Open SWE on #325: the output is the last apply's value, and preflight
+        # checks the next one, so a changed tfvar wins and the difference is named.
+        "name": "a tfvar changed since the last apply wins over the output, with a warning",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "public",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": ["[!] The last apply used azure_environment = public, and the configuration now says usgovernment"],
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
         "name": "a commercial tfvars on the commercial CLI passes the cloud check",
         "ca_all": ALL_GOOD,
         "reject": ["but the Azure CLI is on"],

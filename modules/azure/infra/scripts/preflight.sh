@@ -136,18 +136,35 @@ fi
 # active cloud. A Government subscription is invisible from the commercial cloud
 # and the other way round, so a mismatch fails every check below for a reason
 # none of them would name. ARM is the Resource Manager endpoint for az rest.
-# The value Terraform uses: the azure_environment output once applied (it covers
-# terraform.tfvars, *.auto.tfvars and TF_VAR_), else terraform.tfvars, else
-# TF_VAR_azure_environment, else public. Same order as _azure_environment in
-# _common.sh, which this script does not source.
-AZURE_ENVIRONMENT=""
+# Preflight checks the configuration the next apply will use, so the configured
+# value wins, in Terraform's own precedence: *.auto.tfvars (the last in lexical
+# order wins), then terraform.tfvars, then TF_VAR_azure_environment. The
+# azure_environment output, the value of the last apply, is the fallback when
+# nothing is configured, and a discrepancy between the two is reported. (The
+# post-apply scripts read the output first, since they act on what was applied.)
+_cloud_in_file() {
+  sed -n 's/^[[:space:]]*azure_environment[[:space:]]*=[[:space:]]*"\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$1" 2>/dev/null | head -1
+}
+_cloud_configured=""
+for _auto in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
+  _cloud_configured=$(_cloud_in_file "$_auto")
+  [ -n "$_cloud_configured" ] && break
+done
+[ -n "$_cloud_configured" ] || _cloud_configured=$(_tfvar azure_environment || true)
+[ -n "$_cloud_configured" ] || _cloud_configured="${TF_VAR_azure_environment:-}"
+_cloud_applied=""
 if command -v terraform >/dev/null 2>&1; then
-  AZURE_ENVIRONMENT=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || AZURE_ENVIRONMENT=""
+  _cloud_applied=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || _cloud_applied=""
 fi
+case "$_cloud_applied" in public|usgovernment) ;; *) _cloud_applied="" ;; esac
+AZURE_ENVIRONMENT="${_cloud_configured:-${_cloud_applied:-public}}"
 case "$AZURE_ENVIRONMENT" in
   public|usgovernment) ;;
-  *) AZURE_ENVIRONMENT=$(_tfvar azure_environment || echo "${TF_VAR_azure_environment:-public}") ;;
+  *) fail "azure_environment is \"${AZURE_ENVIRONMENT}\"; it must be public or usgovernment"; AZURE_ENVIRONMENT="public" ;;
 esac
+if [ -n "$_cloud_applied" ] && [ "$_cloud_applied" != "$AZURE_ENVIRONMENT" ]; then
+  warn "The last apply used azure_environment = ${_cloud_applied}, and the configuration now says ${AZURE_ENVIRONMENT}. Checking against ${AZURE_ENVIRONMENT}. Moving an existing deployment to another cloud recreates every resource."
+fi
 case "$AZURE_ENVIRONMENT" in
   usgovernment) EXPECTED_CLI_CLOUD="AzureUSGovernment"; ARM="https://management.usgovcloudapi.net" ;;
   *)            EXPECTED_CLI_CLOUD="AzureCloud";        ARM="https://management.azure.com" ;;
