@@ -355,8 +355,9 @@ fleet:
     providerOrgId: \"${_fleet_oauth_org_id}\"${_fleet_oauth_lines}"
   if [[ -n "$_fleet_slack_provider" ]]; then
     # The chart renders fleet.oauth.slackSigningSecret as a plain env value, so it
-    # stays unset and the secret comes by reference instead. optional lets the pod
-    # start before the key exists; deploy.sh warns while it is missing.
+    # stays unset and the secret comes by reference instead. The reference is
+    # required, so the pod never starts without a key to verify Slack events;
+    # deploy.sh stops before the upgrade while the key is missing.
     _fleet_oauth_block="${_fleet_oauth_block}
 
 fleetTriggerServer:
@@ -366,8 +367,7 @@ fleetTriggerServer:
         valueFrom:
           secretKeyRef:
             name: langsmith-config-secret
-            key: fleet_slack_signing_secret
-            optional: true"
+            key: fleet_slack_signing_secret"
   fi
 fi
 

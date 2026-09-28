@@ -251,8 +251,8 @@ sizing_profile = "production"
 #
 # Fleet OAuth tools and triggers. Create the OAuth providers in your LangSmith
 # org first, then paste the org ID and each provider ID. Leave a provider unset
-# to keep its tools off. For the Slack trigger, store the signing secret in Key
-# Vault, not here:
+# to keep its tools off. fleet_slack_oauth_provider also requires the Slack
+# signing secret in Key Vault, not here, and deploy.sh stops without it:
 #   ./infra/scripts/manage-keyvault.sh set langsmith-fleet-slack-signing-secret '<secret>'
 #   make k8s-secrets
 # fleet_oauth_provider_org_id     = ""

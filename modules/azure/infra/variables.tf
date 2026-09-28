@@ -1199,8 +1199,9 @@ variable "enable_fleet" {
 # ── Fleet OAuth (read by helm/scripts/init-values.sh; Terraform ignores these) ──
 # Each provider ID comes from an OAuth provider created in the LangSmith org named
 # by fleet_oauth_provider_org_id. A provider left empty keeps its tools and
-# triggers off. The Slack signing secret is not a tfvar: store it in Key Vault as
-# langsmith-fleet-slack-signing-secret, then run make k8s-secrets.
+# triggers off. fleet_slack_oauth_provider also requires the Slack signing secret,
+# which is not a tfvar: store it in Key Vault as langsmith-fleet-slack-signing-secret,
+# then run make k8s-secrets.
 
 # tflint-ignore: terraform_unused_declarations
 variable "fleet_oauth_provider_org_id" {
