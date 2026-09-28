@@ -190,6 +190,25 @@ run "local_ssd_count_rejects_a_fraction" {
   expect_failures = [var.sandbox_host_ephemeral_local_ssd_count]
 }
 
+# Compute Engine accepts only 0, 1, 2, 4, 8, 16 or 24 local SSDs on N2 types.
+run "local_ssd_count_accepts_a_supported_count" {
+  command = plan
+
+  variables {
+    sandbox_host_ephemeral_local_ssd_count = 24
+  }
+}
+
+run "local_ssd_count_rejects_an_unsupported_count" {
+  command = plan
+
+  variables {
+    sandbox_host_ephemeral_local_ssd_count = 3
+  }
+
+  expect_failures = [var.sandbox_host_ephemeral_local_ssd_count]
+}
+
 # An empty password is how in-cluster Postgres is expressed, so the validation
 # accepts "" and rejects anything shorter than 8 characters.
 run "postgres_password_rejects_a_short_value" {
