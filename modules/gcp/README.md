@@ -82,6 +82,21 @@ gcloud services enable \
 | `roles/resourcemanager.projectIamAdmin` | Grant IAM bindings during provisioning |
 | `roles/servicenetworking.networksAdmin` | Create private service connections (required for Cloud SQL + Redis) |
 
+### Required outbound access
+
+LangSmith needs HTTPS egress from the cluster to **`beacon.langchain.com`** for license verification and usage reporting, unless it runs in [offline mode](https://docs.langchain.com/langsmith/self-host-egress). The module's nodes are private (`enable_private_nodes = true`) and reach the internet through the Cloud NAT it creates, and it adds no egress firewall rules, so a stock deployment works. What breaks it is an egress policy added around the module: a deny-by-default egress firewall rule or firewall policy, a proxy, or a VPC Service Controls perimeter. Permit `beacon.langchain.com:443` there before the first deploy.
+
+With an `lcl_` license key this is a startup dependency, not only a reporting one. `platform-backend` exchanges the key with Beacon before it starts and caches the result in Redis. A first install has no cache, so when Beacon is unreachable `platform-backend` refuses to start, logging `failed to fetch license and no cached license available`, and the services behind it crash-loop. A later outage falls back to the cached license.
+
+To check the path from inside the cluster before the Helm deploy:
+
+```bash
+kubectl run beacon-check --rm -i --restart=Never --image=curlimages/curl -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' https://beacon.langchain.com
+```
+
+Any HTTP status means the cluster reached Beacon. A timeout or a TLS error means something on the path is dropping or intercepting the traffic. If your firewall matches on IP addresses rather than names, LangChain publishes the [addresses to allowlist](https://docs.langchain.com/langsmith/cloud#allowlisting-ip-addresses).
+
 ### Authenticate
 
 ```bash

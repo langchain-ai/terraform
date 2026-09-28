@@ -192,6 +192,21 @@ For the full permission inventory, the role assignments the deployment creates, 
 
 Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` through an ABAC condition on `principalType` instead of granting UAA outright. There the apply fails with a generic 403 even though the permission is present. `terraform_principal_type` fixes the case where the condition admits the deployer's own type; where it admits only `ServicePrincipal` and the deployer is a human, no value of that variable satisfies it and the way through is `keyvault_manage_terraform_admin_assignment = false`. `make preflight` reads the condition and says which case you are in. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
+### Required outbound access
+
+LangSmith needs HTTPS egress from the cluster to **`beacon.langchain.com`** for license verification and usage reporting, unless it runs in [offline mode](https://docs.langchain.com/langsmith/self-host-egress). This module does not arrange that egress: it leaves AKS on its default `outboundType` of `loadBalancer`, so nodes reach the internet through the cluster load balancer's outbound rules. A stock deployment therefore works. What breaks it is routing egress through a firewall or network virtual appliance, with a user-defined route on the AKS subnet or a subnet your network team supplies with default outbound access turned off. Permit `beacon.langchain.com:443` there before the first deploy.
+
+With an `lcl_` license key this is a startup dependency, not only a reporting one. `platform-backend` exchanges the key with Beacon before it starts and caches the result in Redis. A first install has no cache, so when Beacon is unreachable `platform-backend` refuses to start, logging `failed to fetch license and no cached license available`, and the services behind it crash-loop. A later outage falls back to the cached license.
+
+To check the path from inside the cluster before `make deploy`:
+
+```bash
+kubectl run beacon-check --rm -i --restart=Never --image=curlimages/curl -- \
+  curl -sS -o /dev/null -w '%{http_code}\n' https://beacon.langchain.com
+```
+
+Any HTTP status means the cluster reached Beacon. A timeout or a TLS error means something on the path is dropping or intercepting the traffic. If your firewall matches on IP addresses rather than names, LangChain publishes the [addresses to allowlist](https://docs.langchain.com/langsmith/cloud#allowlisting-ip-addresses).
+
 ### Authenticate
 
 ```bash
@@ -984,6 +999,11 @@ sees the VNet itself. `aks_dns_service_ip` follows from `aks_service_cidr`
 automatically as the eleventh address unless you set one, and plan rejects a
 value outside the range — worth knowing if you set both by hand, because
 changing the range strands an address written against the old one.
+
+A VNet your network team manages is also where egress tends to be locked down,
+with a route table sending `0.0.0.0/0` to a firewall or subnets created with
+default outbound access off. The cluster must still reach
+`beacon.langchain.com:443`; see [Required outbound access](#required-outbound-access).
 
 ### Network mode, data plane and tier
 

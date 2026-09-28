@@ -276,6 +276,13 @@ sizing_profile = "production"
 # and the Redis subnet gets no delegation (it holds a private endpoint, and a
 # delegated subnet would reject it).
 #
+# Required egress: LangSmith must reach beacon.langchain.com:443 for license
+# verification, and with an lcl_ key a first install cannot start without it.
+# AKS egresses through its load balancer by default, so this only needs action
+# when your VNet routes egress through a firewall or appliance (a UDR on the AKS
+# subnet), or the subnet has default outbound access off. Permit it there. See
+# "Required outbound access" in README.md.
+#
 # create_vnet          = false
 # vnet_id              = "/subscriptions/.../resourceGroups/net-rg/providers/Microsoft.Network/virtualNetworks/my-vnet"
 #
