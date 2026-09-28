@@ -360,6 +360,8 @@ Every pod that reads blob storage env vars (`langsmith.commonEnv` in the Helm ch
 | `langsmith-listener` | 3 | yes |
 | `langsmith-agent-builder-tool-server` | 4 | yes |
 | `langsmith-agent-builder-trigger-server` | 4 | yes |
+| `langsmith-agent-gateway` | LLM Gateway (`enable_llm_gateway`) | yes |
+| `langsmith-presidio-analyzer` | LLM Gateway PII redaction (`enable_gateway_pii_redaction`) | yes |
 | `langsmith-frontend` | 2 | no |
 | `langsmith-playground` | 2 | no |
 | `langsmith-ace-backend` | 2 | no |

@@ -714,20 +714,29 @@ presidioAnalyzer:
 LLMGW_EOF
     fi
     # The chart's frontend proxy gives /gateway/ a 900 s read timeout for long model
-    # calls; ingress-nginx in front of it defaults to 60 s and would cut a
+    # calls. ingress-nginx (60 s) and Application Gateway (30 s) would cut a
     # non-streaming call first. The chart has one Ingress, so this applies to every
-    # path on it.
-    if [[ "$_ingress_controller" == "nginx" ]]; then
-      cat << 'LLMGW_EOF'
+    # path on it. Istio sets no request timeout by default, so it needs nothing.
+    case "$_ingress_controller" in
+      nginx)
+        cat << 'LLMGW_EOF'
 ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
 LLMGW_EOF
-    fi
+        ;;
+      agic)
+        cat << 'LLMGW_EOF'
+ingress:
+  annotations:
+    appgw.ingress.kubernetes.io/request-timeout: "900"
+LLMGW_EOF
+        ;;
+    esac
   } > "$_llm_gateway_file"
   pass "Generated: langsmith-values-llm-gateway.yaml"
-  if [[ "$_ingress_controller" != "nginx" ]]; then
+  if [[ "$_ingress_controller" == "envoy-gateway" || "$_ingress_controller" == "none" ]]; then
     warn "enable_llm_gateway with ingress_controller = ${_ingress_controller}: model calls longer than that controller's request timeout will fail at the ingress. Raise it there to 900 s to match the gateway."
   fi
 fi

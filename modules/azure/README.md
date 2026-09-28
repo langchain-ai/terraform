@@ -654,7 +654,7 @@ enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.1
 enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
 enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
-enable_llm_gateway   = true           # LLM Gateway, private beta (chart 0.17)
+enable_llm_gateway   = false          # LLM Gateway, private beta (chart 0.17)
 enable_gateway_pii_redaction = false  # Presidio PII redaction for gateway traffic (requires enable_llm_gateway)
 ```
 
@@ -682,9 +682,11 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   `<release>-presidio-analyzer`) with the LangSmith identity. Those two credentials exist whether or not the flag is set,
   so turning the gateway on needs no `make apply` on a cluster applied from this version. On an older cluster, run
   `make apply` once first.
-- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls. With `ingress_controller = "nginx"`
-  the overlay raises the NGINX Ingress read and send timeouts to 900 s to match; this applies to every path on the
-  LangSmith Ingress. With another controller, `init-values.sh` warns, and its request timeout has to be raised there.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls. The overlay raises the ingress
+  timeout to match, for every path on the LangSmith Ingress: the NGINX read and send timeouts (default 60 s) with
+  `ingress_controller = "nginx"`, and Application Gateway's request timeout (default 30 s) with `agic`. Istio sets no
+  request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
+  there.
 - **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
   organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
 
