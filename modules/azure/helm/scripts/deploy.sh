@@ -42,7 +42,10 @@ if [[ "$RELEASE_NAME" == *langsmith* ]]; then
 else
   CHART_FULLNAME="${RELEASE_NAME}-langsmith"
 fi
-NAMESPACE="${NAMESPACE:-langsmith}"
+# Same order for the namespace. The Terraform side (the workload identity
+# subjects, the namespace itself) reads langsmith_namespace, so an env-only
+# value installed the release where no federated identity pointed.
+NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
@@ -130,7 +133,7 @@ fi
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
-  _le_namespace=$(_parse_tfvar "langsmith_namespace") || _le_namespace="langsmith"
+  _le_namespace="$NAMESPACE"
   _le_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
@@ -253,7 +256,7 @@ if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
   _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
   _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   kubectl apply -f - &>/dev/null <<EOF
 apiVersion: networking.istio.io/v1beta1
@@ -570,7 +573,7 @@ fi
 # chart validation (validate.yaml requires ingress, gateway, or istioGateway).
 # HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_namespace="$NAMESPACE"
   _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
   _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
@@ -720,7 +723,7 @@ echo ""
 # The chart creates HTTPRoutes via gateway.enabled: true.
 # Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_namespace="$NAMESPACE"
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
@@ -747,7 +750,7 @@ fi
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
 if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
-  _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
+  _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
   for _ in $(seq 1 18); do
@@ -778,7 +781,7 @@ fi
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false
