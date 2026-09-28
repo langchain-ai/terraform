@@ -32,7 +32,16 @@ VALUES_DIR="$HELM_DIR/values"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
-RELEASE_NAME="${RELEASE_NAME:-langsmith}"
+# The Helm release name: RELEASE_NAME from the environment if set, else
+# langsmith_release_name from terraform.tfvars, else langsmith. The chart names
+# its objects after its fullname, which is the release name only when that
+# contains "langsmith" (prod -> prod-langsmith-backend).
+RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
+if [[ "$RELEASE_NAME" == *langsmith* ]]; then
+  CHART_FULLNAME="$RELEASE_NAME"
+else
+  CHART_FULLNAME="${RELEASE_NAME}-langsmith"
+fi
 NAMESPACE="${NAMESPACE:-langsmith}"
 CHART_VERSION="${CHART_VERSION:-}"
 
@@ -674,20 +683,20 @@ echo ""
 
 # ── Wait for core components ──────────────────────────────────────────────
 _core_deployments=(
-  "${RELEASE_NAME}-frontend"
-  "${RELEASE_NAME}-backend"
-  "${RELEASE_NAME}-platform-backend"
-  "${RELEASE_NAME}-ingest-queue"
-  "${RELEASE_NAME}-queue"
+  "${CHART_FULLNAME}-frontend"
+  "${CHART_FULLNAME}-backend"
+  "${CHART_FULLNAME}-platform-backend"
+  "${CHART_FULLNAME}-ingest-queue"
+  "${CHART_FULLNAME}-queue"
   # The chart always installs playground. Without it here, a sizing profile that
   # leaves playground crash-looping still reports "All core deployments ready" (#217).
-  "${RELEASE_NAME}-playground"
+  "${CHART_FULLNAME}-playground"
 )
 if [[ "$_enable_deployments" == "true" ]]; then
   _core_deployments+=(
-    "${RELEASE_NAME}-host-backend"
-    "${RELEASE_NAME}-listener"
-    "${RELEASE_NAME}-operator"
+    "${CHART_FULLNAME}-host-backend"
+    "${CHART_FULLNAME}-listener"
+    "${CHART_FULLNAME}-operator"
   )
 fi
 
