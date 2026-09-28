@@ -664,6 +664,15 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     exit 1
   fi
 
+  # Outside the public cloud the chart needs the account's blob endpoint: left
+  # empty, SmithDB falls back to the commercial blob suffix and cannot reach a
+  # Government account.
+  if [[ "$AZURE_ENVIRONMENT" != "public" && -z "$SMITHDB_STORAGE_BLOB_ENDPOINT" ]]; then
+    fail "enable_smithdb = true in Azure ${AZURE_ENVIRONMENT} but the smithdb_storage_blob_endpoint Terraform output is missing"
+    action "Run terraform apply so the output is recorded, then re-run make init-values"
+    exit 1
+  fi
+
   _smithdb_password_secret_key='"smithdb_metastore_db_password"'
   _smithdb_iam_auth_provider='""'
   _smithdb_iam_username='""'
