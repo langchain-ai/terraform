@@ -244,17 +244,19 @@ locals {
     pow(2, 32 - tonumber(split("/", prefix)[1]))
   ])) - 5
 
-  # ── Address space of a reused VNet ──────────────────────────────────────────
+  # ── Address space of the VNet the subnets are carved from ──────────────────
   # A VNet ID is one segment shorter than a subnet ID, so the same positional
   # read applies with the name at 8 instead of 10:
   #   0:"" 1:subscriptions 2:<sub> 3:resourceGroups 4:<rg>
   #   5:providers 6:Microsoft.Network 7:virtualNetworks 8:<name>
-  byo_vnet_parts     = split("/", var.vnet_id)
-  vnet_address_space = coalesce(one(data.azurerm_virtual_network.byo_vnet[*].address_space), [])
-
-  # The address space of whichever VNet the nodes will sit in, for the overlay
-  # pod-range check: the one Terraform creates, or the one supplied.
-  aks_vnet_spaces = var.create_vnet ? tolist(coalesce(module.vnet.address_space, [])) : tolist(local.vnet_address_space)
+  byo_vnet_parts = split("/", var.vnet_id)
+  # The configured space when Terraform builds the VNet, or the one read back
+  # from vnet_id. Empty only under bring-your-own with no vnet_id, which has its
+  # own precondition.
+  vnet_address_space = var.create_vnet ? var.vnet_address_space : coalesce(one(data.azurerm_virtual_network.byo_vnet[*].address_space), [])
+  # Names the VNet in a containment failure, so the message points at the input
+  # that set its address space.
+  vnet_address_space_source = var.create_vnet ? "vnet_address_space" : "vnet_id"
 
   # Every prefix Terraform is about to carve, tagged with the variable that set
   # it so a failure names what to change. A service running in-cluster carves
@@ -264,6 +266,9 @@ locals {
       { name = "aks_subnet_address_prefix", carve = local.create_aks_subnet, prefixes = var.aks_subnet_address_prefix },
       { name = "postgres_subnet_address_prefix", carve = local.create_postgres_subnet, prefixes = var.postgres_subnet_address_prefix },
       { name = "redis_subnet_address_prefix", carve = local.create_redis_subnet, prefixes = var.redis_subnet_address_prefix },
+      # Carved only out of a VNet Terraform owns, matching module.vnet below.
+      { name = "agic_subnet_address_prefix", carve = var.ingress_controller == "agic" && var.create_vnet, prefixes = var.agic_subnet_address_prefix },
+      { name = "bastion_subnet_address_prefix", carve = var.create_bastion && var.create_vnet, prefixes = var.bastion_subnet_address_prefix },
     ] : [for prefix in entry.prefixes : { name = entry.name, prefix = prefix }] if entry.carve
   ])
 
@@ -271,7 +276,7 @@ locals {
   # to its numeric bounds and compare those. cidrhost(x, 0) is the network
   # address, and the last address is that plus the host count.
   measured_cidrs = distinct(concat(
-    local.aks_vnet_spaces,
+    local.vnet_address_space,
     [for entry in local.carved_prefixes : entry.prefix],
     [local.aks_service_cidr],
     # A single address, measured as a /32 so the bounds below cover it too.
@@ -316,7 +321,7 @@ locals {
   # every node, so it has to stay clear of the VNet, the ClusterIP range and the
   # ranges AKS reserves. Each neighbor is named so the message says which one.
   aks_pod_cidr_neighbors = local.aks_overlay ? merge(
-    { for space in local.aks_vnet_spaces : "the VNet address space ${space}" => space },
+    { for space in local.vnet_address_space : "the VNet address space ${space}" => space },
     { "aks_service_cidr ${local.aks_service_cidr}" = local.aks_service_cidr },
     { for range in local.aks_reserved_cidrs : "the AKS reserved range ${range}" => range },
   ) : {}
@@ -395,6 +400,7 @@ module "vnet" {
 
   create_vnet      = var.create_vnet
   existing_vnet_id = var.vnet_id
+  address_space    = var.vnet_address_space
 
   # A subnet is skipped when the operator supplied one, or when the service it
   # serves runs in-cluster and needs no dedicated subnet.
@@ -409,7 +415,8 @@ module "vnet" {
   # The bastion and AGIC subnets below are carved only out of a VNet Terraform
   # owns. Under bring-your-own the operator supplies the subnet instead, and
   # local.*_subnet_id selects it.
-  enable_bastion = var.create_bastion && var.create_vnet
+  enable_bastion                = var.create_bastion && var.create_vnet
+  bastion_subnet_address_prefix = var.bastion_subnet_address_prefix
 
   # AGIC subnet: provisioned only when ingress_controller = "agic"
   enable_agic                = var.ingress_controller == "agic" && var.create_vnet
@@ -722,13 +729,13 @@ resource "terraform_data" "validate_network" {
       error_message = "aks_dns_service_ip (${local.aks_dns_service_ip}) is outside aks_service_cidr (${local.aks_service_cidr}). AKS takes the CoreDNS ClusterIP out of the service range. Leave aks_dns_service_ip empty to get ${cidrhost(local.aks_service_cidr, 10)}, the eleventh address, which is the Azure convention."
     }
 
-    # The subnet prefix defaults describe the 10.0.0.0/17 VNet Terraform builds,
-    # so on someone else's network they are wrong more often than right. Azure
-    # rejects an out-of-range prefix partway through apply, once the resource
-    # group and Key Vault already exist.
+    # The subnet prefix defaults sit inside the default 10.0.0.0/17, so they go
+    # wrong on someone else's network and on a VNet built at a moved
+    # vnet_address_space alike. Azure rejects an out-of-range prefix partway
+    # through apply, once the resource group and Key Vault already exist.
     precondition {
-      condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || length(local.uncontained_prefixes) == 0
-      error_message = "These subnet prefixes fall outside the address space of vnet_id (${join(", ", local.vnet_address_space)}): ${join(", ", local.uncontained_prefixes)}. Point each at a free range inside your VNet, or supply that subnet's ID to reuse a subnet that already exists."
+      condition     = length(local.vnet_address_space) == 0 || length(local.uncontained_prefixes) == 0
+      error_message = "These subnet prefixes fall outside the address space of ${local.vnet_address_space_source} (${join(", ", local.vnet_address_space)}): ${join(", ", local.uncontained_prefixes)}. Point each at a free range inside that space${var.create_vnet ? "" : ", or supply that subnet's ID to reuse a subnet that already exists"}."
     }
   }
 }

@@ -40,6 +40,10 @@ variables {
   # serialization. Double quotes and backslashes are covered by rejection runs.
   postgres_admin_password = "Aa1 !$#%&'()*+,-./:;<=>?@[]^_`{|}~"
   enable_smithdb          = false
+  # The wiring suite's throwaway public key, for the runs that set
+  # create_bastion = true: the empty default fails inside azurerm's own schema
+  # validator, which would mask the precondition a run expects.
+  bastion_admin_ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDLvAeJ8tG7HNaDGXt2T05HJmj1X1qaP+jb2MTDRBLNEPOwsvT7UrCsGp/8AB5MZIyMmRLoNOz1GTRWWBQsgQoKJD1jPUJNvSDZ16g4yFV4wX2o6nxooi53U9L6JWH6XrXn2Ozhca7tC0o26Oyd2toFrf8An8H8Gnwsdr3EOIrqvL0ZxXvjgGLZDx9auENfrlrhob8+6QLsZkEzphDWqKhbYpy46WEYtwHvKRpYX1YlDN6jbObN0wifqu98UZNsIr7FoZR3luNj1bA/kjqUC61GW6UziPyCoMhk3Jf9IMQ24OBXn2Xp4JWMZ3jYp+IL1fi9YVgofvsOvlYM2XGtmgzt plan-tests-fixture"
 }
 
 run "enums_reject_an_unlisted_value" {
@@ -248,6 +252,96 @@ run "aks_dns_service_ip_rejects_a_non_address" {
   }
 
   expect_failures = [var.aks_dns_service_ip]
+}
+
+# ── VNet address space ───────────────────────────────────────────────────────
+
+run "vnet_address_space_rejects_a_non_cidr" {
+  command = plan
+
+  variables {
+    vnet_address_space = ["10.0.0.0"]
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+run "vnet_address_space_rejects_an_empty_list" {
+  command = plan
+
+  variables {
+    vnet_address_space = []
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+run "vnet_address_space_rejects_a_host_address" {
+  command = plan
+
+  variables {
+    vnet_address_space = ["10.0.0.5/17"]
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+# A moved VNet with every carved prefix moved inside it plans clean. The runs
+# after it each leave one feature's prefix at its default, which sits inside
+# 10.0.0.0/17 and so outside the moved space, and the containment precondition
+# on terraform_data.validate_network has to catch it.
+
+run "moved_vnet_address_space_plans_with_moved_prefixes" {
+  command = plan
+
+  variables {
+    vnet_address_space             = ["172.16.0.0/16"]
+    aks_subnet_address_prefix      = ["172.16.0.0/19"]
+    postgres_subnet_address_prefix = ["172.16.32.0/20"]
+    redis_subnet_address_prefix    = ["172.16.48.0/20"]
+    agic_subnet_address_prefix     = ["172.16.96.0/24"]
+    bastion_subnet_address_prefix  = ["172.16.80.0/27"]
+    ingress_controller             = "agic"
+    create_bastion                 = true
+  }
+}
+
+run "moved_vnet_address_space_rejects_default_subnet_prefixes" {
+  command = plan
+
+  variables {
+    vnet_address_space = ["172.16.0.0/16"]
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "moved_vnet_address_space_rejects_a_default_agic_prefix" {
+  command = plan
+
+  variables {
+    vnet_address_space             = ["172.16.0.0/16"]
+    aks_subnet_address_prefix      = ["172.16.0.0/19"]
+    postgres_subnet_address_prefix = ["172.16.32.0/20"]
+    redis_subnet_address_prefix    = ["172.16.48.0/20"]
+    ingress_controller             = "agic"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "moved_vnet_address_space_rejects_a_default_bastion_prefix" {
+  command = plan
+
+  variables {
+    vnet_address_space             = ["172.16.0.0/16"]
+    aks_subnet_address_prefix      = ["172.16.0.0/19"]
+    postgres_subnet_address_prefix = ["172.16.32.0/20"]
+    redis_subnet_address_prefix    = ["172.16.48.0/20"]
+    create_bastion                 = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
 }
 
 # ── AKS network mode, data plane and tier ────────────────────────────────────

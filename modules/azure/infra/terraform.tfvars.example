@@ -266,7 +266,20 @@ sizing_profile = "production"
 # postgres_standby_availability_zone   = "2"              # pin the standby; needs pinned zones
 # postgres_geo_redundant_backup        = true             # geo-redundant backups
 
-# ── Networking (optional — override only if reusing existing VNet) ─────────────
+# ── Networking (optional) ─────────────────────────────────────────────────────
+# The VNet Terraform builds defaults to 10.0.0.0/17. If your network already uses
+# that range, or will peer with one that does, move it and move every subnet
+# prefix with it: the defaults all sit inside 10.0.0.0/17, and plan rejects one
+# that falls outside the new space. The AGIC and bastion prefixes only matter
+# when those features are on.
+# vnet_address_space             = ["172.16.0.0/16"]
+# aks_subnet_address_prefix      = ["172.16.0.0/19"]
+# postgres_subnet_address_prefix = ["172.16.32.0/20"]
+# redis_subnet_address_prefix    = ["172.16.48.0/20"]
+# agic_subnet_address_prefix     = ["172.16.96.0/24"]
+# bastion_subnet_address_prefix  = ["172.16.80.0/27"]
+#
+# To reuse an existing VNet instead:
 # Set create_vnet = false and give the VNet you want LangSmith to deploy into.
 # Each subnet is then independent: supply an ID to reuse a subnet you already
 # have, or leave it out and Terraform creates that subnet inside your VNet from

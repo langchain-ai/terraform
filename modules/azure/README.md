@@ -952,6 +952,29 @@ names the one that is too long, so overriding `storage_account_name` and
 
 ---
 
+## VNet address space
+
+The VNet Terraform creates defaults to `10.0.0.0/17`. If your network already
+uses that range, or the VNet will be peered or reached over ExpressRoute or VPN
+from one that does, set `vnet_address_space` before the first apply. Azure
+creates an overlapping VNet without complaint, and the collision surfaces at the
+first peering.
+
+Every subnet prefix default sits inside `10.0.0.0/17`, so move them with it:
+
+```hcl
+vnet_address_space             = ["172.16.0.0/16"]
+aks_subnet_address_prefix      = ["172.16.0.0/19"]
+postgres_subnet_address_prefix = ["172.16.32.0/20"]
+redis_subnet_address_prefix    = ["172.16.48.0/20"]
+agic_subnet_address_prefix     = ["172.16.96.0/24"] # ingress_controller = "agic" only
+bastion_subnet_address_prefix  = ["172.16.80.0/27"] # create_bastion = true only
+```
+
+Plan rejects any prefix that falls outside `vnet_address_space` and names it.
+
+---
+
 ## Bring your own VNet
 
 By default Terraform creates the VNet and every subnet. To deploy into a VNet
