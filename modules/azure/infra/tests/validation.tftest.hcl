@@ -59,6 +59,7 @@ run "enums_reject_an_unlisted_value" {
     agw_sku_tier                   = "Standard"
     agic_network_contributor_scope = "resourcegroup"
     terraform_principal_type       = "user"
+    redis_clustering_policy        = "Enterprise"
   }
 
   expect_failures = [
@@ -71,6 +72,7 @@ run "enums_reject_an_unlisted_value" {
     var.agw_sku_tier,
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
+    var.redis_clustering_policy,
   ]
 }
 
@@ -134,6 +136,9 @@ run "resource_ids_reject_a_bare_name" {
     redis_subnet_id    = "redis-subnet"
     agic_subnet_id     = "agic-subnet"
     bastion_subnet_id  = "AzureBastionSubnet"
+
+    storage_private_endpoint_subnet_id = "endpoints-subnet"
+    storage_private_dns_zone_id        = "privatelink.blob.core.windows.net"
   }
 
   expect_failures = [
@@ -143,6 +148,8 @@ run "resource_ids_reject_a_bare_name" {
     var.redis_subnet_id,
     var.agic_subnet_id,
     var.bastion_subnet_id,
+    var.storage_private_endpoint_subnet_id,
+    var.storage_private_dns_zone_id,
   ]
 }
 
@@ -154,6 +161,86 @@ run "name_prefix_rejects_a_trailing_hyphen" {
   }
 
   expect_failures = [var.name_prefix]
+}
+
+run "name_base_and_salt_reject_a_malformed_value" {
+  command = plan
+
+  variables {
+    name_base        = "Contoso"
+    name_suffix_salt = "rotate-2"
+  }
+
+  expect_failures = [
+    var.name_base,
+    var.name_suffix_salt,
+  ]
+}
+
+# Each name pair belongs to one side of its create flag: the plain name pins
+# what this module creates, the existing_ name picks what it attaches to. The
+# defaults create both, so only the attach-side names can be wrong here.
+run "attach_names_are_rejected_on_the_create_path" {
+  command = plan
+
+  variables {
+    create_cluster         = true
+    existing_cluster_name  = "ls-aks-prod"
+    create_keyvault        = true
+    existing_keyvault_name = "ls-kv-prod"
+  }
+
+  expect_failures = [
+    var.existing_cluster_name,
+    var.existing_keyvault_name,
+  ]
+}
+
+# blob_ttl_long_days carries two validations, and the second reads
+# blob_ttl_short_days, so each rule gets a run of its own with the other value
+# valid.
+
+run "blob_ttl_short_days_rejects_zero" {
+  command = plan
+
+  variables {
+    blob_ttl_short_days = 0
+  }
+
+  expect_failures = [var.blob_ttl_short_days]
+}
+
+run "blob_ttl_long_days_rejects_a_fraction" {
+  command = plan
+
+  variables {
+    blob_ttl_short_days = 14
+    blob_ttl_long_days  = 400.5
+  }
+
+  expect_failures = [var.blob_ttl_long_days]
+}
+
+run "blob_ttl_long_days_rejects_less_than_the_short_ttl" {
+  command = plan
+
+  variables {
+    blob_ttl_short_days = 14
+    blob_ttl_long_days  = 7
+  }
+
+  expect_failures = [var.blob_ttl_long_days]
+}
+
+run "langsmith_domain_is_required_for_dns01" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "dns01"
+    langsmith_domain       = ""
+  }
+
+  expect_failures = [var.langsmith_domain]
 }
 
 run "smithdb_cache_performance_rejects_out_of_range_values" {
@@ -604,4 +691,117 @@ run "node_subnet_capacity_counts_pods_too" {
   }
 
   expect_failures = [terraform_data.validate_network]
+}
+
+# ── SmithDB gates ────────────────────────────────────────────────────────────
+# Cross-variable, so preconditions on terraform_data.validate_network.
+
+run "smithdb_gates_require_smithdb" {
+  command = plan
+
+  variables {
+    enable_smithdb            = false
+    smithdb_ingestion_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_migration_requires_ingestion" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    smithdb_ingestion_enabled = false
+    smithdb_migration_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# ── Storage and ClusterIP rules ──────────────────────────────────────────────
+
+# A private endpoint removes the public listener the allowlist writes rules for.
+run "storage_allowlist_is_refused_with_private_endpoints" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+    storage_allowed_ips              = ["203.0.113.10"]
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# Both values are well formed on their own; the address is outside the range.
+run "aks_dns_service_ip_outside_the_service_cidr_is_refused" {
+  command = plan
+
+  variables {
+    aks_service_cidr   = "10.100.0.0/16"
+    aks_dns_service_ip = "10.101.0.10"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# ── Derived name lengths ─────────────────────────────────────────────────────
+# Azure's per-service name limits are preconditions on the resource group, the
+# first resource created, so an overlong name fails the plan instead of the
+# apply partway through. One run per name, since expect_failures names the
+# resource and cannot tell the preconditions apart.
+
+run "a_storage_account_name_over_24_characters_is_refused" {
+  command = plan
+
+  variables {
+    storage_account_name = "lsblobprodeastus2contoso01"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_keyvault_name_over_24_characters_is_refused" {
+  command = plan
+
+  variables {
+    create_keyvault = true
+    keyvault_name   = "ls-kv-prod-eastus2-contoso"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_postgres_name_over_63_characters_is_refused" {
+  command = plan
+
+  variables {
+    postgres_source = "external"
+    postgres_name   = "ls-postgres-production-eastus2-contoso-langsmith-self-hosted-001"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_redis_name_over_60_characters_is_refused" {
+  command = plan
+
+  variables {
+    redis_source = "external"
+    redis_name   = "ls-redis-production-eastus2-contoso-langsmith-self-hosted-001"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_cluster_name_over_63_characters_is_refused" {
+  command = plan
+
+  variables {
+    create_cluster = true
+    cluster_name   = "ls-aks-production-eastus2-contoso-langsmith-self-hosted-cluster1"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
 }
