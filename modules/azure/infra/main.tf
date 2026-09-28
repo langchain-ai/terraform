@@ -510,6 +510,21 @@ resource "terraform_data" "validate_network" {
       error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"], or an additional_node_pools entry with zones set. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
     }
 
+    # SmithDB's single-replica deployments start the new pod before stopping
+    # the old one, and the chart exposes no strategy for compaction. On a
+    # dedicated pool that cannot grow, the new pod stays Pending after any
+    # values change, including every staged gate flip. The pool is identified by
+    # the name the chart overrides pin to (kubernetes.azure.com/agentpool:
+    # smithdb). ?: rather than || so the index is skipped when the pool is absent.
+    precondition {
+      condition = (
+        var.enable_smithdb && (var.create_cluster || var.existing_cluster_node_pools_managed) && contains(keys(local.effective_node_pools), "smithdb")
+        ? local.effective_node_pools["smithdb"].max_count > local.effective_node_pools["smithdb"].min_count
+        : true
+      )
+      error_message = "additional_node_pools.smithdb needs max_count greater than min_count. SmithDB rollouts start each new pod before stopping the old one, so a pool that cannot add a node leaves the new pod Pending after every Helm values change. Raise max_count by at least one, and confirm the VM family's regional vCPU quota covers the extra node."
+    }
+
     # A Private Endpoint removes the public listener that storage_allowed_ips
     # writes rules for, so the allowlist stops granting anything. Say so at plan
     # time rather than leaving an operator to believe a CI runner still reaches

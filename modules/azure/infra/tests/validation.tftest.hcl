@@ -209,6 +209,45 @@ run "smithdb_accepts_a_zonal_additional_pool" {
   }
 }
 
+# A SmithDB pool pinned at its minimum has no node for the surge pod of a
+# rolling update. The zonal pool keeps the zone rule satisfied, so a failure
+# here can only be the headroom rule.
+run "smithdb_pool_rejects_max_count_equal_to_min_count" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D8s_v4"
+        min_count = 1
+        max_count = 1
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_pool_accepts_one_node_of_headroom" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D8s_v4"
+        min_count = 1
+        max_count = 2
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+}
+
 run "identifier_is_rejected_outright" {
   command = plan
 

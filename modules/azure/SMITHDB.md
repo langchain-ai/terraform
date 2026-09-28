@@ -198,9 +198,12 @@ can't scale out past `max_count` for the stranded pod.
 
 Leave room for a rollout. A single-replica deployment starts its new pod before
 it stops the old one, so a pool with no spare node for the largest SmithDB pod
-leaves the new pod `Pending` after any values change. The chart exposes no
-`strategy` for compaction or compactionWorker. On a pool at `max_count`, delete
-the old pod and the rollout completes.
+leaves the new pod `Pending` after any values change, including each staged gate
+flip. The chart exposes no `strategy` for compaction or compactionWorker. Plan
+rejects a `smithdb` pool whose `max_count` equals its `min_count`. Confirm the VM
+family's regional vCPU quota covers `max_count` nodes, or the autoscaler cannot
+add the surge node either. If a rollout stalls anyway, delete the old pod and
+the rollout completes.
 
 Size the VM for the largest SmithDB pod. At the `small` tier, compactionWorker
 requests 8 vCPU and 16 GiB, which no 8-vCPU VM can schedule, and ingestion and
