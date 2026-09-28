@@ -972,6 +972,9 @@ bastion_subnet_address_prefix  = ["172.16.80.0/27"] # create_bastion = true only
 ```
 
 Plan rejects any prefix that falls outside `vnet_address_space` and names it.
+It also rejects a prefix that overlaps `aks_service_cidr`, whose `10.0.64.0/20`
+default fills the gap the default prefixes leave. If your space still holds
+`10.0.64.0/20`, keep every subnet clear of it or set `aks_service_cidr` too.
 
 ---
 
@@ -1014,7 +1017,7 @@ one Terraform carves.
 
 `aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
 it, and AKS requires a range that nothing on or connected to your VNet uses. The
-`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
+`10.0.64.0/20` default only avoids the subnets Terraform carves, and an overlap with
 your own address space can be accepted when the cluster is created and break
 later, so plan makes you name one and rejects one that lands inside your VNet.
 Peered and on-premises ranges are still yours to keep clear of, since plan only

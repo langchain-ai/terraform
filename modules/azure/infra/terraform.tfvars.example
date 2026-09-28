@@ -327,8 +327,7 @@ sizing_profile = "production"
 # Or omit an ID above and set its prefix here to have Terraform carve it out.
 # These defaults are sized for the 10.0.0.0/17 VNet Terraform builds, so treat
 # them as a starting point. Plan reads your VNet and rejects a prefix outside its
-# address space, but cannot tell whether one collides with a subnet that already
-# exists there, so pick ranges you know are free.
+# address space or collides with a subnet already there.
 # aks_subnet_address_prefix      = ["10.0.0.0/19"]
 # postgres_subnet_address_prefix = ["10.0.32.0/20"]
 # redis_subnet_address_prefix    = ["10.0.48.0/20"]

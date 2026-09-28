@@ -344,6 +344,31 @@ run "moved_vnet_address_space_rejects_a_default_bastion_prefix" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# The default aks_service_cidr, 10.0.64.0/20, sits inside the default VNet in
+# the gap the default subnets leave. A subnet moved into that gap has to fail at
+# plan, and moving aks_service_cidr out of its way has to clear it.
+
+run "created_vnet_rejects_a_subnet_on_the_service_cidr" {
+  command = plan
+
+  variables {
+    ingress_controller         = "agic"
+    agic_subnet_address_prefix = ["10.0.64.0/24"]
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "created_vnet_plans_a_subnet_beside_a_moved_service_cidr" {
+  command = plan
+
+  variables {
+    ingress_controller         = "agic"
+    agic_subnet_address_prefix = ["10.0.64.0/24"]
+    aks_service_cidr           = "10.0.112.0/20"
+  }
+}
+
 # ── Subnets already in a reused VNet ─────────────────────────────────────────
 # Carving into someone else's VNet, the prefixes Terraform picks must miss the
 # subnets already there. The VNet read returns only their names, so each one is

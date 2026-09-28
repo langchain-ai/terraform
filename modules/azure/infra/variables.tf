@@ -672,12 +672,12 @@ variable "default_node_pool_max_pods" {
 }
 
 # Both of these are empty by default rather than carrying the create-path value,
-# because 10.0.64.0/20 is only safe against the VNet Terraform builds. main.tf
+# because 10.0.64.0/20 is only safe against the subnets Terraform carves. main.tf
 # fills them in for create_vnet = true and requires aks_service_cidr under
 # bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Size it /20: the range is virtual, so a large one costs no address space, and /24 (Azure's floor) caps the cluster at 251 Services, which a Pass 4 deployment can reach because LangGraph Platform adds Services per deployment. Fixed on the cluster at creation — outgrowing it means rebuilding the cluster."
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, the gap the default subnet prefixes leave inside the 10.0.0.0/17 VNet Terraform builds; plan rejects a range that overlaps a subnet Terraform carves there. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Size it /20: the range is virtual, so a large one costs no address space, and /24 (Azure's floor) caps the cluster at 251 Services, which a Pass 4 deployment can reach because LangGraph Platform adds Services per deployment. Fixed on the cluster at creation — outgrowing it means rebuilding the cluster."
   default     = ""
 
   # Empty is the not-set sentinel main.tf falls back on, so it has to pass. Any

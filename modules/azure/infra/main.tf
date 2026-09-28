@@ -333,6 +333,13 @@ locals {
     local.cidr_first[local.aks_service_cidr] <= local.cidr_last[space] &&
     local.cidr_last[local.aks_service_cidr] >= local.cidr_first[space]
   ])
+  # Inside a VNet Terraform builds, the range may share the address space but
+  # not a subnet: the default 10.0.64.0/20 is the gap the default subnet
+  # prefixes leave in 10.0.0.0/17.
+  service_cidr_subnet_overlaps = [
+    for entry in local.carved_prefixes : "${entry.prefix} (${entry.name})"
+    if local.cidr_first[local.aks_service_cidr] <= local.cidr_last[entry.prefix] && local.cidr_last[local.aks_service_cidr] >= local.cidr_first[entry.prefix]
+  ]
 
   # AKS takes the CoreDNS address out of the service range and rejects one that
   # sits outside it. A /32 starts and ends at the same number, so its first
@@ -736,12 +743,12 @@ resource "terraform_data" "validate_network" {
       ])
     }
 
-    # 10.0.64.0/20 only avoids the VNet that Terraform builds. Inside someone
-    # else's address space AKS can accept an overlapping ClusterIP range and
-    # break later, so make the operator name one.
+    # 10.0.64.0/20 only avoids the subnets Terraform carves by default. Inside
+    # someone else's address space AKS can accept an overlapping ClusterIP range
+    # and break later, so make the operator name one.
     precondition {
       condition     = var.create_vnet || var.aks_service_cidr != ""
-      error_message = "aks_service_cidr is required when create_vnet = false. The 10.0.64.0/20 default is chosen to sit outside the Terraform-managed 10.0.0.0/17 and can fall inside your VNet. AKS requires a ClusterIP range that nothing on or connected to your VNet uses, so set one outside your VNet's address space."
+      error_message = "aks_service_cidr is required when create_vnet = false. The 10.0.64.0/20 default only misses the subnets Terraform carves by default and can fall inside your VNet. AKS requires a ClusterIP range that nothing on or connected to your VNet uses, so set one outside your VNet's address space."
     }
 
     # Requiring aks_service_cidr does not make it correct, and a range picked out
@@ -751,6 +758,15 @@ resource "terraform_data" "validate_network" {
     precondition {
       condition     = length(data.azurerm_virtual_network.byo_vnet) == 0 || !local.service_cidr_overlaps_vnet
       error_message = "aks_service_cidr (${local.aks_service_cidr}) overlaps the address space of vnet_id (${join(", ", local.vnet_address_space)}). Kubernetes ClusterIPs are not carved from the VNet, and AKS requires a range nothing on or connected to it uses. This check only sees the VNet's own address space, so keep clear of peered and on-premises ranges too."
+    }
+
+    # A VNet Terraform builds is checked against its subnets instead, since the
+    # default range sits inside the default address space. Moving a subnet
+    # prefix onto 10.0.64.0/20 fails the cluster create partway through apply.
+    # Under create_vnet = false the address-space check above already covers it.
+    precondition {
+      condition     = !var.create_vnet || length(local.service_cidr_subnet_overlaps) == 0
+      error_message = "aks_service_cidr (${local.aks_service_cidr}) overlaps these subnet prefixes: ${join(", ", local.service_cidr_subnet_overlaps)}. AKS rejects a ClusterIP range that overlaps a subnet in its VNet. Move the subnet, or set aks_service_cidr to a range no subnet uses. Changing aks_service_cidr on an existing cluster rebuilds it."
     }
 
     # Left empty the address is derived from the range and is always inside it.
