@@ -758,6 +758,29 @@ CASES = [
         ],
     },
     {
+        # A Government subscription is invisible from the commercial cloud, so
+        # every check after this one would fail without saying why.
+        "name": "a Government tfvars against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": [
+            "[✗] terraform.tfvars sets azure_environment = usgovernment, but the Azure CLI is on AzureCloud",
+            "az cloud set --name AzureUSGovernment && az login",
+        ],
+    },
+    {
+        "name": "a Government tfvars on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "a commercial tfvars on the commercial CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
         "name": "a matching subscription passes without comment",
         "ca_all": ALL_GOOD,
         "reject": ["but the active CLI subscription is"],
@@ -1047,7 +1070,7 @@ def build_case(case, index):
         )
     if "amr_regions" in case:
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
-    for key in ("kv_deleted", "redis_hit", "dns_held"):
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 

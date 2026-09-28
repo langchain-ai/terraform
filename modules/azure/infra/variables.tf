@@ -258,6 +258,21 @@ variable "location" {
   default     = "eastus"
 }
 
+# Not `environment`, which is already the tag value above. The two accepted
+# values are the azurerm and azapi provider names for the clouds this module is
+# tested against; the provider blocks in versions.tf take it verbatim, and
+# local.azure_cloud maps it to the DNS names that differ between the clouds.
+variable "azure_environment" {
+  type        = string
+  description = "Azure cloud to deploy into: 'public' (commercial Azure) or 'usgovernment' (Azure Government). Sets the azurerm and azapi provider environment and the private DNS zone, public IP DNS and Blob endpoint names that differ between the two. Overrides ARM_ENVIRONMENT."
+  default     = "public"
+
+  validation {
+    condition     = contains(["public", "usgovernment"], var.azure_environment)
+    error_message = "azure_environment must be 'public' or 'usgovernment'."
+  }
+}
+
 variable "subscription_id" {
   type        = string
   description = "The subscription id of the LangSmith deployment"
@@ -462,6 +477,15 @@ variable "redis_source" {
     condition     = contains(["external", "in-cluster"], var.redis_source)
     error_message = "redis_source must be 'external' or 'in-cluster'."
   }
+
+  # Azure Managed Redis is not offered in Azure Government: Microsoft's private
+  # endpoint DNS reference lists no redisEnterprise zone for it, and Azure Cache
+  # for Redis there is 6.0, below LangSmith's 6.2 floor. Refused at plan rather
+  # than left to fail mid-apply on a resource type the cloud does not have.
+  validation {
+    condition     = !(var.redis_source == "external" && var.azure_environment == "usgovernment")
+    error_message = "redis_source = \"external\" provisions Azure Managed Redis, which Azure Government does not offer. Set redis_source = \"in-cluster\", or point the chart at a Redis you run yourself."
+  }
 }
 
 # No Terraform resource reads this — where ClickHouse runs is a Helm-values
@@ -596,12 +620,12 @@ variable "storage_private_endpoint_subnet_id" {
 
 variable "storage_private_dns_zone_id" {
   type        = string
-  description = "Existing privatelink.blob.core.windows.net zone to attach the endpoints to. Empty creates one and links it to the VNet. Azure allows a zone name to be linked to a VNet once, so supply the central zone when the VNet already resolves privatelink.blob.core.windows.net — creating a second one fails the link."
+  description = "Existing Blob private DNS zone to attach the endpoints to: privatelink.blob.core.windows.net, or privatelink.blob.core.usgovcloudapi.net in Azure Government. Empty creates one and links it to the VNet. Azure allows a zone name to be linked to a VNet once, so supply the central zone when the VNet already resolves that name — creating a second one fails the link."
   default     = ""
 
   validation {
-    condition     = var.storage_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", var.storage_private_dns_zone_id))
-    error_message = "storage_private_dns_zone_id must be a full privatelink.blob.core.windows.net zone resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    condition     = var.storage_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.${var.azure_environment == "usgovernment" ? "usgovcloudapi" : "windows"}\\.net$", var.storage_private_dns_zone_id))
+    error_message = "storage_private_dns_zone_id must be the full resource ID of the Blob private DNS zone for azure_environment: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net (public) or .../privatelink.blob.core.usgovcloudapi.net (usgovernment)"
   }
 }
 
@@ -1198,7 +1222,7 @@ variable "enable_fleet" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
   default     = ""
 }
 

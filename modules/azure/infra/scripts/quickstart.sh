@@ -1053,7 +1053,7 @@ _run_section_6() {
   _hint "Determines how LangSmith is accessed and whether traffic is encrypted."
   _hint ""
   _hint "None          — HTTP only. Fastest setup, zero cert config. Good for dev/internal."
-  _hint "              URL: http://<label>.<region>.cloudapp.azure.com"
+  _hint "              URL: http://<label>.<region>.$(_azure_cloudapp_suffix)"
   _hint ""
   _hint "Both HTTPS options are free certificates from Let's Encrypt. What differs is how"
   _hint "Let's Encrypt proves you control the name, and both register an ACME account."
@@ -1133,7 +1133,7 @@ _run_section_6() {
     if [[ "$want_domain" == "false" ]]; then
       _hint "How do you want to expose the LangSmith URL?"
       _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
-      _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
+      _hint "                    Azure assigns <label>.<region>.$(_azure_cloudapp_suffix) to the LB IP."
       _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
       _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
       echo ""
@@ -1171,7 +1171,7 @@ _run_section_6() {
     LANGSMITH_DOMAIN=""; LE_EMAIL=""
     echo ""
     _hint "Azure assigns a free DNS label to your load balancer public IP."
-    _hint "Format: <label>.<region>.cloudapp.azure.com"
+    _hint "Format: <label>.<region>.$(_azure_cloudapp_suffix)"
     _ask_dns_label
   else
     # existing — no hostname prompts apply
@@ -1275,6 +1275,15 @@ _run_section_7() {
       PG_SOURCE="in-cluster"
       REDIS_SOURCE="in-cluster"
     fi
+  fi
+
+  # Azure Managed Redis is not offered in Azure Government, and redis_source =
+  # "external" fails at plan there, so whatever was picked above, Redis runs
+  # in-cluster. Postgres keeps the operator's choice.
+  if [[ "$(_azure_environment)" == "usgovernment" && "$REDIS_SOURCE" == "external" ]]; then
+    REDIS_SOURCE="in-cluster"
+    echo ""
+    _hint "Azure Government: Azure Managed Redis is not offered there, so Redis runs in-cluster."
   fi
 
   # Without this prompt every quickstart deployment silently took the Balanced_B0
@@ -1615,7 +1624,7 @@ while true; do
   [[ "$TLS_SOURCE" == "letsencrypt" ]] && _TLS_REVIEW="letsencrypt  (Let's Encrypt, HTTP-01 challenge)"
   [[ "$TLS_SOURCE" == "dns01" ]]       && _TLS_REVIEW="dns01  (Let's Encrypt, DNS-01 challenge)"
   printf "  %-24s %s\n" "6. TLS:"             "$_TLS_REVIEW"
-  [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
+  [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.$(_azure_cloudapp_suffix)"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
   [[ -n "$LE_EMAIL" ]]         && printf "  %-24s %s\n" "   ACME email:"   "$LE_EMAIL"
   printf "  %-24s %s\n" "7. PostgreSQL:"      "$PG_SOURCE"

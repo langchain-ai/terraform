@@ -153,6 +153,44 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 
 ---
 
+### Deploying to Azure Government
+
+Set the cloud in `terraform.tfvars` and point the Azure CLI at the same one before `make preflight`:
+
+```hcl
+azure_environment = "usgovernment"
+location          = "usgovvirginia"
+redis_source      = "in-cluster"
+```
+
+```bash
+az cloud set --name AzureUSGovernment
+az login
+```
+
+`azure_environment` sets the `azurerm` and `azapi` provider environment and picks the names that differ between the clouds:
+
+| | `public` (default) | `usgovernment` |
+|---|---|---|
+| PostgreSQL private DNS zone | `privatelink.postgres.database.azure.com` | `privatelink.postgres.database.usgovcloudapi.net` |
+| Blob private DNS zone | `privatelink.blob.core.windows.net` | `privatelink.blob.core.usgovcloudapi.net` |
+| Public IP DNS label | `<label>.<region>.cloudapp.azure.com` | `<label>.<region>.cloudapp.usgovcloudapi.net` |
+| Blob endpoint in Helm values | chart default | `azureStorageServiceUrlOverride` from the `storage_blob_endpoint` output |
+| cert-manager `azureDNS` environment | `AzurePublicCloud` | `AzureUSGovernmentCloud` |
+
+The zone names are Microsoft's recommended names from the [private endpoint DNS reference](https://learn.microsoft.com/azure/private-link/private-endpoint-dns#government). `make preflight` fails when the CLI's active cloud does not match `azure_environment`.
+
+Limits in Azure Government:
+
+- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
+- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
+
+**The state backend needs the cloud too.** `azure_environment` configures the providers, not the `azurerm` backend, which Terraform initializes before it reads any variable. A state storage account in Government needs `environment = "usgovernment"` in the `backend "azurerm"` block, or `ARM_ENVIRONMENT=usgovernment` in the shell that runs `terraform init`.
+
+The scripts (`make init-values`, `make deploy`, the quickstart wizard) read the cloud from the `azure_environment` output once the infrastructure is applied, then from `terraform.tfvars`, then from `TF_VAR_azure_environment`. The wizard keeps Redis in-cluster in Government.
+
+
 ## Prerequisites
 
 ### Required tools

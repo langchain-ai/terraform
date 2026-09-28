@@ -19,3 +19,8 @@ output "k8s_managed_identity_principal_id" {
   description = "Object ID of the managed identity — used by the keyvault module to grant Key Vault Secrets User role"
   value       = var.workload_identity_principal_id
 }
+
+output "blob_endpoint" {
+  description = "Blob service endpoint of the trace-blob account, as Azure reports it for this cloud (https://<name>.blob.core.windows.net/ in commercial Azure)."
+  value       = azurerm_storage_account.storage_account.primary_blob_endpoint
+}

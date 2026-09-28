@@ -53,3 +53,9 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "private_dns_zone_name" {
+  type        = string
+  description = "Name of the metastore private DNS zone when this module creates it. The root passes the name for its azure_environment."
+  default     = "privatelink.postgres.database.azure.com"
+}
