@@ -154,19 +154,20 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # Requirements:
 #   - gke_use_autopilot = false. Autopilot does not support the required
 #     dedicated nested-virtualization node pool.
-#   - enable_gcp_iam_module = true so the sandbox-host service account can
-#     access the shared GCS bucket via Workload Identity.
+#   - enable_gcp_iam_module = true. The juicefs-format Job reaches the bucket
+#     through the langsmith-sandbox-host Workload Identity binding.
 #   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
-#     The default is n2-standard-8, which matches the tested live
-#     configuration. Other example machine types include n2-highmem-8,
-#     n1-standard-8, c3-standard-8, and c4-standard-8. GCP nested
-#     virtualization is not available on E2, memory-optimized, AMD-powered,
-#     Arm-powered, or H4D machine types.
+#     The machine type follows sizing_profile (see below). Other examples:
+#     n2-highmem-8, c3-standard-8. C4 accepts only Hyperdisk, and this pool
+#     uses a pd-ssd boot disk. GCP nested virtualization is not available on
+#     E2, memory-optimized, AMD-powered, Arm-powered, or H4D machine types.
 #
 # When sandboxes are enabled, the module creates a restricted sandbox-host node
-# service account and assigns it only the standard GKE node/telemetry roles.
-# JuiceFS object-store access stays on the Workload Identity service account
-# bound to the sandbox-host Kubernetes service account, not on the node identity.
+# service account with the standard GKE node and telemetry roles. sandbox-host
+# runs on the host network, so GKE gives it this node identity, not Workload
+# Identity. The module grants the node service account roles/storage.objectAdmin
+# on the bucket. An IAM condition limits the grant to objects under
+# <sandbox_juicefs_name>/.
 #
 # enable_sandboxes = true
 # sandbox_juicefs_redis_memory_size = 5
@@ -174,9 +175,15 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # For SaaS-like production scale:
 # sandbox_juicefs_redis_memory_size = 20
 # sandbox_juicefs_redis_rdb_snapshot_period = "ONE_HOUR"
+# Node counts are per zone: the sandbox-host pool is regional. The default
+# minimum of 0 keeps only the nodes that sandbox-host needs. Set 1 to keep an
+# idle node in every zone for faster recovery after a node or zone failure.
 # sandbox_host_node_count = 1
-# sandbox_host_min_node_count = 1
+# sandbox_host_min_node_count = 0
 # sandbox_host_max_node_count = 5
+# The machine type follows sizing_profile when it stays unset:
+#   production, production-large -> n2-standard-32
+#   every other profile          -> n2-standard-8
 # sandbox_host_machine_type = "n2-standard-8"
 # Optional: requests injected into sandbox containers that omit them. These
 # values preserve namespace request-quota accounting without imposing limits
@@ -185,14 +192,14 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 #   cpu    = "100m"
 #   memory = "128Mi"
 # }
-# Optional: larger host nodes can attach local SSDs for JuiceFS cache backed
-# ephemeral storage. Some machine types only allow specific local SSD counts;
-# confirm the selected machine type supports the requested count.
-# sandbox_host_ephemeral_local_ssd_count = 7
+# Optional: local SSDs back kubelet and container runtime ephemeral storage on
+# sandbox-host nodes. The JuiceFS host cache stays on the boot disk. Compute
+# Engine accepts only specific counts: N2 with 2-10 vCPU takes 1, 2, 4, 8, 16 or
+# 24; 12-20 vCPU takes 2, 4, 8, 16 or 24; 22-40 vCPU takes 4, 8, 16 or 24.
+# sandbox_host_ephemeral_local_ssd_count = 0
 #
-# Required by init-values.sh when enable_sandboxes = true. Use the same release
-# tag as the other LangSmith images.
-# sandbox_host_image_tag = "0.0.0"
+# deploy.sh sets the sandbox-host image tag from the chart appVersion, so
+# sandbox_host_image_tag is ignored. Remove it from older tfvars files.
 # Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
 # Requires wildcard DNS and TLS for *.<host>.
 # sandbox_service_url_base_url = "https://sandbox-services.example.com"

@@ -387,9 +387,10 @@ variable "sandbox_host_node_count" {
 }
 
 variable "sandbox_host_min_node_count" {
-  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true. The pool is regional, so a minimum of 1 keeps one node in every zone. The default of 0 lets the autoscaler keep only the nodes that sandbox-host needs, one for each replica. When sandbox-host is Pending, the autoscaler adds a node in a healthy zone."
   type        = number
-  default     = 1
+  default     = 0
+  nullable    = false
 }
 
 variable "sandbox_host_max_node_count" {
@@ -399,9 +400,9 @@ variable "sandbox_host_max_node_count" {
 }
 
 variable "sandbox_host_machine_type" {
-  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). Defaults to n2-standard-8; other examples include n2-highmem-8, n1-standard-8, c3-standard-8, and c4-standard-8."
+  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). null (default) follows sizing_profile: production and production-large use n2-standard-32, every other profile uses n2-standard-8. Other examples: n2-highmem-8, c3-standard-8. C4 accepts only Hyperdisk, and this pool uses a pd-ssd boot disk."
   type        = string
-  default     = "n2-standard-8"
+  default     = null
 }
 
 variable "sandbox_host_disk_size_gb" {
@@ -411,13 +412,13 @@ variable "sandbox_host_disk_size_gb" {
 }
 
 variable "sandbox_host_ephemeral_local_ssd_count" {
-  description = "Number of local SSDs backing sandbox-host ephemeral storage, used by the JuiceFS host cache. 0 keeps ephemeral storage on the boot disk."
+  description = "Number of 375 GB local SSDs that back kubelet and container runtime ephemeral storage on sandbox-host nodes. The JuiceFS host cache stays on the boot disk (/var/cache/juicefs), so these disks do not speed up sandbox file I/O. Compute Engine accepts only specific counts per machine type: N2 with 2-10 vCPU takes 1, 2, 4, 8, 16 or 24; 12-20 vCPU takes 2, 4, 8, 16 or 24; 22-40 vCPU takes 4, 8, 16 or 24. Standard C3 types take none."
   type        = number
   default     = 0
 
   validation {
-    condition     = var.sandbox_host_ephemeral_local_ssd_count >= 0 && floor(var.sandbox_host_ephemeral_local_ssd_count) == var.sandbox_host_ephemeral_local_ssd_count
-    error_message = "sandbox_host_ephemeral_local_ssd_count must be a non-negative integer."
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.sandbox_host_ephemeral_local_ssd_count)
+    error_message = "sandbox_host_ephemeral_local_ssd_count must be one of 0, 1, 2, 4, 8, 16 or 24 (the N2 set), and the machine type must accept that count."
   }
 }
 
@@ -495,7 +496,7 @@ variable "sandbox_juicefs_csi_config_secret_revision" {
 # tflint-ignore: terraform_unused_declarations
 variable "sandbox_host_image_tag" {
   type        = string
-  description = "sandbox-host image tag. Required by init-values.sh when enable_sandboxes = true."
+  description = "Deprecated and ignored. deploy.sh sets images.sandboxHostImage.tag from the resolved chart appVersion, so the sandbox-host image cannot lag a chart upgrade. Kept so that older terraform.tfvars files still plan; remove it from tfvars."
   default     = ""
 }
 
