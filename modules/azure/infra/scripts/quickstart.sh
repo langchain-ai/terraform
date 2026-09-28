@@ -1727,7 +1727,7 @@ while true; do
   [[ "$CREATE_VNET" == "true" ]] && printf "    %-18s %s\n" "Virtual network" "$_VNET_NAME"
   # Attach mode is set by hand and carried across a re-run, so the wizard can
   # reach this screen with a cluster or vault it will not create. This is the
-  # review before an auto-approved apply, so it must not list those as created.
+  # review before apply, so it must not list those as created.
   if [[ "$CREATE_CLUSTER" == "false" ]]; then
     printf "    %-18s %s\n" "AKS cluster"   "${_AKS_NAME:-(existing_cluster_name is unset)}  — attaches, does not create"
   else
@@ -2069,12 +2069,9 @@ printf "     ${CYAN}make preflight${RESET}\n"
 echo ""
 printf "  4. Deploy infrastructure (~15–20 min):\n"
 printf "     ${CYAN}make init && make apply${RESET}\n"
-# make apply runs -auto-approve across three targeted stages, so the summary
-# above is the last look before the deployment is built. Silent on whether make
-# plan works first: that depends on whether any kubernetes_manifest is left in
-# the config, which is in flux.
-printf "     ${DIM}apply auto-approves. The summary above is your review.${RESET}\n"
-printf "     ${DIM}Run ${RESET}${CYAN}make plan${RESET}${DIM} before any later apply.${RESET}\n"
+# Silent on whether make plan works first: that depends on whether any
+# kubernetes_manifest is left in the config, which is in flux.
+printf "     ${DIM}apply runs in three stages and asks you to confirm each plan.${RESET}\n"
 echo ""
 printf "  5. Get cluster credentials + create K8s secrets:\n"
 printf "     ${CYAN}make kubeconfig && make k8s-secrets${RESET}\n"
