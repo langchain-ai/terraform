@@ -592,6 +592,12 @@ variable "enable_secret_manager_module" {
   default     = false
 }
 
+variable "grant_project_secret_accessor" {
+  description = "Grant the LangSmith service account roles/secretmanager.secretAccessor on the whole project. No module component needs it. Set true only for a workload you added that reads Secret Manager as that service account; a per-secret grant is safer."
+  type        = bool
+  default     = false
+}
+
 variable "enable_dns_module" {
   description = "Enable Cloud DNS + managed certificate module wiring."
   type        = bool

@@ -669,7 +669,8 @@ module "iam" {
     # old mount pods read the bucket until then.
     "juicefs-csi-node-sa",
   ]
-  gcs_bucket_name = module.storage.bucket_name
+  gcs_bucket_name               = module.storage.bucket_name
+  grant_project_secret_accessor = var.grant_project_secret_accessor
 }
 
 #------------------------------------------------------------------------------

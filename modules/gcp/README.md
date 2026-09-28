@@ -393,6 +393,7 @@ helm upgrade langsmith langchain/langsmith \
 |---|---|---|
 | `enable_gcp_iam_module` | `true` | Wires `modules/iam` for Workload Identity + bucket IAM binding |
 | `enable_secret_manager_module` | `false` | Wires `modules/secrets` for Secret Manager bootstrap secret |
+| `grant_project_secret_accessor` | `false` | Grants the LangSmith service account `roles/secretmanager.secretAccessor` on the whole project. No module component needs it |
 | `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS + managed cert |
 | `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
 | `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |

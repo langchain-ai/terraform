@@ -314,6 +314,11 @@ ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved
 # Enable Workload Identity + bucket IAM grants module (recommended).
 enable_gcp_iam_module = true
 
+# Grant the LangSmith service account read access to every Secret Manager secret
+# in the project. No module component needs it. Keep false; for a workload you
+# add, grant roles/secretmanager.secretAccessor on the secrets it reads.
+grant_project_secret_accessor = false
+
 # Enable Secret Manager secret creation for bootstrap credentials.
 # When true, postgres + redis passwords are stored in Secret Manager.
 # Use setup-env.sh to manage secrets — it reads/writes Secret Manager automatically.

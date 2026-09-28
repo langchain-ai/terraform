@@ -177,6 +177,23 @@ Then do the other steps in
 metastore TLS values, the overlay, and the backfill Job. That section also covers
 a direct `helm upgrade`.
 
+## 4) Secret Manager access on GCP
+
+The LangSmith service account no longer gets `roles/secretmanager.secretAccessor`
+on the whole project. No LangSmith component reads Secret Manager at runtime. The
+scripts (`setup-env.sh`, `manage-secrets.sh`, `status.sh`) read it with your own
+gcloud credentials.
+
+- `make apply` destroys one resource,
+  `module.iam[0].google_project_iam_member.langsmith_secret_accessor[0]`. The
+  provider removes only this member from the role binding. No pod restarts.
+- First check if a workload that you added reads Secret Manager as the LangSmith
+  service account, for example External Secrets Operator on a LangSmith Kubernetes
+  service account. Give that workload its own GCP service account, with
+  `roles/secretmanager.secretAccessor` on the secrets that it reads.
+- To keep the old grant, set `grant_project_secret_accessor = true`. Terraform then
+  keeps the existing binding.
+
 ## Upgrade path
 
 1) Take a database backup. Chart downgrades are not supported, so 0.17 to 0.16 is not
@@ -191,7 +208,8 @@ a direct `helm upgrade`.
    `sandbox_host_machine_type = "n2-standard-8"`. The pin keeps the current
    sandbox-host nodes and their mounted chart 0.16 volumes until the drain in
    step 5. After step 6, remove the pin. Then run `make apply` again. GKE recreates
-   every sandbox-host node, and running sandboxes stop.
+   every sandbox-host node, and running sandboxes stop. On GCP, `make apply` also
+   removes the project-wide Secret Manager grant (section 4).
 4) Run `make init-values` so the generated overrides file is regenerated in the 0.17
    shape.
 5) Deploy: `make deploy`. If sandboxes ran on chart 0.16, the first run stops and
