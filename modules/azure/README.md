@@ -1160,21 +1160,19 @@ Microsoft's container host OS. Microsoft describes it as having a reduced attack
 surface, and AKS Automatic uses it for the system pool, which is why enterprise
 hardening baselines tend to ask for it. Nothing in LangSmith depends on the node
 OS: every component runs in its own container image. The accepted values are
-`Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3`,
-`Ubuntu2204` and `Ubuntu2404`. Windows SKUs are refused, because every pool here
-is Linux.
+`Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3` and
+`Ubuntu2204`. Windows SKUs are refused, because every pool here is Linux.
+`Ubuntu2404` is not accepted yet: the azurerm provider added it in 4.67.0, and
+this module still allows versions back to 4.59.0.
 
-Choose it before the first apply if you can. On an existing cluster the azurerm
-provider handles a change in one of three ways:
-
-| Change | Default pool | Additional pool |
-|--------|--------------|-----------------|
-| `Ubuntu` to `AzureLinux`, or back | Updated in place: AKS reimages the nodes | Updated in place |
-| Any other change, such as to `AzureLinux3` or `Ubuntu2404` | Cycled through the temporary rotation pool (`defaulttmp`), with no cordon and drain, so pods are rescheduled as the old nodes go | **Replaced**: the pool is deleted and created again |
-
-Because an additional pool with no `os_sku` follows `aks_os_sku`, changing
-`aks_os_sku` to a pinned version replaces those pools too. Read the plan before
-applying.
+On an existing cluster, a change between any two accepted values is an in-place
+update of the pool, for the default pool and additional pools alike. The provider
+treats every change whose old and new values both start with `Ubuntu` or
+`AzureLinux` that way, and Azure applies it by reimaging the pool's nodes, so
+workloads on them are rescheduled as it goes. No accepted change replaces a pool or
+cycles the default pool through `defaulttmp`. Because an additional pool with no
+`os_sku` follows `aks_os_sku`, changing `aks_os_sku` reimages those pools too.
+Plan it for a maintenance window, and read the plan before applying.
 
 ## Multi-AZ Support
 

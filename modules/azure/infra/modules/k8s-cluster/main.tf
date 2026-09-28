@@ -304,8 +304,9 @@ resource "azurerm_kubernetes_cluster" "main" {
     # Setting to 60 fits all passes on 1 node, avoiding autoscaler scale-out and vCPU quota pressure.
     max_pods = var.default_node_pool_max_pods
 
-    # Ubuntu <-> AzureLinux updates in place; any other change cycles the pool
-    # through temporary_name_for_rotation below.
+    # The provider updates os_sku in place when the old and new values both start
+    # with Ubuntu or AzureLinux, which covers every value the root accepts; only a
+    # value outside those would cycle the pool through temporary_name_for_rotation.
     os_sku = var.default_node_pool_os_sku
 
     # Nodes live in the main subnet. In node-subnet mode pods take their IPs
@@ -467,8 +468,8 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   kubelet_disk_type     = each.value.kubelet_disk_type
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
 
-  # Follows the default pool unless the pool sets its own. Ubuntu <-> AzureLinux
-  # updates in place; the provider replaces the pool for any other change.
+  # Follows the default pool unless the pool sets its own. In place between any
+  # two Ubuntu* or AzureLinux* values; the provider replaces the pool otherwise.
   os_sku = coalesce(each.value.os_sku, var.default_node_pool_os_sku)
 
   # "User" mode: these pools run application workloads.

@@ -311,7 +311,7 @@ run "os_sku_azure_linux_with_a_pool_override" {
     aks_os_sku = "AzureLinux"
     additional_node_pools = {
       large  = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
-      ubuntu = { vm_size = "Standard_D8s_v3", min_count = 0, max_count = 1, os_sku = "Ubuntu2404" }
+      ubuntu = { vm_size = "Standard_D8s_v3", min_count = 0, max_count = 1, os_sku = "Ubuntu2204" }
     }
   }
 
@@ -326,7 +326,7 @@ run "os_sku_azure_linux_with_a_pool_override" {
   }
 
   assert {
-    condition     = module.aks.node_pool_os_skus["ubuntu"] == "Ubuntu2404"
+    condition     = module.aks.node_pool_os_skus["ubuntu"] == "Ubuntu2204"
     error_message = "a pool's own os_sku was overridden by aks_os_sku"
   }
 }
