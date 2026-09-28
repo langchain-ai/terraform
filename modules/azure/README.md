@@ -536,7 +536,7 @@ Runs `terraform plan` in `infra/`. Auto-runs `setup-env.sh` first if `secrets.au
 ---
 
 ### `make apply` — Provision Azure infrastructure
-Runs `terraform apply -auto-approve` in `infra/`. Auto-runs `setup-env.sh` if needed. Creates all Azure resources (~15–20 min on first run):
+Runs `terraform apply` in `infra/` in three targeted stages, each of which shows its plan and asks for confirmation. Pass `ARGS="-auto-approve"` to skip the prompts. Auto-runs `setup-env.sh` if needed. Creates all Azure resources (~15–20 min on first run):
 
 - VNet + subnets (AKS, Postgres, Redis) + private DNS zones
 - AKS cluster + node pools + OIDC issuer + managed identity + Workload Identity federated credentials
