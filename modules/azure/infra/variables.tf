@@ -741,8 +741,10 @@ variable "additional_node_pools" {
     }
   }
 
+  # A ternary, not ||: Terraform before 1.12 evaluates both operands, so contains()
+  # would get the null os_sku of a pool that sets none, and versions.tf allows 1.11.
   validation {
-    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null || contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null ? true : contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
     error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204, or left unset to follow aks_os_sku."
   }
 }
