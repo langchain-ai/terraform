@@ -235,7 +235,7 @@ Terraform destroys in dependency order:
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
 - Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
-- GKE cluster and node pools, including the SmithDB Local SSD and compute pools
+- GKE cluster and node pools, including the SmithDB cache and compute pools
 - Private service connection (only when `postgres_source` or `redis_source` is `"external"`, when `enable_sandboxes = true`, or when the module creates the SmithDB metastore): removed from state only (`deletion_policy = "ABANDON"`). The VPC delete removes its peering.
 - VPC, subnet, Cloud Router, Cloud NAT
 

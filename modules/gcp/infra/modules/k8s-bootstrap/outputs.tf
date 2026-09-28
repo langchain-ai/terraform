@@ -87,3 +87,8 @@ output "uses_external_clickhouse" {
   description = "Whether using external ClickHouse (managed or self-hosted)"
   value       = var.clickhouse_source != "in-cluster"
 }
+
+output "smithdb_cache_storage_class_name" {
+  description = "Name of the SmithDB cache StorageClass, or null when it is not created"
+  value       = var.create_smithdb_cache_storage_class ? kubernetes_storage_class_v1.smithdb_cache[0].metadata[0].name : null
+}
