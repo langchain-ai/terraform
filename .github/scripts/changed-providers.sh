@@ -10,8 +10,8 @@
 # Reads changed paths on stdin, one per line. A path under modules/<provider>/
 # selects that provider. A change to the gate itself (agents/, this script, or
 # the workflow) selects every provider, since it can break any leg. Anything
-# else selects none: modules/ocp and the docs have no terraform leg, and the
-# shellcheck job covers every script regardless of this list.
+# else selects none: modules/ocp and the docs have no terraform leg, and every
+# script is linted by the shellcheck job regardless of this list.
 set -euo pipefail
 
 # The one list of providers with a check and plan-tests leg. A new provider
