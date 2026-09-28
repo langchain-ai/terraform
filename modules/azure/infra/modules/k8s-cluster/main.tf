@@ -417,6 +417,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   node_labels           = each.value.node_labels
   node_taints           = each.value.node_taints
   kubelet_disk_type     = each.value.kubelet_disk_type
+  zones                 = length(each.value.zones) > 0 ? each.value.zones : null
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
 
   # "User" mode: these pools run application workloads.

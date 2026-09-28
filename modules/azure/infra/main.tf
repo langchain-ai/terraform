@@ -198,6 +198,13 @@ locals {
 
   effective_node_pools = var.additional_node_pools
 
+  # Additional pools this module creates with zones set. One of these gives
+  # SmithDB zonal nodes for its Premium SSD v2 cache disks on a cluster whose
+  # default pool was built nonzonal.
+  zonal_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? [
+    for name, pool in local.effective_node_pools : name if length(pool.zones) > 0
+  ] : []
+
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
   aks_demand_rows = [
@@ -495,10 +502,12 @@ resource "terraform_data" "validate_network" {
     # after a clean apply, as SmithDB pods pending on a disk attach error.
     # default_node_pool[0].zones also carries ignore_changes and applies at
     # creation, so recovering from it means rebuilding the pool rather than
-    # editing a variable. Refuse at plan time instead.
+    # editing a variable. Refuse at plan time instead. A zonal additional pool
+    # also passes, because it is the non-disruptive way to add zonal nodes to a
+    # cluster built without them; the chart overrides then pin SmithDB there.
     precondition {
-      condition     = !var.enable_smithdb || length(var.availability_zones) > 0
-      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"]. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
+      condition     = !var.enable_smithdb || length(var.availability_zones) > 0 || length(local.zonal_node_pools) > 0
+      error_message = "enable_smithdb = true requires availability_zones to name at least one zone, for example [\"1\",\"2\",\"3\"], or an additional_node_pools entry with zones set. SmithDB cache volumes use Premium SSD v2, which attaches only to zonal VMs in most regions that support availability zones, and AKS zones apply at creation only. A small set of regions does support nonzonal Premium SSD v2 - see https://learn.microsoft.com/en-us/azure/virtual-machines/disks-deploy-premium-v2#nonzonal-premium-ssd-v2-deployments - so on one of those, or on an attached cluster whose nodes are already zonal, set availability_zones to the zones those nodes use."
     }
 
     # A Private Endpoint removes the public listener that storage_allowed_ips

@@ -164,6 +164,94 @@ zones against the requested ones. Read that warning: a nonzonal pool with
 SmithDB enabled gets a cache StorageClass no pod can bind to. Re-zoning means
 rebuilding the pool.
 
+### Adding a zonal pool to a nonzonal cluster
+
+A cluster built without zones can take SmithDB without a rebuild. Add a zonal
+pool to `additional_node_pools` and leave `availability_zones` as it is.
+`availability_zones` also places PostgreSQL and Redis, so changing it on a
+running deployment can move them. A pool with `zones` set satisfies the plan-time
+zone check on its own.
+
+```hcl
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v3"
+    min_count = 0
+    max_count = 2
+  }
+  smithdb = {
+    vm_size     = "Standard_D16s_v3"
+    min_count   = 1
+    max_count   = 3
+    zones       = ["1", "2", "3"]
+    node_taints = ["workload=smithdb:NoSchedule"]
+  }
+}
+```
+
+Restate every pool you already run, because the map replaces the default rather
+than merging with it. Set `zones` when the pool is created.
+
+Taint the pool. An untainted pool takes any pod, and the first rollout after it
+joins can fill it with LangSmith services until SmithDB no longer fits. The pool
+can't scale out past `max_count` for the stranded pod.
+
+Leave room for a rollout. A single-replica deployment starts its new pod before
+it stops the old one, so a pool with no spare node for the largest SmithDB pod
+leaves the new pod `Pending` after any values change. The chart exposes no
+`strategy` for compaction or compactionWorker. On a pool at `max_count`, delete
+the old pod and the rollout completes.
+
+Size the VM for the largest SmithDB pod. At the `small` tier, compactionWorker
+requests 8 vCPU and 16 GiB, which no 8-vCPU VM can schedule, and ingestion and
+query add 4 vCPU and 8 GiB each.
+
+The pool does nothing until SmithDB is scheduled onto it. Pin every SmithDB
+service to the pool and give it the matching toleration in
+`langsmith-values-smithdb.yaml`. `init-values.sh` copies that file once and
+never overwrites it.
+
+```yaml
+smithdb:
+  query:
+    deployment:
+      nodeSelector: &smithdb_pool
+        kubernetes.azure.com/agentpool: smithdb
+      tolerations: &smithdb_toleration
+        - key: workload
+          operator: Equal
+          value: smithdb
+          effect: NoSchedule
+  ingestion:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+  compactionWorker:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+  compaction:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+  clusterManager:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+  mutations:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+  runRules:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+  statsQuery:
+    deployment:
+      nodeSelector: *smithdb_pool
+      tolerations: *smithdb_toleration
+```
+
 ## Pre-apply review
 
 Run the normal local gate:

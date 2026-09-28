@@ -599,8 +599,9 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
+    zones             = optional(list(string), [])
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. zones places a pool in availability zones independently of availability_zones; set it when the pool is created. A zonal pool satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md)."
   default = {
     large = {
       vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods

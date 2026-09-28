@@ -189,6 +189,26 @@ run "smithdb_requires_zonal_nodes_for_premium_ssd_v2" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# The other direction: the default pool stays nonzonal and a zonal additional
+# pool supplies SmithDB's nodes, which is how a running cluster gains zones
+# without a rebuild.
+run "smithdb_accepts_a_zonal_additional_pool" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = []
+    additional_node_pools = {
+      smithdb = {
+        vm_size   = "Standard_D16s_v3"
+        min_count = 0
+        max_count = 3
+        zones     = ["1", "2", "3"]
+      }
+    }
+  }
+}
+
 run "identifier_is_rejected_outright" {
   command = plan
 
