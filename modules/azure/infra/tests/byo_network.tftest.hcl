@@ -94,7 +94,7 @@ variables {
 
 # ── The shapes that plan clean ───────────────────────────────────────────────
 
-run "a_reused_vnet_carves_every_subnet" {
+run "a_reused_vnet_with_no_subnet_ids_plans_clean" {
   command = plan
 
   assert {
@@ -119,6 +119,10 @@ run "supplied_subnets_are_read_and_not_carved" {
   assert {
     condition     = length(data.azurerm_subnet.byo_aks_subnet) == 1 && length(data.azapi_resource.byo_postgres_subnet) == 1
     error_message = "A supplied AKS or Postgres subnet was not read at plan time"
+  }
+  assert {
+    condition     = module.vnet.subnet_main_id == null && module.vnet.subnet_postgres_id == null && module.vnet.subnet_redis_id == null
+    error_message = "A subnet was supplied by ID and Terraform still planned to carve one for it"
   }
   assert {
     condition     = length(azapi_update_resource.byo_aks_subnet_endpoints) == 0
