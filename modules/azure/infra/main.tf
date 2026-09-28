@@ -272,12 +272,30 @@ locals {
     ] : [for prefix in entry.prefixes : { name = entry.name, prefix = prefix }] if entry.carve
   ])
 
+  # Subnets already in a reused VNet, which the carved prefixes must stay clear
+  # of. module.vnet names its own subnets after local.vnet_name, and once applied
+  # they show up in the VNet's subnet list too, so leave those out. Read only
+  # when something is carved, since each sibling costs a subnet read.
+  terraform_subnet_names = [for suffix in ["0", "postgres", "redis", "bastion", "agic"] : lower("${local.vnet_name}-subnet-${suffix}")]
+  byo_vnet_sibling_names = length(local.carved_prefixes) == 0 ? [] : [
+    for name in coalesce(one(data.azurerm_virtual_network.byo_vnet[*].subnets), []) : name
+    if !contains(local.terraform_subnet_names, lower(name))
+  ]
+  # IPv4 only: the bounds below are computed from dotted quads, and every
+  # carved prefix is IPv4, so an IPv6 sibling cannot overlap one.
+  byo_vnet_sibling_prefixes = flatten([
+    for name, subnet in data.azurerm_subnet.byo_vnet_siblings : [
+      for prefix in subnet.address_prefixes : { name = name, prefix = prefix } if can(cidrnetmask(prefix))
+    ]
+  ])
+
   # Terraform has no CIDR containment or overlap function, so reduce every range
   # to its numeric bounds and compare those. cidrhost(x, 0) is the network
   # address, and the last address is that plus the host count.
   measured_cidrs = distinct(concat(
     local.vnet_address_space,
     [for entry in local.carved_prefixes : entry.prefix],
+    [for entry in local.byo_vnet_sibling_prefixes : entry.prefix],
     [local.aks_service_cidr],
     # A single address, measured as a /32 so the bounds below cover it too.
     ["${local.aks_dns_service_ip}/32"],
@@ -298,6 +316,13 @@ locals {
       local.cidr_first[entry.prefix] >= local.cidr_first[space] &&
       local.cidr_last[entry.prefix] <= local.cidr_last[space]
     ])
+  ]
+
+  # Two ranges overlap unless one ends before the other starts.
+  sibling_subnet_overlaps = [
+    for pair in setproduct(local.carved_prefixes, local.byo_vnet_sibling_prefixes) :
+    "${pair[0].prefix} (${pair[0].name}) overlaps ${pair[1].prefix} (subnet ${pair[1].name})"
+    if local.cidr_first[pair[0].prefix] <= local.cidr_last[pair[1].prefix] && local.cidr_last[pair[0].prefix] >= local.cidr_first[pair[1].prefix]
   ]
 
   # The ClusterIP range is the opposite case: it is not carved from the VNet and
@@ -451,6 +476,16 @@ data "azurerm_virtual_network" "byo_vnet" {
   count               = !var.create_vnet && var.vnet_id != "" ? 1 : 0
   name                = local.byo_vnet_parts[8]
   resource_group_name = local.byo_vnet_parts[4]
+}
+
+# Reads each subnet already in a reused VNet for its address prefixes, so a
+# carved prefix that collides with one fails at plan. The VNet read returns only
+# subnet names.
+data "azurerm_subnet" "byo_vnet_siblings" {
+  for_each             = toset(local.byo_vnet_sibling_names)
+  name                 = each.key
+  virtual_network_name = local.byo_vnet_parts[8]
+  resource_group_name  = local.byo_vnet_parts[4]
 }
 
 # Reads an operator-supplied AKS subnet for its address prefixes, and for the
@@ -736,6 +771,14 @@ resource "terraform_data" "validate_network" {
     precondition {
       condition     = length(local.vnet_address_space) == 0 || length(local.uncontained_prefixes) == 0
       error_message = "These subnet prefixes fall outside the address space of ${local.vnet_address_space_source} (${join(", ", local.vnet_address_space)}): ${join(", ", local.uncontained_prefixes)}. Point each at a free range inside that space${var.create_vnet ? "" : ", or supply that subnet's ID to reuse a subnet that already exists"}."
+    }
+
+    # Containment is not enough in a reused VNet: the free-looking range can
+    # already belong to someone else's subnet, and Azure rejects the overlap
+    # partway through apply.
+    precondition {
+      condition     = length(local.sibling_subnet_overlaps) == 0
+      error_message = "These subnet prefixes collide with subnets already in vnet_id: ${join("; ", local.sibling_subnet_overlaps)}. Point each at a range no existing subnet uses, or supply the existing subnet's ID to reuse it."
     }
   }
 }

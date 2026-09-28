@@ -344,6 +344,83 @@ run "moved_vnet_address_space_rejects_a_default_bastion_prefix" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# ── Subnets already in a reused VNet ─────────────────────────────────────────
+# Carving into someone else's VNet, the prefixes Terraform picks must miss the
+# subnets already there. The VNet read returns only their names, so each one is
+# read for its prefixes.
+
+run "byo_vnet_plans_beside_a_clear_sibling" {
+  command = plan
+
+  variables {
+    create_vnet      = false
+    vnet_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr = "172.20.0.0/16"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+  }
+  override_data {
+    target = data.azurerm_subnet.byo_vnet_siblings
+    values = { address_prefixes = ["10.0.200.0/24"] }
+  }
+
+  assert {
+    condition     = length(data.azurerm_subnet.byo_vnet_siblings) == 1
+    error_message = "The sibling subnet was not read"
+  }
+}
+
+run "byo_vnet_rejects_a_prefix_on_a_sibling" {
+  command = plan
+
+  variables {
+    create_vnet      = false
+    vnet_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr = "172.20.0.0/16"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+  }
+  # Inside the default aks_subnet_address_prefix, 10.0.0.0/19.
+  override_data {
+    target = data.azurerm_subnet.byo_vnet_siblings
+    values = { address_prefixes = ["10.0.4.0/24"] }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# After the first apply the carved subnets are in the VNet's list as well, and
+# they overlap their own prefixes by definition.
+run "byo_vnet_skips_the_subnets_terraform_carved" {
+  command = plan
+
+  variables {
+    create_vnet      = false
+    vnet_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr = "172.20.0.0/16"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = { address_space = ["10.0.0.0/16"], subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
+  }
+  override_data {
+    target = data.azurerm_subnet.byo_vnet_siblings
+    values = { address_prefixes = ["10.0.0.0/19"] }
+  }
+
+  assert {
+    condition     = length(data.azurerm_subnet.byo_vnet_siblings) == 0
+    error_message = "A subnet Terraform carves was read as a sibling"
+  }
+}
+
 # ── AKS network mode, data plane and tier ────────────────────────────────────
 
 run "aks_network_enums_reject_an_unlisted_value" {

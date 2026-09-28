@@ -1008,11 +1008,9 @@ LangSmith one, and get the settings each service needs:
 The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
 builds, so they are a starting point rather than a default that fits your
 network. Plan reads your VNet and rejects a prefix that falls outside its
-address space, and rejects an AKS prefix too small for the node pools whether
-the subnet is one you supplied or one Terraform carves. What it cannot check is
-whether a prefix collides with a subnet that already exists in the VNet, because
-Azure's VNet read returns subnet names and not their ranges — so pick ranges you
-know are free.
+address space or collides with a subnet already in it, and rejects an AKS
+prefix too small for the node pools whether the subnet is one you supplied or
+one Terraform carves.
 
 `aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
 it, and AKS requires a range that nothing on or connected to your VNet uses. The
@@ -1149,6 +1147,7 @@ an apply:
 - every prefix Terraform is about to carve sits inside your VNet's address
   space. The defaults describe the VNet Terraform builds, so this is usually the
   first thing to change on a network of your own
+- no prefix Terraform is about to carve overlaps a subnet already in your VNet
 - `aks_service_cidr` is set, and does not overlap your VNet's address space, and
   `aks_dns_service_ip` sits inside it when you set one
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
@@ -1156,8 +1155,7 @@ an apply:
 Whoever runs Terraform needs two kinds of access to the VNet, which normally
 lives in the network team's resource group rather than the LangSmith one:
 
-- **read** on `vnet_id` and on whichever subnets you supply, at plan time, for
-  the checks above
+- **read** on `vnet_id` and its subnets at plan time, for the checks above
 - **`Microsoft.Network/virtualNetworks/subnets/write`** on `vnet_id` for every
   subnet you leave Terraform to create. This is the larger ask of a network
   team, and it fails at apply rather than at plan, so settle it first
