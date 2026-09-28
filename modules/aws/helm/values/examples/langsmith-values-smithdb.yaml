@@ -62,7 +62,7 @@ smithdb:
           # kubectl create secret generic smithdb-migration-taskdb --namespace "${NAMESPACE:-langsmith}" --from-literal=postgres_password="$TASKDB_PASSWORD"
           existingSecretName: "smithdb-migration-taskdb"
           passwordSecretKey: "postgres_password"
-    deployment:
+    job:
       nodeSelector:
         smithdb-local/instance-store: "true"
       tolerations:
