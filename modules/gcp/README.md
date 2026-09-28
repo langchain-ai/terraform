@@ -58,6 +58,7 @@ Terraform enables these automatically on first apply. To enable manually:
 ```bash
 gcloud services enable \
   container.googleapis.com \
+  compute.googleapis.com \
   sqladmin.googleapis.com \
   redis.googleapis.com \
   storage.googleapis.com \
@@ -66,6 +67,8 @@ gcloud services enable \
   certificatemanager.googleapis.com \
   servicenetworking.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  logging.googleapis.com \
+  monitoring.googleapis.com \
   --project <your-project-id>
 ```
 

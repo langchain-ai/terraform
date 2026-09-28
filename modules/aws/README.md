@@ -515,7 +515,7 @@ make deploy
 
 ### Important notes
 
-- The bastion's IAM role has `AmazonSSMManagedInstanceCore` and `AmazonEKSClusterPolicy` attached. Add additional policies if you need the bastion to manage other AWS resources.
+- The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
 - The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
 - When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
 

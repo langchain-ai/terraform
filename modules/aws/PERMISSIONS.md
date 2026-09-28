@@ -120,13 +120,13 @@ Run `make preflight`. It confirms credentials with `aws sts get-caller-identity`
 
 A read-only call that succeeds does not prove the create action behind it is allowed. The read-only pass never tests `iam:PassRole`, KMS, CloudWatch Logs, SQS, or EventBridge, and never checks service quotas.
 
-To test creation, run the script directly with `--create-test-resources`. `make preflight` does not forward flags.
+To test creation, pass `--create-test-resources`:
 
 ```bash
-./infra/scripts/preflight.sh --create-test-resources
+make preflight ARGS="--create-test-resources"
 ```
 
-It creates and then deletes a VPC, a subnet, a security group, and an IAM role, which confirms `ec2:CreateVpc`, `ec2:CreateSubnet`, `ec2:CreateSecurityGroup`, and `iam:CreateRole`. Pass `--domain <your-domain>` as well to confirm an ACM certificate and a Route 53 zone exist for it.
+It creates and then deletes a VPC, a subnet, a security group, and an IAM role, which confirms `ec2:CreateVpc`, `ec2:CreateSubnet`, `ec2:CreateSecurityGroup`, and `iam:CreateRole`. Add `--domain <your-domain>` inside `ARGS` to confirm an ACM certificate and a Route 53 zone exist for it.
 
 To test the actions the script does not cover, use the IAM policy simulator. It evaluates the principal's identity policies, its permissions boundary, and the SCPs on the account. For an SSO or other assumed role, simulate the role, not the session: take the role name from the `assumed-role/<role-name>/<session>` ARN that `aws sts get-caller-identity` prints.
 

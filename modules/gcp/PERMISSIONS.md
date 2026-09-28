@@ -18,7 +18,7 @@ The predefined set, and the configuration that needs each role:
 |------|-----------|---------------|
 | `roles/container.admin` | GKE cluster and node pools, and the Kubernetes objects Terraform creates in the cluster | Always |
 | `roles/compute.networkAdmin` | VPC, subnet, Cloud Router, Cloud NAT, and the private service connection address | Always |
-| `roles/compute.securityAdmin` | Firewall rules, and the Google-managed SSL certificate | Always |
+| `roles/compute.securityAdmin` | Firewall rules, and the Google-managed SSL certificate when `enable_dns_module = true` | Always |
 | `roles/iam.serviceAccountAdmin` | Service accounts, and the Workload Identity bindings on them | Always |
 | `roles/iam.serviceAccountUser` | Attaching a service account to GKE nodes | Always |
 | `roles/resourcemanager.projectIamAdmin` | Project-level role grants to the service accounts Terraform creates | Always |
@@ -66,9 +66,7 @@ Terraform enables the rest: `container`, `compute`, `sqladmin`, `redis`, `storag
 
 ## Verify access before the first apply
 
-Run `make preflight`. It reads `terraform.tfvars`, builds the permission list for your configuration, and tests it against the project with the Cloud Resource Manager `testIamPermissions` API. It also confirms billing is enabled on the project, and reports which APIs Terraform will enable.
-
-A missing permission prints as an error, but the script still exits 0 and ends with `Preflight complete!`. Read the `Missing IAM permissions` block rather than the exit status.
+Run `make preflight`. It reads `terraform.tfvars`, builds the permission list for your configuration, and tests it against the project with the Cloud Resource Manager `testIamPermissions` API. It also confirms billing is enabled on the project, and reports which APIs Terraform will enable. It exits 1 and lists the missing permissions when any are denied.
 
 The script always tests:
 
@@ -78,6 +76,7 @@ container.clusters.delete
 compute.networks.create
 compute.subnetworks.create
 compute.routers.create
+compute.firewalls.create
 iam.serviceAccounts.create
 iam.serviceAccounts.setIamPolicy
 storage.buckets.create
@@ -90,21 +89,25 @@ It adds these for the matching configuration:
 
 | Configuration | Permissions added |
 |---------------|------------------|
-| `postgres_source = "external"` | `cloudsql.instances.create`, `cloudsql.databases.create`, `servicenetworking.services.addPeering`, `compute.globalAddresses.create` |
+| `postgres_source = "external"` | `cloudsql.instances.create`, `cloudsql.databases.create` |
 | `redis_source = "external"` | `redis.instances.create` |
+| Cloud SQL or Memorystore is created, or `enable_sandboxes = true` | `servicenetworking.services.addPeering`, `compute.globalAddresses.create` |
 | `enable_secret_manager_module = true` | `secretmanager.secrets.create` |
 | `enable_dns_module = true` | `dns.managedZones.create`, `dns.resourceRecordSets.create` |
-| `tls_certificate_source = "letsencrypt"` | `certificatemanager.certs.create` |
-| `enable_smithdb = true` with `smithdb_metastore_source = "create"` | The four Cloud SQL and peering permissions above |
+| `enable_dns_module = true`, unless `dns_create_certificate = false` | `compute.sslCertificates.create` |
+| `enable_smithdb = true` with `smithdb_metastore_source = "create"` | `cloudsql.instances.create`, `cloudsql.databases.create` |
 | `enable_smithdb = true` with `smithdb_metastore_use_auth_proxy = true` | `resourcemanager.projects.setIamPolicy` |
 
-`certificatemanager.certs.create` is not needed for the apply. Let's Encrypt certificates come from cert-manager inside the cluster, and Terraform creates no Certificate Manager resources, so a denial on that one permission does not block the deployment.
+Pass flags through `ARGS`. `--domain <your-domain>` also checks for a Cloud DNS zone that covers the domain, and `--create-test-resources` creates and deletes a GCS bucket:
 
-The project-level test cannot see four things the apply also needs:
+```bash
+make preflight ARGS="--domain langsmith.example.com --create-test-resources"
+```
+
+The project-level test cannot see three things the apply also needs:
 
 - **Bucket-level IAM** (`storage.buckets.setIamPolicy`). The test runs against the project, where this permission always reads as absent. `roles/storage.admin` grants it.
 - **`iam.serviceAccounts.actAs`** on the node service account. `roles/iam.serviceAccountUser` grants it.
-- **Firewall rules and SSL certificates** (`compute.firewalls.create`, `compute.sslCertificates.create`). `roles/compute.securityAdmin` grants both.
 - **Organization Policy constraints and IAM deny policies.** These override grants, and `testIamPermissions` does not evaluate them. An apply that fails with `constraint violated` names the constraint; ask the organization's administrator about that constraint.
 
 To test permissions for an identity other than your own, or a permission the script does not list, call the API directly:
