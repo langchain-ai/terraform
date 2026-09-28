@@ -289,6 +289,24 @@ any value. A deployment that set `identifier = "-prod"` and never set
 replaced, but cost allocation and Azure Policy rules keyed on the old value stop
 matching. Set `environment = "dev"` explicitly to keep the old tag.
 
+### Keeping deployment config outside this repo
+
+By default the scripts and `make` targets read `terraform.tfvars`,
+`secrets.auto.tfvars`, and state from `infra/`, and write generated Helm values
+to `helm/values/`. To keep a deployment's config in its own repo, write a
+wrapper root module that sources `modules/azure/infra` and re-exports its
+outputs, then point the tooling at it:
+
+```bash
+export LANGSMITH_INFRA_DIR=/path/to/deployment        # Terraform root: tfvars, secrets, state
+export LANGSMITH_VALUES_DIR=/path/to/deployment/helm/values   # generated Helm values
+```
+
+The scripts and the tracked base `helm/values/values.yaml` still come from this
+repo. `make apply` refuses to run under `LANGSMITH_INFRA_DIR`, because its
+staged `-target` addresses gain the wrapper's module prefix; run
+`terraform apply` in the wrapper directory instead.
+
 ---
 
 ## Deployment Passes

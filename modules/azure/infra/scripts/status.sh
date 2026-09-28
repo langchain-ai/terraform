@@ -19,9 +19,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
-AZURE_DIR="$INFRA_DIR/.."
+AZURE_DIR="$SCRIPT_DIR/../.."
 HELM_DIR="$AZURE_DIR/helm"
-VALUES_DIR="$HELM_DIR/values"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -245,7 +245,7 @@ fi
 # ── 7. Helm Values ────────────────────────────────────────────────────────────
 header "7. Helm Values"
 
-_base_values="$VALUES_DIR/values.yaml"
+_base_values="$HELM_DIR/values/values.yaml"
 _overrides="$VALUES_DIR/values-overrides.yaml"
 
 if [[ -f "$_base_values" ]]; then
@@ -421,7 +421,7 @@ else
     # Extract subdomain label (e.g. "langsmith" from "langsmith.example.com")
     _subdomain="${_langsmith_domain%%.*}"
     _parent_domain="${_langsmith_domain#*.}"
-    _ns_list=$(terraform -chdir="$SCRIPT_DIR/.." output -json dns_nameservers 2>/dev/null \
+    _ns_list=$(terraform -chdir="$INFRA_DIR" output -json dns_nameservers 2>/dev/null \
       | python3 -c "import sys,json; ns=json.load(sys.stdin); print('\n'.join(ns))" 2>/dev/null) || _ns_list=""
     if [[ -n "$_ns_list" ]]; then
       echo ""

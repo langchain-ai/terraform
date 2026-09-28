@@ -39,7 +39,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; DIM='\033[0;90m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # _validate_admin_password lives here so `make keyvault set` enforces the same
 # rules as this script.

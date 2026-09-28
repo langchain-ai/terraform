@@ -17,6 +17,9 @@
 
 INFRA_DIR := infra
 HELM_DIR  := helm
+# The Terraform root the terraform targets run in. LANGSMITH_INFRA_DIR points it
+# (and the scripts) at a root outside this repo, such as a wrapper module.
+TF_DIR    := $(or $(LANGSMITH_INFRA_DIR),$(INFRA_DIR))
 
 help: ## Show available targets
 	@echo ""
@@ -71,16 +74,18 @@ test-preflight: ## Run the pre-flight tests (stubbed az, no Azure account needed
 	python3 $(INFRA_DIR)/scripts/test-preflight-rbac.py
 
 init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init $(ARGS)
+	terraform -chdir=$(TF_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
-	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
-	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
+	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
+	terraform -chdir=$(TF_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
-	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
+	@# The stage targets are this root's addresses; a wrapper module prefixes them.
+	@if [ -n "$(LANGSMITH_INFRA_DIR)" ]; then echo "make apply stages this repo's addresses; run terraform apply in $(LANGSMITH_INFRA_DIR) instead."; exit 1; fi
+	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(TF_DIR) apply -auto-approve $(ARGS) \
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
@@ -89,7 +94,7 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.blob \
 		-target=module.keyvault
 	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(TF_DIR) apply -auto-approve $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
@@ -101,16 +106,16 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
 	@echo "→ Stage 3: remaining resources (DNS zone, WAF, anything left in k8s bootstrap)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS)
+	terraform -chdir=$(TF_DIR) apply -auto-approve $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation
-	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+	terraform -chdir=$(TF_DIR) destroy $(ARGS)
 
 destroy-force: ## terraform destroy without confirmation prompt (use after make uninstall)
-	terraform -chdir=$(INFRA_DIR) destroy -auto-approve $(ARGS)
+	terraform -chdir=$(TF_DIR) destroy -auto-approve $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
-	terraform -chdir=$(INFRA_DIR) $(ARGS)
+	terraform -chdir=$(TF_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)
 	$(INFRA_DIR)/scripts/clean.sh

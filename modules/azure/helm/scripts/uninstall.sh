@@ -20,8 +20,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$SCRIPT_DIR/../../infra"
-source "$INFRA_DIR/scripts/_common.sh"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$SCRIPT_DIR/../../infra}"
+source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"

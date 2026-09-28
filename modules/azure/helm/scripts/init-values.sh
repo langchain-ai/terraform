@@ -32,11 +32,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
-VALUES_DIR="$HELM_DIR/values"
-EXAMPLES_DIR="$VALUES_DIR/examples"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
+EXAMPLES_DIR="$HELM_DIR/values/examples"
 
-source "$INFRA_DIR/scripts/_common.sh"
+source "$HELM_DIR/../infra/scripts/_common.sh"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then

@@ -30,7 +30,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 source "$SCRIPT_DIR/_common.sh"
 

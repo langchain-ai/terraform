@@ -16,9 +16,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
 
-source "$INFRA_DIR/scripts/_common.sh"
+source "$HELM_DIR/../infra/scripts/_common.sh"
 
 echo ""
 echo "Fetching AKS credentials..."
