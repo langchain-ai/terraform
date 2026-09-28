@@ -109,6 +109,7 @@ aks_sku_tier                = "Standard"       # uptime SLA; Free has none, Prem
 # aks_pod_cidr             = "10.244.0.0/16"   # overlay pod range; must not overlap the VNet, peers, aks_service_cidr or AKS reserved ranges
 # aks_network_dataplane    = "cilium"          # empty picks cilium in overlay mode, azure in node-subnet mode
 # aks_support_plan         = "KubernetesOfficial" # AKSLongTermSupport requires aks_sku_tier = "Premium"
+# aks_os_sku               = "Ubuntu"          # or AzureLinux; additional pools follow unless they set os_sku. README "Node OS"
 
 # Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
 # ClickHouse production sizing requests 2 vCPU / 8 GiB — fits on the default pool.

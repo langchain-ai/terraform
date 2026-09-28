@@ -86,7 +86,7 @@ Terraform also warns when `location` doesn't match the cluster's region, since K
 
 These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
 
-- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
+- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`, `aks_os_sku` (for the default pool; additional pools Terraform manages still follow it)
 - `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
@@ -1174,6 +1174,43 @@ requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger
 plan checks the name, and Azure enforces the size at apply.
 
 ---
+
+## Node OS
+
+Every pool runs Ubuntu unless you choose otherwise. `aks_os_sku` sets the default
+pool, and every additional pool that does not name its own `os_sku` follows it:
+
+```hcl
+aks_os_sku = "AzureLinux"
+
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v3"
+    min_count = 0
+    max_count = 2
+    # os_sku  = "Ubuntu"   # set only to differ from aks_os_sku
+  }
+}
+```
+
+[Azure Linux](https://learn.microsoft.com/en-us/azure/aks/use-azure-linux) is
+Microsoft's container host OS. Microsoft describes it as having a reduced attack
+surface, and AKS Automatic uses it for the system pool, which is why enterprise
+hardening baselines tend to ask for it. Nothing in LangSmith depends on the node
+OS: every component runs in its own container image. The accepted values are
+`Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3` and
+`Ubuntu2204`. Windows SKUs are refused, because every pool here is Linux.
+`Ubuntu2404` is not accepted yet: the azurerm provider added it in 4.67.0, and
+this module still allows versions back to 4.59.0.
+
+On an existing cluster, a change between any two accepted values is an in-place
+update of the pool, for the default pool and additional pools alike. The provider
+treats every change whose old and new values both start with `Ubuntu` or
+`AzureLinux` that way, and Azure applies it by reimaging the pool's nodes, so
+workloads on them are rescheduled as it goes. No accepted change replaces a pool or
+cycles the default pool through `defaulttmp`. Because an additional pool with no
+`os_sku` follows `aks_os_sku`, changing `aks_os_sku` reimages those pools too.
+Plan it for a maintenance window, and read the plan before applying.
 
 ## Multi-AZ Support
 
