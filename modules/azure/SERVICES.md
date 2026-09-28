@@ -35,12 +35,12 @@ All passes verified during production deploy (external Postgres + Redis).
 ### `langsmith-queue`
 - **What**: Trace ingestion worker — dequeues from Redis, writes to ClickHouse + Blob Storage
 - **Depends on**: Redis, ClickHouse, Blob Storage
-- **HPA**: 3–10 replicas · **WI**
+- **HPA**: 3–10 replicas in the `production` profile, 6–24 in `production-large`; `dev` and `minimum` run one fixed replica · **WI**
 
 ### `langsmith-ingest-queue`
 - **What**: Dedicated high-throughput ingestion worker — parallel to `queue`, handles burst traffic
 - **Depends on**: Redis, Blob Storage
-- **HPA**: 3–10 replicas · **WI**
+- **HPA**: 3–10 replicas in the `production` profile, 6–24 in `production-large`; `dev` and `minimum` run one fixed replica · **WI**
 - **Enabled**: always, from Pass 2, whether Redis is external or in-cluster. The `dev` and `minimum` sizing profiles run it as one replica rather than turning it off, so count it when sizing nodes.
 
 ### `langsmith-ace-backend`
@@ -157,7 +157,7 @@ All passes verified during production deploy (external Postgres + Redis).
 - **ClusterIssuers**: `letsencrypt-staging`, `letsencrypt-prod`
 
 ### KEDA
-- **What**: Kubernetes Event-driven Autoscaling. The chart can scale `queue` and `ingest-queue` on Redis queue depth through KEDA, but ships that off, and this module does not turn it on: both scale on their HPA
+- **What**: Kubernetes Event-driven Autoscaling. The chart can scale `queue` and `ingest-queue` on Redis queue depth through KEDA, but ships that off, and this module does not turn it on. Both scale on their HPA under the `production` sizing profiles, and run fixed replicas under `dev` and `minimum`
 - **Deployed by**: Terraform k8s-bootstrap module
 - **Required for**: Pass 3+ (LangGraph Platform prerequisite)
 

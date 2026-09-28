@@ -70,7 +70,7 @@ zone   = "us-west2-a"
 #
 # Required egress: nodes reach the internet through the Cloud NAT this module
 # creates, and LangSmith must reach beacon.langchain.com:443 for license
-# verification. An egress firewall rule, proxy or VPC Service Controls perimeter
+# verification. An egress firewall rule or proxy
 # you add must permit it. See "Required outbound access" in README.md.
 
 # Ensure these don't overlap with existing ranges in your project

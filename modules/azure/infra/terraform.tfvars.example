@@ -280,7 +280,7 @@ sizing_profile = "production"
 # verification, and with an lcl_ key a first install cannot start without it.
 # AKS egresses through its load balancer by default, so this only needs action
 # when your VNet routes egress through a firewall or appliance (a UDR on the AKS
-# subnet), or the subnet has default outbound access off. Permit it there. See
+# subnet). Permit it there, with the image registries and AKS's required rules. See
 # "Required outbound access" in README.md.
 #
 # create_vnet          = false

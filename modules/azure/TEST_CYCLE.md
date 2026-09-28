@@ -35,8 +35,10 @@ Start from the minimum profile rather than a hand-written config:
 cp infra/terraform.tfvars.minimum infra/terraform.tfvars
 ```
 
-Then set the values it marks for you: `subscription_id`, `name_prefix`,
-`dns_label` and `letsencrypt_email`. Everything this cycle checks below assumes
+Then set `subscription_id`, the one value with no working placeholder. Also change
+`name_prefix`, `dns_label` and `letsencrypt_email`, which it fills with
+examples: `dns_label` names a public hostname, so two testers who keep the same
+one collide in the same region. Everything this cycle checks below assumes
 that file, so edit it rather than copying settings into a new one. What it gives
 you:
 
