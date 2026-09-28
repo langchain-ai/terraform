@@ -85,3 +85,13 @@ fleetTriggerServer:
   # Currently only supports a single replica (chart-enforced) to prevent duplicate
   # trigger executions — do not set a replica count here.
   enabled: true
+  # Same slow start as the tool server: it was killed twice (exit 137) inside the
+  # chart's default 6 × 10s startup window during a rollout. 30 × 5s = 150s.
+  deployment:
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 1990
+      failureThreshold: 30
+      periodSeconds: 5
+      timeoutSeconds: 5
