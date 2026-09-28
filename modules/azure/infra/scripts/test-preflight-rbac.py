@@ -764,7 +764,7 @@ CASES = [
         "ca_all": ALL_GOOD,
         "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
         "expect": [
-            "[✗] terraform.tfvars sets azure_environment = usgovernment, but the Azure CLI is on AzureCloud",
+            "[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud",
             "az cloud set --name AzureUSGovernment && az login",
         ],
     },
@@ -774,6 +774,24 @@ CASES = [
         "cloud_name": "AzureUSGovernment",
         "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
         "reject": ["but the Azure CLI is on"],
+    },
+    {
+        # Open SWE on #323: the cloud can come from TF_VAR_azure_environment alone,
+        # and preflight read only terraform.tfvars, so it flagged a correctly
+        # configured Government CLI as a mismatch.
+        "name": "TF_VAR_azure_environment on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "TF_VAR_azure_environment against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
     },
     {
         "name": "a commercial tfvars on the commercial CLI passes the cloud check",

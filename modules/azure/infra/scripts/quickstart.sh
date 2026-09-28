@@ -20,6 +20,14 @@ source "$SCRIPT_DIR/_common.sh"
 INFRA_DIR="$(cd "$INFRA_DIR" && pwd)"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
 
+# The cloud this wizard is writing for. On a fresh run there is no tfvars and no
+# Terraform output for _common.sh's _azure_environment to read, so the wizard
+# owns the value: taken from a resumed tfvars, else from the Azure CLI's active
+# cloud in section 2, and written to the tfvars. Inside the wizard,
+# _azure_environment returns it, so the DNS hints and the Redis rule use it.
+AZURE_ENVIRONMENT=""
+_azure_environment() { echo "${AZURE_ENVIRONMENT:-public}"; }
+
 # ── Colors ────────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
 CYAN='\033[0;36m'
@@ -238,7 +246,7 @@ AKS cluster:${_AKS_NAME}:63"
 
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
-_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID AZURE_ENVIRONMENT NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
 STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
 CREATE_KEYVAULT EXISTING_KEYVAULT_NAME
@@ -368,11 +376,12 @@ _load_tfvars() {
            sizing_profile postgres_admin_username postgres_database_name \
            amr_sku name_base name_suffix_salt storage_account_name keyvault_name postgres_name \
            redis_name cluster_name resource_group_name vnet_name \
-           existing_cluster_name existing_keyvault_name aks_network_mode aks_sku_tier; do
+           existing_cluster_name existing_keyvault_name aks_network_mode aks_sku_tier azure_environment; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
+      azure_environment)         AZURE_ENVIRONMENT="$_TF_VAL" ;;
       name_base)                 NAME_BASE="$_TF_VAL" ;;
       name_suffix_salt)          NAME_SUFFIX_SALT="$_TF_VAL" ;;
       storage_account_name)      STORAGE_ACCOUNT_NAME="$_TF_VAL" ;;
@@ -568,6 +577,17 @@ _run_section_2() {
   # Defaults come from the current values, so a resumed or re-entered section
   # prefills what you answered before. Profile-driven defaults apply only when
   # the field is still untouched, so switching profiles never eats an edit.
+  # The cloud follows the Azure CLI, which preflight also requires to match it.
+  if [[ -z "$AZURE_ENVIRONMENT" ]]; then
+    case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
+      AzureUSGovernment) AZURE_ENVIRONMENT="usgovernment" ;;
+      *)                 AZURE_ENVIRONMENT="public" ;;
+    esac
+  fi
+  if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
+    _hint "Azure cloud: Azure Government (from the Azure CLI). Writing azure_environment = \"usgovernment\"."
+  fi
+
   AUTO_SUB="$SUBSCRIPTION_ID"
   if [[ -z "$AUTO_SUB" ]] && command -v az &>/dev/null; then
     AUTO_SUB=$(az account show --query id --output tsv 2>/dev/null) || AUTO_SUB=""
@@ -1598,6 +1618,7 @@ while true; do
   printf "  %-24s %s\n" "1. Profile:"         "$PROFILE"
   printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
+  printf "  %-24s %s\n" "   Azure cloud:"     "${AZURE_ENVIRONMENT:-public}"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
   # An unanswered environment tag falls back to the deployment name, then "dev",
   # so show what the tag will actually say.
@@ -1708,7 +1729,7 @@ _section "Generating terraform.tfvars"
 # is carried across rather than destroyed. `identifier` is listed as the retired
 # spelling of name_prefix: already read back, and carrying it forward would leave
 # two keys naming the deployment.
-_WRITER_KEYS="subscription_id identifier name_prefix location unique_resource_names
+_WRITER_KEYS="subscription_id azure_environment identifier name_prefix location unique_resource_names
 environment owner cost_center
 create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
 aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
@@ -1778,9 +1799,10 @@ cat > "$OUTPUT" << TFVARS
 #------------------------------------------------------------------------------
 # Subscription & Identity
 #------------------------------------------------------------------------------
-subscription_id = "${SUBSCRIPTION_ID}"
-name_prefix     = "${NAME_PREFIX}"
-location        = "${LOCATION}"
+subscription_id   = "${SUBSCRIPTION_ID}"
+azure_environment = "${AZURE_ENVIRONMENT:-public}"
+name_prefix       = "${NAME_PREFIX}"
+location          = "${LOCATION}"
 
 # Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
 # Key Vault) so they cannot collide with another LangSmith deployment.

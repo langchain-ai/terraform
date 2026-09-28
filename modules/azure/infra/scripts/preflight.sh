@@ -136,14 +136,25 @@ fi
 # active cloud. A Government subscription is invisible from the commercial cloud
 # and the other way round, so a mismatch fails every check below for a reason
 # none of them would name. ARM is the Resource Manager endpoint for az rest.
-AZURE_ENVIRONMENT=$(_tfvar azure_environment || echo "public")
+# The value Terraform uses: the azure_environment output once applied (it covers
+# terraform.tfvars, *.auto.tfvars and TF_VAR_), else terraform.tfvars, else
+# TF_VAR_azure_environment, else public. Same order as _azure_environment in
+# _common.sh, which this script does not source.
+AZURE_ENVIRONMENT=""
+if command -v terraform >/dev/null 2>&1; then
+  AZURE_ENVIRONMENT=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || AZURE_ENVIRONMENT=""
+fi
+case "$AZURE_ENVIRONMENT" in
+  public|usgovernment) ;;
+  *) AZURE_ENVIRONMENT=$(_tfvar azure_environment || echo "${TF_VAR_azure_environment:-public}") ;;
+esac
 case "$AZURE_ENVIRONMENT" in
   usgovernment) EXPECTED_CLI_CLOUD="AzureUSGovernment"; ARM="https://management.usgovcloudapi.net" ;;
   *)            EXPECTED_CLI_CLOUD="AzureCloud";        ARM="https://management.azure.com" ;;
 esac
 ACTIVE_CLI_CLOUD=$(az cloud show --query name -o tsv 2>/dev/null || echo "")
 if [ -n "$ACTIVE_CLI_CLOUD" ] && [ "$ACTIVE_CLI_CLOUD" != "$EXPECTED_CLI_CLOUD" ]; then
-  fail "terraform.tfvars sets azure_environment = ${AZURE_ENVIRONMENT}, but the Azure CLI is on ${ACTIVE_CLI_CLOUD}. Run: az cloud set --name ${EXPECTED_CLI_CLOUD} && az login"
+  fail "azure_environment is ${AZURE_ENVIRONMENT}, but the Azure CLI is on ${ACTIVE_CLI_CLOUD}. Run: az cloud set --name ${EXPECTED_CLI_CLOUD} && az login"
 fi
 
 # identifier is name_prefix's legacy name. Track which was read so warnings name
