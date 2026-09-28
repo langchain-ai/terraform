@@ -654,11 +654,48 @@ enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.1
 enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
 enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
+enable_llm_gateway   = false          # LLM Gateway, private beta (chart 0.17)
+enable_gateway_pii_redaction = false  # Presidio PII redaction for gateway traffic (requires enable_llm_gateway)
 ```
 
 **Pass 3** requires a node pool scale-up before deploying — operator-spawned pods need headroom. Set `default_node_pool_min_count = 5` and run `make apply` first, then `make init-values && make deploy`.
 
 **Passes 4–5** only need `make init-values && make deploy` — no `terraform apply` required.
+
+#### LLM Gateway
+
+`enable_llm_gateway = true` deploys the chart's `agentGateway`, the
+[LLM Gateway](https://docs.langchain.com/langsmith/llm-gateway) (beta; on self-hosted, chart 0.17 only). It lets one
+LangSmith API key call models across the providers an organization configures, traces every call, and applies spend and
+rate policies centrally. It adds one Deployment and a `/gateway/` path on the LangSmith hostname:
+
+| Client format | Base URL |
+|---|---|
+| OpenAI Chat Completions, Responses | `https://<langsmith host>/gateway/v1` |
+| Anthropic Messages | `https://<langsmith host>/gateway` |
+
+After `make init-values && make deploy`, an organization admin still turns the gateway on for workspaces, adds provider
+secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsmith/llm-gateway-admin-setup).
+
+- **Workload Identity.** The gateway pod carries the blob storage settings, so `init-values.sh` gives it the identity
+  label and service account annotation, and Terraform federates `<release>-agent-gateway` (and
+  `<release>-presidio-analyzer`) with the LangSmith identity. Those two credentials exist whether or not the flag is set,
+  so turning the gateway on needs no `make apply` on a cluster applied from this version. On an older cluster, run
+  `make apply` once first.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but ingress-nginx cuts requests
+  at 60 s and Application Gateway at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
+  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: the
+  NGINX read and send timeouts with `ingress_controller = "nginx"`, Application Gateway's request timeout with `agic`.
+  Every other path keeps the controller's default, so a slow request elsewhere is not held for fifteen minutes. Istio sets
+  no request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
+  there. `make uninstall` removes the extra Ingress.
+- **Private registries.** The gateway runs from the LangSmith images already in use. PII redaction adds
+  `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage`), which is on Microsoft's
+  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too; with `images.registry` set,
+  the chart prepends that registry to the full repository, so keep the `mcr.microsoft.com/presidio-analyzer` path in the
+  mirror.
+- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
+  organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
 
 ---
 

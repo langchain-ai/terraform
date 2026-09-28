@@ -15,6 +15,8 @@
 #   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
 #   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   8b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
+#   8c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
 #   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -325,12 +327,16 @@ _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
+_enable_llm_gateway=false
+_enable_gateway_pii_redaction=false
 _enable_fleet=false
 _enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
 _tfvar_is_true "enable_polly"         && _enable_polly=true        || true
+_tfvar_is_true "enable_llm_gateway"   && _enable_llm_gateway=true  || true
+_tfvar_is_true "enable_gateway_pii_redaction" && _enable_gateway_pii_redaction=true || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
 _tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
 
@@ -397,6 +403,8 @@ _addon_gate=(
   "fleet:fleet:$_enable_fleet"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
+  "llm-gateway:llm_gateway:$_enable_llm_gateway"
+  "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -758,6 +766,33 @@ if [[ -n "$_wi_client_id" ]]; then
   kubectl annotate serviceaccount langsmith-ksa -n "$NAMESPACE" \
     azure.workload.identity/client-id="$_wi_client_id" --overwrite &>/dev/null
   pass "langsmith-ksa WI annotation: ${_wi_client_id}"
+fi
+
+# ── LLM Gateway: an Ingress of its own for /gateway/ ─────────────────────
+# The chart's frontend allows 900 s on /gateway/ for long model calls, but
+# ingress-nginx cuts at 60 s and Application Gateway at 30 s. Raising that on the
+# chart's Ingress would raise it for every path, so /gateway/ gets a second
+# Ingress, built from the chart's (same class, host, TLS and backend), carrying
+# the longer timeout; every other path keeps the controller default. Istio has no
+# default request timeout. For envoy-gateway, init-values.sh warns. With the
+# gateway off, a leftover one is removed.
+_chart_fullname="$RELEASE_NAME"
+[[ "$RELEASE_NAME" == *langsmith* ]] || _chart_fullname="${RELEASE_NAME}-langsmith"
+_gw_ingress="${_chart_fullname}-llm-gateway"
+if [[ "$_enable_llm_gateway" == "true" && ( "$_ingress_controller" == "nginx" || "$_ingress_controller" == "agic" ) ]]; then
+  if _chart_ingress_json=$(kubectl get ingress "${_chart_fullname}-ingress" -n "$NAMESPACE" -o json 2>/dev/null); then
+    if printf '%s' "$_chart_ingress_json" \
+        | python3 "$SCRIPT_DIR/llm-gateway-ingress.py" --controller "$_ingress_controller" --name "$_gw_ingress" \
+        | kubectl apply -f - >/dev/null; then
+      pass "LLM Gateway Ingress ${_gw_ingress}: /gateway/ with a 900 s timeout (${_ingress_controller})"
+    else
+      warn "Could not apply Ingress ${_gw_ingress}; gateway calls use the controller's default timeout. Re-run: make deploy"
+    fi
+  else
+    warn "Ingress ${_chart_fullname}-ingress not found, so ${_gw_ingress} was not created; gateway calls use the controller's default timeout"
+  fi
+elif kubectl get ingress "$_gw_ingress" -n "$NAMESPACE" &>/dev/null; then
+  kubectl delete ingress "$_gw_ingress" -n "$NAMESPACE" >/dev/null && pass "Removed Ingress ${_gw_ingress} (enable_llm_gateway is off)"
 fi
 
 # ── Post-deploy access info ───────────────────────────────────────────────

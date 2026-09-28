@@ -974,6 +974,25 @@ variable "enable_sso_oidc" {
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
+variable "enable_llm_gateway" {
+  type        = bool
+  description = "Enable the LLM Gateway (chart agentGateway, private beta): one LangSmith API key calls models across the configured providers, every call is traced, and spend and rate policies apply centrally. Requires chart 0.17, which deploy.sh enforces. Clients use https://<langsmith host>/gateway/v1 (OpenAI formats) or /gateway (Anthropic Messages). An organization admin still enables providers and grants access in the UI. Read by init-values.sh and deploy.sh; Terraform reads it only in enable_gateway_pii_redaction's validation."
+  default     = false
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "enable_gateway_pii_redaction" {
+  type        = bool
+  description = "Run the Presidio analyzer beside the LLM Gateway so it can redact PII (named entities) from gateway traffic, and turn the redaction feature on for new organizations. Requires enable_llm_gateway = true, which the validation below checks. Read by init-values.sh."
+  default     = false
+
+  validation {
+    condition     = !var.enable_gateway_pii_redaction || var.enable_llm_gateway
+    error_message = "enable_gateway_pii_redaction = true requires enable_llm_gateway = true: Presidio only serves the gateway."
+  }
+}
+
 variable "enable_fleet" {
   type        = bool
   description = <<-EOT

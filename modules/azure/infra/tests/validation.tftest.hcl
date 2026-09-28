@@ -241,3 +241,25 @@ run "aks_dns_service_ip_rejects_a_non_address" {
 
   expect_failures = [var.aks_dns_service_ip]
 }
+
+# Presidio only serves the LLM Gateway, so asking for redaction without the
+# gateway is refused, and the pair together plans.
+run "gateway_pii_redaction_requires_the_gateway" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = false
+    enable_gateway_pii_redaction = true
+  }
+
+  expect_failures = [var.enable_gateway_pii_redaction]
+}
+
+run "gateway_pii_redaction_with_the_gateway_plans" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = true
+    enable_gateway_pii_redaction = true
+  }
+}

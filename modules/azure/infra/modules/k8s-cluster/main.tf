@@ -39,6 +39,12 @@ locals {
     "${var.langsmith_release_name}-listener",
     "${var.langsmith_release_name}-fleet-tool-server",
     "${var.langsmith_release_name}-fleet-trigger-server",
+    # LLM Gateway (chart agentGateway) and its optional Presidio PII analyzer. Both
+    # carry langsmith.commonEnv, so both get the blob identity. Federated whether or
+    # not enable_llm_gateway is set: a credential for an absent service account is
+    # inert, and keeping the list fixed means turning the gateway on needs no apply.
+    "${var.langsmith_release_name}-agent-gateway",
+    "${var.langsmith_release_name}-presidio-analyzer",
   ]
 
   # AGIC add-on identity — extracted from the cluster resource after apply.

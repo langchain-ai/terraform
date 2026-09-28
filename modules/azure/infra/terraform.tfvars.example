@@ -249,6 +249,12 @@ sizing_profile = "production"
 # matching depends on the OIDC provider this creates.
 # enable_sso_oidc = false
 
+# LLM Gateway (private beta, chart 0.17): one LangSmith API key calls models across
+# configured providers at https://<host>/gateway, traced, with spend and rate policies.
+# An org admin enables providers and access in the UI afterwards. README "LLM Gateway".
+# enable_llm_gateway           = false
+# enable_gateway_pii_redaction = false  # Presidio PII redaction; requires enable_llm_gateway
+
 # ── Optional modules ──────────────────────────────────────────────────────────
 # Each is independently toggleable — safe to add after initial deploy.
 # create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)
