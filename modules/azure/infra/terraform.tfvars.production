@@ -104,6 +104,7 @@ keyvault_purge_protection = true   # required for production
 blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads
 blob_ttl_long_days  = 400   # run attachments (~13 months)
+storage_replication_type = "ZRS" # zone-redundant: survives a zone loss; needs a region with zones. On an existing LRS account, convert first (README "Storage redundancy")
 
 #------------------------------------------------------------------------------
 # LangSmith

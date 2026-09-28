@@ -64,6 +64,12 @@ variable "allowed_subnet_ids" {
   default     = []
 }
 
+variable "replication_type" {
+  type        = string
+  description = "account_replication_type for the account. Validated, and guarded against a zone-redundancy change on an existing account, in the root module."
+  default     = "LRS"
+}
+
 variable "private_endpoint_enabled" {
   type        = bool
   description = "Reach this account over a Private Endpoint and turn off its public endpoint. Terraform manages the account through Azure Resource Manager, so provisioning is unaffected."

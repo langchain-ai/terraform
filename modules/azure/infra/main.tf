@@ -977,6 +977,64 @@ resource "terraform_data" "aks_network_guard" {
   }
 }
 
+# ── Storage redundancy guard ──────────────────────────────────────────────────
+# Azure converts an account between locally and zone-redundant replication in
+# place, with no downtime, but the azurerm provider cannot: it applies any change
+# between LRS/GRS/RAGRS and ZRS/GZRS/RAGZRS by deleting the account and creating
+# it again, and the trace-blob account holds every trace payload. So the
+# requested replication is compared with the SKU Azure reports for each account
+# (listed at subscription scope, empty until the account exists), and a change
+# across that boundary is refused. The way through is Azure's conversion, after
+# which the live SKU matches the variable and the plan is clean. Changes within
+# a group (LRS to GRS, ZRS to GZRS) update in place and pass. Provider rule from
+# the azurerm 4.81.0 storage_account docs, account_replication_type.
+locals {
+  blob_account_name = replace(local.blob_name, "-", "")
+
+  storage_guarded_accounts = merge(
+    { (local.blob_account_name) = { variable = "storage_replication_type", requested = var.storage_replication_type } },
+    var.enable_smithdb ? { (local.smithdb_storage_name) = { variable = "smithdb_storage_replication_type", requested = var.smithdb_storage_replication_type } } : {},
+  )
+
+  # try() covers a mocked provider, whose output has no such shape.
+  storage_live_skus = {
+    for a in try(data.azapi_resource_list.storage_accounts.output.accounts, []) :
+    lower(a.name) => replace(a.sku, "Standard_", "")
+    if lower(split("/", a.id)[4]) == lower(local.resource_group_name)
+  }
+
+  storage_zone_changes = [
+    for name, want in local.storage_guarded_accounts :
+    "${want.variable} on ${name} is ${local.storage_live_skus[lower(name)]} in Azure and ${want.requested} here"
+    if contains(keys(local.storage_live_skus), lower(name)) &&
+    contains(["ZRS", "GZRS", "RAGZRS"], local.storage_live_skus[lower(name)]) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
+  ]
+}
+
+data "azapi_resource_list" "storage_accounts" {
+  type      = "Microsoft.Storage/storageAccounts@2023-05-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    accounts = "value[?${join(" || ", [for name in keys(local.storage_guarded_accounts) : "name=='${name}'"])}].{id: id, name: name, sku: sku.name}"
+  }
+}
+
+resource "terraform_data" "storage_replication_guard" {
+  input = { for name, want in local.storage_guarded_accounts : name => want.requested }
+
+  lifecycle {
+    precondition {
+      condition = length(local.storage_zone_changes) == 0
+      error_message = join(" ", [
+        "Adding or removing zone redundancy on a storage account that already exists: ${join("; ", local.storage_zone_changes)}.",
+        "The azurerm provider would delete the account, and every blob in it, and create it again.",
+        "Azure converts the account in place instead: az storage account migration start --account-name <account> --resource-group ${local.resource_group_name} --sku Standard_<type> --no-wait, then watch az storage account migration show --account-name <account> --resource-group ${local.resource_group_name} --name default until it reads Completed.",
+        "Keep the variable at the account's current value until then; once the conversion completes the plan is clean. See README \"Storage redundancy\".",
+      ])
+    }
+  }
+}
+
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 # Managed PostgreSQL Flexible Server in a private subnet.
 # Only provisioned when postgres_source = "external".
@@ -1049,6 +1107,7 @@ module "smithdb" {
   private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
 
   storage_account_name = local.smithdb_storage_name
+  replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
@@ -1116,6 +1175,8 @@ module "blob" {
   container_name       = "${local.blob_name}-container"
   location             = var.location
   resource_group_name  = azurerm_resource_group.resource_group.name
+
+  replication_type = var.storage_replication_type
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days

@@ -1231,6 +1231,61 @@ nothing to be out of sync with. To re-zone an existing cluster on purpose, remov
 `default_node_pool[0].zones` from the `ignore_changes` block in
 `infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
 
+### Storage redundancy
+
+Both storage accounts are locally redundant (LRS) by default: three copies in one
+datacenter. The trace-blob account holds every trace payload and attachment, so on
+a deployment spread across zones it is the one component a zone loss can still take
+out. The cluster and a zone-redundant database stay up, and trace pages fail to
+load the payloads they point at. For a zone-redundant deployment, set:
+
+```hcl
+storage_replication_type         = "ZRS"   # trace blobs
+smithdb_storage_replication_type = "ZRS"   # SmithDB's object store, when enable_smithdb = true
+```
+
+| Value | Copies | Survives |
+|-------|--------|----------|
+| `LRS` (default) | Three, in one datacenter | Disk and rack failures |
+| `ZRS` | Three, across availability zones | The loss of a zone; the account stays readable and writable |
+| `GRS`, `RAGRS` | LRS, plus an asynchronous copy in the paired region | A regional outage, after a failover |
+| `GZRS`, `RAGZRS` | ZRS, plus an asynchronous copy in the paired region | Both |
+
+The zone-redundant values need a region with availability zones, and GZRS needs a
+paired region too. See Microsoft's
+[Azure Storage redundancy](https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy)
+page.
+
+**Choose before the first apply.** On an existing account, the provider and Azure
+handle a change differently:
+
+- A change **within** a group (LRS, GRS, RAGRS; or ZRS, GZRS, RAGZRS) updates the
+  account in place.
+- A change **across** the groups adds or removes zone redundancy. Azure does this in
+  place, as a conversion with no downtime, but the azurerm provider can only apply it
+  by deleting the account and creating it again, and every blob would go with it.
+  Plan therefore refuses it. It reads the account's current SKU and fails, naming the
+  account and both values, before anything is applied.
+
+To move an existing account to ZRS, keep the variable at its current value, run
+Azure's conversion, and set the variable once it finishes:
+
+```bash
+az storage account migration start \
+  --account-name <account> --resource-group <resource-group> \
+  --sku Standard_ZRS --no-wait
+az storage account migration show \
+  --account-name <account> --resource-group <resource-group> --name default
+```
+
+A conversion usually starts within 72 hours and has no completion SLA. When the
+status reads `Completed`, the live SKU matches `storage_replication_type = "ZRS"` and
+the plan is clean. LRS to GZRS takes two steps: convert to ZRS, wait 24 hours, then
+change to GZRS in place. Microsoft's
+[Change how a storage account is replicated](https://learn.microsoft.com/en-us/azure/storage/common/redundancy-migration)
+lists the limits, such as archive-tier blobs, which the zone-redundant values do not
+support.
+
 ---
 
 ## Architecture

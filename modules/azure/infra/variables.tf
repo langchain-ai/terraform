@@ -594,6 +594,17 @@ variable "storage_allowed_ips" {
   default     = []
 }
 
+variable "storage_replication_type" {
+  type        = string
+  description = "Redundancy of the LangSmith trace-blob account, which holds every trace payload and attachment. LRS (the default, so no existing account moves) keeps three copies in one datacenter. ZRS spreads them across availability zones and keeps the account readable and writable through a zone loss; Microsoft recommends it for high availability, and it matches a cluster spread by availability_zones. GZRS adds a copy in the paired region. ZRS, GZRS and RAGZRS need a region with availability zones. Changing between LRS, GRS and RAGRS, or between ZRS, GZRS and RAGZRS, updates the account in place. A change across those two groups adds or removes zone redundancy, which the azurerm provider can only apply by deleting and recreating the account, so plan refuses it on an existing account: run Azure's conversion first (az storage account migration start), then set this to match. See README \"Storage redundancy\"."
+  default     = "LRS"
+
+  validation {
+    condition     = contains(["LRS", "GRS", "RAGRS", "ZRS", "GZRS", "RAGZRS"], var.storage_replication_type)
+    error_message = "storage_replication_type must be one of LRS, GRS, RAGRS, ZRS, GZRS or RAGZRS."
+  }
+}
+
 # ── Blob storage private endpoints ────────────────────────────────────────────
 # Without this, both storage accounts keep a public endpoint that a default-deny
 # firewall filters down to the AKS subnet. That posture depends on the firewall
@@ -906,6 +917,17 @@ variable "smithdb_storage_account_name" {
   type        = string
   description = "Optional globally unique Storage Account name for SmithDB. Empty derives one from the deployment name."
   default     = ""
+}
+
+variable "smithdb_storage_replication_type" {
+  type        = string
+  description = "Redundancy of the SmithDB object store, which holds SmithDB's durable data. Separate from storage_replication_type because the two accounts can warrant different durability. Same values and rules: LRS by default, ZRS for a zone-redundant deployment. Changing between LRS, GRS and RAGRS, or between ZRS, GZRS and RAGZRS, updates the account in place. A change across those two groups adds or removes zone redundancy, which the azurerm provider can only apply by deleting and recreating the account, so plan refuses it on an existing account: run Azure's conversion first (az storage account migration start), then set this to match. See README \"Storage redundancy\"."
+  default     = "LRS"
+
+  validation {
+    condition     = contains(["LRS", "GRS", "RAGRS", "ZRS", "GZRS", "RAGZRS"], var.smithdb_storage_replication_type)
+    error_message = "smithdb_storage_replication_type must be one of LRS, GRS, RAGRS, ZRS, GZRS or RAGZRS."
+  }
 }
 
 variable "smithdb_storage_container_name" {

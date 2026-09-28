@@ -34,6 +34,10 @@ variable "private_dns_zone_id" {
 }
 variable "storage_account_name" { type = string }
 variable "container_name" { type = string }
+variable "replication_type" {
+  type    = string
+  default = "LRS"
+}
 variable "blob_private_endpoint_enabled" {
   type        = bool
   description = "Reach the object store over a Private Endpoint and turn off its public endpoint. The container is created through Azure Resource Manager, so provisioning is unaffected."
