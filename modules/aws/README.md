@@ -57,17 +57,7 @@ brew install eksctl
 
 ### Required AWS IAM permissions
 
-The IAM user or role running Terraform needs the following managed policies (or equivalent inline policies):
-
-| Policy | Purpose |
-|--------|---------|
-| `AmazonEKSClusterPolicy` | Create and manage EKS clusters |
-| `AmazonVPCFullAccess` | Create VPC, subnets, route tables, NAT |
-| `AmazonRDSFullAccess` | Create and manage RDS instances |
-| `AmazonElastiCacheFullAccess` | Create ElastiCache clusters |
-| `AmazonS3FullAccess` | Create S3 buckets and VPC endpoints |
-| `IAMFullAccess` | Create IRSA roles and policies |
-| `ElasticLoadBalancingFullAccess` | Create ALB via Terraform |
+The IAM user or role running Terraform needs `AdministratorAccess`, or `PowerUserAccess` plus `IAMFullAccess`. `PowerUserAccess` alone fails at the first IAM role the apply creates. For a custom policy, the IAM roles the deployment creates, and how to test access before the first apply, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
 ### Authenticate
 
@@ -108,7 +98,7 @@ aws sts get-caller-identity   # verify
 
 After this, `terraform`, `kubectl`, `helm`, and all the `make` targets in this repo pick up the SSO credentials automatically via `AWS_PROFILE`.
 
-**IAM permissions note:** the policies listed in the table above must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
+**IAM permissions note:** the policies in [PERMISSIONS.md](PERMISSIONS.md) must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
 
 **Optional helper:** some sub-tooling in this repo (parallel test workers, scripts that assume a `[default]` block in `~/.aws/credentials`) doesn't honor `AWS_PROFILE`. For those, run `./infra/scripts/hydrate-creds.sh` after `aws sso login` to dump the temporary key/secret/session-token triple into `~/.aws/credentials [default]`. Re-run it whenever your SSO session expires.
 
