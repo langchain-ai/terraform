@@ -499,36 +499,67 @@ printf "${DIM}  Answer each question. Review and change any answer before writin
 # -- 1. Profile --------------------------------------------------------------
 PROFILE="dev"
 
-# The cloud: a value already set (a resumed tfvars or checkpoint, or kept
-# through "start fresh") wins, then TF_VAR_azure_environment, then the Azure
-# CLI's active cloud. Run once at startup, after resume and start fresh, so a
-# checkpoint that skips section 2, or one saved before this key existed, still
-# gets a cloud. Preflight requires the CLI to match, so a mismatch is flagged.
-_resolve_azure_environment() {
-  local _cli_cloud _cloud_src="the existing terraform.tfvars"
+# The Azure CLI's active cloud, in azure_environment's terms.
+_cli_azure_environment() {
   case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
-    AzureUSGovernment) _cli_cloud="usgovernment" ;;
-    *)                 _cli_cloud="public" ;;
+    AzureUSGovernment) echo "usgovernment" ;;
+    *)                 echo "public" ;;
   esac
+}
+
+# Preflight requires the CLI and azure_environment to agree, so say which side
+# to change. Either can be the wrong one: the CLI left on the old cloud, or a
+# tfvars carried over from a deployment in the other cloud.
+_warn_cloud_mismatch() {
+  local _cli_cloud
+  _cli_cloud="$(_cli_azure_environment)"
+  [[ "$(_azure_environment)" == "$_cli_cloud" ]] && return 0
+  _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight fails until they match:\n" \
+    "$(_azure_environment)" "$_cli_cloud"
+  printf "  change the Azure cloud in section 2, or run: az cloud set --name %s && az login\n" \
+    "$([[ "$(_azure_environment)" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
+}
+
+# The cloud's default: a value already set (a resumed tfvars or checkpoint, or
+# kept through "start fresh") wins, then TF_VAR_azure_environment, then the
+# Azure CLI's active cloud. Run once at startup, after resume and start fresh,
+# so a checkpoint that skips section 2, or one saved before this key existed,
+# still gets a cloud. Section 2 asks with this as the default, so a value that
+# is set is never locked in.
+_resolve_azure_environment() {
+  local _cloud_src="the existing terraform.tfvars"
   if [[ -z "$AZURE_ENVIRONMENT" ]]; then
     case "${TF_VAR_azure_environment:-}" in
       public|usgovernment) AZURE_ENVIRONMENT="$TF_VAR_azure_environment"; _cloud_src="TF_VAR_azure_environment" ;;
-      *)                   AZURE_ENVIRONMENT="$_cli_cloud";             _cloud_src="the Azure CLI" ;;
+      *)                   AZURE_ENVIRONMENT="$(_cli_azure_environment)"; _cloud_src="the Azure CLI" ;;
     esac
   fi
   if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
     _hint "Azure cloud: Azure Government (from ${_cloud_src}). Writing azure_environment = \"usgovernment\"."
   fi
-  if [[ "$AZURE_ENVIRONMENT" != "$_cli_cloud" ]]; then
-    _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight will fail until you run: az cloud set --name %s && az login\n" \
-      "$AZURE_ENVIRONMENT" "$_cli_cloud" "$([[ "$AZURE_ENVIRONMENT" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
-  fi
+  _warn_cloud_mismatch
+}
+
+# Section 2's cloud question. Moving an existing deployment between clouds is
+# a new deployment, but a tfvars copied from one is a normal starting point, so
+# the answer is always offered for change.
+_ask_azure_environment() {
+  _ask_choice --default "$(_index_of "$(_azure_environment)" public usgovernment)" \
+    "Which Azure cloud does this deployment run in?" \
+    "Azure (commercial)  — azure_environment = \"public\"" \
+    "Azure Government    — azure_environment = \"usgovernment\""
+  AZURE_ENVIRONMENT="public"
+  [[ "$_CHOICE" == "2" ]] && AZURE_ENVIRONMENT="usgovernment"
+  _warn_cloud_mismatch
+  # A jump to review from here skips section 7, which applies the same rule.
+  _gov_redis_in_cluster
 }
 
 # Azure Managed Redis is not offered in Azure Government, and redis_source =
 # "external" fails at plan there, so Redis runs in-cluster whatever was picked.
 # Postgres keeps the operator's choice. Called from section 7, and at startup
-# for a resumed checkpoint that will not pass through section 7 again.
+# for a resumed checkpoint that will not pass through section 7 again, and
+# after the cloud question in section 2.
 _gov_redis_in_cluster() {
   if [[ "$(_azure_environment)" == "usgovernment" && "$REDIS_SOURCE" == "external" ]]; then
     REDIS_SOURCE="in-cluster"
@@ -600,6 +631,7 @@ COST_CENTER=""
 
 _run_section_2() {
   _section "2. Subscription & Naming"
+  _ask_azure_environment
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
   _hint "and is the default 'environment' tag. Write it without a hyphen — we add the separator."
   # Same base the derivation uses, so a tfvars carrying name_base gets an example
