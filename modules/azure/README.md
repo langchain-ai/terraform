@@ -86,7 +86,7 @@ Terraform also warns when `location` doesn't match the cluster's region, since K
 
 These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
 
-- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
+- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`, `aks_os_sku` (for the default pool; additional pools Terraform manages still follow it)
 - `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
@@ -1136,6 +1136,45 @@ requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger
 plan checks the name, and Azure enforces the size at apply.
 
 ---
+
+## Node OS
+
+Every pool runs Ubuntu unless you choose otherwise. `aks_os_sku` sets the default
+pool, and every additional pool that does not name its own `os_sku` follows it:
+
+```hcl
+aks_os_sku = "AzureLinux"
+
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v3"
+    min_count = 0
+    max_count = 2
+    # os_sku  = "Ubuntu"   # set only to differ from aks_os_sku
+  }
+}
+```
+
+[Azure Linux](https://learn.microsoft.com/en-us/azure/aks/use-azure-linux) is
+Microsoft's container host OS. Microsoft describes it as having a reduced attack
+surface, and AKS Automatic uses it for the system pool, which is why enterprise
+hardening baselines tend to ask for it. Nothing in LangSmith depends on the node
+OS: every component runs in its own container image. The accepted values are
+`Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3`,
+`Ubuntu2204` and `Ubuntu2404`. Windows SKUs are refused, because every pool here
+is Linux.
+
+Choose it before the first apply if you can. On an existing cluster the azurerm
+provider handles a change in one of three ways:
+
+| Change | Default pool | Additional pool |
+|--------|--------------|-----------------|
+| `Ubuntu` to `AzureLinux`, or back | Updated in place: AKS reimages the nodes | Updated in place |
+| Any other change, such as to `AzureLinux3` or `Ubuntu2404` | Cycled through the temporary rotation pool (`defaulttmp`), with no cordon and drain, so pods are rescheduled as the old nodes go | **Replaced**: the pool is deleted and created again |
+
+Because an additional pool with no `os_sku` follows `aks_os_sku`, changing
+`aks_os_sku` to a pinned version replaces those pools too. Read the plan before
+applying.
 
 ## Multi-AZ Support
 

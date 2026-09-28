@@ -651,6 +651,17 @@ variable "default_node_pool_max_pods" {
   default     = 60
 }
 
+variable "aks_os_sku" {
+  type        = string
+  description = "Node OS image for the default pool, and for every additional pool that does not set its own os_sku. Ubuntu (the default, so that no existing pool changes) or AzureLinux, which Microsoft describes as having a reduced attack surface and uses as the system pool OS in AKS Automatic. AzureLinux3, Ubuntu2204 and Ubuntu2404 pin a version. Switching between Ubuntu and AzureLinux updates a pool in place; any other change cycles the default pool through its temporary rotation pool and replaces an additional pool. Windows SKUs are not accepted: every pool here is Linux."
+  default     = "Ubuntu"
+
+  validation {
+    condition     = contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204", "Ubuntu2404"], var.aks_os_sku)
+    error_message = "aks_os_sku must be one of AzureLinux, AzureLinux3, Ubuntu, Ubuntu2204 or Ubuntu2404."
+  }
+}
+
 # Both of these are empty by default rather than carrying the create-path value,
 # because 10.0.64.0/20 is only safe against the VNet Terraform builds. main.tf
 # fills them in for create_vnet = true and requires aks_service_cidr under
@@ -719,14 +730,20 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
+    os_sku            = optional(string)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; on these pools any change other than between Ubuntu and AzureLinux replaces the pool."
   default = {
     large = {
       vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
       min_count = 0
       max_count = 2
     }
+  }
+
+  validation {
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null || contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204", "Ubuntu2404"], pool.os_sku)])
+    error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu, Ubuntu2204 or Ubuntu2404, or left unset to follow aks_os_sku."
   }
 }
 

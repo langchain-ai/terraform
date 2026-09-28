@@ -792,6 +792,7 @@ module "aks" {
   default_node_pool_min_count = var.default_node_pool_min_count
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
+  default_node_pool_os_sku    = var.aks_os_sku
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
