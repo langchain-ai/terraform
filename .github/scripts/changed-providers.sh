@@ -1,54 +1,40 @@
 #!/usr/bin/env bash
 #
 # Print, as a JSON array, the providers whose terraform checks a change needs.
-# Feeds the check and plan-tests matrices in .github/workflows/checks.yaml, so
-# a PR runs only the legs for the clouds it touches.
+# Feeds the check and plan-tests matrices in .github/workflows/checks.yaml.
 #
-#   git diff --name-only HEAD^1 HEAD | .github/scripts/changed-providers.sh
-#   .github/scripts/changed-providers.sh --all
+#   git diff --name-only --no-renames -z <base> HEAD | changed-providers.sh
+#   changed-providers.sh --all
 #
-# Reads changed paths on stdin, one per line. A path under modules/<provider>/
-# selects that provider. A change to the gate itself (agents/, this script, or
-# the workflow) selects every provider, since it can break any leg. Anything
-# else selects none: modules/ocp and the docs have no terraform leg, and every
-# script is linted by the shellcheck job regardless of this list.
+# Reads NUL-separated paths on stdin, so git never quotes an unusual filename
+# out of the match. A path under modules/<provider>/ selects that provider. A
+# change to the gate itself (agents/, this script, or the workflow) selects
+# every provider. Anything else, modules/ocp and docs included, selects none.
 set -euo pipefail
 
-# The one list of providers with a check and plan-tests leg. A new provider
-# directory goes here.
+# The providers with a check and plan-tests leg. A new provider goes here.
 PROVIDERS=(aws azure byoc gcp)
 
-emit() {
-  local out="" p
-  for p in "$@"; do
-    out+="${out:+,}\"$p\""
-  done
-  echo "[$out]"
-}
-
+all=0
+selected=" "
 if [[ "${1:-}" == "--all" ]]; then
-  emit "${PROVIDERS[@]}"
-  exit 0
+  all=1
+else
+  while IFS= read -r -d '' path; do
+    case "$path" in
+      agents/* | .github/workflows/checks.yaml | .github/scripts/changed-providers.sh)
+        all=1 ;;
+      modules/*/*)
+        p=${path#modules/}
+        selected+="${p%%/*} " ;;
+    esac
+  done
 fi
 
-selected=" "
-while IFS= read -r path; do
-  case "$path" in
-    agents/* | .github/workflows/checks.yaml | .github/scripts/changed-providers.sh)
-      emit "${PROVIDERS[@]}"
-      exit 0
-      ;;
-    modules/*/*)
-      p=${path#modules/}
-      p=${p%%/*}
-      selected+="$p "
-      ;;
-  esac
-done
-
-# Emit in PROVIDERS order, so modules/ocp and any unlisted directory drop out.
-picked=()
+out=""
 for p in "${PROVIDERS[@]}"; do
-  case "$selected" in *" $p "*) picked+=("$p") ;; esac
+  if [[ $all == 1 || "$selected" == *" $p "* ]]; then
+    out+="${out:+,}\"$p\""
+  fi
 done
-emit ${picked[@]+"${picked[@]}"}
+echo "[$out]"
