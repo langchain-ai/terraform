@@ -977,6 +977,73 @@ resource "terraform_data" "aks_network_guard" {
   }
 }
 
+# ── Storage redundancy guard ──────────────────────────────────────────────────
+# Azure converts an account between locally and zone-redundant replication in
+# place, with no downtime, but the azurerm provider cannot: it applies any change
+# between LRS/GRS/RAGRS and ZRS/GZRS/RAGZRS by deleting the account and creating
+# it again, and the trace-blob account holds every trace payload. So the
+# requested replication is compared with the SKU Azure reports for each account
+# (listed at subscription scope, empty until the account exists), and a change
+# across that boundary is refused. The way through is Azure's conversion, after
+# which the live SKU matches the variable and the plan is clean. Changes within
+# a group (LRS to GRS, ZRS to GZRS) update in place and pass. Provider rule from
+# the azurerm 4.81.0 storage_account docs, account_replication_type.
+locals {
+  blob_account_name = replace(local.blob_name, "-", "")
+
+  storage_guarded_accounts = merge(
+    { (local.blob_account_name) = { variable = "storage_replication_type", requested = var.storage_replication_type } },
+    var.enable_smithdb ? { (local.smithdb_storage_name) = { variable = "smithdb_storage_replication_type", requested = var.smithdb_storage_replication_type } } : {},
+  )
+
+  # try() covers a mocked provider, whose output has no such shape.
+  storage_live_skus = {
+    for a in try(data.azapi_resource_list.storage_accounts.output.accounts, []) :
+    lower(a.name) => replace(a.sku, "Standard_", "")
+    if lower(split("/", a.id)[4]) == lower(local.resource_group_name)
+  }
+
+  # An account Azure does not have yet reads as its requested value, so it never
+  # counts as a change. lookup() rather than an index guarded by &&: Terraform
+  # before 1.12 evaluates both operands, and versions.tf allows 1.11.
+  # One instruction per account, built from the live SKU, so the message names the
+  # account and the value to set rather than placeholders. Setting the variable to
+  # what Azure reports is right in both cases this fires: after a conversion made
+  # outside Terraform (the variable is behind), and before one (convert first).
+  storage_zone_changes = [
+    for name, want in local.storage_guarded_accounts :
+    join(" ", [
+      "${name}: ${want.variable} is \"${want.requested}\" here and Azure reports \"${lookup(local.storage_live_skus, lower(name), want.requested)}\".",
+      "Set ${want.variable} = \"${lookup(local.storage_live_skus, lower(name), want.requested)}\" to match it now.",
+      "To move the account to ${want.requested}, then run az storage account migration start --account-name ${name} --resource-group ${local.resource_group_name} --sku Standard_${want.requested} --no-wait, and set ${want.variable} = \"${want.requested}\" once az storage account migration show --account-name ${name} --resource-group ${local.resource_group_name} --name default reads Completed.",
+    ])
+    if contains(["ZRS", "GZRS", "RAGZRS"], lookup(local.storage_live_skus, lower(name), want.requested)) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
+  ]
+}
+
+data "azapi_resource_list" "storage_accounts" {
+  type      = "Microsoft.Storage/storageAccounts@2023-05-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    accounts = "value[?${join(" || ", [for name in keys(local.storage_guarded_accounts) : "name=='${name}'"])}].{id: id, name: name, sku: sku.name}"
+  }
+}
+
+resource "terraform_data" "storage_replication_guard" {
+  input = { for name, want in local.storage_guarded_accounts : name => want.requested }
+
+  lifecycle {
+    precondition {
+      condition = length(local.storage_zone_changes) == 0
+      error_message = join(" ", concat(
+        ["This plan adds or removes zone redundancy on a storage account that already exists. The azurerm provider would apply that by deleting the account, and every blob in it, and creating it again; Azure converts it in place instead."],
+        local.storage_zone_changes,
+        ["See README \"Storage redundancy\"."],
+      ))
+    }
+  }
+}
+
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 # Managed PostgreSQL Flexible Server in a private subnet.
 # Only provisioned when postgres_source = "external".
@@ -1049,6 +1116,7 @@ module "smithdb" {
   private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
 
   storage_account_name = local.smithdb_storage_name
+  replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
@@ -1116,6 +1184,8 @@ module "blob" {
   container_name       = "${local.blob_name}-container"
   location             = var.location
   resource_group_name  = azurerm_resource_group.resource_group.name
+
+  replication_type = var.storage_replication_type
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days

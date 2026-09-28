@@ -42,3 +42,8 @@ output "storage_blob_endpoint" {
   description = "Blob service endpoint of the SmithDB object-store account, as Azure reports it for this cloud."
   value       = azurerm_storage_account.smithdb.primary_blob_endpoint
 }
+
+output "storage_replication_type" {
+  description = "Replication the SmithDB account is planned or created with."
+  value       = azurerm_storage_account.smithdb.account_replication_type
+}

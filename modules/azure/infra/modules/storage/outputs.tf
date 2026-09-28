@@ -24,3 +24,8 @@ output "blob_endpoint" {
   description = "Blob service endpoint of the trace-blob account, as Azure reports it for this cloud (https://<name>.blob.core.windows.net/ in commercial Azure)."
   value       = azurerm_storage_account.storage_account.primary_blob_endpoint
 }
+
+output "replication_type" {
+  description = "Replication the account is planned or created with."
+  value       = azurerm_storage_account.storage_account.account_replication_type
+}
