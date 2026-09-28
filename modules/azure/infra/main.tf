@@ -1011,13 +1011,21 @@ locals {
   # account and the value to set rather than placeholders. Setting the variable to
   # what Azure reports is right in both cases this fires: after a conversion made
   # outside Terraform (the variable is behind), and before one (convert first).
+  # Azure's conversion changes only the zone part of the replication and keeps
+  # the geo part (LRS<->ZRS, GRS<->GZRS, RAGRS<->RAGZRS). A target that also
+  # changes the geo part, such as LRS to GZRS, is two steps: the conversion, then
+  # an in-place change within the new group, which Azure allows 24 hours after a
+  # conversion. The message names the conversion step and, when needed, the second.
+  storage_zone_flip = { LRS = "ZRS", ZRS = "LRS", GRS = "GZRS", GZRS = "GRS", RAGRS = "RAGZRS", RAGZRS = "RAGRS" }
+
   storage_zone_changes = [
     for name, want in local.storage_guarded_accounts :
-    join(" ", [
+    join(" ", compact([
       "${name}: ${want.variable} is \"${want.requested}\" here and Azure reports \"${lookup(local.storage_live_skus, lower(name), want.requested)}\".",
       "Set ${want.variable} = \"${lookup(local.storage_live_skus, lower(name), want.requested)}\" to match it now.",
-      "To move the account to ${want.requested}, then run az storage account migration start --account-name ${name} --resource-group ${local.resource_group_name} --sku Standard_${want.requested} --no-wait, and set ${want.variable} = \"${want.requested}\" once az storage account migration show --account-name ${name} --resource-group ${local.resource_group_name} --name default reads Completed.",
-    ])
+      "To convert the account, run az storage account migration start --account-name ${name} --resource-group ${local.resource_group_name} --sku Standard_${lookup(local.storage_zone_flip, lookup(local.storage_live_skus, lower(name), want.requested), want.requested)} --no-wait, and set ${want.variable} = \"${lookup(local.storage_zone_flip, lookup(local.storage_live_skus, lower(name), want.requested), want.requested)}\" once az storage account migration show --account-name ${name} --resource-group ${local.resource_group_name} --name default reads Completed.",
+      lookup(local.storage_zone_flip, lookup(local.storage_live_skus, lower(name), want.requested), want.requested) == want.requested ? "" : "Azure converts only the zone part, so ${want.requested} is a second step: at least 24 hours after the conversion, set ${want.variable} = \"${want.requested}\", which updates the account in place.",
+    ]))
     if contains(["ZRS", "GZRS", "RAGZRS"], lookup(local.storage_live_skus, lower(name), want.requested)) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
   ]
 }

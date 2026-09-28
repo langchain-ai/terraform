@@ -577,15 +577,26 @@ _run_section_2() {
   # Defaults come from the current values, so a resumed or re-entered section
   # prefills what you answered before. Profile-driven defaults apply only when
   # the field is still untouched, so switching profiles never eats an edit.
-  # The cloud follows the Azure CLI, which preflight also requires to match it.
+  # The cloud: a value already set (a resumed tfvars, or kept through "start
+  # fresh") wins, then TF_VAR_azure_environment, then the Azure CLI's active
+  # cloud. Preflight requires the CLI to match, so a mismatch is flagged here.
+  local _cli_cloud _cloud_src="the existing terraform.tfvars"
+  case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
+    AzureUSGovernment) _cli_cloud="usgovernment" ;;
+    *)                 _cli_cloud="public" ;;
+  esac
   if [[ -z "$AZURE_ENVIRONMENT" ]]; then
-    case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
-      AzureUSGovernment) AZURE_ENVIRONMENT="usgovernment" ;;
-      *)                 AZURE_ENVIRONMENT="public" ;;
+    case "${TF_VAR_azure_environment:-}" in
+      public|usgovernment) AZURE_ENVIRONMENT="$TF_VAR_azure_environment"; _cloud_src="TF_VAR_azure_environment" ;;
+      *)                   AZURE_ENVIRONMENT="$_cli_cloud";             _cloud_src="the Azure CLI" ;;
     esac
   fi
   if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
-    _hint "Azure cloud: Azure Government (from the Azure CLI). Writing azure_environment = \"usgovernment\"."
+    _hint "Azure cloud: Azure Government (from ${_cloud_src}). Writing azure_environment = \"usgovernment\"."
+  fi
+  if [[ "$AZURE_ENVIRONMENT" != "$_cli_cloud" ]]; then
+    _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight will fail until you run: az cloud set --name %s && az login\n" \
+      "$AZURE_ENVIRONMENT" "$_cli_cloud" "$([[ "$AZURE_ENVIRONMENT" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
   fi
 
   AUTO_SUB="$SUBSCRIPTION_ID"
@@ -1550,6 +1561,11 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
        ANSWERED="1 2 3 4 5 6 7 8 9 10"
        printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
     2) PRESERVE_UNKNOWN="false"
+       # The cloud is not an answer to start over: dropping it would quietly turn
+       # a Government file commercial, so keep it through the fresh start.
+       case "$(_tfvar azure_environment 2>/dev/null || true)" in
+         public|usgovernment) AZURE_ENVIRONMENT="$(_tfvar azure_environment)" ;;
+       esac
        # create_cluster and create_keyvault ride through a re-run as preserved
        # unknown keys, except on this branch, which drops them. That is not one
        # more discarded hand-edit: it turns an attached deployment greenfield,

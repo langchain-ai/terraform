@@ -282,3 +282,28 @@ run "existing_deployment_turning_smithdb_on_plans_clean" {
     error_message = "turning SmithDB on beside an existing LRS trace-blob account did not plan clean"
   }
 }
+
+# LRS to GZRS changes both parts, which Azure does in two steps; the guard still
+# refuses it on an existing account (and its message names ZRS as the first step).
+run "lrs_to_gzrs_on_an_existing_account_is_refused" {
+  command = plan
+
+  variables {
+    storage_replication_type = "GZRS"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.storage_accounts
+    values = {
+      output = {
+        accounts = [{
+          id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/langsmith-rg-test/providers/Microsoft.Storage/storageAccounts/langsmithblobtest"
+          name = "langsmithblobtest"
+          sku  = "Standard_LRS"
+        }]
+      }
+    }
+  }
+
+  expect_failures = [terraform_data.storage_replication_guard]
+}

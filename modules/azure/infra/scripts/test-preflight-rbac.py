@@ -794,6 +794,23 @@ CASES = [
         "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
     },
     {
+        # The azure_environment output is the value Terraform applied with,
+        # whichever source it came from, so preflight reads it first.
+        "name": "the azure_environment output on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "the azure_environment output wins over a missing tfvar on a commercial CLI",
+        "ca_all": ALL_GOOD,
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
         "name": "a commercial tfvars on the commercial CLI passes the cloud check",
         "ca_all": ALL_GOOD,
         "reject": ["but the Azure CLI is on"],
@@ -1088,7 +1105,7 @@ def build_case(case, index):
         )
     if "amr_regions" in case:
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
-    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name"):
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
