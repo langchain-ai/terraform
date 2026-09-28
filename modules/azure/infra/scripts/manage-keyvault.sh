@@ -43,6 +43,7 @@ OPTIONAL_SECRETS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-fleet-slack-signing-secret"
 )
 
 # Stable secrets — changing them breaks active sessions/API keys

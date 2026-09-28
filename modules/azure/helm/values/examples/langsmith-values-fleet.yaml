@@ -58,6 +58,11 @@ fleet:
   # The langsmith-defaults LimitRange (infra/modules/k8s-bootstrap) supplies the
   # cpu/memory the bundled Redis/Postgres StatefulSets need to satisfy the ResourceQuota.
 
+  # oauth: set through the fleet_* tfvars, not here. init-values.sh writes
+  # fleet.oauth into values-overrides.yaml, and it overwrites this file on every
+  # run. Without fleet_oauth_provider_org_id and a provider ID, Fleet's OAuth
+  # tools and triggers (Gmail, Slack, Outlook, GitHub, ...) stay off.
+
 # fleetToolServer / fleetTriggerServer are separate top-level Deployments. Chart
 # v0.15 renamed them from agentBuilderToolServer / agentBuilderTriggerServer.
 # Both default to enabled: true. Workload Identity serviceAccount.annotations are

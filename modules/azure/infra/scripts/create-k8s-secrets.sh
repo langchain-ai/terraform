@@ -20,6 +20,8 @@ set -euo pipefail
 #   langsmith-config-secret — license key, API salt, JWT secret, admin password,
 #                             and four Fernet encryption keys. Read by all LangSmith
 #                             pods via config.existingSecretName in Helm values.
+#                             Adds fleet_slack_signing_secret when Key Vault has
+#                             langsmith-fleet-slack-signing-secret.
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
@@ -66,6 +68,22 @@ AGENT_KEY=$(_kv "langsmith-agent-builder-encryption-key")
 INSIGHTS_KEY=$(_kv "langsmith-insights-encryption-key")
 POLLY_KEY=$(_kv "langsmith-polly-encryption-key")
 
+# Optional: only Fleet's Slack trigger reads it. A missing secret leaves the key
+# out; any other Key Vault error still stops the script.
+SLACK_SIGNING_ARGS=()
+_slack_err=$(mktemp)
+if _slack_val=$(az keyvault secret show --vault-name "$KV_NAME" \
+    --name "langsmith-fleet-slack-signing-secret" --query value -o tsv 2>"$_slack_err"); then
+  SLACK_SIGNING_ARGS=(--from-literal=fleet_slack_signing_secret="$_slack_val")
+elif ! grep -qi "SecretNotFound" "$_slack_err"; then
+  echo "  ERROR: Key Vault query failed for langsmith-fleet-slack-signing-secret:" >&2
+  cat "$_slack_err" >&2
+  rm -f "$_slack_err"
+  exit 1
+fi
+rm -f "$_slack_err"
+unset _slack_val _slack_err
+
 # The license key is the one value here that nothing has checked since the
 # setup-env prompt (#250). Written as it stands, an empty or malformed value
 # surfaces inside platform-backend at startup as a base64 error that names
@@ -93,6 +111,7 @@ kubectl create secret generic langsmith-config-secret \
   --from-literal=agent_builder_encryption_key="$AGENT_KEY" \
   --from-literal=insights_encryption_key="$INSIGHTS_KEY" \
   --from-literal=polly_encryption_key="$POLLY_KEY" \
+  ${SLACK_SIGNING_ARGS[@]+"${SLACK_SIGNING_ARGS[@]}"} \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
