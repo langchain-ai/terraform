@@ -211,6 +211,43 @@ eq "annotated boolean loses its comment" "$CREATE_WAF"          "false"
 eq "annotated integer loses its comment" "$BLOB_TTL_SHORT_DAYS" "21"
 eq "attach mode survives the comment"    "$(_derive_kv_name)"   "corp-shared-kv"
 
+echo "8. The cloud is asked in section 2, never locked in by an earlier value"
+# A tfvars written on the commercial cloud and reused after the CLI moved to
+# Government must be changeable in the wizard, not only by hand. Carve the cloud
+# functions and drive them with the stub az and a scripted answer.
+for f in _azure_environment _ask_choice _index_of _hint _cli_azure_environment \
+         _warn_cloud_mismatch _resolve_azure_environment _ask_azure_environment \
+         _gov_redis_in_cluster; do
+  awk -v f="$f" '$0 ~ "^"f"\\(\\) *\\{" {p=1} p {print} p && /^}/ {p=0}' "$SRC"
+done > cloud.sh
+# shellcheck source=/dev/null
+source ./cloud.sh
+mkdir -p fix bin
+cp "$SCRIPT_DIR/test-support/az" bin/az
+export FIXTURE_DIR="$TMP/fix"
+PATH="$TMP/bin:$PATH"
+printf 'AzureUSGovernment' > fix/cloud_name
+unset TF_VAR_azure_environment
+
+AZURE_ENVIRONMENT="public"; REDIS_SOURCE="external"
+_resolve_azure_environment > out.txt 2>&1
+eq "a set value is kept at startup"      "$AZURE_ENVIRONMENT" "public"
+grep -q "change the Azure cloud in section 2" out.txt \
+  && ok "the mismatch warning offers section 2" || bad "the mismatch warning does not offer section 2"
+_ask_azure_environment > out.txt 2>&1 <<< "2"
+eq "picking Government overrides tfvars" "$AZURE_ENVIRONMENT" "usgovernment"
+eq "Government moves Redis in-cluster"   "$REDIS_SOURCE"      "in-cluster"
+grep -q "WARNING" out.txt && bad "warned after the cloud matched the CLI" || ok "no warning once the cloud matches the CLI"
+_ask_azure_environment > out.txt 2>&1 <<< ""
+eq "Enter keeps the current cloud"       "$AZURE_ENVIRONMENT" "usgovernment"
+
+AZURE_ENVIRONMENT=""
+TF_VAR_azure_environment="public" _resolve_azure_environment > out.txt 2>&1
+eq "TF_VAR_ outranks the CLI when unset" "$AZURE_ENVIRONMENT" "public"
+AZURE_ENVIRONMENT=""
+_resolve_azure_environment > out.txt 2>&1
+eq "the CLI fills an unset cloud"        "$AZURE_ENVIRONMENT" "usgovernment"
+
 echo ""
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

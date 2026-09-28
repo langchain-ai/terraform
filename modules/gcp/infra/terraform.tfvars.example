@@ -67,6 +67,11 @@ zone   = "us-west2-a"
 #------------------------------------------------------------------------------
 # Note: External PostgreSQL and Redis always use private connections (VPC peering)
 # Requires: servicenetworking.networksAdmin role (for VPC peering)
+#
+# Required egress: nodes reach the internet through the Cloud NAT this module
+# creates, and LangSmith must reach beacon.langchain.com:443 for license
+# verification. An egress firewall rule or proxy
+# you add must permit it. See "Required outbound access" in README.md.
 
 # Ensure these don't overlap with existing ranges in your project
 subnet_cidr   = "10.0.0.0/20"
@@ -236,6 +241,8 @@ langsmith_domain    = "langsmith.example.com"
 
 # License key (sensitive — use environment variable, not this file)
 # Set via: export TF_VAR_langsmith_license_key="your-license-key"
+# An lcl_ key is exchanged with beacon.langchain.com before platform-backend
+# starts, so a first install cannot start without that egress.
 # langsmith_license_key = ""
 
 # Optional: Pin Helm chart version (recommended for reproducible deploys)
