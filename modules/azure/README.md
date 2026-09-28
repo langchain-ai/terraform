@@ -682,11 +682,18 @@ secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsm
   `<release>-presidio-analyzer`) with the LangSmith identity. Those two credentials exist whether or not the flag is set,
   so turning the gateway on needs no `make apply` on a cluster applied from this version. On an older cluster, run
   `make apply` once first.
-- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls. The overlay raises the ingress
-  timeout to match, for every path on the LangSmith Ingress: the NGINX read and send timeouts (default 60 s) with
-  `ingress_controller = "nginx"`, and Application Gateway's request timeout (default 30 s) with `agic`. Istio sets no
-  request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
-  there.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but ingress-nginx cuts requests
+  at 60 s and Application Gateway at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
+  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: the
+  NGINX read and send timeouts with `ingress_controller = "nginx"`, Application Gateway's request timeout with `agic`.
+  Every other path keeps the controller's default, so a slow request elsewhere is not held for fifteen minutes. Istio sets
+  no request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
+  there. `make uninstall` removes the extra Ingress.
+- **Private registries.** The gateway runs from the LangSmith images already in use. PII redaction adds
+  `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage`), which is on Microsoft's
+  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too; with `images.registry` set,
+  the chart prepends that registry to the full repository, so keep the `mcr.microsoft.com/presidio-analyzer` path in the
+  mirror.
 - **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
   organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
 

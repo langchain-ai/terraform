@@ -764,6 +764,33 @@ if [[ -n "$_wi_client_id" ]]; then
   pass "langsmith-ksa WI annotation: ${_wi_client_id}"
 fi
 
+# ── LLM Gateway: an Ingress of its own for /gateway/ ─────────────────────
+# The chart's frontend allows 900 s on /gateway/ for long model calls, but
+# ingress-nginx cuts at 60 s and Application Gateway at 30 s. Raising that on the
+# chart's Ingress would raise it for every path, so /gateway/ gets a second
+# Ingress, built from the chart's (same class, host, TLS and backend), carrying
+# the longer timeout; every other path keeps the controller default. Istio has no
+# default request timeout. For envoy-gateway, init-values.sh warns. With the
+# gateway off, a leftover one is removed.
+_chart_fullname="$RELEASE_NAME"
+[[ "$RELEASE_NAME" == *langsmith* ]] || _chart_fullname="${RELEASE_NAME}-langsmith"
+_gw_ingress="${_chart_fullname}-llm-gateway"
+if [[ "$_enable_llm_gateway" == "true" && ( "$_ingress_controller" == "nginx" || "$_ingress_controller" == "agic" ) ]]; then
+  if _chart_ingress_json=$(kubectl get ingress "${_chart_fullname}-ingress" -n "$NAMESPACE" -o json 2>/dev/null); then
+    if printf '%s' "$_chart_ingress_json" \
+        | python3 "$SCRIPT_DIR/llm-gateway-ingress.py" --controller "$_ingress_controller" --name "$_gw_ingress" \
+        | kubectl apply -f - >/dev/null; then
+      pass "LLM Gateway Ingress ${_gw_ingress}: /gateway/ with a 900 s timeout (${_ingress_controller})"
+    else
+      warn "Could not apply Ingress ${_gw_ingress}; gateway calls use the controller's default timeout. Re-run: make deploy"
+    fi
+  else
+    warn "Ingress ${_chart_fullname}-ingress not found, so ${_gw_ingress} was not created; gateway calls use the controller's default timeout"
+  fi
+elif kubectl get ingress "$_gw_ingress" -n "$NAMESPACE" &>/dev/null; then
+  kubectl delete ingress "$_gw_ingress" -n "$NAMESPACE" >/dev/null && pass "Removed Ingress ${_gw_ingress} (enable_llm_gateway is off)"
+fi
+
 # ── Post-deploy access info ───────────────────────────────────────────────
 _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""

@@ -678,7 +678,9 @@ fi
 [[ "$_enable_polly"         == "true" ]] && _copy_addon "polly"
 
 # LLM Gateway — generated rather than copied, because it carries the Workload
-# Identity client ID and, behind NGINX, a read timeout. Both pods take
+# Identity client ID. The longer ingress timeout for /gateway/ is not set here:
+# deploy.sh gives /gateway/ an Ingress of its own, so that no other path gets it
+# (see helm/scripts/llm-gateway-ingress.py). Both pods take
 # langsmith.commonEnv (the blob storage settings), so both get the identity label
 # and the service account annotation that k8s-cluster federates for them.
 if [[ "$_enable_gateway_pii_redaction" == "true" && "$_enable_llm_gateway" != "true" ]]; then
@@ -713,27 +715,6 @@ presidioAnalyzer:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 LLMGW_EOF
     fi
-    # The chart's frontend proxy gives /gateway/ a 900 s read timeout for long model
-    # calls. ingress-nginx (60 s) and Application Gateway (30 s) would cut a
-    # non-streaming call first. The chart has one Ingress, so this applies to every
-    # path on it. Istio sets no request timeout by default, so it needs nothing.
-    case "$_ingress_controller" in
-      nginx)
-        cat << 'LLMGW_EOF'
-ingress:
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "900"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
-LLMGW_EOF
-        ;;
-      agic)
-        cat << 'LLMGW_EOF'
-ingress:
-  annotations:
-    appgw.ingress.kubernetes.io/request-timeout: "900"
-LLMGW_EOF
-        ;;
-    esac
   } > "$_llm_gateway_file"
   pass "Generated: langsmith-values-llm-gateway.yaml"
   if [[ "$_ingress_controller" == "envoy-gateway" || "$_ingress_controller" == "none" ]]; then

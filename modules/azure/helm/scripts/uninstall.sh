@@ -60,6 +60,8 @@ fi
 # ── Uninstall Helm release ──────────────────────────────────────────────────
 if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --short 2>/dev/null | grep -q "^${RELEASE_NAME}$"; then
   info "Uninstalling Helm release: ${RELEASE_NAME}..."
+  # deploy.sh creates the LLM Gateway's Ingress outside the release.
+  kubectl delete ingress -n "$NAMESPACE" -l app.kubernetes.io/managed-by=langsmith-azure-deploy --ignore-not-found 2>/dev/null || true
   helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m 2>/dev/null || \
     helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" 2>/dev/null || true
   pass "Helm release '${RELEASE_NAME}' uninstalled"
