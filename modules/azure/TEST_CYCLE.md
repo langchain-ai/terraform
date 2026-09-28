@@ -29,25 +29,28 @@ Owner includes both. Contributor alone is insufficient — role assignments requ
 
 ## Bare Minimum Test Config
 
-`azure/infra/terraform.tfvars` must include:
+Start from the minimum profile rather than a hand-written config:
 
-```hcl
-subscription_id              = "your-azure-subscription-id"
-name_prefix                  = "dev"
-location                     = "eastus"
-keyvault_purge_protection    = false   # required for clean terraform destroy after test
-dns_label              = "langsmith-test"
-tls_certificate_source       = "letsencrypt"
-letsencrypt_email            = "you@example.com"
-default_node_pool_min_count  = 3       # critical — autoscaler starts here; 1 causes pod pending
-default_node_pool_max_pods   = 60      # immutable — must be set before first apply
-aks_network_mode             = "overlay" # Azure CNI Overlay + Cilium; creation-time, see README "Network mode"
+```bash
+cp infra/terraform.tfvars.minimum infra/terraform.tfvars
 ```
 
-All other defaults are fine for testing. A typical dev config uses:
-- AKS: `Standard_D8s_v3`, 3 min / 10 max nodes
-- PostgreSQL: Flexible Server (GeneralPurpose_Standard_D2s_v3)
-- Redis: P1 (6 GB RAM)
+Then set `subscription_id`, the one value with no working placeholder. Also change
+`name_prefix`, `dns_label` and `letsencrypt_email`, which it fills with
+examples: `dns_label` names a public hostname, so two testers who keep the same
+one collide in the same region. Everything this cycle checks below assumes
+that file, so edit it rather than copying settings into a new one. What it gives
+you:
+
+- One `Standard_D4s_v3` node (4 vCPU, 16 GiB), autoscaling to 3, no additional pools
+- Postgres, Redis and ClickHouse **in-cluster**: no Flexible Server, no Managed Redis, and no data subnets or private DNS zones for them
+- `unique_resource_names = true`, so the globally unique names carry a six-character hash (see [Terraform outputs](#terraform-outputs))
+- `keyvault_purge_protection = false`, which a clean `make destroy` needs
+- `default_node_pool_max_pods = 60` and `aks_network_mode = "overlay"`, both fixed at creation
+- `sizing_profile = "minimum"` for Pass 2
+
+To test the managed data tier as well, see [External Postgres and Redis](#external-postgres-and-redis)
+under Optional Modules. It adds cost and time, and the checklist below notes where its results differ.
 
 ---
 
@@ -100,16 +103,18 @@ Must return `Success! The configuration is valid.` — fix any errors before con
 ```bash
 make plan
 ```
-Review the plan. Expected resource categories:
+Review the plan. Expected resource categories with `terraform.tfvars.minimum`:
 - Resource group
-- VNet, subnets (main, postgres, redis), private DNS zones
-- AKS cluster, default node pool, large node pool, OIDC issuer, managed identity, federated credentials
+- VNet and the AKS subnet
+- AKS cluster and its default node pool, OIDC issuer, managed identities, federated credentials
 - Azure Blob storage account + container
-- Azure Key Vault, its RBAC role assignments, and two secrets (Postgres password, license key)
-- Azure DB for PostgreSQL Flexible Server + private endpoint
-- Azure Managed Redis + private endpoint
-- cert-manager, KEDA, NGINX ingress Helm releases
-- Kubernetes namespace `langsmith`, K8s ServiceAccount
+- Azure Key Vault, its RBAC role assignments, and two secrets (`postgres-admin-password`, `langsmith-license-key`)
+- cert-manager, KEDA and NGINX ingress Helm releases
+- Kubernetes namespace `langsmith` with its ServiceAccounts, ResourceQuota, LimitRange, NetworkPolicies and the `langsmith-license` secret
+
+With external Postgres and Redis the plan also has the Postgres and Redis subnets, a
+PostgreSQL Flexible Server and an Azure Managed Redis with their private DNS zones and
+endpoints, and the `langsmith-postgres-secret` and `langsmith-redis-secret` secrets.
 
 Confirm no unexpected `destroy` or `replace` actions on existing resources.
 
@@ -117,7 +122,7 @@ Confirm no unexpected `destroy` or `replace` actions on existing resources.
 ```bash
 make apply
 ```
-Typical duration: **15–25 min** (AKS cluster provisioning takes ~10–15 min; PostgreSQL and Redis add ~5 min each).
+Typical duration: **10–15 min**, most of it AKS cluster provisioning. External PostgreSQL and Redis add ~5 min each.
 
 If apply fails partway through, it is safe to re-run — Terraform is idempotent.
 
@@ -139,26 +144,39 @@ the Key Vault Secrets Officer role, which `make apply` grants to the deployer.
 
 Rotate deliberately via `make keyvault` when you actually intend to.
 
+### Step 8 — Cluster credentials and app secret (Pass 1.5)
+```bash
+make kubeconfig
+make k8s-secrets
+```
+`make kubeconfig` fetches the AKS credentials; it is harmless to repeat if you already ran
+it for the Pass 1 checks. `make k8s-secrets` reads the eight app
+secrets from Key Vault and creates `langsmith-config-secret` in the `langsmith`
+namespace, which Pass 2 reads. It needs Step 7 first: the secrets it copies do not
+exist until `make seed-secrets` writes them.
+
 ---
 
 ## Verification Checklist
 
-Run these after `apply` completes successfully.
+The checklist follows the order things are created. Run the Pass 1 checks after
+Step 6, and the Pass 1.5 checks after Step 8. Items that only exist after Pass 2
+are listed at the end so a healthy Pass 1 is not read as a failure.
 
-### Cluster access
+### After Pass 1 (Step 6, `make apply`)
+
+#### Cluster access
 ```bash
 make kubeconfig
 kubectl get nodes
 ```
-Expected output:
+Expected: one node `Ready`, since `terraform.tfvars.minimum` sets `default_node_pool_min_count = 1`.
 ```
 NAME                              STATUS   ROLES    AGE   VERSION
-aks-default-13798291-vmss000000   Ready    <none>   18m   v1.32.11
-aks-default-13798291-vmss000001   Ready    <none>   18m   v1.32.11
-aks-default-13798291-vmss000002   Ready    <none>   18m   v1.32.11
+aks-default-<id>-vmss000000       Ready    <none>   18m   v1.<minor>.<patch>
 ```
 
-### Bootstrap components (Pass 2 prerequisites)
+#### Bootstrap components (Pass 2 prerequisites)
 ```bash
 kubectl get pods -n cert-manager    # cert-manager controller + cainjector + webhook
 kubectl get pods -n keda            # KEDA operator + metrics adapter
@@ -184,54 +202,106 @@ ingress-nginx-controller-7558b45cf6-k8q9l   1/1     Running   0          16m
 ingress-nginx-controller-7558b45cf6-tf9cq   1/1     Running   0          16m
 ```
 
-### LangSmith namespace
+#### LangSmith namespace
 ```bash
 kubectl get secret -n langsmith
 kubectl get serviceaccount langsmith-ksa -n langsmith -o yaml | grep -A3 "annotations:"
-kubectl get clusterissuer
 ```
-Expected:
+Expected with in-cluster Postgres and Redis:
 ```
-NAME                        TYPE     DATA
-langsmith-config-secret     Opaque   8
-langsmith-license           Opaque   1
-langsmith-postgres-secret   Opaque   1
-langsmith-redis-secret      Opaque   3
+NAME                TYPE     DATA
+langsmith-license   Opaque   1
 
 # WI annotation
 annotations:
   azure.workload.identity/client-id: <client-id>
-
-# ClusterIssuer
-NAME               READY   STATUS
-letsencrypt-prod   True    The ACME account was registered with the ACME server
 ```
+With external Postgres and Redis, two more secrets are present:
+```
+langsmith-postgres-secret   Opaque   3
+langsmith-redis-secret      Opaque   3
+```
+No ClusterIssuer exists yet. Terraform installs cert-manager but creates no issuer;
+`make deploy` applies them in Pass 2.
 
-### Terraform outputs
+#### Terraform outputs
 ```bash
-# Run from terraform/azure/
 terraform -chdir=infra output
 ```
-Expected key outputs:
+Expected key outputs, with `unique_resource_names = true` as in `terraform.tfvars.minimum`.
+`<hash>` is six hex characters derived from the subscription ID, `name_prefix` and
+`name_suffix_salt`, so it is the same on every run:
 ```
-aks_cluster_name       = "langsmith-aks-<name_prefix>"
-keyvault_name          = "langsmith-kv-<name_prefix>"
-langsmith_url          = "https://<dns_label>.eastus.cloudapp.azure.com"
-resource_group_name    = "langsmith-rg-<name_prefix>"
-storage_account_name   = "langsmithblob<name_prefix>"
+aks_cluster_name       = "ls-aks-<name_prefix>"
+keyvault_name          = "ls-kv-<name_prefix>-<hash>"
+langsmith_url          = "https://<dns_label>.<location>.cloudapp.azure.com"
+resource_group_name    = "ls-rg-<name_prefix>"
+storage_account_name   = "lsblob<name_prefix><hash>"
 ```
+With `unique_resource_names = false` the prefix is `langsmith` and there is no hash, for
+example `langsmith-kv-<name_prefix>`.
 
-### Full health check
+#### `make status` after Pass 1
 ```bash
 make status
 ```
-All 9 sections must show `✔`. Expected final line: `All checks passed — deployment looks healthy`
+Sections 1 to 5 (configuration, secrets file, credentials, Key Vault, Terraform) should
+show `✔`, except that the Key Vault section reports the app secrets missing until Step 7
+runs. The later sections describe Pass 1.5 and Pass 2 and show `○`, `⚠` or `✘` for what does
+not exist yet. The **Next Step** line names what to run, which is `make seed-secrets`
+until Step 7 has run.
+
+### After Pass 1.5 (Step 8, `make k8s-secrets`)
+
+```bash
+kubectl get secret langsmith-config-secret -n langsmith
+```
+Expected:
+```
+NAME                      TYPE     DATA
+langsmith-config-secret   Opaque   8
+```
+`make status` now shows sections 1 to 6 as `✔` and names `make init-values` as the next
+step, which is where this cycle stops. Section 8 lists `langsmith-config-secret` as
+present; on an in-cluster deployment it also lists `langsmith-postgres-secret` and
+`langsmith-redis-secret` as `○ not created yet`, which is expected, because only the
+external data tier creates them.
+
+### What Pass 2 adds
+
+These fail on a correct Pass 1 and are not part of this cycle. Check them after
+`make init-values && make deploy`:
+
+- The `letsencrypt-prod` ClusterIssuer, `READY=True`
+- `values-overrides.yaml` and the Helm release, sections 7 to 9 of `make status`
+- `All checks passed — deployment looks healthy` as the final line of `make status`
 
 ---
 
 ## Optional Modules
 
 Test each module as an incremental apply on top of the existing baseline.
+
+### External Postgres and Redis
+
+```hcl
+# terraform.tfvars
+postgres_source = "external"
+redis_source    = "external"
+```
+
+**Expected plan**: the Postgres and Redis subnets, a PostgreSQL Flexible Server and an
+Azure Managed Redis with their private DNS zones and endpoints, and two Kubernetes
+secrets, `langsmith-postgres-secret` and `langsmith-redis-secret`. Adds about 10 minutes to
+the apply and the cost of both managed services. Set these before the first Pass 2 to
+avoid a data migration: switching an installed deployment from in-cluster to external
+does not move its data.
+
+On an MSDN or Visual Studio subscription, `make preflight` may warn with
+`LocationIsOfferRestricted`: that offer type cannot create a Flexible Server in some
+regions.
+
+---
 
 ### WAF Policy
 
@@ -315,7 +385,7 @@ zone to Azure.
 | `letsencrypt-prod` ClusterIssuer missing after apply | `clusterissuers.cert-manager.io "letsencrypt-prod" not found` on the langsmith-tls certificate | Terraform does not create the issuer. `make deploy` applies it, so run Pass 2 before checking the certificate. See TROUBLESHOOTING.md. |
 | vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv3Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv3 → Request 32. Or: `az quota update --resource-name standardDSv3Family ...` See TROUBLESHOOTING.md. |
 | `max_pods` too low — autoscaler backoff | `pod didn't trigger scale-up: in backoff after failed scale-up` | Set `default_node_pool_max_pods = 60` **before** first apply — this field is immutable. With 30 pods/node, Pass 2's ~37 pods trigger autoscaler which hits quota. |
-| `default_node_pool_min_count = 1` causes pod pending | All 14+ vCPU of Pass 2 must schedule but only 1 node starts | Set `default_node_pool_min_count = 3` — autoscaler waits for pending pods before adding nodes, causing initial deploy to stall. |
+| Pass 2 pods `Pending` while the autoscaler adds nodes | The first deploy waits on scale-ups when the node floor is below what the chosen sizing needs | Not seen with `terraform.tfvars.minimum`: one `Standard_D4s_v3` schedules a minimum-profile Pass 2 (about 1,560m CPU requested against about 3,920m allocatable). With a larger `sizing_profile` or addons enabled, raise `default_node_pool_min_count` so the floor already fits the requests. |
 | Istio addon revision not supported | `Revision asm-1-XX is not supported by the service mesh add-on` | Check supported revisions: `az aks mesh get-revisions --location eastus -o table`. Update `istio_addon_revision` in tfvars. |
 | Key Vault soft-delete conflict | `VaultAlreadyExists: A vault with the same name already exists in deleted state` | Purge the old vault: `az keyvault purge --name <name> --location eastus`. Or use `keyvault_name` in tfvars to pick a new name. |
 | cert-manager or KEDA Helm timeout | `context deadline exceeded` on k8s-bootstrap module | Uninstall the stuck release and re-apply: `helm uninstall cert-manager -n cert-manager` |
@@ -342,7 +412,7 @@ make clean
 
 > **`make clean` before `make destroy` = unrecoverable.** `make clean` deletes `terraform.tfstate`.
 > Without state, Terraform cannot destroy anything. You'll have to delete Azure resources manually:
-> `az group delete --name langsmith-rg-<name_prefix> --yes`
+> `az group delete --name <resource_group_name> --yes` (`ls-rg-<name_prefix>` with `unique_resource_names = true`)
 
 **Before destroy, verify this is set in `terraform.tfvars`:**
 - `keyvault_purge_protection    = false`
@@ -351,22 +421,25 @@ make clean
 that hold the subnet. Delete the LB manually from Azure Portal → Load Balancers → find the
 `kubernetes` LB → delete, then re-run `make destroy`.
 
-**Key Vault soft-delete after destroy:** Even with `purge_protection = false`, Azure retains the
-Key Vault in soft-deleted state for 7 days. If you re-deploy with the same `name_prefix`:
+**Key Vault soft-delete after destroy:** with `purge_protection = false`, `make destroy`
+purges the vault as well as deleting it, because the provider's
+`purge_soft_delete_on_destroy` default is on and `infra/versions.tf` does not change it.
+Check with `az keyvault list-deleted`. A vault is left soft-deleted only when the destroy
+was interrupted or the vault was deleted outside Terraform. A re-deploy with the same
+`name_prefix` then fails with `VaultAlreadyExists`; purge it first:
 ```bash
-az keyvault purge --name langsmith-kv-<name_prefix> --location <region>
+az keyvault purge --name <keyvault_name> --location <region>
 ```
-Or use a different `name_prefix` for the next deploy.
 
 ---
 
 ## Key Vault Secret Reference
 
-Secrets stored in Azure Key Vault at `langsmith-kv-<name_prefix>`:
+Secrets stored in the Azure Key Vault named by `terraform -chdir=infra output keyvault_name`:
 
 | Secret name | Auto-generated | Rotatable |
 |-------------|---------------|-----------|
-| `postgres-password` | No (prompted) | Yes, with app restart |
+| `postgres-admin-password` | No (prompted) | Yes, with app restart |
 | `langsmith-api-key-salt` | Yes (base64-32) | **Never** — invalidates all API keys |
 | `langsmith-jwt-secret` | Yes (base64-32) | **Never** — invalidates all sessions |
 | `langsmith-license-key` | No (prompted) | N/A |
