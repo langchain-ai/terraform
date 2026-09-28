@@ -348,27 +348,38 @@ fi
 _fleet_oauth_block=""
 if [[ "$_enable_fleet" != "true" ]]; then
   [[ -n "${_fleet_oauth_org_id}${_fleet_oauth_lines}" ]] && warn "fleet_* OAuth tfvars are set but enable_fleet is not true, so they are ignored"
-elif [[ -n "${_fleet_oauth_org_id}${_fleet_oauth_lines}" ]]; then
-  _fleet_oauth_block="# ── Fleet OAuth, from the fleet_* tfvars ──────────────────────────────────────
+else
+  _fleet_oauth_block="# ── Fleet OAuth, from the fleet_* tfvars ──────────────────────────────────────"
+  if [[ -n "${_fleet_oauth_org_id}${_fleet_oauth_lines}" ]]; then
+    _fleet_oauth_block="${_fleet_oauth_block}
 fleet:
   oauth:
-    providerOrgId: \"${_fleet_oauth_org_id}\"${_fleet_oauth_lines}"
+    providerOrgId: \"${_fleet_oauth_org_id}\"${_fleet_oauth_lines}
+"
+  fi
   if [[ -n "$_fleet_slack_provider" ]]; then
     # The chart renders fleet.oauth.slackSigningSecret as a plain env value, so it
     # stays unset and the secret comes by reference instead. The reference is
     # required, so the pod never starts without a key to verify Slack events;
     # deploy.sh stops before the upgrade while the key is missing.
-    _fleet_oauth_block="${_fleet_oauth_block}
-
-fleetTriggerServer:
-  deployment:
-    extraEnv:
-      - name: SLACK_SIGNING_SECRET
+    _fleet_slack_env="      - name: SLACK_SIGNING_SECRET
         valueFrom:
           secretKeyRef:
             name: langsmith-config-secret
             key: fleet_slack_signing_secret"
+  else
+    # The trigger server turns its Slack triggers on unless SLACK_OAUTH_PROVIDER
+    # is empty, and the chart omits the variable when no provider is set. Left on,
+    # they verify Slack events against the server's built-in placeholder signing
+    # secret, so an empty value turns them off.
+    _fleet_slack_env="      - name: SLACK_OAUTH_PROVIDER
+        value: \"\""
   fi
+  _fleet_oauth_block="${_fleet_oauth_block}
+fleetTriggerServer:
+  deployment:
+    extraEnv:
+${_fleet_slack_env}"
 fi
 
 # ── Generate values-overrides.yaml ────────────────────────────────────────
