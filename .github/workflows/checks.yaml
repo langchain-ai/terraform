@@ -26,18 +26,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which provider legs to run. On a PR, only the providers the PR touches; on
+  # a push to main, all of them. The provider list and the path rules live in
+  # changed-providers.sh. On pull_request the checkout is the merge commit, so
+  # HEAD^1 is the base tip and the diff is exactly what the PR changes.
+  changes:
+    name: changed providers
+    runs-on: ubuntu-latest
+    outputs:
+      providers: ${{ steps.pick.outputs.providers }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Pick providers
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            providers=$(git diff --name-only HEAD^1 HEAD | bash .github/scripts/changed-providers.sh)
+          else
+            providers=$(bash .github/scripts/changed-providers.sh --all)
+          fi
+          echo "Providers to check: $providers"
+          echo "providers=$providers" >> "$GITHUB_OUTPUT"
+
   # One job per provider so a failure names the provider, and so the provider
   # rulesets install in parallel. Only the directory names live here: check.sh
   # expands modules/<provider> into the roots beneath it, so which directories
   # are roots stays defined in one place. byoc is the standalone
-  # langsmith-byoc-role IAM root, nested a level deeper than the others.
+  # langsmith-byoc-role IAM root, nested a level deeper than the others. An
+  # empty provider list is a workflow error as a matrix, so skip the job instead.
   check:
     name: check (${{ matrix.provider }})
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: [aws, azure, byoc, gcp]
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
@@ -91,11 +120,13 @@ jobs:
   # versions.tf to init against at all.
   plan-tests:
     name: plan tests (${{ matrix.provider }})
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: [aws, azure, byoc, gcp]
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
