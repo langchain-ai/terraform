@@ -1006,9 +1006,17 @@ locals {
   # An account Azure does not have yet reads as its requested value, so it never
   # counts as a change. lookup() rather than an index guarded by &&: Terraform
   # before 1.12 evaluates both operands, and versions.tf allows 1.11.
+  # One instruction per account, built from the live SKU, so the message names the
+  # account and the value to set rather than placeholders. Setting the variable to
+  # what Azure reports is right in both cases this fires: after a conversion made
+  # outside Terraform (the variable is behind), and before one (convert first).
   storage_zone_changes = [
     for name, want in local.storage_guarded_accounts :
-    "${want.variable} on ${name} is ${lookup(local.storage_live_skus, lower(name), want.requested)} in Azure and ${want.requested} here"
+    join(" ", [
+      "${name}: ${want.variable} is \"${want.requested}\" here and Azure reports \"${lookup(local.storage_live_skus, lower(name), want.requested)}\".",
+      "Set ${want.variable} = \"${lookup(local.storage_live_skus, lower(name), want.requested)}\" to match it now.",
+      "To move the account to ${want.requested}, then run az storage account migration start --account-name ${name} --resource-group ${local.resource_group_name} --sku Standard_${want.requested} --no-wait, and set ${want.variable} = \"${want.requested}\" once az storage account migration show --account-name ${name} --resource-group ${local.resource_group_name} --name default reads Completed.",
+    ])
     if contains(["ZRS", "GZRS", "RAGZRS"], lookup(local.storage_live_skus, lower(name), want.requested)) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
   ]
 }
@@ -1027,12 +1035,11 @@ resource "terraform_data" "storage_replication_guard" {
   lifecycle {
     precondition {
       condition = length(local.storage_zone_changes) == 0
-      error_message = join(" ", [
-        "Adding or removing zone redundancy on a storage account that already exists: ${join("; ", local.storage_zone_changes)}.",
-        "The azurerm provider would delete the account, and every blob in it, and create it again.",
-        "Azure converts the account in place instead: az storage account migration start --account-name <account> --resource-group ${local.resource_group_name} --sku Standard_<type> --no-wait, then watch az storage account migration show --account-name <account> --resource-group ${local.resource_group_name} --name default until it reads Completed.",
-        "Keep the variable at the account's current value until then; once the conversion completes the plan is clean. See README \"Storage redundancy\".",
-      ])
+      error_message = join(" ", concat(
+        ["This plan adds or removes zone redundancy on a storage account that already exists. The azurerm provider would apply that by deleting the account, and every blob in it, and creating it again; Azure converts it in place instead."],
+        local.storage_zone_changes,
+        ["See README \"Storage redundancy\"."],
+      ))
     }
   }
 }

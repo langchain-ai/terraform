@@ -251,3 +251,34 @@ run "smithdb_zone_change_on_an_existing_account_is_refused" {
 
   expect_failures = [terraform_data.storage_replication_guard]
 }
+
+# An existing deployment turning SmithDB on: the trace-blob account exists at LRS
+# and the SmithDB account does not exist yet, so nothing is changing zones.
+run "existing_deployment_turning_smithdb_on_plans_clean" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    availability_zones               = ["1", "2", "3"]
+    storage_replication_type         = "LRS"
+    smithdb_storage_replication_type = "ZRS"
+  }
+
+  override_data {
+    target = data.azapi_resource_list.storage_accounts
+    values = {
+      output = {
+        accounts = [{
+          id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/langsmith-rg-test/providers/Microsoft.Storage/storageAccounts/langsmithblobtest"
+          name = "langsmithblobtest"
+          sku  = "Standard_LRS"
+        }]
+      }
+    }
+  }
+
+  assert {
+    condition     = module.smithdb[0].storage_replication_type == "ZRS" && module.blob.replication_type == "LRS"
+    error_message = "turning SmithDB on beside an existing LRS trace-blob account did not plan clean"
+  }
+}
