@@ -116,3 +116,8 @@ output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
 }
+
+output "workload_identity_service_accounts" {
+  description = "Service accounts federated with the LangSmith workload identity."
+  value       = local.service_accounts_for_workload_identity
+}

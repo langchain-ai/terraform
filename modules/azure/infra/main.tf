@@ -835,8 +835,11 @@ module "aks" {
   # Envoy Gateway
   envoy_gateway_version = var.envoy_gateway_version
 
-  langsmith_namespace    = var.langsmith_namespace
-  langsmith_release_name = var.langsmith_release_name
+  langsmith_namespace = var.langsmith_namespace
+  # The chart names its service accounts after its fullname, which is the release
+  # name only when it contains "langsmith" (prod -> prod-langsmith-backend), so the
+  # federated credential subjects are built from the fullname.
+  langsmith_release_name = local.langsmith_release_fullname
 
   # Preserve existing identity name when migrating from storage module.
   # New deployments leave this unset and get "${cluster_name}-app-identity".
