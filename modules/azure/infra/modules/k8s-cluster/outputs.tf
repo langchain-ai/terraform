@@ -84,3 +84,8 @@ output "agw_id" {
   description = "Resource ID of the Application Gateway, for the diagnostics module to attach a setting to. Null when no gateway is created."
   value       = one(azurerm_application_gateway.agw[*].id)
 }
+
+output "workload_identity_service_accounts" {
+  description = "Service accounts federated with the LangSmith workload identity."
+  value       = local.service_accounts_for_workload_identity
+}

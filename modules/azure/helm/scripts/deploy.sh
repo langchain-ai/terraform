@@ -16,6 +16,7 @@
 #   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
 #   8b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
+#   8c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
 #   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -327,6 +328,7 @@ _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_llm_gateway=false
+_enable_gateway_pii_redaction=false
 _enable_fleet=false
 _enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
@@ -334,6 +336,7 @@ _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
 _tfvar_is_true "enable_polly"         && _enable_polly=true        || true
 _tfvar_is_true "enable_llm_gateway"   && _enable_llm_gateway=true  || true
+_tfvar_is_true "enable_gateway_pii_redaction" && _enable_gateway_pii_redaction=true || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
 _tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
 
@@ -401,6 +404,7 @@ _addon_gate=(
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "llm-gateway:llm_gateway:$_enable_llm_gateway"
+  "gateway-pii:gateway_pii_redaction:$_enable_gateway_pii_redaction"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
