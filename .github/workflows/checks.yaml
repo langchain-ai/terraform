@@ -122,8 +122,8 @@ jobs:
   # assertion should read as a wiring failure rather than as a lint failure.
   # The matrix mirrors the check legs, byoc included: plan-tests.sh skips it by
   # name because it has no infra/ root to plan, and a leg that says so beats a
-  # missing check nobody can account for. ocp is out of both matrices, having no
-  # versions.tf to init against at all.
+  # missing check nobody can account for. ocp is out of this matrix and check's,
+  # having no versions.tf to init against at all.
   plan-tests:
     name: plan tests (${{ matrix.provider }})
     needs: changes

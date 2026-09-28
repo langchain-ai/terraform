@@ -70,7 +70,7 @@ fi
 # an HCL double-quoted string. Shell expansion is not recursive, so ordinary
 # dollar signs and backticks in the expanded value remain literal. Keep this in
 # lockstep with the Terraform validation on postgres_admin_password.
-_tfvars_password_ok() {
+_pg_password_ok() {
   local val="$1"
   [[ "$val" != *'"'* ]] || return 1
   [[ "$val" != *'\'* ]] || return 1
@@ -80,7 +80,7 @@ _tfvars_password_ok() {
   return 0
 }
 
-_tfvars_password_error() {
+_pg_password_error() {
   echo 'ERROR: PostgreSQL admin password must not contain double quotes, backslashes, newlines, ${, or %{.' >&2
 }
 
@@ -100,8 +100,8 @@ _prompt() {
   local attempt=0
 
   if [[ -n "$val" ]]; then
-    if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" ]] && ! _tfvars_password_ok "$val"; then
-      _tfvars_password_error
+    if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" ]] && ! _pg_password_ok "$val"; then
+      _pg_password_error
       return 1
     fi
     echo "$val"
@@ -120,8 +120,8 @@ _prompt() {
       echo >&2                # -s also swallows the newline the user typed
     fi
     if [[ -n "$val" ]]; then
-      if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" ]] && ! _tfvars_password_ok "$val"; then
-        _tfvars_password_error
+      if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" ]] && ! _pg_password_ok "$val"; then
+        _pg_password_error
         val=""
         continue
       fi
@@ -146,8 +146,8 @@ _prompt() {
     echo "ERROR: No value provided for $env_var." >&2
     return 1
   fi
-  if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" && -n "$val" ]] && ! _tfvars_password_ok "$val"; then
-    _tfvars_password_error
+  if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" && -n "$val" ]] && ! _pg_password_ok "$val"; then
+    _pg_password_error
     return 1
   fi
   echo "$val"
@@ -370,8 +370,8 @@ if [[ -z "$pg_password" ]]; then
 fi
 
 # ── Write secrets.auto.tfvars ─────────────────────────────────────────────────
-if [[ -n "$pg_password" ]] && ! _tfvars_password_ok "$pg_password"; then
-  _tfvars_password_error
+if [[ -n "$pg_password" ]] && ! _pg_password_ok "$pg_password"; then
+  _pg_password_error
   exit 1
 fi
 

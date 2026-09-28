@@ -479,11 +479,18 @@ _quoted_tfvars_writes() {
 # form exits 2 claiming an unknown root module. A token holding a non-tfvars
 # path still comes through, because naming another root has to be refused rather
 # than skipped.
+#
+# A wrapper forwards only its own $1, so the token after its key is whatever the
+# wrapper does with $2 -- aws quickstart.sh's _existing takes a fallback value,
+# and "0.0.0.0/0" is not a filename. Wrapper calls are read as key-only.
 _accessor_calls() {
-  awk -v accs="$1" "$AWK_LIB"'
+  awk -v accs="$1" -v wraps="$3" "$AWK_LIB"'
     /^[ \t]*#/ { next }
     '"$AWK_ASSIGN"'
-    BEGIN { n = split(accs, a, " "); for (i = 1; i <= n; i++) acc[a[i]] = 1 }
+    BEGIN {
+      n = split(accs, a, " "); for (i = 1; i <= n; i++) acc[a[i]] = 1
+      n = split(wraps, a, " "); for (i = 1; i <= n; i++) wrap[a[i]] = 1
+    }
     # $1 aliases are per function, not per file: _parse_tfvar declares "key" on
     # its first line, which file scope would make an alias for all of
     # _common.sh, silencing the azure _values_input_stamp loop.
@@ -511,7 +518,7 @@ _accessor_calls() {
         }
         if (arg !~ /^[A-Za-z_][A-Za-z0-9_]*$/) continue
         f = ""
-        if (i + 2 <= n2) {
+        if (i + 2 <= n2 && !(tok in wrap)) {
           cand = t[i+2]
           sub(/[);&|].*$/, "", cand)
           # A redirection is not an argument. `_parse_tfvar_quoted "$k"
@@ -741,7 +748,7 @@ for f in $scripts; do
         ;;
     esac
   done <<EOF
-$(_accessor_calls "$all_accessors" "$REPO_ROOT/$f")
+$(_accessor_calls "$all_accessors" "$REPO_ROOT/$f" "$wrappers")
 EOF
 done
 echo "   $(echo "$read_keys" | wc -w | tr -d ' ') keys read through an accessor"
