@@ -32,8 +32,20 @@ VALUES_DIR="$HELM_DIR/values"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
-RELEASE_NAME="${RELEASE_NAME:-langsmith}"
-NAMESPACE="${NAMESPACE:-langsmith}"
+# The Helm release name: RELEASE_NAME from the environment if set, else
+# langsmith_release_name from terraform.tfvars, else langsmith. The chart names
+# its objects after its fullname, which is the release name only when that
+# contains "langsmith" (prod -> prod-langsmith-backend).
+RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
+if [[ "$RELEASE_NAME" == *langsmith* ]]; then
+  CHART_FULLNAME="$RELEASE_NAME"
+else
+  CHART_FULLNAME="${RELEASE_NAME}-langsmith"
+fi
+# Same order for the namespace. The Terraform side (the workload identity
+# subjects, the namespace itself) reads langsmith_namespace, so an env-only
+# value installed the release where no federated identity pointed.
+NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
@@ -123,7 +135,7 @@ fi
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
-  _le_namespace=$(_parse_tfvar "langsmith_namespace") || _le_namespace="langsmith"
+  _le_namespace="$NAMESPACE"
   _le_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
@@ -246,7 +258,7 @@ if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
   _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   kubectl apply -f - &>/dev/null <<EOF
 apiVersion: networking.istio.io/v1beta1
@@ -563,7 +575,7 @@ fi
 # chart validation (validate.yaml requires ingress, gateway, or istioGateway).
 # HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_namespace="$NAMESPACE"
   _eg_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
@@ -676,20 +688,20 @@ echo ""
 
 # ── Wait for core components ──────────────────────────────────────────────
 _core_deployments=(
-  "${RELEASE_NAME}-frontend"
-  "${RELEASE_NAME}-backend"
-  "${RELEASE_NAME}-platform-backend"
-  "${RELEASE_NAME}-ingest-queue"
-  "${RELEASE_NAME}-queue"
+  "${CHART_FULLNAME}-frontend"
+  "${CHART_FULLNAME}-backend"
+  "${CHART_FULLNAME}-platform-backend"
+  "${CHART_FULLNAME}-ingest-queue"
+  "${CHART_FULLNAME}-queue"
   # The chart always installs playground. Without it here, a sizing profile that
   # leaves playground crash-looping still reports "All core deployments ready" (#217).
-  "${RELEASE_NAME}-playground"
+  "${CHART_FULLNAME}-playground"
 )
 if [[ "$_enable_deployments" == "true" ]]; then
   _core_deployments+=(
-    "${RELEASE_NAME}-host-backend"
-    "${RELEASE_NAME}-listener"
-    "${RELEASE_NAME}-operator"
+    "${CHART_FULLNAME}-host-backend"
+    "${CHART_FULLNAME}-listener"
+    "${CHART_FULLNAME}-operator"
   )
 fi
 
@@ -713,7 +725,7 @@ echo ""
 # The chart creates HTTPRoutes via gateway.enabled: true.
 # Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_namespace="$NAMESPACE"
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
@@ -740,7 +752,7 @@ fi
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
 if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
-  _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
+  _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
   for _ in $(seq 1 18); do
@@ -771,7 +783,7 @@ fi
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false

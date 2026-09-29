@@ -159,7 +159,7 @@ variable "langsmith_namespace" {
 
 variable "langsmith_release_name" {
   type        = string
-  description = "Helm release name for LangSmith. Used to generate federated identity credential subjects."
+  description = "The LangSmith chart's fullname: the release name when it contains \"langsmith\", otherwise <release>-langsmith. The chart prefixes every service account with it, so the federated identity credential subjects are built from it."
   default     = "langsmith"
 }
 
