@@ -6,8 +6,27 @@
 # so a default change shows up as a failing assertion here and not as a test
 # that quietly stops covering anything.
 
-mock_provider "azurerm" {}
-mock_provider "azapi" {}
+# Fixed client_config so the Key Vault run below can compare the deployer's
+# object_id by value. The generated mock is a random string.
+mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = {
+      tenant_id       = "00000000-0000-0000-0000-000000000000"
+      client_id       = "00000000-0000-0000-0000-000000000000"
+      object_id       = "11111111-1111-1111-1111-111111111111"
+      subscription_id = "00000000-0000-0000-0000-000000000000"
+    }
+  }
+}
+# The cluster module lists the subscription's AKS clusters to read the one it
+# manages; the generated mock has no such shape, so give it an empty list.
+mock_provider "azapi" {
+  mock_data "azapi_resource_list" {
+    defaults = {
+      output = { clusters = [] }
+    }
+  }
+}
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
 mock_provider "null" {}
@@ -94,7 +113,8 @@ run "create_dns_zone_adds_only_dns" {
   command = plan
 
   variables {
-    create_dns_zone = true
+    create_dns_zone  = true
+    langsmith_domain = "langsmith.example.com"
   }
 
   assert {
@@ -215,5 +235,156 @@ run "wi_subjects_release_name_without_langsmith" {
   assert {
     condition     = !contains(module.aks.workload_identity_service_accounts, "prod-backend")
     error_message = "release \"prod\" still produced the bare prod-backend subject"
+  }
+}
+
+# ── AKS network mode, data plane and tier ────────────────────────────────────
+# What reaches the cluster resource from the one operator-facing mode variable.
+
+run "overlay_mode_plans_cilium_and_the_pod_range" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+  }
+
+  assert {
+    condition     = module.aks.network_profile.network_plugin_mode == "overlay"
+    error_message = "aks_network_mode = overlay did not set network_plugin_mode = overlay"
+  }
+  assert {
+    condition     = module.aks.network_profile.pod_cidr == "10.244.0.0/16"
+    error_message = "overlay mode did not pass aks_pod_cidr through as pod_cidr"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_data_plane == "cilium"
+    error_message = "overlay mode did not default the data plane to cilium"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_policy == "cilium"
+    error_message = "the cilium data plane did not select the cilium policy engine"
+  }
+  assert {
+    condition     = module.aks.sku_tier == "Standard"
+    error_message = "the default tier is not Standard"
+  }
+}
+
+run "overlay_mode_can_keep_the_azure_data_plane" {
+  command = plan
+
+  variables {
+    aks_network_mode      = "overlay"
+    aks_network_dataplane = "azure"
+  }
+
+  assert {
+    condition     = module.aks.network_profile.network_data_plane == "azure"
+    error_message = "aks_network_dataplane = azure was overridden"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_policy == "azure"
+    error_message = "the azure data plane did not select the azure policy engine"
+  }
+}
+
+run "node_subnet_mode_plans_the_flat_profile" {
+  command = plan
+
+  variables {
+    aks_network_mode = "node-subnet"
+  }
+
+  assert {
+    condition     = module.aks.network_profile.network_plugin_mode == null
+    error_message = "node-subnet mode set a network_plugin_mode"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_data_plane == "azure"
+    error_message = "node-subnet mode did not keep the azure data plane"
+  }
+  assert {
+    condition     = module.aks.network_profile.network_policy == "azure"
+    error_message = "node-subnet mode did not keep the azure policy engine"
+  }
+}
+
+run "premium_tier_with_long_term_support_is_passed_through" {
+  command = plan
+
+  variables {
+    aks_sku_tier     = "Premium"
+    aks_support_plan = "AKSLongTermSupport"
+  }
+
+  assert {
+    condition     = module.aks.sku_tier == "Premium" && module.aks.support_plan == "AKSLongTermSupport"
+    error_message = "tier and support plan did not reach the cluster"
+  }
+}
+
+# ── AGIC with overlay ────────────────────────────────────────────────────────
+# Nothing has confirmed Application Gateway reaching overlay pod addresses, so the
+# pairing warns (a check, not a precondition) and the plan proceeds.
+
+run "agic_with_overlay_warns" {
+  command = plan
+
+  variables {
+    ingress_controller = "agic"
+    aks_network_mode   = "overlay"
+  }
+
+  expect_failures = [check.agic_with_overlay_unverified]
+}
+# ── Key Vault deployer grant ─────────────────────────────────────────────────
+# module.keyvault carries a module-level depends_on, which defers every data
+# source inside it while any dependency has changes pending. Read there, the
+# deployer's object_id is unknown at plan time and the grant plans as a replace
+# whenever module.blob changes. Read in the root, it is known.
+
+run "keyvault_deployer_grant_principal_known_at_plan" {
+  command = plan
+
+  variables {
+    create_keyvault                            = true
+    keyvault_manage_terraform_admin_assignment = true
+  }
+
+  assert {
+    condition     = module.keyvault.terraform_admin_principal_id == "11111111-1111-1111-1111-111111111111"
+    error_message = "The Key Vault deployer grant's principal_id is not the client_config object_id at plan time"
+  }
+}
+
+# ── Blob private DNS zone ────────────────────────────────────────────────────
+# Azure links a zone name to a VNet once, so a supplied central zone must stop
+# Terraform creating a second one.
+
+run "storage_private_endpoints_create_the_blob_zone" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+    storage_private_dns_zone_id      = ""
+  }
+
+  assert {
+    condition     = length(azurerm_private_dns_zone.blob) == 1 && length(azurerm_private_dns_zone_virtual_network_link.blob) == 1
+    error_message = "storage_private_endpoint_enabled = true with no zone supplied did not plan the blob zone and its VNet link"
+  }
+}
+
+run "a_supplied_blob_zone_is_not_created_again" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+    storage_private_dns_zone_id      = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  }
+
+  assert {
+    condition     = length(azurerm_private_dns_zone.blob) == 0 && length(azurerm_private_dns_zone_virtual_network_link.blob) == 0
+    error_message = "A supplied storage_private_dns_zone_id still planned a second blob zone"
   }
 }

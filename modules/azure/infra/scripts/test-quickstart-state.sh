@@ -80,6 +80,17 @@ eq "COST_CENTER keeps space"   "$COST_CENTER"   "CC-9 / dept 4"
 eq "PG_ADMIN_USER survives"    "$PG_ADMIN_USER" "ls_admin"
 eq "CREATE_WAF survives"       "$CREATE_WAF"    "true"
 
+# A checkpoint written before the network mode was a choice has no NETWORK_MODE
+# line; that deployment runs node-subnet, and the resumed session must not carry
+# the top-level default of overlay into its tfvars.
+printf 'SECTION=4\nANSWERED=1 2 3\n' > "$STATE_FILE"
+NETWORK_MODE="overlay"
+_load_state
+eq "old checkpoint seeds node-subnet"  "$NETWORK_MODE" "node-subnet"
+printf 'SECTION=4\nNETWORK_MODE=overlay\n' > "$STATE_FILE"
+_load_state
+eq "checkpoint with a mode keeps it"   "$NETWORK_MODE" "overlay"
+
 echo "2. _STATE_KEYS covers every variable _load_tfvars assigns"
 # _load_state drops a key that is missing from the whitelist without saying so,
 # and _save_state never writes it, so a rename that lands in one place and not
@@ -105,6 +116,24 @@ while read -r v; do
 done < assigned.txt
 [[ -z "$MISSING" ]] && ok "every assigned variable is whitelisted" \
   || bad "assigned by _load_tfvars but missing from _STATE_KEYS:$MISSING"
+
+echo "2b. _WRITER_KEYS covers every key the writer emits"
+# The preserve loop copies any key outside _WRITER_KEYS from the previous file
+# into the "Kept from your previous terraform.tfvars" block, so a key the writer
+# emits but does not own lands twice on a re-edit and no plan can parse the
+# result. Scrape the writer's heredoc and echo lines from _WRITER_KEYS onward.
+WRITER_START=$(grep -n '^_WRITER_KEYS=' "$SRC" | cut -d: -f1)
+sed -n "${WRITER_START},\$p" "$SRC" \
+  | grep -oE '^[a-z_][a-z0-9_]* += |echo "[a-z_][a-z0-9_]* += ' \
+  | sed -E 's/^echo "//; s/ *= *$//' | sort -u > emitted.txt
+ECOUNT=$(wc -l < emitted.txt | tr -d ' ')
+[[ "$ECOUNT" -ge 40 ]] && ok "scraped $ECOUNT emitted keys" \
+  || bad "scraped only $ECOUNT emitted keys — the scrape pattern has drifted"
+WKEYS=" $(sed -n '/^_WRITER_KEYS="/,/"$/p' "$SRC" | tr -d '"' | sed 's/_WRITER_KEYS=//' | tr '\n' ' ') "
+WMISSING=""
+while read -r k; do [[ "$WKEYS" == *" $k "* ]] || WMISSING="$WMISSING $k"; done < emitted.txt
+[[ -z "$WMISSING" ]] && ok "every emitted key is in _WRITER_KEYS" \
+  || bad "emitted by the writer but missing from _WRITER_KEYS:$WMISSING"
 
 echo "3. A key outside the whitelist is ignored"
 NOT_A_KEY="untouched"
@@ -137,14 +166,24 @@ $NAME_TFKEY = "acme"
 location        = "westus2"
 owner           = "platform team"
 create_waf      = true
+langsmith_domain = "langsmith.acme.com"
+create_dns_zone = true
 EOF
-PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; eval "$NAME_VAR="
+PROFILE="dev"; LOCATION=""; OWNER=""; CREATE_WAF="false"; NETWORK_MODE="overlay"; CREATE_DNS_ZONE="false"; eval "$NAME_VAR="
 _load_tfvars
 eq "$NAME_TFKEY read into $NAME_VAR" "${!NAME_VAR}" "acme"
 eq "PROFILE read from the header"    "$PROFILE"     "prod"
 eq "LOCATION read"                   "$LOCATION"    "westus2"
 eq "OWNER keeps its space"           "$OWNER"       "platform team"
 eq "CREATE_WAF read"                 "$CREATE_WAF"  "true"
+# Section 6 defaults its zone prompt to this value on a re-edit.
+eq "CREATE_DNS_ZONE read"            "$CREATE_DNS_ZONE" "true"
+# A tfvars from before the mode was a choice deploys the module default of
+# that time; seeding overlay would write a migration into it on save.
+eq "absent aks_network_mode is node-subnet" "$NETWORK_MODE" "node-subnet"
+printf 'aks_network_mode = "overlay"\n' >> "$OUTPUT"
+_load_tfvars
+eq "present aks_network_mode is read"      "$NETWORK_MODE" "overlay"
 
 echo "6. tfvars to checkpoint and back keeps the deployment name"
 _save_state
@@ -152,6 +191,25 @@ eval "$NAME_VAR="; PROFILE=""
 _load_state
 eq "name survives the full trip"    "${!NAME_VAR}" "acme"
 eq "profile survives the full trip" "$PROFILE"     "prod"
+
+echo "7. A trailing comment on a bare value is not part of the value"
+# terraform.tfvars.example ships annotated keys, so a copied file reaches here
+# with them. An unstripped comment makes every boolean read as neither true nor
+# false, and _derive_kv_name then names a vault that does not exist.
+cat > "$OUTPUT" << EOF
+subscription_id       = "sub-1"
+$NAME_TFKEY           = "acme"
+create_waf            = false  # the dev subscription has no WAF quota
+blob_ttl_short_days   = 21     # short-lived trace payloads
+create_keyvault       = false  # attach to the platform vault
+existing_keyvault_name = "corp-shared-kv"
+unique_resource_names = true
+EOF
+CREATE_WAF="true"; BLOB_TTL_SHORT_DAYS=""
+_load_tfvars
+eq "annotated boolean loses its comment" "$CREATE_WAF"          "false"
+eq "annotated integer loses its comment" "$BLOB_TTL_SHORT_DAYS" "21"
+eq "attach mode survives the comment"    "$(_derive_kv_name)"   "corp-shared-kv"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

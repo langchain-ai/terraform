@@ -20,7 +20,15 @@ mock_provider "azurerm" {
     }
   }
 }
-mock_provider "azapi" {}
+# The cluster module lists the subscription's AKS clusters to read the one it
+# manages; the generated mock has no such shape, so give it an empty list.
+mock_provider "azapi" {
+  mock_data "azapi_resource_list" {
+    defaults = {
+      output = { clusters = [] }
+    }
+  }
+}
 mock_provider "kubernetes" {}
 mock_provider "helm" {}
 mock_provider "null" {}
@@ -47,6 +55,7 @@ run "enums_reject_an_unlisted_value" {
     agw_sku_tier                   = "Standard"
     agic_network_contributor_scope = "resourcegroup"
     terraform_principal_type       = "user"
+    redis_clustering_policy        = "Enterprise"
   }
 
   expect_failures = [
@@ -59,6 +68,7 @@ run "enums_reject_an_unlisted_value" {
     var.agw_sku_tier,
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
+    var.redis_clustering_policy,
   ]
 }
 
@@ -122,6 +132,9 @@ run "resource_ids_reject_a_bare_name" {
     redis_subnet_id    = "redis-subnet"
     agic_subnet_id     = "agic-subnet"
     bastion_subnet_id  = "AzureBastionSubnet"
+
+    storage_private_endpoint_subnet_id = "endpoints-subnet"
+    storage_private_dns_zone_id        = "privatelink.blob.core.windows.net"
   }
 
   expect_failures = [
@@ -131,6 +144,8 @@ run "resource_ids_reject_a_bare_name" {
     var.redis_subnet_id,
     var.agic_subnet_id,
     var.bastion_subnet_id,
+    var.storage_private_endpoint_subnet_id,
+    var.storage_private_dns_zone_id,
   ]
 }
 
@@ -142,6 +157,86 @@ run "name_prefix_rejects_a_trailing_hyphen" {
   }
 
   expect_failures = [var.name_prefix]
+}
+
+run "name_base_and_salt_reject_a_malformed_value" {
+  command = plan
+
+  variables {
+    name_base        = "Contoso"
+    name_suffix_salt = "rotate-2"
+  }
+
+  expect_failures = [
+    var.name_base,
+    var.name_suffix_salt,
+  ]
+}
+
+# Each name pair belongs to one side of its create flag: the plain name pins
+# what this module creates, the existing_ name picks what it attaches to. The
+# defaults create both, so only the attach-side names can be wrong here.
+run "attach_names_are_rejected_on_the_create_path" {
+  command = plan
+
+  variables {
+    create_cluster         = true
+    existing_cluster_name  = "ls-aks-prod"
+    create_keyvault        = true
+    existing_keyvault_name = "ls-kv-prod"
+  }
+
+  expect_failures = [
+    var.existing_cluster_name,
+    var.existing_keyvault_name,
+  ]
+}
+
+# blob_ttl_long_days carries two validations, and the second reads
+# blob_ttl_short_days, so each rule gets a run of its own with the other value
+# valid.
+
+run "blob_ttl_short_days_rejects_zero" {
+  command = plan
+
+  variables {
+    blob_ttl_short_days = 0
+  }
+
+  expect_failures = [var.blob_ttl_short_days]
+}
+
+run "blob_ttl_long_days_rejects_a_fraction" {
+  command = plan
+
+  variables {
+    blob_ttl_short_days = 14
+    blob_ttl_long_days  = 400.5
+  }
+
+  expect_failures = [var.blob_ttl_long_days]
+}
+
+run "blob_ttl_long_days_rejects_less_than_the_short_ttl" {
+  command = plan
+
+  variables {
+    blob_ttl_short_days = 14
+    blob_ttl_long_days  = 7
+  }
+
+  expect_failures = [var.blob_ttl_long_days]
+}
+
+run "langsmith_domain_is_required_for_dns01" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "dns01"
+    langsmith_domain       = ""
+  }
+
+  expect_failures = [var.langsmith_domain]
 }
 
 run "smithdb_cache_performance_rejects_out_of_range_values" {
@@ -262,4 +357,276 @@ run "gateway_pii_redaction_with_the_gateway_plans" {
     enable_llm_gateway           = true
     enable_gateway_pii_redaction = true
   }
+}
+# ── AKS network mode, data plane and tier ────────────────────────────────────
+
+run "aks_network_enums_reject_an_unlisted_value" {
+  command = plan
+
+  variables {
+    aks_network_mode      = "kubenet"
+    aks_network_dataplane = "calico"
+    aks_sku_tier          = "Basic"
+    aks_support_plan      = "Extended"
+  }
+
+  expect_failures = [
+    var.aks_network_mode,
+    var.aks_network_dataplane,
+    var.aks_sku_tier,
+    var.aks_support_plan,
+  ]
+}
+
+run "aks_pod_cidr_rejects_a_non_cidr" {
+  command = plan
+
+  variables {
+    aks_pod_cidr = "10.244.0.0"
+  }
+
+  expect_failures = [var.aks_pod_cidr]
+}
+
+run "aks_pod_cidr_rejects_a_host_address" {
+  command = plan
+
+  variables {
+    aks_pod_cidr = "10.244.0.5/16"
+  }
+
+  expect_failures = [var.aks_pod_cidr]
+}
+
+run "aks_pod_cidr_rejects_a_range_smaller_than_a_24" {
+  command = plan
+
+  variables {
+    aks_pod_cidr = "10.244.0.0/26"
+  }
+
+  expect_failures = [var.aks_pod_cidr]
+}
+
+# Cross-variable rules are preconditions on terraform_data.validate_network, so
+# that is the object expected to fail.
+
+run "cilium_requires_overlay_mode" {
+  command = plan
+
+  variables {
+    aks_network_mode      = "node-subnet"
+    aks_network_dataplane = "cilium"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "long_term_support_requires_the_premium_tier" {
+  command = plan
+
+  variables {
+    aks_sku_tier     = "Standard"
+    aks_support_plan = "AKSLongTermSupport"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# The three overlay preconditions live on terraform_data.validate_network with
+# the subnet capacity check, so that is the object expected to fail.
+
+run "overlay_pod_cidr_rejects_an_overlap_with_the_vnet" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+    aks_pod_cidr     = "10.0.0.0/16" # the created VNet is 10.0.0.0/17
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "overlay_pod_cidr_rejects_an_aks_reserved_range" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+    aks_pod_cidr     = "172.30.0.0/16" # clear of the VNet and the ClusterIP range; reserved by AKS
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "overlay_pod_cidr_rejects_too_small_a_range_for_the_pools" {
+  command = plan
+
+  variables {
+    aks_network_mode = "overlay"
+    aks_pod_cidr     = "10.244.0.0/22" # four /24s; the pools below reach 11 + 3 nodes with surge
+    # Pinned rather than inherited: terraform test auto-loads a terraform.tfvars
+    # from this directory when one exists, and the capacity arithmetic below
+    # assumes these pools.
+    default_node_pool_max_count = 10
+    default_node_pool_max_pods  = 60
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# The same /27 AKS subnet (27 usable addresses) is enough for the pinned pools'
+# 14 nodes in overlay mode and nowhere near the 11 x 61 + 3 x 31 addresses
+# node-subnet mode needs. Both runs together show the capacity check switches
+# with the mode.
+
+run "overlay_subnet_capacity_counts_nodes_only" {
+  command = plan
+
+  variables {
+    aks_network_mode          = "overlay"
+    aks_subnet_address_prefix = ["10.0.0.0/27"]
+    # Pinned rather than inherited: terraform test auto-loads a terraform.tfvars
+    # from this directory when one exists, and the capacity arithmetic below
+    # assumes these pools.
+    default_node_pool_max_count = 10
+    default_node_pool_max_pods  = 60
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+}
+
+run "node_subnet_capacity_counts_pods_too" {
+  command = plan
+
+  variables {
+    aks_network_mode          = "node-subnet"
+    aks_subnet_address_prefix = ["10.0.0.0/27"]
+    # Pinned rather than inherited: terraform test auto-loads a terraform.tfvars
+    # from this directory when one exists, and the capacity arithmetic below
+    # assumes these pools.
+    default_node_pool_max_count = 10
+    default_node_pool_max_pods  = 60
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# ── SmithDB gates ────────────────────────────────────────────────────────────
+# Cross-variable, so preconditions on terraform_data.validate_network.
+
+run "smithdb_gates_require_smithdb" {
+  command = plan
+
+  variables {
+    enable_smithdb            = false
+    smithdb_ingestion_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "smithdb_migration_requires_ingestion" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    smithdb_ingestion_enabled = false
+    smithdb_migration_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# ── Storage and ClusterIP rules ──────────────────────────────────────────────
+
+# A private endpoint removes the public listener the allowlist writes rules for.
+run "storage_allowlist_is_refused_with_private_endpoints" {
+  command = plan
+
+  variables {
+    storage_private_endpoint_enabled = true
+    storage_allowed_ips              = ["203.0.113.10"]
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# Both values are well formed on their own; the address is outside the range.
+run "aks_dns_service_ip_outside_the_service_cidr_is_refused" {
+  command = plan
+
+  variables {
+    aks_service_cidr   = "10.100.0.0/16"
+    aks_dns_service_ip = "10.101.0.10"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# ── Derived name lengths ─────────────────────────────────────────────────────
+# Azure's per-service name limits are preconditions on the resource group, the
+# first resource created, so an overlong name fails the plan instead of the
+# apply partway through. One run per name, since expect_failures names the
+# resource and cannot tell the preconditions apart.
+
+run "a_storage_account_name_over_24_characters_is_refused" {
+  command = plan
+
+  variables {
+    storage_account_name = "lsblobprodeastus2contoso01"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_keyvault_name_over_24_characters_is_refused" {
+  command = plan
+
+  variables {
+    create_keyvault = true
+    keyvault_name   = "ls-kv-prod-eastus2-contoso"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_postgres_name_over_63_characters_is_refused" {
+  command = plan
+
+  variables {
+    postgres_source = "external"
+    postgres_name   = "ls-postgres-production-eastus2-contoso-langsmith-self-hosted-001"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_redis_name_over_60_characters_is_refused" {
+  command = plan
+
+  variables {
+    redis_source = "external"
+    redis_name   = "ls-redis-production-eastus2-contoso-langsmith-self-hosted-001"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
+}
+
+run "a_cluster_name_over_63_characters_is_refused" {
+  command = plan
+
+  variables {
+    create_cluster = true
+    cluster_name   = "ls-aks-production-eastus2-contoso-langsmith-self-hosted-cluster1"
+  }
+
+  expect_failures = [azurerm_resource_group.resource_group]
 }
