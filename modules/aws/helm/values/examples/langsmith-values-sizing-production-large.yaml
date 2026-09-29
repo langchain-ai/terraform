@@ -215,7 +215,7 @@ smithdb:
           memory: "50Gi"
           ephemeral-storage: "1000Gi"
       volumes:
-        - name: local-ssd-storage
+        - name: cache
           emptyDir:
             sizeLimit: "1000Gi"
     autoscaling:
@@ -233,7 +233,7 @@ smithdb:
           memory: "150Gi"
           ephemeral-storage: "1000Gi"
       volumes:
-        - name: local-ssd-storage
+        - name: cache
           emptyDir:
             sizeLimit: "1000Gi"
     autoscaling:
@@ -262,7 +262,7 @@ smithdb:
           memory: "50Gi"
           ephemeral-storage: "300Gi"
       volumes:
-        - name: local-ssd-storage
+        - name: cache
           emptyDir:
             sizeLimit: "300Gi"
     autoscaling:
