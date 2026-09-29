@@ -758,6 +758,75 @@ CASES = [
         ],
     },
     {
+        # A Government subscription is invisible from the commercial cloud, so
+        # every check after this one would fail without saying why.
+        "name": "a Government tfvars against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": [
+            "[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud",
+            "az cloud set --name AzureUSGovernment && az login",
+        ],
+    },
+    {
+        "name": "a Government tfvars on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        # Open SWE on #323: the cloud can come from TF_VAR_azure_environment alone,
+        # and preflight read only terraform.tfvars, so it flagged a correctly
+        # configured Government CLI as a mismatch.
+        "name": "TF_VAR_azure_environment on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "TF_VAR_azure_environment against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
+        # The azure_environment output is the value Terraform applied with,
+        # whichever source it came from, so preflight reads it first.
+        "name": "the azure_environment output on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "the azure_environment output wins over a missing tfvar on a commercial CLI",
+        "ca_all": ALL_GOOD,
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
+        # Open SWE on #325: the output is the last apply's value, and preflight
+        # checks the next one, so a changed tfvar wins and the difference is named.
+        "name": "a tfvar changed since the last apply wins over the output, with a warning",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "public",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": ["[!] The last apply used azure_environment = public, and the configuration now says usgovernment"],
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "a commercial tfvars on the commercial CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
         "name": "a matching subscription passes without comment",
         "ca_all": ALL_GOOD,
         "reject": ["but the active CLI subscription is"],
@@ -1047,7 +1116,7 @@ def build_case(case, index):
         )
     if "amr_regions" in case:
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
-    for key in ("kv_deleted", "redis_hit", "dns_held"):
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 

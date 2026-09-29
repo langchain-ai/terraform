@@ -109,6 +109,7 @@ aks_sku_tier                = "Standard"       # uptime SLA; Free has none, Prem
 # aks_pod_cidr             = "10.244.0.0/16"   # overlay pod range; must not overlap the VNet, peers, aks_service_cidr or AKS reserved ranges
 # aks_network_dataplane    = "cilium"          # empty picks cilium in overlay mode, azure in node-subnet mode
 # aks_support_plan         = "KubernetesOfficial" # AKSLongTermSupport requires aks_sku_tier = "Premium"
+# aks_os_sku               = "Ubuntu"          # or AzureLinux; additional pools follow unless they set os_sku. README "Node OS"
 
 # Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
 # ClickHouse production sizing requests 2 vCPU / 8 GiB — fits on the default pool.
@@ -145,6 +146,7 @@ smithdb_query_enabled     = false
 # smithdb_metastore_storage_mb     = 32768
 # smithdb_storage_account_name     = "" # empty derives a globally unique name
 # smithdb_storage_container_name   = "smithdb"
+# smithdb_storage_replication_type = "LRS"   # same values and rules as storage_replication_type
 # smithdb_cache_storage_class_name   = "smithdb-cache-premium-v2"
 # smithdb_cache_disk_iops            = 7000
 # smithdb_cache_disk_throughput_mbps = 1000
@@ -221,6 +223,7 @@ keyvault_purge_protection = false   # set true for production
 blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads
 blob_ttl_long_days  = 400   # run attachments (~13 months)
+# storage_replication_type = "LRS" # LRS | ZRS (zone loss) | GRS/RAGRS (region) | GZRS/RAGZRS (both). Choose before the first apply: README "Storage redundancy"
 
 # ── LangSmith ─────────────────────────────────────────────────────────────────
 langsmith_namespace    = "langsmith"
