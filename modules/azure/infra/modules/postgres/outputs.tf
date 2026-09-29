@@ -16,7 +16,7 @@ output "private_dns_zone_id" {
 
 output "connection_url" {
   description = "The connection URL for the PostgreSQL Flexible Server"
-  value       = "postgresql://${local.postgres_login_uri_encoded}:${local.postgres_password_uri_encoded}@${azurerm_postgresql_flexible_server.db.name}.postgres.database.azure.com:5432/${var.database_name}"
+  value       = "postgresql://${local.postgres_login_uri_encoded}:${local.postgres_password_uri_encoded}@${azurerm_postgresql_flexible_server.db.fqdn}:5432/${var.database_name}"
 }
 
 # Connection URL for the standalone Fleet database. Same server, dedicated
@@ -26,5 +26,10 @@ output "connection_url" {
 output "fleet_connection_url" {
   description = "The connection URL for the standalone Fleet database (langsmith_fleet)"
   sensitive   = true
-  value       = var.enable_fleet ? "postgresql://${local.postgres_login_uri_encoded}:${local.postgres_password_uri_encoded}@${azurerm_postgresql_flexible_server.db.name}.postgres.database.azure.com:5432/langsmith_fleet?sslmode=require" : ""
+  value       = var.enable_fleet ? "postgresql://${local.postgres_login_uri_encoded}:${local.postgres_password_uri_encoded}@${azurerm_postgresql_flexible_server.db.fqdn}:5432/langsmith_fleet?sslmode=require" : ""
+}
+
+output "private_dns_zone_name" {
+  description = "Name of the private PostgreSQL DNS zone."
+  value       = azurerm_private_dns_zone.db_dns_zone.name
 }

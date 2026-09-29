@@ -33,6 +33,7 @@ help: ## Show available targets
 	@echo ""
 	@echo "    Note: make apply runs three targeted stages. ARGS is passed to each"
 	@echo "    stage, so it suits flags like -var / -parallelism / -refresh=false."
+	@echo "    Each stage prompts for confirmation; ARGS=\"-auto-approve\" skips all three."
 	@echo "    To apply a saved plan or one module, use: make tf ARGS=\"apply tfplan\""
 	@echo ""
 	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
@@ -77,10 +78,10 @@ plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.au
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
+apply: ## terraform apply (infra) — three stages, each prompts for confirmation: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS) \
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
@@ -89,7 +90,7 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.blob \
 		-target=module.keyvault
 	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
@@ -101,7 +102,7 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
 	@echo "→ Stage 3: remaining resources (DNS zone, WAF, anything left in k8s bootstrap)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS)
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
