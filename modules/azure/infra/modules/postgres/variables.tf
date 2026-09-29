@@ -110,3 +110,9 @@ variable "enable_fleet" {
   description = "Create a dedicated 'langsmith_fleet' database for standalone Fleet (chart v0.15+)."
   default     = false
 }
+
+variable "private_dns_zone_name" {
+  type        = string
+  description = "Name of the private DNS zone for the server. The root passes the name for its azure_environment; Government uses privatelink.postgres.database.usgovcloudapi.net."
+  default     = "privatelink.postgres.database.azure.com"
+}

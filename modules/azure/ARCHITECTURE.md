@@ -105,7 +105,7 @@ AKS Cluster
 └── cert-manager  (Let's Encrypt TLS)
 
 Azure
-├── Azure Blob Storage  (trace payloads — always external)
+├── Azure Blob Storage  (trace payloads — always external; LRS by default, storage_replication_type)
 └── Azure Key Vault     (secrets)
 ```
 
