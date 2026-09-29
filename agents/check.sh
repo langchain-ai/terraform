@@ -5,8 +5,9 @@
 #   bash agents/check.sh modules/aws        # the roots under one dir, terraform only
 #   bash agents/check.sh --scripts          # every tracked *.sh, no terraform
 #
-# Per root: terraform validate (init -backend=false, so no cloud creds or
-# state) and tflint with the provider's pinned ruleset. Scripts are linted
+# Per root: the tracked terraform.tfvars.* files against the declared
+# variables, terraform validate (init -backend=false, so no cloud creds or
+# state), and tflint with the provider's pinned ruleset. Scripts are linted
 # repo-wide rather than per root, so naming a directory checks terraform only.
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
@@ -111,6 +112,19 @@ for rel in "${roots[@]}"; do
   provider_dir="$REPO_ROOT/modules/$provider"
 
   echo "== check $rel"
+
+  # Terraform only warns on a tfvars key no variable declares, so a stale key in
+  # an example passes validate. The root's own _tfvars.sh is the checker the
+  # scripts use on the files they write.
+  if [ -f "$dir/scripts/_tfvars.sh" ]; then
+    while IFS= read -r tfvars; do
+      [ -n "$tfvars" ] || continue
+      echo "   ${tfvars#"$rel/"}"
+      (source "$dir/scripts/_tfvars.sh" "$dir" && _tfvars_check_file "$REPO_ROOT/$tfvars") || status=1
+    done <<EOF
+$(git -C "$REPO_ROOT" ls-files "$rel/terraform.tfvars.*")
+EOF
+  fi
 
   if [ ! -d "$dir/.terraform" ]; then
     (cd "$dir" && terraform init -backend=false -input=false -no-color) || {

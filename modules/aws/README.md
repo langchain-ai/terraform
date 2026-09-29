@@ -132,7 +132,8 @@ aws/
 │   ├── backend.tf          ← Remote state backend (configure before init)
 │   ├── versions.tf         ← Required provider versions
 │   ├── scripts/
-│   │   ├── _common.sh          ← Shared helpers (tfvar parsing, colors)
+│   │   ├── _common.sh          ← Shared helpers (colors, AWS wrappers; sources _tfvars.sh)
+│   │   ├── _tfvars.sh          ← tfvars readers and TF_VAR_ exports; fails on an undeclared name
 │   │   ├── manage-ssm.sh       ← Interactive SSM parameter manager
 │   │   ├── migrate-ssm.sh      ← Migrate SSM params from legacy paths
 │   │   ├── preflight.sh        ← Pre-Terraform AWS permission checks
@@ -933,11 +934,18 @@ These scripts are not exposed as `make` targets but are used internally by the s
 ### `infra/scripts/_common.sh`
 
 Shared library sourced by scripts that need its shared helpers. Provides:
-- `_parse_tfvar <key>` — extracts a value from `terraform.tfvars` using sed
-- `_tfvar_is_true <key>` — returns 0 if a variable is set to `true` in tfvars
+- `_parse_tfvar <key>` and `_tfvar_is_true <key>`, from `_tfvars.sh`
 - `INFRA_DIR` — absolute path to `infra/`, resolved from the sourcing script's location
 - Terminal color helpers: `_green`, `_red`, `_yellow`, `_bold`
 - Status output helpers: `pass`, `fail`, `warn`, `skip`, `info`, `action`, `header` (used by `status.sh`)
+
+### `infra/scripts/_tfvars.sh`
+
+The one set of `terraform.tfvars` helpers. `_common.sh` sources it, and so do the scripts that must not load the rest of `_common.sh`. Every helper fails on a name that no variable in `infra/*.tf` declares:
+- `_parse_tfvar <key>` extracts a value from `terraform.tfvars`.
+- `_tfvar_is_true <key>` returns 0 if a variable is set to `true`.
+- `_export_tf_var <name> <value>` exports `TF_VAR_<name>`.
+- `_tfvars_check_file <file>` fails on any top-level key in a generated tfvars file that is not a declared variable.
 
 ### `infra/scripts/migrate-ssm.sh`
 

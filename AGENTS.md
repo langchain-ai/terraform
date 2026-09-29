@@ -59,41 +59,31 @@ before the PR does, not a separate standard.
     passes a module gated on a variable nothing sets, which is the gap this
     closes. Suites are `modules/<provider>/infra/tests/*.tftest.hcl`; a new flag
     or gate needs a run there in both directions.
-  - Variable, tfvars, or `TF_VAR_` name change → `bash agents/contracts.sh
-    modules/<provider>`: every tfvars key and `TF_VAR_` name the provider's
-    shell scripts read, generate, or export has to be a variable that
-    `infra/variables.tf` declares. Reads files only, so it needs no terraform
-    and returns instantly. One direction: a name in use must be declared, but a
-    declared variable that nothing uses is fine — most carry defaults and
-    correctly appear in no example. Nothing else catches this. Terraform warns
-    and exits 0 on an undeclared tfvars key, ignores an undeclared `TF_VAR_*`
-    with no output at all, and an accessor that misses just falls back to its
-    default, so a half-finished rename reverts the setting in silence. Your own
-    gitignored `infra/terraform.tfvars` is out of scope: CI never sees it, so a
-    stray key there stays a terraform warning nothing fails on. Exit 1 is an
-    undeclared name; exit 2 means the check could not run (a renamed directory,
-    unbalanced braces, a tfvars heredoc whose keys stopped coming out, an
-    accessor helper it can neither follow nor name) and needs a fix in
-    `contracts.sh` itself, never a workaround in the provider script.
+  - Script that reads, writes, or exports a tfvars name → use
+    `modules/<provider>/infra/scripts/_tfvars.sh`, never a new reader copy:
+    `_parse_tfvar` and `_tfvar_is_true` to read, `_export_tf_var` to export,
+    and `_tfvars_check_file` on any file the script generates. Each one fails
+    on a name `infra/*.tf` does not declare. Terraform itself only warns on an
+    undeclared tfvars key and ignores an undeclared `TF_VAR_*`, so a
+    half-finished rename would otherwise revert the setting in silence.
+    `check.sh` runs `_tfvars_check_file` over the tracked
+    `terraform.tfvars.*` files in each root.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries
   pre-existing warnings. Override for a one-off run with
   `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
   needs cloud creds and state — never run it without explicit user approval.
-- **CI runs the same scripts**, one job per provider for each of `check.sh`,
-  `plan-tests.sh`, and `contracts.sh`, plus one for the scripts, so a green
-  local run is a green PR. On a PR, only the providers whose
-  `modules/<provider>/` the PR touches get check and plan-tests legs; a change
+- **CI runs the same scripts**, a check job and a plan-tests job per provider
+  plus one for the scripts, so a green local run is a green PR. On a PR, only
+  the providers whose `modules/<provider>/` the PR touches get legs; a change
   to `agents/` or the workflow runs them all, and a push to `main` always does.
-  The contracts legs read files only, so they run for every provider, ocp
-  included, on every run. If you change what a gate covers, change the script
-  rather than the workflow. A new root under an existing `modules/<provider>/`
-  needs no workflow edit; a brand-new provider directory needs an entry in
-  `PROVIDERS` in `.github/scripts/changed-providers.sh`, a `matrix.provider`
-  entry in the contracts job in `.github/workflows/checks.yaml`, and a test
-  suite — `plan-tests.sh` exits 2 on a provider that has neither a suite nor
-  an entry in its `SKIP_PROVIDERS`.
+  If you change what the gate covers, change `agents/check.sh` or
+  `agents/plan-tests.sh` rather than the workflow. A new root under an existing
+  `modules/<provider>/` needs no workflow edit; a brand-new provider directory
+  needs an entry in `PROVIDERS` in `.github/scripts/changed-providers.sh`, and
+  a test suite — `plan-tests.sh` exits 2 on a provider that has neither a suite
+  nor an entry in its `SKIP_PROVIDERS`.
 - **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
   initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
   forms slip in from model output unnoticed.
