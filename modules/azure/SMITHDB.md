@@ -174,7 +174,11 @@ The component rows are per replica, as CPU / memory / cache volume:
   values with `terraform -chdir=infra output smithdb_quota_extra`.
 
 A wrapper root that calls this module must declare `smithdb_sizing` and pass it
-through, or `make smithdb-configure` changes nothing.
+through, or `make smithdb-configure` changes nothing. It must also re-export the
+`smithdb_helm_values` output, which `init-values.sh` reads through
+`LANGSMITH_INFRA_DIR`. Without it, `init-values.sh` stops when SmithDB is on.
+`make smithdb-status` also reads `smithdb_sizing` and
+`smithdb_metastore_sku_name`, so re-export those too.
 
 ## Staged rollout
 
