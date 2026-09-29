@@ -37,3 +37,11 @@ output "subnet_agic_id" {
   description = "ID of the Application Gateway subnet (empty string when enable_agic = false)"
   value       = var.enable_agic ? azurerm_subnet.subnet_agic[0].id : ""
 }
+
+# The VNet's address space, whichever path produced it, so the root module can
+# check the overlay pod range against it without knowing which path ran.
+output "address_space" {
+  description = "Address prefixes of the VNet the subnets live in: the created VNet's, or the existing VNet's when create_vnet = false"
+  # address_space is a set on the resource; the root concatenates it with lists.
+  value = var.create_vnet ? tolist(one(azurerm_virtual_network.vnet[*].address_space)) : null
+}

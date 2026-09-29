@@ -23,8 +23,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${LANGSMITH_INFRA_DIR:-$SCRIPT_DIR/../../infra}"
 source "$SCRIPT_DIR/../../infra/scripts/_common.sh"
 
-RELEASE_NAME="${RELEASE_NAME:-langsmith}"
-NAMESPACE="${NAMESPACE:-langsmith}"
+# RELEASE_NAME and NAMESPACE from the environment if set, else
+# langsmith_release_name and langsmith_namespace from terraform.tfvars, else
+# langsmith: the same order deploy.sh uses.
+RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
+NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 
 echo ""
 echo "══════════════════════════════════════════════════════"

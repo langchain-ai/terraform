@@ -71,6 +71,12 @@ run "envoy_ingress_plans_the_gateway_delete" {
     )
     error_message = "The Gateway delete triggers do not hold the project, region, cluster, and Gateway name"
   }
+
+  # v1.2.8 has the fixes for CVE-2025-24030 and CVE-2025-25294.
+  assert {
+    condition     = helm_release.envoy_gateway[0].version == "v1.2.8"
+    error_message = "The Envoy Gateway chart is not pinned to v1.2.8"
+  }
 }
 
 run "other_ingress_plans_no_gateway_delete" {
