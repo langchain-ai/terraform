@@ -121,7 +121,8 @@ resource "azurerm_kubernetes_cluster" "customer" {
   // passed into k8s-bootstrap as variables. Azure returns that empty for an
   // AAD-only cluster and there is no kubelogin exec path, so disabling local
   // accounts is a hard blocker.
-  local_account_disabled = false
+  local_account_disabled            = false
+  role_based_access_control_enabled = true
 
   default_node_pool {
     name                 = "default"

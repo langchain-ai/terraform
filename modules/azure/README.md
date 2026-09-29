@@ -49,9 +49,14 @@ existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
 # Required, not optional: the cluster's nodes already run in an existing subnet,
 # and a subnet Terraform carves could never be one of them.
 create_vnet        = false
+vnet_id            = "/subscriptions/.../virtualNetworks/<vnet>"
 aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
 postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
 redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
+
+# The ClusterIP range the cluster was created with, outside the VNet:
+# az aks show -n <cluster> -g <rg> --query networkProfile.serviceCidr -o tsv
+aks_service_cidr   = "<service-cidr>"
 ```
 
 To test this path without a customer cluster, [`test/existing-aks-cluster/`](test/existing-aks-cluster/) builds a cluster and network of this shape in its own state and prints the matching tfvars.
