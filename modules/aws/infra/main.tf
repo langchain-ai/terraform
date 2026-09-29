@@ -12,6 +12,8 @@ provider "aws" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -348,6 +350,53 @@ resource "aws_iam_role_policy" "langsmith_s3" {
           module.storage.bucket_arn,
           "${module.storage.bucket_arn}/*",
         ]
+      }
+    ]
+  })
+}
+
+# Lets backend/platformBackend/queue/etc. pods (all sharing the langsmith IRSA
+# role) call Bedrock models directly via workload identity instead of static
+# AWS keys. Not scoped to specific model IDs, since self-hosted customers pick
+# models at runtime via LangSmith config, not Terraform.
+#
+# foundation-model is granted across all regions (not just var.region): a
+# cross-region inference profile (the "us."/"global." prefix on model IDs like
+# us.anthropic.claude-opus-5) fans requests out to underlying foundation models
+# in whichever region it lands the request, e.g. us-east-1, even when called
+# from us-west-2 — confirmed by AccessDeniedException naming a foundation-model
+# ARN outside var.region. inference-profile is also wildcarded across regions
+# for the same reason (covers "global." profiles alongside geography-scoped
+# ones like "us.", "eu.").
+resource "aws_iam_role_policy" "langsmith_bedrock" {
+  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+
+  name = "langsmith-bedrock-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*",
+        ]
+      },
+      {
+        Sid    = "BedrockListModels"
+        Effect = "Allow"
+        Action = [
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -1162,4 +1211,54 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
   })
 
   depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
+}
+
+# ── Long-lived-stream timeout override ───────────────────────────────────────
+# Envoy Gateway applies an effective 15s response timeout to the LangSmith
+# chart's own catch-all HTTPRoute (chart's http_route.yaml has no timeouts
+# field and no way to set one via values). Several SSE/streaming surfaces
+# regularly run longer than that, so Envoy resets the HTTP/2 stream mid-response
+# (response_flags=UT, response_code_details=response_timeout) even though the
+# backend already returned 200 and is still streaming — the browser sees
+# net::ERR_HTTP2_PROTOCOL_ERROR. Covers:
+#   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
+#     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
+#   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#
+# A second HTTPRoute on the same Gateway+hostname with more specific path
+# matches takes precedence over the chart's "/" catch-all per Gateway API
+# merge/precedence rules (longer prefix wins), without touching the chart's
+# own route. timeouts.request: 0s disables the request timeout for just
+# these path prefixes; every other path keeps Envoy Gateway's default.
+#
+# kubectl_manifest (not kubernetes_manifest) for the same reason as the
+# SmithDB Karpenter CRs above: it defers schema validation to apply time, so
+# terraform plan succeeds even before the Gateway API CRDs are installed
+# (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+resource "kubectl_manifest" "fleet_stream_httproute" {
+  count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "langsmith-fleet-streams"
+      namespace = var.langsmith_namespace
+    }
+    spec = {
+      parentRefs = [{ name = "langsmith-gateway" }]
+      hostnames  = [var.langsmith_domain]
+      rules = [{
+        matches = [
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
+          { path = { type = "PathPrefix", value = "/api-host/v2" } },
+        ]
+        backendRefs = [{ name = "langsmith-frontend", port = 80 }]
+        timeouts    = { request = "0s" }
+      }]
+    }
+  })
+
+  depends_on = [module.k8s_bootstrap]
 }
