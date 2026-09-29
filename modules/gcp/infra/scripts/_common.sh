@@ -9,38 +9,20 @@
 # Usage: source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 #
 # Provides:
-#   _parse_tfvar <key>        — Read a value from terraform.tfvars
-#   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _parse_tfvar <key>        — Read a value from terraform.tfvars (from _tfvars.sh)
+#   _tfvar_is_true <key>      — Return 0 if tfvar == true (from _tfvars.sh)
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
 # ── Resolve INFRA_DIR ────────────────────────────────────────────────────────
 # Assumes this script lives in infra/scripts/. Consumers that live elsewhere
-# should override INFRA_DIR after sourcing.
+# should set INFRA_DIR before sourcing: the tfvars readers bind to it here.
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 
-# ── terraform.tfvars parser ──────────────────────────────────────────────────
-# Values are cut at the closing quote (quoted strings, which may contain a
-# literal #) or at an inline # (bare booleans and numbers). The previous
-# grep/sed pair kept trailing comments, so `enable_smithdb = true  # step 9`
-# compared as "true#step9" and read as false. Keep this function identical to
-# the copies in helm/scripts/*.sh and infra/scripts/preflight.sh.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
-
-# Parse a boolean tfvar (unquoted true/false). Returns 0 for true, 1 for false.
-_tfvar_is_true() {
-  [[ "$(_parse_tfvar "$1")" == "true" ]]
-}
+# ── terraform.tfvars helpers ─────────────────────────────────────────────────
+# _parse_tfvar, _tfvar_is_true, and the rest: see _tfvars.sh.
+source "$_COMMON_DIR/_tfvars.sh" "$INFRA_DIR"
 
 # ── Color helpers ────────────────────────────────────────────────────────────
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }

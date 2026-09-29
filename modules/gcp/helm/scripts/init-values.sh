@@ -53,25 +53,8 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 
-# ── tfvars parser ─────────────────────────────────────────────────────────────
-# Values are cut at the closing quote, or at an inline # for bare booleans and
-# numbers. Without that, `enable_smithdb = true  # step 9` reads as "true#step9"
-# and every gate below silently stays off. Keep identical to the other copies.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
-_tfvar_is_true() {
-  local val
-  val=$(_parse_tfvar "$1")
-  [[ "$val" == "true" ]]
-}
+# ── tfvars helpers ────────────────────────────────────────────────────────────
+source "$INFRA_DIR/scripts/_tfvars.sh" "$INFRA_DIR"
 
 # ── Parse terraform.tfvars ────────────────────────────────────────────────────
 if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then

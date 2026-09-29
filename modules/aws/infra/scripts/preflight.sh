@@ -65,14 +65,13 @@ check_denied() { echo "$1" | grep -Eqi "$DENY_RE"; }
 # These run AFTER 'terraform apply' but BEFORE 'make deploy'.
 # They are invoked by the routing block below and exit the script when done.
 
-# Parse a value from terraform.tfvars for a given key.
-# Usage: _tfvars_get <key> <tfvars_path>
-_tfvars_get() {
-  local key="$1" file="$2"
-  grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null \
-    | head -1 \
-    | sed -E 's/^[^=]+=//; s/[[:space:]]*//g; s/^"//; s/"$//'
-}
+# Parse a value from terraform.tfvars for a given key: empty when it is unset,
+# fatal when infra/ declares no such variable. _tfvars.sh rather than
+# _common.sh, whose info and fail would replace the helpers above.
+# Usage: _tfvars_get <key>
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_tfvars.sh" \
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_tfvars_get() { _parse_tfvar "$1" || [[ $? -eq 1 ]]; }
 
 # Check that all required SSM params exist under /langsmith/{prefix}-{env}/
 run_ssm_checks() {
@@ -83,8 +82,8 @@ run_ssm_checks() {
 
   # Derive the SSM path prefix from tfvars
   local name_prefix environment ssm_path
-  name_prefix=$(_tfvars_get "name_prefix" "$tfvars")
-  environment=$(_tfvars_get "environment" "$tfvars")
+  name_prefix=$(_tfvars_get "name_prefix")
+  environment=$(_tfvars_get "environment")
 
   if [[ -z "$name_prefix" || -z "$environment" ]]; then
     error "Could not read 'name_prefix' or 'environment' from terraform.tfvars — cannot construct SSM path."
@@ -141,7 +140,7 @@ run_post_infra_checks() {
   # secrets-status.sh, manage-ssm.sh, etc.). Falls back to env vars and
   # `aws configure` when tfvars is absent or has no `region`.
   local region
-  region=$(_tfvars_get "region" "$tfvars")
+  region=$(_tfvars_get "region")
   region=${region:-${AWS_REGION:-}}
   region=${region:-$(aws configure get region 2>/dev/null || true)}
   region=${region:-${AWS_DEFAULT_REGION:-us-east-2}}
@@ -160,8 +159,8 @@ run_post_infra_checks() {
 
   # Verify the context name references the expected cluster (name_prefix + environment)
   local name_prefix environment
-  name_prefix=$(_tfvars_get "name_prefix" "$tfvars")
-  environment=$(_tfvars_get "environment" "$tfvars")
+  name_prefix=$(_tfvars_get "name_prefix")
+  environment=$(_tfvars_get "environment")
   local expected_fragment="${name_prefix}-${environment}"
   if [[ -n "$expected_fragment" ]] && ! echo "$ctx" | grep -q "$expected_fragment"; then
     warning "Context '$ctx' does not contain '$expected_fragment' — verify you are targeting the correct cluster."
@@ -220,8 +219,8 @@ run_post_infra_checks() {
   # ── 6. TLS readiness ────────────────────────────────────────────────────────
   info "--- TLS Configuration ---"
   local tls_source langsmith_domain
-  tls_source=$(_tfvars_get "tls_certificate_source" "$tfvars")
-  langsmith_domain=$(_tfvars_get "langsmith_domain" "$tfvars")
+  tls_source=$(_tfvars_get "tls_certificate_source")
+  langsmith_domain=$(_tfvars_get "langsmith_domain")
 
   if [[ "$tls_source" == "acm" ]]; then
     if [[ -z "$langsmith_domain" ]]; then
@@ -257,7 +256,7 @@ if [[ "$MODE" == "ssm-only" ]]; then
   # Resolve region — terraform.tfvars is the source of truth (matches
   # secrets-status.sh, manage-ssm.sh, etc.). Falls back to env vars and
   # `aws configure` when tfvars has no `region`.
-  _REGION=$(_tfvars_get "region" "$_TFVARS")
+  _REGION=$(_tfvars_get "region")
   _REGION=${_REGION:-${AWS_REGION:-}}
   _REGION=${_REGION:-$(aws configure get region 2>/dev/null || true)}
   _REGION=${_REGION:-${AWS_DEFAULT_REGION:-us-east-2}}
@@ -357,7 +356,7 @@ USER_ARN=$(aws sts get-caller-identity --query Arn --output text)
 # Resolve region — terraform.tfvars is the source of truth (matches
 # secrets-status.sh, manage-ssm.sh, etc.). Falls back to env vars and
 # `aws configure` when tfvars has no `region`.
-REGION=$(_tfvars_get "region" "$TFVARS")
+REGION=$(_tfvars_get "region")
 REGION=${REGION:-${AWS_REGION:-}}
 REGION=${REGION:-$(aws configure get region 2>/dev/null || true)}
 REGION=${REGION:-${AWS_DEFAULT_REGION:-us-east-2}}

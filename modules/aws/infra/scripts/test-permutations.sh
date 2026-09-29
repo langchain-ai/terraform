@@ -146,6 +146,7 @@ _write_override() {
 # Override file for permutation testing. Deleted after each run.
 $content
 EOF
+  _tfvars_check_file "$OVERRIDE_FILE" || exit 1
   _step "Wrote permutation.auto.tfvars"
   [[ "$DRY_RUN" == "true" ]] && cat "$OVERRIDE_FILE" | sed 's/^/    /'
 }

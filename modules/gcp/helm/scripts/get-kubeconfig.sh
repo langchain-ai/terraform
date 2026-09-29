@@ -19,7 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$SCRIPT_DIR/../../infra"
-TFVARS="$INFRA_DIR/terraform.tfvars"
+source "$INFRA_DIR/scripts/_tfvars.sh" "$INFRA_DIR"
 
 CLUSTER_NAME="${1:-}"
 REGION="${2:-}"
@@ -29,10 +29,10 @@ if [[ -z "$CLUSTER_NAME" ]]; then
   CLUSTER_NAME="$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null || true)"
 fi
 if [[ -z "$REGION" ]]; then
-  REGION="$(awk -F= '/^[[:space:]]*region[[:space:]]*=/{gsub(/[ "]/, "", $2); print $2; exit}' "$TFVARS" 2>/dev/null || true)"
+  REGION="$(_parse_tfvar region)"
 fi
 if [[ -z "$PROJECT" ]]; then
-  PROJECT="$(awk -F= '/^[[:space:]]*project_id[[:space:]]*=/{gsub(/[ "]/, "", $2); print $2; exit}' "$TFVARS" 2>/dev/null || true)"
+  PROJECT="$(_parse_tfvar project_id)"
 fi
 REGION="${REGION:-us-west2}"
 

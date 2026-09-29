@@ -30,6 +30,9 @@ export AWS_PAGER=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$SCRIPT_DIR/../../infra"
 source "$INFRA_DIR/scripts/_common.sh"
+# The cert ARN is written back into terraform.tfvars at the end. Check the name
+# before issuing a certificate, not after.
+_tfvar_declared acm_certificate_arn || exit 1
 
 echo ""
 echo "══════════════════════════════════════════════════════"

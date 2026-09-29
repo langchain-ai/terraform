@@ -26,64 +26,34 @@ export AWS_PAGER=""
 # setup-env.sh lives in infra/scripts/ but terraform.tfvars lives in infra/.
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
-# ── terraform.tfvars parser ───────────────────────────────────────────────────
-# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
-# apply-eso.sh and deploy.sh decide whether the sandbox secrets are expected by
-# calling the _common.sh copy, so a gate that disagrees leaves the
-# ExternalSecret pointing at an SSM parameter nothing created, which fails the
-# whole langsmith-config sync. _common.sh is not sourced here because it also
-# defines pass/info/fail and _aws, which this script must not leak into the
-# caller's interactive shell.
-_parse_tfvar() {
-  local key="$1"
-  local tfvars_file="$_SETUP_DIR/terraform.tfvars"
-  local raw val
-  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
-  [[ -n "$raw" ]] || return 1
-  # Quoted string: key = "value"
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  if [[ -z "$val" ]]; then
-    # Unquoted value: key = true / key = 42 / key = {} / key = ["m5.2xlarge"]
-    # Strip any trailing `# comment` BEFORE collapsing whitespace, otherwise
-    # `enable_fleet = true # note` parses to `true#note` and breaks _tfvar_is_true
-    # (migration issue #1).
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"[]')
-  fi
-  [[ -n "$val" ]] || return 1
-  echo "$val"
-}
-
-# Returns 0 if KEY = true or "true" in terraform.tfvars.
-_tfvar_is_true() {
-  local val
-  val=$(_parse_tfvar "$1") || return 1
-  [[ "$val" == "true" ]]
-}
+# ── terraform.tfvars helpers ──────────────────────────────────────────────────
+# _tfvars.sh, not _common.sh: _common.sh also defines pass/info/fail and _aws,
+# which this script must not leak into the caller's interactive shell. The
+# readers are the ones _common.sh sources, so the sandbox gate below agrees with
+# the one apply-eso.sh and deploy.sh use to decide which SSM parameters the
+# ExternalSecret expects.
+source "$_SETUP_DIR/scripts/_tfvars.sh" "$_SETUP_DIR"
 
 # ── AWS ───────────────────────────────────────────────────────────────────────
 # Ensure AWS_PROFILE or AWS credentials are set before sourcing.
 # Region is read from terraform.tfvars if present; falls back to AWS_REGION env var.
-_tfvars_region=$(grep -E '^\s*region\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _tfvars_region=""
+_tfvars_region=$(_parse_tfvar region) || _tfvars_region=""
 export AWS_REGION="${_tfvars_region:-${AWS_REGION:-us-west-2}}"
 
 # ── Environment & tagging ─────────────────────────────────────────────────────
 # Read environment from terraform.tfvars first — only fall back to env var / default
 # if not set there. This prevents silently overriding "prod" in tfvars with "dev".
-_tfvars_env=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _tfvars_env=""
-export TF_VAR_environment="${_tfvars_env:-${LANGSMITH_ENV:-dev}}"
-export TF_VAR_owner="${LANGSMITH_OWNER:-}"
-export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
-export TF_VAR_region="$AWS_REGION"
+_tfvars_env=$(_parse_tfvar environment) || _tfvars_env=""
+_export_tf_var environment "${_tfvars_env:-${LANGSMITH_ENV:-dev}}"
+_export_tf_var owner "${LANGSMITH_OWNER:-}"
+_export_tf_var cost_center "${LANGSMITH_COST_CENTER:-}"
+_export_tf_var region "$AWS_REGION"
 
 # ── SSM path prefix ───────────────────────────────────────────────────────────
 # Reads name_prefix and environment from terraform.tfvars to build the SSM path.
 # All secrets are stored under: /langsmith/{name_prefix}-{environment}/
-_name_prefix=$(grep -E '^\s*name_prefix\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
-_environment=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-  | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _environment="${LANGSMITH_ENV:-dev}"
+_name_prefix=$(_parse_tfvar name_prefix) || _name_prefix=""
+_environment=$(_parse_tfvar environment) || _environment="${LANGSMITH_ENV:-dev}"
 _enable_sandboxes=false
 if _tfvar_is_true "enable_sandboxes"; then
   _enable_sandboxes=true
@@ -92,7 +62,7 @@ if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
   return 1
 fi
-export TF_VAR_name_prefix="${_name_prefix}"
+_export_tf_var name_prefix "${_name_prefix}"
 
 _ssm_prefix="/langsmith/${_name_prefix}-${_environment}"
 
@@ -186,6 +156,7 @@ _ssm_secret() {
   local generator="$4"
   local prompt_text="$5"
   local silent="${6:-true}"
+  _tfvar_declared "${varname#TF_VAR_}" || return
 
   local val=""
   local _path="${_ssm_prefix}/${ssm_name}"
@@ -325,7 +296,7 @@ _ed25519_private_jwk_gen() {
 }
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
-export TF_VAR_postgres_username="${LANGSMITH_PG_USER:-langsmith}"
+_export_tf_var postgres_username "${LANGSMITH_PG_USER:-langsmith}"
 
 # Hex is RDS-safe (no / @ " ' space) and URI-safe. Terraform still urlencodes
 # the password in connection URLs for env/SSM overrides that use other symbols.
@@ -456,7 +427,7 @@ echo ""
 echo "  name_prefix       = ${_name_prefix:-(empty)}"
 echo "  environment       = $_environment"
 echo "  region            = $AWS_REGION"
-echo "  postgres_username = $TF_VAR_postgres_username"
+echo "  postgres_username = ${TF_VAR_postgres_username:-}"
 echo "  postgres_password = (hidden — SSM: ${_ssm_prefix}/postgres-password)"
 echo "  redis_auth_token  = (hidden — SSM: ${_ssm_prefix}/redis-auth-token)"
 if [[ "$_enable_sandboxes" == "true" ]]; then

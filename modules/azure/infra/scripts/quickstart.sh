@@ -308,24 +308,28 @@ _load_state() {
 # inside the value (_common.sh's _parse_tfvar strips them). Trailing comments are
 # allowed: the writer puts one on amr_sku, which a re-run could not read back.
 _tfvar() {
+  _tfvar_declared "$1" || return
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\"[[:space:]]*\(#.*\)\{0,1\}\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
 # Read an unquoted tfvar value. _tfvar matches quoted values only, so the bare
 # booleans the wizard does not write come back empty from it however they are set.
 _tfvar_bare() {
+  _tfvar_declared "$1" || return
   sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^\"#[:space:]]*\).*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
 # Read a list-valued tfvar back as its whole assignment line, which is the form
 # the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
 _tfvar_line() {
+  _tfvar_declared "$1" || return
   sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
 }
 
 # Whether a key is assigned at all: _tfvar returns "" for both an absent key and
 # one assigned "".
 _tfvar_set() {
+  _tfvar_declared "$1" || return
   grep -qE "^[[:space:]]*$1[[:space:]]*=" "$OUTPUT" 2>/dev/null
 }
 
@@ -1612,10 +1616,10 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
        # more discarded hand-edit: it turns an attached deployment greenfield,
        # and the next plan builds a second cluster and vault beside the live ones.
        _attached=""
-       if grep -qE '^[[:space:]]*create_cluster[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+       if [[ "$(_tfvar_bare create_cluster)" == "false" ]]; then
          _attached="an AKS cluster"
        fi
-       if grep -qE '^[[:space:]]*create_keyvault[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+       if [[ "$(_tfvar_bare create_keyvault)" == "false" ]]; then
          _attached="${_attached:+${_attached} and }a Key Vault"
        fi
        if [[ -n "$_attached" ]]; then
@@ -2023,6 +2027,12 @@ TFVARS
   printf "%b" "$SECURITY_BLOCK" >> "$OUTPUT"
 fi
 
+# Checked before the carried-over keys go in: those are the operator's own, and
+# a stale one there is theirs to fix, not a bug in this writer. The append still
+# runs on a failure, so the exit below loses none of them.
+_writer_ok=true
+_tfvars_check_file "$OUTPUT" || _writer_ok=false
+
 if [[ -n "$PRESERVED" ]]; then
   # Quoted delimiter and a literal printf: these lines come out of a file on
   # disk and are never expanded on the way through.
@@ -2036,6 +2046,7 @@ if [[ -n "$PRESERVED" ]]; then
 TFVARS
   printf '%s' "$PRESERVED" >> "$OUTPUT"
 fi
+[[ "$_writer_ok" == "true" ]] || exit 1
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Done

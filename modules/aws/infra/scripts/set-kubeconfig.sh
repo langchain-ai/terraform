@@ -22,9 +22,12 @@ if [[ -z "${1:-}" ]]; then
     echo "Error: terraform.tfvars not found at $TFVARS" >&2
     return 1
   fi
-  NAME_PREFIX=$(grep -E '^\s*name_prefix\s*=' "$TFVARS" | head -1 | awk -F'"' '{print $2}')
-  ENVIRONMENT=$(grep -E '^\s*environment\s*=' "$TFVARS" | head -1 | awk -F'"' '{print $2}')
-  REGION=$(grep -E '^\s*region\s*=' "$TFVARS" | head -1 | awk -F'"' '{print $2}')
+  # _tfvars.sh alone: this runs in the caller's shell, which should not
+  # collect the rest of _common.sh.
+  source "$SCRIPT_DIR/_tfvars.sh" "$SCRIPT_DIR/.."
+  NAME_PREFIX=$(_parse_tfvar name_prefix)
+  ENVIRONMENT=$(_parse_tfvar environment)
+  REGION=$(_parse_tfvar region)
   CLUSTER_NAME="${NAME_PREFIX}-${ENVIRONMENT}-eks"
 else
   CLUSTER_NAME="${1}"

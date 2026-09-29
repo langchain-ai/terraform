@@ -112,22 +112,17 @@ done
 # Keep in sync with local.name_base / local.name_suffix in infra/main.tf.
 TFVARS="${INFRA_DIR}/terraform.tfvars"
 
-# Read a tfvars value, quoted or bare. Mirrors _parse_tfvar in _common.sh, which
-# preflight.sh deliberately does not source. Non-zero when absent or empty.
-_tfvar() {
-  local raw val
-  [ -f "$TFVARS" ] || return 1
-  raw=$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1) || true
-  [ -n "$raw" ] || return 1
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  [ -n "$val" ] || val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
-  [ -n "$val" ] || return 1
-  echo "$val"
-}
+# _parse_tfvar and the name guard come from _tfvars.sh. _common.sh, which
+# would replace pass/fail/warn above, is deliberately not sourced.
+source "${INFRA_DIR}/scripts/_tfvars.sh" "$INFRA_DIR"
+# The names the inline readers below match literally, checked once here.
+for _literal in azure_environment additional_node_pools location subscription_id langsmith_license_key; do
+  _tfvar_declared "$_literal" || exit 1
+done
 
 # Terraform deploys to the tfvars subscription_id; every az call below reads the
 # active CLI one. If they differ, the report describes the wrong subscription.
-TFVARS_SUB=$(_tfvar subscription_id || echo "")
+TFVARS_SUB=$(_parse_tfvar subscription_id || echo "")
 if [ -n "${SUB_ID:-}" ] && [ -n "$TFVARS_SUB" ] && [ "$TFVARS_SUB" != "$SUB_ID" ]; then
   fail "terraform.tfvars sets subscription_id = ${TFVARS_SUB}, but the active CLI subscription is ${SUB_ID}. Terraform would deploy to the first; the checks below describe the second. Run: az account set --subscription ${TFVARS_SUB}"
 fi
@@ -150,7 +145,7 @@ for _auto in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
   _cloud_configured=$(_cloud_in_file "$_auto")
   [ -n "$_cloud_configured" ] && break
 done
-[ -n "$_cloud_configured" ] || _cloud_configured=$(_tfvar azure_environment || true)
+[ -n "$_cloud_configured" ] || _cloud_configured=$(_parse_tfvar azure_environment || true)
 [ -n "$_cloud_configured" ] || _cloud_configured="${TF_VAR_azure_environment:-}"
 _cloud_applied=""
 if command -v terraform >/dev/null 2>&1; then
@@ -177,8 +172,8 @@ fi
 # identifier is name_prefix's legacy name. Track which was read so warnings name
 # a key the user actually has.
 NAME_KEY="name_prefix"
-NAME_PREFIX=$(_tfvar name_prefix || echo "")
-if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_tfvar identifier); then
+NAME_PREFIX=$(_parse_tfvar name_prefix || echo "")
+if [ -z "$NAME_PREFIX" ] && NAME_PREFIX=$(_parse_tfvar identifier); then
   NAME_KEY="identifier"
 fi
 
@@ -187,12 +182,12 @@ fi
 NAME_SUFFIX=""
 [ -n "$NAME_PREFIX" ] && NAME_SUFFIX="-${NAME_PREFIX#-}"
 
-UNIQUE_NAMES=$(_tfvar unique_resource_names || echo "false")
+UNIQUE_NAMES=$(_parse_tfvar unique_resource_names || echo "false")
 if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"; fi
 # name_base overrides the ls/langsmith switch outright, same as main.tf.
-NAME_BASE=$(_tfvar name_base || echo "$NAME_BASE")
+NAME_BASE=$(_parse_tfvar name_base || echo "$NAME_BASE")
 
-RESOURCE_GROUP_NAME=$(_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
+RESOURCE_GROUP_NAME=$(_parse_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
 
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
@@ -261,7 +256,7 @@ esac
 # The deployer's Key Vault Secrets Officer grant is the only assignment whose
 # target is not a service principal, so it is the only one a ServicePrincipal pin
 # can reject. Mirrors main.tf: explicit wins, null follows create_keyvault.
-KV_ADMIN_GRANT=$(_tfvar keyvault_manage_terraform_admin_assignment || _tfvar create_keyvault || echo "true")
+KV_ADMIN_GRANT=$(_parse_tfvar keyvault_manage_terraform_admin_assignment || _parse_tfvar create_keyvault || echo "true")
 
 if [ -n "$PRINCIPAL_ID" ]; then
   pass "Terraform will authenticate as ${PRINCIPAL_KIND} (object ID ${PRINCIPAL_ID})"
@@ -315,7 +310,7 @@ else
     warn "terraform.tfvars: '${RESOURCE_GROUP_NAME}' is not a legal resource group name (check ${NAME_KEY}, name_base and resource_group_name), so the deployment resource group was not checked"
   fi
 
-  EXISTING_VNET=$(_tfvar vnet_id || echo "")
+  EXISTING_VNET=$(_parse_tfvar vnet_id || echo "")
   if [ -n "$EXISTING_VNET" ]; then
     if printf '%s\n' "$EXISTING_VNET" \
       | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+$'; then
@@ -880,14 +875,14 @@ fi
 echo ""
 echo "── Regional Quota ────────────────────────────────────"
 
-POSTGRES_SOURCE=$(_tfvar postgres_source || echo "external")
-REDIS_SOURCE=$(_tfvar redis_source || echo "external")
-QUOTA_LOCATION=$(_tfvar location || echo "eastus")
-POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
-CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
-NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v3")
-NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
-NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
+POSTGRES_SOURCE=$(_parse_tfvar postgres_source || echo "external")
+REDIS_SOURCE=$(_parse_tfvar redis_source || echo "external")
+QUOTA_LOCATION=$(_parse_tfvar location || echo "eastus")
+POSTGRES_SKU=$(_parse_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
+CREATE_CLUSTER=$(_parse_tfvar create_cluster || echo "true")
+NODE_VM_SIZE=$(_parse_tfvar default_node_pool_vm_size || echo "Standard_D8s_v3")
+NODE_MIN=$(_parse_tfvar default_node_pool_min_count || echo "1")
+NODE_MAX=$(_parse_tfvar default_node_pool_max_count || echo "10")
 
 # Map a VM size to its Compute quota family. Standard_D2ds_v4 -> letter D, suffix
 # ds, version 4 -> standardDDSv4Family. The v1 B-series is the one family that is
@@ -1136,7 +1131,7 @@ fi
 # that is knowable up front. Provider metadata returns display names ("East US"),
 # so normalize before comparing. redis_location moves only the cluster, so that
 # is the region to check when it is set.
-AMR_LOCATION=$(_tfvar redis_location || echo "")
+AMR_LOCATION=$(_parse_tfvar redis_location || echo "")
 [ "$AMR_LOCATION" = "null" ] && AMR_LOCATION=""
 AMR_LOCATION="${AMR_LOCATION:-$QUOTA_LOCATION}"
 if [ ! -f "$TFVARS" ]; then
@@ -1221,12 +1216,12 @@ else
   # name, but a name that is set and wrong reaches Azure as a 404 partway through
   # the apply. No shape check — these are quoted into az argv, never a URL, and
   # group names legitimately carry underscores and periods.
-  CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
-  CREATE_KEYVAULT=$(_tfvar create_keyvault || echo "true")
+  CREATE_CLUSTER=$(_parse_tfvar create_cluster || echo "true")
+  CREATE_KEYVAULT=$(_parse_tfvar create_keyvault || echo "true")
 
   if [ "$CREATE_CLUSTER" = "false" ]; then
-    EXISTING_AKS=$(_tfvar existing_cluster_name || echo "")
-    EXISTING_AKS_RG=$(_tfvar existing_cluster_resource_group_name || echo "")
+    EXISTING_AKS=$(_parse_tfvar existing_cluster_name || echo "")
+    EXISTING_AKS_RG=$(_parse_tfvar existing_cluster_resource_group_name || echo "")
     if [ -z "$EXISTING_AKS" ] || [ -z "$EXISTING_AKS_RG" ]; then
       fail "create_cluster = false requires both existing_cluster_name and existing_cluster_resource_group_name"
     elif [ -z "${SUB_ID:-}" ]; then
@@ -1239,8 +1234,8 @@ else
   fi
 
   if [ "$CREATE_KEYVAULT" = "false" ]; then
-    EXISTING_KV=$(_tfvar existing_keyvault_name || echo "")
-    EXISTING_KV_RG=$(_tfvar existing_keyvault_resource_group_name || echo "")
+    EXISTING_KV=$(_parse_tfvar existing_keyvault_name || echo "")
+    EXISTING_KV_RG=$(_parse_tfvar existing_keyvault_resource_group_name || echo "")
     if [ -z "$EXISTING_KV" ] || [ -z "$EXISTING_KV_RG" ]; then
       fail "create_keyvault = false requires both existing_keyvault_name and existing_keyvault_resource_group_name"
     elif [ -z "${SUB_ID:-}" ]; then
@@ -1263,10 +1258,10 @@ echo "── PostgreSQL Regional Availability ───────────�
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping Postgres capability checks (need terraform.tfvars and an active az login)"
 else
-  LOCATION=$(_tfvar location || echo "")
-  POSTGRES_SOURCE=$(_tfvar postgres_source || echo "external")
-  POSTGRES_VERSION=$(_tfvar postgres_version || echo "16")
-  POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
+  LOCATION=$(_parse_tfvar location || echo "")
+  POSTGRES_SOURCE=$(_parse_tfvar postgres_source || echo "external")
+  POSTGRES_VERSION=$(_parse_tfvar postgres_version || echo "16")
+  POSTGRES_SKU=$(_parse_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
 
   if [ "$POSTGRES_SOURCE" = "in-cluster" ]; then
     pass "postgres_source = in-cluster — no Flexible Server capability check needed"
@@ -1432,15 +1427,15 @@ echo "── Global Name Availability ──────────────
 if [ ! -f "$TFVARS" ] || [ -z "${SUB_ID:-}" ]; then
   warn "Skipping name checks (need terraform.tfvars and an active az login)"
 else
-  LOCATION=$(_tfvar location || echo "")
-  DNS_LABEL=$(_tfvar dns_label || echo "")
+  LOCATION=$(_parse_tfvar location || echo "")
+  DNS_LABEL=$(_parse_tfvar dns_label || echo "")
 
   # Only these four names carry the hash, so it is derived here rather than above.
   # Keep in sync with local.uniq_suffix in infra/main.tf, salt included: omit the
   # salt and preflight keeps checking the names it was bumped to escape. The
   # subscription comes from tfvars because that is what Terraform hashes and what
   # _derive_kv_name reads.
-  SALT=$(_tfvar name_suffix_salt || echo "")
+  SALT=$(_parse_tfvar name_suffix_salt || echo "")
   HASH_SUB="${TFVARS_SUB:-$SUB_ID}"
   if [ "$UNIQUE_NAMES" = "true" ]; then
     if command -v shasum &>/dev/null; then
@@ -1454,10 +1449,10 @@ else
     warn "unique_resource_names is false — using the legacy shared-namespace names, which collide between deployments"
   fi
 
-  PG_NAME=$(_tfvar postgres_name || echo "${NAME_BASE}-postgres${NAME_SUFFIX}${UNIQ_SUFFIX}")
-  REDIS_NAME=$(_tfvar redis_name || echo "${NAME_BASE}-redis${NAME_SUFFIX}${UNIQ_SUFFIX}")
-  KV_NAME=$(_tfvar keyvault_name || echo "${NAME_BASE}-kv${NAME_SUFFIX}${UNIQ_SUFFIX}")
-  BLOB_RAW=$(_tfvar storage_account_name || echo "${NAME_BASE}-blob${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  PG_NAME=$(_parse_tfvar postgres_name || echo "${NAME_BASE}-postgres${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  REDIS_NAME=$(_parse_tfvar redis_name || echo "${NAME_BASE}-redis${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  KV_NAME=$(_parse_tfvar keyvault_name || echo "${NAME_BASE}-kv${NAME_SUFFIX}${UNIQ_SUFFIX}")
+  BLOB_RAW=$(_parse_tfvar storage_account_name || echo "${NAME_BASE}-blob${NAME_SUFFIX}${UNIQ_SUFFIX}")
   BLOB_NAME=$(echo "$BLOB_RAW" | tr -d '-') # the blob module strips hyphens
 
   # Reject anything that isn't a plain Azure resource name before it reaches a
@@ -1602,7 +1597,7 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
       "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
       "" "available" \
       63 "Shorten var.dns_label." "$DNS_OWNED"
-  elif LANGSMITH_DOMAIN=$(_tfvar langsmith_domain); then
+  elif LANGSMITH_DOMAIN=$(_parse_tfvar langsmith_domain); then
     # A custom domain replaces the <label>.<region>.cloudapp.azure.com name, so
     # there is no Azure-scoped name left to collide.
     pass "Custom domain ${LANGSMITH_DOMAIN} — no public IP DNS label to check"

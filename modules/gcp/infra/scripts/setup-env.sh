@@ -43,25 +43,9 @@ fi
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # ── Read project/env from terraform.tfvars ────────────────────────────────────
-# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
-# deploy.sh and init-values.sh decide whether the sandbox secret is expected by
-# calling the _common.sh copy, so a gate that disagrees omits a secret they
-# require. _common.sh is not sourced here because it also defines
-# pass/info/fail, which this script must not leak into the caller's shell.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null || true
-}
-
-_tfvar_is_true() {
-  [[ "$(_parse_tfvar "$1")" == "true" ]]
-}
+# _tfvars.sh alone, not _common.sh: _common.sh also defines pass/info/fail,
+# which this script must not leak into the caller's shell.
+source "$_SETUP_DIR/scripts/_tfvars.sh" "$_SETUP_DIR"
 
 _project_id=$(_parse_tfvar "project_id")
 _name_prefix=$(_parse_tfvar "name_prefix")
@@ -83,12 +67,12 @@ if [[ -z "$_name_prefix" ]]; then
   return 1
 fi
 
-export TF_VAR_project_id="$_project_id"
-export TF_VAR_name_prefix="$_name_prefix"
-export TF_VAR_environment="${_environment:-dev}"
-export TF_VAR_region="$_region"
-export TF_VAR_owner="${LANGSMITH_OWNER:-}"
-export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
+_export_tf_var project_id "$_project_id"
+_export_tf_var name_prefix "$_name_prefix"
+_export_tf_var environment "${_environment:-dev}"
+_export_tf_var region "$_region"
+_export_tf_var owner "${LANGSMITH_OWNER:-}"
+_export_tf_var cost_center "${LANGSMITH_COST_CENTER:-}"
 
 # ── Secret Manager path prefix ────────────────────────────────────────────────
 # All secrets are stored under:
@@ -233,6 +217,7 @@ _sm_secret() {
   local prompt_text="$4"
   local silent="${5:-true}"
   local validator="${6:-}"
+  _tfvar_declared "${varname#TF_VAR_}" || return
 
   local val=""
   local _reason=""

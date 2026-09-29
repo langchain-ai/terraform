@@ -1531,6 +1531,8 @@ enable_standalone_insights = ${ENABLE_STANDALONE_INSIGHTS}
 enable_sandboxes = ${ENABLE_SANDBOXES}
 TFVARS
 
+_tfvars_check_file "$OUTPUT" || exit 1
+
 if command -v terraform >/dev/null 2>&1; then
   if ! terraform fmt "$OUTPUT" >/dev/null; then
     _red "ERROR"; printf ": %s was written, but Terraform could not format it.\n" "$OUTPUT_DISPLAY"

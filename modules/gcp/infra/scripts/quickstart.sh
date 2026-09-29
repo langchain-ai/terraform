@@ -576,6 +576,8 @@ smithdb_bucket_force_destroy          = ${SMITHDB_BUCKET_FORCE_DESTROY}
 labels = {}
 TFVARS
 
+_tfvars_check_file "$OUTPUT" || exit 1
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════

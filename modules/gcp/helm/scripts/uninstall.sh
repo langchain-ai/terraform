@@ -69,19 +69,8 @@ _force_clear_stuck_pods() {
   )
 }
 
-# ── tfvars parser ─────────────────────────────────────────────────────────────
-# Values are cut at the closing quote, or at an inline # for bare booleans and
-# numbers. Keep identical to the other copies of this function.
-_parse_tfvar() {
-  awk -v key="$1" '
-    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
-      sub(/^[^=]*=[[:space:]]*/, "")
-      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
-      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
-      print; exit
-    }
-  ' "$INFRA_DIR/terraform.tfvars" 2>/dev/null || true
-}
+# ── tfvars helpers ────────────────────────────────────────────────────────────
+source "$INFRA_DIR/scripts/_tfvars.sh" "$INFRA_DIR"
 
 # ── Resolve config from terraform.tfvars (best effort) ────────────────────────
 # TEARDOWN.md Option B documents teardown with no Terraform state and instructs

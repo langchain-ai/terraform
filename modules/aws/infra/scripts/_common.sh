@@ -9,45 +9,21 @@
 # Usage: source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 #
 # Provides:
-#   _parse_tfvar <key>        — Read a value from terraform.tfvars
+#   _parse_tfvar <key>        — Read a value from terraform.tfvars (from _tfvars.sh)
 #   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
 # ── Resolve INFRA_DIR ────────────────────────────────────────────────────────
 # Assumes this script lives in infra/scripts/. Consumers that live elsewhere
-# (e.g. helm/scripts/) should override INFRA_DIR after sourcing.
+# (e.g. helm/scripts/) should set INFRA_DIR before sourcing: the tfvars
+# readers bind to it here.
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
 
-# ── terraform.tfvars parser ──────────────────────────────────────────────────
-# Handles both quoted strings (key = "value") and unquoted values (key = true / key = 42).
-# Returns non-zero if the key is not found.
-_parse_tfvar() {
-  local key="$1"
-  local tfvars_file="${INFRA_DIR}/terraform.tfvars"
-  local raw val
-  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
-  [[ -n "$raw" ]] || return 1
-  # Quoted string: key = "value"
-  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
-  if [[ -z "$val" ]]; then
-    # Unquoted value: key = true / key = 42 / key = {} / key = ["m5.2xlarge"]
-    # Strip any trailing `# comment` BEFORE collapsing whitespace, otherwise
-    # `enable_fleet = true # note` parses to `true#note` and breaks _tfvar_is_true
-    # (migration issue #1).
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"[]')
-  fi
-  [[ -n "$val" ]] || return 1
-  echo "$val"
-}
-
-# Returns 0 if KEY = true or "true" in terraform.tfvars.
-_tfvar_is_true() {
-  local val
-  val=$(_parse_tfvar "$1") || return 1
-  [[ "$val" == "true" ]]
-}
+# ── terraform.tfvars helpers ─────────────────────────────────────────────────
+# _parse_tfvar, _tfvar_is_true, and the rest: see _tfvars.sh.
+source "$_COMMON_DIR/_tfvars.sh" "$INFRA_DIR"
 
 # Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /
 # enable_nginx_ingress) for post-apply scripts.
