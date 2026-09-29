@@ -258,6 +258,21 @@ variable "location" {
   default     = "eastus"
 }
 
+# Not `environment`, which is already the tag value above. The two accepted
+# values are the azurerm and azapi provider names for the clouds this module is
+# tested against; the provider blocks in versions.tf take it verbatim, and
+# local.azure_cloud maps it to the DNS names that differ between the clouds.
+variable "azure_environment" {
+  type        = string
+  description = "Azure cloud to deploy into: 'public' (commercial Azure) or 'usgovernment' (Azure Government). Sets the azurerm and azapi provider environment and the private DNS zone, public IP DNS and Blob endpoint names that differ between the two. Overrides ARM_ENVIRONMENT."
+  default     = "public"
+
+  validation {
+    condition     = contains(["public", "usgovernment"], var.azure_environment)
+    error_message = "azure_environment must be 'public' or 'usgovernment'."
+  }
+}
+
 variable "subscription_id" {
   type        = string
   description = "The subscription id of the LangSmith deployment"
@@ -462,6 +477,15 @@ variable "redis_source" {
     condition     = contains(["external", "in-cluster"], var.redis_source)
     error_message = "redis_source must be 'external' or 'in-cluster'."
   }
+
+  # Azure Managed Redis is not offered in Azure Government: Microsoft's private
+  # endpoint DNS reference lists no redisEnterprise zone for it, and Azure Cache
+  # for Redis there is 6.0, below LangSmith's 6.2 floor. Refused at plan rather
+  # than left to fail mid-apply on a resource type the cloud does not have.
+  validation {
+    condition     = !(var.redis_source == "external" && var.azure_environment == "usgovernment")
+    error_message = "redis_source = \"external\" provisions Azure Managed Redis, which Azure Government does not offer. Set redis_source = \"in-cluster\", or point the chart at a Redis you run yourself."
+  }
 }
 
 # No Terraform resource reads this — where ClickHouse runs is a Helm-values
@@ -570,6 +594,17 @@ variable "storage_allowed_ips" {
   default     = []
 }
 
+variable "storage_replication_type" {
+  type        = string
+  description = "Redundancy of the LangSmith trace-blob account, which holds every trace payload and attachment. LRS (the default, so no existing account moves) keeps three copies in one datacenter. ZRS spreads them across availability zones and keeps the account readable and writable through a zone loss; Microsoft recommends it for high availability, and it matches a cluster spread by availability_zones. GZRS adds a copy in the paired region. ZRS, GZRS and RAGZRS need a region with availability zones. Changing between LRS, GRS and RAGRS, or between ZRS, GZRS and RAGZRS, updates the account in place. A change across those two groups adds or removes zone redundancy, which the azurerm provider can only apply by deleting and recreating the account, so plan refuses it on an existing account: run Azure's conversion first (az storage account migration start), then set this to match. See README \"Storage redundancy\"."
+  default     = "LRS"
+
+  validation {
+    condition     = contains(["LRS", "GRS", "RAGRS", "ZRS", "GZRS", "RAGZRS"], var.storage_replication_type)
+    error_message = "storage_replication_type must be one of LRS, GRS, RAGRS, ZRS, GZRS or RAGZRS."
+  }
+}
+
 # ── Blob storage private endpoints ────────────────────────────────────────────
 # Without this, both storage accounts keep a public endpoint that a default-deny
 # firewall filters down to the AKS subnet. That posture depends on the firewall
@@ -596,12 +631,12 @@ variable "storage_private_endpoint_subnet_id" {
 
 variable "storage_private_dns_zone_id" {
   type        = string
-  description = "Existing privatelink.blob.core.windows.net zone to attach the endpoints to. Empty creates one and links it to the VNet. Azure allows a zone name to be linked to a VNet once, so supply the central zone when the VNet already resolves privatelink.blob.core.windows.net — creating a second one fails the link."
+  description = "Existing Blob private DNS zone to attach the endpoints to: privatelink.blob.core.windows.net, or privatelink.blob.core.usgovcloudapi.net in Azure Government. Empty creates one and links it to the VNet. Azure allows a zone name to be linked to a VNet once, so supply the central zone when the VNet already resolves that name — creating a second one fails the link."
   default     = ""
 
   validation {
-    condition     = var.storage_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", var.storage_private_dns_zone_id))
-    error_message = "storage_private_dns_zone_id must be a full privatelink.blob.core.windows.net zone resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+    condition     = var.storage_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.${var.azure_environment == "usgovernment" ? "usgovcloudapi" : "windows"}\\.net$", var.storage_private_dns_zone_id))
+    error_message = "storage_private_dns_zone_id must be the full resource ID of the Blob private DNS zone for azure_environment: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net (public) or .../privatelink.blob.core.usgovcloudapi.net (usgovernment)"
   }
 }
 
@@ -649,6 +684,17 @@ variable "default_node_pool_max_pods" {
   type        = number
   description = "Max pods per node in the default pool. AKS Azure CNI default is 30 — too low for LangSmith. Pass 2 alone needs ~32 pods (17 LangSmith + 15 system). Set to 60 to fit full multi-pass deployments on a single node. Immutable — changing requires node pool recreation. In overlay mode this no longer sizes the AKS subnet: every node takes a /24 of aks_pod_cidr whatever its max_pods, up to the overlay ceiling of 250."
   default     = 60
+}
+
+variable "aks_os_sku" {
+  type        = string
+  description = "Node OS image for the default pool, and for every additional pool that does not set its own os_sku. Ubuntu (the default, so that no existing pool changes) or AzureLinux, which Microsoft describes as having a reduced attack surface and uses as the system pool OS in AKS Automatic. AzureLinux3 and Ubuntu2204 pin a version; Ubuntu2404 needs azurerm 4.67.0, above this module's floor, so it is not accepted yet. The provider applies a change between any two of these values as an in-place update of the pool, which Azure carries out by reimaging its nodes. Windows SKUs are not accepted: every pool here is Linux."
+  default     = "Ubuntu"
+
+  validation {
+    condition     = contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], var.aks_os_sku)
+    error_message = "aks_os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204."
+  }
 }
 
 # Both of these are empty by default rather than carrying the create-path value,
@@ -719,14 +765,22 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
+    os_sku            = optional(string)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
   default = {
     large = {
       vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
       min_count = 0
       max_count = 2
     }
+  }
+
+  # A ternary, not ||: Terraform before 1.12 evaluates both operands, so contains()
+  # would get the null os_sku of a pool that sets none, and versions.tf allows 1.11.
+  validation {
+    condition     = alltrue([for pool in values(var.additional_node_pools) : pool.os_sku == null ? true : contains(["AzureLinux", "AzureLinux3", "Ubuntu", "Ubuntu2204"], pool.os_sku)])
+    error_message = "additional_node_pools: os_sku must be one of AzureLinux, AzureLinux3, Ubuntu or Ubuntu2204, or left unset to follow aks_os_sku."
   }
 }
 
@@ -882,6 +936,17 @@ variable "smithdb_storage_account_name" {
   type        = string
   description = "Optional globally unique Storage Account name for SmithDB. Empty derives one from the deployment name."
   default     = ""
+}
+
+variable "smithdb_storage_replication_type" {
+  type        = string
+  description = "Redundancy of the SmithDB object store, which holds SmithDB's durable data. Separate from storage_replication_type because the two accounts can warrant different durability. Same values and rules: LRS by default, ZRS for a zone-redundant deployment. Changing between LRS, GRS and RAGRS, or between ZRS, GZRS and RAGZRS, updates the account in place. A change across those two groups adds or removes zone redundancy, which the azurerm provider can only apply by deleting and recreating the account, so plan refuses it on an existing account: run Azure's conversion first (az storage account migration start), then set this to match. See README \"Storage redundancy\"."
+  default     = "LRS"
+
+  validation {
+    condition     = contains(["LRS", "GRS", "RAGRS", "ZRS", "GZRS", "RAGZRS"], var.smithdb_storage_replication_type)
+    error_message = "smithdb_storage_replication_type must be one of LRS, GRS, RAGRS, ZRS, GZRS or RAGZRS."
+  }
 }
 
 variable "smithdb_storage_container_name" {
@@ -1268,7 +1333,7 @@ variable "fleet_salesforce_oauth_provider" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
   default     = ""
 }
 

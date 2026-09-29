@@ -609,3 +609,39 @@ run "a_cluster_name_over_63_characters_is_refused" {
 
   expect_failures = [azurerm_resource_group.resource_group]
 }
+
+# Every pool the module creates is Linux, so a Windows SKU is refused at the
+# variable rather than failing inside the provider for want of os_type.
+run "aks_os_sku_rejects_windows" {
+  command = plan
+
+  variables {
+    aks_os_sku = "Windows2022"
+  }
+
+  expect_failures = [var.aks_os_sku]
+}
+
+run "additional_pool_os_sku_rejects_an_unknown_value" {
+  command = plan
+
+  variables {
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2, os_sku = "Mariner" }
+    }
+  }
+
+  expect_failures = [var.additional_node_pools]
+}
+
+# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.59.0, where the
+# provider rejects it; refused here until the floor moves.
+run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
+  command = plan
+
+  variables {
+    aks_os_sku = "Ubuntu2404"
+  }
+
+  expect_failures = [var.aks_os_sku]
+}

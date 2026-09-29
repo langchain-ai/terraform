@@ -112,7 +112,22 @@ output "sku_tier" {
   value       = one(azurerm_kubernetes_cluster.main[*].sku_tier)
 }
 
+output "default_node_pool_os_sku" {
+  description = "OS SKU the default node pool is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].os_sku)
+}
+
+output "node_pool_os_skus" {
+  description = "OS SKU of each additional node pool, keyed by pool name."
+  value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.os_sku }
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
+}
+
+output "workload_identity_service_accounts" {
+  description = "Service accounts federated with the LangSmith workload identity."
+  value       = local.service_accounts_for_workload_identity
 }

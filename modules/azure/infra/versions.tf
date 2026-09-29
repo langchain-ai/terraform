@@ -40,5 +40,14 @@ terraform {
 
 provider "azurerm" {
   subscription_id = var.subscription_id
+  environment     = var.azure_environment
   features {}
+}
+
+# Configured explicitly so both providers target the same cloud and the same
+# subscription. Left implicit, azapi read ARM_ENVIRONMENT and the CLI's default
+# subscription, which need not match what azurerm was given.
+provider "azapi" {
+  subscription_id = var.subscription_id
+  environment     = var.azure_environment
 }
