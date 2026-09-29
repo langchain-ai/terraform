@@ -54,6 +54,8 @@ postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subn
 redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
 ```
 
+To test this path without a customer cluster, [`test/existing-aks-cluster/`](test/existing-aks-cluster/) builds a cluster and network of this shape in its own state and prints the matching tfvars.
+
 Cluster prerequisites — verify before applying:
 
 ```bash
