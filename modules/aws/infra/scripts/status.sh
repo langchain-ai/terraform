@@ -342,6 +342,16 @@ else
   else
     warn "Secret langsmith-config not found (created by ESO after deploy.sh)"
   fi
+
+  _smithdb_ingestion=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_INGESTION_ENABLED}' 2>/dev/null) || _smithdb_ingestion=""
+  _smithdb_query=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_QUERY_ENABLED}' 2>/dev/null) || _smithdb_query=""
+  if [[ -n "$_smithdb_ingestion" || -n "$_smithdb_query" ]]; then
+    info "SmithDB status: ingestion=${_smithdb_ingestion:-not set}  query=${_smithdb_query:-not set}"
+  else
+    skip "SmithDB status — not present in langsmith-config"
+  fi
 fi
 
 # ── Helm release ────────────────────────────────────────────────────────────
