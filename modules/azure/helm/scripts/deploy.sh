@@ -59,12 +59,47 @@ if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_F
   action "make init-values  (regenerates it; re-apply any hand edits afterward)"
 fi
 
+# ── Reject a values-overrides.yaml generated from different tfvars ─────────
+# init-values.sh bakes tfvars values into that file and `make deploy` never
+# regenerates it, so a tfvars edit afterward leaves Terraform and Helm deploying
+# different configurations.
+if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
+  echo ""
+else
+  _stale=""
+  _stamped="false"
+  for _key in $_VALUES_INPUT_KEYS; do
+    _was=$(_read_values_stamp "$OVERRIDES_FILE" "$_key") || continue
+    _stamped="true"
+    _now=$(_parse_tfvar "$_key") || _now=""
+    [[ "$_was" == "$_now" ]] && continue
+    _stale="${_stale}${_key}: generated with '${_was}', terraform.tfvars now says '${_now}'
+"
+  done
+
+  if [[ "$_stamped" != "true" ]]; then
+    warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
+    action "make init-values  (adds the stamp, so this check can run)"
+    echo ""
+  elif [[ -n "$_stale" ]]; then
+    fail "values-overrides.yaml was generated from different terraform.tfvars values:"
+    printf '%s' "$_stale" | while IFS= read -r _line; do
+      [[ -n "$_line" ]] && info "$_line"
+    done
+    echo ""
+    info "terraform apply used the current terraform.tfvars; this file still describes the old one."
+    action "make init-values  (regenerate it, then re-run make deploy)"
+    exit 1
+  fi
+fi
+
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
-_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
+_cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
   exit 1
 }
-_rg_name=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || _rg_name=""
+_rg_name=$(_tf_out resource_group_name) || _rg_name=""
 
 info "Cluster: ${_cluster_name}"
 az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
@@ -187,9 +222,9 @@ if [[ "$_tls_source" == "dns01" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   _dns_zone="$_le_domain"                          # zone name = domain name
-  _dns_rg=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || _dns_rg=""
+  _dns_rg=$(_tf_out resource_group_name) || _dns_rg=""
   _subscription_id=$(_parse_tfvar "subscription_id") || _subscription_id=""
-  _cert_manager_client_id=$(terraform -chdir="$INFRA_DIR" output -raw cert_manager_identity_client_id 2>/dev/null) || _cert_manager_client_id=""
+  _cert_manager_client_id=$(_tf_out cert_manager_identity_client_id) || _cert_manager_client_id=""
 
   if [[ -z "$_le_domain" ]]; then
     warn "dns01 requires langsmith_domain to be set in terraform.tfvars — ClusterIssuer skipped"
@@ -802,7 +837,7 @@ fi
 # ── Ensure langsmith-ksa carries the WI annotation ───────────────────────
 # langsmith-ksa is used by operator-spawned agent deployment pods.
 # It is created by the operator on first use (not part of Helm release).
-_wi_client_id=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_managed_identity_client_id 2>/dev/null || true)
+_wi_client_id=$(_tf_out storage_account_k8s_managed_identity_client_id || true)
 if [[ -n "$_wi_client_id" ]]; then
   kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \
     --dry-run=client -o yaml | kubectl apply -f - &>/dev/null
@@ -814,8 +849,8 @@ fi
 # ── Post-deploy access info ───────────────────────────────────────────────
 _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
-_kv_name=$(terraform -chdir="$INFRA_DIR" output -raw keyvault_name 2>/dev/null || true)
-_admin_email=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null || true)
+_kv_name=$(_tf_out keyvault_name || true)
+_admin_email=$(_tf_out langsmith_admin_email || true)
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _url_protocol="http"
 [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]] && _url_protocol="https"

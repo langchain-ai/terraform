@@ -861,15 +861,16 @@ CASES = [
         ],
     },
     {
-        # Left unset, additional_node_pools is the variable's default: one D16s_v3
-        # pool scaling 0-2, in the same family as the D4s_v3 default pool.
+        # Left unset, additional_node_pools is the variable's default: one D16s_v5
+        # pool scaling 0-2, in its own family beside the D4s_v3 default pool.
         "name": "the default large pool counts toward its family and cores",
         "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3]),
         "ca_all": ALL_GOOD,
-        "vm_usage": [("standardDSv3Family", 0, 64), ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
+        "vm_usage": [("standardDSv3Family", 0, 64), ("standardDSv5Family", 0, 64),
+                     ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
         "expect": [
-            "[✓] standardDSv3Family quota in eastus: 64 of 64 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 needs up to 52)",
-            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 plus Postgres needs up to 54)",
+            "[✓] standardDSv5Family quota in eastus: 64 of 64 vCPUs free (large 0-2 × Standard_D16s_v5 needs up to 32)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v5 plus Postgres needs up to 54)",
         ],
     },
     {

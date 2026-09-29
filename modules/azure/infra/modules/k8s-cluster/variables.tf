@@ -51,12 +51,12 @@ variable "kubernetes_version" {
 variable "default_node_pool_vm_size" {
   type        = string
   description = "VM size of the default node pool"
-  default     = "Standard_D8s_v3" # 8 vCPU, 32GB RAM — Dsv3 family; matches the root module's production default
+  default     = "Standard_D8s_v5" # 8 vCPU, 32GB RAM — Dsv5 family; matches the root module's production default
 }
 
 variable "default_node_pool_min_count" {
   type        = number
-  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable."
+  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v5 provides 18,870m allocatable."
   default     = 1
 }
 
@@ -96,7 +96,7 @@ variable "additional_node_pools" {
   description = "Node pools to be created"
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64GB RAM — Dsv3 family; matches the root module's production default
+      vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
       min_count = 0
       max_count = 2
     }

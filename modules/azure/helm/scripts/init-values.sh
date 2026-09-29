@@ -94,24 +94,24 @@ echo ""
 # ── Read terraform outputs ─────────────────────────────────────────────────
 echo "Reading terraform outputs..."
 
-STORAGE_ACCOUNT=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_name 2>/dev/null) || {
+STORAGE_ACCOUNT=$(_tf_out storage_account_name) || {
   fail "Could not read storage_account_name. Is 'terraform apply' complete?"
   exit 1
 }
-STORAGE_CONTAINER=$(terraform -chdir="$INFRA_DIR" output -raw storage_container_name 2>/dev/null) || {
+STORAGE_CONTAINER=$(_tf_out storage_container_name) || {
   fail "Could not read storage_container_name."
   exit 1
 }
-WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_managed_identity_client_id 2>/dev/null) || {
+WI_CLIENT_ID=$(_tf_out storage_account_k8s_managed_identity_client_id) || {
   fail "Could not read storage_account_k8s_managed_identity_client_id."
   exit 1
 }
-NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
-ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
+NAMESPACE=$(_tf_out langsmith_namespace) || NAMESPACE="langsmith"
+ADMIN_EMAIL=$(_tf_out langsmith_admin_email) || ADMIN_EMAIL=""
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || CLUSTER_NAME=""
 # Redis client mode follows the AMR clustering policy. No default: guessing wrong pairs
 # the standalone client with an OSS cluster, which is the combination that 503s ingest.
-REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED=""
+REDIS_CLUSTER_ENABLED=$(_tf_out redis_cluster_enabled) || REDIS_CLUSTER_ENABLED=""
 
 SMITHDB_STORAGE_ACCOUNT=""
 SMITHDB_STORAGE_CONTAINER=""
@@ -121,13 +121,13 @@ SMITHDB_METASTORE_AUTH_MODE="password"
 SMITHDB_METASTORE_USERNAME=""
 SMITHDB_CACHE_STORAGE_CLASS=""
 if [[ "${_enable_smithdb:-false}" == "true" ]]; then
-  SMITHDB_STORAGE_ACCOUNT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_account_name 2>/dev/null) || SMITHDB_STORAGE_ACCOUNT=""
-  SMITHDB_STORAGE_CONTAINER=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_container_name 2>/dev/null) || SMITHDB_STORAGE_CONTAINER=""
-  SMITHDB_WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_workload_identity_client_id 2>/dev/null) || SMITHDB_WI_CLIENT_ID=""
-  SMITHDB_METASTORE_SECRET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_secret_name 2>/dev/null) || SMITHDB_METASTORE_SECRET="smithdb-metastore"
-  SMITHDB_METASTORE_AUTH_MODE=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_auth_mode 2>/dev/null) || SMITHDB_METASTORE_AUTH_MODE="password"
-  SMITHDB_METASTORE_USERNAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_username 2>/dev/null) || SMITHDB_METASTORE_USERNAME=""
-  SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name 2>/dev/null) || SMITHDB_CACHE_STORAGE_CLASS=""
+  SMITHDB_STORAGE_ACCOUNT=$(_tf_out smithdb_storage_account_name) || SMITHDB_STORAGE_ACCOUNT=""
+  SMITHDB_STORAGE_CONTAINER=$(_tf_out smithdb_storage_container_name) || SMITHDB_STORAGE_CONTAINER=""
+  SMITHDB_WI_CLIENT_ID=$(_tf_out smithdb_workload_identity_client_id) || SMITHDB_WI_CLIENT_ID=""
+  SMITHDB_METASTORE_SECRET=$(_tf_out smithdb_metastore_secret_name) || SMITHDB_METASTORE_SECRET="smithdb-metastore"
+  SMITHDB_METASTORE_AUTH_MODE=$(_tf_out smithdb_metastore_auth_mode) || SMITHDB_METASTORE_AUTH_MODE="password"
+  SMITHDB_METASTORE_USERNAME=$(_tf_out smithdb_metastore_username) || SMITHDB_METASTORE_USERNAME=""
+  SMITHDB_CACHE_STORAGE_CLASS=$(_tf_out smithdb_cache_storage_class_name) || SMITHDB_CACHE_STORAGE_CLASS=""
 fi
 
 echo ""
@@ -170,7 +170,7 @@ fi
 
 # AGIC: derive hostname from Application Gateway public IP FQDN (terraform output)
 if [[ -z "$HOSTNAME" && "$_ingress_controller" == "agic" ]]; then
-  _agw_fqdn=$(terraform -chdir="$INFRA_DIR" output -raw agw_public_ip_fqdn 2>/dev/null) || _agw_fqdn=""
+  _agw_fqdn=$(_tf_out agw_public_ip_fqdn) || _agw_fqdn=""
   if [[ -n "$_agw_fqdn" ]]; then
     HOSTNAME="$_agw_fqdn"
     info "Hostname from AGW public IP FQDN: $HOSTNAME"
@@ -406,6 +406,11 @@ cat > "$OUT_FILE" << EOF
 # values-overrides.yaml is gitignored — never commit it.
 #
 # Values chain: values.yaml (base) → this file → addon overlays → sizing overlay
+#
+# Generated from these terraform.tfvars values. deploy.sh reads them back and
+# stops the deploy if any has changed since this file was written — editing
+# terraform.tfvars does not regenerate this file. Re-run make init-values.
+$(_values_input_stamp)
 
 config:
   hostname: "${HOSTNAME}"
