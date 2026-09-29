@@ -158,7 +158,7 @@ install_cert_manager = false   # cluster already runs cert-manager
 install_keda         = false   # cluster already runs KEDA
 ```
 
-Both default to `true`, and `infra/scripts/quickstart.sh` asks about each one on this path only. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off.
+Both default to `true`. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off.
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
 
