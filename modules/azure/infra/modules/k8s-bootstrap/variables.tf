@@ -187,7 +187,7 @@ variable "langsmith_license_key" {
 # would stop renewing certificates for anyone already deployed.
 variable "install_cert_manager" {
   type        = bool
-  description = "Install cert-manager. Set false when attaching to a cluster that already runs it — Helm cannot adopt a release it does not own, so a second install fails on the existing CRDs."
+  description = "Install cert-manager. Set false when attaching to a cluster that already runs it. Helm cannot adopt a release it does not own, so a second install fails on the existing CRDs."
   default     = true
 }
 

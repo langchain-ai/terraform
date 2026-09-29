@@ -1071,7 +1071,7 @@ variable "tls_certificate_source" {
 # install fails on the CRDs that are already there.
 variable "install_cert_manager" {
   type        = bool
-  description = "Install cert-manager into the cluster. Set false when the cluster already runs it. tls_certificate_source = 'dns01' requires this to be true — the DNS-01 solver needs a workload-identity annotation Terraform only adds to a cert-manager it installs itself."
+  description = "Install cert-manager into the cluster. Set false when the cluster already runs it. tls_certificate_source = 'dns01' requires this to be true: the DNS-01 solver needs a workload-identity annotation Terraform only adds to a cert-manager it installs itself."
   default     = true
 }
 
