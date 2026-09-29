@@ -17,7 +17,9 @@
 #   7b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
 #   7c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
 #   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
+#   9. langsmith-values-smithdb-sizing.yaml      — SmithDB tier and replicas, from terraform output (if enable_smithdb = true)
+#  10. langsmith-values-smithdb.yaml             — SmithDB overlay, hand-edited (if enable_smithdb = true)
+#  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
@@ -452,14 +454,17 @@ else
 fi
 
 if [[ "$_enable_smithdb" == "true" ]]; then
+  # The generated sizing file goes first, so the hand-edited overlay can
+  # override it, and the generated overrides go last.
+  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-  if [[ ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
+  if [[ ! -f "$_smithdb_sizing" || ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
     fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
     exit 1
   fi
-  VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
-  echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+  VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
+  echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
 fi
 echo ""
 

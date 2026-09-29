@@ -168,6 +168,41 @@ variable "smithdb_cache_disk_throughput" {
   default     = 1000
 }
 
+variable "resource_quota_extra_cpu" {
+  type        = number
+  description = "Additional CPU added to the LangSmith namespace ResourceQuota, once on the requests side and twice on the limits side. The root sizes it for SmithDB. Zero keeps the base quota."
+  default     = 0
+
+  # SmithDB large with the backfill needs 414.
+  validation {
+    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
+    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
+  }
+}
+
+variable "resource_quota_extra_memory_gi" {
+  type        = number
+  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  default     = 0
+
+  # SmithDB large with the backfill needs 906.
+  validation {
+    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
+    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
+  }
+}
+
+variable "resource_quota_extra_pods" {
+  type        = number
+  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
+    error_message = "resource_quota_extra_pods must be between 0 and 400."
+  }
+}
+
 # ── Application secrets ───────────────────────────────────────────────────────
 # License key is stored in K8s as langsmith-license secret.
 # Other app secrets (api_key_salt, jwt_secret, admin_password) are written by

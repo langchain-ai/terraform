@@ -93,6 +93,20 @@ the SmithDB ServiceAccount with `azure.workload.identity/client-id` from
 `smithdb_workload_identity_client_id`, and labels SmithDB pods with
 `azure.workload.identity/use: "true"`.
 
+`deploy.sh` loads three SmithDB files, in this order:
+
+1. `langsmith-values-smithdb-sizing.yaml`, which `init-values.sh` writes from
+   the `smithdb_helm_values` output on every run. It holds the chart tier, the
+   replicas, and the `minimal` resources. Do not edit it; see [Sizing](#sizing).
+2. `langsmith-values-smithdb.yaml`, the overlay. `init-values.sh` copies it once
+   and never overwrites it, so scheduling and other hand edits go here.
+3. `langsmith-values-smithdb-overrides.yaml`, which `init-values.sh` writes from
+   the identity, storage, and metastore outputs on every run.
+
+A later file wins, so a `smithdb.resourceTier` line in the overlay replaces the
+size. An overlay copied before the sizing file existed has that line.
+`init-values.sh` warns about it; delete the line.
+
 Select the chart line explicitly alongside the flag, as described in
 [Version requirements](#version-requirements):
 
@@ -108,6 +122,88 @@ LangSmith itself.
 The federated identity subject is derived with the same fullname convention as
 the chart. For example, release `langsmith` uses `langsmith-smithdb`, while
 release `prod` uses `prod-langsmith-smithdb`.
+
+## Sizing
+
+`smithdb_sizing` sets the chart `resourceTier`, the replicas, the `minimal`
+resources, the default metastore SKU, and the namespace quota headroom. Set it
+with `make smithdb-configure SIZING=<minimal|small|medium|large>`, then run
+`make deploy-all`. When it is unset, it follows `sizing_profile`: `minimum`
+gives `minimal`, `dev` and `default` give `small`, `production` gives `medium`,
+and `production-large` gives `large`.
+
+The component rows are per replica, as CPU / memory / cache volume:
+
+| | `minimal` | `small` | `medium` | `large` |
+|---|---|---|---|---|
+| Throughput: ingest / query QPS | development only | 10 / 10 | 100 / 40 | 1000 / 100 |
+| Chart `resourceTier` | `small`, explicit resources | `small` | `medium` | `large` |
+| Replicas: `query` / `ingestion` / `compactionWorker` | 1 / 1 / 1 | 1 / 1 / 1 | 1 / 1 / 1 | 4 / 2 / 4 |
+| `query` | 1 / 2Gi / 200Gi | 4 / 8Gi / 200Gi | 28 / 48Gi / 200Gi | 28 / 50Gi / 1000Gi |
+| `ingestion` | 1 / 2Gi / 100Gi | 4 / 8Gi / 100Gi | 16 / 32Gi / 100Gi | 56 / 150Gi / 1000Gi |
+| `compactionWorker` | 1 / 2Gi / 100Gi | 8 / 16Gi / 100Gi | 16 / 32Gi / 100Gi | 28 / 50Gi / 300Gi |
+| `compaction` | 500m / 1Gi | 2 / 4Gi | 4 / 8Gi | 8 / 16Gi |
+| `clusterManager` | 250m / 256Mi | 250m / 256Mi | 250m / 256Mi | 2 / 2Gi |
+| Sum at these replicas (pods) | 3.75 / 7.25Gi (5) | 18.25 / 36.25Gi (5) | 64.25 / 120.25Gi (5) | 346 / 718Gi (12) |
+| Backfill Job | 1 / 4Gi | 8 / 32Gi | 8 / 32Gi | 8 / 32Gi |
+| Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
+| VM for the largest pod, for example | general pool | 16 vCPU, `Standard_D16s_v5` | 32 vCPU, `Standard_D32s_v5` | 64 vCPU and over 150 GiB, `Standard_D64s_v5` |
+| Default metastore SKU (vCPU / memory) | `GP_Standard_D2ds_v5` (2 / 8Gi) | `MO_Standard_E2ds_v5` (2 / 16Gi) | `MO_Standard_E4ds_v5` (4 / 32Gi) | `MO_Standard_E8ds_v5` (8 / 64Gi) |
+| Quota headroom: CPU / memory / pods | 5 / 10Gi / 12 | 27 / 53Gi / 12 | 93 / 169Gi / 12 | 402 / 868Gi / 26 |
+| Quota headroom with the backfill | 8 / 18Gi / 20 | 37 / 89Gi / 20 | 103 / 205Gi / 20 | 412 / 904Gi / 34 |
+
+- The throughput and replica rows come from the SmithDB sizing table in the
+  [LangSmith self-hosted docs](https://docs.langchain.com/langsmith/self-host-smithdb-scale).
+  The replicas are the HPA `minReplicas` of the three cache components.
+  `compaction` and `clusterManager` have no HPA and run one replica.
+- The `small`, `medium`, and `large` component rows and the cache volumes come
+  from the chart tier, where requests equal limits. `minimal` runs the `small`
+  tier, so it keeps the `small` cache volumes. Its values are requests, and its
+  limits are 2x. Use `minimal` only for development and test.
+- The metastore defaults match the "Metastore capacity" section of the same
+  docs page. A `smithdb_metastore_sku_name` that you set replaces the default,
+  also after a size change. A SKU change restarts the Flexible Server.
+- The VM row is the smallest shape that holds the largest pod. Set the pool
+  `max_count` to cover the sum row at that shape, plus one node for the surge
+  copy of the largest pod, plus room for the backfill Job while it runs.
+- The quota rows are what Terraform adds to the namespace ResourceQuota: once
+  to requests and twice to limits. They cover the replicas above, one surge copy
+  of the largest pod, and, in the backfill phase, the Job and the taskdb. HPA
+  scale-out above `minReplicas` gets only the surge room, and the quota refuses
+  the next pod with a `FailedCreate` event on the ReplicaSet. Read the resolved
+  values with `terraform -chdir=infra output smithdb_quota_extra`.
+
+A wrapper root that calls this module must declare `smithdb_sizing` and pass it
+through, or `make smithdb-configure` changes nothing.
+
+## Staged rollout
+
+Keep ClickHouse enabled in every phase. `make smithdb-phase` writes the three
+Terraform gates for one phase. Run `make deploy-all` after each phase.
+`make smithdb-status` shows the phase, the resolved size, the SmithDB pods,
+Jobs, and PVCs, and the backfill progress, and changes nothing.
+
+| Phase | Command | ingestion / migration / query |
+|---|---|---|
+| Off | `make smithdb-phase PHASE=off` | false / false / false |
+| Dual write | `make smithdb-phase PHASE=dual-write` | true / false / false |
+| Backfill | `make smithdb-phase PHASE=backfill` | true / true / false |
+| Cutover | `make smithdb-phase PHASE=cutover [FORCE=true]` | true / false / true |
+
+1. Dual write. LangSmith writes to ClickHouse and SmithDB, and reads stay on
+   ClickHouse. Confirm that segments arrive in the SmithDB container.
+2. Backfill. The deploy adds the migration Job and the taskdb to copy the
+   ClickHouse history. The apply grants the trace-blob read role and waits 300
+   seconds; see [Infrastructure](#infrastructure). The backfill is complete when
+   every row of the taskdb table `migration_jobs` has `promoted_at`. Do not use
+   the percent or the pod phase.
+3. Cutover. Reads move to SmithDB, and the deploy removes the migration Job and
+   the taskdb, with its PVC and task state. `PHASE=cutover` refuses until every
+   `migration_jobs` row has `promoted_at`, and also when the table is empty or
+   unreadable. Add `FORCE=true` only when you did not run a backfill.
+4. Rollback. `PHASE=dual-write` moves reads back to ClickHouse, which has all
+   the data. `PHASE=off` stops the writes to SmithDB, which then misses the
+   traces written while it is off, so run a backfill before the next cutover.
 
 ## Network and sizing notes
 
@@ -206,9 +302,9 @@ family's regional vCPU quota covers `max_count` nodes, or the autoscaler cannot
 add the surge node either. If a rollout stalls anyway, delete the old pod and
 the rollout completes.
 
-Size the VM for the largest SmithDB pod. At the `small` tier, compactionWorker
-requests 8 vCPU and 16 GiB, which no 8-vCPU VM can schedule, and ingestion and
-query add 4 vCPU and 8 GiB each.
+Size the VM for the largest SmithDB pod at the chosen size; see the VM row in
+[Sizing](#sizing). The `D16s_v3` pool above fits `small`, not `medium` or
+`large`.
 
 The pool does nothing until SmithDB is scheduled onto it. Pin every SmithDB
 service to the pool and give it the matching toleration in

@@ -5,6 +5,6 @@
 
 smithdb:
   enabled: true
-  # Cache sizes and workload resources come from the chart's small tier. The
+  # The chart tier and replicas come from smithdb_sizing, in the generated
+  # langsmith-values-smithdb-sizing.yaml, which loads before this file. The
   # generated overrides select Terraform's Premium SSD v2 StorageClass.
-  resourceTier: small
