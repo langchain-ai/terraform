@@ -18,14 +18,13 @@
 # Azure Storage Account — the container for LangSmith trace blobs.
 # Storage account names must be globally unique, lowercase alphanumeric, 3-24 chars.
 # replace() strips hyphens from the input name to satisfy Azure naming rules.
-# Standard LRS: locally-redundant storage — adequate for trace data.
-# Upgrade to ZRS or GRS in Stage 3 for higher durability.
+# Redundancy comes from the root's storage_replication_type (LRS by default).
 resource "azurerm_storage_account" "storage_account" {
   name                     = replace(var.storage_account_name, "-", "")
   resource_group_name      = var.resource_group_name
   location                 = var.location
   account_tier             = "Standard"
-  account_replication_type = "LRS" # Stage 3: consider ZRS or RA-GRS
+  account_replication_type = var.replication_type
   tags                     = merge(var.tags, { module = "blob" })
 
   # With a Private Endpoint there is no public listener to filter, so the rules

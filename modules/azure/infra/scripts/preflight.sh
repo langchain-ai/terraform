@@ -132,6 +132,48 @@ if [ -n "${SUB_ID:-}" ] && [ -n "$TFVARS_SUB" ] && [ "$TFVARS_SUB" != "$SUB_ID" 
   fail "terraform.tfvars sets subscription_id = ${TFVARS_SUB}, but the active CLI subscription is ${SUB_ID}. Terraform would deploy to the first; the checks below describe the second. Run: az account set --subscription ${TFVARS_SUB}"
 fi
 
+# Terraform targets azure_environment; every az call below goes to the CLI's
+# active cloud. A Government subscription is invisible from the commercial cloud
+# and the other way round, so a mismatch fails every check below for a reason
+# none of them would name. ARM is the Resource Manager endpoint for az rest.
+# Preflight checks the configuration the next apply will use, so the configured
+# value wins, in Terraform's own precedence: *.auto.tfvars (the last in lexical
+# order wins), then terraform.tfvars, then TF_VAR_azure_environment. The
+# azure_environment output, the value of the last apply, is the fallback when
+# nothing is configured, and a discrepancy between the two is reported. (The
+# post-apply scripts read the output first, since they act on what was applied.)
+_cloud_in_file() {
+  sed -n 's/^[[:space:]]*azure_environment[[:space:]]*=[[:space:]]*"\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$1" 2>/dev/null | head -1
+}
+_cloud_configured=""
+for _auto in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
+  _cloud_configured=$(_cloud_in_file "$_auto")
+  [ -n "$_cloud_configured" ] && break
+done
+[ -n "$_cloud_configured" ] || _cloud_configured=$(_tfvar azure_environment || true)
+[ -n "$_cloud_configured" ] || _cloud_configured="${TF_VAR_azure_environment:-}"
+_cloud_applied=""
+if command -v terraform >/dev/null 2>&1; then
+  _cloud_applied=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || _cloud_applied=""
+fi
+case "$_cloud_applied" in public|usgovernment) ;; *) _cloud_applied="" ;; esac
+AZURE_ENVIRONMENT="${_cloud_configured:-${_cloud_applied:-public}}"
+case "$AZURE_ENVIRONMENT" in
+  public|usgovernment) ;;
+  *) fail "azure_environment is \"${AZURE_ENVIRONMENT}\"; it must be public or usgovernment"; AZURE_ENVIRONMENT="public" ;;
+esac
+if [ -n "$_cloud_applied" ] && [ "$_cloud_applied" != "$AZURE_ENVIRONMENT" ]; then
+  warn "The last apply used azure_environment = ${_cloud_applied}, and the configuration now says ${AZURE_ENVIRONMENT}. Checking against ${AZURE_ENVIRONMENT}. Moving an existing deployment to another cloud recreates every resource."
+fi
+case "$AZURE_ENVIRONMENT" in
+  usgovernment) EXPECTED_CLI_CLOUD="AzureUSGovernment"; ARM="https://management.usgovcloudapi.net" ;;
+  *)            EXPECTED_CLI_CLOUD="AzureCloud";        ARM="https://management.azure.com" ;;
+esac
+ACTIVE_CLI_CLOUD=$(az cloud show --query name -o tsv 2>/dev/null || echo "")
+if [ -n "$ACTIVE_CLI_CLOUD" ] && [ "$ACTIVE_CLI_CLOUD" != "$EXPECTED_CLI_CLOUD" ]; then
+  fail "azure_environment is ${AZURE_ENVIRONMENT}, but the Azure CLI is on ${ACTIVE_CLI_CLOUD}. Run: az cloud set --name ${EXPECTED_CLI_CLOUD} && az login"
+fi
+
 # identifier is name_prefix's legacy name. Track which was read so warnings name
 # a key the user actually has.
 NAME_KEY="name_prefix"
@@ -322,7 +364,7 @@ PY
     SCOPE_COUNT=$((SCOPE_COUNT + 1))
     printf '%s\n' "$SCOPE" >> "${RBAC_TMP}/scopes.txt"
     az rest --method post \
-      --url "https://management.azure.com${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
+      --url "${ARM}${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
       --headers "Content-Type=application/json" \
       --body "@${RBAC_TMP}/body.json" \
       -o json > "${RBAC_TMP}/response-${SCOPE_COUNT}.json" 2>/dev/null || true
@@ -336,13 +378,13 @@ PY
   echo "{}" > "${RBAC_TMP}/activations.json"
   if [ "$PRINCIPAL_IS_CALLER" -eq 1 ]; then
     az rest --method get \
-      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      --url "${ARM}/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
       -o json > "${RBAC_TMP}/eligibilities.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/eligibilities.json"
     # The sibling call for what is active now, and when it expires. An activation
     # that lapses between preflight and plan looks like never having activated,
     # and a first apply of AKS plus Postgres outlasts a short window.
     az rest --method get \
-      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      --url "${ARM}/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
       -o json > "${RBAC_TMP}/activations.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/activations.json"
   fi
 
@@ -799,7 +841,7 @@ fi
 echo ""
 echo "── Subscription Offer Type ───────────────────────────"
 QUOTA_ID=$(az rest --method get \
-  --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
+  --url "${ARM}/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
   --query "subscriptionPolicies.quotaId" -o tsv 2>/dev/null || echo "")
 
 if [ -z "$QUOTA_ID" ]; then
@@ -1514,12 +1556,12 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   }
 
   _check_name "Postgres" "$PG_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
+    "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
     "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable" \
     63 "Shorten var.name_prefix or set var.postgres_name explicitly."
 
   _check_name "Storage account" "$BLOB_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
+    "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
     "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable" \
     24 "Shorten var.name_prefix or set var.storage_account_name explicitly."
 
@@ -1540,7 +1582,7 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     fail "Key Vault: '${KV_NAME}' is soft-deleted, which still reserves the name. Recover it (az keyvault recover --name ${KV_NAME}) or purge it (az keyvault purge --name ${KV_NAME})."
   else
     _check_name "Key Vault" "$KV_NAME" \
-      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+      "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
       "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable" \
       24 "Shorten var.name_prefix or set var.keyvault_name explicitly."
   fi
@@ -1557,7 +1599,7 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
       fi
     fi
     _check_name "Public IP DNS label" "$DNS_LABEL" \
-      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
+      "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
       "" "available" \
       63 "Shorten var.dns_label." "$DNS_OWNED"
   elif LANGSMITH_DOMAIN=$(_tfvar langsmith_domain); then

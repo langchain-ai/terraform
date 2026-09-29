@@ -82,6 +82,41 @@ _tf_out() {
   printf '%s' "$val"
 }
 
+# ── Azure cloud ──────────────────────────────────────────────────────────────
+# The cloud this deployment targets. Once applied, the azure_environment output
+# is the value Terraform actually used, whichever of terraform.tfvars,
+# *.auto.tfvars or TF_VAR_azure_environment it came from, so read that first.
+# Before the first apply there is no output: fall back to terraform.tfvars, then
+# the environment variable, then public. The names below mirror
+# local.azure_clouds in infra/main.tf; keep the two in step.
+_azure_environment() {
+  local val=""
+  if command -v terraform >/dev/null 2>&1; then
+    val=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || val=""
+  fi
+  case "$val" in
+    public|usgovernment) ;;
+    *) val=$(_parse_tfvar azure_environment) || val="${TF_VAR_azure_environment:-public}" ;;
+  esac
+  echo "$val"
+}
+
+# Suffix Azure appends to a public IP DNS label: <label>.<region>.<suffix>.
+_azure_cloudapp_suffix() {
+  case "$(_azure_environment)" in
+    usgovernment) echo "cloudapp.usgovcloudapi.net" ;;
+    *) echo "cloudapp.azure.com" ;;
+  esac
+}
+
+# cert-manager's azureDNS solver names the cloud its own way.
+_cert_manager_azure_environment() {
+  case "$(_azure_environment)" in
+    usgovernment) echo "AzureUSGovernmentCloud" ;;
+    *) echo "AzurePublicCloud" ;;
+  esac
+}
+
 # ── Admin password rules ─────────────────────────────────────────────────────
 # The LangSmith Helm chart's auth-bootstrap job rejects an initial org admin
 # password without a symbol, and it fails ~10 minutes into the release rather

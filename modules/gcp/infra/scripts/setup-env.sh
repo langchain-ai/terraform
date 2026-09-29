@@ -20,7 +20,8 @@
 #   secrets are exported for this session only and stored once the API is up.
 #
 # Prerequisites:
-#   gcloud auth application-default login   (or a service account with secretmanager.admin)
+#   gcloud auth login   (the script uses gcloud CLI credentials, not ADC), with
+#   roles/secretmanager.admin, or roles/secretmanager.secretAccessor with roles/editor
 #   Secret Manager API must be enabled (enabled automatically by terraform apply)
 #
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced. Those
@@ -99,6 +100,9 @@ _sm_prefix="langsmith-${_name_prefix}-${_environment}"
 # this shell (its values come back via export, not command substitution), so the
 # append inside it is visible here.
 _missing_vars=""
+# Variables whose Secret Manager read failed for a reason other than "absent"
+# (NOT_FOUND, or the API not enabled).
+_unreadable_vars=""
 
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
 _precheck_var="TF_VAR_langsmith_license_key"
@@ -152,13 +156,31 @@ _sm_put() {
 }
 
 # ── Secret Manager read ───────────────────────────────────────────────────────
+# Prints the value and returns 0. Returns 3 when the secret is absent: NOT_FOUND,
+# or the API not yet enabled on a first run before terraform apply. Returns 1 for
+# any other failure. An expired login, a missing secretmanager.versions.access
+# permission, or the 30 s timeout must not look absent, because the caller then
+# generates a new value and replaces a stable key.
 _sm_get() {
   local _name="$1"
   local _secret_id="${_sm_prefix}-${_name}"
+  local _err _rc=0
+  _err="$(mktemp)" || return 1
   _gcloud_bounded secrets versions access latest \
     --secret="$_secret_id" \
     --project="$_project_id" \
-    --quiet 2>/dev/null || true
+    --quiet 2>|"$_err" || _rc=$?
+  if (( _rc != 0 )); then
+    if grep -qE 'NOT_FOUND|SERVICE_DISABLED|has not been used in project' "$_err"; then
+      _rc=3
+    else
+      echo "ERROR: cannot read ${_secret_id} from Secret Manager (gcloud exit ${_rc}):" >&2
+      sed 's/^/       /' "$_err" >&2
+      _rc=1
+    fi
+  fi
+  rm -f "$_err"
+  return "$_rc"
 }
 
 # ── Rejected value reporting ──────────────────────────────────────────────────
@@ -214,6 +236,7 @@ _sm_secret() {
 
   local val=""
   local _reason=""
+  local _sm_rc=0
   local _secret_id="${_sm_prefix}-${sm_name}"
 
   # 0. Already exported in the environment — use as-is, backfill SM if missing.
@@ -236,8 +259,21 @@ _sm_secret() {
     return
   fi
 
-  # 1. Try Secret Manager
-  val=$(_sm_get "$sm_name") || val=""
+  # 1. Try Secret Manager. A read failure other than "absent" stops here: the
+  # secret can exist, so a prompt or a generator would replace the stored value.
+  val=$(_sm_get "$sm_name") || _sm_rc=$?
+  if [[ "$_sm_rc" != 0 && "$_sm_rc" != 3 ]]; then
+    # On stdout, like the non-interactive failure below: _sm_get can only use stderr.
+    echo "  ERROR: cannot read ${_secret_id}. Nothing was generated, stored, or exported for $varname."
+    if [[ -z "$_unreadable_vars" ]]; then
+      echo "         Check: 'gcloud auth login', network access, and that the latest"
+      echo "         version is enabled. The identity needs roles/secretmanager.admin, or"
+      echo "         roles/secretmanager.secretAccessor with roles/editor. roles/editor"
+      echo "         alone cannot read secrets. Then re-source this script."
+    fi
+    _unreadable_vars="$_unreadable_vars $varname"
+    return 1
+  fi
 
   # A stored value can predate this rule, so it gets the same gate. Exporting it
   # unchecked only moves the failure to helm upgrade, after Pass 1 has built the
@@ -454,6 +490,17 @@ _sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" 
 
 _sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
+
+# ── Unreadable secrets ────────────────────────────────────────────────────────
+# A stored value may exist for these, so stop before the summary. With the
+# variable unset, init-values.sh can generate a new apiKeySalt or jwtSecret.
+if [[ -n "$_unreadable_vars" ]]; then
+  echo ""
+  echo "ERROR: Secret Manager read failed for:$_unreadable_vars"
+  echo "       Nothing was generated or stored for them. Fix the cause shown above,"
+  echo "       then re-run: source infra/scripts/setup-env.sh"
+  return 1
+fi
 
 # ── Non-interactive failure ───────────────────────────────────────────────────
 # Only populated when stdin is not a tty and a secret was in neither the

@@ -68,6 +68,7 @@ default_node_pool_max_count = 10
 default_node_pool_max_pods  = 60
 aks_network_mode            = "overlay"         # Azure CNI Overlay with Cilium: pods from aks_pod_cidr, the subnet holds nodes only
 aks_sku_tier                = "Standard"       # uptime SLA, 99.95% across zones; the production floor
+# aks_os_sku               = "AzureLinux"      # Microsoft's container host OS, the AKS Automatic system pool default; choose before the first apply (README "Node OS")
 
 # Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
 additional_node_pools = {
@@ -104,6 +105,7 @@ keyvault_purge_protection = true   # required for production
 blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads
 blob_ttl_long_days  = 400   # run attachments (~13 months)
+storage_replication_type = "ZRS" # zone-redundant: survives a zone loss; needs a region with zones. On an existing LRS account, convert first (README "Storage redundancy")
 
 #------------------------------------------------------------------------------
 # LangSmith

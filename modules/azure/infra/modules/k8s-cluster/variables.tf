@@ -72,6 +72,12 @@ variable "default_node_pool_max_pods" {
   default     = 60
 }
 
+variable "default_node_pool_os_sku" {
+  type        = string
+  description = "OS SKU of the default node pool, and of every additional pool that sets no os_sku. Validated in the root module."
+  default     = "Ubuntu"
+}
+
 variable "service_cidr" {
   type        = string
   description = "Service CIDR of the cluster"
@@ -92,8 +98,9 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
+    os_sku            = optional(string)
   }))
-  description = "Node pools to be created"
+  description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
@@ -152,7 +159,7 @@ variable "langsmith_namespace" {
 
 variable "langsmith_release_name" {
   type        = string
-  description = "Helm release name for LangSmith. Used to generate federated identity credential subjects."
+  description = "The LangSmith chart's fullname: the release name when it contains \"langsmith\", otherwise <release>-langsmith. The chart prefixes every service account with it, so the federated identity credential subjects are built from it."
   default     = "langsmith"
 }
 

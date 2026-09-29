@@ -86,7 +86,7 @@ Terraform also warns when `location` doesn't match the cluster's region, since K
 
 These variables shape the cluster itself, so Terraform reads and ignores them once it no longer owns the cluster — change them on the cluster directly:
 
-- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`
+- `default_node_pool_vm_size`, `default_node_pool_min_count`, `default_node_pool_max_count`, `default_node_pool_max_pods`, `aks_os_sku` (for the default pool; additional pools Terraform manages still follow it)
 - `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
@@ -152,6 +152,44 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 > **Attach to a vault dedicated to this deployment.** Microsoft recommends [one vault per application, per environment, and per region](https://learn.microsoft.com/en-us/azure/key-vault/general/secure-key-vault), because grouping unrelated secrets into one vault widens the blast radius of a compromise, and vault-level RBAC is what grants read access to every secret in it. A vault shared with the customer's other applications adds two failures this module can't prevent: secret names like `postgres-admin-password` colliding with theirs, where a write lands as a new version and breaks their app silently, and a `terraform destroy` that deletes secrets belonging to something else.
 
 ---
+
+### Deploying to Azure Government
+
+Set the cloud in `terraform.tfvars` and point the Azure CLI at the same one before `make preflight`:
+
+```hcl
+azure_environment = "usgovernment"
+location          = "usgovvirginia"
+redis_source      = "in-cluster"
+```
+
+```bash
+az cloud set --name AzureUSGovernment
+az login
+```
+
+`azure_environment` sets the `azurerm` and `azapi` provider environment and picks the names that differ between the clouds:
+
+| | `public` (default) | `usgovernment` |
+|---|---|---|
+| PostgreSQL private DNS zone | `privatelink.postgres.database.azure.com` | `privatelink.postgres.database.usgovcloudapi.net` |
+| Blob private DNS zone | `privatelink.blob.core.windows.net` | `privatelink.blob.core.usgovcloudapi.net` |
+| Public IP DNS label | `<label>.<region>.cloudapp.azure.com` | `<label>.<region>.cloudapp.usgovcloudapi.net` |
+| Blob endpoint in Helm values | chart default | `azureStorageServiceUrlOverride` from the `storage_blob_endpoint` output |
+| cert-manager `azureDNS` environment | `AzurePublicCloud` | `AzureUSGovernmentCloud` |
+
+The zone names are Microsoft's recommended names from the [private endpoint DNS reference](https://learn.microsoft.com/azure/private-link/private-endpoint-dns#government). `make preflight` fails when the CLI's active cloud does not match `azure_environment`.
+
+Limits in Azure Government:
+
+- **No Azure Managed Redis.** The service is not offered there, so `redis_source = "external"` is refused at plan. Use `in-cluster`, or point the chart at a Redis you run
+- **PostgreSQL high availability.** Check which HA modes the region offers before setting `postgres_high_availability = true` (#291)
+- **PostgreSQL 18 for SmithDB is unconfirmed.** The SmithDB metastore pins PostgreSQL 18, and Microsoft's [general availability announcement](https://techcommunity.microsoft.com/blog/adforpostgresql/postgresql-18-now-ga-on-azure-postgres-flexible-server/4469802) covers public regions only. Before `enable_smithdb = true`, check that the region offers it: `az postgres flexible-server list-skus --location usgovvirginia` from a Government subscription
+
+**The state backend needs the cloud too.** `azure_environment` configures the providers, not the `azurerm` backend, which Terraform initializes before it reads any variable. A state storage account in Government needs `environment = "usgovernment"` in the `backend "azurerm"` block, or `ARM_ENVIRONMENT=usgovernment` in the shell that runs `terraform init`.
+
+The scripts (`make init-values`, `make deploy`, the quickstart wizard) read the cloud from the `azure_environment` output once the infrastructure is applied, then from `terraform.tfvars`, then from `TF_VAR_azure_environment`. The wizard keeps Redis in-cluster in Government.
+
 
 ## Prerequisites
 
@@ -1158,6 +1196,43 @@ plan checks the name, and Azure enforces the size at apply.
 
 ---
 
+## Node OS
+
+Every pool runs Ubuntu unless you choose otherwise. `aks_os_sku` sets the default
+pool, and every additional pool that does not name its own `os_sku` follows it:
+
+```hcl
+aks_os_sku = "AzureLinux"
+
+additional_node_pools = {
+  large = {
+    vm_size   = "Standard_D16s_v5"
+    min_count = 0
+    max_count = 2
+    # os_sku  = "Ubuntu"   # set only to differ from aks_os_sku
+  }
+}
+```
+
+[Azure Linux](https://learn.microsoft.com/en-us/azure/aks/use-azure-linux) is
+Microsoft's container host OS. Microsoft describes it as having a reduced attack
+surface, and AKS Automatic uses it for the system pool, which is why enterprise
+hardening baselines tend to ask for it. Nothing in LangSmith depends on the node
+OS: every component runs in its own container image. The accepted values are
+`Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3` and
+`Ubuntu2204`. Windows SKUs are refused, because every pool here is Linux.
+`Ubuntu2404` is not accepted yet: the azurerm provider added it in 4.67.0, and
+this module still allows versions back to 4.59.0.
+
+On an existing cluster, a change between any two accepted values is an in-place
+update of the pool, for the default pool and additional pools alike. The provider
+treats every change whose old and new values both start with `Ubuntu` or
+`AzureLinux` that way, and Azure applies it by reimaging the pool's nodes, so
+workloads on them are rescheduled as it goes. No accepted change replaces a pool or
+cycles the default pool through `defaulttmp`. Because an additional pool with no
+`os_sku` follows `aks_os_sku`, changing `aks_os_sku` reimages those pools too.
+Plan it for a maintenance window, and read the plan before applying.
+
 ## Multi-AZ Support
 
 `availability_zones` defaults to `[]`, which leaves placement to Azure: the AKS
@@ -1213,6 +1288,61 @@ requested zones. The `[]` default is exempt: it requests no zone, so there is
 nothing to be out of sync with. To re-zone an existing cluster on purpose, remove
 `default_node_pool[0].zones` from the `ignore_changes` block in
 `infra/modules/k8s-cluster/main.tf` and apply during a maintenance window.
+
+### Storage redundancy
+
+Both storage accounts are locally redundant (LRS) by default: three copies in one
+datacenter. The trace-blob account holds every trace payload and attachment, so on
+a deployment spread across zones it is the one component a zone loss can still take
+out. The cluster and a zone-redundant database stay up, and trace pages fail to
+load the payloads they point at. For a zone-redundant deployment, set:
+
+```hcl
+storage_replication_type         = "ZRS"   # trace blobs
+smithdb_storage_replication_type = "ZRS"   # SmithDB's object store, when enable_smithdb = true
+```
+
+| Value | Copies | Survives |
+|-------|--------|----------|
+| `LRS` (default) | Three, in one datacenter | Disk and rack failures |
+| `ZRS` | Three, across availability zones | The loss of a zone; the account stays readable and writable |
+| `GRS`, `RAGRS` | LRS, plus an asynchronous copy in the paired region | A regional outage, after a failover |
+| `GZRS`, `RAGZRS` | ZRS, plus an asynchronous copy in the paired region | Both |
+
+The zone-redundant values need a region with availability zones, and GZRS needs a
+paired region too. See Microsoft's
+[Azure Storage redundancy](https://learn.microsoft.com/en-us/azure/storage/common/storage-redundancy)
+page.
+
+**Choose before the first apply.** On an existing account, the provider and Azure
+handle a change differently:
+
+- A change **within** a group (LRS, GRS, RAGRS; or ZRS, GZRS, RAGZRS) updates the
+  account in place.
+- A change **across** the groups adds or removes zone redundancy. Azure does this in
+  place, as a conversion with no downtime, but the azurerm provider can only apply it
+  by deleting the account and creating it again, and every blob would go with it.
+  Plan therefore refuses it. It reads the account's current SKU and fails, naming the
+  account and both values, before anything is applied.
+
+To move an existing account to ZRS, keep the variable at its current value, run
+Azure's conversion, and set the variable once it finishes:
+
+```bash
+az storage account migration start \
+  --account-name <account> --resource-group <resource-group> \
+  --sku Standard_ZRS --no-wait
+az storage account migration show \
+  --account-name <account> --resource-group <resource-group> --name default
+```
+
+A conversion usually starts within 72 hours and has no completion SLA. When the
+status reads `Completed`, the live SKU matches `storage_replication_type = "ZRS"` and
+the plan is clean. LRS to GZRS takes two steps: convert to ZRS, wait 24 hours, then
+change to GZRS in place. Microsoft's
+[Change how a storage account is replicated](https://learn.microsoft.com/en-us/azure/storage/common/redundancy-migration)
+lists the limits, such as archive-tier blobs, which the zone-redundant values do not
+support.
 
 ---
 
