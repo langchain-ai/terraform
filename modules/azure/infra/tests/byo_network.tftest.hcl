@@ -348,3 +348,27 @@ run "an_undelegated_agic_subnet_warns" {
 
   expect_failures = [check.agic_subnet_delegation]
 }
+
+# ── Subnet NSGs ──────────────────────────────────────────────────────────────
+# A supplied subnet keeps its owner's NSG, and the carved subnets admit the
+# supplied AKS subnet's real prefixes rather than the unused carve default.
+
+run "a_supplied_aks_subnet_gets_no_nsg" {
+  command = plan
+
+  variables {
+    aks_subnet_id             = "${var.vnet_id}/subnets/aks"
+    aks_subnet_address_prefix = ["10.0.200.0/24"]
+    enable_subnet_nsgs        = true
+  }
+
+  assert {
+    condition     = module.vnet.subnet_nsg_rules.aks == null
+    error_message = "enable_subnet_nsgs = true planned an NSG on a supplied AKS subnet"
+  }
+  assert {
+    condition     = one([for r in module.vnet.subnet_nsg_rules.postgres : r.source_address_prefixes if r.name == "allow-aks-postgres"]) == toset(["10.0.0.0/19"])
+    error_message = "the Postgres NSG does not admit the supplied AKS subnet's prefixes"
+  }
+}
+

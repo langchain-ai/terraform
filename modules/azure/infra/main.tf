@@ -47,7 +47,7 @@ locals {
 
   # Regional names — unique within the subscription, so no hash needed. Changing
   # an override after an apply is a destroy and recreate.
-  resource_group_name = var.resource_group_name != "" ? var.resource_group_name : "${local.name_base}-rg${local.name_suffix}"
+  resource_group_name = var.create_resource_group ? (var.resource_group_name != "" ? var.resource_group_name : "${local.name_base}-rg${local.name_suffix}") : var.existing_resource_group_name
   vnet_name           = var.vnet_name != "" ? var.vnet_name : "${local.name_base}-vnet${local.name_suffix}"
 
   # Attaching (create_cluster = false) takes the customer's name with no
@@ -363,43 +363,73 @@ locals {
   )
 }
 
+# Catch an over-long name before the resource group exists, rather than as an
+# Azure 400 partway through the apply. Key Vault binds first — hyphens kept,
+# inside Storage's 24-char limit — so ~12 chars of name_prefix is the ceiling
+# under unique_resource_names. AKS binds only once both 24-char names are
+# overridden. VNet and the resource group never bind before those, so they are
+# not checked.
+#
+# One list, checked by a single precondition on the resource group and on the
+# existing-group read below, so the check runs whichever one is planned and
+# everything placed in the group waits on it.
+locals {
+  name_length_errors = compact([
+    length(replace(local.blob_name, "-", "")) >= 3 && length(replace(local.blob_name, "-", "")) <= 24 ? "" : "Storage account name '${replace(local.blob_name, "-", "")}' is ${length(replace(local.blob_name, "-", ""))} chars; Azure allows 3-24. Shorten var.name_prefix or set var.storage_account_name explicitly.",
+    # Exempt when attaching: the name is the operator's already-created resource,
+    # and the remedy below is a config variables.tf rejects once create_* is
+    # false. An unset existing_* name fails on the module's own precondition.
+    !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24) ? "" : "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly.",
+    length(local.postgres_name) <= 63 ? "" : "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly.",
+    length(local.redis_name) <= 60 ? "" : "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly.",
+    !var.create_cluster || length(local.aks_name) <= 63 ? "" : "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly.",
+  ])
+}
+
 # The resource group that contains all LangSmith Azure resources.
 # Deleting this resource group will delete EVERYTHING inside it.
 resource "azurerm_resource_group" "resource_group" {
+  count    = var.create_resource_group ? 1 : 0
   name     = local.resource_group_name
   location = var.location
   tags     = local.common_tags
 
-  # Catch an over-long name here rather than as an Azure 400 partway through the
-  # apply. Key Vault binds first — hyphens kept, inside Storage's 24-char limit —
-  # so ~12 chars of name_prefix is the ceiling under unique_resource_names. AKS
-  # binds only once both 24-char names are overridden. VNet and the resource
-  # group never bind before those, so they are not checked.
   lifecycle {
     precondition {
-      condition     = length(replace(local.blob_name, "-", "")) >= 3 && length(replace(local.blob_name, "-", "")) <= 24
-      error_message = "Storage account name '${replace(local.blob_name, "-", "")}' is ${length(replace(local.blob_name, "-", ""))} chars; Azure allows 3-24. Shorten var.name_prefix or set var.storage_account_name explicitly."
-    }
-    # Exempt when attaching: the name is the operator's already-created resource,
-    # and the remedy below is a config variables.tf rejects once create_* is
-    # false. An unset existing_* name fails on the module's own precondition.
-    precondition {
-      condition     = !var.create_keyvault || (length(local.keyvault_name) >= 3 && length(local.keyvault_name) <= 24)
-      error_message = "Key Vault name '${local.keyvault_name}' is ${length(local.keyvault_name)} chars; Azure allows 3-24. Shorten var.name_prefix or set var.keyvault_name explicitly."
-    }
-    precondition {
-      condition     = length(local.postgres_name) <= 63
-      error_message = "Postgres name '${local.postgres_name}' is ${length(local.postgres_name)} chars; Azure allows at most 63. Shorten var.name_prefix or set var.postgres_name explicitly."
-    }
-    precondition {
-      condition     = length(local.redis_name) <= 60
-      error_message = "Redis name '${local.redis_name}' is ${length(local.redis_name)} chars; Azure allows at most 60. Shorten var.name_prefix or set var.redis_name explicitly."
-    }
-    precondition {
-      condition     = !var.create_cluster || length(local.aks_name) <= 63
-      error_message = "AKS cluster name '${local.aks_name}' is ${length(local.aks_name)} chars; Azure allows at most 63. Shorten var.name_base or var.name_prefix, or set var.cluster_name explicitly."
+      condition     = length(local.name_length_errors) == 0
+      error_message = join("\n", local.name_length_errors)
     }
   }
+}
+
+# Deployments applied before create_resource_group existed hold the group at the
+# unindexed address.
+moved {
+  from = azurerm_resource_group.resource_group
+  to   = azurerm_resource_group.resource_group[0]
+}
+
+# A group the customer's platform team created. Read only for its name and ID:
+# its tags, locks, and policy assignments stay as its owner set them, and
+# terraform destroy leaves it in place. Resources keep var.location, which Azure
+# allows to differ from the group's own.
+data "azurerm_resource_group" "existing" {
+  count = var.create_resource_group ? 0 : 1
+  name  = var.existing_resource_group_name
+
+  lifecycle {
+    precondition {
+      condition     = length(local.name_length_errors) == 0
+      error_message = join("\n", local.name_length_errors)
+    }
+  }
+}
+
+locals {
+  # Read off the resource or the data source rather than local.resource_group_name,
+  # so that everything placed in the group waits for it on a first apply.
+  rg_name = var.create_resource_group ? azurerm_resource_group.resource_group[0].name : data.azurerm_resource_group.existing[0].name
+  rg_id   = var.create_resource_group ? azurerm_resource_group.resource_group[0].id : data.azurerm_resource_group.existing[0].id
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -412,7 +442,7 @@ module "vnet" {
   source              = "./modules/networking"
   network_name        = local.vnet_name
   location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
 
   create_vnet      = var.create_vnet
   existing_vnet_id = var.vnet_id
@@ -435,6 +465,9 @@ module "vnet" {
   # AGIC subnet: provisioned only when ingress_controller = "agic"
   enable_agic                = var.ingress_controller == "agic" && var.create_vnet
   agic_subnet_address_prefix = var.agic_subnet_address_prefix
+
+  enable_subnet_nsgs  = var.enable_subnet_nsgs
+  aks_source_prefixes = local.aks_subnet_prefixes
 
   tags = local.common_tags
 }
@@ -788,7 +821,7 @@ module "aks" {
   source              = "./modules/k8s-cluster"
   cluster_name        = local.aks_name
   location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   subnet_id           = local.aks_subnet_id
   service_cidr        = local.aks_service_cidr   # K8s ClusterIP range (must not overlap VNet)
   dns_service_ip      = local.aks_dns_service_ip # CoreDNS IP (derived from service_cidr)
@@ -1066,7 +1099,7 @@ module "postgres" {
   source              = "./modules/postgres"
   name                = local.postgres_name
   location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   vnet_id             = local.vnet_id # needed to link the private DNS zone
   subnet_id           = local.postgres_subnet_id
 
@@ -1106,7 +1139,7 @@ module "smithdb" {
 
   name                = local.smithdb_name
   location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   vnet_id             = local.vnet_id
 
   private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
@@ -1150,10 +1183,10 @@ module "redis" {
   source              = "./modules/redis"
   name                = local.redis_name
   location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
-  resource_group_id   = azurerm_resource_group.resource_group.id # azapi parent_id for AMR
-  subnet_id           = local.redis_subnet_id                    # private endpoint goes here
-  vnet_id             = local.vnet_id                            # private DNS zone link
+  resource_group_name = local.rg_name
+  resource_group_id   = local.rg_id           # azapi parent_id for AMR
+  subnet_id           = local.redis_subnet_id # private endpoint goes here
+  vnet_id             = local.vnet_id         # private DNS zone link
   amr_sku             = var.amr_sku
   clustering_policy   = var.redis_clustering_policy
   high_availability   = var.redis_high_availability
@@ -1171,14 +1204,14 @@ module "redis" {
 resource "azurerm_private_dns_zone" "blob" {
   count               = local.create_blob_private_dns_zone ? 1 : 0
   name                = local.azure_cloud.blob_private_dns_zone
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   tags                = local.common_tags
 }
 
 resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   count                 = local.create_blob_private_dns_zone ? 1 : 0
   name                  = "${local.name_base}-blob-dnslink"
-  resource_group_name   = azurerm_resource_group.resource_group.name
+  resource_group_name   = local.rg_name
   private_dns_zone_name = azurerm_private_dns_zone.blob[0].name
   virtual_network_id    = local.vnet_id
   registration_enabled  = false
@@ -1195,7 +1228,7 @@ module "blob" {
   storage_account_name = local.blob_name
   container_name       = "${local.blob_name}-container"
   location             = var.location
-  resource_group_name  = azurerm_resource_group.resource_group.name
+  resource_group_name  = local.rg_name
 
   replication_type = var.storage_replication_type
 
@@ -1296,7 +1329,7 @@ module "keyvault" {
   source              = "./modules/keyvault"
   name                = local.keyvault_name
   location            = var.location
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   tenant_id           = data.azurerm_client_config.current.tenant_id
 
   # The identity running apply, granted Secrets Officer so it can write secrets.
@@ -1452,7 +1485,7 @@ module "waf" {
   count               = var.create_waf ? 1 : 0
   source              = "./modules/waf"
   name                = "langsmith-waf${local.name_suffix}"
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   location            = var.location
   waf_mode            = var.waf_mode
   tags                = local.common_tags
@@ -1466,7 +1499,7 @@ module "diagnostics" {
   count               = var.create_diagnostics ? 1 : 0
   source              = "./modules/diagnostics"
   name                = "langsmith-logs${local.name_suffix}"
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   location            = var.location
   retention_days      = var.log_retention_days
 
@@ -1497,7 +1530,7 @@ module "bastion" {
   count                = var.create_bastion ? 1 : 0
   source               = "./modules/bastion"
   name                 = "langsmith-bastion${local.name_suffix}"
-  resource_group_name  = azurerm_resource_group.resource_group.name
+  resource_group_name  = local.rg_name
   location             = var.location
   subnet_id            = local.bastion_subnet_id
   vm_size              = var.bastion_vm_size
@@ -1516,7 +1549,7 @@ module "dns" {
   count               = var.create_dns_zone ? 1 : 0
   source              = "./modules/dns"
   domain              = var.langsmith_domain
-  resource_group_name = azurerm_resource_group.resource_group.name
+  resource_group_name = local.rg_name
   ingress_ip          = var.ingress_ip
   tags                = local.common_tags
 

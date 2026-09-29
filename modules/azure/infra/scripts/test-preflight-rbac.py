@@ -624,6 +624,35 @@ CASES = [
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
     },
+    # An attached group is the deployment's whole footprint, and its deployer may
+    # hold rights there alone. Asking the subscription would fail that deployer
+    # for rights the deployment never uses.
+    {
+        "name": "an attached resource group is probed alone, without the subscription",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] Resource group platform-langsmith-rg exists"],
+        "expect_calls": [
+            f"{SUB_SCOPE}/resourceGroups/platform-langsmith-rg/providers",
+            "group show --name platform-langsmith-rg",
+        ],
+        "reject_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+    },
+    {
+        "name": "an attached resource group that cannot be read fails",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "group_missing": True,
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] Resource group platform-langsmith-rg could not be read"],
+    },
+    {
+        "name": "a created resource group is still checked for resourceGroups/write",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+        "expect_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_calls": ["group show"],
+    },
     {
         # name_suffix_salt exists so a deployment whose four global names got
         # burned can rotate them. Preflight has to mix it into the hash the same
@@ -1138,7 +1167,8 @@ def build_case(case, index):
         (fixture / "group_ids").write_text("\n".join(case["group_ids"]))
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr"):
+                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr",
+                 "group_missing"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 

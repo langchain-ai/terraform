@@ -151,6 +151,23 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 
 > **Attach to a vault dedicated to this deployment.** Microsoft recommends [one vault per application, per environment, and per region](https://learn.microsoft.com/en-us/azure/key-vault/general/secure-key-vault), because grouping unrelated secrets into one vault widens the blast radius of a compromise, and vault-level RBAC is what grants read access to every secret in it. A vault shared with the customer's other applications adds two failures this module can't prevent: secret names like `postgres-admin-password` colliding with theirs, where a write lands as a new version and breaks their app silently, and a `terraform destroy` that deletes secrets belonging to something else.
 
+### Deploying into an existing resource group
+
+Set `create_resource_group = false` to deploy into a resource group someone else created, typically one a platform team hands out with the deployer's rights granted on that group alone. Terraform reads the group and changes nothing about it: its tags, locks, and policy assignments stay as its owner configured them, and `terraform destroy` removes the LangSmith resources and leaves the group in place.
+
+```hcl
+create_resource_group        = false
+existing_resource_group_name = "platform-langsmith-rg"
+```
+
+`resource_group_name` is refused when attaching, and `existing_resource_group_name` has no fallback: leaving it empty fails the plan instead of deriving a name and creating a group. Every resource still deploys to `location`, whatever region the group itself records, since a group's region only says where its metadata lives.
+
+An existing deployment picks up this release as a `moved` block on its resource group, with nothing replaced. To hand a group Terraform created over to its new owner, set `existing_resource_group_name` to the same name and remove the group from state first, so Terraform forgets it rather than deleting it:
+
+```bash
+terraform state rm 'azurerm_resource_group.resource_group[0]'
+```
+
 ---
 
 ### Deploying to Azure Government
@@ -549,7 +566,7 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
 - Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
-- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
+- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription and the resource group the deployment creates (or only the group, when `create_resource_group = false` attaches one, which it also confirms exists), and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
 - Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
 - Maps `postgres_sku_name` to the `Microsoft.Compute` vCPU family it draws on and fails when that family's quota in the region is 0 or has less headroom than the SKU needs. `az postgres flexible-server list-skus` reports what a region offers, not what the subscription may create, and fresh subscriptions commonly carry a limit of 0 on the v5 families. Also confirms the region carries `redisEnterprise`; Managed Redis capacity itself is not queryable ahead of an apply
 - Queries PostgreSQL Flexible Server capabilities for the active subscription and configured region. An empty result fails because the service cannot be created there; a non-empty result also verifies `postgres_version` and `postgres_sku_name`. CLI, permission, stderr, or response-shape failures warn and skip instead of claiming the region is unavailable
@@ -1193,6 +1210,22 @@ feature when `create_vnet = false` and its subnet ID is empty. Application
 Gateway v2 wants the subnet to itself and Azure recommends a `/24`. Azure Bastion
 requires the subnet be named exactly `AzureBastionSubnet` and be `/26` or larger;
 plan checks the name, and Azure enforces the size at apply.
+
+---
+
+## Subnet network security groups
+
+Set `enable_subnet_nsgs = true` to put a network security group on each subnet Terraform creates, so the data tier admits only the cluster:
+
+| Subnet | Inbound it admits |
+|--------|-------------------|
+| AKS | TCP 80 and 443 from the Internet, for the ingress load balancer. Everything else follows Azure's default rules |
+| Postgres | TCP 5432 from the AKS subnet, and all traffic from the Postgres subnet itself, which high availability replicates over. The rest of the VNet is denied |
+| Redis | TCP 10000 and 8500-8599 from the AKS subnet. The rest of the VNet is denied |
+
+Outbound keeps Azure's defaults on all three. The NSGs land in the LangSmith resource group, even when the subnets sit in a bring-your-own VNet's group, and the Redis subnet enables private endpoint network policies so its NSG applies to the Managed Redis endpoint. A subnet you supply keeps whatever NSG you gave it, and nothing is attached to the bastion or AGIC subnets.
+
+Anything else that reaches Postgres or Redis directly from inside the VNet, such as a jump host or a peered network, is denied once this is on. Add a rule to the NSG for it, or leave the flag off.
 
 ---
 
