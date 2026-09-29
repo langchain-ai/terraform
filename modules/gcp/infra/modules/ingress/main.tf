@@ -49,13 +49,16 @@ resource "null_resource" "install_gateway_api_crds" {
 #------------------------------------------------------------------------------
 # Envoy Gateway
 #------------------------------------------------------------------------------
+# v1.2.8 is the last v1.2 patch release. v1.2.6 fixes CVE-2025-24030 and v1.2.7
+# fixes CVE-2025-25294. The v1.2 line is end of life, so a later change must
+# move to a supported line.
 resource "helm_release" "envoy_gateway" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
   name             = "envoy-gateway"
   repository       = "oci://docker.io/envoyproxy"
   chart            = "gateway-helm"
-  version          = "v1.2.0"
+  version          = "v1.2.8"
   namespace        = "envoy-gateway-system"
   create_namespace = true
 
