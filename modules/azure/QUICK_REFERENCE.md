@@ -389,6 +389,7 @@ cd modules/azure
 make init    ARGS="-upgrade"                 # re-resolve provider versions
 make plan    ARGS="-target=module.aks"       # plan one module
 make plan    ARGS="-out=tfplan"              # save a plan file
+make apply   ARGS="-auto-approve"            # skip the three approval prompts
 make destroy ARGS="-target=module.redis"     # destroy one module
 ```
 

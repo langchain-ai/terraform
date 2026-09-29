@@ -284,6 +284,53 @@ run "premium_tier_with_long_term_support_is_passed_through" {
   }
 }
 
+# ── Node OS SKU ──────────────────────────────────────────────────────────────
+# The default stays Ubuntu so no existing pool moves. A pool with no os_sku of
+# its own follows aks_os_sku; one that sets it keeps its own.
+
+run "os_sku_defaults_to_ubuntu" {
+  command = plan
+
+  variables {
+    aks_os_sku = "Ubuntu"
+    additional_node_pools = {
+      large = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+    }
+  }
+
+  assert {
+    condition     = module.aks.default_node_pool_os_sku == "Ubuntu" && module.aks.node_pool_os_skus["large"] == "Ubuntu"
+    error_message = "aks_os_sku = Ubuntu did not reach the default and additional pools"
+  }
+}
+
+run "os_sku_azure_linux_with_a_pool_override" {
+  command = plan
+
+  variables {
+    aks_os_sku = "AzureLinux"
+    additional_node_pools = {
+      large  = { vm_size = "Standard_D16s_v3", min_count = 0, max_count = 2 }
+      ubuntu = { vm_size = "Standard_D8s_v3", min_count = 0, max_count = 1, os_sku = "Ubuntu2204" }
+    }
+  }
+
+  assert {
+    condition     = module.aks.default_node_pool_os_sku == "AzureLinux"
+    error_message = "aks_os_sku did not reach the default pool"
+  }
+
+  assert {
+    condition     = module.aks.node_pool_os_skus["large"] == "AzureLinux"
+    error_message = "a pool with no os_sku did not follow aks_os_sku"
+  }
+
+  assert {
+    condition     = module.aks.node_pool_os_skus["ubuntu"] == "Ubuntu2204"
+    error_message = "a pool's own os_sku was overridden by aks_os_sku"
+  }
+}
+
 # ── AGIC with overlay ────────────────────────────────────────────────────────
 # Nothing has confirmed Application Gateway reaching overlay pod addresses, so the
 # pairing warns (a check, not a precondition) and the plan proceeds.
@@ -347,5 +394,44 @@ run "a_supplied_blob_zone_is_not_created_again" {
   assert {
     condition     = length(azurerm_private_dns_zone.blob) == 0 && length(azurerm_private_dns_zone_virtual_network_link.blob) == 0
     error_message = "A supplied storage_private_dns_zone_id still planned a second blob zone"
+  }
+}
+
+# ── Workload Identity subjects follow the chart's fullname ───────────────────
+# The chart prefixes its service accounts with its fullname: the release name
+# when it contains "langsmith", otherwise <release>-langsmith. The federated
+# credential subjects have to match, or every blob-reading pod loses its identity.
+
+run "wi_subjects_default_release_name" {
+  command = plan
+
+  variables {
+    langsmith_release_name = "langsmith"
+  }
+
+  assert {
+    condition     = contains(module.aks.workload_identity_service_accounts, "langsmith-backend") && contains(module.aks.workload_identity_service_accounts, "langsmith-queue")
+    error_message = "the default release name did not give langsmith-<component> subjects"
+  }
+}
+
+run "wi_subjects_release_name_without_langsmith" {
+  command = plan
+
+  variables {
+    langsmith_release_name = "prod"
+  }
+
+  assert {
+    condition = alltrue([
+      for sa in ["prod-langsmith-backend", "prod-langsmith-platform-backend", "prod-langsmith-queue", "prod-langsmith-ingest-queue"] :
+      contains(module.aks.workload_identity_service_accounts, sa)
+    ])
+    error_message = "release \"prod\" did not give prod-langsmith-<component> subjects: ${join(", ", module.aks.workload_identity_service_accounts)}"
+  }
+
+  assert {
+    condition     = !contains(module.aks.workload_identity_service_accounts, "prod-backend")
+    error_message = "release \"prod\" still produced the bare prod-backend subject"
   }
 }

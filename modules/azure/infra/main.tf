@@ -113,6 +113,27 @@ locals {
   # address per endpoint and no new reachability.
   storage_private_endpoint_subnet_id = var.storage_private_endpoint_subnet_id != "" ? var.storage_private_endpoint_subnet_id : local.aks_subnet_id
 
+  # Names that differ between commercial Azure and Azure Government. Zone names
+  # are Microsoft's recommended names from the private endpoint DNS reference
+  # (learn.microsoft.com/azure/private-link/private-endpoint-dns, 2026-08-11);
+  # a private endpoint only registers its record automatically in a zone with
+  # exactly this name. The cloudapp suffix is what Azure appends to a public IP
+  # DNS label. Managed Redis has no Government zone because the service is not
+  # offered there; redis_source refuses that combination at plan.
+  azure_clouds = {
+    public = {
+      postgres_private_dns_zone = "privatelink.postgres.database.azure.com"
+      blob_private_dns_zone     = "privatelink.blob.core.windows.net"
+      cloudapp_suffix           = "cloudapp.azure.com"
+    }
+    usgovernment = {
+      postgres_private_dns_zone = "privatelink.postgres.database.usgovcloudapi.net"
+      blob_private_dns_zone     = "privatelink.blob.core.usgovcloudapi.net"
+      cloudapp_suffix           = "cloudapp.usgovcloudapi.net"
+    }
+  }
+  azure_cloud = local.azure_clouds[var.azure_environment]
+
   # Both accounts share one privatelink.blob.core.windows.net zone. Azure links
   # a zone name to a VNet once, so the root owns it and hands the ID to each
   # module instead of letting both create their own.
@@ -792,6 +813,7 @@ module "aks" {
   default_node_pool_min_count = var.default_node_pool_min_count
   default_node_pool_max_count = var.default_node_pool_max_count
   default_node_pool_max_pods  = var.default_node_pool_max_pods
+  default_node_pool_os_sku    = var.aks_os_sku
 
   # Network mode, data plane and tier, derived above from the operator-facing
   # variables. The tier and support plan update in place. The mode, the pod
@@ -835,8 +857,11 @@ module "aks" {
   # Envoy Gateway
   envoy_gateway_version = var.envoy_gateway_version
 
-  langsmith_namespace    = var.langsmith_namespace
-  langsmith_release_name = var.langsmith_release_name
+  langsmith_namespace = var.langsmith_namespace
+  # The chart names its service accounts after its fullname, which is the release
+  # name only when it contains "langsmith" (prod -> prod-langsmith-backend), so the
+  # federated credential subjects are built from the fullname.
+  langsmith_release_name = local.langsmith_release_fullname
 
   # Preserve existing identity name when migrating from storage module.
   # New deployments leave this unset and get "${cluster_name}-app-identity".
@@ -956,6 +981,81 @@ resource "terraform_data" "aks_network_guard" {
   }
 }
 
+# ── Storage redundancy guard ──────────────────────────────────────────────────
+# Azure converts an account between locally and zone-redundant replication in
+# place, with no downtime, but the azurerm provider cannot: it applies any change
+# between LRS/GRS/RAGRS and ZRS/GZRS/RAGZRS by deleting the account and creating
+# it again, and the trace-blob account holds every trace payload. So the
+# requested replication is compared with the SKU Azure reports for each account
+# (listed at subscription scope, empty until the account exists), and a change
+# across that boundary is refused. The way through is Azure's conversion, after
+# which the live SKU matches the variable and the plan is clean. Changes within
+# a group (LRS to GRS, ZRS to GZRS) update in place and pass. Provider rule from
+# the azurerm 4.81.0 storage_account docs, account_replication_type.
+locals {
+  blob_account_name = replace(local.blob_name, "-", "")
+
+  storage_guarded_accounts = merge(
+    { (local.blob_account_name) = { variable = "storage_replication_type", requested = var.storage_replication_type } },
+    var.enable_smithdb ? { (local.smithdb_storage_name) = { variable = "smithdb_storage_replication_type", requested = var.smithdb_storage_replication_type } } : {},
+  )
+
+  # try() covers a mocked provider, whose output has no such shape.
+  storage_live_skus = {
+    for a in try(data.azapi_resource_list.storage_accounts.output.accounts, []) :
+    lower(a.name) => replace(a.sku, "Standard_", "")
+    if lower(split("/", a.id)[4]) == lower(local.resource_group_name)
+  }
+
+  # An account Azure does not have yet reads as its requested value, so it never
+  # counts as a change. lookup() rather than an index guarded by &&: Terraform
+  # before 1.12 evaluates both operands, and versions.tf allows 1.11.
+  # One instruction per account, built from the live SKU, so the message names the
+  # account and the value to set rather than placeholders. Setting the variable to
+  # what Azure reports is right in both cases this fires: after a conversion made
+  # outside Terraform (the variable is behind), and before one (convert first).
+  # Azure's conversion changes only the zone part of the replication and keeps
+  # the geo part (LRS<->ZRS, GRS<->GZRS, RAGRS<->RAGZRS). A target that also
+  # changes the geo part, such as LRS to GZRS, is two steps: the conversion, then
+  # an in-place change within the new group, which Azure allows 24 hours after a
+  # conversion. The message names the conversion step and, when needed, the second.
+  storage_zone_flip = { LRS = "ZRS", ZRS = "LRS", GRS = "GZRS", GZRS = "GRS", RAGRS = "RAGZRS", RAGZRS = "RAGRS" }
+
+  storage_zone_changes = [
+    for name, want in local.storage_guarded_accounts :
+    join(" ", compact([
+      "${name}: ${want.variable} is \"${want.requested}\" here and Azure reports \"${lookup(local.storage_live_skus, lower(name), want.requested)}\".",
+      "Set ${want.variable} = \"${lookup(local.storage_live_skus, lower(name), want.requested)}\" to match it now.",
+      "To convert the account, run az storage account migration start --account-name ${name} --resource-group ${local.resource_group_name} --sku Standard_${lookup(local.storage_zone_flip, lookup(local.storage_live_skus, lower(name), want.requested), want.requested)} --no-wait, and set ${want.variable} = \"${lookup(local.storage_zone_flip, lookup(local.storage_live_skus, lower(name), want.requested), want.requested)}\" once az storage account migration show --account-name ${name} --resource-group ${local.resource_group_name} --name default reads Completed.",
+      lookup(local.storage_zone_flip, lookup(local.storage_live_skus, lower(name), want.requested), want.requested) == want.requested ? "" : "Azure converts only the zone part, so ${want.requested} is a second step: at least 24 hours after the conversion, set ${want.variable} = \"${want.requested}\", which updates the account in place.",
+    ]))
+    if contains(["ZRS", "GZRS", "RAGZRS"], lookup(local.storage_live_skus, lower(name), want.requested)) != contains(["ZRS", "GZRS", "RAGZRS"], want.requested)
+  ]
+}
+
+data "azapi_resource_list" "storage_accounts" {
+  type      = "Microsoft.Storage/storageAccounts@2023-05-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    accounts = "value[?${join(" || ", [for name in keys(local.storage_guarded_accounts) : "name=='${name}'"])}].{id: id, name: name, sku: sku.name}"
+  }
+}
+
+resource "terraform_data" "storage_replication_guard" {
+  input = { for name, want in local.storage_guarded_accounts : name => want.requested }
+
+  lifecycle {
+    precondition {
+      condition = length(local.storage_zone_changes) == 0
+      error_message = join(" ", concat(
+        ["This plan adds or removes zone redundancy on a storage account that already exists. The azurerm provider would apply that by deleting the account, and every blob in it, and creating it again; Azure converts it in place instead."],
+        local.storage_zone_changes,
+        ["See README \"Storage redundancy\"."],
+      ))
+    }
+  }
+}
+
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 # Managed PostgreSQL Flexible Server in a private subnet.
 # Only provisioned when postgres_source = "external".
@@ -969,6 +1069,8 @@ module "postgres" {
   resource_group_name = azurerm_resource_group.resource_group.name
   vnet_id             = local.vnet_id # needed to link the private DNS zone
   subnet_id           = local.postgres_subnet_id
+
+  private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
@@ -1002,15 +1104,17 @@ module "smithdb" {
   source = "./modules/smithdb"
   count  = var.enable_smithdb ? 1 : 0
 
-  name                 = local.smithdb_name
-  location             = var.location
-  resource_group_name  = azurerm_resource_group.resource_group.name
-  vnet_id              = local.vnet_id
-  subnet_id            = local.postgres_subnet_id
-  aks_subnet_id        = local.aks_subnet_id
-  oidc_issuer_url      = module.aks.oidc_issuer_url
-  namespace            = var.langsmith_namespace
-  service_account_name = local.smithdb_service_account
+  name                = local.smithdb_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.resource_group.name
+  vnet_id             = local.vnet_id
+
+  private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
+  subnet_id             = local.postgres_subnet_id
+  aks_subnet_id         = local.aks_subnet_id
+  oidc_issuer_url       = module.aks.oidc_issuer_url
+  namespace             = var.langsmith_namespace
+  service_account_name  = local.smithdb_service_account
 
   metastore_admin_username        = var.smithdb_metastore_admin_username
   metastore_admin_password        = var.smithdb_metastore_admin_password
@@ -1024,6 +1128,7 @@ module "smithdb" {
   private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
 
   storage_account_name = local.smithdb_storage_name
+  replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
   # Prefixed to keep it apart from private_dns_zone_id above, which is the
@@ -1059,13 +1164,13 @@ module "redis" {
 
 # ── Blob private DNS ──────────────────────────────────────────────────────────
 # Shared by the LangSmith trace-blob account and the SmithDB object store. The
-# account keeps its usual <name>.blob.core.windows.net hostname; this zone is
+# account keeps its usual <name>.blob.<cloud suffix> hostname; this zone is
 # what makes that name resolve to the Private Endpoint address inside the VNet.
 # Skipped when the operator supplies a central zone.
 
 resource "azurerm_private_dns_zone" "blob" {
   count               = local.create_blob_private_dns_zone ? 1 : 0
-  name                = "privatelink.blob.core.windows.net"
+  name                = local.azure_cloud.blob_private_dns_zone
   resource_group_name = azurerm_resource_group.resource_group.name
   tags                = local.common_tags
 }
@@ -1091,6 +1196,8 @@ module "blob" {
   container_name       = "${local.blob_name}-container"
   location             = var.location
   resource_group_name  = azurerm_resource_group.resource_group.name
+
+  replication_type = var.storage_replication_type
 
   ttl_enabled    = var.blob_ttl_enabled
   ttl_short_days = var.blob_ttl_short_days

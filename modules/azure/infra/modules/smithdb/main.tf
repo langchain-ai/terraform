@@ -9,7 +9,7 @@ data "azurerm_client_config" "current" {}
 
 resource "azurerm_private_dns_zone" "smithdb" {
   count               = local.create_private_dns_zone ? 1 : 0
-  name                = "privatelink.postgres.database.azure.com"
+  name                = var.private_dns_zone_name
   resource_group_name = var.resource_group_name
   tags                = merge(var.tags, { module = "smithdb" })
 }
@@ -92,7 +92,7 @@ resource "azurerm_storage_account" "smithdb" {
   resource_group_name             = var.resource_group_name
   location                        = var.location
   account_tier                    = "Standard"
-  account_replication_type        = "LRS"
+  account_replication_type        = var.replication_type
   min_tls_version                 = "TLS1_2"
   allow_nested_items_to_be_public = false
   tags                            = merge(var.tags, { module = "smithdb" })
