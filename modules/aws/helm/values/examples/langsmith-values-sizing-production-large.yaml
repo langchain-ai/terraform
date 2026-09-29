@@ -219,7 +219,8 @@ smithdb:
           emptyDir:
             sizeLimit: "1000Gi"
     autoscaling:
-      minReplicas: 4
+      hpa:
+        minReplicas: 4
 
   ingestion:
     deployment:
@@ -237,7 +238,8 @@ smithdb:
           emptyDir:
             sizeLimit: "1000Gi"
     autoscaling:
-      minReplicas: 2
+      hpa:
+        minReplicas: 2
 
   compaction:
     deployment:
@@ -266,7 +268,8 @@ smithdb:
           emptyDir:
             sizeLimit: "300Gi"
     autoscaling:
-      minReplicas: 4
+      hpa:
+        minReplicas: 4
 
   clusterManager:
     deployment:
