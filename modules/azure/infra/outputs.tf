@@ -40,7 +40,7 @@ output "storage_account_k8s_managed_identity_client_id" {
 
 output "resource_group_name" {
   description = "Name of the Azure resource group containing all LangSmith resources"
-  value       = azurerm_resource_group.resource_group.name
+  value       = local.rg_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ output "langsmith_url" {
   description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
+    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.${local.azure_cloud.cloudapp_suffix}" :
     var.ingress_controller == "agic" && module.aks.agw_public_ip_fqdn != null && module.aks.agw_public_ip_fqdn != "" ? "https://${module.aks.agw_public_ip_fqdn}" :
     "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
   )
@@ -185,7 +185,7 @@ output "get_credentials_command" {
   # creates for Key Vault and Storage, so the created group would name a resource
   # group that does not contain the cluster. existing_cluster_resource_group_name is
   # required when create_cluster = false, so this branch is never blank.
-  value = "az aks get-credentials --resource-group ${var.create_cluster ? azurerm_resource_group.resource_group.name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value = "az aks get-credentials --resource-group ${var.create_cluster ? local.rg_name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -261,4 +261,23 @@ output "aks_network" {
     sku_tier     = module.aks.sku_tier
     support_plan = module.aks.support_plan
   }
+}
+
+# The chart builds https://<account>.blob.core.windows.net/ when no override is
+# set, which is the commercial name only. init-values.sh writes these into
+# config.blobStorage.azureStorageServiceUrlOverride and the SmithDB object-store
+# endpoint outside commercial Azure.
+output "azure_environment" {
+  description = "Azure cloud this deployment targets: public or usgovernment."
+  value       = var.azure_environment
+}
+
+output "storage_blob_endpoint" {
+  description = "Blob service endpoint of the LangSmith trace-blob account."
+  value       = module.blob.blob_endpoint
+}
+
+output "smithdb_storage_blob_endpoint" {
+  description = "Blob service endpoint of the SmithDB object-store account. Null when enable_smithdb = false."
+  value       = var.enable_smithdb ? module.smithdb[0].storage_blob_endpoint : null
 }

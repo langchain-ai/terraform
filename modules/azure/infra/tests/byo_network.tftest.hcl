@@ -348,3 +348,101 @@ run "an_undelegated_agic_subnet_warns" {
 
   expect_failures = [check.agic_subnet_delegation]
 }
+
+# ── Subnet NSGs ──────────────────────────────────────────────────────────────
+# A supplied subnet keeps its owner's NSG, and the carved subnets admit the
+# supplied AKS subnet's real prefixes rather than the unused carve default.
+
+run "a_supplied_aks_subnet_gets_no_nsg" {
+  command = plan
+
+  variables {
+    aks_subnet_id             = "${var.vnet_id}/subnets/aks"
+    aks_subnet_address_prefix = ["10.0.200.0/24"]
+    enable_subnet_nsgs        = true
+  }
+
+  assert {
+    condition     = module.vnet.subnet_nsg_rules.aks == null
+    error_message = "enable_subnet_nsgs = true planned an NSG on a supplied AKS subnet"
+  }
+  assert {
+    condition     = one([for r in module.vnet.subnet_nsg_rules.postgres : r.source_address_prefixes if r.name == "allow-aks-postgres"]) == toset(["10.0.0.0/19"])
+    error_message = "the Postgres NSG does not admit the supplied AKS subnet's prefixes"
+  }
+}
+
+
+# An attached cluster's node pools can span subnets, and the data-tier NSGs admit
+# aks_subnet_id alone. The two runs differ only in the second pool's subnet.
+
+run "subnet_nsgs_plan_on_an_attached_cluster_in_one_subnet" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+        { name = "user", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/AKS" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_subnet_nsgs                   = true
+  }
+
+  assert {
+    condition     = module.vnet.subnet_nsg_rules.postgres != null
+    error_message = "enable_subnet_nsgs = true on an attached cluster in one subnet did not plan the Postgres NSG"
+  }
+}
+
+run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+        { name = "user", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks-user" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    enable_subnet_nsgs                   = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}

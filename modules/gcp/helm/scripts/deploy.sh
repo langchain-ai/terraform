@@ -374,6 +374,12 @@ _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;             
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
 _tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
+# An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
+# addon keys falls back to loading every addon file on disk.
+for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
+          enable_fleet enable_standalone_polly enable_standalone_insights; do
+  if [[ -n "$(_parse_tfvar "$_k")" ]]; then _any_flag_set=true; fi
+done
 
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -400,7 +406,10 @@ if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
   echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
 fi
 
-{
+# Build the whole payload before kubectl runs. In a pipe, a failed ${VAR:?} ends
+# only the left side, and kubectl apply then replaces langsmith-config with the
+# keys printed before the failure.
+if ! _langsmith_config_env=$(
   printf 'langsmith_license_key=%s\n' "${TF_VAR_langsmith_license_key:?}"
   printf 'api_key_salt=%s\n' "${TF_VAR_langsmith_api_key_salt:?}"
   printf 'jwt_secret=%s\n' "${TF_VAR_langsmith_jwt_secret:?}"
@@ -418,7 +427,12 @@ fi
   if [[ "$_enable_sandboxes" == "true" ]]; then
     printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
   fi
-} | kubectl create secret generic langsmith-config \
+); then
+  echo "ERROR: a langsmith-config value is not set. The Secret was not changed." >&2
+  echo "       Run: source infra/scripts/setup-env.sh" >&2
+  exit 1
+fi
+printf '%s\n' "$_langsmith_config_env" | kubectl create secret generic langsmith-config \
   --namespace "$NAMESPACE" \
   --from-env-file=/dev/stdin \
   --dry-run=client -o yaml | kubectl apply -f -
@@ -477,6 +491,12 @@ for entry in "${_addon_gate[@]}"; do
   fi
 done
 
+# Fleet needs host-backend, which the base values leave off. A fleet file copied
+# before the overlay set it is never replaced by init-values.sh, so set it here.
+if [[ "$_enable_fleet" == "true" ]]; then
+  VALUES_ARGS+=(--set "hostBackend.enabled=true")
+fi
+
 # SmithDB last, so its overrides beat every sizing and addon file above.
 if [[ "$_smithdb_enabled" == "true" ]]; then
   _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
@@ -500,7 +520,21 @@ helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain
 
 # Guard: pending Helm states (often from interrupted --wait) block upgrades.
-# Recover automatically before proceeding.
+# Recover automatically before proceeding, but never uninstall a release that
+# has a revision to roll back to: stop and print the rollback instead.
+#
+# Prints the newest revision a rollback can restore: one Helm counts as good
+# (deployed or superseded), or the one an interrupted uninstall left behind.
+# Prints nothing when there is none; fails when the history cannot be read or
+# holds no revision.
+_last_good_revision() {
+  local _history
+  _history=$(helm history "$RELEASE_NAME" -n "$NAMESPACE" --output json 2>/dev/null) || return 1
+  # Every release in these states has a revision. No parsable revision is a read failure.
+  grep -q '"revision":[0-9]' <<< "$_history" || return 1
+  tr '{' '\n' <<< "$_history" | grep -E '"status":"(deployed|superseded|uninstalling)"' \
+    | grep -o '"revision":[0-9]*' | cut -d: -f2 | sort -n | tail -1 || true
+}
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
 case "$_release_status" in
@@ -510,22 +544,39 @@ case "$_release_status" in
     helm rollback "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m
     echo ""
     ;;
-  pending-install|pending-rollback|pending-uninstall)
+  pending-install|pending-rollback|uninstalling)
+    # An uninstall deletes every workload and the revision history, so only a
+    # release with nothing to restore (an interrupted first install) is cleared here.
+    # A history that cannot be read counts as one with a revision to restore.
+    _good_rev=$(_last_good_revision || echo "<revision>")
+    if [[ -n "$_good_rev" ]]; then
+      echo "ERROR: Helm release '${RELEASE_NAME}' is in '${_release_status}' state." >&2
+      echo "       deploy.sh does not uninstall a release that has a revision to restore." >&2
+      echo "       Check the history, roll back, then deploy again:" >&2
+      echo "         helm history $RELEASE_NAME -n $NAMESPACE --max 5" >&2
+      if [[ "$_good_rev" == "<revision>" ]]; then
+        echo "       (helm history could not be read, so the revision number is not known.)" >&2
+      fi
+      echo "         helm rollback $RELEASE_NAME $_good_rev -n $NAMESPACE --wait --timeout 5m" >&2
+      echo "         make deploy" >&2
+      exit 1
+    fi
     echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in '${_release_status}' state."
     echo "         Uninstalling stale release to clear lock before reinstall..."
     helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait
     echo ""
     ;;
   failed)
-    # `helm upgrade --install` aborts with "has no deployed releases" when the
-    # history holds no revision in deployed status, which is what a failed first
-    # install leaves behind. A release with a good revision behind it can upgrade
-    # in place, so only clear the record when there is nothing to upgrade from.
-    if helm history "$RELEASE_NAME" -n "$NAMESPACE" --output json 2>/dev/null \
-      | grep -q '"status":"deployed"'; then
+    # A failed first install leaves no revision to upgrade from, and
+    # `helm upgrade --install` can then abort with "has no deployed releases".
+    # Upgrade in place when a deployed, superseded or uninstalling revision
+    # exists, or when the history cannot be read. Clear the record only when no
+    # such revision exists.
+    if [[ -n "$(_last_good_revision || echo "<revision>")" ]]; then
       echo "WARNING: Prior Helm release '${RELEASE_NAME}' is in 'failed' state."
       echo "         This is commonly a hook timeout and does not always indicate unhealthy workloads."
-      echo "         An earlier revision did deploy, so upgrading in place..."
+      echo "         An earlier revision deployed, or helm history could not be read,"
+      echo "         so upgrading in place..."
       echo ""
     else
       echo "WARNING: Helm release '${RELEASE_NAME}' failed on its first install, so no"

@@ -51,12 +51,12 @@ variable "kubernetes_version" {
 variable "default_node_pool_vm_size" {
   type        = string
   description = "VM size of the default node pool"
-  default     = "Standard_D8s_v3" # 8 vCPU, 32GB RAM — Dsv3 family; matches the root module's production default
+  default     = "Standard_D8s_v5" # 8 vCPU, 32GB RAM — Dsv5 family; matches the root module's production default
 }
 
 variable "default_node_pool_min_count" {
   type        = number
-  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable."
+  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v5 provides 18,870m allocatable."
   default     = 1
 }
 
@@ -70,6 +70,12 @@ variable "default_node_pool_max_pods" {
   type        = number
   description = "Max pods per node in the default node pool. AKS default is 30 (Azure CNI). LangSmith Pass 2 deploys ~17 pods; Pass 3 adds ~20 more. Set to 60 to fit a full multi-pass deployment on a single node without triggering autoscaler quota limits."
   default     = 60
+}
+
+variable "default_node_pool_os_sku" {
+  type        = string
+  description = "OS SKU of the default node pool, and of every additional pool that sets no os_sku. Validated in the root module."
+  default     = "Ubuntu"
 }
 
 variable "service_cidr" {
@@ -92,11 +98,12 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
+    os_sku            = optional(string)
   }))
-  description = "Node pools to be created"
+  description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64GB RAM — Dsv3 family; matches the root module's production default
+      vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
       min_count = 0
       max_count = 2
     }
@@ -105,8 +112,8 @@ variable "additional_node_pools" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
-  default     = "nginx"
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'none' = skip."
+  default     = "envoy-gateway"
 
   validation {
     condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
@@ -152,7 +159,7 @@ variable "langsmith_namespace" {
 
 variable "langsmith_release_name" {
   type        = string
-  description = "Helm release name for LangSmith. Used to generate federated identity credential subjects."
+  description = "The LangSmith chart's fullname: the release name when it contains \"langsmith\", otherwise <release>-langsmith. The chart prefixes every service account with it, so the federated identity credential subjects are built from it."
   default     = "langsmith"
 }
 
@@ -238,7 +245,7 @@ variable "support_plan" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 

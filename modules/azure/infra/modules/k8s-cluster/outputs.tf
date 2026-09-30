@@ -112,7 +112,32 @@ output "sku_tier" {
   value       = one(azurerm_kubernetes_cluster.main[*].sku_tier)
 }
 
+output "default_node_pool_os_sku" {
+  description = "OS SKU the default node pool is planned or created with. null when create_cluster = false."
+  value       = one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].os_sku)
+}
+
+output "node_pool_os_skus" {
+  description = "OS SKU of each additional node pool, keyed by pool name."
+  value       = { for name, pool in azurerm_kubernetes_cluster_node_pool.node_pool : name => pool.os_sku }
+}
+
 output "support_plan" {
   description = "The AKS support plan the cluster is planned or created with. null when create_cluster = false."
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
+}
+
+output "workload_identity_service_accounts" {
+  description = "Service accounts federated with the LangSmith workload identity."
+  value       = local.service_accounts_for_workload_identity
+}
+
+output "envoy_gateway_version" {
+  description = "Version of the Envoy Gateway release, empty when ingress_controller is not 'envoy-gateway'. k8s-bootstrap reads it to install cert-manager after the Gateway API CRDs this release ships."
+  value       = join("", helm_release.envoy_gateway[*].version)
+}
+
+output "node_subnet_ids" {
+  description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
+  value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
 }

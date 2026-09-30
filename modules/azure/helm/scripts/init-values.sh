@@ -55,7 +55,7 @@ _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
-_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
 _langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
 if [[ "$_langsmith_release_name" == *langsmith* ]]; then
@@ -94,24 +94,35 @@ echo ""
 # ── Read terraform outputs ─────────────────────────────────────────────────
 echo "Reading terraform outputs..."
 
-STORAGE_ACCOUNT=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_name 2>/dev/null) || {
+STORAGE_ACCOUNT=$(_tf_out storage_account_name) || {
   fail "Could not read storage_account_name. Is 'terraform apply' complete?"
   exit 1
 }
-STORAGE_CONTAINER=$(terraform -chdir="$INFRA_DIR" output -raw storage_container_name 2>/dev/null) || {
+STORAGE_CONTAINER=$(_tf_out storage_container_name) || {
   fail "Could not read storage_container_name."
   exit 1
 }
-WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_managed_identity_client_id 2>/dev/null) || {
+WI_CLIENT_ID=$(_tf_out storage_account_k8s_managed_identity_client_id) || {
   fail "Could not read storage_account_k8s_managed_identity_client_id."
   exit 1
 }
-NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
-ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
+# The chart builds https://<account>.blob.core.windows.net/ unless told otherwise,
+# which is the commercial hostname only. Outside commercial Azure, pass the
+# endpoint Azure reported for the account.
+AZURE_ENVIRONMENT=$(_azure_environment)
+STORAGE_BLOB_ENDPOINT=""
+if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
+  STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw storage_blob_endpoint 2>/dev/null) || {
+    fail "Could not read storage_blob_endpoint, which azure_environment = ${AZURE_ENVIRONMENT} needs. Run 'make apply' on this version of the module first."
+    exit 1
+  }
+fi
+NAMESPACE=$(_tf_out langsmith_namespace) || NAMESPACE="langsmith"
+ADMIN_EMAIL=$(_tf_out langsmith_admin_email) || ADMIN_EMAIL=""
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || CLUSTER_NAME=""
 # Redis client mode follows the AMR clustering policy. No default: guessing wrong pairs
 # the standalone client with an OSS cluster, which is the combination that 503s ingest.
-REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED=""
+REDIS_CLUSTER_ENABLED=$(_tf_out redis_cluster_enabled) || REDIS_CLUSTER_ENABLED=""
 
 SMITHDB_STORAGE_ACCOUNT=""
 SMITHDB_STORAGE_CONTAINER=""
@@ -120,14 +131,18 @@ SMITHDB_METASTORE_SECRET="smithdb-metastore"
 SMITHDB_METASTORE_AUTH_MODE="password"
 SMITHDB_METASTORE_USERNAME=""
 SMITHDB_CACHE_STORAGE_CLASS=""
+SMITHDB_STORAGE_BLOB_ENDPOINT=""
 if [[ "${_enable_smithdb:-false}" == "true" ]]; then
-  SMITHDB_STORAGE_ACCOUNT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_account_name 2>/dev/null) || SMITHDB_STORAGE_ACCOUNT=""
-  SMITHDB_STORAGE_CONTAINER=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_container_name 2>/dev/null) || SMITHDB_STORAGE_CONTAINER=""
-  SMITHDB_WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_workload_identity_client_id 2>/dev/null) || SMITHDB_WI_CLIENT_ID=""
-  SMITHDB_METASTORE_SECRET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_secret_name 2>/dev/null) || SMITHDB_METASTORE_SECRET="smithdb-metastore"
-  SMITHDB_METASTORE_AUTH_MODE=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_auth_mode 2>/dev/null) || SMITHDB_METASTORE_AUTH_MODE="password"
-  SMITHDB_METASTORE_USERNAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_username 2>/dev/null) || SMITHDB_METASTORE_USERNAME=""
-  SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name 2>/dev/null) || SMITHDB_CACHE_STORAGE_CLASS=""
+  SMITHDB_STORAGE_ACCOUNT=$(_tf_out smithdb_storage_account_name) || SMITHDB_STORAGE_ACCOUNT=""
+  SMITHDB_STORAGE_CONTAINER=$(_tf_out smithdb_storage_container_name) || SMITHDB_STORAGE_CONTAINER=""
+  SMITHDB_WI_CLIENT_ID=$(_tf_out smithdb_workload_identity_client_id) || SMITHDB_WI_CLIENT_ID=""
+  SMITHDB_METASTORE_SECRET=$(_tf_out smithdb_metastore_secret_name) || SMITHDB_METASTORE_SECRET="smithdb-metastore"
+  SMITHDB_METASTORE_AUTH_MODE=$(_tf_out smithdb_metastore_auth_mode) || SMITHDB_METASTORE_AUTH_MODE="password"
+  SMITHDB_METASTORE_USERNAME=$(_tf_out smithdb_metastore_username) || SMITHDB_METASTORE_USERNAME=""
+  SMITHDB_CACHE_STORAGE_CLASS=$(_tf_out smithdb_cache_storage_class_name) || SMITHDB_CACHE_STORAGE_CLASS=""
+  if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
+    SMITHDB_STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_blob_endpoint 2>/dev/null) || SMITHDB_STORAGE_BLOB_ENDPOINT=""
+  fi
 fi
 
 echo ""
@@ -149,6 +164,7 @@ echo ""
 # Priority order:
 #   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
 #   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
+#      (cloudapp.usgovcloudapi.net in Azure Government)
 #      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
 #   3. Existing value in values-overrides.yaml (keep on re-run)
@@ -163,14 +179,14 @@ fi
 
 # Azure Public IP DNS label — free, no extra resource, works for all ingress controllers
 if [[ -z "$HOSTNAME" && -n "$_dns_label" ]]; then
-  HOSTNAME="${_dns_label}.${_location}.cloudapp.azure.com"
+  HOSTNAME="${_dns_label}.${_location}.$(_azure_cloudapp_suffix)"
   info "Hostname from dns_label (${_ingress_controller}): $HOSTNAME"
   echo ""
 fi
 
 # AGIC: derive hostname from Application Gateway public IP FQDN (terraform output)
 if [[ -z "$HOSTNAME" && "$_ingress_controller" == "agic" ]]; then
-  _agw_fqdn=$(terraform -chdir="$INFRA_DIR" output -raw agw_public_ip_fqdn 2>/dev/null) || _agw_fqdn=""
+  _agw_fqdn=$(_tf_out agw_public_ip_fqdn) || _agw_fqdn=""
   if [[ -n "$_agw_fqdn" ]]; then
     HOSTNAME="$_agw_fqdn"
     info "Hostname from AGW public IP FQDN: $HOSTNAME"
@@ -318,7 +334,7 @@ info "Generating values-overrides.yaml..."
 #   istio         → "istio"  (self-managed via Helm)
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
-#   envoy-gateway → ""     (uses Gateway API, not Ingress — configure manually)
+#   envoy-gateway → ""     (uses Gateway API, not Ingress — see the gateway block below)
 #   none          → ""       (bring your own)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
@@ -400,12 +416,23 @@ else
   _clickhouse_block='# clickhouse: in-cluster (managed by Helm chart)'
 fi
 
+if [[ -n "$STORAGE_BLOB_ENDPOINT" ]]; then
+  _blob_endpoint_line="    azureStorageServiceUrlOverride: \"${STORAGE_BLOB_ENDPOINT}\""
+else
+  _blob_endpoint_line="    # azureStorageServiceUrlOverride: unset, commercial Azure (<account>.blob.core.windows.net)"
+fi
+
 cat > "$OUT_FILE" << EOF
 # LangSmith Azure — Helm values overrides
 # Auto-generated by init-values.sh — edit to customize, re-run to refresh from terraform outputs.
 # values-overrides.yaml is gitignored — never commit it.
 #
 # Values chain: values.yaml (base) → this file → addon overlays → sizing overlay
+#
+# Generated from these terraform.tfvars values. deploy.sh reads them back and
+# stops the deploy if any has changed since this file was written — editing
+# terraform.tfvars does not regenerate this file. Re-run make init-values.
+$(_values_input_stamp)
 
 config:
   hostname: "${HOSTNAME}"
@@ -419,6 +446,7 @@ config:
     engine: "Azure"
     azureStorageAccountName: "${STORAGE_ACCOUNT}"
     azureStorageContainerName: "${STORAGE_CONTAINER}"
+${_blob_endpoint_line}
   telemetry:
     usageReporting: true
   deployment:
@@ -641,6 +669,15 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     exit 1
   fi
 
+  # Outside the public cloud the chart needs the account's blob endpoint: left
+  # empty, SmithDB falls back to the commercial blob suffix and cannot reach a
+  # Government account.
+  if [[ "$AZURE_ENVIRONMENT" != "public" && -z "$SMITHDB_STORAGE_BLOB_ENDPOINT" ]]; then
+    fail "enable_smithdb = true in Azure ${AZURE_ENVIRONMENT} but the smithdb_storage_blob_endpoint Terraform output is missing"
+    action "Run terraform apply so the output is recorded, then re-run make init-values"
+    exit 1
+  fi
+
   _smithdb_password_secret_key='"smithdb_metastore_db_password"'
   _smithdb_iam_auth_provider='""'
   _smithdb_iam_username='""'
@@ -671,6 +708,7 @@ smithdb:
       bucket: "${SMITHDB_STORAGE_CONTAINER}"
       azure:
         accountName: "${SMITHDB_STORAGE_ACCOUNT}"
+        endpoint: "${SMITHDB_STORAGE_BLOB_ENDPOINT}"
         accessKeySecretKey: ""
     metastore:
       hostSecretKey: "smithdb_metastore_db_host"

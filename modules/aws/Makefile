@@ -103,8 +103,8 @@ tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 purge-secrets: ## Delete SSM secrets after Terraform has no managed resources
 	$(INFRA_DIR)/scripts/purge-secrets.sh
 
-preflight: ## Run infra preflight checks
-	$(INFRA_DIR)/scripts/preflight.sh
+preflight: ## Run infra preflight checks (ARGS="--domain <d>" / "--create-test-resources")
+	$(INFRA_DIR)/scripts/preflight.sh $(ARGS)
 
 preflight-post: kubeconfig ## Post-infra preflight: kubectl + SSM params + helm values
 	$(INFRA_DIR)/scripts/preflight.sh --post-infra

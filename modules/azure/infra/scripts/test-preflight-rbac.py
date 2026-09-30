@@ -624,6 +624,42 @@ CASES = [
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
     },
+    # An attached group is the deployment's whole footprint, and its deployer may
+    # hold rights there alone. Asking the subscription would fail that deployer
+    # for rights the deployment never uses.
+    {
+        "name": "an attached resource group is probed alone, without the subscription",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] Resource group platform-langsmith-rg exists"],
+        "expect_calls": [
+            f"{SUB_SCOPE}/resourceGroups/platform-langsmith-rg/providers",
+            "group show --name platform-langsmith-rg",
+        ],
+        "reject_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+    },
+    {
+        "name": "an attached resource group that cannot be read fails",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "group_missing": True,
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] Resource group platform-langsmith-rg could not be read"],
+    },
+    {
+        "name": "an attached resource group without a name fails before any RBAC call",
+        "tfvars_extra": "create_resource_group = false",
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] terraform.tfvars: create_resource_group = false needs existing_resource_group_name"],
+        "reject_calls": ["checkAccess", "role assignment list"],
+    },
+    {
+        "name": "a created resource group is still checked for resourceGroups/write",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+        "expect_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_calls": ["group show"],
+    },
     {
         # name_suffix_salt exists so a deployment whose four global names got
         # burned can rotate them. Preflight has to mix it into the hash the same
@@ -723,8 +759,8 @@ CASES = [
     },
     {
         # domain_name_label only reaches state through azurerm_public_ip.agw,
-        # which exists under ingress_controller = "agic" alone. On the default
-        # nginx path the label rides a Service annotation on an AKS-managed IP,
+        # which exists under ingress_controller = "agic" alone. On every other
+        # path the label rides a Service annotation on an AKS-managed IP,
         # so state cannot vouch for it and the subscription has to.
         "name": "a DNS label held by this subscription is not a collision",
         "tfvars_extra": f'dns_label = "{DNS}"',
@@ -756,6 +792,75 @@ CASES = [
             f"the active CLI subscription is {SUB}",
             "az account set --subscription 99999999-9999-9999-9999-999999999999",
         ],
+    },
+    {
+        # A Government subscription is invisible from the commercial cloud, so
+        # every check after this one would fail without saying why.
+        "name": "a Government tfvars against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": [
+            "[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud",
+            "az cloud set --name AzureUSGovernment && az login",
+        ],
+    },
+    {
+        "name": "a Government tfvars on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        # Open SWE on #323: the cloud can come from TF_VAR_azure_environment alone,
+        # and preflight read only terraform.tfvars, so it flagged a correctly
+        # configured Government CLI as a mismatch.
+        "name": "TF_VAR_azure_environment on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "TF_VAR_azure_environment against a commercial CLI fails",
+        "ca_all": ALL_GOOD,
+        "env": {"TF_VAR_azure_environment": "usgovernment"},
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
+        # The azure_environment output is the value Terraform applied with,
+        # whichever source it came from, so preflight reads it first.
+        "name": "the azure_environment output on the Government CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "the azure_environment output wins over a missing tfvar on a commercial CLI",
+        "ca_all": ALL_GOOD,
+        "tf_azure_environment": "usgovernment",
+        "tfvars_extra": 'redis_source = "in-cluster"',
+        "expect": ["[✗] azure_environment is usgovernment, but the Azure CLI is on AzureCloud"],
+    },
+    {
+        # Open SWE on #325: the output is the last apply's value, and preflight
+        # checks the next one, so a changed tfvar wins and the difference is named.
+        "name": "a tfvar changed since the last apply wins over the output, with a warning",
+        "ca_all": ALL_GOOD,
+        "cloud_name": "AzureUSGovernment",
+        "tf_azure_environment": "public",
+        "tfvars_extra": 'azure_environment = "usgovernment"\nredis_source = "in-cluster"',
+        "expect": ["[!] The last apply used azure_environment = public, and the configuration now says usgovernment"],
+        "reject": ["but the Azure CLI is on"],
+    },
+    {
+        "name": "a commercial tfvars on the commercial CLI passes the cloud check",
+        "ca_all": ALL_GOOD,
+        "reject": ["but the Azure CLI is on"],
     },
     {
         "name": "a matching subscription passes without comment",
@@ -861,15 +966,16 @@ CASES = [
         ],
     },
     {
-        # Left unset, additional_node_pools is the variable's default: one D16s_v3
-        # pool scaling 0-2, in the same family as the D4s_v3 default pool.
+        # Left unset, additional_node_pools is the variable's default: one D16s_v5
+        # pool scaling 0-2, in its own family beside the D4s_v3 default pool.
         "name": "the default large pool counts toward its family and cores",
         "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3]),
         "ca_all": ALL_GOOD,
-        "vm_usage": [("standardDSv3Family", 0, 64), ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
+        "vm_usage": [("standardDSv3Family", 0, 64), ("standardDSv5Family", 0, 64),
+                     ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
         "expect": [
-            "[✓] standardDSv3Family quota in eastus: 64 of 64 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 needs up to 52)",
-            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 plus Postgres needs up to 54)",
+            "[✓] standardDSv5Family quota in eastus: 64 of 64 vCPUs free (large 0-2 × Standard_D16s_v5 needs up to 32)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v5 plus Postgres needs up to 54)",
         ],
     },
     {
@@ -1047,7 +1153,7 @@ def build_case(case, index):
         )
     if "amr_regions" in case:
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
-    for key in ("kv_deleted", "redis_hit", "dns_held"):
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
@@ -1069,7 +1175,8 @@ def build_case(case, index):
         (fixture / "group_ids").write_text("\n".join(case["group_ids"]))
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr"):
+                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr",
+                 "group_missing"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 

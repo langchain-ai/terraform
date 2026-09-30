@@ -17,7 +17,7 @@ type: "reference"
 
 ![LangSmith Azure Production Architecture](diagrams/lang_smith_deployment_pass_4_5.png)
 
-Full topology: all passes (2–4), AKS namespaces, pod names, external managed services, Workload Identity flow, Key Vault, TLS, KEDA, NGINX.
+Full topology: all passes (2–4), AKS namespaces, pod names, external managed services, Workload Identity flow, Key Vault, TLS, KEDA, and NGINX ingress, drawn before `envoy-gateway` became the default.
 
 ### Pass 5 — Insights (verified)
 
@@ -75,13 +75,13 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 
 | Controller | Variable | DNS label support | Notes |
 |-----------|---------|------------------|-------|
-| `nginx` | `ingress_controller = "nginx"` | yes | Default. NGINX via Helm, standard Kubernetes Ingress. |
+| `envoy-gateway` | `ingress_controller = "envoy-gateway"` | yes | Default. Gateway API native. Uses `envoyproxy/gateway-helm`. |
+| `nginx` | `ingress_controller = "nginx"` | yes | NGINX via Helm, standard Kubernetes Ingress. For clusters standardized on classic Ingress. |
 | `istio-addon` | `ingress_controller = "istio-addon"` | yes | AKS managed Istio service mesh. Use `istio_addon_revision` to pin revision. |
 | `istio` | `ingress_controller = "istio"` | yes | Self-managed Istio via Helm. Full control over revision and config. |
-| `envoy-gateway` | `ingress_controller = "envoy-gateway"` | yes | Gateway API native. Uses `envoyproxy/gateway-helm`. |
 | `none` | `ingress_controller = "none"` | — | Bring your own ingress. |
 
-Azure Public IP DNS labels (`dns_label`) work with all controllers. `deploy.sh` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to the correct LoadBalancer service based on the chosen controller.
+Azure Public IP DNS labels (`dns_label`) work with all controllers. `deploy.sh` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to the correct LoadBalancer service based on the chosen controller. For `envoy-gateway`, it sets the annotation on the EnvoyProxy `langsmith-proxy`, so the proxy service has the label from creation.
 
 ---
 
@@ -101,11 +101,11 @@ AKS Cluster
 │   ├── clickhouse (in-cluster pod)
 │   ├── postgres   (in-cluster pod)
 │   └── redis      (in-cluster pod)
-├── ingress-nginx (Azure Load Balancer → NGINX)
+├── envoy-gateway-system (Azure Load Balancer → Envoy proxy)
 └── cert-manager  (Let's Encrypt TLS)
 
 Azure
-├── Azure Blob Storage  (trace payloads — always external)
+├── Azure Blob Storage  (trace payloads — always external; LRS by default, storage_replication_type)
 └── Azure Key Vault     (secrets)
 ```
 
@@ -116,7 +116,7 @@ AKS Cluster
 ├── langsmith namespace
 │   ├── frontend / backend / platform-backend / playground / queue / ace-backend
 │   └── clickhouse (in-cluster)
-└── ingress-nginx + cert-manager
+└── envoy-gateway-system + cert-manager
 
 Azure Managed Services
 ├── Azure DB for PostgreSQL Flexible Server (private VNet)
@@ -252,8 +252,8 @@ Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/
 
 | Pool | VM Size | vCPU | RAM | Min | Max | Purpose |
 |------|---------|------|-----|-----|-----|---------|
-| default | Standard_D8s_v3 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
-| large | Standard_D16s_v3 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
+| default | Standard_D8s_v5 | 8 | 32 GB | 3 | 10 | Core LangSmith, system pods |
+| large | Standard_D16s_v5 | 16 | 64 GB | 0 | 2 | ClickHouse (in-cluster), LGP agent pods |
 > ClickHouse (when in-cluster) requests 2–4 CPU and 8–15 GB RAM depending on profile. If using [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse), the large pool is only needed for LGP operator-spawned agent pods.
 >
 > SmithDB workloads schedule on ordinary AKS nodes by default. Cache data uses per-pod Premium SSD v2 volumes rather than node-local temporary disks. Use `additional_node_pools` and chart scheduling overrides when workload isolation is required.

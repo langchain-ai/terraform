@@ -132,6 +132,48 @@ if [ -n "${SUB_ID:-}" ] && [ -n "$TFVARS_SUB" ] && [ "$TFVARS_SUB" != "$SUB_ID" 
   fail "terraform.tfvars sets subscription_id = ${TFVARS_SUB}, but the active CLI subscription is ${SUB_ID}. Terraform would deploy to the first; the checks below describe the second. Run: az account set --subscription ${TFVARS_SUB}"
 fi
 
+# Terraform targets azure_environment; every az call below goes to the CLI's
+# active cloud. A Government subscription is invisible from the commercial cloud
+# and the other way round, so a mismatch fails every check below for a reason
+# none of them would name. ARM is the Resource Manager endpoint for az rest.
+# Preflight checks the configuration the next apply will use, so the configured
+# value wins, in Terraform's own precedence: *.auto.tfvars (the last in lexical
+# order wins), then terraform.tfvars, then TF_VAR_azure_environment. The
+# azure_environment output, the value of the last apply, is the fallback when
+# nothing is configured, and a discrepancy between the two is reported. (The
+# post-apply scripts read the output first, since they act on what was applied.)
+_cloud_in_file() {
+  sed -n 's/^[[:space:]]*azure_environment[[:space:]]*=[[:space:]]*"\{0,1\}\([a-z]*\)"\{0,1\}.*/\1/p' "$1" 2>/dev/null | head -1
+}
+_cloud_configured=""
+for _auto in $(ls "$INFRA_DIR"/*.auto.tfvars 2>/dev/null | sort -r); do
+  _cloud_configured=$(_cloud_in_file "$_auto")
+  [ -n "$_cloud_configured" ] && break
+done
+[ -n "$_cloud_configured" ] || _cloud_configured=$(_tfvar azure_environment || true)
+[ -n "$_cloud_configured" ] || _cloud_configured="${TF_VAR_azure_environment:-}"
+_cloud_applied=""
+if command -v terraform >/dev/null 2>&1; then
+  _cloud_applied=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || _cloud_applied=""
+fi
+case "$_cloud_applied" in public|usgovernment) ;; *) _cloud_applied="" ;; esac
+AZURE_ENVIRONMENT="${_cloud_configured:-${_cloud_applied:-public}}"
+case "$AZURE_ENVIRONMENT" in
+  public|usgovernment) ;;
+  *) fail "azure_environment is \"${AZURE_ENVIRONMENT}\"; it must be public or usgovernment"; AZURE_ENVIRONMENT="public" ;;
+esac
+if [ -n "$_cloud_applied" ] && [ "$_cloud_applied" != "$AZURE_ENVIRONMENT" ]; then
+  warn "The last apply used azure_environment = ${_cloud_applied}, and the configuration now says ${AZURE_ENVIRONMENT}. Checking against ${AZURE_ENVIRONMENT}. Moving an existing deployment to another cloud recreates every resource."
+fi
+case "$AZURE_ENVIRONMENT" in
+  usgovernment) EXPECTED_CLI_CLOUD="AzureUSGovernment"; ARM="https://management.usgovcloudapi.net" ;;
+  *)            EXPECTED_CLI_CLOUD="AzureCloud";        ARM="https://management.azure.com" ;;
+esac
+ACTIVE_CLI_CLOUD=$(az cloud show --query name -o tsv 2>/dev/null || echo "")
+if [ -n "$ACTIVE_CLI_CLOUD" ] && [ "$ACTIVE_CLI_CLOUD" != "$EXPECTED_CLI_CLOUD" ]; then
+  fail "azure_environment is ${AZURE_ENVIRONMENT}, but the Azure CLI is on ${ACTIVE_CLI_CLOUD}. Run: az cloud set --name ${EXPECTED_CLI_CLOUD} && az login"
+fi
+
 # identifier is name_prefix's legacy name. Track which was read so warnings name
 # a key the user actually has.
 NAME_KEY="name_prefix"
@@ -150,7 +192,16 @@ if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"
 # name_base overrides the ls/langsmith switch outright, same as main.tf.
 NAME_BASE=$(_tfvar name_base || echo "$NAME_BASE")
 
-RESOURCE_GROUP_NAME=$(_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
+# create_resource_group = false deploys into a group someone else created, often
+# with the deployer's rights granted on that group alone.
+CREATE_RG=$(_tfvar create_resource_group || echo "true")
+if [ "$CREATE_RG" = "false" ]; then
+  RG_KEY="existing_resource_group_name"
+  RESOURCE_GROUP_NAME=$(_tfvar existing_resource_group_name || echo "")
+else
+  RG_KEY="${NAME_KEY}, name_base and resource_group_name"
+  RESOURCE_GROUP_NAME=$(_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
+fi
 
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
@@ -252,25 +303,41 @@ trap 'rm -rf "$RBAC_TMP"' EXIT
 
 if [ -z "$PRINCIPAL_ID" ] || [ -z "$SUB_ID_CHECK" ]; then
   warn "Skipping RBAC check — no principal object ID to query"
+elif [ "$CREATE_RG" = "false" ] && [ -z "$RESOURCE_GROUP_NAME" ]; then
+  # Without a group there is no scope to ask about, and the subscription
+  # fallback would judge rights an attached deployment never uses.
+  fail "terraform.tfvars: create_resource_group = false needs existing_resource_group_name, the group to deploy into"
 else
   # Every scope the deployment writes a role assignment at is knowable before
   # apply. The subscription covers everything created beneath it by inheritance.
   # The resource group is where every LangSmith resource lands, and one of the
-  # AGIC assignments names it literally. A bring-your-own VNet can sit in a
+  # AGIC assignments names it literally. An attached group is the whole
+  # footprint, so the subscription is not asked about: a deployer scoped to the
+  # group would fail there for rights the deployment never uses. A bring-your-own VNet can sit in a
   # platform-managed resource group, which is where a landing zone puts its deny
   # assignments, so it gets checked on its own when one is configured.
   #
   # Both values come out of terraform.tfvars and end up in a request URL, so each
   # is held to the pattern its Terraform variable already validates and dropped
   # if it does not fit. An unchecked value here could aim the request elsewhere.
-  SCOPES=("/subscriptions/${SUB_ID_CHECK}")
+  SCOPES=()
+  RG_SCOPE=""
+  [ "$CREATE_RG" = "false" ] || SCOPES+=("/subscriptions/${SUB_ID_CHECK}")
 
   # Azure's resource-group grammar, so a hand-edited terraform.tfvars cannot aim
   # the request elsewhere. printf gives grep the newline it needs to see a line.
   if printf '%s\n' "$RESOURCE_GROUP_NAME" | grep -qE '^[A-Za-z0-9._()-]{1,90}$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}")
+    RG_SCOPE="/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}"
+    SCOPES+=("$RG_SCOPE")
+    if [ "$CREATE_RG" = "false" ]; then
+      if az group show --name "$RESOURCE_GROUP_NAME" --query id -o tsv >/dev/null 2>&1; then
+        pass "Resource group ${RESOURCE_GROUP_NAME} exists"
+      else
+        fail "Resource group ${RESOURCE_GROUP_NAME} could not be read. It does not exist in this subscription or this identity cannot read it, and plan reads it before creating anything."
+      fi
+    fi
   else
-    warn "terraform.tfvars: '${RESOURCE_GROUP_NAME}' is not a legal resource group name (check ${NAME_KEY}, name_base and resource_group_name), so the deployment resource group was not checked"
+    warn "terraform.tfvars: '${RESOURCE_GROUP_NAME}' is not a legal resource group name (check ${RG_KEY}), so the deployment resource group was not checked"
   fi
 
   EXISTING_VNET=$(_tfvar vnet_id || echo "")
@@ -288,7 +355,7 @@ else
   # is what plan exercises before any write, so an applied deployment fails there
   # first. checkAccess batches them into one request per scope. The subject
   # attributes go through json.dumps into a file rather than onto a command line.
-  python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" > "${RBAC_TMP}/body.json" <<'PY'
+  python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" "$CREATE_RG" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
 ACTIONS = [
@@ -305,6 +372,9 @@ ACTIONS = [
     # Microsoft.Cache/redis is classic Azure Cache and a separate RBAC action.
     "Microsoft.Cache/redisEnterprise/write",
 ]
+# An attached group already exists, so nothing writes it.
+if sys.argv[4] == "false":
+    ACTIONS.remove("Microsoft.Resources/subscriptions/resourceGroups/write")
 
 attributes = {"ObjectId": sys.argv[1]}
 if sys.argv[2] == "1":
@@ -318,11 +388,12 @@ PY
 
   : > "${RBAC_TMP}/scopes.txt"
   SCOPE_COUNT=0
-  for SCOPE in "${SCOPES[@]}"; do
+  # bash 3.2 treats an empty array as unset under set -u, hence the guard.
+  for SCOPE in ${SCOPES[@]+"${SCOPES[@]}"}; do
     SCOPE_COUNT=$((SCOPE_COUNT + 1))
     printf '%s\n' "$SCOPE" >> "${RBAC_TMP}/scopes.txt"
     az rest --method post \
-      --url "https://management.azure.com${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
+      --url "${ARM}${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
       --headers "Content-Type=application/json" \
       --body "@${RBAC_TMP}/body.json" \
       -o json > "${RBAC_TMP}/response-${SCOPE_COUNT}.json" 2>/dev/null || true
@@ -336,13 +407,13 @@ PY
   echo "{}" > "${RBAC_TMP}/activations.json"
   if [ "$PRINCIPAL_IS_CALLER" -eq 1 ]; then
     az rest --method get \
-      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      --url "${ARM}/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleEligibilityScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
       -o json > "${RBAC_TMP}/eligibilities.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/eligibilities.json"
     # The sibling call for what is active now, and when it expires. An activation
     # that lapses between preflight and plan looks like never having activated,
     # and a first apply of AKS plus Postgres outlasts a short window.
     az rest --method get \
-      --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
+      --url "${ARM}/subscriptions/${SUB_ID_CHECK}/providers/Microsoft.Authorization/roleAssignmentScheduleInstances?api-version=2020-10-01&\$filter=asTarget()" \
       -o json > "${RBAC_TMP}/activations.json" 2>/dev/null || echo "{}" > "${RBAC_TMP}/activations.json"
   fi
 
@@ -656,8 +727,17 @@ PY
 
   if [ "$RBAC_VERDICT" = "unavailable" ]; then
     warn "checkAccess (Microsoft.Authorization/checkAccess, 2018-09-01-preview) did not answer at any scope. It is an unversioned preview API, so it may have changed or this tenant may refuse it. Falling back to a role-name check, which cannot see deny assignments, ABAC conditions, or custom roles."
+    # The attach path's deployer may hold its roles on the group alone, so ask
+    # there; --include-inherited still picks up anything from above it.
+    if [ "$CREATE_RG" = "false" ] && [ -n "$RG_SCOPE" ]; then
+      FALLBACK_SCOPE="$RG_SCOPE"
+      FALLBACK_LABEL="the resource group"
+    else
+      FALLBACK_SCOPE="/subscriptions/${SUB_ID_CHECK}"
+      FALLBACK_LABEL="the subscription"
+    fi
     HELD=$(az role assignment list \
-      --scope "/subscriptions/${SUB_ID_CHECK}" \
+      --scope "$FALLBACK_SCOPE" \
       --include-inherited \
       --assignee-object-id "$PRINCIPAL_ID" \
       --include-groups \
@@ -665,11 +745,11 @@ PY
     HELD_FLAT=$(printf '%s' "$HELD" | tr '\n' ',' | sed 's/,$//')
     case ",${HELD_FLAT}," in
       *,Owner,*|*,"User Access Administrator",*|*,"Role Based Access Control Administrator",*)
-        pass "Holds ${HELD_FLAT} at or above the subscription, which carries roleAssignments/write" ;;
+        pass "Holds ${HELD_FLAT} at or above ${FALLBACK_LABEL}, which carries roleAssignments/write" ;;
       ,,)
         fail "No role assignments could be read for this principal, and checkAccess did not answer. Nothing here can tell you whether apply will succeed — check the identity by hand before applying." ;;
       *)
-        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
+        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above ${FALLBACK_LABEL}. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
   else
     if [ "$GROUPS_RESOLVED" -eq 1 ]; then
@@ -799,7 +879,7 @@ fi
 echo ""
 echo "── Subscription Offer Type ───────────────────────────"
 QUOTA_ID=$(az rest --method get \
-  --url "https://management.azure.com/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
+  --url "${ARM}/subscriptions/${SUB_ID_CHECK}?api-version=2022-12-01" \
   --query "subscriptionPolicies.quotaId" -o tsv 2>/dev/null || echo "")
 
 if [ -z "$QUOTA_ID" ]; then
@@ -843,7 +923,7 @@ REDIS_SOURCE=$(_tfvar redis_source || echo "external")
 QUOTA_LOCATION=$(_tfvar location || echo "eastus")
 POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
 CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
-NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v3")
+NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v5")
 NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
 NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
 
@@ -908,7 +988,7 @@ _quota_row() {
 # for a shape it cannot read, such as the whole map on one line.
 _additional_pools() {
   if ! grep -qE '^[[:space:]]*additional_node_pools[[:space:]]*=' "$TFVARS" 2>/dev/null; then
-    printf 'large\tStandard_D16s_v3\t0\t2\n'
+    printf 'large\tStandard_D16s_v5\t0\t2\n'
     return 0
   fi
   local rows
@@ -1514,12 +1594,12 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   }
 
   _check_name "Postgres" "$PG_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
+    "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.DBforPostgreSQL/locations/${LOCATION}/checkNameAvailability?api-version=2023-03-01-preview" \
     "{\"name\":\"${PG_NAME}\",\"type\":\"Microsoft.DBforPostgreSQL/flexibleServers\"}" "nameAvailable" \
     63 "Shorten var.name_prefix or set var.postgres_name explicitly."
 
   _check_name "Storage account" "$BLOB_NAME" \
-    "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
+    "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Storage/checkNameAvailability?api-version=2023-01-01" \
     "{\"name\":\"${BLOB_NAME}\",\"type\":\"Microsoft.Storage/storageAccounts\"}" "nameAvailable" \
     24 "Shorten var.name_prefix or set var.storage_account_name explicitly."
 
@@ -1540,14 +1620,14 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
     fail "Key Vault: '${KV_NAME}' is soft-deleted, which still reserves the name. Recover it (az keyvault recover --name ${KV_NAME}) or purge it (az keyvault purge --name ${KV_NAME})."
   else
     _check_name "Key Vault" "$KV_NAME" \
-      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
+      "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.KeyVault/checkNameAvailability?api-version=2023-07-01" \
       "{\"name\":\"${KV_NAME}\",\"type\":\"Microsoft.KeyVault/vaults\"}" "nameAvailable" \
       24 "Shorten var.name_prefix or set var.keyvault_name explicitly."
   fi
 
   if [ -n "$DNS_LABEL" ]; then
-    # State carries the label only under ingress_controller = "agic". The
-    # default nginx path sets it as a Service annotation on an AKS-managed IP,
+    # State carries the label only under ingress_controller = "agic". Every
+    # other controller sets it as a Service annotation on an AKS-managed IP,
     # so _in_state cannot see it — ask the subscription who holds it instead.
     DNS_OWNED=0
     if _name_is_safe "$DNS_LABEL"; then
@@ -1557,7 +1637,7 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
       fi
     fi
     _check_name "Public IP DNS label" "$DNS_LABEL" \
-      "https://management.azure.com/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
+      "${ARM}/subscriptions/${SUB_ID}/providers/Microsoft.Network/locations/${LOCATION}/CheckDnsNameAvailability?domainNameLabel=${DNS_LABEL}&api-version=2023-09-01" \
       "" "available" \
       63 "Shorten var.dns_label." "$DNS_OWNED"
   elif LANGSMITH_DOMAIN=$(_tfvar langsmith_domain); then

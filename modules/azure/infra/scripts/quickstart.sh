@@ -20,6 +20,14 @@ source "$SCRIPT_DIR/_common.sh"
 INFRA_DIR="$(cd "$INFRA_DIR" && pwd)"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
 
+# The cloud this wizard is writing for. On a fresh run there is no tfvars and no
+# Terraform output for _common.sh's _azure_environment to read, so the wizard
+# owns the value: taken from a resumed tfvars, else from the Azure CLI's active
+# cloud in section 2, and written to the tfvars. Inside the wizard,
+# _azure_environment returns it, so the DNS hints and the Redis rule use it.
+AZURE_ENVIRONMENT=""
+_azure_environment() { echo "${AZURE_ENVIRONMENT:-public}"; }
+
 # ── Colors ────────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
 CYAN='\033[0;36m'
@@ -188,6 +196,7 @@ _derive_names() {
   # and what lets the review screen say "attaches to".
   [[ "$CREATE_CLUSTER" == "false" ]]  && _AKS_NAME="$EXISTING_CLUSTER_NAME"
   [[ "$CREATE_KEYVAULT" == "false" ]] && _KV_NAME="$EXISTING_KEYVAULT_NAME"
+  [[ "$CREATE_RESOURCE_GROUP" == "false" ]] && _RG_NAME="$EXISTING_RESOURCE_GROUP_NAME"
   # Not derived from name_base: renaming a Log Analytics workspace destroys the
   # logs in it.
   _LAW_NAME="langsmith-logs${suffix}"
@@ -238,10 +247,10 @@ AKS cluster:${_AKS_NAME}:63"
 
 STATE_FILE="$INFRA_DIR/.quickstart-state"
 
-_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID AZURE_ENVIRONMENT NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
 STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
-CREATE_KEYVAULT EXISTING_KEYVAULT_NAME
+CREATE_KEYVAULT EXISTING_KEYVAULT_NAME CREATE_RESOURCE_GROUP EXISTING_RESOURCE_GROUP_NAME
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
@@ -353,11 +362,12 @@ _load_tfvars() {
 
   # Bare booleans, so _tfvar cannot see them. Only "false" is acted on, so a
   # malformed value cannot silently turn a greenfield deployment into an attach.
-  for v in create_cluster create_keyvault; do
+  for v in create_cluster create_keyvault create_resource_group; do
     [[ "$(_tfvar_bare "$v")" == "false" ]] || continue
     case "$v" in
-      create_cluster)  CREATE_CLUSTER="false" ;;
-      create_keyvault) CREATE_KEYVAULT="false" ;;
+      create_cluster)        CREATE_CLUSTER="false" ;;
+      create_keyvault)       CREATE_KEYVAULT="false" ;;
+      create_resource_group) CREATE_RESOURCE_GROUP="false" ;;
     esac
   done
 
@@ -368,11 +378,12 @@ _load_tfvars() {
            sizing_profile postgres_admin_username postgres_database_name \
            amr_sku name_base name_suffix_salt storage_account_name keyvault_name postgres_name \
            redis_name cluster_name resource_group_name vnet_name \
-           existing_cluster_name existing_keyvault_name aks_network_mode aks_sku_tier; do
+           existing_cluster_name existing_keyvault_name existing_resource_group_name aks_network_mode aks_sku_tier azure_environment; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
       subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
+      azure_environment)         AZURE_ENVIRONMENT="$_TF_VAL" ;;
       name_base)                 NAME_BASE="$_TF_VAL" ;;
       name_suffix_salt)          NAME_SUFFIX_SALT="$_TF_VAL" ;;
       storage_account_name)      STORAGE_ACCOUNT_NAME="$_TF_VAL" ;;
@@ -384,6 +395,7 @@ _load_tfvars() {
       vnet_name)                 VNET_NAME="$_TF_VAL" ;;
       existing_cluster_name)     EXISTING_CLUSTER_NAME="$_TF_VAL" ;;
       existing_keyvault_name)    EXISTING_KEYVAULT_NAME="$_TF_VAL" ;;
+      existing_resource_group_name) EXISTING_RESOURCE_GROUP_NAME="$_TF_VAL" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       environment)               ENVIRONMENT="$_TF_VAL" ;;
@@ -490,11 +502,80 @@ printf "${DIM}  Answer each question. Review and change any answer before writin
 # -- 1. Profile --------------------------------------------------------------
 PROFILE="dev"
 
+# The Azure CLI's active cloud, in azure_environment's terms.
+_cli_azure_environment() {
+  case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
+    AzureUSGovernment) echo "usgovernment" ;;
+    *)                 echo "public" ;;
+  esac
+}
+
+# Preflight requires the CLI and azure_environment to agree, so say which side
+# to change. Either can be the wrong one: the CLI left on the old cloud, or a
+# tfvars carried over from a deployment in the other cloud.
+_warn_cloud_mismatch() {
+  local _cli_cloud
+  _cli_cloud="$(_cli_azure_environment)"
+  [[ "$(_azure_environment)" == "$_cli_cloud" ]] && return 0
+  _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight fails until they match:\n" \
+    "$(_azure_environment)" "$_cli_cloud"
+  printf "  change the Azure cloud in section 2, or run: az cloud set --name %s && az login\n" \
+    "$([[ "$(_azure_environment)" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
+}
+
+# The cloud's default: a value already set (a resumed tfvars or checkpoint, or
+# kept through "start fresh") wins, then TF_VAR_azure_environment, then the
+# Azure CLI's active cloud. Run once at startup, after resume and start fresh,
+# so a checkpoint that skips section 2, or one saved before this key existed,
+# still gets a cloud. Section 2 asks with this as the default, so a value that
+# is set is never locked in.
+_resolve_azure_environment() {
+  local _cloud_src="the existing terraform.tfvars"
+  if [[ -z "$AZURE_ENVIRONMENT" ]]; then
+    case "${TF_VAR_azure_environment:-}" in
+      public|usgovernment) AZURE_ENVIRONMENT="$TF_VAR_azure_environment"; _cloud_src="TF_VAR_azure_environment" ;;
+      *)                   AZURE_ENVIRONMENT="$(_cli_azure_environment)"; _cloud_src="the Azure CLI" ;;
+    esac
+  fi
+  if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
+    _hint "Azure cloud: Azure Government (from ${_cloud_src}). Writing azure_environment = \"usgovernment\"."
+  fi
+  _warn_cloud_mismatch
+}
+
+# Section 2's cloud question. Moving an existing deployment between clouds is
+# a new deployment, but a tfvars copied from one is a normal starting point, so
+# the answer is always offered for change.
+_ask_azure_environment() {
+  _ask_choice --default "$(_index_of "$(_azure_environment)" public usgovernment)" \
+    "Which Azure cloud does this deployment run in?" \
+    "Azure (commercial)  — azure_environment = \"public\"" \
+    "Azure Government    — azure_environment = \"usgovernment\""
+  AZURE_ENVIRONMENT="public"
+  [[ "$_CHOICE" == "2" ]] && AZURE_ENVIRONMENT="usgovernment"
+  _warn_cloud_mismatch
+  # A jump to review from here skips section 7, which applies the same rule.
+  _gov_redis_in_cluster
+}
+
+# Azure Managed Redis is not offered in Azure Government, and redis_source =
+# "external" fails at plan there, so Redis runs in-cluster whatever was picked.
+# Postgres keeps the operator's choice. Called from section 7, and at startup
+# for a resumed checkpoint that will not pass through section 7 again, and
+# after the cloud question in section 2.
+_gov_redis_in_cluster() {
+  if [[ "$(_azure_environment)" == "usgovernment" && "$REDIS_SOURCE" == "external" ]]; then
+    REDIS_SOURCE="in-cluster"
+    echo ""
+    _hint "Azure Government: Azure Managed Redis is not offered there, so Redis runs in-cluster."
+  fi
+}
+
 _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
   _hint "Dev/POC:    smaller nodes, in-cluster services OK, Key Vault stays purgeable."
-  _hint "Production: D8s_v3 nodes, external Postgres + Redis, Key Vault purge protection."
+  _hint "Production: D8s_v5 nodes, external Postgres + Redis, Key Vault purge protection."
 
   _hint "Changing this later leaves answers you have already given untouched —"
   _hint "it only affects the defaults of sections you have not filled in yet."
@@ -539,12 +620,14 @@ RESOURCE_GROUP_NAME=""
 VNET_NAME=""
 
 # Attach mode, same reason again: the review screen and the length check both
-# name the cluster and the vault, and those names are the operator's here. An
-# absent key reads as create, the module's default.
+# name the cluster, the vault, and the resource group, and those names are the
+# operator's here. An absent key reads as create, the module's default.
 CREATE_CLUSTER="true"
 EXISTING_CLUSTER_NAME=""
 CREATE_KEYVAULT="true"
 EXISTING_KEYVAULT_NAME=""
+CREATE_RESOURCE_GROUP="true"
+EXISTING_RESOURCE_GROUP_NAME=""
 # Blank on purpose: the module omits the tag when it is empty, and an unanswered
 # "platform-team" is worse than no tag.
 OWNER=""
@@ -553,6 +636,7 @@ COST_CENTER=""
 
 _run_section_2() {
   _section "2. Subscription & Naming"
+  _ask_azure_environment
   _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
   _hint "and is the default 'environment' tag. Write it without a hyphen — we add the separator."
   # Same base the derivation uses, so a tfvars carrying name_base gets an example
@@ -666,7 +750,7 @@ _run_section_2() {
 
   echo ""
   _derive_names
-  printf "  Resource group  $(_cyan "$_RG_NAME")  in  $(_cyan "$LOCATION")\n"
+  printf "  Resource group  $(_cyan "$(_name_or_attached "$CREATE_RESOURCE_GROUP" "$_RG_NAME")")  in  $(_cyan "$LOCATION")\n"
   printf "  Cluster $(_cyan "$(_name_or_attached "$CREATE_CLUSTER" "$_AKS_NAME")") · Key Vault $(_cyan "$(_name_or_attached "$CREATE_KEYVAULT" "$_KV_NAME")") · Storage $(_cyan "$_BLOB_NAME")\n"
 }
 
@@ -855,7 +939,7 @@ _run_section_3() {
 }
 
 # -- 4. AKS ------------------------------------------------------------------
-NODE_VM_SIZE="Standard_D4s_v3"
+NODE_VM_SIZE="Standard_D4s_v5"
 NODE_MIN=2
 NODE_MAX=5
 NODE_MAX_PODS=60
@@ -865,9 +949,9 @@ AKS_SKU_TIER="Standard"
 _run_section_4() {
   _section "4. AKS Cluster"
   _hint "Node sizing determines how many LangSmith services fit per node."
-  _hint "Standard_D4s_v3 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
-  _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
-  _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
+  _hint "Standard_D4s_v5 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
+  _hint "Standard_D8s_v5 (8 vCPU, 32 GiB) — required for production sizing profile."
+  _hint "Cost estimate (eastus, on-demand): D4s_v5 ~\$0.19/hr, D8s_v5 ~\$0.38/hr per node."
   _hint "The autoscaler handles bursts — min_count is the always-on floor."
 
   local vm_default="$NODE_VM_SIZE"
@@ -875,11 +959,11 @@ _run_section_4() {
   local max_default="$NODE_MAX"
   if [[ "$PROFILE" == "prod" ]]; then
     if ! _answered 4; then
-      vm_default="Standard_D8s_v3"
+      vm_default="Standard_D8s_v5"
       min_default=3
       max_default=10
     fi
-    _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
+    _hint "Production defaults: D8s_v5 ×3 min (fits Pass 2 at ~76% CPU utilization)."
   fi
 
   _ask "Node VM size" "$vm_default"
@@ -944,40 +1028,40 @@ _run_section_4() {
 }
 
 # -- 5. Ingress Controller ---------------------------------------------------
-INGRESS_CONTROLLER="nginx"
+INGRESS_CONTROLLER="envoy-gateway"
 ISTIO_ADDON_REVISION=""
 AGW_SKU_TIER=""
 
 _run_section_5() {
   _section "5. Ingress Controller"
   _hint "The ingress controller routes external HTTP/HTTPS traffic to LangSmith pods."
-  _hint "nginx       — standard K8s ingress, supported everywhere, easiest to debug."
-  _hint "istio-addon — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
-  _hint "istio       — self-managed Istio via Helm; more control, more operational overhead."
-  _hint "agic        — Azure Application Gateway; enterprise WAF built-in. Needs a"
-  _hint "              dedicated /24 subnet, carved for you or named with agic_subnet_id."
-  _hint "envoy-gateway — Gateway API native; useful if you're standardizing on Gateway API."
-  _hint "Start with nginx unless you have a specific reason to use another."
+  _hint "envoy-gateway — Gateway API native; the same controller on AWS and GCP."
+  _hint "nginx         — classic K8s Ingress; for clusters standardized on it."
+  _hint "istio-addon   — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
+  _hint "istio         — self-managed Istio via Helm; more control, more operational overhead."
+  _hint "agic          — Azure Application Gateway; enterprise WAF built-in. Needs a"
+  _hint "                dedicated /24 subnet, carved for you or named with agic_subnet_id."
+  _hint "Start with envoy-gateway unless you have a specific reason to use another."
 
   local ingress_choice=""
-  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" nginx istio-addon istio agic envoy-gateway none)"
+  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" envoy-gateway nginx istio-addon istio agic none)"
 
   while true; do
     _ask_choice --default "$ingress_choice" \
       "Which ingress controller?" \
-      "nginx         — NGINX via Helm (recommended default)" \
+      "envoy-gateway — Envoy Gateway, Gateway API (recommended default)" \
+      "nginx         — NGINX via Helm (legacy Ingress compatibility)" \
       "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
       "istio         — Istio via Helm (self-managed)" \
       "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
-      "envoy-gateway — Envoy Gateway (Gateway API native)" \
       "none          — skip (bring your own)"
 
     case "$_CHOICE" in
-      1) INGRESS_CONTROLLER="nginx" ;;
-      2) INGRESS_CONTROLLER="istio-addon" ;;
-      3) INGRESS_CONTROLLER="istio" ;;
-      4) INGRESS_CONTROLLER="agic" ;;
-      5) INGRESS_CONTROLLER="envoy-gateway" ;;
+      1) INGRESS_CONTROLLER="envoy-gateway" ;;
+      2) INGRESS_CONTROLLER="nginx" ;;
+      3) INGRESS_CONTROLLER="istio-addon" ;;
+      4) INGRESS_CONTROLLER="istio" ;;
+      5) INGRESS_CONTROLLER="agic" ;;
       6) INGRESS_CONTROLLER="none" ;;
     esac
 
@@ -1022,7 +1106,7 @@ _run_section_5() {
       _yellow "NOTE"; printf ": AGIC with the overlay network mode is not yet verified by this module.\n"
       _hint "Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here)"
       _hint "except in Azure Government and Azure China, where it is unsupported. Confirm ingress on"
-      _hint "the cluster before relying on it, or choose nginx, where every TLS path is validated."
+      _hint "the cluster before relying on it, or choose envoy-gateway, the default."
     fi
   fi
 }
@@ -1053,7 +1137,7 @@ _run_section_6() {
   _hint "Determines how LangSmith is accessed and whether traffic is encrypted."
   _hint ""
   _hint "None          — HTTP only. Fastest setup, zero cert config. Good for dev/internal."
-  _hint "              URL: http://<label>.<region>.cloudapp.azure.com"
+  _hint "              URL: http://<label>.<region>.$(_azure_cloudapp_suffix)"
   _hint ""
   _hint "Both HTTPS options are free certificates from Let's Encrypt. What differs is how"
   _hint "Let's Encrypt proves you control the name, and both register an ACME account."
@@ -1133,7 +1217,7 @@ _run_section_6() {
     if [[ "$want_domain" == "false" ]]; then
       _hint "How do you want to expose the LangSmith URL?"
       _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
-      _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
+      _hint "                    Azure assigns <label>.<region>.$(_azure_cloudapp_suffix) to the LB IP."
       _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
       _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
       echo ""
@@ -1171,7 +1255,7 @@ _run_section_6() {
     LANGSMITH_DOMAIN=""; LE_EMAIL=""
     echo ""
     _hint "Azure assigns a free DNS label to your load balancer public IP."
-    _hint "Format: <label>.<region>.cloudapp.azure.com"
+    _hint "Format: <label>.<region>.$(_azure_cloudapp_suffix)"
     _ask_dns_label
   else
     # existing — no hostname prompts apply
@@ -1276,6 +1360,8 @@ _run_section_7() {
       REDIS_SOURCE="in-cluster"
     fi
   fi
+
+  _gov_redis_in_cluster
 
   # Without this prompt every quickstart deployment silently took the Balanced_B0
   # module default, which some regions cannot allocate.
@@ -1386,11 +1472,11 @@ _run_section_9() {
   _hint ""
   _hint "minimum        — bare minimum (demos, heavily constrained clusters, < 4 vCPU total)."
   _hint "dev            — single replica per service, minimal requests. Fast deploys."
-  _hint "                 Use with Standard_D4s_v3 × 2+ nodes."
+  _hint "                 Use with Standard_D4s_v5 × 2+ nodes."
   _hint "production     — multi-replica + HPA (backend×3, queue×3, etc.)."
-  _hint "                 Use with Standard_D8s_v3 × 3+ nodes. Required for real workloads."
+  _hint "                 Use with Standard_D8s_v5 × 3+ nodes. Required for real workloads."
   _hint "production-large — high-volume (~50 concurrent users, ~1000 traces/sec)."
-  _hint "                 Use with Standard_D8s_v3 × 5+ nodes."
+  _hint "                 Use with Standard_D8s_v5 × 5+ nodes."
 
   local sizing_choice=""
   _answered 9 && sizing_choice="$(_index_of "$SIZING_PROFILE" minimum dev production production-large)"
@@ -1431,7 +1517,7 @@ _run_section_10() {
     _hint "                  more). Starts in Detection mode — logs matches without blocking."
     _hint "                  Say yes to diagnostics too, or nothing collects the firewall log and"
     _hint "                  you cannot see what to exclude before switching to Prevention."
-    _hint "                  For nginx/istio the policy is created but nothing references it —"
+    _hint "                  For envoy-gateway/nginx/istio the policy is created but nothing references it —"
     _hint "                  use Azure Front Door or DDoS Protection instead."
     if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then
       CREATE_WAF="true"
@@ -1521,16 +1607,25 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
        ANSWERED="1 2 3 4 5 6 7 8 9 10"
        printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
     2) PRESERVE_UNKNOWN="false"
-       # create_cluster and create_keyvault ride through a re-run as preserved
-       # unknown keys, except on this branch, which drops them. That is not one
-       # more discarded hand-edit: it turns an attached deployment greenfield,
-       # and the next plan builds a second cluster and vault beside the live ones.
+       # The cloud is not an answer to start over: dropping it would quietly turn
+       # a Government file commercial, so keep it through the fresh start.
+       case "$(_tfvar azure_environment 2>/dev/null || true)" in
+         public|usgovernment) AZURE_ENVIRONMENT="$(_tfvar azure_environment)" ;;
+       esac
+       # create_cluster, create_keyvault, and create_resource_group ride through
+       # a re-run as preserved unknown keys, except on this branch, which drops
+       # them. That is not one more discarded hand-edit: it turns an attached
+       # deployment greenfield, and the next plan builds a second cluster, vault,
+       # or resource group beside the live ones.
        _attached=""
        if grep -qE '^[[:space:]]*create_cluster[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
          _attached="an AKS cluster"
        fi
        if grep -qE '^[[:space:]]*create_keyvault[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
          _attached="${_attached:+${_attached} and }a Key Vault"
+       fi
+       if grep -qE '^[[:space:]]*create_resource_group[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="${_attached:+${_attached} and }a resource group"
        fi
        if [[ -n "$_attached" ]]; then
          echo ""
@@ -1542,6 +1637,9 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
     3) echo "Aborted."; exit 0 ;;
   esac
 fi
+
+_resolve_azure_environment
+_gov_redis_in_cluster
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Run sections — Enter advances, b goes back, r jumps to review, q saves & quits
@@ -1589,6 +1687,7 @@ while true; do
   printf "  %-24s %s\n" "1. Profile:"         "$PROFILE"
   printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
+  printf "  %-24s %s\n" "   Azure cloud:"     "${AZURE_ENVIRONMENT:-public}"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
   # An unanswered environment tag falls back to the deployment name, then "dev",
   # so show what the tag will actually say.
@@ -1615,7 +1714,7 @@ while true; do
   [[ "$TLS_SOURCE" == "letsencrypt" ]] && _TLS_REVIEW="letsencrypt  (Let's Encrypt, HTTP-01 challenge)"
   [[ "$TLS_SOURCE" == "dns01" ]]       && _TLS_REVIEW="dns01  (Let's Encrypt, DNS-01 challenge)"
   printf "  %-24s %s\n" "6. TLS:"             "$_TLS_REVIEW"
-  [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
+  [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.$(_azure_cloudapp_suffix)"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
   [[ -n "$LE_EMAIL" ]]         && printf "  %-24s %s\n" "   ACME email:"   "$LE_EMAIL"
   printf "  %-24s %s\n" "7. PostgreSQL:"      "$PG_SOURCE"
@@ -1632,7 +1731,13 @@ while true; do
   # asked about, so this is the only place they surface.
   _derive_names
   echo ""
-  printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  # An attached group is the operator's, so it is named as the target rather
+  # than as something this deployment owns.
+  if [[ "$CREATE_RESOURCE_GROUP" == "false" ]]; then
+    printf "  ${BOLD}Terraform creates, in your existing resource group %s:${RESET}\n" "${_RG_NAME:-(existing_resource_group_name is unset)}"
+  else
+    printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  fi
   # A BYO VNet is listed under section 3 by ID, so name only the created one.
   [[ "$CREATE_VNET" == "true" ]] && printf "    %-18s %s\n" "Virtual network" "$_VNET_NAME"
   # Attach mode is set by hand and carried across a re-run, so the wizard can
@@ -1658,7 +1763,11 @@ while true; do
   else
     printf "    %-18s %s\n" "Blob retention" "off — artifacts are kept until you delete them"
   fi
-  printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+  if [[ "$CREATE_RESOURCE_GROUP" == "false" ]]; then
+    printf "  ${DIM}terraform destroy removes these and leaves the resource group in place.${RESET}\n"
+  else
+    printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+  fi
 
   echo ""
   printf "  ${DIM}Press Enter to write terraform.tfvars, a section number (1-10) to change it,${RESET}\n"
@@ -1699,7 +1808,7 @@ _section "Generating terraform.tfvars"
 # is carried across rather than destroyed. `identifier` is listed as the retired
 # spelling of name_prefix: already read back, and carrying it forward would leave
 # two keys naming the deployment.
-_WRITER_KEYS="subscription_id identifier name_prefix location unique_resource_names
+_WRITER_KEYS="subscription_id azure_environment identifier name_prefix location unique_resource_names
 environment owner cost_center
 create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
 aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
@@ -1769,9 +1878,10 @@ cat > "$OUTPUT" << TFVARS
 #------------------------------------------------------------------------------
 # Subscription & Identity
 #------------------------------------------------------------------------------
-subscription_id = "${SUBSCRIPTION_ID}"
-name_prefix     = "${NAME_PREFIX}"
-location        = "${LOCATION}"
+subscription_id   = "${SUBSCRIPTION_ID}"
+azure_environment = "${AZURE_ENVIRONMENT:-public}"
+name_prefix       = "${NAME_PREFIX}"
+location          = "${LOCATION}"
 
 # Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
 # Key Vault) so they cannot collide with another LangSmith deployment.
@@ -1871,7 +1981,8 @@ if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
 # Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
-# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity.
+# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity,
+# and a new redis_name with it: the failed create keeps the old name reserved.
 amr_sku                 = "${AMR_SKU}"
 redis_high_availability = ${REDIS_HA}
 TFVARS

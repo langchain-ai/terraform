@@ -2,7 +2,7 @@
 # Module: dns
 # Purpose: Azure DNS zone + A record for the LangSmith public domain.
 #
-# Creates a public DNS zone, points it at the NGINX ingress LB IP, and
+# Creates a public DNS zone, points it at the ingress LB IP, and
 # grants cert-manager the DNS Zone Contributor role so it can create TXT
 # records for ACME DNS-01 challenges (more reliable than HTTP-01 for wildcard
 # certs and private clusters).

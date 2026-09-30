@@ -24,10 +24,10 @@ echo ""
 echo "Fetching AKS credentials..."
 echo ""
 
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || {
   echo "ERROR: Could not read aks_cluster_name. Is 'terraform apply' complete?" >&2; exit 1
 }
-RESOURCE_GROUP=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || {
+RESOURCE_GROUP=$(_tf_out resource_group_name) || {
   echo "ERROR: Could not read resource_group_name." >&2; exit 1
 }
 

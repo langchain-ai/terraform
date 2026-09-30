@@ -16,15 +16,7 @@ checklist below.
 - `kubectl`
 - `helm` v3+
 
-**GCP roles required** (verify with `gcloud projects get-iam-policy <project-id>`):
-- `roles/container.admin` — GKE cluster create/delete
-- `roles/compute.networkAdmin` — VPC, subnets, Cloud NAT, firewall rules
-- `roles/iam.serviceAccountAdmin` + `roles/iam.workloadIdentityUser` — Workload Identity setup
-- `roles/cloudsql.admin` — Cloud SQL instance create/delete
-- `roles/redis.admin` — Memorystore instance create/delete
-- `roles/storage.admin` — GCS bucket create/delete
-- `roles/servicenetworking.networksAdmin` — VPC peering for Cloud SQL / Memorystore
-- `roles/secretmanager.admin` — Secret Manager (if `enable_secret_manager_module = true`)
+**GCP roles required**: see [PERMISSIONS.md](PERMISSIONS.md). Verify with `./infra/scripts/preflight.sh`.
 
 **Bootstrap requirement**: `cloudresourcemanager.googleapis.com` must be enabled before first apply:
 ```bash
