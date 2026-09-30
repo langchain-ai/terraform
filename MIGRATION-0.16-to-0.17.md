@@ -206,6 +206,27 @@ parts in this order:
    them with `kubectl apply --server-side`.
 3. The `envoy-gateway` Helm release, with the chart copy of the CRDs off.
 
+The three steps are tested on GKE Standard `1.35.8-gke.1380001`. The steps are not
+tested on GKE Autopilot.
+
+Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36. The GKE RAPID channel offers
+1.37, which v1.9 does not list. Before the upgrade, make sure that the control plane
+runs a version from 1.33 to 1.36.
+
+On Autopilot, GKE Gateway is always on, and GKE installs the Gateway API CRDs. Step 1
+applies v1.6.1 over those CRDs. The GKE documentation does not say if GKE later puts
+back its own version. Test the upgrade on a non-production Autopilot cluster first.
+Before and after the upgrade, show the bundle version and the field managers of the
+CRDs:
+
+```bash
+kubectl get crd gateways.gateway.networking.k8s.io \
+  -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}{range .metadata.managedFields[*]}{.manager}{"\n"}{end}'
+```
+
+After the upgrade, the first line must be `v1.6.1`. If it is not, open an issue with
+both outputs.
+
 - Plan a maintenance window. The proxy pod restarts one time, and the old pod drains
   open connections for up to 60 seconds. Streams that stay open longer stop, and
   clients must reconnect. The load balancer IP does not change.
