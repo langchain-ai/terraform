@@ -306,7 +306,14 @@ tls_secret_name = "langsmith-tls"
 # Optional: Ingress Configuration
 #------------------------------------------------------------------------------
 install_ingress = true
-ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved)
+ingress_type    = "envoy"  # "envoy" (default), "gke" (GKE Gateway), "istio" or "other" (reserved)
+
+# ingress_type = "gke" uses the GKE Gateway controller instead of Envoy Gateway.
+#   - tls_certificate_source must be "none" or "existing". "letsencrypt" is Envoy-only.
+#   - The default class reserves a global static IP (<name>-gateway-ip) for DNS.
+#     Regional classes such as "gke-l7-rilb" need a proxy-only subnet that this
+#     stack does not create, and get an ephemeral IP.
+# gke_gateway_class = "gke-l7-global-external-managed"
 
 #------------------------------------------------------------------------------
 # Optional: AWS-parity module wiring

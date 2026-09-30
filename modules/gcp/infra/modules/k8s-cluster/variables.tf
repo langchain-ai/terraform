@@ -162,6 +162,12 @@ variable "release_channel" {
   default     = "REGULAR"
 }
 
+variable "enable_gateway_api" {
+  description = "Enable the GKE Gateway API controller (CHANNEL_STANDARD). Required for ingress_type = \"gke\"."
+  type        = bool
+  default     = false
+}
+
 variable "network_policy_provider" {
   description = "Network policy provider: CALICO (legacy) or DATA_PLANE_V2 (Cilium-based, recommended)"
   type        = string

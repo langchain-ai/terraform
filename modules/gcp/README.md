@@ -126,7 +126,7 @@ gcp/
 │       ├── redis/          ← Memorystore Redis, HA tier, private IP
 │       ├── storage/        ← GCS bucket with TTL lifecycle rules (ttl_s/ ttl_l/)
 │       ├── k8s-bootstrap/  ← Namespaces, K8s secrets, cert-manager, KEDA
-│       ├── ingress/        ← Envoy Gateway (Gateway API), GatewayClass, HTTPRoute
+│       ├── ingress/        ← Envoy Gateway (default) or GKE Gateway (Gateway API), GatewayClass, HTTPRoute
 │       ├── iam/            ← Workload Identity service accounts and bindings (wired by default)
 │       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
 │       ├── secrets/        ← Secret Manager secrets for credentials (optional via flags)
@@ -311,6 +311,33 @@ echo "Create A record: $EXTERNAL_IP -> <your-langsmith-domain>"
 kubectl get certificate -n langsmith
 ```
 
+### Using the GKE Gateway instead of Envoy
+
+Set `ingress_type = "gke"` to use GKE's built-in Gateway controller instead of Envoy Gateway. Envoy stays the default.
+
+```hcl
+ingress_type           = "gke"
+tls_certificate_source = "none"   # or "existing"; "letsencrypt" is not supported with gke
+```
+
+What changes:
+
+- The cluster's Gateway API controller is turned on (`CHANNEL_STANDARD`). This is an in-place cluster update.
+- No Envoy Gateway release or CRD install. Terraform creates a `Gateway` in the LangSmith namespace, and with the default global class, a global static IP named `<name>-gateway-ip`.
+- The Gateway lives in the `langsmith` namespace, not `envoy-gateway-system`. `init-values.sh` writes `gateway.namespace` for you when `ingress_type = "gke"`.
+- The namespace NetworkPolicy gets two extra sources for Google's load balancer ranges (`130.211.0.0/22`, `35.191.0.0/16`). Without them the backends report unhealthy and every request returns 503.
+- The IP comes from Terraform, not from a Service:
+
+  ```bash
+  terraform output -raw ingress_ip
+  kubectl get gateway -n langsmith
+  ```
+
+Things to know:
+
+- The listener is bound to `langsmith_domain`. A request with any other `Host`, such as the bare IP, gets a 404 with the body `fault filter abort`. Use the hostname.
+- With `tls_certificate_source = "none"` the Gateway serves HTTP only, so use `http://`.
+
 ---
 
 ## Pass 3 — LangSmith Deployments (Optional)
@@ -386,9 +413,10 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_domain` | `langsmith.example.com` | no | Fully qualified domain name |
 | `langsmith_license_key` | `""` | no | License key — use `TF_VAR_langsmith_license_key` |
 | `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.16.0` line; must be on the 0.16 line) |
-| `install_ingress` | `true` | no | Install Envoy Gateway via Terraform |
-| `ingress_type` | `envoy` | no | Ingress type: `envoy`, `istio`, or `other` |
-| `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing` |
+| `install_ingress` | `true` | no | Install the Gateway via Terraform (Envoy Gateway by default, or the GKE Gateway) |
+| `ingress_type` | `envoy` | no | Ingress type: `envoy` (default), `gke`, `istio`, or `other` |
+| `gke_gateway_class` | `gke-l7-global-external-managed` | no | GatewayClass when `ingress_type = "gke"`. Global classes reserve a static IP |
+| `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing`. `letsencrypt` works with `envoy` only |
 | `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt notifications |
 | `tls_secret_name` | `langsmith-tls` | no | Name for the TLS secret in Kubernetes |
 | `enable_langsmith_deployment` | `true` | no | Enable LangSmith Deployments — installs KEDA |

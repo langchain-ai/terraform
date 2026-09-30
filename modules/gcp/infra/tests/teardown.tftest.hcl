@@ -100,3 +100,35 @@ run "other_ingress_plans_no_gateway_delete" {
     error_message = "ingress_type = other still planned the Gateway delete on destroy"
   }
 }
+
+run "gke_ingress_plans_the_gateway_delete" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    project_id             = "langsmith-plan-tests"
+    region                 = "us-central1"
+    cluster_name           = "langsmith-plan-tests-gke"
+    ingress_type           = "gke"
+    langsmith_domain       = ""
+    langsmith_namespace    = "langsmith"
+    gateway_name           = "langsmith-plan-tests-gateway"
+    tls_certificate_source = "none"
+  }
+
+  # A destroy provisioner can read only self, so its triggers must hold the
+  # cluster, the Gateway name, and the namespace it lives in.
+  assert {
+    condition = (
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["project_id"] == "langsmith-plan-tests" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["region"] == "us-central1" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["cluster_name"] == "langsmith-plan-tests-gke" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["gateway_name"] == "langsmith-plan-tests-gateway" &&
+      null_resource.delete_gke_gateway_on_destroy[0].triggers["namespace"] == "langsmith"
+    )
+    error_message = "The GKE Gateway delete triggers do not hold the project, region, cluster, Gateway name, and namespace"
+  }
+}
