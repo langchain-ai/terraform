@@ -435,3 +435,49 @@ run "wi_subjects_release_name_without_langsmith" {
     error_message = "release \"prod\" still produced the bare prod-backend subject"
   }
 }
+
+# ── Cluster components, both directions ──────────────────────────────────────
+# The two helm_releases are count-gated inside k8s-bootstrap, so the module's
+# namespace outputs are the observable: a name when this module installed the
+# component, null when the cluster was expected to already run it.
+
+run "cluster_components_installed_when_flags_are_true" {
+  command = plan
+
+  variables {
+    install_cert_manager = true
+    install_keda         = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_namespace == "cert-manager"
+    error_message = "install_cert_manager = true did not plan the cert-manager release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_namespace == "keda"
+    error_message = "install_keda = true did not plan the KEDA release"
+  }
+}
+
+run "cluster_components_absent_when_flags_are_false" {
+  command = plan
+
+  variables {
+    install_cert_manager = false
+    install_keda         = false
+    # false is only reachable on the attach path, and dns01 is refused with it.
+    tls_certificate_source = "letsencrypt"
+    letsencrypt_email      = "fixture@example.com"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_namespace == null
+    error_message = "install_cert_manager = false still planned the cert-manager release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.keda_namespace == null
+    error_message = "install_keda = false still planned the KEDA release"
+  }
+}

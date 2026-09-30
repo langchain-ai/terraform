@@ -645,3 +645,22 @@ run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
 
   expect_failures = [var.aks_os_sku]
 }
+
+# install_cert_manager = false rules out DNS-01. The solver reaches the Azure DNS
+# API as a Managed Identity bound to the pod by a workload-identity annotation
+# Terraform adds only to the service account of a release it installs itself, so
+# the pair applies cleanly and then fails every ACME challenge on an Azure auth
+# error. The guard is a second validation block on tls_certificate_source, which
+# is where it lives now that #133 removed the ClusterIssuer it used to hang on.
+run "dns01_rejects_a_cert_manager_this_module_did_not_install" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "dns01"
+    install_cert_manager   = false
+    langsmith_domain       = "langsmith.example.com"
+    letsencrypt_email      = "fixture@example.com"
+  }
+
+  expect_failures = [var.tls_certificate_source]
+}

@@ -1423,6 +1423,11 @@ module "k8s_bootstrap" {
   # helm/scripts/generate-secrets.sh from Azure Key Vault.
   langsmith_license_key = var.langsmith_license_key
 
+  # Cluster components, off when the cluster already runs them, which is only
+  # possible on the attach path. Helm cannot adopt a release it does not own.
+  install_cert_manager = var.install_cert_manager
+  install_keda         = var.install_keda
+
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
   # subscription_id straight from terraform.tfvars.
