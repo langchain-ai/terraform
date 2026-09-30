@@ -306,7 +306,7 @@ output "script_config" {
     tls_certificate_source       = var.tls_certificate_source
     letsencrypt_email            = var.letsencrypt_email
     install_cert_manager         = var.install_cert_manager
-    postgres_source             = var.postgres_source
+    postgres_source              = var.postgres_source
     redis_source                 = var.redis_source
     clickhouse_source            = var.clickhouse_source
     sizing_profile               = var.sizing_profile
