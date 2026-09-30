@@ -7,6 +7,8 @@ on:
       - "agents/**"
       - ".github/scripts/**"
       - ".github/actions/setup-shellcheck/**"
+      - ".github/actions/setup-terraform/**"
+      - ".terraform-version"
       - ".github/workflows/checks.yaml"
   push:
     branches:
@@ -16,6 +18,8 @@ on:
       - "agents/**"
       - ".github/scripts/**"
       - ".github/actions/setup-shellcheck/**"
+      - ".github/actions/setup-terraform/**"
+      - ".terraform-version"
       - ".github/workflows/checks.yaml"
 
 permissions:
@@ -80,9 +84,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+        uses: ./.github/actions/setup-terraform
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v4
@@ -140,9 +142,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
+        uses: ./.github/actions/setup-terraform
 
       # Shared with the check leg above by key, so whichever job runs first
       # populates it and the other reads it.
@@ -184,3 +184,20 @@ jobs:
 
       - name: Shellcheck every tracked script
         run: bash agents/check.sh --scripts
+
+  # Formatting for modules/ocp, the one HCL tree with no check leg: it has no
+  # versions.tf, so check.sh finds no root there to validate. The provider legs
+  # already fmt-check their own trees, so this covers the gap and nothing else.
+  # Always on, like the scripts job, since it needs no provider selection.
+  fmt-ocp:
+    name: fmt (ocp)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: ./.github/actions/setup-terraform
+
+      - name: Format check
+        run: bash agents/check.sh --fmt modules/ocp

@@ -31,7 +31,9 @@ before the PR does, not a separate standard.
 - Not gated for terraform: `modules/ocp`. It has provider requirements in
   `infra/main.tf`, but no `versions.tf` for root discovery. Its
   shell scripts are covered (CI lints every tracked `*.sh`); the HCL has only
-  `terraform fmt -check`. Edit with extra care.
+  `terraform fmt -check`, through `bash agents/check.sh --fmt modules/ocp` (CI's
+  `fmt (ocp)` job) or a no-argument run. `check.sh modules/ocp` exits 2, having
+  no root to find. Edit with extra care.
 - `.terraform.lock.hcl`, `*.tfvars`, `*.tfstate*` are gitignored per provider
   dir. Lock files on disk are the pinned provider versions — read them, don't
   guess versions.
@@ -46,12 +48,16 @@ before the PR does, not a separate standard.
 - **Work in small units**: one resource or module, run the checks below, then
   continue. Don't write 300 lines and hand back a correction cycle.
 - **Machine-graded before handing back**, and fix what it reports:
-  - HCL edit → `bash agents/check.sh <dir>`: `terraform validate` plus `tflint`
-    with the provider's pinned ruleset from `modules/<provider>/.tflint.hcl`,
-    for every root at or beneath the directory you name.
+  - HCL edit → `bash agents/check.sh <dir>`: `terraform fmt -recursive -check`
+    over the directory you name, then `terraform validate` plus `tflint` with
+    the provider's pinned ruleset from `modules/<provider>/.tflint.hcl`, for
+    every root at or beneath it. Gitignored files (`*.tfvars`,
+    `*_override.tf`) are left out of the fmt check, since CI never sees them.
   - Shell edit → `bash agents/check.sh --scripts`: `shellcheck` over every
     tracked `*.sh`. No terraform, so it returns in about a second.
-  - No argument → both, across every root.
+  - No argument → both, with the fmt check run from the repo root (so
+    `modules/ocp` included) and validate and tflint across every root.
+  - `--fmt [dir]` → the fmt check alone, repo-wide with no dir.
   - Conditional wiring, a `validation` block, or a precondition →
     `bash agents/plan-tests.sh modules/<provider>`: `terraform test` plans the
     root against mocked providers, so `length(module.waf) == 0` is assertable
@@ -66,7 +72,8 @@ before the PR does, not a separate standard.
   `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
   needs cloud creds and state — never run it without explicit user approval.
 - **CI runs the same scripts**, a check job and a plan-tests job per provider
-  plus one for the scripts, so a green local run is a green PR. On a PR, only
+  plus one for the scripts and one for `modules/ocp` formatting, so a green
+  local run is a green PR. On a PR, only
   the providers whose `modules/<provider>/` the PR touches get legs; a change
   to `agents/` or the workflow runs them all, and a push to `main` always does.
   If you change what the gate covers, change `agents/check.sh` or
@@ -75,6 +82,10 @@ before the PR does, not a separate standard.
   needs an entry in `PROVIDERS` in `.github/scripts/changed-providers.sh`, and
   a test suite — `plan-tests.sh` exits 2 on a provider that has neither a suite
   nor an entry in its `SKIP_PROVIDERS`.
+- **Terraform is pinned in `.terraform-version`**, which every CI job installs
+  through `.github/actions/setup-terraform` (tfenv and tfswitch read it too).
+  `check.sh` warns when the local binary differs, since fmt and validate can
+  disagree across versions. Bump the pin in that file, never in a workflow.
 - **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
   initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
   forms slip in from model output unnoticed.
