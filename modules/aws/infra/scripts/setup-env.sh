@@ -145,7 +145,7 @@ _ssm_put_safe() {
 # Args:
 #   $1  ssm_name     — SSM parameter leaf name (e.g. "postgres-password")
 #   $2  file_name    — Legacy local .secret file (empty = no file fallback)
-#   $3  varname      — TF_VAR_* variable name to export
+#   $3  varname      — Name to export: TF_VAR_* for a Terraform variable, LANGSMITH_* for a value only the helm scripts read
 #   $4  generator    — Shell command that outputs a new value (empty = prompt)
 #   $5  prompt_text  — Prompt string for interactive input
 #   $6  silent       — "true" to hide input (passwords); "false" for plaintext
@@ -156,7 +156,8 @@ _ssm_secret() {
   local generator="$4"
   local prompt_text="$5"
   local silent="${6:-true}"
-  _tfvar_declared "${varname#TF_VAR_}" || return
+  # LANGSMITH_* names are app secrets for ESO, not Terraform variables.
+  [[ "$varname" != TF_VAR_* ]] || _tfvar_declared "${varname#TF_VAR_}" || return
 
   local val=""
   local _path="${_ssm_prefix}/${ssm_name}"
