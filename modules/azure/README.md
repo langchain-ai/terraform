@@ -151,6 +151,17 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 
 > **Attach to a vault dedicated to this deployment.** Microsoft recommends [one vault per application, per environment, and per region](https://learn.microsoft.com/en-us/azure/key-vault/general/secure-key-vault), because grouping unrelated secrets into one vault widens the blast radius of a compromise, and vault-level RBAC is what grants read access to every secret in it. A vault shared with the customer's other applications adds two failures this module can't prevent: secret names like `postgres-admin-password` colliding with theirs, where a write lands as a new version and breaks their app silently, and a `terraform destroy` that deletes secrets belonging to something else.
 
+Pass 1 installs cert-manager and KEDA. Helm will not adopt a release it does not own, so on a cluster already running either one the install fails on CRDs that are already registered, partway through an apply that has already built Azure resources. Turn off whichever the cluster provides:
+
+```hcl
+install_cert_manager = false   # cluster already runs cert-manager
+install_keda         = false   # cluster already runs KEDA
+```
+
+Both default to `true`. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: `deploy.sh` turns that on only for a cert-manager this module installed.
+
+`install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
+
 ---
 
 ### Deploying to Azure Government
@@ -995,6 +1006,32 @@ names the one that is too long, so overriding `storage_account_name` and
 
 ---
 
+## VNet address space
+
+The VNet Terraform creates defaults to `10.0.0.0/17`. If your network already
+uses that range, or the VNet will be peered or reached over ExpressRoute or VPN
+from one that does, set `vnet_address_space` before the first apply. Azure
+creates an overlapping VNet without complaint, and the collision surfaces at the
+first peering.
+
+Every subnet prefix default sits inside `10.0.0.0/17`, so move them with it:
+
+```hcl
+vnet_address_space             = ["172.16.0.0/16"]
+aks_subnet_address_prefix      = ["172.16.0.0/19"]
+postgres_subnet_address_prefix = ["172.16.32.0/20"]
+redis_subnet_address_prefix    = ["172.16.48.0/20"]
+agic_subnet_address_prefix     = ["172.16.96.0/24"] # ingress_controller = "agic" only
+bastion_subnet_address_prefix  = ["172.16.80.0/27"] # create_bastion = true only
+```
+
+Plan rejects any prefix that falls outside `vnet_address_space` and names it.
+It also rejects a prefix that overlaps `aks_service_cidr`, whose `10.0.64.0/20`
+default fills the gap the default prefixes leave. If your space still holds
+`10.0.64.0/20`, keep every subnet clear of it or set `aks_service_cidr` too.
+
+---
+
 ## Bring your own VNet
 
 By default Terraform creates the VNet and every subnet. To deploy into a VNet
@@ -1028,15 +1065,13 @@ LangSmith one, and get the settings each service needs:
 The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
 builds, so they are a starting point rather than a default that fits your
 network. Plan reads your VNet and rejects a prefix that falls outside its
-address space, and rejects an AKS prefix too small for the node pools whether
-the subnet is one you supplied or one Terraform carves. What it cannot check is
-whether a prefix collides with a subnet that already exists in the VNet, because
-Azure's VNet read returns subnet names and not their ranges — so pick ranges you
-know are free.
+address space or collides with a subnet already in it, and rejects an AKS
+prefix too small for the node pools whether the subnet is one you supplied or
+one Terraform carves.
 
 `aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
 it, and AKS requires a range that nothing on or connected to your VNet uses. The
-`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
+`10.0.64.0/20` default only avoids the subnets Terraform carves, and an overlap with
 your own address space can be accepted when the cluster is created and break
 later, so plan makes you name one and rejects one that lands inside your VNet.
 Peered and on-premises ranges are still yours to keep clear of, since plan only
@@ -1169,6 +1204,7 @@ an apply:
 - every prefix Terraform is about to carve sits inside your VNet's address
   space. The defaults describe the VNet Terraform builds, so this is usually the
   first thing to change on a network of your own
+- no prefix Terraform is about to carve overlaps a subnet already in your VNet
 - `aks_service_cidr` is set, and does not overlap your VNet's address space, and
   `aks_dns_service_ip` sits inside it when you set one
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
@@ -1176,8 +1212,7 @@ an apply:
 Whoever runs Terraform needs two kinds of access to the VNet, which normally
 lives in the network team's resource group rather than the LangSmith one:
 
-- **read** on `vnet_id` and on whichever subnets you supply, at plan time, for
-  the checks above
+- **read** on `vnet_id` and its subnets at plan time, for the checks above
 - **`Microsoft.Network/virtualNetworks/subnets/write`** on `vnet_id` for every
   subnet you leave Terraform to create. This is the larger ask of a network
   team, and it fails at apply rather than at plan, so settle it first

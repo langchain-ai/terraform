@@ -292,6 +292,26 @@ variable "create_vnet" {
   default     = true
 }
 
+variable "vnet_address_space" {
+  type        = list(string)
+  description = "Address space of the VNet Terraform creates. Ignored when create_vnet = false, where vnet_id's own address space applies. Pick a range that does not overlap any network this VNet will be peered with or reach over ExpressRoute or VPN: Azure creates an overlapping VNet without complaint, and the collision surfaces at the first peering. Moving it means moving the subnet prefixes too (aks_subnet_address_prefix, postgres_subnet_address_prefix, redis_subnet_address_prefix, and agic_subnet_address_prefix and bastion_subnet_address_prefix when those features are on), since their defaults sit inside 10.0.0.0/17. Plan rejects a prefix outside this space. Fixed on the VNet in practice: Azure refuses to remove a range that subnets still use."
+  default     = ["10.0.0.0/17"]
+
+  # Parsed here for the reason aks_service_cidr is: the containment math in
+  # main.tf splits each range on "." and would fail on an IPv6 range or a
+  # non-CIDR as a function error that names neither the variable nor the fix.
+  validation {
+    condition     = length(var.vnet_address_space) > 0 && alltrue([for cidr in var.vnet_address_space : can(cidrnetmask(cidr))])
+    error_message = "vnet_address_space must list at least one IPv4 CIDR range, such as [\"10.0.0.0/17\"]."
+  }
+
+  # try(..., true) so a value that is not a CIDR fails only the check above.
+  validation {
+    condition     = alltrue([for cidr in var.vnet_address_space : try(cidr == cidrsubnet(cidr, 0, 0), true)])
+    error_message = "vnet_address_space has a range with host bits set. Use the network address of each range, for example 10.0.0.0/17 rather than 10.0.0.5/17: plan checks subnet containment against the masked range, while Azure is sent the value as written."
+  }
+}
+
 # ── Bring-your-own AKS cluster ────────────────────────────────────────────────
 # Set create_cluster = false to deploy onto a cluster the customer already runs.
 # Terraform still provisions Key Vault, Storage, Managed Identities, and
@@ -697,12 +717,12 @@ variable "aks_os_sku" {
 }
 
 # Both of these are empty by default rather than carrying the create-path value,
-# because 10.0.64.0/20 is only safe against the VNet Terraform builds. main.tf
+# because 10.0.64.0/20 is only safe against the subnets Terraform carves. main.tf
 # fills them in for create_vnet = true and requires aks_service_cidr under
 # bring-your-own, where the operator's address space is unknown here.
 variable "aks_service_cidr" {
   type        = string
-  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, which is chosen to sit outside the Terraform-managed 10.0.0.0/17 VNet. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Size it /20: the range is virtual, so a large one costs no address space, and /24 (Azure's floor) caps the cluster at 251 Services, which a Pass 4 deployment can reach because LangGraph Platform adds Services per deployment. Fixed on the cluster at creation — outgrowing it means rebuilding the cluster."
+  description = "Kubernetes ClusterIP range for the AKS cluster. Defaults to 10.0.64.0/20, the gap the default subnet prefixes leave inside the 10.0.0.0/17 VNet Terraform builds; plan rejects a range that overlaps a subnet Terraform carves there. Required when create_vnet = false: AKS needs a range that nothing on or connected to your VNet uses, and an overlap can be accepted at create time and break later. Plan rejects a range that overlaps your VNet's address space, but cannot see peered or on-premises networks. Size it /20: the range is virtual, so a large one costs no address space, and /24 (Azure's floor) caps the cluster at 251 Services, which a Pass 4 deployment can reach because LangGraph Platform adds Services per deployment. Fixed on the cluster at creation — outgrowing it means rebuilding the cluster."
   default     = ""
 
   # Empty is the not-set sentinel main.tf falls back on, so it has to pass. Any
@@ -1055,6 +1075,27 @@ variable "tls_certificate_source" {
     condition     = contains(["none", "letsencrypt", "dns01", "existing"], var.tls_certificate_source)
     error_message = "tls_certificate_source must be 'none', 'letsencrypt', 'dns01', or 'existing'."
   }
+
+  validation {
+    condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
+    error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
+  }
+}
+
+# Both default true, which is what this module did before the flags existed. Set
+# them false when attaching to a cluster (create_cluster = false) that already
+# runs either component: Helm will not adopt a release it does not own, so the
+# install fails on the CRDs that are already there.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager into the cluster. Set false when the cluster already runs it. tls_certificate_source = 'dns01' requires this to be true: the DNS-01 solver needs a workload-identity annotation Terraform only adds to a cert-manager it installs itself."
+  default     = true
+}
+
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  default     = true
 }
 
 variable "postgres_admin_username" {
@@ -1146,6 +1187,12 @@ variable "create_bastion" {
   type        = bool
   description = "Deploy a jump VM for private AKS cluster access via az ssh vm."
   default     = false
+}
+
+variable "bastion_subnet_address_prefix" {
+  type        = list(string)
+  description = "CIDR prefix for the jump VM subnet Terraform carves when create_bastion = true and create_vnet = true. A /27 is enough for the single VM. Must fall inside vnet_address_space, which plan checks. Under create_vnet = false supply bastion_subnet_id instead."
+  default     = ["10.0.80.0/27"]
 }
 
 variable "bastion_vm_size" {
@@ -1264,7 +1311,7 @@ variable "dns_label" {
 
 variable "agic_subnet_address_prefix" {
   type        = list(string)
-  description = "CIDR prefix for the Application Gateway dedicated subnet. Must be /24 or larger. Only used when ingress_controller = 'agic'."
+  description = "CIDR prefix for the Application Gateway dedicated subnet. Must be /24 or larger. Only used when ingress_controller = 'agic'. Must fall inside vnet_address_space, which plan checks."
   default     = ["10.0.96.0/24"]
 }
 

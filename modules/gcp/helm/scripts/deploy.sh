@@ -329,6 +329,12 @@ _cfg_is_true "enable_fleet"              && { _enable_fleet=true;               
 _cfg_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
 _cfg_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
 _cfg_is_true "enable_sandboxes"          && _enable_sandboxes=true
+# An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
+# addon keys falls back to loading every addon file on disk.
+for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
+          enable_fleet enable_standalone_polly enable_standalone_insights; do
+  if [[ -n "$(_parse_tfvar "$_k")" ]]; then _any_flag_set=true; fi
+done
 
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -439,6 +445,12 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# Fleet needs host-backend, which the base values leave off. A fleet file copied
+# before the overlay set it is never replaced by init-values.sh, so set it here.
+if [[ "$_enable_fleet" == "true" ]]; then
+  VALUES_ARGS+=(--set "hostBackend.enabled=true")
+fi
 
 # SmithDB last, so its overrides beat every sizing and addon file above.
 if [[ "$_smithdb_enabled" == "true" ]]; then
