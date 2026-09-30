@@ -836,18 +836,18 @@ check "agic_subnet_delegation" {
 # Microsoft supports AGIC on Azure CNI Overlay (AGIC 1.9.1 or later, a
 # delegated subnet of /24 or smaller, both of which this module provides) except
 # in Azure Government and Azure China, where the pairing is unsupported. Nothing
-# here has exercised it: the test cluster runs nginx. A check rather than a
+# here has exercised it: the test cluster does not run agic. A check rather than a
 # precondition, so the plan says so and proceeds; once the module knows which
 # cloud it deploys to, the Government case becomes a precondition.
 check "agic_with_overlay_unverified" {
   assert {
     condition     = !(var.ingress_controller == "agic" && local.aks_overlay)
-    error_message = "ingress_controller = \"agic\" with aks_network_mode = \"overlay\": Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here) except in Azure Government and Azure China, where it is unsupported and the WAF path is Application Gateway in front of an internal load balancer instead. This module has not exercised AGIC on overlay; confirm ingress on this cluster before relying on it, or use nginx, where every TLS path is validated."
+    error_message = "ingress_controller = \"agic\" with aks_network_mode = \"overlay\": Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here) except in Azure Government and Azure China, where it is unsupported and the WAF path is Application Gateway in front of an internal load balancer instead. This module has not exercised AGIC on overlay; confirm ingress on this cluster before relying on it, or use envoy-gateway, the default."
   }
 }
 
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
-# AKS cluster with OIDC + Workload Identity enabled, NGINX ingress installed.
+# AKS cluster with OIDC + Workload Identity enabled, ingress controller installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
 
 module "aks" {
@@ -900,7 +900,7 @@ module "aks" {
   # map so Terraform doesn't attach pools to a cluster it doesn't manage.
   additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
-  # Ingress controller: 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'envoy-gateway', 'none'
+  # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
   ingress_controller   = var.ingress_controller
   dns_label            = var.dns_label
   istio_version        = var.istio_version
@@ -1451,8 +1451,10 @@ module "k8s_bootstrap" {
   smithdb_cache_disk_iops          = var.smithdb_cache_disk_iops
   smithdb_cache_disk_throughput    = var.smithdb_cache_disk_throughput_mbps
 
-  # Ingress controller — drives the NetworkPolicy's allowed source namespace.
-  ingress_controller = var.ingress_controller
+  # Ingress controller — drives the NetworkPolicy's allowed source namespace and
+  # cert-manager's Gateway API support.
+  ingress_controller    = var.ingress_controller
+  envoy_gateway_version = module.aks.envoy_gateway_version
 
   # Application Gateway has no in-cluster namespace to allow, so the same policy
   # admits it by the address range of its dedicated subnet. Read from a supplied

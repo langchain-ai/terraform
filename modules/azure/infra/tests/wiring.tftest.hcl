@@ -460,6 +460,46 @@ run "cluster_components_installed_when_flags_are_true" {
   }
 }
 
+# Envoy Gateway ships the Gateway API CRDs, and cert-manager serves Gateways
+# only with its feature gate on, so the two travel together.
+run "envoy_gateway_turns_on_cert_manager_gateway_api" {
+  command = plan
+
+  variables {
+    ingress_controller   = "envoy-gateway"
+    install_cert_manager = true
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_version != ""
+    error_message = "ingress_controller = \"envoy-gateway\" did not plan the Envoy Gateway release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_feature_gates == "ExperimentalGatewayAPISupport=true"
+    error_message = "ingress_controller = \"envoy-gateway\" left cert-manager without Gateway API support: \"${module.k8s_bootstrap.cert_manager_feature_gates}\""
+  }
+}
+
+run "nginx_leaves_cert_manager_gateway_api_off" {
+  command = plan
+
+  variables {
+    ingress_controller   = "nginx"
+    install_cert_manager = true
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_version == ""
+    error_message = "ingress_controller = \"nginx\" still planned the Envoy Gateway release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_feature_gates == ""
+    error_message = "ingress_controller = \"nginx\" still set cert-manager featureGates: \"${module.k8s_bootstrap.cert_manager_feature_gates}\""
+  }
+}
+
 run "cluster_components_absent_when_flags_are_false" {
   command = plan
 

@@ -131,3 +131,8 @@ output "workload_identity_service_accounts" {
   description = "Service accounts federated with the LangSmith workload identity."
   value       = local.service_accounts_for_workload_identity
 }
+
+output "envoy_gateway_version" {
+  description = "Version of the Envoy Gateway release, empty when ingress_controller is not 'envoy-gateway'. k8s-bootstrap reads it to install cert-manager after the Gateway API CRDs this release ships."
+  value       = join("", helm_release.envoy_gateway[*].version)
+}
