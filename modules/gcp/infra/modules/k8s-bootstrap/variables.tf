@@ -284,6 +284,12 @@ variable "clickhouse_ca_cert" {
   sensitive   = true
 }
 
+variable "allow_gke_gateway_traffic" {
+  description = "Admit Google Cloud load balancer and health-check traffic (130.211.0.0/22, 35.191.0.0/16) to LangSmith pods. Needed for ingress_type = \"gke\", where the load balancer reaches pods directly through container-native NEGs."
+  type        = bool
+  default     = false
+}
+
 #------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------

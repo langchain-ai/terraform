@@ -1,4 +1,4 @@
-# Ingress Module - Envoy Gateway (Gateway API)
+# Ingress Module - Envoy Gateway (default) or GKE Gateway, both via Gateway API
 
 #------------------------------------------------------------------------------
 # Gateway API CRDs
@@ -142,6 +142,39 @@ locals {
   # can never be programmed, so omit it instead.
   gateway_https_listener_enabled = var.tls_certificate_source != "none"
 
+  # Listeners shared by the Envoy and GKE Gateways. Both attach routes from any
+  # namespace and, for HTTPS, terminate with the secret named by tls_secret_name.
+  gateway_listeners = concat(
+    local.gateway_http_listener_enabled ? [merge({
+      name     = "http"
+      protocol = "HTTP"
+      port     = 80
+      allowedRoutes = {
+        namespaces = {
+          from = "All"
+        }
+      }
+    }, local.gateway_listener_hostname)] : [],
+    local.gateway_https_listener_enabled ? [merge({
+      name     = "https"
+      protocol = "HTTPS"
+      port     = 443
+      tls = {
+        mode = "Terminate"
+        certificateRefs = [{
+          name      = var.tls_secret_name
+          kind      = "Secret"
+          namespace = var.langsmith_namespace
+        }]
+      }
+      allowedRoutes = {
+        namespaces = {
+          from = "All"
+        }
+      }
+    }, local.gateway_listener_hostname)] : []
+  )
+
   gateway_yaml = var.ingress_type == "envoy" ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "Gateway"
@@ -154,36 +187,7 @@ locals {
     }
     spec = {
       gatewayClassName = "envoy-gateway-class"
-      listeners = concat(
-        local.gateway_http_listener_enabled ? [merge({
-          name     = "http"
-          protocol = "HTTP"
-          port     = 80
-          allowedRoutes = {
-            namespaces = {
-              from = "All"
-            }
-          }
-        }, local.gateway_listener_hostname)] : [],
-        local.gateway_https_listener_enabled ? [merge({
-          name     = "https"
-          protocol = "HTTPS"
-          port     = 443
-          tls = {
-            mode = "Terminate"
-            certificateRefs = [{
-              name      = var.tls_secret_name
-              kind      = "Secret"
-              namespace = var.langsmith_namespace
-            }]
-          }
-          allowedRoutes = {
-            namespaces = {
-              from = "All"
-            }
-          }
-        }, local.gateway_listener_hostname)] : []
-      )
+      listeners        = local.gateway_listeners
     }
   }) : ""
 }
@@ -387,6 +391,128 @@ data "local_file" "external_ip" {
   count      = var.ingress_type == "envoy" ? 1 : 0
   filename   = "${path.module}/external-ip.txt"
   depends_on = [null_resource.get_external_ip]
+}
+
+#------------------------------------------------------------------------------
+# GKE Gateway (ingress_type = "gke")
+#------------------------------------------------------------------------------
+# The GKE Gateway controller is built into the cluster (enable_gateway_api on the
+# k8s-cluster module), so there are no CRDs or Helm releases to install here. The
+# Gateway lives in the LangSmith namespace, which is also where k8s-bootstrap
+# creates the TLS secret, so no ReferenceGrant is needed.
+locals {
+  gke_gateway_enabled = var.ingress_type == "gke"
+
+  # Only global classes can use a global static IP. Regional classes (for example
+  # gke-l7-rilb) need a regional address and a proxy-only subnet, which this
+  # module does not create.
+  gke_gateway_global_ip    = local.gke_gateway_enabled && startswith(var.gke_gateway_class, "gke-l7-global")
+  gke_gateway_address_name = "${var.gateway_name}-ip"
+
+  gke_gateway_yaml = local.gke_gateway_enabled ? yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "Gateway"
+    metadata = {
+      name      = var.gateway_name
+      namespace = var.langsmith_namespace
+    }
+    spec = merge({
+      gatewayClassName = var.gke_gateway_class
+      listeners        = local.gateway_listeners
+      }, local.gke_gateway_global_ip ? {
+      addresses = [{
+        type  = "NamedAddress"
+        value = local.gke_gateway_address_name
+      }]
+    } : {})
+  }) : ""
+}
+
+# A static IP lets DNS point at the Gateway before, and after, it is recreated.
+resource "google_compute_global_address" "gke_gateway" {
+  count   = local.gke_gateway_global_ip ? 1 : 0
+  name    = local.gke_gateway_address_name
+  project = var.project_id
+}
+
+resource "local_file" "gke_gateway" {
+  count    = local.gke_gateway_enabled ? 1 : 0
+  filename = "${path.module}/gke-gateway.yaml"
+  content  = local.gke_gateway_yaml
+
+  lifecycle {
+    precondition {
+      condition     = var.tls_certificate_source != "letsencrypt"
+      error_message = "ingress_type = \"gke\" supports tls_certificate_source = \"none\" or \"existing\". The cert-manager HTTP01 solver is wired to Envoy Gateway only."
+    }
+  }
+}
+
+resource "null_resource" "apply_gke_gateway" {
+  count = local.gke_gateway_enabled ? 1 : 0
+
+  triggers = {
+    gateway_content = local_file.gke_gateway[0].content
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      ${local.kubectl_creds}
+      # GKE installs the Gateway API CRDs after the cluster update that enables
+      # the controller, which can take a few minutes.
+      for i in {1..60}; do
+        if kubectl get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for Gateway CRD... ($i/60)"
+        sleep 5
+      done
+
+      # Apply the Gateway
+      kubectl apply -f ${local_file.gke_gateway[0].filename}
+    EOT
+  }
+
+  depends_on = [local_file.gke_gateway, google_compute_global_address.gke_gateway]
+}
+
+# Same reasoning as delete_gateway_on_destroy, which is Envoy-only. The GKE
+# controller holds a finalizer on the Gateway until it has removed the load
+# balancer, so a blocking delete waits for that cleanup. It is not on
+# apply_gke_gateway, because a Gateway change replaces that resource and would
+# delete the Gateway on each edit. It depends on the address so that, in reverse
+# on destroy, the Gateway is gone before Terraform tries to release the IP.
+resource "null_resource" "delete_gke_gateway_on_destroy" {
+  count = local.gke_gateway_enabled ? 1 : 0
+
+  triggers = {
+    project_id   = var.project_id
+    region       = var.region
+    cluster_name = var.cluster_name
+    gateway_name = var.gateway_name
+    namespace    = var.langsmith_namespace
+  }
+
+  provisioner "local-exec" {
+    when       = destroy
+    on_failure = continue
+    command    = <<-EOT
+      KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+      export KUBECONFIG
+      trap 'rm -f "$KUBECONFIG"' EXIT
+      if ! gcloud container clusters get-credentials ${self.triggers.cluster_name} \
+        --region ${self.triggers.region} --project ${self.triggers.project_id} --quiet; then
+        echo "Cluster ${self.triggers.cluster_name} is not reachable. Skipping the Gateway delete."
+        exit 0
+      fi
+      if ! kubectl delete gateway ${self.triggers.gateway_name} -n ${self.triggers.namespace} \
+        --ignore-not-found --timeout=300s; then
+        echo "WARNING: the Gateway is still present. See TEARDOWN.md."
+      fi
+    EOT
+  }
+
+  depends_on = [null_resource.apply_gke_gateway, google_compute_global_address.gke_gateway]
 }
 
 #------------------------------------------------------------------------------
