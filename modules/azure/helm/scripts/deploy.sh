@@ -715,7 +715,8 @@ echo ""
 # GatewayClass + Gateway were created before helm install (pre-deploy block above).
 # The chart creates HTTPRoutes via gateway.enabled: true.
 # Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
-if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+# Skipped when dns_label is unset (a custom langsmith_domain needs no label).
+if [[ "$_ingress_controller" == "envoy-gateway" && -n "$_dns_label" ]]; then
   _eg_namespace="$NAMESPACE"
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
@@ -728,7 +729,7 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
     sleep 5
   done
 
-  if [[ -n "$_eg_svc_name" && -n "$_dns_label" ]]; then
+  if [[ -n "$_eg_svc_name" ]]; then
     kubectl annotate svc "$_eg_svc_name" -n "envoy-gateway-system" \
       "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" --overwrite &>/dev/null
     pass "DNS label '${_dns_label}' set on envoy-gateway-system/${_eg_svc_name}"
