@@ -248,6 +248,26 @@ sizing_profile = "production"
 # Pass 4 — Agent Builder UI (fleetToolServer, fleetTriggerServer)
 # enable_agent_builder = true
 
+# Pass 4 (alternative): standalone Fleet. Needs enable_deployments = true and
+# postgres_source = "external"; mutually exclusive with enable_agent_builder.
+# enable_fleet = true
+#
+# Fleet OAuth tools and triggers. Create the OAuth providers in your LangSmith
+# org first, then paste the org ID and each provider ID. Leave a provider unset
+# to keep its tools off. fleet_slack_oauth_provider also requires the Slack
+# signing secret in Key Vault, not here, and deploy.sh stops without it:
+#   ./infra/scripts/manage-keyvault.sh set langsmith-fleet-slack-signing-secret '<secret>'
+#   make k8s-secrets
+# fleet_oauth_provider_org_id     = ""
+# fleet_google_oauth_provider     = ""   # Gmail, Calendar, Sheets, BigQuery + Gmail trigger
+# fleet_slack_oauth_provider      = ""   # Slack tools + Slack trigger
+# fleet_slack_bot_id              = ""
+# fleet_microsoft_oauth_provider  = ""   # Outlook, Teams, SharePoint + Outlook trigger
+# fleet_github_oauth_provider     = ""
+# fleet_linear_oauth_provider     = ""
+# fleet_linkedin_oauth_provider   = ""
+# fleet_salesforce_oauth_provider = ""
+
 # Pass 5 — Insights (ClickHouse-backed trace analytics)
 # enable_insights = true
 

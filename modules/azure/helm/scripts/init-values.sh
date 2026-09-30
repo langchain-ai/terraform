@@ -324,6 +324,80 @@ if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" 
   exit 1
 fi
 
+# ── Fleet OAuth ────────────────────────────────────────────────────────────
+# Provider IDs are not secrets, so they come from terraform.tfvars and land in
+# values-overrides.yaml. Each tfvar maps to one fleet.oauth chart key. The Slack
+# signing secret is a secret: it reaches the trigger server from
+# langsmith-config-secret by secretKeyRef, never through a values file.
+_fleet_oauth_tfvars=(fleet_google_oauth_provider fleet_slack_oauth_provider
+  fleet_linkedin_oauth_provider fleet_linear_oauth_provider fleet_github_oauth_provider
+  fleet_microsoft_oauth_provider fleet_salesforce_oauth_provider fleet_slack_bot_id)
+_fleet_oauth_keys=(googleOAuthProvider slackOAuthProvider
+  linkedinOAuthProvider linearOAuthProvider githubOAuthProvider
+  microsoftOAuthProvider salesforceOAuthProvider slackBotId)
+_fleet_oauth_org_id=$(_parse_tfvar "fleet_oauth_provider_org_id") || _fleet_oauth_org_id=""
+_fleet_oauth_lines=""
+_fleet_oauth_providers_set="false"
+_fleet_slack_provider=""
+for _i in "${!_fleet_oauth_tfvars[@]}"; do
+  _tfvar="${_fleet_oauth_tfvars[$_i]}"
+  _val=$(_parse_tfvar "$_tfvar") || continue
+  # The value lands inside a double-quoted YAML string, so allow ID characters only.
+  if [[ ! "$_val" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    fail "$_tfvar must contain only letters, digits, '.', '_', or '-'"
+    exit 1
+  fi
+  _fleet_oauth_lines="${_fleet_oauth_lines}
+    ${_fleet_oauth_keys[$_i]}: \"${_val}\""
+  [[ "$_tfvar" == *_oauth_provider ]] && _fleet_oauth_providers_set="true"
+  [[ "$_tfvar" == "fleet_slack_oauth_provider" ]] && _fleet_slack_provider="$_val"
+done
+if [[ -n "$_fleet_oauth_org_id" && ! "$_fleet_oauth_org_id" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  fail "fleet_oauth_provider_org_id must contain only letters, digits, '.', '_', or '-'"
+  exit 1
+fi
+if [[ "$_fleet_oauth_providers_set" == "true" && -z "$_fleet_oauth_org_id" ]]; then
+  fail "A fleet_*_oauth_provider is set but fleet_oauth_provider_org_id is empty. Fleet OAuth tools and triggers need the org ID."
+  exit 1
+fi
+
+_fleet_oauth_block=""
+if [[ "$_enable_fleet" != "true" ]]; then
+  [[ -n "${_fleet_oauth_org_id}${_fleet_oauth_lines}" ]] && warn "fleet_* OAuth tfvars are set but enable_fleet is not true, so they are ignored"
+else
+  _fleet_oauth_block="# ── Fleet OAuth, from the fleet_* tfvars ──────────────────────────────────────"
+  if [[ -n "${_fleet_oauth_org_id}${_fleet_oauth_lines}" ]]; then
+    _fleet_oauth_block="${_fleet_oauth_block}
+fleet:
+  oauth:
+    providerOrgId: \"${_fleet_oauth_org_id}\"${_fleet_oauth_lines}
+"
+  fi
+  if [[ -n "$_fleet_slack_provider" ]]; then
+    # The chart renders fleet.oauth.slackSigningSecret as a plain env value, so it
+    # stays unset and the secret comes by reference instead. The reference is
+    # required, so the pod never starts without a key to verify Slack events;
+    # deploy.sh stops before the upgrade while the key is missing.
+    _fleet_slack_env="      - name: SLACK_SIGNING_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: langsmith-config-secret
+            key: fleet_slack_signing_secret"
+  else
+    # The trigger server turns its Slack triggers on unless SLACK_OAUTH_PROVIDER
+    # is empty, and the chart omits the variable when no provider is set. Left on,
+    # they verify Slack events against the server's built-in placeholder signing
+    # secret, so an empty value turns them off.
+    _fleet_slack_env="      - name: SLACK_OAUTH_PROVIDER
+        value: \"\""
+  fi
+  _fleet_oauth_block="${_fleet_oauth_block}
+fleetTriggerServer:
+  deployment:
+    extraEnv:
+${_fleet_slack_env}"
+fi
+
 # ── Generate values-overrides.yaml ────────────────────────────────────────
 echo ""
 info "Generating values-overrides.yaml..."
@@ -568,6 +642,8 @@ insights:
   enabled: ${_enable_insights}
 polly:
   enabled: ${_enable_polly}
+
+${_fleet_oauth_block}
 EOF
 
 pass "Generated: ${OUT_FILE}"

@@ -382,6 +382,17 @@ if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
   fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
   exit 1
 fi
+# The trigger server needs SLACK_SIGNING_SECRET to verify Slack events, and its
+# secretKeyRef is required, so a missing key would leave the pod unable to start.
+if [[ "$_enable_fleet" == "true" ]] && _parse_tfvar "fleet_slack_oauth_provider" >/dev/null; then
+  _has_slack_secret=$(kubectl get secret langsmith-config-secret -n "$NAMESPACE" \
+    -o go-template='{{if index .data "fleet_slack_signing_secret"}}yes{{end}}' 2>/dev/null) || _has_slack_secret=""
+  if [[ "$_has_slack_secret" != "yes" ]]; then
+    fail "fleet_slack_oauth_provider is set but langsmith-config-secret has no fleet_slack_signing_secret"
+    action "./infra/scripts/manage-keyvault.sh set langsmith-fleet-slack-signing-secret '<secret>' && make k8s-secrets"
+    exit 1
+  fi
+fi
 
 # ── Build values args ─────────────────────────────────────────────────────
 VALUES_ARGS=()

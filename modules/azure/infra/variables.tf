@@ -1308,6 +1308,76 @@ variable "enable_fleet" {
   default     = false
 }
 
+# ── Fleet OAuth (read by helm/scripts/init-values.sh; Terraform ignores these) ──
+# Each provider ID comes from an OAuth provider created in the LangSmith org named
+# by fleet_oauth_provider_org_id. A provider left empty keeps its tools and
+# triggers off. fleet_slack_oauth_provider also requires the Slack signing secret,
+# which is not a tfvar: store it in Key Vault as langsmith-fleet-slack-signing-secret,
+# then run make k8s-secrets.
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_oauth_provider_org_id" {
+  type        = string
+  description = "LangSmith organization ID that owns the Fleet OAuth providers. Required when any fleet_*_oauth_provider is set."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_google_oauth_provider" {
+  type        = string
+  description = "Fleet Google OAuth provider ID: Gmail, Google Calendar, Google Sheets, and BigQuery tools, plus the Gmail trigger."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_slack_oauth_provider" {
+  type        = string
+  description = "Fleet Slack OAuth provider ID: Slack tools and the Slack trigger."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_slack_bot_id" {
+  type        = string
+  description = "Slack bot ID for the Fleet Slack trigger."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_linkedin_oauth_provider" {
+  type        = string
+  description = "Fleet LinkedIn OAuth provider ID: LinkedIn tools."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_linear_oauth_provider" {
+  type        = string
+  description = "Fleet Linear OAuth provider ID: Linear tools."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_github_oauth_provider" {
+  type        = string
+  description = "Fleet GitHub OAuth provider ID: GitHub tools."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_microsoft_oauth_provider" {
+  type        = string
+  description = "Fleet Microsoft OAuth provider ID: Outlook, Teams, and SharePoint tools, plus the Outlook trigger."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "fleet_salesforce_oauth_provider" {
+  type        = string
+  description = "Fleet Salesforce OAuth provider ID: Salesforce tools."
+  default     = ""
+}
+
 variable "dns_label" {
   type        = string
   description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
