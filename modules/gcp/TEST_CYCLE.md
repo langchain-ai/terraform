@@ -96,7 +96,7 @@ Review the plan. Expected resource categories:
 - Cloud SQL PostgreSQL instance, database, user, private IP allocation
 - Memorystore Redis instance
 - Cloud Storage bucket + lifecycle rules
-- GCP service account + IAM bindings (storage.objectAdmin, secretmanager.secretAccessor)
+- GCP service account + IAM bindings (storage.objectAdmin; secretmanager.secretAccessor only with `grant_project_secret_accessor = true`)
 - Kubernetes namespace `langsmith`, K8s Secrets (`langsmith-postgres`, `langsmith-redis`)
 - Helm releases: ESO (external-secrets), optionally KEDA, optionally cert-manager
 - Envoy Gateway (GatewayClass + Gateway resources)

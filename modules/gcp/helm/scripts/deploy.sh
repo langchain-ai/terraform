@@ -405,6 +405,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_sso_oidc=false
 _any_flag_set=false
 _tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _any_flag_set=true; }
 _tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _any_flag_set=true; }
@@ -414,6 +415,7 @@ _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;             
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
 _tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
+_tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
 
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -440,6 +442,16 @@ if [[ "$_enable_agent_builder" == "true" && "$_enable_fleet" != "true" ]]; then
   echo "         used to register the agent itself. Set enable_fleet = true for a working runtime." >&2
 fi
 
+# With config.existingSecretName set, the chart reads the OIDC client ID, secret,
+# and issuer URL from langsmith-config. Check them first, for a clear message.
+# The payload check below covers every key.
+if [[ "$_enable_sso_oidc" == "true" ]] && \
+   [[ -z "${TF_VAR_langsmith_oauth_client_id:-}" || -z "${TF_VAR_langsmith_oauth_client_secret:-}" || -z "${TF_VAR_langsmith_oauth_issuer_url:-}" ]]; then
+  echo "ERROR: enable_sso_oidc = true but OIDC credentials are not set." >&2
+  echo "       Run: source infra/scripts/setup-env.sh" >&2
+  exit 1
+fi
+
 # Build the whole payload before kubectl runs. In a pipe, a failed ${VAR:?} ends
 # only the left side, and kubectl apply then replaces langsmith-config with the
 # keys printed before the failure.
@@ -461,6 +473,11 @@ if ! _langsmith_config_env=$(
   if [[ "$_enable_sandboxes" == "true" ]]; then
     printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
   fi
+  if [[ "$_enable_sso_oidc" == "true" ]]; then
+    printf 'oauth_client_id=%s\n' "${TF_VAR_langsmith_oauth_client_id:?}"
+    printf 'oauth_client_secret=%s\n' "${TF_VAR_langsmith_oauth_client_secret:?}"
+    printf 'oauth_issuer_url=%s\n' "${TF_VAR_langsmith_oauth_issuer_url:?}"
+  fi
 ); then
   echo "ERROR: a langsmith-config value is not set. The Secret was not changed." >&2
   echo "       Run: source infra/scripts/setup-env.sh" >&2
@@ -481,6 +498,7 @@ VALUES_ARGS+=(
   --set-string "insights.encryptionKey="
   --set-string "polly.encryptionKey="
   --set-string "sandboxes.callbackSigningJwk="
+  --set-string "config.oauth.oauthClientSecret="
 )
 echo "  ✔ langsmith-config secret"
 
