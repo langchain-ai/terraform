@@ -1626,8 +1626,8 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 
   if [ -n "$DNS_LABEL" ]; then
-    # State carries the label only under ingress_controller = "agic". The
-    # default nginx path sets it as a Service annotation on an AKS-managed IP,
+    # State carries the label only under ingress_controller = "agic". Every
+    # other controller sets it as a Service annotation on an AKS-managed IP,
     # so _in_state cannot see it — ask the subscription who holds it instead.
     DNS_OWNED=0
     if _name_is_safe "$DNS_LABEL"; then

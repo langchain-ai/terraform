@@ -241,7 +241,7 @@ aks_sku_tier                = "Standard"  # uptime SLA; Free has none
 dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 
-# Option B — HTTPS via Let's Encrypt HTTP-01 (nginx, istio, envoy-gateway only — validated ✅)
+# Option B — HTTPS via Let's Encrypt HTTP-01 (envoy-gateway, nginx, istio only — validated ✅)
 # tls_certificate_source = "letsencrypt"
 # letsencrypt_email      = "you@example.com"
 
@@ -295,8 +295,10 @@ kubectl logs <pod-name> -n langsmith --tail=100 -f
 kubectl logs <pod-name> -n langsmith --previous --tail=50
 
 # Ingress / TLS
-kubectl get svc ingress-nginx-controller -n ingress-nginx
-kubectl get ingress -n langsmith
+kubectl get gateway,httproute -n langsmith                   # envoy-gateway (default)
+kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway
+kubectl get svc ingress-nginx-controller -n ingress-nginx    # nginx
+kubectl get ingress -n langsmith                             # Ingress-based controllers
 kubectl get certificate -n langsmith
 
 # Secrets (check keys without decoding)
@@ -363,9 +365,9 @@ langsmith-standalone-polly-queue-xxxxx             1/1     Running     0        
 
 > **Roll frontend after first Polly enable.** The `langsmith-polly-config` ConfigMap carrying `VITE_POLLY_DEPLOYMENT_URL` is written once Polly registers. The frontend loads it via `envFrom` at pod start, so a frontend pod that was already running shows "Unable to connect to LangGraph server" (falls back to `localhost:8123`). Fix: `kubectl rollout restart deployment langsmith-frontend -n langsmith`
 
-> **Uninstall Helm BEFORE `terraform destroy`.** The Azure Load Balancer created by NGINX blocks VNet deletion. Run `helm uninstall langsmith -n langsmith --wait` first.
+> **Uninstall BEFORE `terraform destroy`.** The Azure Load Balancer in front of the ingress controller blocks VNet deletion. Run `make uninstall` first. For `envoy-gateway`, it deletes the Gateway, which removes the proxy LB service and its IP. For `nginx`, also run `helm uninstall ingress-nginx -n ingress-nginx --wait`.
 
-> **DNS label works for nginx, istio, istio-addon, and envoy-gateway.** `dns_label` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to whichever LB service your ingress controller creates. No custom domain needed — `<label>.<region>.cloudapp.azure.com` resolves immediately. For AGIC, `dns_label` is applied directly to the AGW public IP resource — the FQDN is available via `terraform output agw_public_ip_fqdn` after apply.
+> **DNS label works for envoy-gateway, nginx, istio, and istio-addon.** `dns_label` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to whichever LB service your ingress controller creates. For `envoy-gateway`, the EnvoyProxy `langsmith-proxy` lists the annotation, so the proxy service has it from creation. No custom domain needed — `<label>.<region>.cloudapp.azure.com` resolves immediately. For AGIC, `dns_label` is applied directly to the AGW public IP resource — the FQDN is available via `terraform output agw_public_ip_fqdn` after apply.
 
 > **AGIC requires a dedicated `/24` subnet.** Terraform creates it automatically (`10.0.96.0/24`) when `ingress_controller = "agic"`. Application Gateway v2 requires an exclusive subnet — no pods, VMs, or other resources. The subnet is managed by the networking module; no manual creation needed.
 
@@ -373,7 +375,7 @@ langsmith-standalone-polly-queue-xxxxx             1/1     Running     0        
 
 > **AGIC RBAC timing — known issue.** The AKS AGIC addon creates its managed identity during cluster provisioning, but Azure AD needs ~5 minutes to register it before role assignments take effect. Terraform adds a 300s `time_sleep` before creating role assignments to avoid this. If the AGIC pod is still in CrashLoopBackOff after `make apply`, run: `az aks update --name <cluster> --resource-group <rg> --yes` then `kubectl delete pod -n kube-system -l app=ingress-azure`.
 
-> **Envoy Gateway uses Gateway API, not Ingress.** Set `ingress.enabled: false` in LangSmith Helm values and apply Gateway + HTTPRoute resources manually. See `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml` for the step-by-step commands.
+> **Envoy Gateway uses Gateway API, not Ingress.** `make init-values` sets `ingress.enabled: false` and `gateway.enabled: true`. `make deploy` creates the EnvoyProxy, GatewayClass, and Gateway before helm install, and the LangSmith chart renders the HTTPRoutes. For the resource names and lookup commands, refer to `helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml`.
 
 > **Pin `--version` in Helm.** Without it, `helm upgrade` pulls latest which may silently apply DB migrations or toggle feature flags.
 

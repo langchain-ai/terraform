@@ -1028,40 +1028,40 @@ _run_section_4() {
 }
 
 # -- 5. Ingress Controller ---------------------------------------------------
-INGRESS_CONTROLLER="nginx"
+INGRESS_CONTROLLER="envoy-gateway"
 ISTIO_ADDON_REVISION=""
 AGW_SKU_TIER=""
 
 _run_section_5() {
   _section "5. Ingress Controller"
   _hint "The ingress controller routes external HTTP/HTTPS traffic to LangSmith pods."
-  _hint "nginx       — standard K8s ingress, supported everywhere, easiest to debug."
-  _hint "istio-addon — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
-  _hint "istio       — self-managed Istio via Helm; more control, more operational overhead."
-  _hint "agic        — Azure Application Gateway; enterprise WAF built-in. Needs a"
-  _hint "              dedicated /24 subnet, carved for you or named with agic_subnet_id."
-  _hint "envoy-gateway — Gateway API native; useful if you're standardizing on Gateway API."
-  _hint "Start with nginx unless you have a specific reason to use another."
+  _hint "envoy-gateway — Gateway API native; the same controller on AWS and GCP."
+  _hint "nginx         — classic K8s Ingress; for clusters standardized on it."
+  _hint "istio-addon   — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
+  _hint "istio         — self-managed Istio via Helm; more control, more operational overhead."
+  _hint "agic          — Azure Application Gateway; enterprise WAF built-in. Needs a"
+  _hint "                dedicated /24 subnet, carved for you or named with agic_subnet_id."
+  _hint "Start with envoy-gateway unless you have a specific reason to use another."
 
   local ingress_choice=""
-  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" nginx istio-addon istio agic envoy-gateway none)"
+  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" envoy-gateway nginx istio-addon istio agic none)"
 
   while true; do
     _ask_choice --default "$ingress_choice" \
       "Which ingress controller?" \
-      "nginx         — NGINX via Helm (recommended default)" \
+      "envoy-gateway — Envoy Gateway, Gateway API (recommended default)" \
+      "nginx         — NGINX via Helm (legacy Ingress compatibility)" \
       "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
       "istio         — Istio via Helm (self-managed)" \
       "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
-      "envoy-gateway — Envoy Gateway (Gateway API native)" \
       "none          — skip (bring your own)"
 
     case "$_CHOICE" in
-      1) INGRESS_CONTROLLER="nginx" ;;
-      2) INGRESS_CONTROLLER="istio-addon" ;;
-      3) INGRESS_CONTROLLER="istio" ;;
-      4) INGRESS_CONTROLLER="agic" ;;
-      5) INGRESS_CONTROLLER="envoy-gateway" ;;
+      1) INGRESS_CONTROLLER="envoy-gateway" ;;
+      2) INGRESS_CONTROLLER="nginx" ;;
+      3) INGRESS_CONTROLLER="istio-addon" ;;
+      4) INGRESS_CONTROLLER="istio" ;;
+      5) INGRESS_CONTROLLER="agic" ;;
       6) INGRESS_CONTROLLER="none" ;;
     esac
 
@@ -1106,7 +1106,7 @@ _run_section_5() {
       _yellow "NOTE"; printf ": AGIC with the overlay network mode is not yet verified by this module.\n"
       _hint "Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here)"
       _hint "except in Azure Government and Azure China, where it is unsupported. Confirm ingress on"
-      _hint "the cluster before relying on it, or choose nginx, where every TLS path is validated."
+      _hint "the cluster before relying on it, or choose envoy-gateway, the default."
     fi
   fi
 }
@@ -1517,7 +1517,7 @@ _run_section_10() {
     _hint "                  more). Starts in Detection mode — logs matches without blocking."
     _hint "                  Say yes to diagnostics too, or nothing collects the firewall log and"
     _hint "                  you cannot see what to exclude before switching to Prevention."
-    _hint "                  For nginx/istio the policy is created but nothing references it —"
+    _hint "                  For envoy-gateway/nginx/istio the policy is created but nothing references it —"
     _hint "                  use Azure Front Door or DDoS Protection instead."
     if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then
       CREATE_WAF="true"

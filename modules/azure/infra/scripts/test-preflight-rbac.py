@@ -759,8 +759,8 @@ CASES = [
     },
     {
         # domain_name_label only reaches state through azurerm_public_ip.agw,
-        # which exists under ingress_controller = "agic" alone. On the default
-        # nginx path the label rides a Service annotation on an AKS-managed IP,
+        # which exists under ingress_controller = "agic" alone. On every other
+        # path the label rides a Service annotation on an AKS-managed IP,
         # so state cannot vouch for it and the subscription has to.
         "name": "a DNS label held by this subscription is not a collision",
         "tfvars_extra": f'dns_label = "{DNS}"',

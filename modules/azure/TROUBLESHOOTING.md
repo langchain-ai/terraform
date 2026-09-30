@@ -547,11 +547,23 @@ Terraform then writes no secrets, so neither a missing grant nor an unpropagated
 
 **Symptom:** After `make deploy`, `nslookup langsmith-demo.eastus.cloudapp.azure.com` returns NXDOMAIN. The cert-manager ACME challenge can't complete and the TLS certificate stays `READY: False`.
 
-**Cause:** The `service.beta.kubernetes.io/azure-dns-label-name` annotation must be present on the NGINX LoadBalancer service for Azure to assign the DNS label to the public IP. If the annotation is missing, the IP is provisioned but has no DNS name.
+**Cause:** The `service.beta.kubernetes.io/azure-dns-label-name` annotation must be present on the ingress controller's LoadBalancer service for Azure to assign the DNS label to the public IP. If the annotation is missing, the IP is provisioned but has no DNS name.
 
 `make deploy` sets this annotation automatically via `deploy.sh`. If you deployed without `make deploy` (e.g. ran `helm upgrade` directly), the annotation was never set.
 
-**Fix — set the annotation manually:**
+**Fix with `ingress_controller = "envoy-gateway"`:** the EnvoyProxy `langsmith-proxy` lists the annotation, and Envoy Gateway copies it onto the proxy service. Check both:
+```bash
+kubectl get envoyproxy langsmith-proxy -n envoy-gateway-system \
+  -o jsonpath='{.spec.provider.kubernetes.envoyService.annotations}'
+kubectl get svc -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway \
+  -o jsonpath='{.items[0].metadata.annotations.service\.beta\.kubernetes\.io/azure-dns-label-name}'
+# Expected: langsmith-demo (or your dns_label value)
+```
+
+If either is missing, set `dns_label` in `terraform.tfvars` and run `make deploy`, which re-applies the EnvoyProxy. Once DNS resolves, delete the stuck cert as in the nginx fix that follows.
+
+**Fix with `ingress_controller = "nginx"`:** set the annotation manually.
 ```bash
 kubectl annotate svc ingress-nginx-controller -n ingress-nginx \
   service.beta.kubernetes.io/azure-dns-label-name=<dns_label> \
@@ -715,7 +727,7 @@ kubectl describe certificate langsmith-tls -n langsmith
 
 **Cause:** `deploy.sh` applies the `letsencrypt-prod` ClusterIssuer when `tls_certificate_source` is `letsencrypt` or `dns01`. Terraform never creates it. You hit this when `make deploy` has not run yet, when `tls_certificate_source` was unset in tfvars at the time it ran, or when the `dns01` branch skipped the issuer because `langsmith_domain` was empty (`make deploy` prints a warning in that case).
 
-**Fix — apply it manually:**
+**Fix — apply it manually.** With `ingress_controller = "envoy-gateway"`, replace the `ingress:` solver in this command with the `gatewayHTTPRoute` solver that follows it.
 ```bash
 kubectl apply -f - <<EOF
 apiVersion: cert-manager.io/v1
@@ -743,7 +755,18 @@ kubectl get clusterissuer letsencrypt-prod
 kubectl delete certificate langsmith-tls -n langsmith
 ```
 
-**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`, with the correct `ingressClassName` for the active ingress controller. This is already the case in the current version of the scripts.
+Solver for `ingress_controller = "envoy-gateway"`:
+```yaml
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+          - name: langsmith-gateway
+            namespace: langsmith
+            kind: Gateway
+```
+
+**Note:** `kubernetes_manifest` cannot be used for this in Terraform — it requires a live k8s API connection during `terraform plan`, which fails on fresh deploy. The ClusterIssuer is therefore applied by `make deploy` (`deploy.sh`) via `kubectl apply`, with the correct solver for the active ingress controller. This is already the case in the current version of the scripts.
 
 ---
 
@@ -1130,12 +1153,16 @@ az group show --name langsmith-rg-<name_prefix> 2>&1 | grep -E "provisioningStat
 
 **Symptom:** `terraform destroy` hangs waiting to delete the VNet or subnet with no progress.
 
-**Cause:** The Azure Load Balancer provisioned by `ingress-nginx-controller` is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
+**Cause:** The Azure Load Balancer provisioned for the ingress controller's LoadBalancer service (the Envoy proxy service for `envoy-gateway`, `ingress-nginx-controller` for `nginx`) is not tracked by Terraform — it is created by AKS on behalf of the K8s Service. Azure blocks VNet deletion while the Load Balancer holds a reference to the subnet.
 
 **Fix — correct teardown order:**
 ```bash
 # 1. Uninstall LangSmith — removes pods, services, and the Azure Load Balancer
+#    (for envoy-gateway, make uninstall deletes the Gateway, which removes the proxy service)
 make uninstall
+
+# 1b. With ingress_controller = "nginx": remove the ingress-nginx Load Balancer
+helm uninstall ingress-nginx -n ingress-nginx --wait
 
 # 2. Delete the namespace (clears any lingering finalizers)
 kubectl delete namespace langsmith --timeout=60s

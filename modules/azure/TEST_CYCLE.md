@@ -109,7 +109,7 @@ Review the plan. Expected resource categories with `terraform.tfvars.minimum`:
 - AKS cluster and its default node pool, OIDC issuer, managed identities, federated credentials
 - Azure Blob storage account + container
 - Azure Key Vault, its RBAC role assignments, and two secrets (`postgres-admin-password`, `langsmith-license-key`)
-- cert-manager, KEDA and NGINX ingress Helm releases
+- cert-manager, KEDA, and Envoy Gateway Helm releases
 - Kubernetes namespace `langsmith` with its ServiceAccounts, ResourceQuota, LimitRange, NetworkPolicies and the `langsmith-license` secret
 
 With external Postgres and Redis the plan also has the Postgres and Redis subnets, a
@@ -180,7 +180,7 @@ aks-default-<id>-vmss000000       Ready    <none>   18m   v1.<minor>.<patch>
 ```bash
 kubectl get pods -n cert-manager    # cert-manager controller + cainjector + webhook
 kubectl get pods -n keda            # KEDA operator + metrics adapter
-kubectl get pods -n ingress-nginx   # NGINX ingress controller
+kubectl get pods -n envoy-gateway-system   # Envoy Gateway controller
 ```
 Expected output:
 ```
@@ -196,10 +196,12 @@ keda-admission-webhooks-59489d5cf6-q4h9q          1/1     Running   0          9
 keda-operator-78875c99-kktmk                      1/1     Running   0          97s
 keda-operator-metrics-apiserver-5bd8f8bb6-vvblq   1/1     Running   0          97s
 
-# ingress-nginx (deployed by k8s-cluster module)
-NAME                                        READY   STATUS    RESTARTS   AGE
-ingress-nginx-controller-7558b45cf6-k8q9l   1/1     Running   0          16m
-ingress-nginx-controller-7558b45cf6-tf9cq   1/1     Running   0          16m
+# envoy-gateway-system (deployed by k8s-cluster module)
+NAME                    READY   STATUS    RESTARTS   AGE
+envoy-gateway-<hash>    1/1     Running   0          16m
+
+# With ingress_controller = "nginx", check ingress-nginx instead:
+# kubectl get pods -n ingress-nginx
 ```
 
 #### LangSmith namespace
@@ -391,6 +393,7 @@ zone to Azure.
 | cert-manager or KEDA Helm timeout | `context deadline exceeded` on k8s-bootstrap module | Uninstall the stuck release and re-apply: `helm uninstall cert-manager -n cert-manager` |
 | PostgreSQL provisioning takes >20 min | `apply` appears hung on postgres module | Normal for Azure DB for PostgreSQL — it can take 10–15 min. Wait for it to complete. |
 | `secrets.auto.tfvars` not found | `terraform plan` fails: variables have no value | Run `make setup-env` first. The file is gitignored and must be generated locally. |
+| Envoy LB IP pending | `kubectl get gateway langsmith-gateway -n langsmith` shows no address | Wait 1–3 min for Azure LB provisioning. Check the proxy service: `kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway`. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
 | NGINX LB IP pending | `kubectl get svc -n ingress-nginx` shows `<pending>` for EXTERNAL-IP | Wait 1–3 min for Azure LB provisioning. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
 
 ---
@@ -417,7 +420,7 @@ make clean
 **Before destroy, verify this is set in `terraform.tfvars`:**
 - `keyvault_purge_protection    = false`
 
-**If destroy hangs on the VNet**: the NGINX ingress controller may have created Azure LB rules
+**If destroy hangs on the VNet**: the ingress controller's LoadBalancer service (the Envoy proxy service, or ingress-nginx with `nginx`) may have created Azure LB rules
 that hold the subnet. Delete the LB manually from Azure Portal → Load Balancers → find the
 `kubernetes` LB → delete, then re-run `make destroy`.
 

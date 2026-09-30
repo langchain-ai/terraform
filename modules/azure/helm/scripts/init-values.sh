@@ -55,7 +55,7 @@ _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
-_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
 _langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
 if [[ "$_langsmith_release_name" == *langsmith* ]]; then
@@ -334,7 +334,7 @@ info "Generating values-overrides.yaml..."
 #   istio         → "istio"  (self-managed via Helm)
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
-#   envoy-gateway → ""     (uses Gateway API, not Ingress — configure manually)
+#   envoy-gateway → ""     (uses Gateway API, not Ingress — see the gateway block below)
 #   none          → ""       (bring your own)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;

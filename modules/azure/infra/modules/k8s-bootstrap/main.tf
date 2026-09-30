@@ -346,8 +346,17 @@ resource "kubernetes_secret_v1" "license" {
 # TLS automation infrastructure. Manages Let's Encrypt certificates.
 # ClusterIssuers are applied separately by helm/scripts/deploy.sh.
 
+# Orders cert-manager after the Envoy Gateway release. cert-manager looks for the
+# Gateway API CRDs only at startup, so one started before them never serves
+# Gateways even with the feature gate below.
+resource "terraform_data" "gateway_api_crds" {
+  input = var.envoy_gateway_version
+}
+
 resource "helm_release" "cert_manager" {
   count = var.install_cert_manager ? 1 : 0
+
+  depends_on = [terraform_data.gateway_api_crds]
 
   name             = "cert-manager"
   namespace        = "cert-manager"
@@ -377,6 +386,18 @@ resource "helm_release" "cert_manager" {
   set {
     name  = "controller.resources.limits.memory"
     value = "256Mi"
+  }
+
+  # Envoy Gateway: the HTTP-01 gatewayHTTPRoute solver, and the Gateway shim that
+  # issues the certificate a Gateway's cluster-issuer annotation asks for, both
+  # need Gateway API support. On the pinned v1.14 that is this feature gate;
+  # v1.15 and later replace it with config.enableGatewayAPI.
+  dynamic "set" {
+    for_each = var.ingress_controller == "envoy-gateway" ? [1] : []
+    content {
+      name  = "featureGates"
+      value = "ExperimentalGatewayAPISupport=true"
+    }
   }
 
   # DNS-01 via Azure Workload Identity: annotate the cert-manager service account

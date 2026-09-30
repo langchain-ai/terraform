@@ -20,8 +20,9 @@
 #     (D8s_v3 / D16s_v3) is the documented fallback when Dsv5 quota is short.
 #   • Additional "large" pool: Standard_D16s_v5 (16 vCPU, 64 GB) for ClickHouse
 #     and other stateful/memory-intensive workloads.
-#   • NGINX ingress: deployed via Helm, exposes a single Azure Load Balancer
-#     IP that routes to all LangSmith services by path/host.
+#   • Ingress controller (Envoy Gateway by default): deployed via Helm,
+#     exposes a single Azure Load Balancer IP that routes to all LangSmith
+#     services by path/host.
 # ══════════════════════════════════════════════════════════════════════════════
 
 locals {
@@ -210,7 +211,7 @@ check "existing_cluster_location" {
 }
 
 # Helm provider uses the AKS cluster credentials to deploy charts
-# (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
+# (the ingress controller, and later cert-manager/KEDA via k8s-bootstrap).
 # Credentials come from the AKS cluster (created here or pre-existing) —
 # no external kubeconfig needed.
 provider "helm" {
@@ -285,7 +286,7 @@ resource "azurerm_kubernetes_cluster" "main" {
   # token into pods annotated with azure.workload.identity/use: "true".
   workload_identity_enabled = true
 
-  # Default system node pool — runs kube-system, cert-manager, KEDA, NGINX,
+  # Default system node pool — runs kube-system, cert-manager, KEDA, ingress,
   # and LangSmith services that don't require extra resources.
   default_node_pool {
     name = "default"
@@ -836,10 +837,12 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 }
 
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────
-# CNCF Gateway API implementation. Uses Gateway/HTTPRoute resources (not classic Ingress).
-# Published via OCI registry — no separate Helm repository needed.
-# After install: create a GatewayClass + Gateway + HTTPRoute to expose LangSmith.
-# See: helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml
+# CNCF Gateway API implementation and the default ingress_controller. Uses
+# Gateway/HTTPRoute resources (not classic Ingress). Published via OCI registry,
+# so no separate Helm repository is needed. The chart ships the Gateway API CRDs.
+# Terraform installs only the controller: helm/scripts/deploy.sh creates the
+# EnvoyProxy (which carries the DNS label onto the proxy Service), GatewayClass
+# and Gateway, and the LangSmith chart renders the HTTPRoutes.
 
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0

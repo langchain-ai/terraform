@@ -8,6 +8,11 @@ output "cert_manager_namespace" {
   value       = one(helm_release.cert_manager[*].namespace)
 }
 
+output "cert_manager_feature_gates" {
+  description = "featureGates set on the cert-manager release, empty with none, or null when this module did not install cert-manager"
+  value       = one([for r in helm_release.cert_manager : join(",", [for s in r.set : s.value if s.name == "featureGates"])])
+}
+
 output "keda_namespace" {
   description = "Kubernetes namespace where KEDA is deployed, or null when this module did not install it"
   value       = one(helm_release.keda[*].namespace)

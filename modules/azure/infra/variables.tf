@@ -1055,8 +1055,8 @@ variable "langsmith_namespace" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
-  default     = "nginx"
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller. 'none' = skip. Changing it on an existing deployment removes the old controller and its load balancer IP. See INGRESS_CONTROLLERS.md for the TLS compatibility matrix."
+  default     = "envoy-gateway"
 
   validation {
     condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
@@ -1266,7 +1266,7 @@ variable "create_dns_zone" {
 
 variable "ingress_ip" {
   type        = string
-  description = "Public IP of the NGINX ingress Load Balancer. Used by the DNS module for the A record. Get from: kubectl get svc -n ingress-nginx."
+  description = "Public IP of the ingress controller's Load Balancer. Used by the DNS module for the A record. For envoy-gateway, get it from: kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway. For nginx: kubectl get svc -n ingress-nginx."
   default     = ""
 }
 
@@ -1350,7 +1350,7 @@ variable "enable_fleet" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer. Results in <label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net in Azure Government). Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 
