@@ -234,8 +234,14 @@ else
       if kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -v "Running\|Completed" | grep -q .; then
         warn "$ns: some pods not Running"
       else
-        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || echo 0)
-        pass "$ns: ${_running_count} pod(s) Running"
+        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || true)
+        # A cluster that already ran cert-manager or KEDA (install_* = false) may
+        # run it in another namespace, so an empty one here is not a pass.
+        if [[ "$_running_count" == "0" && "$ns" != "ingress-nginx" ]]; then
+          warn "$ns: no pods Running"
+        else
+          pass "$ns: ${_running_count} pod(s) Running"
+        fi
       fi
     done
   else
@@ -322,6 +328,16 @@ else
     pass "langsmith-ksa Workload Identity annotation: ${_ksa_annotation}"
   else
     skip "langsmith-ksa WI annotation not set (set by Terraform k8s-bootstrap)"
+  fi
+
+  _smithdb_ingestion=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_INGESTION_ENABLED}' 2>/dev/null) || _smithdb_ingestion=""
+  _smithdb_query=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_QUERY_ENABLED}' 2>/dev/null) || _smithdb_query=""
+  if [[ -n "$_smithdb_ingestion" || -n "$_smithdb_query" ]]; then
+    info "SmithDB status: ingestion=${_smithdb_ingestion:-not set}  query=${_smithdb_query:-not set}"
+  else
+    skip "SmithDB status — not present in langsmith-config"
   fi
 fi
 

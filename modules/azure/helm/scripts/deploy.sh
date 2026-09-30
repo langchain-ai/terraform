@@ -143,9 +143,16 @@ if [[ "$_tls_source" == "letsencrypt" ]]; then
   if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
     # Envoy Gateway uses Gateway API — cert-manager gatewayHTTPRoute solver
     # requires ExperimentalGatewayAPISupport feature gate on cert-manager controller.
-    # deploy.sh enables this gate automatically (kubectl patch).
-    kubectl patch deployment cert-manager -n cert-manager --type='json' \
-      -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]' &>/dev/null || true
+    # deploy.sh enables this gate automatically (kubectl patch), but only on the
+    # cert-manager Terraform installed: one the cluster already ran is owned by
+    # something else, which would revert the patch.
+    _install_cert_manager=$(_parse_tfvar "install_cert_manager") || _install_cert_manager=true
+    if [[ "$_install_cert_manager" == "false" ]]; then
+      warn "install_cert_manager = false: the cluster's own cert-manager must run with Gateway API support enabled, or the HTTP-01 challenge through Envoy Gateway never completes."
+    else
+      kubectl patch deployment cert-manager -n cert-manager --type='json' \
+        -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]' &>/dev/null || true
+    fi
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
