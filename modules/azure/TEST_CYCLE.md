@@ -42,7 +42,7 @@ one collide in the same region. Everything this cycle checks below assumes
 that file, so edit it rather than copying settings into a new one. What it gives
 you:
 
-- One `Standard_D4s_v3` node (4 vCPU, 16 GiB), autoscaling to 3, no additional pools
+- One `Standard_D4s_v5` node (4 vCPU, 16 GiB), autoscaling to 3, no additional pools
 - Postgres, Redis and ClickHouse **in-cluster**: no Flexible Server, no Managed Redis, and no data subnets or private DNS zones for them
 - `unique_resource_names = true`, so the globally unique names carry a six-character hash (see [Terraform outputs](#terraform-outputs))
 - `keyvault_purge_protection = false`, which a clean `make destroy` needs
@@ -383,9 +383,9 @@ zone to Azure.
 | Issue | Symptom | Fix |
 |-------|---------|-----|
 | `letsencrypt-prod` ClusterIssuer missing after apply | `clusterissuers.cert-manager.io "letsencrypt-prod" not found` on the langsmith-tls certificate | Terraform does not create the issuer. `make deploy` applies it, so run Pass 2 before checking the certificate. See TROUBLESHOOTING.md. |
-| vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv3Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv3 → Request 32. Or: `az quota update --resource-name standardDSv3Family ...` See TROUBLESHOOTING.md. |
+| vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv5Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv5 → Request 32. Or: `az quota update --resource-name standardDSv5Family ...` See TROUBLESHOOTING.md. |
 | `max_pods` too low — autoscaler backoff | `pod didn't trigger scale-up: in backoff after failed scale-up` | Set `default_node_pool_max_pods = 60` **before** first apply — this field is immutable. With 30 pods/node, Pass 2's ~37 pods trigger autoscaler which hits quota. |
-| Pass 2 pods `Pending` while the autoscaler adds nodes | The first deploy waits on scale-ups when the node floor is below what the chosen sizing needs | Not seen with `terraform.tfvars.minimum`: one `Standard_D4s_v3` schedules a minimum-profile Pass 2 (about 1,560m CPU requested against about 3,920m allocatable). With a larger `sizing_profile` or addons enabled, raise `default_node_pool_min_count` so the floor already fits the requests. |
+| Pass 2 pods `Pending` while the autoscaler adds nodes | The first deploy waits on scale-ups when the node floor is below what the chosen sizing needs | Not seen with `terraform.tfvars.minimum`: one `Standard_D4s_v5` schedules a minimum-profile Pass 2 (about 1,560m CPU requested against about 3,920m allocatable). With a larger `sizing_profile` or addons enabled, raise `default_node_pool_min_count` so the floor already fits the requests. |
 | Istio addon revision not supported | `Revision asm-1-XX is not supported by the service mesh add-on` | Check supported revisions: `az aks mesh get-revisions --location eastus -o table`. Update `istio_addon_revision` in tfvars. |
 | Key Vault soft-delete conflict | `VaultAlreadyExists: A vault with the same name already exists in deleted state` | Purge the old vault: `az keyvault purge --name <name> --location eastus`. Or use `keyvault_name` in tfvars to pick a new name. |
 | cert-manager or KEDA Helm timeout | `context deadline exceeded` on k8s-bootstrap module | Uninstall the stuck release and re-apply: `helm uninstall cert-manager -n cert-manager` |

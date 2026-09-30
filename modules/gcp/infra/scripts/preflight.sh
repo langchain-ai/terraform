@@ -9,11 +9,11 @@
 # Run this BEFORE 'terraform apply' to verify that your GCP credentials
 # have the permissions needed to provision all LangSmith infrastructure.
 #
-# Usage (from terraform/gcp/):
-#   make preflight                              # read-only checks
-#   make preflight -- --domain langsmith.example.com  # + Cloud DNS zone check
-#   make preflight -- --create-test-resources  # + create/destroy a real GCS bucket
-#   make preflight -- -y                       # non-interactive
+# Usage (from modules/gcp/):
+#   make preflight                                        # read-only checks
+#   make preflight ARGS="--domain langsmith.example.com"  # + Cloud DNS zone check
+#   make preflight ARGS="--create-test-resources"         # + create/destroy a real GCS bucket
+#   make preflight ARGS="-y"                              # non-interactive
 # Sourced directly, the `set -euo pipefail` below would leak into the caller's
 # shell and leave it armed to exit on the next non-zero command, and any `exit`
 # here would close that shell outright. So when sourced, hand off to a child
@@ -134,7 +134,8 @@ POSTGRES_SOURCE=$(_tfvar "postgres_source")
 REDIS_SOURCE=$(_tfvar "redis_source")
 ENABLE_SECRET_MANAGER=$(_tfvar "enable_secret_manager_module")
 ENABLE_DNS=$(_tfvar "enable_dns_module")
-TLS_SOURCE=$(_tfvar "tls_certificate_source")
+DNS_CREATE_CERT=$(_tfvar "dns_create_certificate")
+ENABLE_SANDBOXES=$(_tfvar "enable_sandboxes")
 ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
 SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")
 SMITHDB_METASTORE_SOURCE="${SMITHDB_METASTORE_SOURCE:-create}"
@@ -236,6 +237,7 @@ CORE_PERMISSIONS=(
   "compute.networks.create"
   "compute.subnetworks.create"
   "compute.routers.create"
+  "compute.firewalls.create"
   "iam.serviceAccounts.create"
   "iam.serviceAccounts.setIamPolicy"
   "storage.buckets.create"
@@ -247,12 +249,7 @@ CORE_PERMISSIONS=(
 # Conditional permissions based on tfvars
 CONDITIONAL_PERMISSIONS=()
 if [[ "$POSTGRES_SOURCE" == "external" ]]; then
-  CONDITIONAL_PERMISSIONS+=(
-    "cloudsql.instances.create"
-    "cloudsql.databases.create"
-    "servicenetworking.services.addPeering"
-    "compute.globalAddresses.create"
-  )
+  CONDITIONAL_PERMISSIONS+=("cloudsql.instances.create" "cloudsql.databases.create")
 fi
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   CONDITIONAL_PERMISSIONS+=("redis.instances.create")
@@ -263,16 +260,23 @@ fi
 if [[ "$ENABLE_DNS" == "true" ]]; then
   CONDITIONAL_PERMISSIONS+=("dns.managedZones.create" "dns.resourceRecordSets.create")
 fi
-if [[ "$TLS_SOURCE" == "letsencrypt" ]]; then
-  CONDITIONAL_PERMISSIONS+=("certificatemanager.certs.create")
+# The DNS module creates a Google-managed SSL certificate unless
+# dns_create_certificate is set to false.
+if [[ "$ENABLE_DNS" == "true" && "$DNS_CREATE_CERT" != "false" ]]; then
+  CONDITIONAL_PERMISSIONS+=("compute.sslCertificates.create")
 fi
 # The SmithDB metastore is its own Cloud SQL instance, so these are needed even
 # when postgres_source is not "external" and the block above did not add them.
 if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ]]; then
-  for _p in "cloudsql.instances.create" "cloudsql.databases.create" \
-    "servicenetworking.services.addPeering" "compute.globalAddresses.create"; do
+  for _p in "cloudsql.instances.create" "cloudsql.databases.create"; do
     case " ${CONDITIONAL_PERMISSIONS[*]-} " in *" $_p "*) ;; *) CONDITIONAL_PERMISSIONS+=("$_p") ;; esac
   done
+fi
+# The private service connection (VPC peering). Same condition as
+# enable_private_service_connection in main.tf.
+if [[ "$POSTGRES_SOURCE" == "external" || "$REDIS_SOURCE" == "external" || "$ENABLE_SANDBOXES" == "true" ||
+  ( "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ) ]]; then
+  CONDITIONAL_PERMISSIONS+=("servicenetworking.services.addPeering" "compute.globalAddresses.create")
 fi
 # Granting roles/cloudsql.client to the SmithDB service account is a
 # project-level IAM policy write, which setIamPolicy covers. The apply fails at
@@ -288,6 +292,7 @@ fi
 # /bin/bash, treats expansion of an empty array as an unbound variable under
 # `set -u` and aborts. CONDITIONAL_PERMISSIONS is empty whenever every optional
 # module is off.
+DENIED=()
 ALL_PERMISSIONS=("${CORE_PERMISSIONS[@]}" ${CONDITIONAL_PERMISSIONS[@]+"${CONDITIONAL_PERMISSIONS[@]}"})
 
 # Obtain a bearer token — requires active gcloud auth (already verified above).
@@ -302,7 +307,6 @@ else
   # rather than 'gcloud projects test-iam-permissions', which has a quoting bug
   # when permissions are passed via shell variable expansion and requires the
   # caller to already hold resourcemanager.projects.testIamPermissions.
-  DENIED=()
   i=0
   while [[ $i -lt ${#ALL_PERMISSIONS[@]} ]]; do
     batch=("${ALL_PERMISSIONS[@]:$i:20}")
@@ -498,6 +502,10 @@ fi
 
 # ── Read-only checks complete ─────────────────────────────────────────────────
 printf "\n"
+if [[ ${#DENIED[@]} -gt 0 ]]; then
+  error "Preflight failed: ${#DENIED[@]} required IAM permission(s) missing. See the list above."
+  exit 1
+fi
 if [[ "$CREATE_TEST_RESOURCES" == "false" ]]; then
   info "Read-only checks passed. Run with --create-test-resources to also validate resource creation."
   success "Preflight complete!"

@@ -49,10 +49,17 @@ existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
 # Required, not optional: the cluster's nodes already run in an existing subnet,
 # and a subnet Terraform carves could never be one of them.
 create_vnet        = false
+vnet_id            = "/subscriptions/.../virtualNetworks/<vnet>"
 aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
 postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
 redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
+
+# The ClusterIP range the cluster was created with, outside the VNet:
+# az aks show -n <cluster> -g <rg> --query networkProfile.serviceCidr -o tsv
+aks_service_cidr   = "<service-cidr>"
 ```
+
+To test this path without a customer cluster, [`test/existing-aks-cluster/`](test/existing-aks-cluster/) builds a cluster and network of this shape in its own state and prints the matching tfvars.
 
 Cluster prerequisites — verify before applying:
 
@@ -804,7 +811,7 @@ See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for tot
 
 | File | Profile | When to use |
 |------|---------|-------------|
-| `langsmith-values-sizing-minimum.yaml` | `minimum` | Absolute floor. Core LangSmith fits on one small node (4 vCPU / 16 Gi); with Deployments and Fleet on, plan on two D4s_v3 nodes. Rock-bottom CPU/memory requests from real `kubectl top` measurements on idle. **Expect OOM kills under any real traffic.** Use for cost parking, weekend standby, or single-user demos. |
+| `langsmith-values-sizing-minimum.yaml` | `minimum` | Absolute floor. Core LangSmith fits on one small node (4 vCPU / 16 Gi); with Deployments and Fleet on, plan on two D4s_v5 nodes. Rock-bottom CPU/memory requests from real `kubectl top` measurements on idle. **Expect OOM kills under any real traffic.** Use for cost parking, weekend standby, or single-user demos. |
 | `langsmith-values-sizing-dev.yaml` | `dev` | Light non-production profile for local dev, CI pipelines, integration tests, and short-lived POCs. Single replica per component, no autoscaling. Will show instability under real workloads — that is expected. |
 | `langsmith-values-sizing-production.yaml` | `production` | **Recommended for production.** Multi-replica deployments with HPA on all stateless components. Sensible CPU/memory starting points — tune with `kubectl top pods -n langsmith` after go-live. |
 | `langsmith-values-sizing-production-large.yaml` | `production-large` | High-volume starting point based on the LangSmith scale guide (~50 concurrent users, ~1000 traces/sec). Elevated HPA minimums (e.g. 10 backend replicas). Start with `production` and move here when monitoring shows sustained pressure. |
@@ -1276,7 +1283,7 @@ aks_os_sku = "AzureLinux"
 
 additional_node_pools = {
   large = {
-    vm_size   = "Standard_D16s_v3"
+    vm_size   = "Standard_D16s_v5"
     min_count = 0
     max_count = 2
     # os_sku  = "Ubuntu"   # set only to differ from aks_os_sku
