@@ -10,8 +10,13 @@ output "redis_connection_url" {
   value       = var.redis_source == "external" ? module.redis[0].connection_url : ""
 }
 
+output "redis_cluster_enabled" {
+  description = "Sets redis.external.cluster.enabled. True for the OSSCluster policy; read by init-values.sh."
+  value       = var.redis_source == "external" ? module.redis[0].cluster_enabled : false
+}
+
 output "redis_cluster_safe_mode" {
-  description = "Whether LangSmith should set redis.external.clusterSafeMode (true for AMR). init-values.sh reads this."
+  description = "Sets redis.external.clusterSafeMode. True for the EnterpriseCluster policy."
   value       = var.redis_source == "external" ? module.redis[0].cluster_safe_mode : false
 }
 
@@ -158,7 +163,7 @@ output "langsmith_url" {
   description = "URL where LangSmith is accessible."
   value = (
     var.langsmith_domain != "" ? "https://${var.langsmith_domain}" :
-    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.cloudapp.azure.com" :
+    var.dns_label != "" ? "https://${var.dns_label}.${var.location}.${local.azure_cloud.cloudapp_suffix}" :
     var.ingress_controller == "agic" && module.aks.agw_public_ip_fqdn != null && module.aks.agw_public_ip_fqdn != "" ? "https://${module.aks.agw_public_ip_fqdn}" :
     "No domain configured — set dns_label or langsmith_domain in terraform.tfvars"
   )
@@ -244,4 +249,35 @@ output "cert_manager_identity_client_id" {
 output "dns_nameservers" {
   description = "Azure nameservers for the DNS zone — configure at your registrar"
   value       = var.create_dns_zone ? module.dns[0].nameservers : []
+}
+
+output "aks_network" {
+  description = "Effective AKS network mode, pod range, data plane, policy engine and tier, as planned or created. null for an attached cluster."
+  value = module.aks.network_profile == null ? null : {
+    mode         = coalesce(module.aks.network_profile.network_plugin_mode, "node-subnet")
+    pod_cidr     = module.aks.network_profile.pod_cidr
+    data_plane   = module.aks.network_profile.network_data_plane
+    policy       = module.aks.network_profile.network_policy
+    sku_tier     = module.aks.sku_tier
+    support_plan = module.aks.support_plan
+  }
+}
+
+# The chart builds https://<account>.blob.core.windows.net/ when no override is
+# set, which is the commercial name only. init-values.sh writes these into
+# config.blobStorage.azureStorageServiceUrlOverride and the SmithDB object-store
+# endpoint outside commercial Azure.
+output "azure_environment" {
+  description = "Azure cloud this deployment targets: public or usgovernment."
+  value       = var.azure_environment
+}
+
+output "storage_blob_endpoint" {
+  description = "Blob service endpoint of the LangSmith trace-blob account."
+  value       = module.blob.blob_endpoint
+}
+
+output "smithdb_storage_blob_endpoint" {
+  description = "Blob service endpoint of the SmithDB object-store account. Null when enable_smithdb = false."
+  value       = var.enable_smithdb ? module.smithdb[0].storage_blob_endpoint : null
 }

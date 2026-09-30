@@ -43,21 +43,34 @@ fi
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # ── Read project/env from terraform.tfvars ────────────────────────────────────
-_tfvars_parse() {
-  grep -E "^\s*${1}\s*=" "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
+# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
+# deploy.sh and init-values.sh decide whether the sandbox secret is expected by
+# calling the _common.sh copy, so a gate that disagrees omits a secret they
+# require. _common.sh is not sourced here because it also defines
+# pass/info/fail, which this script must not leak into the caller's shell.
+_parse_tfvar() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null || true
 }
 
-# Booleans in terraform.tfvars are unquoted (enable_x = true), so the
-# quoted-string extraction above doesn't apply — match the bare word instead.
-_tfvars_is_true() {
-  grep -E "^\s*${1}\s*=\s*true\s*(#.*)?$" "$_SETUP_DIR/terraform.tfvars" >/dev/null 2>&1
+_tfvar_is_true() {
+  [[ "$(_parse_tfvar "$1")" == "true" ]]
 }
 
-_project_id=$(_tfvars_parse "project_id")
-_name_prefix=$(_tfvars_parse "name_prefix")
-_environment=$(_tfvars_parse "environment")
-_region=$(_tfvars_parse "region")
+_project_id=$(_parse_tfvar "project_id")
+_name_prefix=$(_parse_tfvar "name_prefix")
+_environment=$(_parse_tfvar "environment")
+_region=$(_parse_tfvar "region")
+_enable_sandboxes=false
+if _tfvar_is_true "enable_sandboxes"; then
+  _enable_sandboxes=true
+fi
 _region="${_region:-us-west2}"
 
 if [[ -z "$_project_id" ]]; then
@@ -409,8 +422,10 @@ _sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
 _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
 
-_sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
-  "_ed25519_private_jwk_gen" "" "true"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
+    "_ed25519_private_jwk_gen" "" "true"
+fi
 
 # ── Admin password rule ───────────────────────────────────────────────────────
 # templates/validate.yaml rejects a non-compliant password at render time, so
@@ -465,7 +480,7 @@ _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
 # them when enable_sso_oidc = true in terraform.tfvars. Every other secret in
 # this script runs unconditionally because a generator makes that harmless;
 # these three would otherwise force an unrelated prompt on every fresh setup.
-if _tfvars_is_true "enable_sso_oidc"; then
+if _tfvar_is_true "enable_sso_oidc"; then
   _sm_secret "oauth-client-id" "TF_VAR_langsmith_oauth_client_id" \
     "" "OIDC client ID (from your identity provider's app registration)" "false" || return 1
   _sm_secret "oauth-client-secret" "TF_VAR_langsmith_oauth_client_secret" \
@@ -535,7 +550,9 @@ echo "  postgres_password = (hidden — SM: ${_sm_prefix}-postgres-password)"
 echo "  license_key       = (hidden — SM: ${_sm_prefix}-langsmith-license-key)"
 echo "  api_key_salt      = (hidden — SM: ${_sm_prefix}-api-key-salt)"
 echo "  jwt_secret        = (hidden — SM: ${_sm_prefix}-jwt-secret)"
-echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
+fi
 echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"

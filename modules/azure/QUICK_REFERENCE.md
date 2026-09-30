@@ -9,8 +9,6 @@ type: "reference"
 
 All commands run from `modules/azure/`. Run `make help` to see all targets.
 
-For demo/POC (all in-cluster DBs) see [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md).
-
 ---
 
 ## First-Time Setup
@@ -234,6 +232,8 @@ clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 default_node_pool_vm_size   = "Standard_D8s_v3"
 default_node_pool_max_count = 12
 default_node_pool_max_pods  = 60
+aks_network_mode            = "overlay"   # Azure CNI Overlay + Cilium (node-subnet = legacy flat network)
+aks_sku_tier                = "Standard"  # uptime SLA; Free has none
 
 # ── TLS (pick one approach) ───────────────────────────────────────────────────
 # Option A — HTTP only (quickstart default, zero setup — validated ✅)
@@ -389,6 +389,7 @@ cd modules/azure
 make init    ARGS="-upgrade"                 # re-resolve provider versions
 make plan    ARGS="-target=module.aks"       # plan one module
 make plan    ARGS="-out=tfplan"              # save a plan file
+make apply   ARGS="-auto-approve"            # skip the three approval prompts
 make destroy ARGS="-target=module.redis"     # destroy one module
 ```
 
@@ -429,4 +430,3 @@ make clean
 - [ARCHITECTURE.md](ARCHITECTURE.md) — component diagram and pass structure
 - [SERVICES.md](SERVICES.md) — what each pod does, dependencies, which pass enables it
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — issues, gotchas, and fixes
-- [BUILDING_LIGHT_LANGSMITH.md](BUILDING_LIGHT_LANGSMITH.md) — all-in-cluster demo/POC guide

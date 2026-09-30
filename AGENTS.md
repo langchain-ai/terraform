@@ -66,13 +66,15 @@ before the PR does, not a separate standard.
   `SHELLCHECK_SEVERITY=info` or `TFLINT_SEVERITY=warning`. `terraform plan`
   needs cloud creds and state — never run it without explicit user approval.
 - **CI runs the same scripts**, a check job and a plan-tests job per provider
-  plus one for the scripts, so a green local run is a green PR. If you change
-  what the gate covers, change `agents/check.sh` or `agents/plan-tests.sh`
-  rather than the workflow. A new root under an existing `modules/<provider>/`
-  needs no workflow edit; a brand-new provider directory needs a
-  `matrix.provider` entry in both matrices in
-  `.github/workflows/checks.yaml`, and a test suite — `plan-tests.sh` exits 2
-  on a provider that has neither a suite nor an entry in its `SKIP_PROVIDERS`.
+  plus one for the scripts, so a green local run is a green PR. On a PR, only
+  the providers whose `modules/<provider>/` the PR touches get legs; a change
+  to `agents/` or the workflow runs them all, and a push to `main` always does.
+  If you change what the gate covers, change `agents/check.sh` or
+  `agents/plan-tests.sh` rather than the workflow. A new root under an existing
+  `modules/<provider>/` needs no workflow edit; a brand-new provider directory
+  needs an entry in `PROVIDERS` in `.github/scripts/changed-providers.sh`, and
+  a test suite — `plan-tests.sh` exits 2 on a provider that has neither a suite
+  nor an entry in its `SKIP_PROVIDERS`.
 - **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
   initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
   forms slip in from model output unnoticed.

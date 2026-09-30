@@ -26,6 +26,40 @@ export AWS_PAGER=""
 # setup-env.sh lives in infra/scripts/ but terraform.tfvars lives in infra/.
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
+# ── terraform.tfvars parser ───────────────────────────────────────────────────
+# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
+# apply-eso.sh and deploy.sh decide whether the sandbox secrets are expected by
+# calling the _common.sh copy, so a gate that disagrees leaves the
+# ExternalSecret pointing at an SSM parameter nothing created, which fails the
+# whole langsmith-config sync. _common.sh is not sourced here because it also
+# defines pass/info/fail and _aws, which this script must not leak into the
+# caller's interactive shell.
+_parse_tfvar() {
+  local key="$1"
+  local tfvars_file="$_SETUP_DIR/terraform.tfvars"
+  local raw val
+  raw=$(grep -E "^\s*${key}\s*=" "$tfvars_file" 2>/dev/null | head -1) || return 1
+  [[ -n "$raw" ]] || return 1
+  # Quoted string: key = "value"
+  val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
+  if [[ -z "$val" ]]; then
+    # Unquoted value: key = true / key = 42 / key = {} / key = ["m5.2xlarge"]
+    # Strip any trailing `# comment` BEFORE collapsing whitespace, otherwise
+    # `enable_fleet = true # note` parses to `true#note` and breaks _tfvar_is_true
+    # (migration issue #1).
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"[]')
+  fi
+  [[ -n "$val" ]] || return 1
+  echo "$val"
+}
+
+# Returns 0 if KEY = true or "true" in terraform.tfvars.
+_tfvar_is_true() {
+  local val
+  val=$(_parse_tfvar "$1") || return 1
+  [[ "$val" == "true" ]]
+}
+
 # ── AWS ───────────────────────────────────────────────────────────────────────
 # Ensure AWS_PROFILE or AWS credentials are set before sourcing.
 # Region is read from terraform.tfvars if present; falls back to AWS_REGION env var.
@@ -50,6 +84,10 @@ _name_prefix=$(grep -E '^\s*name_prefix\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/d
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _name_prefix=""
 _environment=$(grep -E '^\s*environment\s*=' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
   | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _environment="${LANGSMITH_ENV:-dev}"
+_enable_sandboxes=false
+if _tfvar_is_true "enable_sandboxes"; then
+  _enable_sandboxes=true
+fi
 if [[ -z "$_name_prefix" ]]; then
   echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
   return 1
@@ -319,8 +357,10 @@ _ssm_secret "redis-auth-token" "" "TF_VAR_redis_auth_token" \
 
 # ── Sandbox JuiceFS Redis auth token ──────────────────────────────────────────
 # ElastiCache auth tokens must be printable ASCII — use hex, not base64.
-_ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
-  "openssl rand -hex 32" "" "true"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _ssm_secret "sandbox-juicefs-redis-auth-token" "" "TF_VAR_sandbox_juicefs_redis_auth_token" \
+    "openssl rand -hex 32" "" "true"
+fi
 
 # ── Stable auto-generated secrets (must never change after first deployment) ──
 # Changing api_key_salt invalidates ALL existing API keys.
@@ -331,8 +371,10 @@ _ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "TF_VAR_langsmi
 _ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32" "" "true"
 
-_ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
-  "_ed25519_private_jwk_gen" "" "true"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
+    "_ed25519_private_jwk_gen" "" "true"
+fi
 
 # ── LangSmith app secrets (consumed by ESO → K8s Secret → Helm chart) ────────
 _ssm_secret "langsmith-license-key" "$_SETUP_DIR/.license_key" "LANGSMITH_LICENSE_KEY" \
@@ -417,10 +459,14 @@ echo "  region            = $AWS_REGION"
 echo "  postgres_username = $TF_VAR_postgres_username"
 echo "  postgres_password = (hidden — SSM: ${_ssm_prefix}/postgres-password)"
 echo "  redis_auth_token  = (hidden — SSM: ${_ssm_prefix}/redis-auth-token)"
-echo "  juicefs_redis     = (hidden — SSM: ${_ssm_prefix}/sandbox-juicefs-redis-auth-token)"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  juicefs_redis     = (hidden — SSM: ${_ssm_prefix}/sandbox-juicefs-redis-auth-token)"
+fi
 echo "  api_key_salt      = (hidden — SSM: ${_ssm_prefix}/langsmith-api-key-salt)"
 echo "  jwt_secret        = (hidden — SSM: ${_ssm_prefix}/langsmith-jwt-secret)"
-echo "  sandbox_cb_jwk    = (hidden — SSM: ${_ssm_prefix}/sandbox-callback-signing-jwk)"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  sandbox_cb_jwk    = (hidden — SSM: ${_ssm_prefix}/sandbox-callback-signing-jwk)"
+fi
 echo "  license_key       = (hidden — SSM: ${_ssm_prefix}/langsmith-license-key)"
 echo "  admin_password    = (hidden — SSM: ${_ssm_prefix}/langsmith-admin-password)"
 echo "  admin_email       = (stored — SSM: ${_ssm_prefix}/langsmith-admin-email)"
