@@ -9,8 +9,9 @@ Most of the 0.16 values schema carries over to 0.17. The modules absorb two chan
 - Sandboxes: chart 0.17 removes the bundled JuiceFS CSI driver (sections 1 and 2).
 - SmithDB on GCP: chart 0.17 changes the cache and migration values (section 3).
 
-A deployment with `enable_sandboxes = false` and `enable_smithdb = false` only moves
-the chart pin.
+On GCP, `make apply` also removes the project-wide Secret Manager grant (section 4)
+and upgrades Envoy Gateway (section 5). Otherwise, a deployment with
+`enable_sandboxes = false` and `enable_smithdb = false` only moves the chart pin.
 
 ## Status of the 0.17 line
 
@@ -177,6 +178,79 @@ Then do the other steps in
 metastore TLS values, the overlay, and the backfill Job. That section also covers
 a direct `helm upgrade`.
 
+## 4) Secret Manager access on GCP
+
+The LangSmith service account no longer gets `roles/secretmanager.secretAccessor`
+on the whole project. No LangSmith component reads Secret Manager at runtime. The
+scripts (`setup-env.sh`, `manage-secrets.sh`, `status.sh`) read it with your own
+gcloud credentials.
+
+- `make apply` destroys one resource,
+  `module.iam[0].google_project_iam_member.langsmith_secret_accessor[0]`. The
+  provider removes only this member from the role binding. No pod restarts.
+- First check if a workload that you added reads Secret Manager as the LangSmith
+  service account, for example External Secrets Operator on a LangSmith Kubernetes
+  service account. Give that workload its own GCP service account, with
+  `roles/secretmanager.secretAccessor` on the secrets that it reads.
+- To keep the old grant, set `grant_project_secret_accessor = true`. Terraform then
+  keeps the existing binding.
+
+## 5) Envoy Gateway v1.9 on GCP
+
+With `ingress_type = "envoy"` (the default), `make apply` upgrades Envoy Gateway to
+v1.9.2 in one step, and the Envoy proxy to v1.39. The ingress module applies the
+parts in this order:
+
+1. The Gateway API CRDs v1.6.1 (standard channel), which Envoy Gateway v1.9 needs.
+2. The Envoy Gateway v1.9.2 CRDs. Helm does not upgrade CRDs, so the module applies
+   them with `kubectl apply --server-side`.
+3. The `envoy-gateway` Helm release, with the chart copy of the CRDs off.
+
+The three steps are tested on GKE Standard `1.35.8-gke.1380001`. The steps are not
+tested on GKE Autopilot.
+
+Envoy Gateway v1.9 supports Kubernetes 1.33 to 1.36. The GKE RAPID channel offers
+1.37, which v1.9 does not list. Before the upgrade, make sure that the control plane
+runs a version from 1.33 to 1.36.
+
+On Autopilot, GKE Gateway is always on, and GKE installs the Gateway API CRDs. Step 1
+applies v1.6.1 over those CRDs. The GKE documentation does not say if GKE later puts
+back its own version. Test the upgrade on a non-production Autopilot cluster first.
+Before and after the upgrade, show the bundle version and the field managers of the
+CRDs:
+
+```bash
+kubectl get crd gateways.gateway.networking.k8s.io \
+  -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}{range .metadata.managedFields[*]}{.manager}{"\n"}{end}'
+```
+
+After the upgrade, the first line must be `v1.6.1`. If it is not, open an issue with
+both outputs.
+
+- Plan a maintenance window. The proxy pod restarts one time, and the old pod drains
+  open connections for up to 60 seconds. Streams that stay open longer stop, and
+  clients must reconnect. The load balancer IP does not change.
+- The Gateway API v1.6.1 bundle adds the admission policy
+  `safe-upgrades.gateway.networking.k8s.io`. After that, the cluster rejects Gateway
+  API CRDs older than v1.5.
+- A rollback of the Helm release (`helm rollback envoy-gateway <revision>`) keeps the
+  new CRDs. Expect a short outage while the old proxy starts. After a rollback,
+  look for certgen objects that the v1.9 chart left behind, and delete them:
+  `kubectl get clusterrole,clusterrolebinding -o name | grep certgen`.
+- The module creates only a GatewayClass, a Gateway, and the chart HTTPRoutes. If you
+  added Envoy Gateway policies (for example SecurityPolicy, ClientTrafficPolicy or
+  EnvoyProxy) or v1alpha2 TCPRoute, TLSRoute or UDPRoute objects, read the Envoy
+  Gateway v1.3 to v1.9 release notes before the upgrade.
+- The proxy metric labels changed in v1.7. Check dashboards that read the proxy
+  metrics.
+- The GatewayClass now owns the proxy Service. Do not delete the GatewayClass before
+  the Gateway.
+- Mirrors and egress allowlists need the chart
+  `oci://docker.io/envoyproxy/gateway-helm:v1.9.2`, the images
+  `docker.io/envoyproxy/gateway:v1.9.2` and `docker.io/envoyproxy/envoy:distroless-v1.39.1`,
+  and the two CRD files from the GitHub releases of `kubernetes-sigs/gateway-api`
+  (v1.6.1) and `envoyproxy/gateway` (v1.9.2).
+
 ## Upgrade path
 
 1) Take a database backup. Chart downgrades are not supported, so 0.17 to 0.16 is not
@@ -191,7 +265,9 @@ a direct `helm upgrade`.
    `sandbox_host_machine_type = "n2-standard-8"`. The pin keeps the current
    sandbox-host nodes and their mounted chart 0.16 volumes until the drain in
    step 5. After step 6, remove the pin. Then run `make apply` again. GKE recreates
-   every sandbox-host node, and running sandboxes stop.
+   every sandbox-host node, and running sandboxes stop. On GCP, `make apply` also
+   removes the project-wide Secret Manager grant (section 4), and upgrades Envoy
+   Gateway (section 5).
 4) Run `make init-values` so the generated overrides file is regenerated in the 0.17
    shape.
 5) Deploy: `make deploy`. If sandboxes ran on chart 0.16, the first run stops and

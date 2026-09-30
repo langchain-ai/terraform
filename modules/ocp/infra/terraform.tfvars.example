@@ -3,3 +3,10 @@ kube_context    = "my-ocp-cluster"
 environment     = "dev"
 project         = "my-project"
 hostname        = "langsmith.apps.cluster.example.com"
+
+# Datastore connection URLs, written to the langsmith-postgres / langsmith-redis
+# secrets. Both embed a password and end up in Terraform state in plaintext — keep
+# state in an encrypted remote backend, or leave these empty and export
+# POSTGRES_CONNECTION_URL / REDIS_CONNECTION_URL to generate-secrets.sh instead.
+# postgres_connection_url = "postgresql://langsmith:CHANGEME@postgres.example.com:5432/langsmith"
+# redis_connection_url    = "rediss://:CHANGEME@redis.example.com:6380/0"

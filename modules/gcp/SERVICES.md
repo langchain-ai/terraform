@@ -143,8 +143,9 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 
 ### External Secrets Operator (ESO)
 - **What**: Can sync Secret Manager secrets into Kubernetes secrets
-- **Deployed by**: Terraform `k8s-bootstrap` module
-- **Note**: Core LangSmith secrets (postgres/redis) are written directly to K8s Secrets by the `k8s-bootstrap` Terraform module — ESO is available for custom secret workflows but is not required for a base deployment.
+- **Deployed by**: Not deployed by this module. Install it yourself for custom secret workflows.
+- **Note**: Core LangSmith secrets (postgres/redis) are written directly to K8s Secrets by the `k8s-bootstrap` Terraform module — ESO is not required for a base deployment.
+- **Identity**: The LangSmith service account has no Secret Manager role (`grant_project_secret_accessor = false`). Give ESO its own GCP service account, with `roles/secretmanager.secretAccessor` on the secrets it syncs.
 
 ---
 

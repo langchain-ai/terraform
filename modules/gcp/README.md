@@ -58,6 +58,7 @@ Terraform enables these automatically on first apply. To enable manually:
 ```bash
 gcloud services enable \
   container.googleapis.com \
+  compute.googleapis.com \
   sqladmin.googleapis.com \
   redis.googleapis.com \
   storage.googleapis.com \
@@ -66,21 +67,14 @@ gcloud services enable \
   certificatemanager.googleapis.com \
   servicenetworking.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  logging.googleapis.com \
+  monitoring.googleapis.com \
   --project <your-project-id>
 ```
 
 ### Required IAM roles
 
-| Role | Purpose |
-|------|---------|
-| `roles/container.admin` | Create and manage GKE clusters |
-| `roles/compute.networkAdmin` | Create VPC, subnets, firewall rules |
-| `roles/iam.serviceAccountAdmin` | Create service accounts for Workload Identity |
-| `roles/cloudsql.admin` | Create and manage Cloud SQL instances |
-| `roles/redis.admin` | Create and manage Memorystore Redis |
-| `roles/storage.admin` | Create GCS buckets and lifecycle policies |
-| `roles/resourcemanager.projectIamAdmin` | Grant IAM bindings during provisioning |
-| `roles/servicenetworking.networksAdmin` | Create private service connections (required for Cloud SQL + Redis) |
+The identity running Terraform needs `roles/owner`, or a set of predefined roles that includes `roles/resourcemanager.projectIamAdmin`. `roles/editor` alone fails at the first IAM binding. For the full role list, the IAM the deployment creates, and how to test access before the first apply, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
 ### Required outbound access
 
@@ -410,6 +404,7 @@ helm upgrade langsmith langchain/langsmith \
 |---|---|---|
 | `enable_gcp_iam_module` | `true` | Wires `modules/iam` for Workload Identity + bucket IAM binding |
 | `enable_secret_manager_module` | `false` | Wires `modules/secrets` for Secret Manager bootstrap secret |
+| `grant_project_secret_accessor` | `false` | Grants the LangSmith service account `roles/secretmanager.secretAccessor` on the whole project. No module component needs it |
 | `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS + managed cert |
 | `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
 | `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |

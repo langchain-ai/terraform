@@ -40,6 +40,10 @@ variables {
   # serialization. Double quotes and backslashes are covered by rejection runs.
   postgres_admin_password = "Aa1 !$#%&'()*+,-./:;<=>?@[]^_`{|}~"
   enable_smithdb          = false
+  # The wiring suite's throwaway public key, for the runs that set
+  # create_bastion = true: the empty default fails inside azurerm's own schema
+  # validator, which would mask the precondition a run expects.
+  bastion_admin_ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDLvAeJ8tG7HNaDGXt2T05HJmj1X1qaP+jb2MTDRBLNEPOwsvT7UrCsGp/8AB5MZIyMmRLoNOz1GTRWWBQsgQoKJD1jPUJNvSDZ16g4yFV4wX2o6nxooi53U9L6JWH6XrXn2Ozhca7tC0o26Oyd2toFrf8An8H8Gnwsdr3EOIrqvL0ZxXvjgGLZDx9auENfrlrhob8+6QLsZkEzphDWqKhbYpy46WEYtwHvKRpYX1YlDN6jbObN0wifqu98UZNsIr7FoZR3luNj1bA/kjqUC61GW6UziPyCoMhk3Jf9IMQ24OBXn2Xp4JWMZ3jYp+IL1fi9YVgofvsOvlYM2XGtmgzt plan-tests-fixture"
 }
 
 run "enums_reject_an_unlisted_value" {
@@ -180,16 +184,57 @@ run "attach_names_are_rejected_on_the_create_path" {
   command = plan
 
   variables {
-    create_cluster         = true
-    existing_cluster_name  = "ls-aks-prod"
-    create_keyvault        = true
-    existing_keyvault_name = "ls-kv-prod"
+    create_cluster               = true
+    existing_cluster_name        = "ls-aks-prod"
+    create_keyvault              = true
+    existing_keyvault_name       = "ls-kv-prod"
+    create_resource_group        = true
+    existing_resource_group_name = "platform-langsmith-rg"
   }
 
   expect_failures = [
     var.existing_cluster_name,
     var.existing_keyvault_name,
+    var.existing_resource_group_name,
   ]
+}
+
+# The resource group's pair runs the other way too: a pinned create-side name
+# on the attach path would be ignored, so it is refused.
+run "a_resource_group_name_is_rejected_on_the_attach_path" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = "platform-langsmith-rg"
+    resource_group_name          = "langsmith-rg-prod"
+  }
+
+  expect_failures = [var.resource_group_name]
+}
+
+run "attaching_a_resource_group_requires_its_name" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = ""
+  }
+
+  expect_failures = [var.existing_resource_group_name]
+}
+
+# preflight.sh puts this name into a request URL, so a character outside
+# Azure's grammar is refused here as well as there.
+run "an_existing_resource_group_name_outside_azure_grammar_is_refused" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = "rg/../other"
+  }
+
+  expect_failures = [var.existing_resource_group_name]
 }
 
 # blob_ttl_long_days carries two validations, and the second reads
@@ -417,6 +462,199 @@ run "gateway_pii_redaction_with_the_gateway_plans" {
     enable_gateway_pii_redaction = true
   }
 }
+
+# ── VNet address space ───────────────────────────────────────────────────────
+
+run "vnet_address_space_rejects_a_non_cidr" {
+  command = plan
+
+  variables {
+    vnet_address_space = ["10.0.0.0"]
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+run "vnet_address_space_rejects_an_empty_list" {
+  command = plan
+
+  variables {
+    vnet_address_space = []
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+run "vnet_address_space_rejects_a_host_address" {
+  command = plan
+
+  variables {
+    vnet_address_space = ["10.0.0.5/17"]
+  }
+
+  expect_failures = [var.vnet_address_space]
+}
+
+# A moved VNet with every carved prefix moved inside it plans clean. The runs
+# after it each leave one feature's prefix at its default, which sits inside
+# 10.0.0.0/17 and so outside the moved space, and the containment precondition
+# on terraform_data.validate_network has to catch it.
+
+run "moved_vnet_address_space_plans_with_moved_prefixes" {
+  command = plan
+
+  variables {
+    vnet_address_space             = ["172.16.0.0/16"]
+    aks_subnet_address_prefix      = ["172.16.0.0/19"]
+    postgres_subnet_address_prefix = ["172.16.32.0/20"]
+    redis_subnet_address_prefix    = ["172.16.48.0/20"]
+    agic_subnet_address_prefix     = ["172.16.96.0/24"]
+    bastion_subnet_address_prefix  = ["172.16.80.0/27"]
+    ingress_controller             = "agic"
+    create_bastion                 = true
+  }
+}
+
+run "moved_vnet_address_space_rejects_default_subnet_prefixes" {
+  command = plan
+
+  variables {
+    vnet_address_space = ["172.16.0.0/16"]
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "moved_vnet_address_space_rejects_a_default_agic_prefix" {
+  command = plan
+
+  variables {
+    vnet_address_space             = ["172.16.0.0/16"]
+    aks_subnet_address_prefix      = ["172.16.0.0/19"]
+    postgres_subnet_address_prefix = ["172.16.32.0/20"]
+    redis_subnet_address_prefix    = ["172.16.48.0/20"]
+    ingress_controller             = "agic"
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "moved_vnet_address_space_rejects_a_default_bastion_prefix" {
+  command = plan
+
+  variables {
+    vnet_address_space             = ["172.16.0.0/16"]
+    aks_subnet_address_prefix      = ["172.16.0.0/19"]
+    postgres_subnet_address_prefix = ["172.16.32.0/20"]
+    redis_subnet_address_prefix    = ["172.16.48.0/20"]
+    create_bastion                 = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# The default aks_service_cidr, 10.0.64.0/20, sits inside the default VNet in
+# the gap the default subnets leave. A subnet moved into that gap has to fail at
+# plan, and moving aks_service_cidr out of its way has to clear it.
+
+run "created_vnet_rejects_a_subnet_on_the_service_cidr" {
+  command = plan
+
+  variables {
+    ingress_controller         = "agic"
+    agic_subnet_address_prefix = ["10.0.64.0/24"]
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+run "created_vnet_plans_a_subnet_beside_a_moved_service_cidr" {
+  command = plan
+
+  variables {
+    ingress_controller         = "agic"
+    agic_subnet_address_prefix = ["10.0.64.0/24"]
+    aks_service_cidr           = "10.0.112.0/20"
+  }
+}
+
+# ── Subnets already in a reused VNet ─────────────────────────────────────────
+# Carving into someone else's VNet, the prefixes Terraform picks must miss the
+# subnets already there. The VNet read returns only their names, so each one is
+# read for its prefixes.
+
+run "byo_vnet_plans_beside_a_clear_sibling" {
+  command = plan
+
+  variables {
+    create_vnet      = false
+    vnet_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr = "172.20.0.0/16"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+  }
+  override_data {
+    target = data.azurerm_subnet.byo_vnet_siblings
+    values = { address_prefixes = ["10.0.200.0/24"] }
+  }
+
+  assert {
+    condition     = length(data.azurerm_subnet.byo_vnet_siblings) == 1
+    error_message = "The sibling subnet was not read"
+  }
+}
+
+run "byo_vnet_rejects_a_prefix_on_a_sibling" {
+  command = plan
+
+  variables {
+    create_vnet      = false
+    vnet_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr = "172.20.0.0/16"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+  }
+  # Inside the default aks_subnet_address_prefix, 10.0.0.0/19.
+  override_data {
+    target = data.azurerm_subnet.byo_vnet_siblings
+    values = { address_prefixes = ["10.0.4.0/24"] }
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
+# After the first apply the carved subnets are in the VNet's list as well, and
+# they overlap their own prefixes by definition.
+run "byo_vnet_skips_the_subnets_terraform_carved" {
+  command = plan
+
+  variables {
+    create_vnet      = false
+    vnet_id          = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+    aks_service_cidr = "172.20.0.0/16"
+  }
+
+  override_data {
+    target = data.azurerm_virtual_network.byo_vnet
+    values = { address_space = ["10.0.0.0/16"], subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
+  }
+  override_data {
+    target = data.azurerm_subnet.byo_vnet_siblings
+    values = { address_prefixes = ["10.0.0.0/19"] }
+  }
+
+  assert {
+    condition     = length(data.azurerm_subnet.byo_vnet_siblings) == 0
+    error_message = "A subnet Terraform carves was read as a sibling"
+  }
+}
+
 # ── AKS network mode, data plane and tier ────────────────────────────────────
 
 run "aks_network_enums_reject_an_unlisted_value" {
@@ -643,10 +881,10 @@ run "aks_dns_service_ip_outside_the_service_cidr_is_refused" {
 }
 
 # ── Derived name lengths ─────────────────────────────────────────────────────
-# Azure's per-service name limits are preconditions on the resource group, the
+# Azure's per-service name limits are a precondition on the resource group, the
 # first resource created, so an overlong name fails the plan instead of the
-# apply partway through. One run per name, since expect_failures names the
-# resource and cannot tell the preconditions apart.
+# apply partway through. One run per name, since the one precondition covers
+# every name and expect_failures cannot tell them apart.
 
 run "a_storage_account_name_over_24_characters_is_refused" {
   command = plan
@@ -656,6 +894,20 @@ run "a_storage_account_name_over_24_characters_is_refused" {
   }
 
   expect_failures = [azurerm_resource_group.resource_group]
+}
+
+# Attaching creates no resource group, so the same check sits on the read of
+# the existing one.
+run "a_long_name_is_refused_when_attaching_a_resource_group" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = "platform-langsmith-rg"
+    storage_account_name         = "lsblobprodeastus2contoso01"
+  }
+
+  expect_failures = [data.azurerm_resource_group.existing]
 }
 
 run "a_keyvault_name_over_24_characters_is_refused" {
@@ -736,4 +988,23 @@ run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
   }
 
   expect_failures = [var.aks_os_sku]
+}
+
+# install_cert_manager = false rules out DNS-01. The solver reaches the Azure DNS
+# API as a Managed Identity bound to the pod by a workload-identity annotation
+# Terraform adds only to the service account of a release it installs itself, so
+# the pair applies cleanly and then fails every ACME challenge on an Azure auth
+# error. The guard is a second validation block on tls_certificate_source, which
+# is where it lives now that #133 removed the ClusterIssuer it used to hang on.
+run "dns01_rejects_a_cert_manager_this_module_did_not_install" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "dns01"
+    install_cert_manager   = false
+    langsmith_domain       = "langsmith.example.com"
+    letsencrypt_email      = "fixture@example.com"
+  }
+
+  expect_failures = [var.tls_certificate_source]
 }

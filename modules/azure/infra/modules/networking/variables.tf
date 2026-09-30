@@ -96,3 +96,15 @@ variable "agic_subnet_address_prefix" {
   description = "CIDR prefix for the Application Gateway subnet. Must be /24 or larger (Azure AGW requirement). Must not overlap with other subnets."
   default     = ["10.0.96.0/24"] # 256 IPs — min size for App Gateway v2
 }
+
+variable "enable_subnet_nsgs" {
+  type        = bool
+  description = "Attach a network security group to each AKS, Postgres, and Redis subnet this module creates. Subnets supplied by the operator are left alone."
+  default     = false
+}
+
+variable "aks_source_prefixes" {
+  type        = list(string)
+  description = "Address prefixes of the AKS node subnet, whether created here or supplied. The Postgres and Redis NSGs admit these and nothing else from the VNet."
+  default     = []
+}

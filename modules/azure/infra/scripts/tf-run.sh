@@ -25,4 +25,8 @@ if [[ ! -f "$INFRA_DIR/secrets.auto.tfvars" ]]; then
   echo ""
 fi
 
+case "${1:-}" in
+  plan|apply) bash "$SCRIPT_DIR/guard-ingress-default.sh" "${@:2}" ;;
+esac
+
 exec terraform -chdir="$INFRA_DIR" "$@"

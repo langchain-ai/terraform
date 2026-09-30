@@ -79,12 +79,14 @@ init: ## terraform init (infra)
 	terraform -chdir=$(TF_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
+	@bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(ARGS)
 	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	terraform -chdir=$(TF_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra) — three stages, each prompts for confirmation: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
 	@# The stage targets are this root's addresses; a wrapper module prefixes them.
 	@if [ -n "$(LANGSMITH_INFRA_DIR)" ]; then echo "make apply stages this repo's addresses; run terraform apply in $(LANGSMITH_INFRA_DIR) instead."; exit 1; fi
+	@bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(ARGS)
 	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
 	terraform -chdir=$(TF_DIR) apply $(ARGS) \
@@ -117,6 +119,7 @@ destroy-force: ## terraform destroy without confirmation prompt (use after make 
 	terraform -chdir=$(TF_DIR) destroy -auto-approve $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
+	@case "$(firstword $(ARGS))" in plan|apply) bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(wordlist 2,$(words $(ARGS)),$(ARGS)) ;; esac
 	terraform -chdir=$(TF_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)

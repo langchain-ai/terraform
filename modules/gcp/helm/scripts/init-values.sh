@@ -429,6 +429,14 @@ _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=tru
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
 
+# An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
+# addon keys falls back to the interactive prompt or the files already on disk.
+for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
+          enable_usage_telemetry enable_fleet enable_standalone_polly \
+          enable_standalone_insights enable_sandboxes; do
+  if [[ -n "$(_parse_tfvar "$_k")" ]]; then _tfvars_drive_addons=true; fi
+done
+
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then

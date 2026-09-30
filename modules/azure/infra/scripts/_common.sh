@@ -12,6 +12,7 @@
 #   _parse_tfvar <key>              — Read a value from terraform.tfvars
 #   _parse_tfvar_quoted <key> <f>   — Read a quoted value, spaces intact, from <f>
 #   _tfvar_is_true <key>            — Return 0 if tfvar == true
+#   _tf_out <name>                  — Read one terraform output, or return 1
 #   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
 #   _values_input_stamp             — tfvars values baked into values-overrides.yaml
 #   _read_values_stamp <f> <k>      — Read one stamped value back out
@@ -71,6 +72,18 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# ── terraform output reader ──────────────────────────────────────────────────
+# `terraform output -raw <name>` exits 0 against a state with no outputs and
+# prints its warning to stdout, so an exit-code check alone captures the warning
+# as the value. Accept only a value shaped like a resource name, ID, or email;
+# the leading alphanumeric also stops a value being read as an az CLI flag.
+_tf_out() {
+  local name="$1" val
+  val=$(terraform -chdir="$INFRA_DIR" output -raw "$name" 2>/dev/null) || return 1
+  [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9._@+-]*$ ]] || return 1
+  printf '%s' "$val"
 }
 
 # ── Azure cloud ──────────────────────────────────────────────────────────────
