@@ -62,11 +62,13 @@ kubectl cluster-info
 aws sts get-caller-identity
 ```
 
-If the cluster was created with a different IAM role, grant `aws-auth` ConfigMap access:
+If the cluster was created with a different IAM role, the cluster creator adds an access entry for yours. See [Authenticate](PERMISSIONS.md#authenticate) in PERMISSIONS.md:
 
 ```bash
-kubectl edit configmap aws-auth -n kube-system
-# Add your IAM user/role under mapUsers or mapRoles
+aws eks create-access-entry --cluster-name <cluster-name> --principal-arn <role-arn>
+aws eks associate-access-policy --cluster-name <cluster-name> --principal-arn <role-arn> \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster
 ```
 
 ---

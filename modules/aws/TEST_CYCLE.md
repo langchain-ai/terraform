@@ -16,14 +16,7 @@ checklist below.
 - `kubectl`
 - `helm` v3+
 
-**IAM permissions required** (run preflight to verify):
-- EKS: create/describe/delete cluster, node groups, OIDC provider
-- EC2: VPC, subnets, security groups, NAT gateway, ELB
-- IAM: create/attach roles and policies
-- RDS: create/delete DB instance
-- ElastiCache: create/delete replication group
-- S3: create/delete bucket, bucket policies
-- SSM: GetParameter, PutParameter (for `source ./infra/scripts/setup-env.sh`)
+**IAM permissions required**: see [PERMISSIONS.md](PERMISSIONS.md). Verify with `make preflight`.
 
 ---
 

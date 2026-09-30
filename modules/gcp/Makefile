@@ -80,8 +80,8 @@ destroy: ## terraform destroy (infra)
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	terraform -chdir=$(INFRA_DIR) $(ARGS)
 
-preflight: ## Run GCP infra preflight checks
-	$(INFRA_DIR)/scripts/preflight.sh
+preflight: ## Run GCP infra preflight checks (ARGS="--domain <d>" / "--create-test-resources")
+	$(INFRA_DIR)/scripts/preflight.sh $(ARGS)
 
 kubeconfig: ## Fetch kubeconfig for the GKE cluster
 	$(HELM_DIR)/scripts/get-kubeconfig.sh
