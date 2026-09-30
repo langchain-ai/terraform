@@ -36,8 +36,8 @@ echo "════════════════════════�
 echo ""
 
 # ── Resolve cluster from terraform outputs ─────────────────────────────────
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-RESOURCE_GROUP=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || RESOURCE_GROUP=""
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || CLUSTER_NAME=""
+RESOURCE_GROUP=$(_tf_out resource_group_name) || RESOURCE_GROUP=""
 
 if [[ -n "$CLUSTER_NAME" && -n "$RESOURCE_GROUP" ]]; then
   info "Cluster: $CLUSTER_NAME"

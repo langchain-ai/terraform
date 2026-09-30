@@ -885,7 +885,7 @@ REDIS_SOURCE=$(_tfvar redis_source || echo "external")
 QUOTA_LOCATION=$(_tfvar location || echo "eastus")
 POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
 CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
-NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v3")
+NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v5")
 NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
 NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
 
@@ -950,7 +950,7 @@ _quota_row() {
 # for a shape it cannot read, such as the whole map on one line.
 _additional_pools() {
   if ! grep -qE '^[[:space:]]*additional_node_pools[[:space:]]*=' "$TFVARS" 2>/dev/null; then
-    printf 'large\tStandard_D16s_v3\t0\t2\n'
+    printf 'large\tStandard_D16s_v5\t0\t2\n'
     return 0
   fi
   local rows

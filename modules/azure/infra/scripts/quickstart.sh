@@ -572,7 +572,7 @@ _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
   _hint "Dev/POC:    smaller nodes, in-cluster services OK, Key Vault stays purgeable."
-  _hint "Production: D8s_v3 nodes, external Postgres + Redis, Key Vault purge protection."
+  _hint "Production: D8s_v5 nodes, external Postgres + Redis, Key Vault purge protection."
 
   _hint "Changing this later leaves answers you have already given untouched —"
   _hint "it only affects the defaults of sections you have not filled in yet."
@@ -934,7 +934,7 @@ _run_section_3() {
 }
 
 # -- 4. AKS ------------------------------------------------------------------
-NODE_VM_SIZE="Standard_D4s_v3"
+NODE_VM_SIZE="Standard_D4s_v5"
 NODE_MIN=2
 NODE_MAX=5
 NODE_MAX_PODS=60
@@ -944,9 +944,9 @@ AKS_SKU_TIER="Standard"
 _run_section_4() {
   _section "4. AKS Cluster"
   _hint "Node sizing determines how many LangSmith services fit per node."
-  _hint "Standard_D4s_v3 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
-  _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
-  _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
+  _hint "Standard_D4s_v5 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
+  _hint "Standard_D8s_v5 (8 vCPU, 32 GiB) — required for production sizing profile."
+  _hint "Cost estimate (eastus, on-demand): D4s_v5 ~\$0.19/hr, D8s_v5 ~\$0.38/hr per node."
   _hint "The autoscaler handles bursts — min_count is the always-on floor."
 
   local vm_default="$NODE_VM_SIZE"
@@ -954,11 +954,11 @@ _run_section_4() {
   local max_default="$NODE_MAX"
   if [[ "$PROFILE" == "prod" ]]; then
     if ! _answered 4; then
-      vm_default="Standard_D8s_v3"
+      vm_default="Standard_D8s_v5"
       min_default=3
       max_default=10
     fi
-    _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
+    _hint "Production defaults: D8s_v5 ×3 min (fits Pass 2 at ~76% CPU utilization)."
   fi
 
   _ask "Node VM size" "$vm_default"
@@ -1467,11 +1467,11 @@ _run_section_9() {
   _hint ""
   _hint "minimum        — bare minimum (demos, heavily constrained clusters, < 4 vCPU total)."
   _hint "dev            — single replica per service, minimal requests. Fast deploys."
-  _hint "                 Use with Standard_D4s_v3 × 2+ nodes."
+  _hint "                 Use with Standard_D4s_v5 × 2+ nodes."
   _hint "production     — multi-replica + HPA (backend×3, queue×3, etc.)."
-  _hint "                 Use with Standard_D8s_v3 × 3+ nodes. Required for real workloads."
+  _hint "                 Use with Standard_D8s_v5 × 3+ nodes. Required for real workloads."
   _hint "production-large — high-volume (~50 concurrent users, ~1000 traces/sec)."
-  _hint "                 Use with Standard_D8s_v3 × 5+ nodes."
+  _hint "                 Use with Standard_D8s_v5 × 5+ nodes."
 
   local sizing_choice=""
   _answered 9 && sizing_choice="$(_index_of "$SIZING_PROFILE" minimum dev production production-large)"
@@ -1962,7 +1962,8 @@ if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
 # Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
-# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity.
+# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity,
+# and a new redis_name with it: the failed create keeps the old name reserved.
 amr_sku                 = "${AMR_SKU}"
 redis_high_availability = ${REDIS_HA}
 TFVARS

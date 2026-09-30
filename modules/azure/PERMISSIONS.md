@@ -165,6 +165,6 @@ Work through these causes in order:
 1. **The identity holds Contributor only.** Add `Role Based Access Control Administrator` at subscription scope. This is the common case.
 2. **A condition restricts which roles the identity may assign.** Suspect this when one assignment succeeds and another on the same scope fails, because the two differ only by role definition. Run the `checkAccess` probe and read the `condition` field.
 3. **A deny assignment blocks the write.** Deny assignments override role assignments and appear in the `denyAssignment` field of the probe output. Azure Blueprints and managed application lock-downs both create them.
-4. **The grant has not propagated.** Role assignments take one to three minutes to take effect. If access was granted in the last few minutes, run `az account get-access-token --query expiresOn` to confirm the token predates the grant, then re-authenticate with `az login`.
+4. **The grant has not reached your session.** Role assignments take one to three minutes to take effect. If the grant arrived through a group, the token you are holding predates it and no wait fixes that: `checkAccess` reports `Allowed` while the apply still fails with 403. Sign in again (`az logout && az login`, or restart Cloud Shell) and re-run `terraform apply`.
 
 After granting the missing role, re-run `terraform apply`. The run is resumable, and resources created before the failure stay in state.

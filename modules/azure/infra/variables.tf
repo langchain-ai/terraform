@@ -566,7 +566,7 @@ variable "redis_high_availability" {
 
 variable "redis_location" {
   type        = string
-  description = "Region for the AMR cluster. Defaults to var.location. Set this only when AMR reports InsufficientCapacity in your region — the private endpoint and every other resource stay in var.location, so the change is a cross-region private link, not a second deployment."
+  description = "Region for the AMR cluster. Defaults to var.location. Set this only when AMR reports InsufficientCapacity in your region — the private endpoint and every other resource stay in var.location, so the change is a cross-region private link, not a second deployment. Retrying after a failed create also needs a new redis_name: the failed attempt keeps the old name reserved, and ARM rejects it even when no resource is visible."
   default     = null
 }
 
@@ -664,13 +664,13 @@ variable "storage_private_dns_zone_id" {
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)
 #   + ingestQueue×3 (3 vCPU/6Gi) + frontend + playground + aceBackend + system pods
-#   → Standard_D8s_v3 × 3 nodes (24 vCPU / 96 GiB) comfortably fits Pass 2.
+#   → Standard_D8s_v5 × 3 nodes (24 vCPU / 96 GiB) comfortably fits Pass 2.
 #
 # Pass 3–5 (LangGraph Platform, Agent Builder, Insights): add ~3 vCPU / 5 GiB.
-#   Total with autoscale headroom: max_count = 12 (Standard_D8s_v3).
+#   Total with autoscale headroom: max_count = 12 (Standard_D8s_v5).
 #
 # ClickHouse: 3.5 vCPU / 15 GiB request — always scheduled to the large pool
-#   (Standard_D16s_v3, 16 vCPU / 64 GiB) via node affinity set in the chart.
+#   (Standard_D16s_v5, 16 vCPU / 64 GiB) via node affinity set in the chart.
 #   Production recommendation from upstream: 8 vCPU / 32 GiB for heavy tracing load.
 #
 # Official LangSmith minimum: 16 vCPU / 64 GiB cluster-wide.
@@ -684,13 +684,13 @@ variable "aks_kubernetes_version" {
 
 variable "default_node_pool_vm_size" {
   type        = string
-  description = "VM size for the default AKS node pool. Standard_D8s_v3 (8 vCPU / 32 GiB) is the recommended baseline for Pass 2+ (external Postgres + Redis). Use Standard_D4s_v3 (4 vCPU / 16 GiB) only for light/demo deployments (in-cluster DBs). See sizing comment above."
-  default     = "Standard_D8s_v3" # 8 vCPU, 32 GiB
+  description = "VM size for the default AKS node pool. Standard_D8s_v5 (8 vCPU / 32 GiB) is the recommended baseline for Pass 2+ (external Postgres + Redis). Use Standard_D4s_v5 (4 vCPU / 16 GiB) only for light/demo deployments (in-cluster DBs). See sizing comment above."
+  default     = "Standard_D8s_v5" # 8 vCPU, 32 GiB
 }
 
 variable "default_node_pool_min_count" {
   type        = number
-  description = "Min node count for the default pool. Autoscaler never scales below this floor. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable (76% CPU). Set to 1 for minimum/dev deployments."
+  description = "Min node count for the default pool. Autoscaler never scales below this floor. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v5 provides 18,870m allocatable (76% CPU). Set to 1 for minimum/dev deployments."
   default     = 1
 }
 
@@ -787,10 +787,10 @@ variable "additional_node_pools" {
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
+      vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
       min_count = 0
       max_count = 2
     }
