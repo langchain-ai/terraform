@@ -7,7 +7,7 @@
 #   AKS subnet    10.0.0.0/19   — node IPs, plus pod IPs in node-subnet mode (8 k IPs)
 #   Postgres      10.0.32.0/20  — delegated to PostgreSQL Flexible Server (4 k IPs)
 #   Redis         10.0.48.0/20  — Premium Redis requires a dedicated subnet (4 k IPs)
-#   K8s svc CIDR  10.0.64.0/20  — defined in AKS module, must NOT overlap VNet ranges
+#   K8s svc CIDR  10.0.64.0/20  — defined in AKS module, must NOT overlap any subnet
 #
 # Why dedicated subnets?
 #   • PostgreSQL Flexible Server requires its own delegated subnet (Azure restriction).
