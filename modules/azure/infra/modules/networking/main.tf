@@ -237,6 +237,20 @@ resource "azurerm_network_security_group" "postgres" {
     destination_address_prefix = "*"
   }
 
+  # The VirtualNetwork tag covers the host address 168.63.129.16, so the deny
+  # below would otherwise win over Azure's own AllowAzureLoadBalancerInBound.
+  security_rule {
+    name                       = "allow-azure-load-balancer"
+    priority                   = 4095
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "AzureLoadBalancer"
+    destination_address_prefix = "*"
+  }
+
   security_rule {
     name                       = "deny-vnet-inbound"
     priority                   = 4096
@@ -275,6 +289,20 @@ resource "azurerm_network_security_group" "redis" {
     source_port_range          = "*"
     destination_port_ranges    = ["10000", "8500-8599"]
     source_address_prefixes    = var.aks_source_prefixes
+    destination_address_prefix = "*"
+  }
+
+  # The VirtualNetwork tag covers the host address 168.63.129.16, so the deny
+  # below would otherwise win over Azure's own AllowAzureLoadBalancerInBound.
+  security_rule {
+    name                       = "allow-azure-load-balancer"
+    priority                   = 4095
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "AzureLoadBalancer"
     destination_address_prefix = "*"
   }
 

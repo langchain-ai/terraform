@@ -647,6 +647,13 @@ CASES = [
         "expect": ["[✗] Resource group platform-langsmith-rg could not be read"],
     },
     {
+        "name": "an attached resource group without a name fails before any RBAC call",
+        "tfvars_extra": "create_resource_group = false",
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] terraform.tfvars: create_resource_group = false needs existing_resource_group_name"],
+        "reject_calls": ["checkAccess", "role assignment list"],
+    },
+    {
         "name": "a created resource group is still checked for resourceGroups/write",
         "ca_all": ALL_GOOD,
         "assert_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],

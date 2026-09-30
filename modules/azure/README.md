@@ -1258,9 +1258,11 @@ Set `enable_subnet_nsgs = true` to put a network security group on each subnet T
 | Postgres | TCP 5432 from the AKS subnet, and all traffic from the Postgres subnet itself, which high availability replicates over. The rest of the VNet is denied |
 | Redis | TCP 10000 and 8500-8599 from the AKS subnet. The rest of the VNet is denied |
 
-Outbound keeps Azure's defaults on all three. The NSGs land in the LangSmith resource group, even when the subnets sit in a bring-your-own VNet's group, and the Redis subnet enables private endpoint network policies so its NSG applies to the Managed Redis endpoint. A subnet you supply keeps whatever NSG you gave it, and nothing is attached to the bastion or AGIC subnets.
+Both data-tier NSGs also admit Azure's platform probes, which arrive from the `AzureLoadBalancer` service tag. Outbound keeps Azure's defaults on all three. The NSGs land in the LangSmith resource group, even when the subnets sit in a bring-your-own VNet's group, and the Redis subnet enables private endpoint network policies so its NSG applies to the Managed Redis endpoint. A subnet you supply keeps whatever NSG you gave it, and nothing is attached to the bastion or AGIC subnets.
 
 Anything else that reaches Postgres or Redis directly from inside the VNet, such as a jump host or a peered network, is denied once this is on. Add a rule to the NSG for it, or leave the flag off.
+
+On an attached cluster, the plan refuses the flag when node pools run in more than one subnet, since only `aks_subnet_id` is admitted. A cluster that gives pods their own pod subnet reaches the data tier from that subnet's addresses, which these NSGs deny; attach your own NSGs for it instead.
 
 ---
 

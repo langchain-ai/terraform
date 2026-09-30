@@ -303,6 +303,10 @@ trap 'rm -rf "$RBAC_TMP"' EXIT
 
 if [ -z "$PRINCIPAL_ID" ] || [ -z "$SUB_ID_CHECK" ]; then
   warn "Skipping RBAC check — no principal object ID to query"
+elif [ "$CREATE_RG" = "false" ] && [ -z "$RESOURCE_GROUP_NAME" ]; then
+  # Without a group there is no scope to ask about, and the subscription
+  # fallback would judge rights an attached deployment never uses.
+  fail "terraform.tfvars: create_resource_group = false needs existing_resource_group_name, the group to deploy into"
 else
   # Every scope the deployment writes a role assignment at is knowable before
   # apply. The subscription covers everything created beneath it by inheritance.

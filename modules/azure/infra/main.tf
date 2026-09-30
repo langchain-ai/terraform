@@ -734,6 +734,13 @@ resource "terraform_data" "validate_network" {
       error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add them, or clear aks_subnet_id and let Terraform create a subnet."
     }
 
+    # The Postgres and Redis NSGs admit aks_subnet_id alone, so pods on an
+    # attached cluster's other node subnets would time out reaching both.
+    precondition {
+      condition     = !var.enable_subnet_nsgs || length(module.aks.node_subnet_ids) <= 1
+      error_message = "enable_subnet_nsgs = true admits only aks_subnet_id to the Postgres and Redis subnets, and cluster '${local.aks_name}' runs node pools in ${length(module.aks.node_subnet_ids)} subnets: [${join(", ", module.aks.node_subnet_ids)}]. Set enable_subnet_nsgs = false and attach NSGs that admit every node subnet yourself."
+    }
+
     # Each service needs its own subnet. Postgres is the reason this is fatal
     # rather than untidy: its subnet is delegated, and Azure documents that no
     # other resource type may sit in a delegated subnet. Sharing passes the
@@ -898,7 +905,7 @@ module "aks" {
   create_vnet    = var.create_vnet
 
   # Both of these are passed straight from variables, never derived from another
-  # resource. azurerm_resource_group.resource_group is pending creation on a first
+  # resource. azurerm_resource_group.resource_group[0] is pending creation on a first
   # apply, and local.aks_subnet_id reads module.vnet.subnet_main_id, whose module
   # has no count and so is pending too. A reference to either draws a dependency
   # edge that defers the cluster lookup to apply, taking the OIDC issuer, Workload

@@ -531,6 +531,13 @@ run "subnet_nsgs_admit_only_the_aks_subnet" {
     condition     = one([for r in module.vnet.subnet_nsg_rules.redis : r.access if r.name == "deny-vnet-inbound"]) == "Deny"
     error_message = "the Redis NSG does not deny the rest of the VNet"
   }
+  assert {
+    condition = alltrue([
+      for nsg in ["postgres", "redis"] :
+      one([for r in module.vnet.subnet_nsg_rules[nsg] : r.priority if r.source_address_prefix == "AzureLoadBalancer" && r.access == "Allow"]) < one([for r in module.vnet.subnet_nsg_rules[nsg] : r.priority if r.name == "deny-vnet-inbound"])
+    ])
+    error_message = "a data-tier NSG denies Azure's platform probes ahead of admitting them"
+  }
 }
 
 # ── Cluster components, both directions ──────────────────────────────────────
