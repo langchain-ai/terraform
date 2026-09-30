@@ -106,11 +106,23 @@ WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_man
   fail "Could not read storage_account_k8s_managed_identity_client_id."
   exit 1
 }
+# The chart builds https://<account>.blob.core.windows.net/ unless told otherwise,
+# which is the commercial hostname only. Outside commercial Azure, pass the
+# endpoint Azure reported for the account.
+AZURE_ENVIRONMENT=$(_azure_environment)
+STORAGE_BLOB_ENDPOINT=""
+if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
+  STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw storage_blob_endpoint 2>/dev/null) || {
+    fail "Could not read storage_blob_endpoint, which azure_environment = ${AZURE_ENVIRONMENT} needs. Run 'make apply' on this version of the module first."
+    exit 1
+  }
+fi
 NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
 ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
 CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-# AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
-REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
+# Redis client mode follows the AMR clustering policy. No default: guessing wrong pairs
+# the standalone client with an OSS cluster, which is the combination that 503s ingest.
+REDIS_CLUSTER_ENABLED=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_enabled 2>/dev/null) || REDIS_CLUSTER_ENABLED=""
 
 SMITHDB_STORAGE_ACCOUNT=""
 SMITHDB_STORAGE_CONTAINER=""
@@ -119,6 +131,7 @@ SMITHDB_METASTORE_SECRET="smithdb-metastore"
 SMITHDB_METASTORE_AUTH_MODE="password"
 SMITHDB_METASTORE_USERNAME=""
 SMITHDB_CACHE_STORAGE_CLASS=""
+SMITHDB_STORAGE_BLOB_ENDPOINT=""
 if [[ "${_enable_smithdb:-false}" == "true" ]]; then
   SMITHDB_STORAGE_ACCOUNT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_account_name 2>/dev/null) || SMITHDB_STORAGE_ACCOUNT=""
   SMITHDB_STORAGE_CONTAINER=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_container_name 2>/dev/null) || SMITHDB_STORAGE_CONTAINER=""
@@ -127,6 +140,9 @@ if [[ "${_enable_smithdb:-false}" == "true" ]]; then
   SMITHDB_METASTORE_AUTH_MODE=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_auth_mode 2>/dev/null) || SMITHDB_METASTORE_AUTH_MODE="password"
   SMITHDB_METASTORE_USERNAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_username 2>/dev/null) || SMITHDB_METASTORE_USERNAME=""
   SMITHDB_CACHE_STORAGE_CLASS=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage_class_name 2>/dev/null) || SMITHDB_CACHE_STORAGE_CLASS=""
+  if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
+    SMITHDB_STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_blob_endpoint 2>/dev/null) || SMITHDB_STORAGE_BLOB_ENDPOINT=""
+  fi
 fi
 
 echo ""
@@ -148,6 +164,7 @@ echo ""
 # Priority order:
 #   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
 #   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
+#      (cloudapp.usgovcloudapi.net in Azure Government)
 #      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
 #   3. Existing value in values-overrides.yaml (keep on re-run)
@@ -162,7 +179,7 @@ fi
 
 # Azure Public IP DNS label — free, no extra resource, works for all ingress controllers
 if [[ -z "$HOSTNAME" && -n "$_dns_label" ]]; then
-  HOSTNAME="${_dns_label}.${_location}.cloudapp.azure.com"
+  HOSTNAME="${_dns_label}.${_location}.$(_azure_cloudapp_suffix)"
   info "Hostname from dns_label (${_ingress_controller}): $HOSTNAME"
   echo ""
 fi
@@ -439,17 +456,30 @@ fi
 
 # Build redis block
 if [[ "$_redis_source" == "external" ]]; then
-  _redis_block='redis:
+  # terraform prints its "no outputs" warning to stdout and still exits 0, so check the
+  # value parses as a bool rather than trusting the read.
+  if [[ "$REDIS_CLUSTER_ENABLED" != "true" && "$REDIS_CLUSTER_ENABLED" != "false" ]]; then
+    fail "Could not read redis_cluster_enabled. Run terraform apply in $INFRA_DIR first."
+    exit 1
+  fi
+  if [[ "$REDIS_CLUSTER_ENABLED" == "true" ]]; then
+    # OSSCluster: the endpoint answers MOVED redirects, so the cluster client. Node
+    # URIs and password come from the secret's default keys. Needs chart 0.13.33+.
+    _redis_block='redis:
   external:
     enabled: true
     existingSecretName: "langsmith-redis-secret"
-    connectionUrlSecretKey: "connection_url"'
-  # AMR is an OSS cluster reached over TLS by hostname — LangSmith must use a
-  # standalone client (clusterSafeMode), not a cluster client (whose node-IP TLS
-  # verification fails). Classic cache leaves this false.
-  if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
-    _redis_block="${_redis_block}
-    clusterSafeMode: true"
+    cluster:
+      enabled: true
+      tlsEnabled: true'
+  else
+    # EnterpriseCluster: one proxied endpoint — standalone client, cluster-safe ops only.
+    _redis_block='redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-secret"
+    connectionUrlSecretKey: "connection_url"
+    clusterSafeMode: true'
   fi
 else
   _redis_block='# redis: in-cluster (managed by Helm chart)'
@@ -470,12 +500,18 @@ else
   _clickhouse_block='# clickhouse: in-cluster (managed by Helm chart)'
 fi
 
+if [[ -n "$STORAGE_BLOB_ENDPOINT" ]]; then
+  _blob_endpoint_line="    azureStorageServiceUrlOverride: \"${STORAGE_BLOB_ENDPOINT}\""
+else
+  _blob_endpoint_line="    # azureStorageServiceUrlOverride: unset, commercial Azure (<account>.blob.core.windows.net)"
+fi
+
 cat > "$OUT_FILE" << EOF
 # LangSmith Azure — Helm values overrides
 # Auto-generated by init-values.sh — edit to customize, re-run to refresh from terraform outputs.
 # values-overrides.yaml is gitignored — never commit it.
 #
-# Values chain: values.yaml (base) → this file → sizing overlay → addon overlays
+# Values chain: values.yaml (base) → this file → addon overlays → sizing overlay
 
 config:
   hostname: "${HOSTNAME}"
@@ -488,6 +524,7 @@ ${_auth_block}
     engine: "Azure"
     azureStorageAccountName: "${STORAGE_ACCOUNT}"
     azureStorageContainerName: "${STORAGE_CONTAINER}"
+${_blob_endpoint_line}
   telemetry:
     usageReporting: true
   deployment:
@@ -756,6 +793,15 @@ if [[ "$_enable_smithdb" == "true" ]]; then
     exit 1
   fi
 
+  # Outside the public cloud the chart needs the account's blob endpoint: left
+  # empty, SmithDB falls back to the commercial blob suffix and cannot reach a
+  # Government account.
+  if [[ "$AZURE_ENVIRONMENT" != "public" && -z "$SMITHDB_STORAGE_BLOB_ENDPOINT" ]]; then
+    fail "enable_smithdb = true in Azure ${AZURE_ENVIRONMENT} but the smithdb_storage_blob_endpoint Terraform output is missing"
+    action "Run terraform apply so the output is recorded, then re-run make init-values"
+    exit 1
+  fi
+
   _smithdb_password_secret_key='"smithdb_metastore_db_password"'
   _smithdb_iam_auth_provider='""'
   _smithdb_iam_username='""'
@@ -786,6 +832,7 @@ smithdb:
       bucket: "${SMITHDB_STORAGE_CONTAINER}"
       azure:
         accountName: "${SMITHDB_STORAGE_ACCOUNT}"
+        endpoint: "${SMITHDB_STORAGE_BLOB_ENDPOINT}"
         accessKeySecretKey: ""
     metastore:
       hostSecretKey: "smithdb_metastore_db_host"

@@ -26,18 +26,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The providers to run legs for: on a PR, the ones it touches; on a push to
+  # main, all of them. The provider list and path rules live in
+  # changed-providers.sh. A PR checks out its merge commit, so HEAD^1 is the
+  # base tip and the diff is exactly the PR's change.
+  changes:
+    name: changed providers
+    runs-on: ubuntu-latest
+    outputs:
+      providers: ${{ steps.pick.outputs.providers }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # shell: bash adds pipefail. Without it a failed git diff would pipe
+      # nothing into the script, which prints [] and skips every leg green.
+      # --no-renames keeps the old path of a move, so a file moved out of a
+      # provider still runs that provider.
+      - name: Pick providers
+        id: pick
+        shell: bash
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            providers=$(git diff --name-only --no-renames -z HEAD^1 HEAD | bash .github/scripts/changed-providers.sh)
+          else
+            providers=$(bash .github/scripts/changed-providers.sh --all)
+          fi
+          echo "Providers to check: $providers"
+          echo "providers=$providers" >> "$GITHUB_OUTPUT"
+
   # One job per provider so a failure names the provider, and so the provider
-  # rulesets install in parallel. Only the directory names live here: check.sh
-  # expands modules/<provider> into the roots beneath it, so which directories
-  # are roots stays defined in one place. byoc is the standalone
-  # langsmith-byoc-role IAM root, nested a level deeper than the others.
+  # rulesets install in parallel. The matrix carries only directory names:
+  # check.sh expands modules/<provider> into the roots beneath it, so which
+  # directories are roots stays defined in one place. byoc is the standalone
+  # langsmith-byoc-role IAM root, nested a level deeper than the others. The
+  # if skips the job when no provider changed, because an empty matrix fails
+  # the whole workflow.
   check:
     name: check (${{ matrix.provider }})
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: [aws, azure, byoc, gcp]
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:
@@ -91,11 +126,13 @@ jobs:
   # versions.tf to init against at all.
   plan-tests:
     name: plan tests (${{ matrix.provider }})
+    needs: changes
+    if: needs.changes.outputs.providers != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        provider: [aws, azure, byoc, gcp]
+        provider: ${{ fromJSON(needs.changes.outputs.providers) }}
     env:
       TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform-plugin-cache
     steps:

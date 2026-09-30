@@ -105,7 +105,7 @@ AKS Cluster
 └── cert-manager  (Let's Encrypt TLS)
 
 Azure
-├── Azure Blob Storage  (trace payloads — always external)
+├── Azure Blob Storage  (trace payloads — always external; LRS by default, storage_replication_type)
 └── Azure Key Vault     (secrets)
 ```
 
@@ -147,6 +147,8 @@ langsmith-vnet-<name_prefix>
 ```
 
 All subnets are private. Postgres and Redis are accessible only from within the VNet via private DNS resolution. No public endpoints.
+
+The AKS subnet holds the nodes in either network mode. In overlay mode (`aks_network_mode = "overlay"`, what the templates write) pods take addresses from `aks_pod_cidr`, a range private to the cluster that is not part of the VNet, and pod traffic to the VNet leaves the node with the node's address. In node-subnet mode pods take VNet addresses from the AKS subnet too, which is why that mode needs a subnet sized for `(max_count + 1) x (max_pods + 1)` per pool.
 
 ### Bring your own VNet (`create_vnet = false`)
 
@@ -237,7 +239,7 @@ Pass 2 — Application
 
 ## Resource Sizing
 
-Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for the full resource tables — CPU requests/limits, memory requests/limits, replica counts, and HPA ranges for every component across all four profiles.
+Four sizing profiles are available. See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for total CPU and memory per profile. Each profile's values file holds its per-component resources and HPA ranges.
 
 | Profile | Use case | Set via |
 |---------|---------|---------|

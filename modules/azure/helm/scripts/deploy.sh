@@ -9,14 +9,14 @@
 # Values files loaded (in order, last wins):
 #   1. values.yaml                               — base Azure config (always)
 #   2. values-overrides.yaml                     — env-specific: hostname, WI, blob (required)
-#   3. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
-#   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
-#   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
-#   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
-#   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
-#   8b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
-#   8c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
+#   3. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
+#   4. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
+#   5. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #4)
+#   6. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
+#   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   7b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
+#   7c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
+#   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
 #   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -34,8 +34,20 @@ VALUES_DIR="$HELM_DIR/values"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
-RELEASE_NAME="${RELEASE_NAME:-langsmith}"
-NAMESPACE="${NAMESPACE:-langsmith}"
+# The Helm release name: RELEASE_NAME from the environment if set, else
+# langsmith_release_name from terraform.tfvars, else langsmith. The chart names
+# its objects after its fullname, which is the release name only when that
+# contains "langsmith" (prod -> prod-langsmith-backend).
+RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
+if [[ "$RELEASE_NAME" == *langsmith* ]]; then
+  CHART_FULLNAME="$RELEASE_NAME"
+else
+  CHART_FULLNAME="${RELEASE_NAME}-langsmith"
+fi
+# Same order for the namespace. The Terraform side (the workload identity
+# subjects, the namespace itself) reads langsmith_namespace, so an env-only
+# value installed the release where no federated identity pointed.
+NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
@@ -53,6 +65,13 @@ if [[ ! -f "$OVERRIDES_FILE" ]]; then
   action "make init-values  (generates it from terraform outputs)"
   exit 1
 fi
+# init-values writes insights.enabled and polly.enabled into every overrides file
+# it generates. A file without them predates that, and may be missing other
+# settings init-values writes now.
+if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_FILE"; then
+  warn "values-overrides.yaml has no insights/polly block, so it predates the current init-values"
+  action "make init-values  (regenerates it; re-apply any hand edits afterward)"
+fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
 _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
@@ -68,13 +87,15 @@ info "Active context: $(kubectl config current-context)"
 echo ""
 
 # ── Set DNS label annotation on the ingress LoadBalancer service ──────────
-# Azure assigns <dns_label>.<region>.cloudapp.azure.com to the public IP only when
+# Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
+# in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
 # Works for ALL ingress controllers — nginx, istio, istio-addon, envoy-gateway.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_cloudapp_suffix=$(_azure_cloudapp_suffix)
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
     nginx)
@@ -104,7 +125,7 @@ if [[ -n "$_dns_label" ]]; then
     kubectl annotate svc "$_lb_svc" -n "$_lb_ns" \
       "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" \
       --overwrite &>/dev/null
-    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.cloudapp.azure.com"
+    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.${_cloudapp_suffix}"
   elif [[ -n "$_lb_svc" ]]; then
     warn "${_lb_svc} not found in ${_lb_ns} — DNS label not set (run make apply first)"
   fi
@@ -116,8 +137,8 @@ fi
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
-  _le_namespace=$(_parse_tfvar "langsmith_namespace") || _le_namespace="langsmith"
-  _le_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _le_namespace="$NAMESPACE"
+  _le_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
 
@@ -208,7 +229,7 @@ spec:
           subscriptionID: ${_subscription_id}
           resourceGroupName: ${_dns_rg}
           hostedZoneName: ${_dns_zone}
-          environment: AzurePublicCloud
+          environment: $(_cert_manager_azure_environment)
           managedIdentity:
             clientID: ${_cert_manager_client_id}
 EOF
@@ -236,10 +257,10 @@ fi
 # but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   kubectl apply -f - &>/dev/null <<EOF
 apiVersion: networking.istio.io/v1beta1
@@ -377,25 +398,6 @@ fi
 VALUES_ARGS+=(-f "$OVERRIDES_FILE")
 echo "  ✔ values-overrides.yaml"
 
-# Sizing profile
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
-      echo "     Use sizing_profile = production for production deployments."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: base values defaults (sizing_profile = default)"
-fi
-
 # Addon overlays
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
@@ -427,6 +429,27 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# Sizing profile. Loaded after the addon overlays because agent-deploys carries
+# its own hostBackend/listener/operator resources for the default profile, and
+# loaded before it those overrode whatever profile was chosen.
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ -f "$_sizing_file" ]]; then
+    VALUES_ARGS+=(-f "$_sizing_file")
+    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
+    if [[ "$_sizing_profile" == "minimum" ]]; then
+      echo ""
+      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
+      echo "     Use sizing_profile = production for production deployments."
+      echo ""
+    fi
+  else
+    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
+  fi
+else
+  echo "  ○ sizing: base values defaults (sizing_profile = default)"
+fi
 
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
@@ -538,8 +561,8 @@ fi
 # chart validation (validate.yaml requires ingress, gateway, or istioGateway).
 # HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
-  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _eg_namespace="$NAMESPACE"
+  _eg_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
 
@@ -619,13 +642,30 @@ if [[ -z "$_resolved_chart" ]]; then
   exit 1
 fi
 
+# --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
+# whole invocation with "unknown flag: --server-side" (verified on v3.21.4), so
+# passing it unconditionally blocks the deploy on the Helm 3 the docs require.
+# On Helm 4, SSA is the default for a fresh install, which is what this module
+# does. The chart was written and tested against client-side apply, so ask for it
+# explicitly rather than let the Helm binary decide the apply semantics. Helm 3
+# only ever applies client-side, making the flag redundant as well as unsupported.
+# If the version cannot be read, omit it: omitting is valid on both majors,
+# passing it fails outright on one.
+_helm_major=$(helm version --template '{{.Version}}' 2>/dev/null | sed -e 's/^v//' -e 's/[^0-9].*$//') || _helm_major=""
+_ssa_flag=""
+if [[ -z "$_helm_major" ]]; then
+  echo "WARNING: could not read the Helm version; omitting --server-side=false." >&2
+elif [[ "$_helm_major" -ge 4 ]]; then
+  _ssa_flag="--server-side=false"
+fi
+
 helm upgrade --install "$RELEASE_NAME" "$_chart_source" \
   --namespace "$NAMESPACE" \
   --create-namespace \
   --version "$CHART_VERSION" \
   "${VALUES_ARGS[@]}" \
   ${EXTRA_HELM_ARGS:+$EXTRA_HELM_ARGS} \
-  --server-side=false \
+  ${_ssa_flag} \
   --timeout 20m
 
 echo ""
@@ -634,17 +674,20 @@ echo ""
 
 # ── Wait for core components ──────────────────────────────────────────────
 _core_deployments=(
-  "${RELEASE_NAME}-frontend"
-  "${RELEASE_NAME}-backend"
-  "${RELEASE_NAME}-platform-backend"
-  "${RELEASE_NAME}-ingest-queue"
-  "${RELEASE_NAME}-queue"
+  "${CHART_FULLNAME}-frontend"
+  "${CHART_FULLNAME}-backend"
+  "${CHART_FULLNAME}-platform-backend"
+  "${CHART_FULLNAME}-ingest-queue"
+  "${CHART_FULLNAME}-queue"
+  # The chart always installs playground. Without it here, a sizing profile that
+  # leaves playground crash-looping still reports "All core deployments ready" (#217).
+  "${CHART_FULLNAME}-playground"
 )
 if [[ "$_enable_deployments" == "true" ]]; then
   _core_deployments+=(
-    "${RELEASE_NAME}-host-backend"
-    "${RELEASE_NAME}-listener"
-    "${RELEASE_NAME}-operator"
+    "${CHART_FULLNAME}-host-backend"
+    "${CHART_FULLNAME}-listener"
+    "${CHART_FULLNAME}-operator"
   )
 fi
 
@@ -668,7 +711,7 @@ echo ""
 # The chart creates HTTPRoutes via gateway.enabled: true.
 # Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_namespace="$NAMESPACE"
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
@@ -695,7 +738,7 @@ fi
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
 if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
-  _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
+  _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
   for _ in $(seq 1 18); do
@@ -726,7 +769,7 @@ fi
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false
