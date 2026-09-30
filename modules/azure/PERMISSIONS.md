@@ -12,7 +12,7 @@ Grant one of these combinations to the deploying identity at subscription scope:
 | `Contributor` + `Role Based Access Control Administrator` | `b24988ac-6180-42a0-ab88-20f7382dd24c`, `f58310d9-a9f6-439a-9e8d-f62e7b41a168` | Preferred least-privilege pairing |
 | `Contributor` + `User Access Administrator` | `b24988ac-6180-42a0-ab88-20f7382dd24c`, `18d7d88d-d35e-4fb5-a5c3-7773c20a72d9` | Equivalent, broader than the pairing above |
 
-Resource group scope is enough only if the resource group already exists and you set it in `terraform.tfvars`. The deployment creates its own resource group by default, which requires subscription scope.
+The deployment creates its own resource group by default, which requires subscription scope. To work with rights on one resource group only, have the group created for you and set `create_resource_group = false` and `existing_resource_group_name` in `terraform.tfvars` ([deploying into an existing resource group](README.md#deploying-into-an-existing-resource-group)). Grant the same roles on that group instead.
 
 `Role Based Access Control Administrator` is the narrower of the two role-assignment roles. It grants `Microsoft.Authorization/roleAssignments/write` without the broader access-management rights that `User Access Administrator` carries.
 

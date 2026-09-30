@@ -91,6 +91,40 @@ variable "resource_group_name" {
   type        = string
   description = "Name for the resource group every LangSmith resource lands in. Unique within the subscription, 1-90 chars. Empty derives from the naming scheme."
   default     = ""
+
+  validation {
+    condition     = var.resource_group_name == "" || var.create_resource_group
+    error_message = "resource_group_name applies only when this module creates the resource group, and create_resource_group is false. Set existing_resource_group_name to name the group to deploy into, and leave resource_group_name empty."
+  }
+}
+
+variable "create_resource_group" {
+  type        = bool
+  description = "Whether to create the resource group. Set false to deploy into one that already exists, named by existing_resource_group_name, so the deployer needs rights on that group only. Terraform creates everything inside it and changes nothing about the group itself: its tags, locks, and policy assignments stay as its owner set them, and terraform destroy leaves it in place."
+  default     = true
+}
+
+variable "existing_resource_group_name" {
+  type        = string
+  description = "Name of the pre-existing resource group to deploy into. Required when create_resource_group = false; leaving it empty fails the plan rather than falling back to a derived name."
+  default     = ""
+
+  validation {
+    condition     = var.existing_resource_group_name == "" || !var.create_resource_group
+    error_message = "existing_resource_group_name applies only when deploying into a resource group you already own, and create_resource_group is true. Set create_resource_group = false to use it, or use resource_group_name to pin the name of the group this module creates."
+  }
+
+  validation {
+    condition     = var.create_resource_group || var.existing_resource_group_name != ""
+    error_message = "create_resource_group = false requires existing_resource_group_name. Set it to the resource group LangSmith should deploy into."
+  }
+
+  # The same grammar preflight.sh holds this name to before it goes into a
+  # request URL.
+  validation {
+    condition     = var.existing_resource_group_name == "" || can(regex("^[A-Za-z0-9._()-]{1,90}$", var.existing_resource_group_name))
+    error_message = "existing_resource_group_name must be 1-90 characters of letters, digits, periods, underscores, hyphens, and parentheses."
+  }
 }
 
 variable "vnet_name" {
@@ -536,6 +570,12 @@ variable "postgres_subnet_address_prefix" {
   type        = list(string)
   description = "Prefix for the Postgres subnet. Can be disjoint IP ranges. Under create_vnet = false it must fall inside your VNet's address space, which plan checks."
   default     = ["10.0.32.0/20"] # 4k IP addresses
+}
+
+variable "enable_subnet_nsgs" {
+  type        = bool
+  description = "Attach a network security group to each subnet Terraform creates. The Postgres and Redis subnets then admit only the AKS subnet (5432; 10000 and 8500-8599), and the AKS subnet admits Internet traffic on 80 and 443 for the ingress load balancer. Outbound keeps Azure's defaults. A subnet you supply keeps whatever NSG you gave it."
+  default     = false
 }
 
 variable "amr_sku" {
