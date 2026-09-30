@@ -23,7 +23,8 @@ set -euo pipefail
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
-#   langsmith-redis-secret    — connection_url
+#   langsmith-redis-secret    — connection_url, redis_cluster_node_uris,
+#                               redis_cluster_password
 #
 # Safe to re-run — uses --dry-run=client | kubectl apply so it updates in place.
 
@@ -36,7 +37,7 @@ source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
 if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  KV_NAME=$(_derive_kv_name)
+  KV_NAME=$(_require_kv_name) || exit 1
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 
@@ -64,6 +65,17 @@ DEPLOY_KEY=$(_kv "langsmith-deployments-encryption-key")
 AGENT_KEY=$(_kv "langsmith-agent-builder-encryption-key")
 INSIGHTS_KEY=$(_kv "langsmith-insights-encryption-key")
 POLLY_KEY=$(_kv "langsmith-polly-encryption-key")
+
+# The license key is the one value here that nothing has checked since the
+# setup-env prompt (#250). Written as it stands, an empty or malformed value
+# surfaces inside platform-backend at startup as a base64 error that names
+# neither licensing nor this script. Stop here instead, naming the secret.
+if ! _license_err=$(_validate_license_key "$LICENSE_KEY"); then
+  echo "  ERROR: langsmith-license-key in Key Vault '$KV_NAME' failed validation: ${_license_err}" >&2
+  echo "         Fix the vault first, then re-run this script:" >&2
+  echo "           ./scripts/manage-keyvault.sh set langsmith-license-key '<key>'" >&2
+  exit 1
+fi
 
 echo "  All secrets retrieved."
 echo ""

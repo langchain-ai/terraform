@@ -108,8 +108,10 @@ frontend:
     httpPort: 80
     httpsPort: 443
 
+# Off unless an addon needs it: the agent-deploys overlay turns it on, and
+# deploy.sh adds --set hostBackend.enabled=true when enable_fleet is true.
 hostBackend:
-  enabled: true
+  enabled: false
   deployment:
     resources:
       limits:

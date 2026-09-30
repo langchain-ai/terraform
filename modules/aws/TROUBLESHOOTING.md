@@ -401,8 +401,9 @@ orphaned ALB. `init-values.sh` no longer emits it.
 **Prevention:**
 - Ensure the `group.name` annotation is set (`init-values.sh` does this automatically)
 - Never delete the ingress unless you plan to update all hostname-dependent config
-- Avoid `helm rollback` without `--server-side=false` — the ingress SSA conflict
-  can trigger a delete/recreate cycle
+- On Helm 4, avoid `helm rollback` without `--server-side=false`: the ingress SSA
+  conflict can trigger a delete/recreate cycle. Helm 3 has no server-side apply, so
+  it is unaffected and rejects the flag.
 
 **Fix:**
 ```bash
@@ -537,7 +538,7 @@ If either was entered and the script failed afterwards, clear them first (or ope
 unset LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD
 ```
 
-Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently; only what is missing is prompted for.
+Secrets already in SSM (postgres password, redis token, api key salt, jwt secret) are read back silently. Missing generated secrets (including postgres-password) are created; remaining gaps are prompted.
 
 ---
 

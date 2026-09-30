@@ -6,6 +6,12 @@
     "Resource": "*"
   },
   {
+    "Sid": "ServiceQuotasRead",
+    "Effect": "Allow",
+    "Action": ["servicequotas:GetServiceQuota"],
+    "Resource": "*"
+  },
+  {
     "Sid": "VPCEndpointAllowMultiRegion",
     "Effect": "Allow",
     "Action": ["vpce:AllowMultiRegion"],

@@ -4,6 +4,30 @@
 locals {
   create_rds = var.metastore_source == "create"
 
+  # BYO security group only applies when Terraform is otherwise creating the RDS
+  # instance (metastore_source = "create"). metastore_source = "external" already
+  # skips the whole metastore, SG included.
+  byo_metastore_security_group    = local.create_rds && var.existing_metastore_security_group_id != null && var.existing_metastore_security_group_id != ""
+  create_metastore_security_group = local.create_rds && !local.byo_metastore_security_group
+
+  # Guarded by create_metastore_security_group (not just !byo) so this never indexes
+  # aws_security_group.metastore[0] when metastore_source = "external", where that
+  # resource has count = 0 too.
+  metastore_security_group_id = (
+    local.create_metastore_security_group ? aws_security_group.metastore[0].id :
+    local.byo_metastore_security_group ? var.existing_metastore_security_group_id :
+    null
+  )
+  # Terraform owns egress only for the group it creates. A supplied group may
+  # already have AWS's default allow-all egress rule, so managing it would fail
+  # with a duplicate-rule error.
+  manage_metastore_egress_rule = local.create_metastore_security_group
+
+  # On a supplied group, this opt-in manages only the required ingress rule.
+  # The EKS node group is created in the same apply, so its security group ID is
+  # unavailable when preparing a new deployment's group rules.
+  manage_metastore_ingress_rule = local.create_metastore_security_group || (local.byo_metastore_security_group && var.manage_byo_security_group_rules)
+
   rds_identifier = "${var.name}-metastore"
   rds_db_name    = "smithdb"
 

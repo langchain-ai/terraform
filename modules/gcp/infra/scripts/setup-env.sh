@@ -20,7 +20,8 @@
 #   secrets are exported for this session only and stored once the API is up.
 #
 # Prerequisites:
-#   gcloud auth application-default login   (or a service account with secretmanager.admin)
+#   gcloud auth login   (the script uses gcloud CLI credentials, not ADC), with
+#   roles/secretmanager.admin, or roles/secretmanager.secretAccessor with roles/editor
 #   Secret Manager API must be enabled (enabled automatically by terraform apply)
 #
 # NOTE: No `set -euo pipefail` — this script is intended to be sourced. Those
@@ -42,15 +43,34 @@ fi
 _SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 # ── Read project/env from terraform.tfvars ────────────────────────────────────
-_tfvars_parse() {
-  grep -E "^\s*${1}\s*=" "$_SETUP_DIR/terraform.tfvars" 2>/dev/null \
-    | sed 's/.*=[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]'
+# Keep identical to infra/scripts/_common.sh, apart from the tfvars path:
+# deploy.sh and init-values.sh decide whether the sandbox secret is expected by
+# calling the _common.sh copy, so a gate that disagrees omits a secret they
+# require. _common.sh is not sourced here because it also defines
+# pass/info/fail, which this script must not leak into the caller's shell.
+_parse_tfvar() {
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$_SETUP_DIR/terraform.tfvars" 2>/dev/null || true
 }
 
-_project_id=$(_tfvars_parse "project_id")
-_name_prefix=$(_tfvars_parse "name_prefix")
-_environment=$(_tfvars_parse "environment")
-_region=$(_tfvars_parse "region")
+_tfvar_is_true() {
+  [[ "$(_parse_tfvar "$1")" == "true" ]]
+}
+
+_project_id=$(_parse_tfvar "project_id")
+_name_prefix=$(_parse_tfvar "name_prefix")
+_environment=$(_parse_tfvar "environment")
+_region=$(_parse_tfvar "region")
+_enable_sandboxes=false
+if _tfvar_is_true "enable_sandboxes"; then
+  _enable_sandboxes=true
+fi
 _region="${_region:-us-west2}"
 
 if [[ -z "$_project_id" ]]; then
@@ -80,6 +100,9 @@ _sm_prefix="langsmith-${_name_prefix}-${_environment}"
 # this shell (its values come back via export, not command substitution), so the
 # append inside it is visible here.
 _missing_vars=""
+# Variables whose Secret Manager read failed for a reason other than "absent"
+# (NOT_FOUND, or the API not enabled).
+_unreadable_vars=""
 
 # ── Warn on pre-exported secrets ──────────────────────────────────────────────
 _precheck_var="TF_VAR_langsmith_license_key"
@@ -133,13 +156,31 @@ _sm_put() {
 }
 
 # ── Secret Manager read ───────────────────────────────────────────────────────
+# Prints the value and returns 0. Returns 3 when the secret is absent: NOT_FOUND,
+# or the API not yet enabled on a first run before terraform apply. Returns 1 for
+# any other failure. An expired login, a missing secretmanager.versions.access
+# permission, or the 30 s timeout must not look absent, because the caller then
+# generates a new value and replaces a stable key.
 _sm_get() {
   local _name="$1"
   local _secret_id="${_sm_prefix}-${_name}"
+  local _err _rc=0
+  _err="$(mktemp)" || return 1
   _gcloud_bounded secrets versions access latest \
     --secret="$_secret_id" \
     --project="$_project_id" \
-    --quiet 2>/dev/null || true
+    --quiet 2>|"$_err" || _rc=$?
+  if (( _rc != 0 )); then
+    if grep -qE 'NOT_FOUND|SERVICE_DISABLED|has not been used in project' "$_err"; then
+      _rc=3
+    else
+      echo "ERROR: cannot read ${_secret_id} from Secret Manager (gcloud exit ${_rc}):" >&2
+      sed 's/^/       /' "$_err" >&2
+      _rc=1
+    fi
+  fi
+  rm -f "$_err"
+  return "$_rc"
 }
 
 # ── Rejected value reporting ──────────────────────────────────────────────────
@@ -195,6 +236,7 @@ _sm_secret() {
 
   local val=""
   local _reason=""
+  local _sm_rc=0
   local _secret_id="${_sm_prefix}-${sm_name}"
 
   # 0. Already exported in the environment — use as-is, backfill SM if missing.
@@ -217,8 +259,21 @@ _sm_secret() {
     return
   fi
 
-  # 1. Try Secret Manager
-  val=$(_sm_get "$sm_name") || val=""
+  # 1. Try Secret Manager. A read failure other than "absent" stops here: the
+  # secret can exist, so a prompt or a generator would replace the stored value.
+  val=$(_sm_get "$sm_name") || _sm_rc=$?
+  if [[ "$_sm_rc" != 0 && "$_sm_rc" != 3 ]]; then
+    # On stdout, like the non-interactive failure below: _sm_get can only use stderr.
+    echo "  ERROR: cannot read ${_secret_id}. Nothing was generated, stored, or exported for $varname."
+    if [[ -z "$_unreadable_vars" ]]; then
+      echo "         Check: 'gcloud auth login', network access, and that the latest"
+      echo "         version is enabled. The identity needs roles/secretmanager.admin, or"
+      echo "         roles/secretmanager.secretAccessor with roles/editor. roles/editor"
+      echo "         alone cannot read secrets. Then re-source this script."
+    fi
+    _unreadable_vars="$_unreadable_vars $varname"
+    return 1
+  fi
 
   # A stored value can predate this rule, so it gets the same gate. Exporting it
   # unchecked only moves the failure to helm upgrade, after Pass 1 has built the
@@ -367,8 +422,10 @@ _sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
 _sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
 
-_sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
-  "_ed25519_private_jwk_gen" "" "true"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
+    "_ed25519_private_jwk_gen" "" "true"
+fi
 
 # ── Admin password rule ───────────────────────────────────────────────────────
 # templates/validate.yaml rejects a non-compliant password at render time, so
@@ -434,6 +491,17 @@ _sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" 
 _sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
 
+# ── Unreadable secrets ────────────────────────────────────────────────────────
+# A stored value may exist for these, so stop before the summary. With the
+# variable unset, init-values.sh can generate a new apiKeySalt or jwtSecret.
+if [[ -n "$_unreadable_vars" ]]; then
+  echo ""
+  echo "ERROR: Secret Manager read failed for:$_unreadable_vars"
+  echo "       Nothing was generated or stored for them. Fix the cause shown above,"
+  echo "       then re-run: source infra/scripts/setup-env.sh"
+  return 1
+fi
+
 # ── Non-interactive failure ───────────────────────────────────────────────────
 # Only populated when stdin is not a tty and a secret was in neither the
 # environment nor Secret Manager. Reported here, once, on stdout — and before the
@@ -467,7 +535,9 @@ echo "  postgres_password = (hidden — SM: ${_sm_prefix}-postgres-password)"
 echo "  license_key       = (hidden — SM: ${_sm_prefix}-langsmith-license-key)"
 echo "  api_key_salt      = (hidden — SM: ${_sm_prefix}-api-key-salt)"
 echo "  jwt_secret        = (hidden — SM: ${_sm_prefix}-jwt-secret)"
-echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
+if [[ "$_enable_sandboxes" == "true" ]]; then
+  echo "  sandbox_cb_jwk    = (hidden — SM: ${_sm_prefix}-sandbox-callback-signing-jwk)"
+fi
 echo "  admin_password    = (hidden — SM: ${_sm_prefix}-admin-password)"
 echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption-key)"
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"

@@ -433,7 +433,7 @@ module "sandbox_juicefs_redis" {
     "component" = "sandbox-juicefs-cache"
   })
 
-  depends_on = [module.networking]
+  depends_on = [module.networking, module.redis]
 }
 
 #------------------------------------------------------------------------------

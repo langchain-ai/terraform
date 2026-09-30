@@ -9,19 +9,20 @@
 # Values files loaded (in order, last wins):
 #   1. values.yaml                               — base Azure config (always)
 #   2. values-overrides.yaml                     — env-specific: hostname, WI, blob (required)
-#   3. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   4. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
-#   5. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
-#   6. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #5)
-#   7. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
-#   8. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   3. langsmith-values-agent-deploys.yaml       — Deployments feature (if enable_deployments = true)
+#   4. langsmith-values-agent-builder.yaml       — Agent Builder, legacy (if enable_agent_builder = true)
+#   5. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #4)
+#   6. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
+#   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
+#   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
+#   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
 #
 # Usage (from azure/):
 #   ./helm/scripts/deploy.sh
-#   CHART_VERSION=0.13.29 ./helm/scripts/deploy.sh
+#   CHART_VERSION=0.16.0 ./helm/scripts/deploy.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,8 +32,20 @@ VALUES_DIR="$HELM_DIR/values"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
-RELEASE_NAME="${RELEASE_NAME:-langsmith}"
-NAMESPACE="${NAMESPACE:-langsmith}"
+# The Helm release name: RELEASE_NAME from the environment if set, else
+# langsmith_release_name from terraform.tfvars, else langsmith. The chart names
+# its objects after its fullname, which is the release name only when that
+# contains "langsmith" (prod -> prod-langsmith-backend).
+RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
+if [[ "$RELEASE_NAME" == *langsmith* ]]; then
+  CHART_FULLNAME="$RELEASE_NAME"
+else
+  CHART_FULLNAME="${RELEASE_NAME}-langsmith"
+fi
+# Same order for the namespace. The Terraform side (the workload identity
+# subjects, the namespace itself) reads langsmith_namespace, so an env-only
+# value installed the release where no federated identity pointed.
+NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
@@ -50,6 +63,13 @@ if [[ ! -f "$OVERRIDES_FILE" ]]; then
   action "make init-values  (generates it from terraform outputs)"
   exit 1
 fi
+# init-values writes insights.enabled and polly.enabled into every overrides file
+# it generates. A file without them predates that, and may be missing other
+# settings init-values writes now.
+if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_FILE"; then
+  warn "values-overrides.yaml has no insights/polly block, so it predates the current init-values"
+  action "make init-values  (regenerates it; re-apply any hand edits afterward)"
+fi
 
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
 _cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
@@ -65,13 +85,15 @@ info "Active context: $(kubectl config current-context)"
 echo ""
 
 # ── Set DNS label annotation on the ingress LoadBalancer service ──────────
-# Azure assigns <dns_label>.<region>.cloudapp.azure.com to the public IP only when
+# Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
+# in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
 # Works for ALL ingress controllers — nginx, istio, istio-addon, envoy-gateway.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
 _ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_cloudapp_suffix=$(_azure_cloudapp_suffix)
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
     nginx)
@@ -101,7 +123,7 @@ if [[ -n "$_dns_label" ]]; then
     kubectl annotate svc "$_lb_svc" -n "$_lb_ns" \
       "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" \
       --overwrite &>/dev/null
-    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.cloudapp.azure.com"
+    pass "DNS label set (${_ingress_controller}): ${_dns_label}.${_location}.${_cloudapp_suffix}"
   elif [[ -n "$_lb_svc" ]]; then
     warn "${_lb_svc} not found in ${_lb_ns} — DNS label not set (run make apply first)"
   fi
@@ -113,17 +135,24 @@ fi
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
-  _le_namespace=$(_parse_tfvar "langsmith_namespace") || _le_namespace="langsmith"
-  _le_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _le_namespace="$NAMESPACE"
+  _le_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
 
   if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
     # Envoy Gateway uses Gateway API — cert-manager gatewayHTTPRoute solver
     # requires ExperimentalGatewayAPISupport feature gate on cert-manager controller.
-    # deploy.sh enables this gate automatically (kubectl patch).
-    kubectl patch deployment cert-manager -n cert-manager --type='json' \
-      -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]' &>/dev/null || true
+    # deploy.sh enables this gate automatically (kubectl patch), but only on the
+    # cert-manager Terraform installed: one the cluster already ran is owned by
+    # something else, which would revert the patch.
+    _install_cert_manager=$(_parse_tfvar "install_cert_manager") || _install_cert_manager=true
+    if [[ "$_install_cert_manager" == "false" ]]; then
+      warn "install_cert_manager = false: the cluster's own cert-manager must run with Gateway API support enabled, or the HTTP-01 challenge through Envoy Gateway never completes."
+    else
+      kubectl patch deployment cert-manager -n cert-manager --type='json' \
+        -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]' &>/dev/null || true
+    fi
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -205,7 +234,7 @@ spec:
           subscriptionID: ${_subscription_id}
           resourceGroupName: ${_dns_rg}
           hostedZoneName: ${_dns_zone}
-          environment: AzurePublicCloud
+          environment: $(_cert_manager_azure_environment)
           managedIdentity:
             clientID: ${_cert_manager_client_id}
 EOF
@@ -233,10 +262,10 @@ fi
 # but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _istio_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   kubectl apply -f - &>/dev/null <<EOF
 apiVersion: networking.istio.io/v1beta1
@@ -325,11 +354,13 @@ _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
+_enable_smithdb=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
 _tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
 _tfvar_is_true "enable_insights"      && _enable_insights=true     || true
 _tfvar_is_true "enable_polly"         && _enable_polly=true        || true
 _tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
+_tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -368,25 +399,6 @@ fi
 VALUES_ARGS+=(-f "$OVERRIDES_FILE")
 echo "  ✔ values-overrides.yaml"
 
-# Sizing profile
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
-      echo "     Use sizing_profile = production for production deployments."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: base values defaults (sizing_profile = default)"
-fi
-
 # Addon overlays
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
@@ -416,41 +428,83 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+
+# Sizing profile. Loaded after the addon overlays because agent-deploys carries
+# its own hostBackend/listener/operator resources for the default profile, and
+# loaded before it those overrode whatever profile was chosen.
+if [[ "$_sizing_profile" != "default" ]]; then
+  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
+  if [[ -f "$_sizing_file" ]]; then
+    VALUES_ARGS+=(-f "$_sizing_file")
+    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
+    if [[ "$_sizing_profile" == "minimum" ]]; then
+      echo ""
+      echo "  ⚠️  WARNING: sizing_profile = minimum — NOT for production."
+      echo "     Use sizing_profile = production for production deployments."
+      echo ""
+    fi
+  else
+    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (not found — run: make init-values)"
+  fi
+else
+  echo "  ○ sizing: base values defaults (sizing_profile = default)"
+fi
+
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+  if [[ ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
+    fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
+    exit 1
+  fi
+  VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
+  echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+fi
 echo ""
 
-# ── Chart version ─────────────────────────────────────────────────────────
+# ── Chart source/version ──────────────────────────────────────────────────
+_chart_source="langchain/langsmith"
 # Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
-# We pin the chart *line* (~0.16.0 => latest 0.16.x, never 0.17) so an
-# un-pinned deploy can't silently jump a breaking minor.
+# We pin the chart line so an unpinned deploy cannot silently jump a breaking
+# minor. The existing Azure path remains on 0.16; SmithDB requires an explicit
+# 0.17 selection until the provider-wide default advances.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the pinned chart line."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
 if [[ -z "$CHART_VERSION" ]]; then
   CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+_required_chart_line="0.16"
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _required_chart_line="0.17"
+fi
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# Select the chart line explicitly. The SmithDB Azure values first appear in
+# 0.17; deployments without SmithDB retain the existing 0.16 contract.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_chart_line" != "$_required_chart_line" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
+  if [[ "$_enable_smithdb" == "true" ]]; then
+    echo "       enable_smithdb = true requires the chart ${_required_chart_line} line, which is not the" >&2
+    echo "       Azure default. Select it explicitly in terraform.tfvars:" >&2
+    echo "         langsmith_helm_chart_version = \"~${_required_chart_line}.0\"" >&2
+    echo "       or for a single deploy:" >&2
+    echo "         CHART_VERSION='~${_required_chart_line}.0' make deploy" >&2
+  else
+    echo "       These values require chart ${_required_chart_line} (engineInsightsAgent, top-level insights/polly)." >&2
+    echo "       Leave CHART_VERSION unset to use the pin, or name a ${_required_chart_line} patch explicitly:" >&2
+    echo "         CHART_VERSION=${_required_chart_line}.0 make deploy" >&2
+  fi
   exit 1
 fi
 # engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
 # are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
+if [[ "$_required_chart_line" == "0.16" && "$CHART_VERSION" == *-* ]]; then
   _rc="${CHART_VERSION##*-rc.}"
   if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
     echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
@@ -485,6 +539,30 @@ if [[ -n "$_legacy_files" ]]; then
   exit 1
 fi
 
+# Same trap, different keys: a values directory written while SmithDB still had
+# its own node pools keeps selecting smithdb-local/instance-store and
+# smithdb-local/compute. Those pools no longer exist, so every SmithDB pod stays
+# Pending on "node(s) didn't match Pod's node affinity/selector" and nothing in
+# the chart or the scheduler names the file that asked for them. The chart
+# accepts the keys, which is what makes this worth catching here.
+_stale_pool_files=""
+for _vf in "$VALUES_DIR"/*.yaml; do
+  [[ -f "$_vf" ]] || continue
+  if grep -q 'smithdb-local/' "$_vf" 2>/dev/null; then
+    _stale_pool_files+="         $(basename "$_vf")
+"
+  fi
+done
+if [[ -n "$_stale_pool_files" ]]; then
+  echo "ERROR: these values files schedule SmithDB onto node pools that no longer exist:" >&2
+  printf '%s' "$_stale_pool_files" >&2
+  echo "       The smithcache and smithcompute pools were removed when the SmithDB cache" >&2
+  echo "       moved to per-pod Premium SSD v2 volumes, so a smithdb-local/* nodeSelector" >&2
+  echo "       now matches no node and leaves every SmithDB pod Pending." >&2
+  echo "       Delete the files listed above and re-run 'make init-values'." >&2
+  exit 1
+fi
+
 # ── Pending-upgrade guard ─────────────────────────────────────────────────
 _release_status=$(helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/null \
   | grep -o '"status":"[^"]*"' | head -1 | sed 's/"status":"//;s/"//' || true)
@@ -504,8 +582,8 @@ fi
 # chart validation (validate.yaml requires ingress, gateway, or istioGateway).
 # HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
-  _eg_hostname="${_dns_label}.${_location}.cloudapp.azure.com"
+  _eg_namespace="$NAMESPACE"
+  _eg_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
 
@@ -577,24 +655,38 @@ echo ""
 
 helm repo add langchain https://langchain-ai.github.io/helm 2>/dev/null || true
 helm repo update langchain &>/dev/null
-
-# Resolve the pin to a concrete version and print it. Without this the only place
-# the installed version shows up is `helm list`, after the release is already out.
-_resolved_chart=$(helm show chart langchain/langsmith --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
+_resolved_chart=$(helm show chart "$_chart_source" --version "$CHART_VERSION" ${_devel_flag:-} 2>/dev/null \
   | awk '/^version:/{print $2}') || _resolved_chart=""
-echo "Chart: langchain/langsmith  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
+echo "Chart: $_chart_source  requested=${CHART_VERSION}  resolved=${_resolved_chart:-UNRESOLVED}"
 if [[ -z "$_resolved_chart" ]]; then
   echo "ERROR: no chart matches '$CHART_VERSION' in the langchain repo." >&2
   exit 1
 fi
 
-helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
+# --server-side is a Helm 4 flag. Helm 3 has no server-side apply and rejects the
+# whole invocation with "unknown flag: --server-side" (verified on v3.21.4), so
+# passing it unconditionally blocks the deploy on the Helm 3 the docs require.
+# On Helm 4, SSA is the default for a fresh install, which is what this module
+# does. The chart was written and tested against client-side apply, so ask for it
+# explicitly rather than let the Helm binary decide the apply semantics. Helm 3
+# only ever applies client-side, making the flag redundant as well as unsupported.
+# If the version cannot be read, omit it: omitting is valid on both majors,
+# passing it fails outright on one.
+_helm_major=$(helm version --template '{{.Version}}' 2>/dev/null | sed -e 's/^v//' -e 's/[^0-9].*$//') || _helm_major=""
+_ssa_flag=""
+if [[ -z "$_helm_major" ]]; then
+  echo "WARNING: could not read the Helm version; omitting --server-side=false." >&2
+elif [[ "$_helm_major" -ge 4 ]]; then
+  _ssa_flag="--server-side=false"
+fi
+
+helm upgrade --install "$RELEASE_NAME" "$_chart_source" \
   --namespace "$NAMESPACE" \
   --create-namespace \
-  ${CHART_VERSION:+--version "$CHART_VERSION"} \
+  --version "$CHART_VERSION" \
   "${VALUES_ARGS[@]}" \
   ${EXTRA_HELM_ARGS:+$EXTRA_HELM_ARGS} \
-  --server-side=false \
+  ${_ssa_flag} \
   --timeout 20m
 
 echo ""
@@ -603,17 +695,20 @@ echo ""
 
 # ── Wait for core components ──────────────────────────────────────────────
 _core_deployments=(
-  "${RELEASE_NAME}-frontend"
-  "${RELEASE_NAME}-backend"
-  "${RELEASE_NAME}-platform-backend"
-  "${RELEASE_NAME}-ingest-queue"
-  "${RELEASE_NAME}-queue"
+  "${CHART_FULLNAME}-frontend"
+  "${CHART_FULLNAME}-backend"
+  "${CHART_FULLNAME}-platform-backend"
+  "${CHART_FULLNAME}-ingest-queue"
+  "${CHART_FULLNAME}-queue"
+  # The chart always installs playground. Without it here, a sizing profile that
+  # leaves playground crash-looping still reports "All core deployments ready" (#217).
+  "${CHART_FULLNAME}-playground"
 )
 if [[ "$_enable_deployments" == "true" ]]; then
   _core_deployments+=(
-    "${RELEASE_NAME}-host-backend"
-    "${RELEASE_NAME}-listener"
-    "${RELEASE_NAME}-operator"
+    "${CHART_FULLNAME}-host-backend"
+    "${CHART_FULLNAME}-listener"
+    "${CHART_FULLNAME}-operator"
   )
 fi
 
@@ -637,7 +732,7 @@ echo ""
 # The chart creates HTTPRoutes via gateway.enabled: true.
 # Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace=$(_parse_tfvar "langsmith_namespace") || _eg_namespace="langsmith"
+  _eg_namespace="$NAMESPACE"
 
   info "Waiting for Envoy Gateway LoadBalancer IP..."
   _eg_svc_name=""
@@ -664,7 +759,7 @@ fi
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
 if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
-  _istio_ns=$(_parse_tfvar "langsmith_namespace") || _istio_ns="langsmith"
+  _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
   for _ in $(seq 1 18); do
@@ -695,7 +790,7 @@ fi
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
-  _namespace=$(_parse_tfvar "langsmith_namespace") || _namespace="langsmith"
+  _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."
   _cert_ready=false

@@ -9,7 +9,7 @@
 # Where am I?              make status
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
-.PHONY: help quickstart test-quickstart setup-env preflight keyvault status status-quick \
+.PHONY: help quickstart test-quickstart test-license-key setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
@@ -33,6 +33,7 @@ help: ## Show available targets
 	@echo ""
 	@echo "    Note: make apply runs three targeted stages. ARGS is passed to each"
 	@echo "    stage, so it suits flags like -var / -parallelism / -refresh=false."
+	@echo "    Each stage prompts for confirmation; ARGS=\"-auto-approve\" skips all three."
 	@echo "    To apply a saved plan or one module, use: make tf ARGS=\"apply tfplan\""
 	@echo ""
 	@echo "  \033[1mAny other terraform command — no need to remember -chdir:\033[0m"
@@ -46,6 +47,9 @@ quickstart: ## Interactive setup wizard — generates terraform.tfvars
 
 test-quickstart: ## Unit-test the quickstart wizard's resume layer (no Azure, no prompts)
 	$(INFRA_DIR)/scripts/test-quickstart-state.sh
+
+test-license-key: ## Unit-test the license key check shared by setup-env, k8s-secrets and keyvault set (no Azure)
+	$(INFRA_DIR)/scripts/test-license-key.sh
 
 keyvault: ## Interactive Key Vault secret manager (list/get/set/validate/diff/delete)
 	$(INFRA_DIR)/scripts/manage-keyvault.sh
@@ -74,10 +78,10 @@ plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.au
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
 
-apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
+apply: ## terraform apply (infra) — three stages, each prompts for confirmation: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
 	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS) \
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
@@ -86,7 +90,7 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.blob \
 		-target=module.keyvault
 	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS) \
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
@@ -98,7 +102,7 @@ apply: ## terraform apply (infra) — three stages: Azure infra, then k8s bootst
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
 	@echo "→ Stage 3: remaining resources (DNS zone, WAF, anything left in k8s bootstrap)..."
-	terraform -chdir=$(INFRA_DIR) apply -auto-approve $(ARGS)
+	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation
 	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
@@ -131,7 +135,7 @@ k8s-secrets: ## Create langsmith-config-secret from Key Vault (all 8 keys)
 init-values: ## Generate Helm values from Terraform outputs (run after terraform apply)
 	$(HELM_DIR)/scripts/init-values.sh
 
-deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + sizing + addons)
+deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + addons + sizing)
 	$(HELM_DIR)/scripts/deploy.sh
 
 uninstall: ## Uninstall LangSmith Helm release

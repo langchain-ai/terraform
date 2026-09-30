@@ -18,15 +18,19 @@
 # Azure Storage Account — the container for LangSmith trace blobs.
 # Storage account names must be globally unique, lowercase alphanumeric, 3-24 chars.
 # replace() strips hyphens from the input name to satisfy Azure naming rules.
-# Standard LRS: locally-redundant storage — adequate for trace data.
-# Upgrade to ZRS or GRS in Stage 3 for higher durability.
+# Redundancy comes from the root's storage_replication_type (LRS by default).
 resource "azurerm_storage_account" "storage_account" {
   name                     = replace(var.storage_account_name, "-", "")
   resource_group_name      = var.resource_group_name
   location                 = var.location
   account_tier             = "Standard"
-  account_replication_type = "LRS" # Stage 3: consider ZRS or RA-GRS
+  account_replication_type = var.replication_type
   tags                     = merge(var.tags, { module = "blob" })
+
+  # With a Private Endpoint there is no public listener to filter, so the rules
+  # below stop applying. They stay declared: turning the endpoint back off must
+  # land on a default-deny account, not an open one.
+  public_network_access_enabled = !var.private_endpoint_enabled
 
   # Default-deny on the storage data plane (blob anonymous/SharedKey traffic).
   # Terraform itself uses the management plane (azurerm_storage_account /
@@ -39,6 +43,39 @@ resource "azurerm_storage_account" "storage_account" {
     bypass                     = ["AzureServices"]
     ip_rules                   = var.allowed_ips
     virtual_network_subnet_ids = var.allowed_subnet_ids
+  }
+}
+
+# Private Endpoint — the account's own hostname resolves to an address in the
+# VNet through the zone the root module owns, so no client configuration
+# changes. Operators who reached the data plane from a workstation through
+# var.allowed_ips lose that path and need VNet access instead.
+resource "azurerm_private_endpoint" "blob" {
+  count               = var.private_endpoint_enabled ? 1 : 0
+  name                = "${replace(var.storage_account_name, "-", "")}-pe"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = var.private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "${replace(var.storage_account_name, "-", "")}-psc"
+    private_connection_resource_id = azurerm_storage_account.storage_account.id
+    subresource_names              = ["blob"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "blob"
+    private_dns_zone_ids = [var.private_dns_zone_id]
+  }
+
+  tags = merge(var.tags, { module = "blob" })
+
+  lifecycle {
+    precondition {
+      condition     = var.private_endpoint_subnet_id != "" && var.private_dns_zone_id != ""
+      error_message = "private_endpoint_enabled requires both private_endpoint_subnet_id and private_dns_zone_id. The root module derives them from storage_private_endpoint_subnet_id and storage_private_dns_zone_id."
+    }
   }
 }
 

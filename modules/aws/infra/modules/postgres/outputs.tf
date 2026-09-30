@@ -1,5 +1,6 @@
 output "connection_url" {
-  value     = "postgres://${aws_db_instance.this.username}:${coalesce(aws_db_instance.this.password, "IMPORTED")}@${aws_db_instance.this.endpoint}/${aws_db_instance.this.db_name}"
+  # Root validation rejects spaces, so urlencode() cannot emit "+" for a space.
+  value     = "postgres://${aws_db_instance.this.username}:${urlencode(coalesce(aws_db_instance.this.password, "IMPORTED"))}@${aws_db_instance.this.endpoint}/${aws_db_instance.this.db_name}"
   sensitive = true
 }
 
@@ -21,4 +22,9 @@ output "port" {
 output "db_name" {
   description = "Name of the default (admin) database created on the instance."
   value       = aws_db_instance.this.db_name
+}
+
+output "security_group_id" {
+  description = "Security group ID attached to the RDS instance (created by this module, or the supplied existing_security_group_id)"
+  value       = local.security_group_id
 }

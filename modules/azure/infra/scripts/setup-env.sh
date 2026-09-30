@@ -32,28 +32,22 @@ set -euo pipefail
 SECRETS_FILE="secrets.auto.tfvars"
 
 # ── Resolve the Key Vault name ────────────────────────────────────────────────
-# Priority: terraform output → _derive_kv_name. Same order as manage-keyvault.sh.
-#
-# _derive_kv_name mirrors local.keyvault_name, including the name_prefix suffix, an
-# explicit keyvault_name, and the unique_resource_names hash. Deriving it here by
-# hand is how this script and three others drifted apart. It still cannot cover
-# create_keyvault = false, where the name is the customer's and nothing in
-# terraform.tfvars derives it, so the output wins when there is one. Reading the
-# wrong vault fails silently: _kv_secret below falls through to the local file, then
-# to generating a fresh value. A machine without those files would mint a new
-# api_key_salt and jwt_secret, and Terraform would write them over the live ones.
+# Priority: terraform output → _require_kv_name. Same order as manage-keyvault.sh.
+# Never derive the name here by hand — reading the wrong vault fails silently,
+# because _kv_secret below falls through to generating a fresh value and
+# Terraform then writes a new api_key_salt and jwt_secret over the live ones.
 #
 # `terraform output -raw` exits 0 and prints its "No outputs found" warning on
 # stdout when there is no state, so the guard checks the shape of what came back
-# rather than the exit code. Key Vault names are alphanumerics and hyphens, which
-# the warning is not. Before the first apply that leaves the derivation.
+# rather than the exit code: a Key Vault name is alphanumerics and hyphens, the
+# warning is not.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 _name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
 _kv_name=$(terraform output -raw keyvault_name 2>/dev/null || true)
 case "$_kv_name" in
-  "" | *[![:alnum:]-]*) _kv_name=$(_derive_kv_name) ;;
+  "" | *[![:alnum:]-]*) _kv_name=$(_require_kv_name) || exit 1 ;;
 esac
 
 # LANGSMITH_PG_PASSWORD is not listed — it is generated when left blank.
@@ -72,6 +66,24 @@ if [[ -f "$SECRETS_FILE" ]]; then
   _prev_email=$(_parse_tfvar_quoted langsmith_admin_email "$SECRETS_FILE") || _prev_email=""
 fi
 
+# Characters that break secrets.auto.tfvars: the password is written raw inside
+# an HCL double-quoted string. Shell expansion is not recursive, so ordinary
+# dollar signs and backticks in the expanded value remain literal. Keep this in
+# lockstep with the Terraform validation on postgres_admin_password.
+_tfvars_password_ok() {
+  local val="$1"
+  [[ "$val" != *'"'* ]] || return 1
+  [[ "$val" != *'\'* ]] || return 1
+  [[ "$val" != *'${'* ]] || return 1
+  [[ "$val" != *$'\n'* ]] || return 1
+  [[ "$val" != *'%{'* ]] || return 1
+  return 0
+}
+
+_tfvars_password_error() {
+  echo 'ERROR: PostgreSQL admin password must not contain double quotes, backslashes, newlines, ${, or %{.' >&2
+}
+
 # ── Prompt helper (skips if env var already set) ──────────────────────────────
 # Prompt text goes to stderr: stdout is the return channel for the value, so
 # anything printed there is swallowed by the caller's command substitution.
@@ -88,6 +100,10 @@ _prompt() {
   local attempt=0
 
   if [[ -n "$val" ]]; then
+    if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" ]] && ! _tfvars_password_ok "$val"; then
+      _tfvars_password_error
+      return 1
+    fi
     echo "$val"
     return 0
   fi
@@ -104,6 +120,11 @@ _prompt() {
       echo >&2                # -s also swallows the newline the user typed
     fi
     if [[ -n "$val" ]]; then
+      if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" ]] && ! _tfvars_password_ok "$val"; then
+        _tfvars_password_error
+        val=""
+        continue
+      fi
       break
     fi
     # Blank answer: keep the previous run's value, let an optional prompt
@@ -123,6 +144,10 @@ _prompt() {
 
   if [[ -z "$val" && "$mode" != "optional" ]]; then
     echo "ERROR: No value provided for $env_var." >&2
+    return 1
+  fi
+  if [[ "$env_var" == "LANGSMITH_PG_PASSWORD" && -n "$val" ]] && ! _tfvars_password_ok "$val"; then
+    _tfvars_password_error
     return 1
   fi
   echo "$val"
@@ -282,7 +307,7 @@ if [[ -z "${LANGSMITH_LICENSE_KEY:-}" && -z "$_prev_license" ]]; then
   fi
 fi
 
-_pg_prompt="PostgreSQL admin password (Enter = generate)"
+_pg_prompt='PostgreSQL admin password (Enter = generate; avoid " \ ${ %{ )'
 _license_prompt="LangSmith license key      "
 _email_prompt="Initial org admin email    "
 if [[ -n "$_prev_pg" ]]; then
@@ -308,7 +333,27 @@ fi
 echo ""
 
 pg_password=$(_prompt "LANGSMITH_PG_PASSWORD" "$_pg_prompt" optional "$_prev_pg")
-license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "$_license_prompt" "" "$_prev_license")
+# The license key is the one input nothing downstream inspects until
+# platform-backend starts (#250), so its shape is checked here, where the
+# operator still has the right value to hand. Three attempts, like _prompt.
+# A rejected value is not offered again: a bad key kept in secrets.auto.tfvars
+# or in Key Vault would otherwise come back as the default on every run.
+_license_attempt=0
+while :; do
+  license_key=$(_prompt "LANGSMITH_LICENSE_KEY" "$_license_prompt" "" "$_prev_license")
+  if _license_err=$(_validate_license_key "$license_key"); then
+    break
+  fi
+  echo "  ${_license_err}" >&2
+  _license_attempt=$((_license_attempt + 1))
+  if [[ ! -t 0 || $_license_attempt -ge 3 ]]; then
+    echo "ERROR: LANGSMITH_LICENSE_KEY was not accepted." >&2
+    exit 1
+  fi
+  unset LANGSMITH_LICENSE_KEY
+  _prev_license=""
+  _license_prompt="LangSmith license key      "
+done
 admin_email=$(_prompt "LANGSMITH_ADMIN_EMAIL" "$_email_prompt" visible "$_prev_email")
 
 echo ""
@@ -325,6 +370,11 @@ if [[ -z "$pg_password" ]]; then
 fi
 
 # ── Write secrets.auto.tfvars ─────────────────────────────────────────────────
+if [[ -n "$pg_password" ]] && ! _tfvars_password_ok "$pg_password"; then
+  _tfvars_password_error
+  exit 1
+fi
+
 cat > "$SECRETS_FILE" << EOF
 # Auto-generated by setup-env.sh — DO NOT COMMIT
 # Re-run ./setup-env.sh to change a value; it offers these as the defaults.

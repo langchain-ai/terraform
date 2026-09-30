@@ -28,6 +28,8 @@ resource "kubernetes_secret" "postgres" {
   # External: connection_url only (chart reads it directly).
   # In-cluster: also include postgres_db/user/password so the Helm chart's
   # in-cluster StatefulSet can initialize the database without manual patching.
+  # Updating data does not restart LangSmith pods. Restart the Helm release's
+  # deployments after apply so their pods load the new URL.
   data = var.postgres_in_cluster_pass != "" ? {
     connection_url    = var.postgres_connection_url
     postgres_db       = var.postgres_in_cluster_db
@@ -328,7 +330,10 @@ MANIFEST
     EOT
   }
 
-  depends_on = [terraform_data.letsencrypt_cluster_issuer_dns01]
+  depends_on = [
+    terraform_data.letsencrypt_cluster_issuer_dns01,
+    helm_release.istio_base,
+  ]
 }
 
 # Step 3: Patch Istio Gateway for HTTPS + HTTP redirect.
@@ -412,7 +417,10 @@ MANIFEST
     EOT
   }
 
-  depends_on = [terraform_data.langsmith_certificate]
+  depends_on = [
+    terraform_data.langsmith_certificate,
+    terraform_data.istio_gateway_resource,
+  ]
 }
 
 # ── Envoy Gateway (Kubernetes Gateway API controller) ──────────────────────

@@ -86,8 +86,7 @@ VPC [icon: aws-vpc, color: blue] {
         // credentialName: langsmith-tls (references secret in istio-system)
         IstioGateway [icon: kubernetes, color: orange]
 
-        // VirtualService: routes langsmith.example.com to LangSmith services
-        // Can reference services in other namespaces (split dataplane)
+        // VirtualService: routes langsmith.example.com to the frontend
         VirtualService [icon: kubernetes, color: orange]
 
         // Core LangSmith pods
@@ -97,19 +96,33 @@ VPC [icon: aws-vpc, color: blue] {
         ACEBackend [icon: server, color: blue]
         Playground [icon: server, color: blue]
 
-        // LangGraph Deployments (host-backend, listener, operator, agents)
+        // Shared by Fleet and LangGraph Deployments
         HostBackend [icon: server, color: purple]
+
+        // LangGraph Deployments (listener, operator, agents)
         LangGraphListener [icon: server, color: purple]
         LangGraphOperator [icon: server, color: purple]
         ManagedAgentPods [icon: server, color: purple]
 
-        // Agent Builder
-        AgentBuilderToolServer [icon: server, color: green]
-        AgentBuilderTriggerServer [icon: server, color: green]
+        // Fleet
+        langsmith-standalone-fleet-api-server [icon: server, color: green]
+        langsmith-standalone-fleet-queue [icon: server, color: green]
+        langsmith-fleet-tool-server [icon: server, color: green]
+        langsmith-fleet-trigger-server [icon: server, color: green]
 
-        // Observability / data pipeline
-        PollyPods [icon: server, color: gray]
-        ClioPods [icon: server, color: gray]
+        // Insights and LangSmith Chat
+        langsmith-standalone-insights-api-server [icon: server, color: gray]
+        langsmith-standalone-insights-queue [icon: server, color: gray]
+        langsmith-standalone-polly-api-server [icon: server, color: gray]
+        langsmith-standalone-polly-queue [icon: server, color: gray]
+
+        // Optional chart-managed stores when in-cluster storage is selected
+        langsmith-standalone-fleet-postgres [icon: database, color: red]
+        langsmith-standalone-fleet-redis [icon: database, color: red]
+        langsmith-standalone-insights-postgres [icon: database, color: red]
+        langsmith-standalone-insights-redis [icon: database, color: red]
+        langsmith-standalone-polly-postgres [icon: database, color: red]
+        langsmith-standalone-polly-redis [icon: database, color: red]
       }
     }
 
@@ -166,17 +179,17 @@ CertManager --> LangSmithTLSSecret: writes TLS secret (langsmith-tls)
 // Gateway references the TLS secret by credentialName
 LangSmithTLSSecret --> IstioGateway: credentialName: langsmith-tls
 
-// ingressgateway → LangSmith services (routed via VirtualService)
-IngressGateway > Frontend: VirtualService match /
-IngressGateway > Backend: VirtualService match /api
-IngressGateway > PlatformBackend: VirtualService match /platform
-IngressGateway > ACEBackend: VirtualService match /ace
-IngressGateway > Playground: VirtualService match /playground
-IngressGateway > HostBackend: VirtualService match /langgraph
-IngressGateway > AgentBuilderToolServer: VirtualService agent-builder-tool
-IngressGateway > AgentBuilderTriggerServer: VirtualService agent-builder-trigger
-IngressGateway > PollyPods: VirtualService polly
-IngressGateway > ClioPods: VirtualService clio
+// The chart's single VirtualService targets the frontend. The frontend routes
+// requests to the internal services.
+IngressGateway > Frontend: VirtualService destination
+Frontend > Backend: internal /api route
+Frontend > PlatformBackend: internal /platform route
+Frontend > ACEBackend: internal /ace route
+Frontend > Playground: internal /playground route
+Frontend > HostBackend: internal /langgraph route
+Frontend > langsmith-standalone-fleet-api-server: internal Fleet route
+Frontend > langsmith-standalone-insights-api-server: internal Insights route
+Frontend > langsmith-standalone-polly-api-server: internal Chat route
 
 // KEDA scales LangGraph agent pods
 KEDAOperator --> ManagedAgentPods: scales replicas (queue-based HPA)
@@ -192,7 +205,6 @@ Backend > ElastiCacheRedis: Redis :6379
 Backend > S3VPCEndpoint: blob storage (payloads)
 PlatformBackend > RDSPostgres: Postgres :5432
 HostBackend > RDSPostgres: Postgres (agent state)
-ClioPods > ClickHouseInCluster: ClickHouse analytics writes
 
 // Outbound egress via NAT (image pulls, external APIs, ACME)
 NATGateway --> Internet: outbound egress (image pulls, ACME challenge)

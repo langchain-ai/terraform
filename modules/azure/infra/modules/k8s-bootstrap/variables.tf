@@ -80,11 +80,92 @@ variable "redis_connection_url" {
   default     = ""
 }
 
+variable "redis_cluster_node_uris" {
+  type        = string
+  description = "JSON array of Redis node URIs. Read when redis.external.cluster.enabled is true."
+  sensitive   = true
+  default     = ""
+}
+
+variable "redis_cluster_password" {
+  type        = string
+  description = "Redis access key, not URL-encoded. Read when redis.external.cluster.enabled is true."
+  sensitive   = true
+  default     = ""
+}
+
+variable "enable_smithdb" {
+  type        = bool
+  description = "Create the SmithDB PostgreSQL metastore connection Secret."
+  default     = false
+}
+
+variable "smithdb_metastore_host" {
+  type        = string
+  description = "Private hostname of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_database" {
+  type        = string
+  description = "Database name of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_username" {
+  type        = string
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_password" {
+  type        = string
+  description = "Optional SmithDB metastore password; null when Entra authentication is used."
+  sensitive   = true
+  default     = null
+  nullable    = true
+}
+
 # ── Blob storage (Azure Workload Identity) ────────────────────────────────────
 
 variable "blob_managed_identity_client_id" {
   type        = string
   description = "Client ID of the User-Assigned Managed Identity used by LangSmith pods to access blob storage (Workload Identity)"
+}
+
+variable "backend_service_account_name" {
+  type        = string
+  description = "Pre-created backend ServiceAccount used by Helm pre-install hooks."
+}
+
+variable "smithdb_service_account_name" {
+  type        = string
+  description = "Pre-created SmithDB ServiceAccount used by Helm pre-install hooks."
+  default     = ""
+}
+
+variable "smithdb_managed_identity_client_id" {
+  type        = string
+  description = "Client ID of the SmithDB managed identity."
+  default     = ""
+}
+
+variable "smithdb_cache_storage_class_name" {
+  type        = string
+  description = "Name of the StorageClass created for SmithDB cache volumes."
+  default     = "smithdb-cache-premium-v2"
+}
+
+variable "smithdb_cache_disk_iops" {
+  type        = number
+  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume."
+  default     = 7000
+}
+
+variable "smithdb_cache_disk_throughput" {
+  type        = number
+  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume."
+  default     = 1000
 }
 
 # ── Application secrets ───────────────────────────────────────────────────────
@@ -100,6 +181,15 @@ variable "langsmith_license_key" {
 }
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
+
+# Defaults true, unlike the GCP module's matching flag: this module installed
+# cert-manager unconditionally before the flag existed, so false as a default
+# would stop renewing certificates for anyone already deployed.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager. Set false when attaching to a cluster that already runs it. Helm cannot adopt a release it does not own, so a second install fails on the existing CRDs."
+  default     = true
+}
 
 variable "cert_manager_version" {
   type        = string
@@ -137,6 +227,13 @@ variable "cert_manager_identity_client_id" {
 }
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────
+
+# Defaults true for the same reason install_cert_manager does.
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  default     = true
+}
 
 variable "keda_version" {
   type        = string

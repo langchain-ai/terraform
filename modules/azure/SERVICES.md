@@ -35,13 +35,13 @@ All passes verified during production deploy (external Postgres + Redis).
 ### `langsmith-queue`
 - **What**: Trace ingestion worker — dequeues from Redis, writes to ClickHouse + Blob Storage
 - **Depends on**: Redis, ClickHouse, Blob Storage
-- **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **WI**
+- **HPA**: 3–10 replicas in the `production` profile, 6–24 in `production-large`; `dev` and `minimum` run one fixed replica · **WI**
 
 ### `langsmith-ingest-queue`
 - **What**: Dedicated high-throughput ingestion worker — parallel to `queue`, handles burst traffic
 - **Depends on**: Redis, Blob Storage
-- **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **WI**
-- **Enabled**: Pass 2+ with external Redis. Disabled in demo/light mode.
+- **HPA**: 3–10 replicas in the `production` profile, 6–24 in `production-large`; `dev` and `minimum` run one fixed replica · **WI**
+- **Enabled**: always, from Pass 2, whether Redis is external or in-cluster. The `dev` and `minimum` sizing profiles run it as one replica rather than turning it off, so count it when sizing nodes.
 
 ### `langsmith-ace-backend`
 - **What**: Async compute engine — dataset runs, evaluations, background jobs
@@ -76,7 +76,8 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Version**: Redis ≥ 5 required (Azure Managed Redis runs the Redis Enterprise engine)
 - **Dedicated instance**: Each LangSmith installation must use its own dedicated Redis — shared instances cause deployment tasks to route incorrectly
 - **Access**: Private endpoint only (subnet-redis, private DNS zone) · TLS port 10000
-- **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module
+- **Client mode**: Follows `clustering_policy` — OSSCluster (default) uses the cluster client, EnterpriseCluster the standalone client with `clusterSafeMode`. `init-values.sh` renders the matching Helm block from the terraform outputs.
+- **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module. Keys `connection_url`, `redis_cluster_node_uris`, `redis_cluster_password`; all three always written, the chart reads the pair its mode needs.
 
 ### Azure Blob Storage
 - **What**: Object store for trace payloads — large inputs/outputs, attachments
@@ -156,7 +157,7 @@ All passes verified during production deploy (external Postgres + Redis).
 - **ClusterIssuers**: `letsencrypt-staging`, `letsencrypt-prod`
 
 ### KEDA
-- **What**: Kubernetes Event-driven Autoscaling — scales `queue` and `ingest-queue` based on Redis queue depth
+- **What**: Kubernetes Event-driven Autoscaling. The chart can scale `queue` and `ingest-queue` on Redis queue depth through KEDA, but ships that off, and this module does not turn it on. Both scale on their HPA under the `production` sizing profiles, and run fixed replicas under `dev` and `minimum`
 - **Deployed by**: Terraform k8s-bootstrap module
 - **Required for**: Pass 3+ (LangGraph Platform prerequisite)
 
@@ -167,4 +168,4 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ---
 
-*Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.16 line. Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*
+*Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.16 line for a standard Azure deployment, and the 0.17 line when `enable_smithdb = true` (see [SMITHDB.md](SMITHDB.md#version-requirements)). Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*

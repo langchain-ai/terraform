@@ -47,3 +47,9 @@ variable "snapshot_retention_limit" {
   type        = number
   default     = 0
 }
+
+variable "existing_security_group_id" {
+  description = "ID of an existing security group to attach to the Redis replication group instead of creating one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/6379 from ingress_cidrs and outbound within the VPC CIDR."
+  type        = string
+  default     = null
+}

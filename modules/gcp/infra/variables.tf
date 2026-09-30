@@ -475,7 +475,7 @@ variable "sandbox_juicefs_redis_rdb_snapshot_period" {
   default     = null
 
   validation {
-    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null || contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
+    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null ? true : contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
     error_message = "sandbox_juicefs_redis_rdb_snapshot_period must be null, ONE_HOUR, SIX_HOURS, TWELVE_HOURS, or TWENTY_FOUR_HOURS."
   }
 }
@@ -619,7 +619,7 @@ variable "dns_create_certificate" {
 # Ingress Configuration
 #------------------------------------------------------------------------------
 variable "install_ingress" {
-  description = "Whether to install ingress controller via Terraform. Note: Gateway uses HTTPS only, so TLS must be configured (tls_certificate_source must be 'letsencrypt' or 'existing')."
+  description = "Whether to install ingress through Terraform. For the Envoy Gateway path, tls_certificate_source = 'none' (the default) creates an HTTP-only listener, 'letsencrypt' creates HTTP and HTTPS listeners, and 'existing' creates an HTTPS-only listener."
   type        = bool
   default     = true
 }

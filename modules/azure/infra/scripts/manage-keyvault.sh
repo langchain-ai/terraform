@@ -25,7 +25,7 @@ source "$SCRIPT_DIR/_common.sh"
 if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
   : # got it from terraform output
 else
-  KV_NAME=$(_derive_kv_name)
+  KV_NAME=$(_require_kv_name) || exit 1
 fi
 
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -184,6 +184,17 @@ cmd_set() {
     if ! _pw_err=$(_validate_admin_password "$val"); then
       _red "ERROR"; echo ": $_pw_err"
       echo "  The Helm chart will reject it."
+      exit 1
+    fi
+  fi
+
+  # Validate license key shape (shared rules — see _common.sh). This is the
+  # documented way to correct a bad key (#250, #251), so it must not accept the
+  # same paste the prompt now refuses.
+  if [[ "$key" == "langsmith-license-key" ]]; then
+    if ! _lk_err=$(_validate_license_key "$val"); then
+      _red "ERROR"; echo ": $_lk_err"
+      echo "  platform-backend would fail at startup with a base64 error."
       exit 1
     fi
   fi

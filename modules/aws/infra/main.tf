@@ -12,6 +12,8 @@ provider "aws" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -105,40 +107,21 @@ resource "terraform_data" "validate_inputs" {
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
 
+    # External Fleet storage uses a dedicated database and logical Redis index on
+    # the shared RDS and ElastiCache instances.
     precondition {
-      condition     = !var.enable_agent_builder || var.enable_deployments
-      error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
+      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_polly || var.enable_deployments
-      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
-    }
-
-    # Standalone agent features (chart v0.15+) run their own api-server + queue against
-    # per-feature databases on the shared RDS/ElastiCache. They do NOT require
-    # enable_deployments, but they DO require external Postgres and Redis to exist.
-    precondition {
-      condition     = !var.enable_fleet || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_fleet requires postgres_source = \"external\" and redis_source = \"external\" (standalone Fleet uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
-    }
-
-    # Fleet's chat UI resolves OAuth provider/token connections through host-backend,
-    # which only exists when Deployments is enabled. Without it the UI 500s on
-    # /v1/platform/fleet/providers/.../connection ("host-backend ... no such host").
-    precondition {
-      condition     = !var.enable_fleet || var.enable_deployments
-      error_message = "enable_fleet requires enable_deployments = true. The Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed when Deployments is enabled."
+      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_standalone_polly || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_polly requires postgres_source = \"external\" and redis_source = \"external\" (standalone Polly uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
-    }
-
-    precondition {
-      condition     = !var.enable_standalone_insights || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_insights requires postgres_source = \"external\" and redis_source = \"external\" (standalone Insights uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
@@ -270,6 +253,8 @@ module "redis" {
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
+
+  existing_security_group_id = var.redis_existing_security_group_id
 }
 
 resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
@@ -338,6 +323,8 @@ module "postgres" {
   skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
 
+  existing_security_group_id = var.postgres_existing_security_group_id
+
   depends_on = [module.eks]
 }
 
@@ -363,6 +350,53 @@ resource "aws_iam_role_policy" "langsmith_s3" {
           module.storage.bucket_arn,
           "${module.storage.bucket_arn}/*",
         ]
+      }
+    ]
+  })
+}
+
+# Lets backend/platformBackend/queue/etc. pods (all sharing the langsmith IRSA
+# role) call Bedrock models directly via workload identity instead of static
+# AWS keys. Not scoped to specific model IDs, since self-hosted customers pick
+# models at runtime via LangSmith config, not Terraform.
+#
+# foundation-model is granted across all regions (not just var.region): a
+# cross-region inference profile (the "us."/"global." prefix on model IDs like
+# us.anthropic.claude-opus-5) fans requests out to underlying foundation models
+# in whichever region it lands the request, e.g. us-east-1, even when called
+# from us-west-2 — confirmed by AccessDeniedException naming a foundation-model
+# ARN outside var.region. inference-profile is also wildcarded across regions
+# for the same reason (covers "global." profiles alongside geography-scoped
+# ones like "us.", "eu.").
+resource "aws_iam_role_policy" "langsmith_bedrock" {
+  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+
+  name = "langsmith-bedrock-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*",
+        ]
+      },
+      {
+        Sid    = "BedrockListModels"
+        Effect = "Allow"
+        Action = [
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -451,6 +485,11 @@ module "cert_manager" {
 # wires the validated cert into the ALB HTTPS listener.
 
 locals {
+  insights_enabled          = var.enable_insights || var.enable_standalone_insights
+  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
+  polly_enabled             = var.enable_polly || var.enable_standalone_polly
+  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
 
@@ -500,6 +539,8 @@ module "alb" {
   enable_istio_gateway   = var.enable_istio_gateway
   enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
+
+  existing_security_group_id = var.alb_existing_security_group_id
 
   depends_on = [module.vpc]
 }
@@ -594,6 +635,8 @@ module "bastion" {
   ssh_allowed_cidrs   = var.bastion_ssh_allowed_cidrs
   root_volume_size_gb = var.bastion_root_volume_size_gb
   tags                = local.common_tags
+
+  existing_security_group_id = var.bastion_existing_security_group_id
 
   depends_on = [module.vpc, module.eks]
 }
@@ -710,10 +753,11 @@ resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 
 locals {
-  # Admin base URL (no database) for the shared RDS instance. Guarded by the
-  # external check so module.postgres[0] is only referenced when it exists.
+  # Encoded admin URL for the shared RDS instance, without a database name.
+  # Spaces are rejected by postgres_password validation, so urlencode() cannot
+  # emit "+" for a space in URI userinfo.
   standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${var.postgres_password}@${module.postgres[0].address}:${module.postgres[0].port}"
+    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
   ) : ""
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
@@ -730,6 +774,14 @@ locals {
   standalone_insights_redis_url = "${local.standalone_redis_base}/${local.redis_db_insights}"
 }
 
+# Recreate standalone_db Jobs when the encoded admin URL changes. Kubernetes
+# Jobs do not rerun when Secret data changes, so a Job that failed on a broken
+# (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
+resource "terraform_data" "postgres_connection_url_revision" {
+  count = var.postgres_source == "external" ? 1 : 0
+  input = sha256(local.postgres_connection_url)
+}
+
 # ── Per-feature logical database creation (in-cluster psql Job) ───────────────
 # Idempotent: skips CREATE DATABASE if the database already exists. Sources the
 # admin connection URL from the langsmith-postgres Secret created by k8s-bootstrap
@@ -737,9 +789,9 @@ locals {
 resource "kubernetes_job_v1" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet
-      polly    = var.enable_standalone_polly
-      insights = var.enable_standalone_insights
+      fleet    = var.enable_fleet && var.fleet_storage == "external"
+      polly    = local.polly_external_storage
+      insights = local.insights_external_storage
     } : k => v if v && var.postgres_source == "external"
   }
 
@@ -801,15 +853,23 @@ resource "kubernetes_job_v1" "standalone_db" {
     update = "5m"
   }
 
+  lifecycle {
+    replace_triggered_by = [
+      terraform_data.postgres_connection_url_revision[0]
+    ]
+  }
+
   depends_on = [module.postgres, module.k8s_bootstrap]
 }
 
 # ── Per-feature connection-URL Secrets ────────────────────────────────────────
 # Keys postgres_connection_url / redis_connection_url match what the chart's
 # standalone fleet/polly/insights blocks read via existingSecretName.
+# Secret data updates in place. Restart the Helm release's deployments after
+# apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -822,7 +882,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -835,7 +895,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -848,7 +908,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = var.enable_standalone_polly && var.redis_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -861,7 +921,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -874,7 +934,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
@@ -935,6 +995,9 @@ module "smithdb" {
   s3_kms_key_arn        = var.s3_kms_key_arn
   s3_versioning_enabled = var.smithdb_s3_versioning_enabled
   s3_force_destroy      = var.smithdb_s3_force_destroy
+
+  existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
+  manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
 
   depends_on = [module.eks]
 }
@@ -1148,4 +1211,54 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
   })
 
   depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
+}
+
+# ── Long-lived-stream timeout override ───────────────────────────────────────
+# Envoy Gateway applies an effective 15s response timeout to the LangSmith
+# chart's own catch-all HTTPRoute (chart's http_route.yaml has no timeouts
+# field and no way to set one via values). Several SSE/streaming surfaces
+# regularly run longer than that, so Envoy resets the HTTP/2 stream mid-response
+# (response_flags=UT, response_code_details=response_timeout) even though the
+# backend already returned 200 and is still streaming — the browser sees
+# net::ERR_HTTP2_PROTOCOL_ERROR. Covers:
+#   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
+#     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
+#   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#
+# A second HTTPRoute on the same Gateway+hostname with more specific path
+# matches takes precedence over the chart's "/" catch-all per Gateway API
+# merge/precedence rules (longer prefix wins), without touching the chart's
+# own route. timeouts.request: 0s disables the request timeout for just
+# these path prefixes; every other path keeps Envoy Gateway's default.
+#
+# kubectl_manifest (not kubernetes_manifest) for the same reason as the
+# SmithDB Karpenter CRs above: it defers schema validation to apply time, so
+# terraform plan succeeds even before the Gateway API CRDs are installed
+# (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+resource "kubectl_manifest" "fleet_stream_httproute" {
+  count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "langsmith-fleet-streams"
+      namespace = var.langsmith_namespace
+    }
+    spec = {
+      parentRefs = [{ name = "langsmith-gateway" }]
+      hostnames  = [var.langsmith_domain]
+      rules = [{
+        matches = [
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
+          { path = { type = "PathPrefix", value = "/api-host/v2" } },
+        ]
+        backendRefs = [{ name = "langsmith-frontend", port = 80 }]
+        timeouts    = { request = "0s" }
+      }]
+    }
+  })
+
+  depends_on = [module.k8s_bootstrap]
 }

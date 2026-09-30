@@ -9,8 +9,8 @@ output "alb_dns_name" {
 }
 
 output "security_group_id" {
-  description = "Security group ID attached to the ALB"
-  value       = aws_security_group.alb.id
+  description = "Security group ID attached to the ALB (created by this module, or the supplied existing_security_group_id)"
+  value       = local.security_group_id
 }
 
 output "http_listener_arn" {
