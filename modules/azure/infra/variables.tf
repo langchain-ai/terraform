@@ -91,6 +91,40 @@ variable "resource_group_name" {
   type        = string
   description = "Name for the resource group every LangSmith resource lands in. Unique within the subscription, 1-90 chars. Empty derives from the naming scheme."
   default     = ""
+
+  validation {
+    condition     = var.resource_group_name == "" || var.create_resource_group
+    error_message = "resource_group_name applies only when this module creates the resource group, and create_resource_group is false. Set existing_resource_group_name to name the group to deploy into, and leave resource_group_name empty."
+  }
+}
+
+variable "create_resource_group" {
+  type        = bool
+  description = "Whether to create the resource group. Set false to deploy into one that already exists, named by existing_resource_group_name, so the deployer needs rights on that group only. Terraform creates everything inside it and changes nothing about the group itself: its tags, locks, and policy assignments stay as its owner set them, and terraform destroy leaves it in place."
+  default     = true
+}
+
+variable "existing_resource_group_name" {
+  type        = string
+  description = "Name of the pre-existing resource group to deploy into. Required when create_resource_group = false; leaving it empty fails the plan rather than falling back to a derived name."
+  default     = ""
+
+  validation {
+    condition     = var.existing_resource_group_name == "" || !var.create_resource_group
+    error_message = "existing_resource_group_name applies only when deploying into a resource group you already own, and create_resource_group is true. Set create_resource_group = false to use it, or use resource_group_name to pin the name of the group this module creates."
+  }
+
+  validation {
+    condition     = var.create_resource_group || var.existing_resource_group_name != ""
+    error_message = "create_resource_group = false requires existing_resource_group_name. Set it to the resource group LangSmith should deploy into."
+  }
+
+  # The same grammar preflight.sh holds this name to before it goes into a
+  # request URL.
+  validation {
+    condition     = var.existing_resource_group_name == "" || can(regex("^[A-Za-z0-9._()-]{1,90}$", var.existing_resource_group_name))
+    error_message = "existing_resource_group_name must be 1-90 characters of letters, digits, periods, underscores, hyphens, and parentheses."
+  }
 }
 
 variable "vnet_name" {
@@ -538,6 +572,12 @@ variable "postgres_subnet_address_prefix" {
   default     = ["10.0.32.0/20"] # 4k IP addresses
 }
 
+variable "enable_subnet_nsgs" {
+  type        = bool
+  description = "Attach a network security group to each subnet Terraform creates. The Postgres and Redis subnets then admit only the AKS subnet (5432; 10000 and 8500-8599), and the AKS subnet admits Internet traffic on 80 and 443 for the ingress load balancer. Outbound keeps Azure's defaults. A subnet you supply keeps whatever NSG you gave it."
+  default     = false
+}
+
 variable "amr_sku" {
   type        = string
   description = "Azure Managed Redis SKU. Balanced_B1 (1 GB) is the default — Balanced_B0 (0.5 GB) exists but sits on the most capacity-constrained pool and intermittently fails to allocate, and it can't run high availability. Bump (Balanced_B3/B5/...) for more memory. A larger SKU does not cure InsufficientCapacity: that shortage is regional and reaches every Balanced size, so use redis_location for it. (Replaces the classic redis_capacity.)"
@@ -566,7 +606,7 @@ variable "redis_high_availability" {
 
 variable "redis_location" {
   type        = string
-  description = "Region for the AMR cluster. Defaults to var.location. Set this only when AMR reports InsufficientCapacity in your region — the private endpoint and every other resource stay in var.location, so the change is a cross-region private link, not a second deployment."
+  description = "Region for the AMR cluster. Defaults to var.location. Set this only when AMR reports InsufficientCapacity in your region — the private endpoint and every other resource stay in var.location, so the change is a cross-region private link, not a second deployment. Retrying after a failed create also needs a new redis_name: the failed attempt keeps the old name reserved, and ARM rejects it even when no resource is visible."
   default     = null
 }
 
@@ -664,13 +704,13 @@ variable "storage_private_dns_zone_id" {
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)
 #   + ingestQueue×3 (3 vCPU/6Gi) + frontend + playground + aceBackend + system pods
-#   → Standard_D8s_v3 × 3 nodes (24 vCPU / 96 GiB) comfortably fits Pass 2.
+#   → Standard_D8s_v5 × 3 nodes (24 vCPU / 96 GiB) comfortably fits Pass 2.
 #
 # Pass 3–5 (LangGraph Platform, Agent Builder, Insights): add ~3 vCPU / 5 GiB.
-#   Total with autoscale headroom: max_count = 12 (Standard_D8s_v3).
+#   Total with autoscale headroom: max_count = 12 (Standard_D8s_v5).
 #
 # ClickHouse: 3.5 vCPU / 15 GiB request — always scheduled to the large pool
-#   (Standard_D16s_v3, 16 vCPU / 64 GiB) via node affinity set in the chart.
+#   (Standard_D16s_v5, 16 vCPU / 64 GiB) via node affinity set in the chart.
 #   Production recommendation from upstream: 8 vCPU / 32 GiB for heavy tracing load.
 #
 # Official LangSmith minimum: 16 vCPU / 64 GiB cluster-wide.
@@ -684,13 +724,13 @@ variable "aks_kubernetes_version" {
 
 variable "default_node_pool_vm_size" {
   type        = string
-  description = "VM size for the default AKS node pool. Standard_D8s_v3 (8 vCPU / 32 GiB) is the recommended baseline for Pass 2+ (external Postgres + Redis). Use Standard_D4s_v3 (4 vCPU / 16 GiB) only for light/demo deployments (in-cluster DBs). See sizing comment above."
-  default     = "Standard_D8s_v3" # 8 vCPU, 32 GiB
+  description = "VM size for the default AKS node pool. Standard_D8s_v5 (8 vCPU / 32 GiB) is the recommended baseline for Pass 2+ (external Postgres + Redis). Use Standard_D4s_v5 (4 vCPU / 16 GiB) only for light/demo deployments (in-cluster DBs). See sizing comment above."
+  default     = "Standard_D8s_v5" # 8 vCPU, 32 GiB
 }
 
 variable "default_node_pool_min_count" {
   type        = number
-  description = "Min node count for the default pool. Autoscaler never scales below this floor. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable (76% CPU). Set to 1 for minimum/dev deployments."
+  description = "Min node count for the default pool. Autoscaler never scales below this floor. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v5 provides 18,870m allocatable (76% CPU). Set to 1 for minimum/dev deployments."
   default     = 1
 }
 
@@ -787,10 +827,10 @@ variable "additional_node_pools" {
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v3, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
+      vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
       min_count = 0
       max_count = 2
     }

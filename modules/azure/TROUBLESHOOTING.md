@@ -128,31 +128,31 @@ Normal   NotTriggerScaleUp pod/langsmith-backend-xxx  pod didn't trigger scale-u
 ```
 Error: creating temporary Agent Pool ... Agent Pool Name: "defaulttmp"
 "code": "ErrCode_InsufficientVCPUQuota",
-"message": "Insufficient vcpu quota requested 8, remaining 2 for family standardDSv3Family for region eastus."
+"message": "Insufficient vcpu quota requested 8, remaining 2 for family standardDSv5Family for region eastus."
 ```
 
-**Cause:** Azure subscriptions have per-region vCPU quotas per VM family. The default for `standardDSv3Family` in eastus is often 10 cores. One `Standard_D8s_v3` node uses 8 cores — only 2 remain. Autoscaler needs 8 more for a second node; node pool rotation creates a temporary surge node of the same size.
+**Cause:** Azure subscriptions have per-region vCPU quotas per VM family. The default for `standardDSv5Family` in eastus is often 10 cores. One `Standard_D8s_v5` node uses 8 cores — only 2 remain. Autoscaler needs 8 more for a second node; node pool rotation creates a temporary surge node of the same size.
 
 **Why `max_pods = 30` triggers this:** AKS default is 30 pods per node. Pass 2 alone deploys ~37 pods (17 LangSmith + 20 system). The autoscaler tries to add a second node, hits quota, and enters backoff. The fix is `default_node_pool_max_pods = 60` in `terraform.tfvars` — all pods fit on one node and no scale-out is needed.
 
 **Recommended quota for multi-dataplane (3 dataplanes):**
-- Pass 2 + 3 dataplanes: ~46 pods — fits on 1× D8s_v3 with `max_pods = 60`
+- Pass 2 + 3 dataplanes: ~46 pods — fits on 1× D8s_v5 with `max_pods = 60`
 - Set quota to **32 cores** to allow autoscaler headroom for rolling upgrades and burst
 
 **Fix — request quota increase:**
 ```bash
 # Option 1 — Azure portal (usually auto-approves within minutes)
-# Portal → Subscriptions → <sub-id> → Usage + Quotas → search "DSv3" → eastus → Request increase → 32
+# Portal → Subscriptions → <sub-id> → Usage + Quotas → search "DSv5" → eastus → Request increase → 32
 
 # Option 2 — CLI
 az quota update \
-  --resource-name "standardDSv3Family" \
+  --resource-name "standardDSv5Family" \
   --scope /subscriptions/<sub-id>/providers/Microsoft.Compute/locations/eastus \
   --limit-object value=32 limit-type=Independent \
   --resource-type dedicated
 
 # Verify current usage
-az vm list-usage --location eastus --query "[?contains(name.value,'DSv3')]" -o table
+az vm list-usage --location eastus --query "[?contains(name.value,'DSv5')]" -o table
 ```
 
 **Fix — ensure max_pods is set correctly in terraform.tfvars:**
@@ -162,17 +162,17 @@ default_node_pool_max_pods = 60   # must be set before first apply — immutable
 
 > **Note:** `max_pods` is immutable on an existing node pool. Changing it after initial apply requires a node pool rotation (temporary node = more quota). Always set it before the first `terraform apply`.
 
-**Alternative — switch VM family if DSv3 quota is fully exhausted:**
+**Alternative — switch VM family if DSv5 quota is fully exhausted:**
 
-If `az vm list-usage` shows `standardDSv3Family` at 100% (`Current == Limit`) and a quota increase is not possible, switch to an equivalent family in `terraform.tfvars`:
+If `az vm list-usage` shows `standardDSv5Family` at 100% (`Current == Limit`) and a quota increase is not possible, switch to an equivalent family in `terraform.tfvars`:
 
 ```hcl
-# DSv2 family — equivalent vCPU count, slightly less RAM, different quota pool
-default_node_pool_vm_size = "Standard_DS4_v2"   # 8 vCPU, 28 GiB (vs D8s_v3: 8 vCPU, 32 GiB)
+# DSv3 family — same vCPU and RAM, different quota pool
+default_node_pool_vm_size = "Standard_D8s_v3"   # 8 vCPU, 32 GiB
 
 additional_node_pools = {
   large = {
-    vm_size   = "Standard_DS5_v2"   # 16 vCPU, 56 GiB (vs D16s_v3: 16 vCPU, 64 GiB)
+    vm_size   = "Standard_D16s_v3"   # 16 vCPU, 64 GiB
     min_count = 0
     max_count = 2
   }
@@ -186,12 +186,12 @@ az vm list-usage --location eastus \
   -o table
 ```
 
-| Recommended | Alternative | vCPU | RAM difference |
+| Recommended | Alternative | vCPU | RAM |
 |---|---|---|---|
-| `Standard_D8s_v3` | `Standard_DS4_v2` | 8 | −4 GiB (28 vs 32) |
-| `Standard_D16s_v3` | `Standard_DS5_v2` | 16 | −8 GiB (56 vs 64) |
+| `Standard_D8s_v5` | `Standard_D8s_v3` | 8 | 32 GiB |
+| `Standard_D16s_v5` | `Standard_D16s_v3` | 16 | 64 GiB |
 
-Validated: full pass 2–5 deploy (production sizing, all addons) ran successfully on DS4_v2 / DS5_v2 on 2026-03-30.
+Dsv3 was this module's default before v5. It is previous-generation and scheduled to retire in 2029, so treat it as a stopgap and move back to v5 once the quota arrives. Do not fall back to DSv2 (`Standard_DS4_v2`, `Standard_DS5_v2`): Azure retired it on 2026-05-01.
 
 ---
 

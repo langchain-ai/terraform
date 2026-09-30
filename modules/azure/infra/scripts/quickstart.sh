@@ -196,6 +196,7 @@ _derive_names() {
   # and what lets the review screen say "attaches to".
   [[ "$CREATE_CLUSTER" == "false" ]]  && _AKS_NAME="$EXISTING_CLUSTER_NAME"
   [[ "$CREATE_KEYVAULT" == "false" ]] && _KV_NAME="$EXISTING_KEYVAULT_NAME"
+  [[ "$CREATE_RESOURCE_GROUP" == "false" ]] && _RG_NAME="$EXISTING_RESOURCE_GROUP_NAME"
   # Not derived from name_base: renaming a Log Analytics workspace destroys the
   # logs in it.
   _LAW_NAME="langsmith-logs${suffix}"
@@ -249,7 +250,7 @@ STATE_FILE="$INFRA_DIR/.quickstart-state"
 _STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID AZURE_ENVIRONMENT NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
 STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
 RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
-CREATE_KEYVAULT EXISTING_KEYVAULT_NAME
+CREATE_KEYVAULT EXISTING_KEYVAULT_NAME CREATE_RESOURCE_GROUP EXISTING_RESOURCE_GROUP_NAME
 ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
 AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
 AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
@@ -361,11 +362,12 @@ _load_tfvars() {
 
   # Bare booleans, so _tfvar cannot see them. Only "false" is acted on, so a
   # malformed value cannot silently turn a greenfield deployment into an attach.
-  for v in create_cluster create_keyvault; do
+  for v in create_cluster create_keyvault create_resource_group; do
     [[ "$(_tfvar_bare "$v")" == "false" ]] || continue
     case "$v" in
-      create_cluster)  CREATE_CLUSTER="false" ;;
-      create_keyvault) CREATE_KEYVAULT="false" ;;
+      create_cluster)        CREATE_CLUSTER="false" ;;
+      create_keyvault)       CREATE_KEYVAULT="false" ;;
+      create_resource_group) CREATE_RESOURCE_GROUP="false" ;;
     esac
   done
 
@@ -376,7 +378,7 @@ _load_tfvars() {
            sizing_profile postgres_admin_username postgres_database_name \
            amr_sku name_base name_suffix_salt storage_account_name keyvault_name postgres_name \
            redis_name cluster_name resource_group_name vnet_name \
-           existing_cluster_name existing_keyvault_name aks_network_mode aks_sku_tier azure_environment; do
+           existing_cluster_name existing_keyvault_name existing_resource_group_name aks_network_mode aks_sku_tier azure_environment; do
     _TF_VAL=$(_tfvar "$v")
     [[ -z "$_TF_VAL" ]] && continue
     case "$v" in
@@ -393,6 +395,7 @@ _load_tfvars() {
       vnet_name)                 VNET_NAME="$_TF_VAL" ;;
       existing_cluster_name)     EXISTING_CLUSTER_NAME="$_TF_VAL" ;;
       existing_keyvault_name)    EXISTING_KEYVAULT_NAME="$_TF_VAL" ;;
+      existing_resource_group_name) EXISTING_RESOURCE_GROUP_NAME="$_TF_VAL" ;;
       location)                  LOCATION="$_TF_VAL" ;;
       owner)                     OWNER="$_TF_VAL" ;;
       environment)               ENVIRONMENT="$_TF_VAL" ;;
@@ -572,7 +575,7 @@ _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
   _hint "Dev/POC:    smaller nodes, in-cluster services OK, Key Vault stays purgeable."
-  _hint "Production: D8s_v3 nodes, external Postgres + Redis, Key Vault purge protection."
+  _hint "Production: D8s_v5 nodes, external Postgres + Redis, Key Vault purge protection."
 
   _hint "Changing this later leaves answers you have already given untouched —"
   _hint "it only affects the defaults of sections you have not filled in yet."
@@ -617,12 +620,14 @@ RESOURCE_GROUP_NAME=""
 VNET_NAME=""
 
 # Attach mode, same reason again: the review screen and the length check both
-# name the cluster and the vault, and those names are the operator's here. An
-# absent key reads as create, the module's default.
+# name the cluster, the vault, and the resource group, and those names are the
+# operator's here. An absent key reads as create, the module's default.
 CREATE_CLUSTER="true"
 EXISTING_CLUSTER_NAME=""
 CREATE_KEYVAULT="true"
 EXISTING_KEYVAULT_NAME=""
+CREATE_RESOURCE_GROUP="true"
+EXISTING_RESOURCE_GROUP_NAME=""
 # Blank on purpose: the module omits the tag when it is empty, and an unanswered
 # "platform-team" is worse than no tag.
 OWNER=""
@@ -745,7 +750,7 @@ _run_section_2() {
 
   echo ""
   _derive_names
-  printf "  Resource group  $(_cyan "$_RG_NAME")  in  $(_cyan "$LOCATION")\n"
+  printf "  Resource group  $(_cyan "$(_name_or_attached "$CREATE_RESOURCE_GROUP" "$_RG_NAME")")  in  $(_cyan "$LOCATION")\n"
   printf "  Cluster $(_cyan "$(_name_or_attached "$CREATE_CLUSTER" "$_AKS_NAME")") · Key Vault $(_cyan "$(_name_or_attached "$CREATE_KEYVAULT" "$_KV_NAME")") · Storage $(_cyan "$_BLOB_NAME")\n"
 }
 
@@ -934,7 +939,7 @@ _run_section_3() {
 }
 
 # -- 4. AKS ------------------------------------------------------------------
-NODE_VM_SIZE="Standard_D4s_v3"
+NODE_VM_SIZE="Standard_D4s_v5"
 NODE_MIN=2
 NODE_MAX=5
 NODE_MAX_PODS=60
@@ -944,9 +949,9 @@ AKS_SKU_TIER="Standard"
 _run_section_4() {
   _section "4. AKS Cluster"
   _hint "Node sizing determines how many LangSmith services fit per node."
-  _hint "Standard_D4s_v3 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
-  _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
-  _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
+  _hint "Standard_D4s_v5 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
+  _hint "Standard_D8s_v5 (8 vCPU, 32 GiB) — required for production sizing profile."
+  _hint "Cost estimate (eastus, on-demand): D4s_v5 ~\$0.19/hr, D8s_v5 ~\$0.38/hr per node."
   _hint "The autoscaler handles bursts — min_count is the always-on floor."
 
   local vm_default="$NODE_VM_SIZE"
@@ -954,11 +959,11 @@ _run_section_4() {
   local max_default="$NODE_MAX"
   if [[ "$PROFILE" == "prod" ]]; then
     if ! _answered 4; then
-      vm_default="Standard_D8s_v3"
+      vm_default="Standard_D8s_v5"
       min_default=3
       max_default=10
     fi
-    _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
+    _hint "Production defaults: D8s_v5 ×3 min (fits Pass 2 at ~76% CPU utilization)."
   fi
 
   _ask "Node VM size" "$vm_default"
@@ -1467,11 +1472,11 @@ _run_section_9() {
   _hint ""
   _hint "minimum        — bare minimum (demos, heavily constrained clusters, < 4 vCPU total)."
   _hint "dev            — single replica per service, minimal requests. Fast deploys."
-  _hint "                 Use with Standard_D4s_v3 × 2+ nodes."
+  _hint "                 Use with Standard_D4s_v5 × 2+ nodes."
   _hint "production     — multi-replica + HPA (backend×3, queue×3, etc.)."
-  _hint "                 Use with Standard_D8s_v3 × 3+ nodes. Required for real workloads."
+  _hint "                 Use with Standard_D8s_v5 × 3+ nodes. Required for real workloads."
   _hint "production-large — high-volume (~50 concurrent users, ~1000 traces/sec)."
-  _hint "                 Use with Standard_D8s_v3 × 5+ nodes."
+  _hint "                 Use with Standard_D8s_v5 × 5+ nodes."
 
   local sizing_choice=""
   _answered 9 && sizing_choice="$(_index_of "$SIZING_PROFILE" minimum dev production production-large)"
@@ -1607,16 +1612,20 @@ if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
        case "$(_tfvar azure_environment 2>/dev/null || true)" in
          public|usgovernment) AZURE_ENVIRONMENT="$(_tfvar azure_environment)" ;;
        esac
-       # create_cluster and create_keyvault ride through a re-run as preserved
-       # unknown keys, except on this branch, which drops them. That is not one
-       # more discarded hand-edit: it turns an attached deployment greenfield,
-       # and the next plan builds a second cluster and vault beside the live ones.
+       # create_cluster, create_keyvault, and create_resource_group ride through
+       # a re-run as preserved unknown keys, except on this branch, which drops
+       # them. That is not one more discarded hand-edit: it turns an attached
+       # deployment greenfield, and the next plan builds a second cluster, vault,
+       # or resource group beside the live ones.
        _attached=""
        if grep -qE '^[[:space:]]*create_cluster[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
          _attached="an AKS cluster"
        fi
        if grep -qE '^[[:space:]]*create_keyvault[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
          _attached="${_attached:+${_attached} and }a Key Vault"
+       fi
+       if grep -qE '^[[:space:]]*create_resource_group[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="${_attached:+${_attached} and }a resource group"
        fi
        if [[ -n "$_attached" ]]; then
          echo ""
@@ -1722,7 +1731,13 @@ while true; do
   # asked about, so this is the only place they surface.
   _derive_names
   echo ""
-  printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  # An attached group is the operator's, so it is named as the target rather
+  # than as something this deployment owns.
+  if [[ "$CREATE_RESOURCE_GROUP" == "false" ]]; then
+    printf "  ${BOLD}Terraform creates, in your existing resource group %s:${RESET}\n" "${_RG_NAME:-(existing_resource_group_name is unset)}"
+  else
+    printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  fi
   # A BYO VNet is listed under section 3 by ID, so name only the created one.
   [[ "$CREATE_VNET" == "true" ]] && printf "    %-18s %s\n" "Virtual network" "$_VNET_NAME"
   # Attach mode is set by hand and carried across a re-run, so the wizard can
@@ -1748,7 +1763,11 @@ while true; do
   else
     printf "    %-18s %s\n" "Blob retention" "off — artifacts are kept until you delete them"
   fi
-  printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+  if [[ "$CREATE_RESOURCE_GROUP" == "false" ]]; then
+    printf "  ${DIM}terraform destroy removes these and leaves the resource group in place.${RESET}\n"
+  else
+    printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+  fi
 
   echo ""
   printf "  ${DIM}Press Enter to write terraform.tfvars, a section number (1-10) to change it,${RESET}\n"
@@ -1962,7 +1981,8 @@ if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
 # Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
-# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity.
+# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity,
+# and a new redis_name with it: the failed create keeps the old name reserved.
 amr_sku                 = "${AMR_SKU}"
 redis_high_availability = ${REDIS_HA}
 TFVARS

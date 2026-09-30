@@ -40,7 +40,7 @@ output "storage_account_k8s_managed_identity_client_id" {
 
 output "resource_group_name" {
   description = "Name of the Azure resource group containing all LangSmith resources"
-  value       = azurerm_resource_group.resource_group.name
+  value       = local.rg_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -185,7 +185,7 @@ output "get_credentials_command" {
   # creates for Key Vault and Storage, so the created group would name a resource
   # group that does not contain the cluster. existing_cluster_resource_group_name is
   # required when create_cluster = false, so this branch is never blank.
-  value = "az aks get-credentials --resource-group ${var.create_cluster ? azurerm_resource_group.resource_group.name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value = "az aks get-credentials --resource-group ${var.create_cluster ? local.rg_name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────

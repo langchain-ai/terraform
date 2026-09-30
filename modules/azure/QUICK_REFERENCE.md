@@ -229,7 +229,7 @@ redis_source      = "external"    # Azure Managed Redis
 clickhouse_source = "in-cluster"  # in-cluster (dev/POC) or managed
 
 # ── AKS ───────────────────────────────────────────────────────────────────────
-default_node_pool_vm_size   = "Standard_D8s_v3"
+default_node_pool_vm_size   = "Standard_D8s_v5"
 default_node_pool_max_count = 12
 default_node_pool_max_pods  = 60
 aks_network_mode            = "overlay"   # Azure CNI Overlay + Cilium (node-subnet = legacy flat network)

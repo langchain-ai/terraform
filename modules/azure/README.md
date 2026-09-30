@@ -49,10 +49,17 @@ existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
 # Required, not optional: the cluster's nodes already run in an existing subnet,
 # and a subnet Terraform carves could never be one of them.
 create_vnet        = false
+vnet_id            = "/subscriptions/.../virtualNetworks/<vnet>"
 aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
 postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
 redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
+
+# The ClusterIP range the cluster was created with, outside the VNet:
+# az aks show -n <cluster> -g <rg> --query networkProfile.serviceCidr -o tsv
+aks_service_cidr   = "<service-cidr>"
 ```
+
+To test this path without a customer cluster, [`test/existing-aks-cluster/`](test/existing-aks-cluster/) builds a cluster and network of this shape in its own state and prints the matching tfvars.
 
 Cluster prerequisites — verify before applying:
 
@@ -161,6 +168,23 @@ install_keda         = false   # cluster already runs KEDA
 Both default to `true`. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
+
+### Deploying into an existing resource group
+
+Set `create_resource_group = false` to deploy into a resource group someone else created, typically one a platform team hands out with the deployer's rights granted on that group alone. Terraform reads the group and changes nothing about it: its tags, locks, and policy assignments stay as its owner configured them, and `terraform destroy` removes the LangSmith resources and leaves the group in place.
+
+```hcl
+create_resource_group        = false
+existing_resource_group_name = "platform-langsmith-rg"
+```
+
+`resource_group_name` is refused when attaching, and `existing_resource_group_name` has no fallback: leaving it empty fails the plan instead of deriving a name and creating a group. Every resource still deploys to `location`, whatever region the group itself records, since a group's region only says where its metadata lives.
+
+An existing deployment picks up this release as a `moved` block on its resource group, with nothing replaced. To hand a group Terraform created over to its new owner, set `existing_resource_group_name` to the same name and remove the group from state first, so Terraform forgets it rather than deleting it:
+
+```bash
+terraform state rm 'azurerm_resource_group.resource_group[0]'
+```
 
 ---
 
@@ -566,7 +590,7 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
 - Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
-- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
+- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription and the resource group the deployment creates (or only the group, when `create_resource_group = false` attaches one, which it also confirms exists), and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
 - Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
 - Maps `postgres_sku_name` to the `Microsoft.Compute` vCPU family it draws on and fails when that family's quota in the region is 0 or has less headroom than the SKU needs. `az postgres flexible-server list-skus` reports what a region offers, not what the subscription may create, and fresh subscriptions commonly carry a limit of 0 on the v5 families. Also confirms the region carries `redisEnterprise`; Managed Redis capacity itself is not queryable ahead of an apply
 - Queries PostgreSQL Flexible Server capabilities for the active subscription and configured region. An empty result fails because the service cannot be created there; a non-empty result also verifies `postgres_version` and `postgres_sku_name`. CLI, permission, stderr, or response-shape failures warn and skip instead of claiming the region is unavailable
@@ -795,7 +819,7 @@ See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for tot
 
 | File | Profile | When to use |
 |------|---------|-------------|
-| `langsmith-values-sizing-minimum.yaml` | `minimum` | Absolute floor. Core LangSmith fits on one small node (4 vCPU / 16 Gi); with Deployments and Fleet on, plan on two D4s_v3 nodes. Rock-bottom CPU/memory requests from real `kubectl top` measurements on idle. **Expect OOM kills under any real traffic.** Use for cost parking, weekend standby, or single-user demos. |
+| `langsmith-values-sizing-minimum.yaml` | `minimum` | Absolute floor. Core LangSmith fits on one small node (4 vCPU / 16 Gi); with Deployments and Fleet on, plan on two D4s_v5 nodes. Rock-bottom CPU/memory requests from real `kubectl top` measurements on idle. **Expect OOM kills under any real traffic.** Use for cost parking, weekend standby, or single-user demos. |
 | `langsmith-values-sizing-dev.yaml` | `dev` | Light non-production profile for local dev, CI pipelines, integration tests, and short-lived POCs. Single replica per component, no autoscaling. Will show instability under real workloads — that is expected. |
 | `langsmith-values-sizing-production.yaml` | `production` | **Recommended for production.** Multi-replica deployments with HPA on all stateless components. Sensible CPU/memory starting points — tune with `kubectl top pods -n langsmith` after go-live. |
 | `langsmith-values-sizing-production-large.yaml` | `production-large` | High-volume starting point based on the LangSmith scale guide (~50 concurrent users, ~1000 traces/sec). Elevated HPA minimums (e.g. 10 backend replicas). Start with `production` and move here when monitoring shows sustained pressure. |
@@ -1239,6 +1263,24 @@ plan checks the name, and Azure enforces the size at apply.
 
 ---
 
+## Subnet network security groups
+
+Set `enable_subnet_nsgs = true` to put a network security group on each subnet Terraform creates, so the data tier admits only the cluster:
+
+| Subnet | Inbound it admits |
+|--------|-------------------|
+| AKS | TCP 80 and 443 from the Internet, for the ingress load balancer. Everything else follows Azure's default rules |
+| Postgres | TCP 5432 from the AKS subnet, and all traffic from the Postgres subnet itself, which high availability replicates over. The rest of the VNet is denied |
+| Redis | TCP 10000 and 8500-8599 from the AKS subnet. The rest of the VNet is denied |
+
+Both data-tier NSGs also admit Azure's platform probes, which arrive from the `AzureLoadBalancer` service tag. Outbound keeps Azure's defaults on all three. The NSGs land in the LangSmith resource group, even when the subnets sit in a bring-your-own VNet's group, and the Redis subnet enables private endpoint network policies so its NSG applies to the Managed Redis endpoint. A subnet you supply keeps whatever NSG you gave it, and nothing is attached to the bastion or AGIC subnets.
+
+Anything else that reaches Postgres or Redis directly from inside the VNet, such as a jump host or a peered network, is denied once this is on. Add a rule to the NSG for it, or leave the flag off.
+
+On an attached cluster, the plan refuses the flag when node pools run in more than one subnet, since only `aks_subnet_id` is admitted. A cluster that gives pods their own pod subnet reaches the data tier from that subnet's addresses, which these NSGs deny; attach your own NSGs for it instead.
+
+---
+
 ## Node OS
 
 Every pool runs Ubuntu unless you choose otherwise. `aks_os_sku` sets the default
@@ -1249,7 +1291,7 @@ aks_os_sku = "AzureLinux"
 
 additional_node_pools = {
   large = {
-    vm_size   = "Standard_D16s_v3"
+    vm_size   = "Standard_D16s_v5"
     min_count = 0
     max_count = 2
     # os_sku  = "Ubuntu"   # set only to differ from aks_os_sku

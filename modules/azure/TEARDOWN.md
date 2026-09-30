@@ -65,7 +65,7 @@ Runs `terraform destroy -auto-approve` from `azure/infra/`.
 - Blob Storage account + container + managed identity + federated credentials
 - Azure Key Vault (enters soft-delete — see below)
 - VNet + subnets
-- Resource group
+- Resource group, unless `create_resource_group = false` attached an existing one
 
 **Left behind under `create_vnet = false`:** your VNet and any subnets you
 supplied, since Terraform never owned them. If you also set
@@ -134,7 +134,7 @@ az keyvault purge --name "langsmith-kv-<name_prefix>" --location <region>
 ## Verify Clean State
 
 ```bash
-# Resource group should be gone
+# Resource group should be gone (an attached one stays, and should be empty)
 az group show --name "langsmith-rg-<name_prefix>"
 # Expected: ResourceGroupNotFound
 
