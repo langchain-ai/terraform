@@ -1098,6 +1098,27 @@ variable "tls_certificate_source" {
     condition     = contains(["none", "letsencrypt", "dns01", "existing"], var.tls_certificate_source)
     error_message = "tls_certificate_source must be 'none', 'letsencrypt', 'dns01', or 'existing'."
   }
+
+  validation {
+    condition     = var.tls_certificate_source != "dns01" || var.install_cert_manager
+    error_message = "tls_certificate_source = \"dns01\" requires install_cert_manager = true. DNS-01 works through a workload-identity annotation Terraform adds to the cert-manager service account it installs, so it cannot drive a cert-manager already running in the cluster. Use tls_certificate_source = \"letsencrypt\" (HTTP-01, no Azure DNS credential needed) or \"none\" and issue certificates with your own ClusterIssuer."
+  }
+}
+
+# Both default true, which is what this module did before the flags existed. Set
+# them false when attaching to a cluster (create_cluster = false) that already
+# runs either component: Helm will not adopt a release it does not own, so the
+# install fails on the CRDs that are already there.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager into the cluster. Set false when the cluster already runs it. tls_certificate_source = 'dns01' requires this to be true: the DNS-01 solver needs a workload-identity annotation Terraform only adds to a cert-manager it installs itself."
+  default     = true
+}
+
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA into the cluster. Set false when the cluster already runs it. KEDA scales the LangSmith queue workers on Redis queue depth, so something has to provide it."
+  default     = true
 }
 
 variable "postgres_admin_username" {

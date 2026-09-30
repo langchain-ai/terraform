@@ -347,6 +347,8 @@ resource "kubernetes_secret_v1" "license" {
 # ClusterIssuers are applied separately by helm/scripts/deploy.sh.
 
 resource "helm_release" "cert_manager" {
+  count = var.install_cert_manager ? 1 : 0
+
   name             = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
@@ -409,6 +411,8 @@ resource "helm_release" "cert_manager" {
 # based on Redis queue depth.
 
 resource "helm_release" "keda" {
+  count = var.install_keda ? 1 : 0
+
   name             = "keda"
   namespace        = "keda"
   create_namespace = true
