@@ -109,7 +109,7 @@ make preflight-ssm
 
 ## Enable Optional Addons
 
-Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the flags, then re-run `init-values` to copy the corresponding values files:
+Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the flags, then `make apply && make init-values && make deploy`. The helm scripts read the applied values, so they stop until `make apply` has run. `init-values` copies the corresponding values files:
 
 ```hcl
 # infra/terraform.tfvars
@@ -124,6 +124,7 @@ enable_usage_telemetry = false # Extended usage telemetry
 ```
 
 ```bash
+make apply
 make init-values   # copies addon values files based on enable_* flags
 make deploy
 ```
@@ -137,7 +138,7 @@ sizing_profile = "dev"                # single-replica, minimal resources (dev/C
 sizing_profile = "default"            # chart defaults (no sizing file)
 ```
 
-Then re-run `make init-values && make deploy`.
+Then run `make apply && make init-values && make deploy`.
 
 ---
 

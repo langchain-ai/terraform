@@ -10,9 +10,9 @@
 #   ./helm/scripts/init-values.sh
 #
 # Reads:
-#   - gcp/infra/terraform.tfvars    → project_id, region, name_prefix, environment,
+#   - script_config output          → project_id, region, name_prefix, environment,
 #                                     tls_certificate_source, langsmith_domain,
-#                                     postgres_source, redis_source
+#                                     postgres_source, redis_source, enable_* flags
 #   - terraform output              → storage_bucket_name, workload_identity_annotation,
 #                                     cluster_name, ingress_ip
 #
@@ -56,56 +56,31 @@ EXAMPLES_DIR="$VALUES_DIR/examples"
 # ── tfvars helpers ────────────────────────────────────────────────────────────
 source "$INFRA_DIR/scripts/_tfvars.sh" "$INFRA_DIR"
 
-# ── Parse terraform.tfvars ────────────────────────────────────────────────────
-if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
-  echo "Run: cp $INFRA_DIR/terraform.tfvars.example $INFRA_DIR/terraform.tfvars" >&2
-  exit 1
-fi
+# ── Read the applied configuration ────────────────────────────────────────────
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
+_cfg_load || exit 1
 
-_project_id=$(_parse_tfvar "project_id")
-_name_prefix=$(_parse_tfvar "name_prefix")
-_environment=$(_parse_tfvar "environment")
-_region=$(_parse_tfvar "region")
-_region="${_region:-us-west2}"
-_tls_source=$(_parse_tfvar "tls_certificate_source")
-_tls_source="${_tls_source:-none}"
-# Resolve the domain through Terraform rather than by parsing terraform.tfvars
-# alone. That file is only one of Terraform's variable sources and not the
-# highest priority one, so a file parse misses a value set in an .auto.tfvars
-# file, a .tfvars.json file, -var, -var-file or TF_VAR_langsmith_domain. Where
-# the two disagree, Terraform creates the Gateway listener for its value while
-# this script writes the file's value into config.hostname, and every request
-# then fails the listener match with NoMatchingListenerHostname. A domain name
-# is not a secret.
-#
-# A read failure means the state predates the langsmith_domain output, so fall
-# back to the file parse and keep an older stack working. An empty result from a
-# successful read is an answer rather than a failure: no domain is configured.
-# A tree with no state also reads empty, and the storage_bucket_name check below
-# stops that run regardless.
-_domain_source="terraform output"
-if ! _domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
-  _domain_source="terraform.tfvars"
-  _domain=$(_parse_tfvar "langsmith_domain") || _domain=""
-fi
-_postgres_source=$(_parse_tfvar "postgres_source")
-_postgres_source="${_postgres_source:-external}"
-_redis_source=$(_parse_tfvar "redis_source")
-_redis_source="${_redis_source:-external}"
-_clickhouse_source=$(_parse_tfvar "clickhouse_source")
-_clickhouse_source="${_clickhouse_source:-in-cluster}"
-_sizing_profile=$(_parse_tfvar "sizing_profile")
-_sizing_profile="${_sizing_profile:-default}"
+_project_id=$(_cfg project_id)
+_name_prefix=$(_cfg name_prefix)
+_environment=$(_cfg environment)
+_region=$(_cfg region)
+_tls_source=$(_cfg tls_certificate_source)
+_domain=$(_cfg langsmith_domain)
+_postgres_source=$(_cfg postgres_source)
+_redis_source=$(_cfg redis_source)
+_clickhouse_source=$(_cfg clickhouse_source)
+_sizing_profile=$(_cfg sizing_profile)
 _gateway_name="${_name_prefix}-${_environment}-gateway"
 _enable_smithdb=false
-_tfvar_is_true "enable_smithdb" && _enable_smithdb=true
+_cfg_is_true enable_smithdb             && _enable_smithdb=true
 _smithdb_ingestion_enabled=false
-_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
+_cfg_is_true smithdb_ingestion_enabled && _smithdb_ingestion_enabled=true
 _smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+_cfg_is_true smithdb_migration_enabled && _smithdb_migration_enabled=true
 _smithdb_query_enabled=false
-_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+_cfg_is_true smithdb_query_enabled && _smithdb_query_enabled=true
 
 if [[ "$_enable_smithdb" != "true" ]] && \
    [[ "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
@@ -115,12 +90,6 @@ fi
 if [[ "$_smithdb_ingestion_enabled" != "true" ]] && \
    [[ "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ]]; then
   echo "ERROR: smithdb_migration_enabled and smithdb_query_enabled both require smithdb_ingestion_enabled = true." >&2
-  exit 1
-fi
-
-if [[ -z "$_project_id" || -z "$_name_prefix" || -z "$_environment" ]]; then
-  echo "ERROR: Could not read project_id, name_prefix, and/or environment from $INFRA_DIR/terraform.tfvars." >&2
-  echo "       Ensure terraform.tfvars has these values set." >&2
   exit 1
 fi
 
@@ -135,13 +104,13 @@ OUT_FILE="$VALUES_DIR/values-overrides.yaml"
 _first_run="false"
 [[ ! -f "$OUT_FILE" ]] && _first_run="true"
 
-echo "Parsed terraform.tfvars:"
+echo "Applied configuration (script_config output):"
 echo "  project_id             = $_project_id"
 echo "  name_prefix            = $_name_prefix"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
-echo "  langsmith_domain       = ${_domain:-(none)} (from $_domain_source)"
+echo "  langsmith_domain       = ${_domain:-(none)}"
 echo "  postgres_source        = $_postgres_source"
 echo "  redis_source           = $_redis_source"
 echo "  clickhouse_source      = $_clickhouse_source"
@@ -310,21 +279,21 @@ if [[ -f "$OUT_FILE" ]]; then
   EXISTING_SANDBOX_CALLBACK_SIGNING_JWK=$(_extract_yaml_value "callbackSigningJwk")
 fi
 
-API_KEY_SALT="${TF_VAR_langsmith_api_key_salt:-$EXISTING_API_KEY_SALT}"
+API_KEY_SALT="${LANGSMITH_API_KEY_SALT:-$EXISTING_API_KEY_SALT}"
 if [[ -z "$API_KEY_SALT" ]]; then
   API_KEY_SALT="$(openssl rand -base64 32 | tr -d '\n')"
-  echo "WARNING: TF_VAR_langsmith_api_key_salt not set; generated a new apiKeySalt."
+  echo "WARNING: LANGSMITH_API_KEY_SALT not set; generated a new apiKeySalt."
   echo "         To avoid API key invalidation across redeploys, run: source infra/scripts/setup-env.sh"
 fi
 
-JWT_SECRET="${TF_VAR_langsmith_jwt_secret:-$EXISTING_JWT_SECRET}"
+JWT_SECRET="${LANGSMITH_JWT_SECRET:-$EXISTING_JWT_SECRET}"
 if [[ -z "$JWT_SECRET" ]]; then
   JWT_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
-  echo "WARNING: TF_VAR_langsmith_jwt_secret not set; generated a new jwtSecret."
+  echo "WARNING: LANGSMITH_JWT_SECRET not set; generated a new jwtSecret."
   echo "         To avoid session invalidation across redeploys, run: source infra/scripts/setup-env.sh"
 fi
 
-ADMIN_PASSWORD="${TF_VAR_langsmith_admin_password:-$EXISTING_ADMIN_PASSWORD}"
+ADMIN_PASSWORD="${LANGSMITH_ADMIN_PASSWORD:-$EXISTING_ADMIN_PASSWORD}"
 if [[ -z "$ADMIN_PASSWORD" ]]; then
   printf "Initial admin password: "
   # `|| true`, not `|| ADMIN_PASSWORD=""` — see the admin email prompt above.
@@ -335,7 +304,7 @@ if [[ -z "$ADMIN_PASSWORD" ]]; then
   if [[ -z "$ADMIN_PASSWORD" ]]; then
     echo "ERROR: initial admin password is required." >&2
     echo "       Source infra/scripts/setup-env.sh first so" >&2
-    echo "       TF_VAR_langsmith_admin_password is exported from Secret Manager." >&2
+    echo "       LANGSMITH_ADMIN_PASSWORD is exported from Secret Manager." >&2
     exit 1
   fi
 fi
@@ -366,7 +335,7 @@ else
 fi
 echo ""
 
-# ── Product addons (from terraform.tfvars, with interactive fallback) ─────────
+# ── Product addons (from script_config, with interactive fallback) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _builder_file="$VALUES_DIR/langsmith-values-agent-builder.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
@@ -384,31 +353,31 @@ _tfvars_drive_addons=false
 
 # Resolve encryption keys up front so the standalone copy+inject blocks below
 # can reference them before the _addon_keys_block section runs.
-_agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
-_insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
-_polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
+_agent_builder_key="${LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY:-}"
+_insights_key="${LANGSMITH_INSIGHTS_ENCRYPTION_KEY:-}"
+_polly_key="${LANGSMITH_POLLY_ENCRYPTION_KEY:-}"
 
-# Read enable_* flags from terraform.tfvars if set
-_tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_insights"           && { _enable_insights=true;           _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_polly"              && { _enable_polly=true;              _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_usage_telemetry"    && { _enable_usage_telemetry=true;    _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_fleet"              && { _enable_fleet=true;              _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
-_tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
+# Read the enable_* flags from the applied configuration
+_cfg_is_true enable_deployments         && { _enable_deployments=true;        _tfvars_drive_addons=true; }
+_cfg_is_true enable_agent_builder       && { _enable_agent_builder=true;      _tfvars_drive_addons=true; }
+_cfg_is_true enable_insights            && { _enable_insights=true;           _tfvars_drive_addons=true; }
+_cfg_is_true enable_polly               && { _enable_polly=true;              _tfvars_drive_addons=true; }
+_cfg_is_true enable_usage_telemetry     && { _enable_usage_telemetry=true;    _tfvars_drive_addons=true; }
+_cfg_is_true enable_fleet               && { _enable_fleet=true;              _tfvars_drive_addons=true; }
+_cfg_is_true enable_standalone_polly    && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
+_cfg_is_true enable_standalone_insights && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
+_cfg_is_true enable_sandboxes           && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
 
-_sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
-_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
-SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
+_sandbox_host_image_tag=$(_cfg sandbox_host_image_tag)
+_sandbox_service_url_base_url=$(_cfg sandbox_service_url_base_url)
+SANDBOX_CALLBACK_SIGNING_JWK="${LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if [[ -z "$_sandbox_host_image_tag" ]]; then
     echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
     exit 1
   fi
   if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
-    echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
+    echo "ERROR: LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK is required when enable_sandboxes = true." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -418,7 +387,7 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
   fi
 fi
 
-echo "Product addons (from terraform.tfvars):"
+echo "Product addons (from script_config):"
 
 if [[ "$_tfvars_drive_addons" == "true" ]]; then
   # Validate addon dependencies
@@ -568,7 +537,7 @@ elif [[ "$_first_run" == "true" && "$_enable_sandboxes" != "true" ]]; then
   esac
   echo ""
   echo "  Tip: set enable_deployments / enable_agent_builder / enable_insights"
-  echo "  in terraform.tfvars to skip this prompt on future runs."
+  echo "  in terraform.tfvars and run terraform apply to skip this prompt on future runs."
 else
   # Re-run with no tfvars flags — report what's already on disk
   [[ -f "$_deploys_file" ]]  && { _enable_deployments=true;  echo "  ✔ Deployments (existing file)"; } || echo "  ✗ Deployments"
@@ -907,19 +876,19 @@ if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" || \
       "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
 
   if [[ ( "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ) && -z "$_agent_builder_key" ]]; then
-    echo "ERROR: TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
+    echo "ERROR: LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
 
   if [[ ( "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ) && -z "$_insights_key" ]]; then
-    echo "ERROR: TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "ERROR: LANGSMITH_INSIGHTS_ENCRYPTION_KEY is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
 
   if [[ ( "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ) && -z "$_polly_key" ]]; then
-    echo "ERROR: TF_VAR_langsmith_polly_encryption_key is not set." >&2
+    echo "ERROR: LANGSMITH_POLLY_ENCRYPTION_KEY is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -1074,7 +1043,7 @@ if [[ -z "$HOSTNAME" ]]; then
   echo ""
   echo "WARNING: hostname is empty. Run again after the Envoy Gateway has an external IP:"
   echo "  kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'"
-  echo "  Then set langsmith_domain in terraform.tfvars and re-run this script."
+  echo "  Then set langsmith_domain in terraform.tfvars, run terraform apply, and re-run this script."
 fi
 echo ""
 echo "Next step: ./helm/scripts/deploy.sh"

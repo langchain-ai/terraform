@@ -17,7 +17,7 @@
 #   - chart >= 0.15.0
 #   - Insights entitlement in your LangSmith license
 #   - An 'insights' database on Cloud SQL — provisioned automatically by terraform apply
-#   - TF_VAR_langsmith_insights_encryption_key set (see infra/scripts/setup-env.sh)
+#   - LANGSMITH_INSIGHTS_ENCRYPTION_KEY set (see infra/scripts/setup-env.sh)
 #     (shared with the legacy enable_insights path — same key, same data)
 #
 # Enable via: enable_standalone_insights = true in terraform.tfvars

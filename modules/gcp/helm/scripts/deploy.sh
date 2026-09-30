@@ -38,35 +38,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 
-# Sourced here rather than further down because CHART_VERSION resolution below
-# needs _parse_tfvar, and the chart-line guard runs before the old definition
-# site.
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
 source "$INFRA_DIR/scripts/_tfvars.sh" "$INFRA_DIR"
+_cfg_load || exit 1
 VALUES_DIR="$HELM_DIR/values"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 # Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
 # Override with the CHART_VERSION env var for an exact patch if needed.
-#
-# Read the pin from the Terraform output, not from terraform.tfvars. That file is
-# only one of Terraform's variable sources, and not the highest priority one, so
-# a parse of the file alone misses a value set in an .auto.tfvars file, a
-# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_helm_chart_version, and
-# Helm then installs a different chart than the applied configuration declares.
-# The output is a plain string and carries no secret.
-#
-# The read fails when the state carries outputs but not this one, which is a
-# state applied before this output existed, and when terraform cannot run at all.
-# Fall back to the file parse there, so an older state keeps its documented pin.
-# An empty result is an answer rather than a failure: it means no pin, so let the
-# chart line default below apply. A tree with no state at all also reads as
-# empty, and the cluster_name check further down stops that run regardless.
-_chart_version_pin_source="terraform output"
-if ! _chart_version_pin=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_helm_chart_version 2>/dev/null); then
-  _chart_version_pin_source="terraform.tfvars"
-  _chart_version_pin=$(_parse_tfvar "langsmith_helm_chart_version") || _chart_version_pin=""
-fi
+# An empty pin means none, so the chart line default below applies.
+_chart_version_pin=$(_cfg langsmith_helm_chart_version)
 
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
@@ -75,7 +59,7 @@ fi
 if [[ -n "${CHART_VERSION:-}" ]]; then
   echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment."
   if [[ -n "$_chart_version_pin" ]]; then
-    echo "      It overrides langsmith_helm_chart_version=${_chart_version_pin} (${_chart_version_pin_source})."
+    echo "      It overrides langsmith_helm_chart_version=${_chart_version_pin}."
     echo "      Run 'unset CHART_VERSION' to deploy ${_chart_version_pin}."
   else
     echo "      It overrides the ~0.16.0 chart line pin."
@@ -83,7 +67,7 @@ if [[ -n "${CHART_VERSION:-}" ]]; then
   fi
 elif [[ -n "$_chart_version_pin" ]]; then
   CHART_VERSION="$_chart_version_pin"
-  echo "Chart version pinned by langsmith_helm_chart_version (${_chart_version_pin_source}): ${CHART_VERSION}"
+  echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 
@@ -168,16 +152,16 @@ fi
 # guarantees for every deploy, so there is no SmithDB-specific version gate
 # here. These flags drive the values chain and the rollout wait below.
 _smithdb_enabled=false
-_tfvar_is_true "enable_smithdb" && _smithdb_enabled=true
+_cfg_is_true "enable_smithdb" && _smithdb_enabled=true
 _smithdb_ingestion_enabled=false
-_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
+_cfg_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
 _smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+_cfg_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
 _smithdb_query_enabled=false
-_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+_cfg_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
 
 _enable_sandboxes=false
-_tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+_cfg_is_true "enable_sandboxes" && _enable_sandboxes=true
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
@@ -209,11 +193,10 @@ if ! grep -Eq '^\s*hostname:\s*".+"' "$OVERRIDES_FILE"; then
   exit 1
 fi
 
-# ── Resolve cluster from tfvars + terraform output ────────────────────────────
+# ── Resolve cluster from terraform output ────────────────────────────────────────────────────────────────
 _cluster_name="$(terraform -chdir="$INFRA_DIR" output -raw cluster_name 2>/dev/null || true)"
-_project_id="$(_parse_tfvar project_id)"
-_region="$(_parse_tfvar region)"
-_region="${_region:-us-west2}"
+_project_id="$(_cfg project_id)"
+_region="$(_cfg region)"
 
 if [[ -z "$_cluster_name" ]]; then
   echo "ERROR: Could not resolve cluster_name from Terraform outputs. Run terraform apply first." >&2
@@ -240,21 +223,8 @@ echo ""
 # leaves no intersection between the HTTPRoute and the listener. The route then
 # reports NoMatchingListenerHostname and every request 404s behind an otherwise
 # valid TLS certificate. The AWS module already guards this the same way.
-#
-# Read the domain from the Terraform output, not from terraform.tfvars. That
-# file is only one of Terraform's variable sources and not the highest priority
-# one, so a file parse misses a value set in an .auto.tfvars file, a
-# .tfvars.json file, -var, -var-file or TF_VAR_langsmith_domain. Reading empty
-# there takes this branch for a domain-based install and rewrites the hostname
-# to the Gateway IP — the exact failure this guard exists to prevent. A domain
-# name is not a secret.
-#
-# A read failure means the state predates the langsmith_domain output, so fall
-# back to the file parse. An empty result from a successful read is an answer:
-# no domain is configured, so this is an IP-based install.
-if ! _langsmith_domain=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_domain 2>/dev/null); then
-  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-fi
+# An empty domain means an IP-based install.
+_langsmith_domain=$(_cfg langsmith_domain)
 _live_gateway_ip=$(kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}' 2>/dev/null || true)
 if [[ -n "$_live_gateway_ip" && -n "$_langsmith_domain" ]]; then
@@ -321,8 +291,7 @@ echo "  ✔ values.yaml (base)"
 echo "  ✔ values-overrides.yaml"
 
 # Sizing: driven by sizing_profile in terraform.tfvars.
-_sizing_profile=$(_parse_tfvar "sizing_profile")
-_sizing_profile="${_sizing_profile:-default}"
+_sizing_profile=$(_cfg sizing_profile)
 if [[ "$_sizing_profile" != "default" ]]; then
   _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
   if [[ -f "$_sizing_file" ]]; then
@@ -352,14 +321,14 @@ _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _any_flag_set=false
-_tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _any_flag_set=true; }
-_tfvar_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _any_flag_set=true; }
-_tfvar_is_true "enable_insights"           && { _enable_insights=true;            _any_flag_set=true; }
-_tfvar_is_true "enable_polly"              && { _enable_polly=true;               _any_flag_set=true; }
-_tfvar_is_true "enable_fleet"              && { _enable_fleet=true;               _any_flag_set=true; }
-_tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
-_tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
-_tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
+_cfg_is_true "enable_deployments"        && { _enable_deployments=true;        _any_flag_set=true; }
+_cfg_is_true "enable_agent_builder"      && { _enable_agent_builder=true;      _any_flag_set=true; }
+_cfg_is_true "enable_insights"           && { _enable_insights=true;            _any_flag_set=true; }
+_cfg_is_true "enable_polly"              && { _enable_polly=true;               _any_flag_set=true; }
+_cfg_is_true "enable_fleet"              && { _enable_fleet=true;               _any_flag_set=true; }
+_cfg_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
+_cfg_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
+_cfg_is_true "enable_sandboxes"          && _enable_sandboxes=true
 
 # Validate legacy addon dependencies (standalone flags do not require enable_deployments).
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -391,21 +360,21 @@ fi
 # keys printed before the failure.
 if ! _langsmith_config_env=$(
   printf 'langsmith_license_key=%s\n' "${TF_VAR_langsmith_license_key:?}"
-  printf 'api_key_salt=%s\n' "${TF_VAR_langsmith_api_key_salt:?}"
-  printf 'jwt_secret=%s\n' "${TF_VAR_langsmith_jwt_secret:?}"
-  printf 'initial_org_admin_password=%s\n' "${TF_VAR_langsmith_admin_password:?}"
+  printf 'api_key_salt=%s\n' "${LANGSMITH_API_KEY_SALT:?}"
+  printf 'jwt_secret=%s\n' "${LANGSMITH_JWT_SECRET:?}"
+  printf 'initial_org_admin_password=%s\n' "${LANGSMITH_ADMIN_PASSWORD:?}"
   printf 'initial_org_admin_email=%s\n' "${LANGSMITH_ADMIN_EMAIL:?}"
   if [[ "$_enable_agent_builder" == "true" || "$_enable_fleet" == "true" ]]; then
-    printf 'agent_builder_encryption_key=%s\n' "${TF_VAR_langsmith_agent_builder_encryption_key:?}"
+    printf 'agent_builder_encryption_key=%s\n' "${LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY:?}"
   fi
   if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
-    printf 'insights_encryption_key=%s\n' "${TF_VAR_langsmith_insights_encryption_key:?}"
+    printf 'insights_encryption_key=%s\n' "${LANGSMITH_INSIGHTS_ENCRYPTION_KEY:?}"
   fi
   if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
-    printf 'polly_encryption_key=%s\n' "${TF_VAR_langsmith_polly_encryption_key:?}"
+    printf 'polly_encryption_key=%s\n' "${LANGSMITH_POLLY_ENCRYPTION_KEY:?}"
   fi
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
+    printf 'sandbox_callback_signing_jwk=%s\n' "${LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK:?}"
   fi
 ); then
   echo "ERROR: a langsmith-config value is not set. The Secret was not changed." >&2
@@ -861,6 +830,6 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     echo "    gcloud storage ls gs://\$(terraform -chdir=$INFRA_DIR output -raw smithdb_object_store_bucket)/**"
   else
     echo "  Advance to the next stage by setting smithdb_ingestion_enabled = true in"
-    echo "  $INFRA_DIR/terraform.tfvars, then re-running: make init-values && make deploy"
+    echo "  $INFRA_DIR/terraform.tfvars, then re-running: make apply && make init-values && make deploy"
   fi
 fi

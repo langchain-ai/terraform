@@ -281,3 +281,44 @@ output "smithdb_storage_blob_endpoint" {
   description = "Blob service endpoint of the SmithDB object-store account. Null when enable_smithdb = false."
   value       = var.enable_smithdb ? module.smithdb[0].storage_blob_endpoint : null
 }
+
+# ── Script configuration ──────────────────────────────────────────────────────
+# The variables the helm scripts read, as Terraform resolved them at the last
+# apply: defaults applied and every variable source counted. Scripts read keys
+# through _cfg in scripts/_tfvars.sh, which fails on a key missing here.
+# tfvars_sha is the hash of terraform.tfvars at that apply, so a script can tell
+# the file changed since and refuse to deploy the old values. No secrets here.
+output "script_config" {
+  description = "Variables the helm scripts read, as applied"
+  value = {
+    tfvars_sha = fileexists("${path.root}/terraform.tfvars") ? filesha256("${path.root}/terraform.tfvars") : ""
+
+    subscription_id              = var.subscription_id
+    location                     = var.location
+    name_prefix                  = var.name_prefix
+    environment                  = var.environment
+    langsmith_namespace          = var.langsmith_namespace
+    langsmith_release_name       = var.langsmith_release_name
+    langsmith_helm_chart_version = var.langsmith_helm_chart_version
+    langsmith_domain             = var.langsmith_domain
+    dns_label                    = var.dns_label
+    ingress_controller           = var.ingress_controller
+    tls_certificate_source       = var.tls_certificate_source
+    letsencrypt_email            = var.letsencrypt_email
+    postgres_source              = var.postgres_source
+    redis_source                 = var.redis_source
+    clickhouse_source            = var.clickhouse_source
+    sizing_profile               = var.sizing_profile
+
+    enable_deployments   = var.enable_deployments
+    enable_agent_builder = var.enable_agent_builder
+    enable_insights      = var.enable_insights
+    enable_polly         = var.enable_polly
+    enable_fleet         = var.enable_fleet
+
+    enable_smithdb            = var.enable_smithdb
+    smithdb_ingestion_enabled = var.smithdb_ingestion_enabled
+    smithdb_migration_enabled = var.smithdb_migration_enabled
+    smithdb_query_enabled     = var.smithdb_query_enabled
+  }
+}

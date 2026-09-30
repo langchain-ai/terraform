@@ -61,7 +61,7 @@ warning() { printf "${YELLOW}[WARN]${NC}    %s\n" "$1"; }
 error()   { printf "${RED}[ERROR]${NC}   %s\n" "$1" >&2; }
 
 # ── Required tools ────────────────────────────────────────────────────────────
-REQUIRED_TOOLS=(gcloud terraform kubectl helm)
+REQUIRED_TOOLS=(gcloud terraform kubectl helm jq)
 MISSING=()
 for tool in "${REQUIRED_TOOLS[@]}"; do
   if ! command -v "$tool" &>/dev/null; then
@@ -76,6 +76,7 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   info "  terraform → https://developer.hashicorp.com/terraform/install"
   info "  kubectl   → https://kubernetes.io/docs/tasks/tools/"
   info "  helm      → https://helm.sh/docs/intro/install/"
+  info "  jq        → https://jqlang.org/download/"
   exit 1
 fi
 

@@ -68,6 +68,15 @@ before the PR does, not a separate standard.
     half-finished rename would otherwise revert the setting in silence.
     `check.sh` runs `_tfvars_check_file` over the tracked
     `terraform.tfvars.*` files in each root.
+  - Script that runs after `terraform apply` (the helm `deploy.sh` and
+    `init-values.sh`) → read settings from the `script_config` output, not
+    the file: `_cfg_load` once, then `_cfg` and `_cfg_is_true`. A new setting
+    goes into `script_config` in `infra/outputs.tf` first; `_cfg` fails on a
+    key the output lacks. `_cfg_load` fails when `terraform.tfvars` changed
+    after the last apply. Scripts that run before the first apply stay on
+    `_parse_tfvar`.
+  - Secret that no Terraform code reads → export it as `LANGSMITH_*`, not
+    `TF_VAR_*`, and declare no variable for it.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries

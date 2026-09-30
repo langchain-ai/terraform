@@ -17,7 +17,7 @@
 #   - LangSmith Chat entitlement in your LangSmith license
 #   - postgres_source = "external" and redis_source = "external" in terraform.tfvars
 #   - A 'langsmith_polly' database on RDS — created automatically by terraform apply
-#   - TF_VAR_langsmith_polly_encryption_key set (see infra/scripts/setup-env.sh)
+#   - LANGSMITH_POLLY_ENCRYPTION_KEY set (see infra/scripts/setup-env.sh)
 #     (shared with the legacy enable_polly path — same key, same data)
 #
 # QuickStart selects this alongside enable_polly when the Backend Services choice
@@ -37,7 +37,7 @@ polly:
   # Set false if you do not want Polly (the eval engine) tracing into itself.
   enableTracing: true
   # encryptionKey is written by init-values.sh into langsmith-values-overrides.yaml
-  # from TF_VAR_langsmith_polly_encryption_key. Do NOT set it here — do not change
+  # from LANGSMITH_POLLY_ENCRYPTION_KEY. Do NOT set it here — do not change
   # once data exists.
 
   # Explicit resources — a strict ResourceQuota rejects any pod without cpu/memory

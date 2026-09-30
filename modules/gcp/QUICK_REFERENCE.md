@@ -79,7 +79,7 @@ make kubeconfig
 
 ## Enable Optional Addons
 
-Set the feature flags in `terraform.tfvars`, then `make init-values && make deploy`. `init-values.sh` copies the matching example file into `helm/values/` automatically.
+Set the feature flags in `terraform.tfvars`, then `make apply && make init-values && make deploy`. The helm scripts read the applied values, so they stop until `make apply` has run. `init-values.sh` copies the matching example file into `helm/values/` automatically.
 
 ```hcl
 # terraform.tfvars
@@ -125,7 +125,7 @@ sizing_profile = "production"   # default | minimum | dev | production | product
 | `production` | Multi-replica with HPA — recommended for real workloads |
 | `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
 
-After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+After changing `sizing_profile`, run `make apply`, then `make init-values` to copy the sizing overlay, then `make deploy`.
 
 > **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
 

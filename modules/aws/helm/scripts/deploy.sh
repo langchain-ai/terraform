@@ -28,7 +28,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
 source "$INFRA_DIR/scripts/_common.sh"
+_cfg_load || exit 1
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -45,7 +49,7 @@ fi
 # the pin can live in version-controlled config rather than only in a shell
 # variable. Env var still wins. Matches Azure and GCP.
 if [[ -z "${CHART_VERSION:-}" ]]; then
-  CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
+  CHART_VERSION=$(_cfg langsmith_helm_chart_version)
   [[ -n "$CHART_VERSION" ]] && \
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
@@ -127,19 +131,19 @@ if [[ -n "$_legacy_files" ]]; then
   exit 1
 fi
 
-# ── Resolve environment from terraform.tfvars ─────────────────────────────────
-_environment=$(_parse_tfvar "environment") || _environment="${LANGSMITH_ENV:-}"
-_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
-_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+# ── Resolve environment from the applied configuration ────────────────────────
+_environment=$(_cfg environment)
+_name_prefix=$(_cfg name_prefix)
+_region=$(_cfg region)
+_langsmith_domain=$(_cfg langsmith_domain)
 _enable_sandboxes=false
-_tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
+_cfg_is_true "enable_sandboxes" && _enable_sandboxes=true
 _direct_polly_enabled=false
-if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
+if _cfg_is_true "enable_polly" || _cfg_is_true "enable_standalone_polly"; then
   _direct_polly_enabled=true
 fi
 _direct_insights_enabled=false
-if _tfvar_is_true "enable_insights" || _tfvar_is_true "enable_standalone_insights"; then
+if _cfg_is_true "enable_insights" || _cfg_is_true "enable_standalone_insights"; then
   _direct_insights_enabled=true
 fi
 
@@ -148,12 +152,6 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
     exit 1
   fi
-fi
-
-if [[ -z "$_environment" || -z "$_region" ]]; then
-  echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
-  echo "       Ensure terraform.tfvars has 'environment' and 'region' set." >&2
-  exit 1
 fi
 
 ENV_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
@@ -184,7 +182,7 @@ echo ""
 
 # ── Apply ESO ClusterSecretStore + ExternalSecret (or direct secret for workers) ──
 # SKIP_ESO=true bypasses SSM/ESO and creates langsmith-config directly from env vars.
-# Used by test workers that have TF_VAR_* / LANGSMITH_* secrets in the environment
+# Used by test workers that have the LANGSMITH_* secrets in the environment
 # but have no SSM parameters (SSM is never provisioned for short-lived test clusters).
 if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   echo "Configuring secrets (SKIP_ESO=true — creating langsmith-config directly from env)..."
@@ -197,19 +195,19 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
       exit 1
     fi
   }
-  _require_env "TF_VAR_langsmith_api_key_salt"
-  _require_env "TF_VAR_langsmith_jwt_secret"
+  _require_env "LANGSMITH_API_KEY_SALT"
+  _require_env "LANGSMITH_JWT_SECRET"
   _require_env "LANGSMITH_LICENSE_KEY"
   _require_env "LANGSMITH_ADMIN_PASSWORD"
   _require_env "LANGSMITH_ADMIN_EMAIL"
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    _require_env "TF_VAR_sandbox_callback_signing_jwk"
+    _require_env "LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK"
   fi
   if [[ "$_direct_polly_enabled" == "true" ]]; then
-    _require_env "TF_VAR_langsmith_polly_encryption_key"
+    _require_env "LANGSMITH_POLLY_ENCRYPTION_KEY"
   fi
   if [[ "$_direct_insights_enabled" == "true" ]]; then
-    _require_env "TF_VAR_langsmith_insights_encryption_key"
+    _require_env "LANGSMITH_INSIGHTS_ENCRYPTION_KEY"
   fi
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
@@ -217,30 +215,30 @@ if [[ "${SKIP_ESO:-false}" == "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _sandbox_secret_literals=(
-      --from-literal=sandbox_callback_signing_jwk="${TF_VAR_sandbox_callback_signing_jwk}"
+      --from-literal=sandbox_callback_signing_jwk="${LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK}"
     )
   fi
   _polly_secret_literals=()
   if [[ "$_direct_polly_enabled" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _polly_secret_literals=(
-      --from-literal=polly_encryption_key="${TF_VAR_langsmith_polly_encryption_key}"
+      --from-literal=polly_encryption_key="${LANGSMITH_POLLY_ENCRYPTION_KEY}"
     )
   fi
   _insights_secret_literals=()
   if [[ "$_direct_insights_enabled" == "true" ]]; then
     # shellcheck disable=SC2154  # exported by setup-env.sh; _require_env above asserts it
     _insights_secret_literals=(
-      --from-literal=insights_encryption_key="${TF_VAR_langsmith_insights_encryption_key}"
+      --from-literal=insights_encryption_key="${LANGSMITH_INSIGHTS_ENCRYPTION_KEY}"
     )
   fi
 
-  # shellcheck disable=SC2154  # TF_VAR_* exported by setup-env.sh; _require_env above asserts them
+  # shellcheck disable=SC2154  # LANGSMITH_* exported by setup-env.sh; _require_env above asserts them
   kubectl create secret generic langsmith-config \
     --namespace "$NAMESPACE" \
     --from-literal=langsmith_license_key="${LANGSMITH_LICENSE_KEY}" \
-    --from-literal=api_key_salt="${TF_VAR_langsmith_api_key_salt}" \
-    --from-literal=jwt_secret="${TF_VAR_langsmith_jwt_secret}" \
+    --from-literal=api_key_salt="${LANGSMITH_API_KEY_SALT}" \
+    --from-literal=jwt_secret="${LANGSMITH_JWT_SECRET}" \
     --from-literal=initial_org_admin_password="${LANGSMITH_ADMIN_PASSWORD}" \
     --from-literal=initial_org_admin_email="${LANGSMITH_ADMIN_EMAIL}" \
     "${_sandbox_secret_literals[@]}" \
@@ -256,7 +254,7 @@ else
 fi
 echo ""
 
-# ── Read feature flags from terraform.tfvars ─────────────────────────────────
+# ── Read feature flags from the applied configuration ────────────────────────
 _enable_deployments=false
 _enable_insights=false
 _enable_polly=false
@@ -265,26 +263,18 @@ _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_smithdb=false
-_tfvar_is_true "enable_deployments"   && _enable_deployments=true
-_tfvar_is_true "enable_insights"      && _enable_insights=true
-_tfvar_is_true "enable_polly"         && _enable_polly=true
-_tfvar_is_true "enable_fleet"               && _enable_fleet=true
-_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
-_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
-_tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
-_tfvar_is_true "enable_smithdb"       && _enable_smithdb=true
+_cfg_is_true "enable_deployments"   && _enable_deployments=true
+_cfg_is_true "enable_insights"      && _enable_insights=true
+_cfg_is_true "enable_polly"         && _enable_polly=true
+_cfg_is_true "enable_fleet"               && _enable_fleet=true
+_cfg_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
+_cfg_is_true "enable_standalone_insights" && _enable_standalone_insights=true
+_cfg_is_true "enable_sandboxes"     && _enable_sandboxes=true
+_cfg_is_true "enable_smithdb"       && _enable_smithdb=true
 
-_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
-if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
-  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
-if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
-  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
+# Terraform validates the storage variables as external or in-cluster.
+_fleet_storage=$(_cfg fleet_storage)
+_polly_storage=$(_cfg polly_storage)
 
 # Keep the older standalone switch as an external-storage enabling alias.
 if [[ "$_enable_standalone_polly" == "true" ]]; then
@@ -294,11 +284,7 @@ elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
   _enable_standalone_polly=true
 fi
 
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
-if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
-  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
+_insights_storage=$(_cfg insights_storage)
 
 # Keep the older standalone switch as an external-storage enabling alias.
 if [[ "$_enable_standalone_insights" == "true" ]]; then
@@ -348,8 +334,8 @@ _resolve_entry_hostname() {
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
-# Sizing profile: read from terraform.tfvars (production, dev, minimum, or default).
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
+# Sizing profile: production, dev, minimum, or default.
+_sizing_profile=$(_cfg sizing_profile)
 
 # Print values chain so the user knows exactly what's going into the release.
 echo ""

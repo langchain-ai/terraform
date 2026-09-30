@@ -10,7 +10,8 @@
 #   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
-#   - aws/infra/terraform.tfvars    → name_prefix, environment, region, tls_certificate_source
+#   - script_config output          → name_prefix, environment, region, tls_certificate_source,
+#                                     enable_* flags
 #   - terraform output              → bucket_name, langsmith_irsa_role_arn, alb outputs
 #
 # Prompts for (on first run):
@@ -40,24 +41,21 @@ VALUES_DIR="$HELM_DIR/values"
 EXAMPLES_DIR="$VALUES_DIR/examples"
 source "$INFRA_DIR/scripts/_common.sh"
 
-# ── Parse terraform.tfvars ────────────────────────────────────────────────────
-if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  echo "ERROR: terraform.tfvars not found at $INFRA_DIR/terraform.tfvars" >&2
-  echo "Run: cp $INFRA_DIR/terraform.tfvars.example $INFRA_DIR/terraform.tfvars" >&2
-  exit 1
-fi
+# ── Read the applied configuration ────────────────────────────────────────────
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
+_cfg_load || exit 1
 
-_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_environment=$(_parse_tfvar "environment") || _environment=""
-_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-}"
-_tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
-_acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
-_alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
-_postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
-_redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
-_clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
-_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+_name_prefix=$(_cfg name_prefix)
+_environment=$(_cfg environment)
+_region=$(_cfg region)
+_tls_source=$(_cfg tls_certificate_source)
+_postgres_source=$(_cfg postgres_source)
+_redis_source=$(_cfg redis_source)
+_clickhouse_source=$(_cfg clickhouse_source)
+_sizing_profile=$(_cfg sizing_profile)
+_langsmith_domain=$(_cfg langsmith_domain)
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), so a tfvars that never mentions
 # Envoy still deploys it. Reading the applied state keeps this script in agreement with
@@ -67,14 +65,14 @@ _enable_istio_gateway=$(_read_gateway_flag "enable_istio_gateway")
 _enable_nginx_ingress=$(_read_gateway_flag "enable_nginx_ingress")
 
 _enable_smithdb=false
-_tfvar_is_true "enable_smithdb" && _enable_smithdb=true
+_cfg_is_true "enable_smithdb" && _enable_smithdb=true
 _smithdb_ingestion_enabled=false
-_tfvar_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
+_cfg_is_true "smithdb_ingestion_enabled" && _smithdb_ingestion_enabled=true
 _smithdb_migration_enabled=false
-_tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
+_cfg_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true
 _smithdb_query_enabled=false
-_tfvar_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
-_smithdb_metastore_use_ssl=$(_parse_tfvar "smithdb_metastore_use_ssl") || _smithdb_metastore_use_ssl="true"
+_cfg_is_true "smithdb_query_enabled" && _smithdb_query_enabled=true
+_smithdb_metastore_use_ssl=$(_cfg smithdb_metastore_use_ssl)
 
 if [[ "$_enable_smithdb" != "true" && ( "$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true" ) ]]; then
   echo "ERROR: SmithDB integration gates require enable_smithdb = true." >&2
@@ -100,12 +98,6 @@ fi
 _alb_ingress_mode=false
 (( _gateway_modes == 0 )) && _alb_ingress_mode=true
 
-if [[ -z "$_name_prefix" || -z "$_environment" || -z "$_region" ]]; then
-  echo "ERROR: Could not read name_prefix, environment, and/or region from $INFRA_DIR/terraform.tfvars." >&2
-  echo "       Ensure terraform.tfvars has these values set." >&2
-  exit 1
-fi
-
 # Derive protocol for config.deployment.url
 if [[ "$_tls_source" == "acm" || "$_tls_source" == "letsencrypt" ]]; then
   _protocol="https"
@@ -117,7 +109,7 @@ OUT_FILE="$VALUES_DIR/langsmith-values-overrides.yaml"
 _first_run="false"
 [[ ! -f "$OUT_FILE" ]] && _first_run="true"
 
-echo "Parsed terraform.tfvars:"
+echo "Applied configuration (script_config output):"
 echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
@@ -136,12 +128,8 @@ IRSA_ROLE_ARN=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_irsa_role_ar
 }
 ALB_ARN=$(terraform -chdir="$INFRA_DIR" output -raw alb_arn 2>/dev/null) || ALB_ARN=""
 ALB_DNS_NAME=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) || ALB_DNS_NAME=""
-ALB_SCHEME=$(terraform -chdir="$INFRA_DIR" output -raw alb_scheme 2>/dev/null) || ALB_SCHEME="$_alb_scheme"
+ALB_SCHEME=$(_cfg alb_scheme)
 ACM_CERT_ARN=$(terraform -chdir="$INFRA_DIR" output -raw acm_certificate_arn 2>/dev/null) || ACM_CERT_ARN=""
-# Fallback to tfvars if the output isn't available (older infra module)
-if [[ -z "$ACM_CERT_ARN" && -n "$_acm_arn" ]]; then
-  ACM_CERT_ARN="$_acm_arn"
-fi
 
 echo "  bucket_name            = $BUCKET_NAME"
 echo "  langsmith_irsa_role_arn = $IRSA_ROLE_ARN"
@@ -224,7 +212,7 @@ else
 fi
 echo ""
 
-# ── Sizing profile (from terraform.tfvars) ──────────────────────────────────
+# ── Sizing profile ────────────────────────────────────────────────────────────
 if [[ "$_sizing_profile" != "default" ]]; then
   _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
   _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
@@ -239,7 +227,7 @@ else
 fi
 echo ""
 
-# ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
+# ── Product addons (driven by the enable_* flags) ────────────────────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
 _polly_file="$VALUES_DIR/langsmith-values-polly.yaml"
@@ -253,15 +241,15 @@ _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_sso_oidc=false
-_tfvar_is_true "enable_deployments"    && _enable_deployments=true
-_tfvar_is_true "enable_insights"       && _enable_insights=true
-_tfvar_is_true "enable_polly"          && _enable_polly=true
-_tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
-_tfvar_is_true "enable_fleet"               && _enable_fleet=true
-_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
-_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
-_tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
-_tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
+_cfg_is_true "enable_deployments"    && _enable_deployments=true
+_cfg_is_true "enable_insights"       && _enable_insights=true
+_cfg_is_true "enable_polly"          && _enable_polly=true
+_cfg_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
+_cfg_is_true "enable_fleet"               && _enable_fleet=true
+_cfg_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
+_cfg_is_true "enable_standalone_insights" && _enable_standalone_insights=true
+_cfg_is_true "enable_sandboxes"           && _enable_sandboxes=true
+_cfg_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
 
 # Fail fast rather than let this surface later as a CreateContainerConfigError.
 # apply-eso.sh gates the whole oauth block (client id/secret/issuer url) behind
@@ -304,17 +292,9 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
   fi
 fi
 
-_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
-if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
-  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
-if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
-  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
+# Terraform validates the storage variables as external or in-cluster.
+_fleet_storage=$(_cfg fleet_storage)
+_polly_storage=$(_cfg polly_storage)
 
 # Keep the older standalone switch as an external-storage enabling alias.
 if [[ "$_enable_standalone_polly" == "true" ]]; then
@@ -324,11 +304,7 @@ elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
   _enable_standalone_polly=true
 fi
 
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
-if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
-  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
+_insights_storage=$(_cfg insights_storage)
 
 # Keep the older standalone switch as an external-storage enabling alias.
 if [[ "$_enable_standalone_insights" == "true" ]]; then
@@ -338,12 +314,12 @@ elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; 
   _enable_standalone_insights=true
 fi
 
-_sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
+_sandbox_service_url_base_url=$(_cfg sandbox_service_url_base_url)
 if [[ "$_enable_sandboxes" == "true" ]]; then
   SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw sandbox_juicefs_csi_config_secret_name 2>/dev/null) || SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME="juicefs-csi-config"
 fi
 
-echo "Product addons (from terraform.tfvars):"
+echo "Product addons (from script_config):"
 
 # Deployments
 if [[ "$_enable_deployments" == "true" ]]; then
@@ -367,8 +343,8 @@ if [[ "$_enable_insights" == "true" ]]; then
       cat > "$_insights_file" <<CHEOF
 # Auto-generated by init-values.sh — in-cluster ClickHouse.
 # ClickHouse runs as a StatefulSet pod in the cluster (dev/POC only).
-# For production, set clickhouse_source = "external" in terraform.tfvars
-# and re-run init-values.sh to configure an external ClickHouse connection.
+# For production, set clickhouse_source = "external" in terraform.tfvars, run
+# terraform apply, and re-run init-values.sh to configure an external ClickHouse connection.
 insights:
   enabled: true
 CHEOF
@@ -653,15 +629,15 @@ fi
 # that are OFF get an explicit `enabled: false` so the chart's top-level default
 # (polly/insights default to enabled: true) cannot silently turn them on
 # (migration issue #6).
-_fleet_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
-_polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
-_insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
+_fleet_key="${LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY:-}"
+_polly_key="${LANGSMITH_POLLY_ENCRYPTION_KEY:-}"
+_insights_key="${LANGSMITH_INSIGHTS_ENCRYPTION_KEY:-}"
 
 _standalone_block=""
 
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ -z "$_fleet_key" ]]; then
-    echo "ERROR: enable_fleet = true but TF_VAR_langsmith_agent_builder_encryption_key is not set." >&2
+    echo "ERROR: enable_fleet = true but LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -710,7 +686,7 @@ fi
 
 if [[ "$_enable_polly" == "true" ]]; then
   if [[ -z "$_polly_key" ]]; then
-    echo "ERROR: enable_polly = true but TF_VAR_langsmith_polly_encryption_key is not set." >&2
+    echo "ERROR: enable_polly = true but LANGSMITH_POLLY_ENCRYPTION_KEY is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
@@ -733,7 +709,7 @@ fi
 
 if [[ "$_enable_insights" == "true" ]]; then
   if [[ -z "$_insights_key" ]]; then
-    echo "ERROR: enable_insights = true but TF_VAR_langsmith_insights_encryption_key is not set." >&2
+    echo "ERROR: enable_insights = true but LANGSMITH_INSIGHTS_ENCRYPTION_KEY is not set." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi

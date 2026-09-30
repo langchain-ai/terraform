@@ -77,14 +77,14 @@ _check_var() {
 _env_ok=true
 for var in TF_VAR_name_prefix TF_VAR_environment TF_VAR_region \
            TF_VAR_postgres_password TF_VAR_redis_auth_token \
-           TF_VAR_langsmith_api_key_salt TF_VAR_langsmith_jwt_secret \
+           LANGSMITH_API_KEY_SALT LANGSMITH_JWT_SECRET \
            LANGSMITH_LICENSE_KEY LANGSMITH_ADMIN_PASSWORD; do
   _check_var "$var" || _env_ok=false
 done
 
 if _tfvar_is_true "enable_sandboxes"; then
   for var in TF_VAR_sandbox_juicefs_redis_auth_token \
-             TF_VAR_sandbox_callback_signing_jwk; do
+             LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK; do
     _check_var "$var" || _env_ok=false
   done
 fi

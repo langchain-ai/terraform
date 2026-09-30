@@ -9,7 +9,7 @@
 #   - chart >= 0.15.0
 #   - Fleet entitlement in your LangSmith license
 #   - fleet_storage = "external" also requires external Postgres and Redis
-#   - TF_VAR_langsmith_agent_builder_encryption_key set (see infra/scripts/setup-env.sh).
+#   - LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY set (see infra/scripts/setup-env.sh).
 #     The historical environment-variable name is retained for compatibility.
 #
 # Enable via: enable_fleet = true in terraform.tfvars
@@ -22,7 +22,7 @@ fleet:
   enabled: true
   namePrefix: "standalone-fleet"
   # encryptionKey is written by init-values.sh into langsmith-values-overrides.yaml
-  # from TF_VAR_langsmith_agent_builder_encryption_key. The historical name is
+  # from LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY. The historical name is
   # retained for compatibility. Do NOT set it here or change it once data exists.
   # encryptionKey: ""
 

@@ -49,6 +49,10 @@ kubectl version --client
 # Helm (>= 3.12)
 brew install helm
 helm version
+
+# jq (the helm scripts read Terraform outputs with it)
+brew install jq
+jq --version
 ```
 
 ### Required GCP APIs

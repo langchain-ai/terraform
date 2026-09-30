@@ -1425,7 +1425,7 @@ module "k8s_bootstrap" {
 
   # TLS / cert-manager. The ClusterIssuers themselves are applied by
   # helm/scripts/deploy.sh, which reads letsencrypt_email, langsmith_domain and
-  # subscription_id straight from terraform.tfvars.
+  # subscription_id from the script_config output.
   tls_certificate_source          = var.tls_certificate_source
   cert_manager_identity_client_id = module.aks.cert_manager_identity_client_id
 }

@@ -337,14 +337,14 @@ fi
 # ── Stable auto-generated secrets (must never change after first deployment) ──
 # Changing api_key_salt invalidates ALL existing API keys.
 # Changing jwt_secret invalidates ALL active user sessions.
-_ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "TF_VAR_langsmith_api_key_salt" \
+_ssm_secret "langsmith-api-key-salt" "$_SETUP_DIR/.api_key_salt" "LANGSMITH_API_KEY_SALT" \
   "openssl rand -base64 32" "" "true"
 
-_ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "TF_VAR_langsmith_jwt_secret" \
+_ssm_secret "langsmith-jwt-secret" "$_SETUP_DIR/.jwt_secret" "LANGSMITH_JWT_SECRET" \
   "openssl rand -base64 32" "" "true"
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _ssm_secret "sandbox-callback-signing-jwk" "" "TF_VAR_sandbox_callback_signing_jwk" \
+  _ssm_secret "sandbox-callback-signing-jwk" "" "LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK" \
     "_ed25519_private_jwk_gen" "" "true"
 fi
 
@@ -388,16 +388,16 @@ fi
 # Fernet key = 32 random bytes, URL-safe base64-encoded (openssl, no Python needed).
 _fernet_gen='openssl rand -base64 32 | tr "+/" "-_" | tr -d "\n"'
 
-_ssm_secret "deployments-encryption-key" "" "TF_VAR_langsmith_deployments_encryption_key" \
+_ssm_secret "deployments-encryption-key" "" "LANGSMITH_DEPLOYMENTS_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
-_ssm_secret "agent-builder-encryption-key" "" "TF_VAR_langsmith_agent_builder_encryption_key" \
+_ssm_secret "agent-builder-encryption-key" "" "LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
-_ssm_secret "insights-encryption-key" "" "TF_VAR_langsmith_insights_encryption_key" \
+_ssm_secret "insights-encryption-key" "" "LANGSMITH_INSIGHTS_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
-_ssm_secret "polly-encryption-key" "" "TF_VAR_langsmith_polly_encryption_key" \
+_ssm_secret "polly-encryption-key" "" "LANGSMITH_POLLY_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
 # ── Non-interactive failure ───────────────────────────────────────────────────

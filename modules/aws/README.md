@@ -51,6 +51,10 @@ kubectl version --client
 brew install helm
 helm version
 
+# jq (the helm scripts read Terraform outputs with it)
+brew install jq
+jq --version
+
 # eksctl (useful for debugging and kubeconfig management)
 brew install eksctl
 ```
@@ -394,11 +398,11 @@ make quickdeploy-auto
 ```bash
 cd terraform/aws
 
-make init-values       # prompts: admin email; reads sizing + addons from terraform.tfvars
+make init-values       # prompts: admin email; reads sizing + addons from the applied Terraform config
 make deploy            # deploy LangSmith via Helm (includes ESO wiring)
 ```
 
-`init-values.sh` reads `sizing_profile` and `enable_*` flags from `terraform.tfvars`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
+`init-values.sh` reads `sizing_profile` and `enable_*` flags from the `script_config` Terraform output, the values of the last `make apply`, then copies the right values files from `helm/values/examples/`. On re-runs it preserves your choices and refreshes Terraform outputs.
 
 Pod autoscaling is built into the `dev`, `production`, and `production-large` sizing templates; `minimum` keeps core services fixed while retaining SmithDB HPAs. These settings do not enable node autoscaling. Existing sizing files are preserved, so merge template updates into your current values when upgrading. See [sizing guidance](helm/values/examples/SIZING.md).
 
@@ -707,11 +711,11 @@ make ssm                                                # interactive menu
 
 ### `make init-values`
 
-**When to use:** After `make apply`, or any time you change `terraform.tfvars` settings (addons, sizing, domain).
+**When to use:** After `make apply`, including after you change `terraform.tfvars` settings (addons, sizing, domain). The helm scripts read the applied values, so they stop until `make apply` has run.
 
 Runs `helm/scripts/init-values.sh`. This script is the bridge between Pass 1 and Pass 2:
 
-1. Reads settings from `infra/terraform.tfvars` (`name_prefix`, `tls_certificate_source`, `sizing_profile`, `enable_*` flags, `langsmith_domain`)
+1. Reads the applied settings from the `script_config` Terraform output (`name_prefix`, `tls_certificate_source`, `sizing_profile`, `enable_*` flags, `langsmith_domain`)
 2. Reads live outputs from Terraform state (`bucket_name`, `langsmith_irsa_role_arn`, `alb_dns_name`, `acm_certificate_arn`)
 3. Generates `helm/values/langsmith-values-overrides.yaml` — the environment-specific overlay with your hostname, IRSA role ARNs, S3 bucket, and ACM cert ARN
 4. Copies addon values files from `helm/values/examples/` based on which `enable_*` flags are set:
@@ -737,7 +741,7 @@ Runs `helm/scripts/deploy.sh`. This is the main Helm orchestration script. Here 
 
 **Step 3 — ESO sync** (`apply-eso.sh`). Applies the `ClusterSecretStore` (points ESO at SSM in your region) and the `ExternalSecret` (defines which SSM paths map to which K8s secret keys). Dynamically includes optional encryption keys only if they already exist in SSM — so addon keys are only synced when the addon is enabled. Waits 60s for the sync to complete.
 
-**Step 4 — Read feature flags.** Reads the `enable_*` flags from `terraform.tfvars`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet storage can run in-cluster or use the external Postgres and Redis services.
+**Step 4 — Read feature flags.** Reads the `enable_*` flags from the `script_config` Terraform output, the values of the last `make apply`. Fleet enables host-backend directly; it does not require the listener, operator, or full LangSmith Deployments. Fleet storage can run in-cluster or use the external Postgres and Redis services.
 
 **Step 5 — Build values chain.** Each values file is gated: it's included only if the corresponding `enable_*` flag is `true` AND the file exists. Files are added in this order (last wins):
 ```
@@ -850,7 +854,7 @@ Runs: `make apply` → `make init-values` → `make deploy` in sequence. Conveni
 
 Runs `infra/scripts/quickdeploy.sh`. Before doing anything it gates on two prerequisites:
 
-1. `TF_VAR_langsmith_api_key_salt` is exported — confirms `source infra/scripts/setup-env.sh` has been run.
+1. `LANGSMITH_API_KEY_SALT` is exported — confirms `source infra/scripts/setup-env.sh` has been run.
 2. `infra/terraform.tfvars` exists — confirms `make quickstart` has been run.
 
 If either gate fails it prints the exact command to fix and exits. If terraform is not yet initialized (`.terraform/` missing), it runs `terraform init` automatically.
@@ -946,6 +950,7 @@ The one set of `terraform.tfvars` helpers. `_common.sh` sources it, and so do th
 - `_tfvar_is_true <key>` returns 0 if a variable is set to `true`.
 - `_export_tf_var <name> <value>` exports `TF_VAR_<name>`.
 - `_tfvars_check_file <file>` fails on any top-level key in a generated tfvars file that is not a declared variable.
+- `_cfg_load` reads the `script_config` Terraform output and fails if `terraform.tfvars` changed since the last apply; `_cfg <key>` and `_cfg_is_true <key>` read a value from it. The post-apply helm scripts (`deploy.sh`, `init-values.sh`, `tls.sh`, `setup-tls.sh`) use these instead of `_parse_tfvar`.
 
 ### `infra/scripts/migrate-ssm.sh`
 
@@ -1076,9 +1081,6 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `smithdb_node_arch` | `amd64` | no | Architecture for SmithDB Karpenter nodes: `amd64` or `arm64` (Graviton) |
 | `smithdb_instance_store_sizes` | `["4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB instance-store (local-NVMe) pool |
 | `smithdb_compute_sizes` | `["2xlarge","4xlarge","8xlarge"]` | no | Allowed instance sizes for the SmithDB compute pool |
-| `langsmith_deployments_encryption_key` | `""` | no | Fernet key for LangSmith Deployments |
-| `langsmith_agent_builder_encryption_key` | `""` | no | Fernet key for Fleet; historical variable name retained for compatibility |
-| `langsmith_insights_encryption_key` | `""` | no | Fernet key for Insights |
 | `owner` | `""` | no | Owner tag applied to all resources |
 | `cost_center` | `""` | no | Cost center tag for billing |
 | `tags` | `{}` | no | Additional tags applied to all resources |

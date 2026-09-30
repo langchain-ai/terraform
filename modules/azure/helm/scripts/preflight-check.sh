@@ -19,7 +19,7 @@ echo ""
 
 # ── Required tools ─────────────────────────────────────────────────────────
 MISSING=()
-for tool in az kubectl helm terraform; do
+for tool in az kubectl helm terraform jq; do
   if ! command -v "$tool" &>/dev/null; then
     MISSING+=("$tool")
   fi
@@ -34,11 +34,12 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
       kubectl)   action "Install kubectl: https://kubernetes.io/docs/tasks/tools/" ;;
       helm)      action "Install helm: https://helm.sh/docs/intro/install/" ;;
       terraform) action "Install terraform: https://developer.hashicorp.com/terraform/downloads" ;;
+      jq)        action "Install jq: https://jqlang.org/download/" ;;
     esac
   done
   exit 1
 fi
-pass "Required tools: az kubectl helm terraform"
+pass "Required tools: az kubectl helm terraform jq"
 
 # ── Azure login ─────────────────────────────────────────────────────────────
 if ! az account show &>/dev/null; then

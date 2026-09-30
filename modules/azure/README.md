@@ -16,9 +16,9 @@ This directory contains the Terraform configuration to deploy LangSmith on Azure
 | **Pass 1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` | ~2 min |
 | **Pass 2** | LangSmith Helm chart (~25 pods production) | `make init-values` → `make deploy` | ~10 min |
 | **Pass 3** | + LangSmith Deployments (`enable_deployments = true`) — scale nodes to min 5 first | `make apply && make init-values && make deploy` | ~5 min |
-| **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make init-values && make deploy` | ~5 min |
+| **Pass 4** | Fleet (`enable_fleet = true`) — Agent Builder (`enable_agent_builder = true`) is the deprecated legacy path | `make apply && make init-values && make deploy` | ~5 min |
 | **Optional** | SmithDB Azure infrastructure (`enable_smithdb = true`) — needs a stable chart release on the 0.17 line; see [SMITHDB.md](SMITHDB.md#version-requirements) | `terraform -chdir=infra apply` | ~15–30 min |
-| **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` | ~5 min |
+| **Pass 5** | Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make apply && make init-values && make deploy` | ~5 min |
 
 A [Makefile](Makefile) wraps all commands — run `make help` to see available targets.
 
@@ -211,6 +211,10 @@ kubectl version --client
 # Helm (>= 3.12)
 brew install helm
 helm version
+
+# jq (the helm scripts read Terraform outputs with it)
+brew install jq
+jq --version
 ```
 
 ### Required Azure RBAC
@@ -272,7 +276,7 @@ If you deployed before this change:
 
 `make seed-secrets` is a no-op on an already-populated vault, so running it on an upgraded deployment is safe.
 
-Insights and LangSmith Chat (Polly) now deploy only when enabled. To keep them on an existing deployment, set `enable_insights = true` and `enable_polly = true` in `terraform.tfvars`, then run `make init-values` before the next `make deploy`. The frontend Service also drops its own public IP, so LangSmith is reachable only through the ingress.
+Insights and LangSmith Chat (Polly) now deploy only when enabled. To keep them on an existing deployment, set `enable_insights = true` and `enable_polly = true` in `terraform.tfvars`, then run `make apply` and `make init-values` before the next `make deploy`. The frontend Service also drops its own public IP, so LangSmith is reachable only through the ingress.
 
 Run `make apply` before `make deploy` after this change. `init-values.sh` now reads the `redis_cluster_enabled` output and the two new keys in `langsmith-redis-secret`, and on state from before this change it stops with "Run terraform apply first" rather than render the wrong Redis client. The clustering policy itself has not changed: the module has provisioned Azure Managed Redis as `OSSCluster` since it gained the service, and the chart's cluster client is what that policy needs; the standalone client the values used to render could not follow the server's `MOVED` redirects, which is the ingestion outage #212 fixed. The node URIs carry `ssl_check_hostname=false` because Managed Redis returns node addresses that are not in the endpoint certificate's SAN list; TLS stays on, hostname verification does not.
 
@@ -366,8 +370,8 @@ matching. Set `environment = "dev"` explicitly to keep the old tag.
 | **1.5** | App secrets into Key Vault, then cluster credentials + K8s secrets | `make seed-secrets && make kubeconfig && make k8s-secrets` |
 | **2** | LangSmith Helm (17 pods) via shell scripts | `make init-values && make deploy` |
 | **3** | + LangSmith Deployments (`enable_deployments = true`) — bump `min_count` to 5 first | `make apply && make init-values && make deploy` |
-| **4** | + Fleet (`enable_fleet = true`) — or the deprecated Agent Builder (`enable_agent_builder = true`) | `make init-values && make deploy` |
-| **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make init-values && make deploy` |
+| **4** | + Fleet (`enable_fleet = true`) — or the deprecated Agent Builder (`enable_agent_builder = true`) | `make apply && make init-values && make deploy` |
+| **5** | + Insights + Polly (`enable_insights = true`, `enable_polly = true`) | `make apply && make init-values && make deploy` |
 
 ---
 
@@ -644,9 +648,9 @@ Bridges Key Vault (Terraform's output) to Kubernetes (Helm's input). Safe to re-
 ### `make init-values` — Generate Helm values from Terraform outputs
 **Script:** `helm/scripts/init-values.sh`
 
-Translates Terraform outputs and `terraform.tfvars` flags into Helm values files. Re-running is safe — outputs are refreshed, existing hostname is preserved unless overridden.
+Translates Terraform outputs, including the applied `terraform.tfvars` flags, into Helm values files. Re-running is safe — outputs are refreshed, existing hostname is preserved unless overridden.
 
-- Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
+- Reads from the `script_config` output, which holds the values of the last `make apply` and stops the script when `terraform.tfvars` changed since: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
 - Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
@@ -663,11 +667,11 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 
 - Validates `values-overrides.yaml` exists (fails fast with `make init-values` hint if missing)
 - Refreshes kubeconfig via `az aks get-credentials`
-- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) — dispatches to the right service/namespace based on `ingress_controller` (nginx, istio-addon, istio, envoy-gateway)
+- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in the `script_config` output) — dispatches to the right service/namespace based on `ingress_controller` (nginx, istio-addon, istio, envoy-gateway)
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
-- Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
+- Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform, jq are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
 - Verifies `langsmith-config-secret` exists — auto-creates it from Key Vault if missing
-- Reads `enable_*` feature flags from tfvars and validates addon dependencies (agent builder requires deployments)
+- Reads `enable_*` feature flags from the `script_config` output and validates addon dependencies (agent builder requires deployments)
 - Builds the values chain and logs each file included: `values.yaml` → `values-overrides.yaml` → addon overlays → sizing overlay
 - Guards against a stuck Helm release: auto-rolls back `pending-upgrade` state before proceeding
 - Runs `helm upgrade --install langsmith langchain/langsmith --timeout 20m`
@@ -728,7 +732,7 @@ enable_polly         = true           # Pass 5 — Polly AI evaluation (requires
 
 **Pass 3** requires a node pool scale-up before deploying — operator-spawned pods need headroom. Set `default_node_pool_min_count = 5` and run `make apply` first, then `make init-values && make deploy`.
 
-**Passes 4–5** only need `make init-values && make deploy` — no `terraform apply` required.
+**Passes 4–5** need `make apply && make init-values && make deploy`. The helm scripts read the applied values, so they stop until `make apply` has run after every `terraform.tfvars` edit.
 
 ---
 

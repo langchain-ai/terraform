@@ -391,6 +391,54 @@ output "resource_summary" {
 }
 
 #------------------------------------------------------------------------------
+# Script Configuration
+#------------------------------------------------------------------------------
+# The variables the helm scripts read, as Terraform resolved them at the last
+# apply: defaults applied and every variable source counted. Scripts read keys
+# through _cfg in scripts/_tfvars.sh, which fails on a key missing here.
+# tfvars_sha is the hash of terraform.tfvars at that apply, so a script can tell
+# the file changed since and refuse to deploy the old values. No secrets here.
+output "script_config" {
+  description = "Variables the helm scripts read, as applied"
+  value = {
+    tfvars_sha                   = fileexists("${path.root}/terraform.tfvars") ? filesha256("${path.root}/terraform.tfvars") : ""
+    name_prefix                  = var.name_prefix
+    environment                  = var.environment
+    region                       = var.region
+    langsmith_domain             = var.langsmith_domain
+    langsmith_helm_chart_version = var.langsmith_helm_chart_version
+    tls_certificate_source       = var.tls_certificate_source
+    acm_certificate_arn          = var.acm_certificate_arn
+    alb_scheme                   = var.alb_scheme
+    letsencrypt_email            = var.letsencrypt_email
+    cert_manager_hosted_zone_id  = var.cert_manager_hosted_zone_id
+    create_cert_manager_irsa     = var.create_cert_manager_irsa
+    postgres_source              = var.postgres_source
+    redis_source                 = var.redis_source
+    clickhouse_source            = var.clickhouse_source
+    sizing_profile               = var.sizing_profile
+    enable_deployments           = var.enable_deployments
+    enable_insights              = var.enable_insights
+    enable_polly                 = var.enable_polly
+    enable_fleet                 = var.enable_fleet
+    enable_standalone_polly      = var.enable_standalone_polly
+    enable_standalone_insights   = var.enable_standalone_insights
+    enable_usage_telemetry       = var.enable_usage_telemetry
+    enable_sso_oidc              = var.enable_sso_oidc
+    fleet_storage                = var.fleet_storage
+    polly_storage                = var.polly_storage
+    insights_storage             = var.insights_storage
+    enable_smithdb               = var.enable_smithdb
+    smithdb_ingestion_enabled    = var.smithdb_ingestion_enabled
+    smithdb_migration_enabled    = var.smithdb_migration_enabled
+    smithdb_query_enabled        = var.smithdb_query_enabled
+    smithdb_metastore_use_ssl    = var.smithdb_metastore_use_ssl
+    enable_sandboxes             = var.enable_sandboxes
+    sandbox_service_url_base_url = var.sandbox_service_url_base_url
+  }
+}
+
+#------------------------------------------------------------------------------
 # Next Steps
 #------------------------------------------------------------------------------
 output "next_steps" {

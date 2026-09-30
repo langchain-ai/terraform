@@ -283,7 +283,7 @@ if [[ "$MODE" == "post-infra" ]]; then
 fi
 
 # ── Required tools ────────────────────────────────────────────────────────────
-REQUIRED_TOOLS=(aws terraform kubectl helm)
+REQUIRED_TOOLS=(aws terraform kubectl helm jq)
 MISSING=()
 for tool in "${REQUIRED_TOOLS[@]}"; do
   if ! command -v "$tool" &>/dev/null; then
@@ -298,6 +298,7 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   info "  aws        → https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
   info "  kubectl    → https://kubernetes.io/docs/tasks/tools/"
   info "  helm       → https://helm.sh/docs/intro/install/"
+  info "  jq         → https://jqlang.org/download/"
   exit 1
 fi
 

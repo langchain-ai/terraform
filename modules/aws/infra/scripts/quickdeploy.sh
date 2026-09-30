@@ -67,7 +67,7 @@ TOTAL_STEPS=5
 # ─────────────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Checking prerequisites...${NC}\n"
 
-if [[ -z "${TF_VAR_langsmith_api_key_salt:-}" ]]; then
+if [[ -z "${LANGSMITH_API_KEY_SALT:-}" ]]; then
   printf "${RED}[ERROR]${NC} Secrets not loaded. Run first:\n"
   printf "  ${CYAN}source infra/scripts/setup-env.sh${NC}\n"
   printf "Then re-run: ${CYAN}make quickdeploy${NC}\n"

@@ -4,6 +4,7 @@
 # Pass 1 (infra):          make setup-env → make init → make plan → make apply
 # Pass 1.5 (secrets):      make seed-secrets → make kubeconfig → make k8s-secrets
 # Pass 2 (helm):           make init-values → make deploy
+# After a tfvars edit:     make apply → make init-values → make deploy   (helm scripts read the applied values)
 # Full deploy (helm):      make deploy-all
 # Manage secrets:          make keyvault
 # Where am I?              make status

@@ -526,11 +526,12 @@ sizing_profile = "production"
 # become unreadable. Rotation requires a coordinated migration procedure.
 #------------------------------------------------------------------------------
 
-# Set via: export TF_VAR_langsmith_deployments_encryption_key="..."
-# Or run:  source infra/scripts/setup-env.sh  (auto-generates and stores)
-# langsmith_deployments_encryption_key   = ""
-# langsmith_agent_builder_encryption_key = ""
-# langsmith_insights_encryption_key      = ""
+# These are not Terraform variables, so they do not go in this file.
+# Run:     source infra/scripts/setup-env.sh  (auto-generates and stores)
+# Or set:  export LANGSMITH_DEPLOYMENTS_ENCRYPTION_KEY="..."
+#          export LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY="..."
+#          export LANGSMITH_INSIGHTS_ENCRYPTION_KEY="..."
+#          export LANGSMITH_POLLY_ENCRYPTION_KEY="..."
 
 #------------------------------------------------------------------------------
 # Optional: Labels/Tags (Applied to all resources)

@@ -231,7 +231,7 @@ langsmith_release_name = "langsmith"
 
 # ── Helm sizing + addon feature flags ─────────────────────────────────────────
 # Read by helm/scripts/init-values.sh and helm/scripts/deploy.sh.
-# Set flags and re-run `make init-values && make deploy` to enable each pass.
+# Set flags and re-run `make apply && make init-values && make deploy` to enable each pass.
 #
 # Sizing profiles (controls which examples/langsmith-values-sizing-*.yaml is applied):
 #   minimum          — absolute minimum (demos, very constrained clusters)

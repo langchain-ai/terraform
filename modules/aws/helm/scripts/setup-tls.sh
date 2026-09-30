@@ -19,7 +19,7 @@
 #   6. kubeconfig pointed at the correct cluster (make kubeconfig)
 #
 # What this script does (in order):
-#   1. Reads config from terraform.tfvars and Terraform outputs
+#   1. Reads config from the script_config output and other Terraform outputs
 #   2. Installs cert-manager via Helm (jetstack/cert-manager)
 #   3. Annotates the cert-manager ServiceAccount with the IRSA role ARN
 #   4. Creates a ClusterIssuer (Route 53 DNS-01 solver)
@@ -45,29 +45,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 source "$INFRA_DIR/scripts/_common.sh"
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
+_cfg_load || exit 1
 
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.17.2}"
 NAMESPACE="${NAMESPACE:-langsmith}"
 
-# ── Read config from terraform.tfvars ────────────────────────────────────────
+# ── Read the applied configuration ───────────────────────────────────────────
 
-_domain=$(_parse_tfvar "langsmith_domain") || _domain=""
-_region=$(_parse_tfvar "region") || _region="${AWS_REGION:-us-west-2}"
-_letsencrypt_email=$(_parse_tfvar "letsencrypt_email") || _letsencrypt_email=""
-_hosted_zone_id=$(_parse_tfvar "cert_manager_hosted_zone_id") || _hosted_zone_id=""
-_create_irsa=$(_parse_tfvar "create_cert_manager_irsa") || _create_irsa="false"
+_domain=$(_cfg langsmith_domain)
+_region=$(_cfg region)
+_letsencrypt_email=$(_cfg letsencrypt_email)
+_hosted_zone_id=$(_cfg cert_manager_hosted_zone_id)
+_create_irsa=$(_cfg create_cert_manager_irsa)
 
 # ── Validate inputs ───────────────────────────────────────────────────────────
 
 if [[ -z "$_domain" ]]; then
   echo "ERROR: langsmith_domain is not set in terraform.tfvars." >&2
-  echo "       Set it to your domain (e.g. langsmith.example.com) and re-run." >&2
+  echo "       Set it to your domain (e.g. langsmith.example.com), run terraform apply, and re-run." >&2
   exit 1
 fi
 
 if [[ -z "$_letsencrypt_email" ]]; then
   echo "ERROR: letsencrypt_email is not set in terraform.tfvars." >&2
-  echo "       Set it to your email address (used for Let's Encrypt expiry notifications)." >&2
+  echo "       Set it to your email address (used for Let's Encrypt expiry notifications)," >&2
+  echo "       then run terraform apply." >&2
   exit 1
 fi
 
@@ -80,6 +85,7 @@ fi
 if [[ -z "$_hosted_zone_id" ]]; then
   echo "ERROR: cert_manager_hosted_zone_id is not set in terraform.tfvars." >&2
   echo "       Find it: aws route53 list-hosted-zones --query 'HostedZones[*].[Name,Id]' --output table" >&2
+  echo "       Set it in terraform.tfvars, then run terraform apply." >&2
   exit 1
 fi
 

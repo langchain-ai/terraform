@@ -13,7 +13,7 @@ export AWS_PAGER=""
 #   make tls        (from aws/)
 #   ./helm/scripts/tls.sh
 #
-# Reads from terraform.tfvars:
+# Reads from the script_config output (the values of the last terraform apply):
 #   langsmith_domain    — domain to certify, e.g. dz-envoy-dev.workshop.langchain.com
 #   acm_certificate_arn — if already set, skip cert request and just update DNS
 #   region              — AWS region
@@ -30,6 +30,10 @@ export AWS_PAGER=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFRA_DIR="$SCRIPT_DIR/../../infra"
 source "$INFRA_DIR/scripts/_common.sh"
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
+_cfg_load || exit 1
 # The cert ARN is written back into terraform.tfvars at the end. Check the name
 # before issuing a certificate, not after.
 _tfvar_declared acm_certificate_arn || exit 1
@@ -41,13 +45,14 @@ echo "════════════════════════�
 echo ""
 
 # ── Read config ───────────────────────────────────────────────────────────────
-_domain=$(_parse_tfvar "langsmith_domain") || _domain=""
-_existing_arn=$(_parse_tfvar "acm_certificate_arn") || _existing_arn=""
-_region=$(_parse_tfvar "region") || _region="${AWS_DEFAULT_REGION:-us-east-1}"
+_domain=$(_cfg langsmith_domain)
+_existing_arn=$(_cfg acm_certificate_arn)
+_region=$(_cfg region)
 
 if [[ -z "$_domain" ]]; then
   echo "ERROR: langsmith_domain is not set in terraform.tfvars." >&2
   echo "       Add: langsmith_domain = \"your.domain.com\"" >&2
+  echo "       Then run: make apply" >&2
   exit 1
 fi
 

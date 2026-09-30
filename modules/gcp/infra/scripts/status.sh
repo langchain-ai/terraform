@@ -87,7 +87,7 @@ done
 # Encryption keys are optional — warn if feature flag is set but key is missing
 for addon in deployments agent_builder insights; do
   _flag_name="enable_${addon}"
-  _var_name="TF_VAR_langsmith_${addon}_encryption_key"
+  _var_name="LANGSMITH_$(printf %s "$addon" | tr "[:lower:]" "[:upper:]")_ENCRYPTION_KEY"
   if _tfvar_is_true "$_flag_name"; then
     _check_var "$_var_name" || {
       _env_ok=false

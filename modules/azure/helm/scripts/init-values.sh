@@ -10,8 +10,8 @@
 #   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
-#   - infra/terraform.tfvars    → name_prefix, environment, location, tls_certificate_source,
-#                                 postgres_source, redis_source, sizing_profile
+#   - script_config output      → name_prefix, environment, location, tls_certificate_source,
+#                                 postgres_source, redis_source, sizing_profile, enable_* flags
 #   - terraform output          → storage_account_name, storage_container_name,
 #                                 storage_account_k8s_managed_identity_client_id,
 #                                 langsmith_admin_email, langsmith_namespace, aks_cluster_name
@@ -38,34 +38,35 @@ EXAMPLES_DIR="$VALUES_DIR/examples"
 
 source "$INFRA_DIR/scripts/_common.sh"
 
-# ── Parse terraform.tfvars ────────────────────────────────────────────────
-if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
-  fail "terraform.tfvars not found at $INFRA_DIR/terraform.tfvars"
-  action "cp $INFRA_DIR/terraform.tfvars.example $INFRA_DIR/terraform.tfvars"
-  exit 1
-fi
+# ── Read the applied configuration ────────────────────────────────────────
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
+_cfg_load || exit 1
 
-_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
-_environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
-_location=$(_parse_tfvar "location") || _location="eastus"
-_tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
-_postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
-_redis_source=$(_parse_tfvar "redis_source") || _redis_source="external"
-_clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
-_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
-_dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
-_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
-_enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
-_langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
+_name_prefix=$(_cfg name_prefix)
+# Display only. An empty environment falls back the way the tag in main.tf does.
+_environment=$(_cfg environment)
+_environment="${_environment:-${_name_prefix:-dev}}"
+_location=$(_cfg location)
+_tls_source=$(_cfg tls_certificate_source)
+_postgres_source=$(_cfg postgres_source)
+_redis_source=$(_cfg redis_source)
+_clickhouse_source=$(_cfg clickhouse_source)
+_sizing_profile=$(_cfg sizing_profile)
+_langsmith_domain=$(_cfg langsmith_domain)
+_dns_label=$(_cfg dns_label)
+_ingress_controller=$(_cfg ingress_controller)
+_enable_smithdb=$(_cfg enable_smithdb)
+_langsmith_release_name=$(_cfg langsmith_release_name)
 if [[ "$_langsmith_release_name" == *langsmith* ]]; then
   _langsmith_release_fullname="$_langsmith_release_name"
 else
   _langsmith_release_fullname="${_langsmith_release_name}-langsmith"
 fi
-_smithdb_ingestion_enabled=$(_parse_tfvar "smithdb_ingestion_enabled") || _smithdb_ingestion_enabled="false"
-_smithdb_migration_enabled=$(_parse_tfvar "smithdb_migration_enabled") || _smithdb_migration_enabled="false"
-_smithdb_query_enabled=$(_parse_tfvar "smithdb_query_enabled") || _smithdb_query_enabled="false"
+_smithdb_ingestion_enabled=$(_cfg smithdb_ingestion_enabled)
+_smithdb_migration_enabled=$(_cfg smithdb_migration_enabled)
+_smithdb_query_enabled=$(_cfg smithdb_query_enabled)
 
 # Derive protocol from TLS source
 if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]]; then
@@ -79,7 +80,7 @@ _first_run="false"
 [[ ! -f "$OUT_FILE" ]] && _first_run="true"
 
 echo ""
-echo "Parsed terraform.tfvars:"
+echo "Applied configuration (script_config output):"
 info "name_prefix            = ${_name_prefix:-(empty)}"
 info "environment            = $_environment"
 info "location               = $_location"
@@ -162,8 +163,8 @@ echo ""
 
 # ── Determine hostname ─────────────────────────────────────────────────────
 # Priority order:
-#   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
-#   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
+#   1. langsmith_domain from the script_config output (custom domain — DNS-01 or CNAME)
+#   2. dns_label from the script_config output → <label>.<region>.cloudapp.azure.com
 #      (cloudapp.usgovcloudapi.net in Azure Government)
 #      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
@@ -265,7 +266,7 @@ if [[ "$_sizing_profile" == "default" ]]; then
   echo ""
   printf "  Sizing choice [1]: "
   # EOF here is not an error: the block only runs when sizing_profile is already
-  # "default" in terraform.tfvars, so falling through to 1 preserves exactly what
+  # "default" in the applied configuration, so falling through to 1 preserves exactly what
   # was configured rather than aborting a headless run.
   read -r _sizing_choice || _sizing_choice=""
   case "${_sizing_choice:-1}" in
@@ -276,15 +277,15 @@ if [[ "$_sizing_profile" == "default" ]]; then
   esac
 fi
 
-# ── Product tier — read from terraform.tfvars (enable_* flags) ─────────────
-_enable_deployments=$(_parse_tfvar "enable_deployments") || _enable_deployments="false"
-_enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_builder="false"
-_enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
-_enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
-_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
+# ── Product tier — read from the script_config output (enable_* flags) ────
+_enable_deployments=$(_cfg enable_deployments)
+_enable_agent_builder=$(_cfg enable_agent_builder)
+_enable_insights=$(_cfg enable_insights)
+_enable_fleet=$(_cfg enable_fleet)
+_enable_polly=$(_cfg enable_polly)
 
 echo ""
-echo "  Product tier (from terraform.tfvars enable_* flags):"
+echo "  Product tier (from the applied enable_* flags):"
 info "enable_deployments   = $_enable_deployments"
 info "enable_agent_builder = $_enable_agent_builder"
 info "enable_insights      = $_enable_insights"
@@ -292,7 +293,7 @@ info "enable_polly         = $_enable_polly"
 info "enable_fleet         = $_enable_fleet"
 info "enable_smithdb       = $_enable_smithdb"
 echo ""
-echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
+echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make apply → make init-values"
 
 # ── Fleet dependency guards ────────────────────────────────────────────────
 # Fleet is the standalone successor to Agent Builder. It needs host-backend

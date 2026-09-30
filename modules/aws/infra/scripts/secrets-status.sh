@@ -120,7 +120,7 @@ echo ""
 header "Shell Environment"
 echo ""
 
-if [[ -n "${TF_VAR_langsmith_api_key_salt:-}" ]]; then
+if [[ -n "${LANGSMITH_API_KEY_SALT:-}" ]]; then
   pass "Environment variables exported (TF_VAR_* are set — ready for terraform plan/apply)"
   env_exported=true
 else

@@ -11,7 +11,7 @@
 #   - chart >= 0.15.0
 #   - Agent Builder / Fleet entitlement in your LangSmith license
 #   - A 'fleet' database on Cloud SQL — provisioned automatically by terraform apply
-#   - TF_VAR_langsmith_agent_builder_encryption_key set (see infra/scripts/setup-env.sh)
+#   - LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY set (see infra/scripts/setup-env.sh)
 #     (shared with the legacy enable_agent_builder path — same key, same data)
 #
 # Enable via: enable_fleet = true in terraform.tfvars
@@ -26,7 +26,7 @@ config:
 fleet:
   enabled: true
   namePrefix: "standalone-fleet"
-  # encryptionKey is written by init-values.sh from TF_VAR_langsmith_agent_builder_encryption_key.
+  # encryptionKey is written by init-values.sh from LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY.
   # Shared with the legacy config.agentBuilder path — do not change once data exists.
   # encryptionKey: ""
 

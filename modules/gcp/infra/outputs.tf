@@ -430,6 +430,51 @@ output "resource_summary" {
 }
 
 #------------------------------------------------------------------------------
+# Script Configuration
+#------------------------------------------------------------------------------
+# The variables the helm scripts read, as Terraform resolved them at the last
+# apply: defaults applied and every variable source counted. Scripts read keys
+# through _cfg in scripts/_tfvars.sh, which fails on a key missing here.
+# tfvars_sha is the hash of terraform.tfvars at that apply, so a script can tell
+# the file changed since and refuse to deploy the old values. No secrets here.
+output "script_config" {
+  description = "Variables the helm scripts read, as applied"
+  value = {
+    tfvars_sha = fileexists("${path.root}/terraform.tfvars") ? filesha256("${path.root}/terraform.tfvars") : ""
+
+    project_id                   = var.project_id
+    region                       = var.region
+    name_prefix                  = var.name_prefix
+    environment                  = var.environment
+    langsmith_domain             = var.langsmith_domain
+    langsmith_helm_chart_version = var.langsmith_helm_chart_version
+    tls_certificate_source       = var.tls_certificate_source
+    postgres_source              = var.postgres_source
+    redis_source                 = var.redis_source
+    clickhouse_source            = var.clickhouse_source
+    sizing_profile               = var.sizing_profile
+
+    enable_deployments         = var.enable_deployments
+    enable_agent_builder       = var.enable_agent_builder
+    enable_insights            = var.enable_insights
+    enable_polly               = var.enable_polly
+    enable_fleet               = var.enable_fleet
+    enable_standalone_polly    = var.enable_standalone_polly
+    enable_standalone_insights = var.enable_standalone_insights
+    enable_usage_telemetry     = var.enable_usage_telemetry
+
+    enable_smithdb            = var.enable_smithdb
+    smithdb_ingestion_enabled = var.smithdb_ingestion_enabled
+    smithdb_migration_enabled = var.smithdb_migration_enabled
+    smithdb_query_enabled     = var.smithdb_query_enabled
+
+    enable_sandboxes             = var.enable_sandboxes
+    sandbox_host_image_tag       = var.sandbox_host_image_tag
+    sandbox_service_url_base_url = var.sandbox_service_url_base_url
+  }
+}
+
+#------------------------------------------------------------------------------
 # Next Steps
 #------------------------------------------------------------------------------
 output "next_steps" {

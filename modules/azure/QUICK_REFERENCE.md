@@ -138,6 +138,7 @@ enable_agent_builder = true
 ```
 
 ```bash
+make apply          # records the new flag
 make init-values    # picks up enable_agent_builder = true
 make deploy
 ```
@@ -166,6 +167,7 @@ enable_polly    = true
 ```
 
 ```bash
+make apply          # records the new flags
 make init-values    # picks up both flags
 make deploy
 ```
@@ -198,7 +200,7 @@ sizing_profile = "dev"                # single-replica, minimal resources (dev/C
 sizing_profile = "minimum"            # absolute minimum (demos, very low resource budget)
 ```
 
-Then re-run `make init-values && make deploy`.
+Then run `make apply && make init-values && make deploy`.
 
 ---
 
@@ -210,8 +212,8 @@ Then re-run `make init-values && make deploy`.
 | **1.5** | Cluster credentials + K8s secrets from Key Vault | `make kubeconfig && make k8s-secrets` |
 | **2** | LangSmith base (~25 pods production) — frontend, backend, platform-backend, ingest, queue, clickhouse | `make init-values && make deploy` |
 | **3** | LangSmith Deployments — host-backend, listener, operator. Scale nodes to min 5 first. | `make apply && make init-values && make deploy` |
-| **4** | Agent Builder — tool-server, trigger-server | `make init-values && make deploy` |
-| **5** | Insights + Polly — standalone-insights and standalone-polly api-server + queue pods | `make init-values && make deploy` |
+| **4** | Agent Builder — tool-server, trigger-server | `make apply && make init-values && make deploy` |
+| **5** | Insights + Polly — standalone-insights and standalone-polly api-server + queue pods | `make apply && make init-values && make deploy` |
 
 ---
 

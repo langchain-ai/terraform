@@ -63,9 +63,9 @@ test-quickstart: ## Test QuickStart Route 53 choices and update-mode defaults (n
 
 setup-env: ## Set up secrets in SSM (prints the source command you need to run)
 	@echo ""
-	@if [ -n "$$TF_VAR_langsmith_api_key_salt" ]; then \
-		echo "  \033[32m✔\033[0m  Environment already configured (TF_VAR_* vars are set)."; \
-		echo "     To re-run: unset TF_VAR_langsmith_api_key_salt && source $(INFRA_DIR)/scripts/setup-env.sh"; \
+	@if [ -n "$$LANGSMITH_API_KEY_SALT" ]; then \
+		echo "  \033[32m✔\033[0m  Environment already configured (secrets are exported)."; \
+		echo "     To re-run: unset LANGSMITH_API_KEY_SALT && source $(INFRA_DIR)/scripts/setup-env.sh"; \
 	else \
 		echo "  \033[1msetup-env.sh must be sourced so it can export variables into your shell.\033[0m"; \
 		echo "  Make runs commands in a subshell, so it cannot do this for you."; \

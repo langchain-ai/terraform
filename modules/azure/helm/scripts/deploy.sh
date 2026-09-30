@@ -14,7 +14,7 @@
 #   5. langsmith-values-fleet.yaml               — Fleet, standalone (if enable_fleet = true; replaces #4)
 #   6. langsmith-values-insights.yaml            — Insights (if enable_insights = true)
 #   7. langsmith-values-polly.yaml               — Polly (if enable_polly = true)
-#   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
+#   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in the script_config output)
 #   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
@@ -31,12 +31,16 @@ INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 
 source "$INFRA_DIR/scripts/_common.sh"
+# Every setting below comes from the script_config output: the values of the
+# last terraform apply. _cfg_load stops here when there is none, or when
+# terraform.tfvars changed after that apply.
+_cfg_load || exit 1
 
 # The Helm release name: RELEASE_NAME from the environment if set, else
-# langsmith_release_name from terraform.tfvars, else langsmith. The chart names
-# its objects after its fullname, which is the release name only when that
-# contains "langsmith" (prod -> prod-langsmith-backend).
-RELEASE_NAME="${RELEASE_NAME:-$(_parse_tfvar langsmith_release_name || echo langsmith)}"
+# langsmith_release_name as applied. The chart names its objects after its
+# fullname, which is the release name only when that contains "langsmith"
+# (prod -> prod-langsmith-backend).
+RELEASE_NAME="${RELEASE_NAME:-$(_cfg langsmith_release_name)}"
 if [[ "$RELEASE_NAME" == *langsmith* ]]; then
   CHART_FULLNAME="$RELEASE_NAME"
 else
@@ -45,7 +49,7 @@ fi
 # Same order for the namespace. The Terraform side (the workload identity
 # subjects, the namespace itself) reads langsmith_namespace, so an env-only
 # value installed the release where no federated identity pointed.
-NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
+NAMESPACE="${NAMESPACE:-$(_cfg langsmith_namespace)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
 BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
@@ -90,9 +94,9 @@ echo ""
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
 # Works for ALL ingress controllers — nginx, istio, istio-addon, envoy-gateway.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
-_dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
-_location=$(_parse_tfvar "location") || _location="eastus"
-_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_dns_label=$(_cfg dns_label)
+_location=$(_cfg location)
+_ingress_controller=$(_cfg ingress_controller)
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
@@ -132,12 +136,12 @@ fi
 # ── Apply ClusterIssuer ────────────────────────────────────────────────────
 # kubernetes_manifest in Terraform can't create these on fresh deploy (no cluster
 # exists during plan). Applied here instead — idempotent, safe to re-run.
-_tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
+_tls_source=$(_cfg tls_certificate_source)
 if [[ "$_tls_source" == "letsencrypt" ]]; then
-  _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
+  _le_email=$(_cfg letsencrypt_email)
   _le_namespace="$NAMESPACE"
   _le_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
-  _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
+  _le_domain=$(_cfg langsmith_domain)
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
 
   if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
@@ -198,16 +202,15 @@ if [[ "$_tls_source" == "dns01" ]]; then
   # DNS-01 via Azure DNS + Workload Identity.
   # Requires: langsmith_domain set, create_dns_zone = true, Azure DNS zone NS-delegated.
   # cert-manager WI setup (pod labels + SA annotation) is handled by Terraform k8s-bootstrap.
-  _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
-  _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
+  # The langsmith_domain validation in variables.tf guarantees a domain here.
+  _le_email=$(_cfg letsencrypt_email)
+  _le_domain=$(_cfg langsmith_domain)
   _dns_zone="$_le_domain"                          # zone name = domain name
   _dns_rg=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || _dns_rg=""
-  _subscription_id=$(_parse_tfvar "subscription_id") || _subscription_id=""
+  _subscription_id=$(_cfg subscription_id)
   _cert_manager_client_id=$(terraform -chdir="$INFRA_DIR" output -raw cert_manager_identity_client_id 2>/dev/null) || _cert_manager_client_id=""
 
-  if [[ -z "$_le_domain" ]]; then
-    warn "dns01 requires langsmith_domain to be set in terraform.tfvars — ClusterIssuer skipped"
-  elif [[ -z "$_cert_manager_client_id" ]]; then
+  if [[ -z "$_cert_manager_client_id" ]]; then
     warn "dns01 requires cert_manager_identity_client_id output — run make apply first"
   else
     kubectl apply -f - &>/dev/null <<EOF
@@ -256,7 +259,7 @@ fi
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
 if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
   _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
-  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+  _langsmith_domain=$(_cfg langsmith_domain)
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
   _namespace="$NAMESPACE"
 
@@ -306,7 +309,7 @@ fi
 # StatefulSet and resolves all seven connection fields through secretKeyRef with
 # optional=false. A missing secret or a missing key strands every LangSmith pod
 # in CreateContainerConfigError, so fail here where the cause is still legible.
-_clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
+_clickhouse_source=$(_cfg clickhouse_source)
 if [[ "$_clickhouse_source" == "external" ]]; then
   info "Verifying langsmith-clickhouse secret..."
   # go-template over key names only — secret values never leave the API server.
@@ -339,21 +342,21 @@ if [[ -n "$_configured_hostname" && "$_configured_hostname" == *"<"* ]]; then
   warn "config.hostname still contains a placeholder — run: make init-values"
 fi
 
-# ── Read feature flags from terraform.tfvars ──────────────────────────────
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
-_postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
+# ── Read feature flags from the script_config output ─────────────────────
+_sizing_profile=$(_cfg sizing_profile)
+_postgres_source=$(_cfg postgres_source)
 _enable_deployments=false
 _enable_agent_builder=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
 _enable_smithdb=false
-_tfvar_is_true "enable_deployments"   && _enable_deployments=true  || true
-_tfvar_is_true "enable_agent_builder" && _enable_agent_builder=true || true
-_tfvar_is_true "enable_insights"      && _enable_insights=true     || true
-_tfvar_is_true "enable_polly"         && _enable_polly=true        || true
-_tfvar_is_true "enable_fleet"         && _enable_fleet=true        || true
-_tfvar_is_true "enable_smithdb"        && _enable_smithdb=true       || true
+_cfg_is_true "enable_deployments"   && _enable_deployments=true
+_cfg_is_true "enable_agent_builder" && _enable_agent_builder=true
+_cfg_is_true "enable_insights"      && _enable_insights=true
+_cfg_is_true "enable_polly"         && _enable_polly=true
+_cfg_is_true "enable_fleet"         && _enable_fleet=true
+_cfg_is_true "enable_smithdb"       && _enable_smithdb=true
 
 # Validate addon dependencies
 if [[ "$_enable_agent_builder" == "true" && "$_enable_deployments" != "true" ]]; then
@@ -457,7 +460,7 @@ echo ""
 
 # ── Chart source/version ──────────────────────────────────────────────────
 _chart_source="langchain/langsmith"
-# Precedence: CHART_VERSION env var > terraform.tfvars > pinned line default.
+# Precedence: CHART_VERSION env var > langsmith_helm_chart_version > pinned line default.
 # We pin the chart line so an unpinned deploy cannot silently jump a breaking
 # minor. The existing Azure path remains on 0.16; SmithDB requires an explicit
 # 0.17 selection until the provider-wide default advances.
@@ -469,7 +472,7 @@ if [[ -n "${CHART_VERSION:-}" ]]; then
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
 if [[ -z "$CHART_VERSION" ]]; then
-  CHART_VERSION=$(_parse_tfvar "langsmith_helm_chart_version") || CHART_VERSION=""
+  CHART_VERSION=$(_cfg langsmith_helm_chart_version)
 fi
 CHART_VERSION="${CHART_VERSION:-~0.16.0}"
 _required_chart_line="0.16"
@@ -484,7 +487,7 @@ if [[ "$_chart_line" != "$_required_chart_line" ]]; then
   echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart ${_required_chart_line} line." >&2
   if [[ "$_enable_smithdb" == "true" ]]; then
     echo "       enable_smithdb = true requires the chart ${_required_chart_line} line, which is not the" >&2
-    echo "       Azure default. Select it explicitly in terraform.tfvars:" >&2
+    echo "       Azure default. Select it explicitly in terraform.tfvars, then run make apply:" >&2
     echo "         langsmith_helm_chart_version = \"~${_required_chart_line}.0\"" >&2
     echo "       or for a single deploy:" >&2
     echo "         CHART_VERSION='~${_required_chart_line}.0' make deploy" >&2
@@ -577,7 +580,7 @@ fi
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   _eg_namespace="$NAMESPACE"
   _eg_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
-  _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
+  _eg_domain=$(_cfg langsmith_domain)
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
 
   kubectl apply -f - &>/dev/null <<EOF
@@ -830,7 +833,7 @@ _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
 _kv_name=$(terraform -chdir="$INFRA_DIR" output -raw keyvault_name 2>/dev/null || true)
 _admin_email=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null || true)
-_tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
+_tls_source=$(_cfg tls_certificate_source)
 _url_protocol="http"
 [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]] && _url_protocol="https"
 

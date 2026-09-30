@@ -24,7 +24,7 @@
 #   - postgres_source = "external" and redis_source = "external" in terraform.tfvars
 #   - An external ClickHouse reachable from the cluster (see clickhouse_source)
 #   - A 'langsmith_insights' database on RDS — created automatically by terraform apply
-#   - TF_VAR_langsmith_insights_encryption_key set (see infra/scripts/setup-env.sh)
+#   - LANGSMITH_INSIGHTS_ENCRYPTION_KEY set (see infra/scripts/setup-env.sh)
 #     (shared with the legacy enable_insights path — same key, same data)
 #
 # Enable via: enable_standalone_insights = true in terraform.tfvars
@@ -38,7 +38,7 @@
 insights:
   enabled: true
   # encryptionKey is written by init-values.sh into langsmith-values-overrides.yaml
-  # from TF_VAR_langsmith_insights_encryption_key. Do NOT set it here — do not change
+  # from LANGSMITH_INSIGHTS_ENCRYPTION_KEY. Do NOT set it here — do not change
   # once data exists.
 
 # Chart 0.16 co-hosts the Engine and Insights agents on one deployment, so every

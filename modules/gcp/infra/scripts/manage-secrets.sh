@@ -12,7 +12,7 @@
 #   ./infra/scripts/manage-secrets.sh get <key>    Read a secret value
 #   ./infra/scripts/manage-secrets.sh set <key> [value]   Create or update a secret
 #   ./infra/scripts/manage-secrets.sh validate     Check all required secrets exist
-#   ./infra/scripts/manage-secrets.sh diff         Compare Secret Manager vs TF_VAR_* env
+#   ./infra/scripts/manage-secrets.sh diff         Compare Secret Manager vs the exported environment
 #   ./infra/scripts/manage-secrets.sh delete <key> Delete a secret (with confirmation)
 #
 # Reads project_id, name_prefix, and environment from terraform.tfvars.
@@ -71,7 +71,7 @@ STABLE_KEYS=(
   sandbox-callback-signing-jwk
 )
 
-# SM key → TF_VAR name (for diff subcommand)
+# SM key → environment variable name (for diff subcommand)
 DIFF_SM_KEYS=(
   postgres-password
   langsmith-license-key
@@ -81,14 +81,14 @@ DIFF_SM_KEYS=(
   polly-encryption-key
   sandbox-callback-signing-jwk
 )
-DIFF_TF_VARS=(
+DIFF_ENV_VARS=(
   TF_VAR_postgres_password
   TF_VAR_langsmith_license_key
-  TF_VAR_langsmith_deployments_encryption_key
-  TF_VAR_langsmith_agent_builder_encryption_key
-  TF_VAR_langsmith_insights_encryption_key
-  TF_VAR_langsmith_polly_encryption_key
-  TF_VAR_sandbox_callback_signing_jwk
+  LANGSMITH_DEPLOYMENTS_ENCRYPTION_KEY
+  LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY
+  LANGSMITH_INSIGHTS_ENCRYPTION_KEY
+  LANGSMITH_POLLY_ENCRYPTION_KEY
+  LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK
 )
 
 ALL_KEYS=("${REQUIRED_KEYS[@]}" "${OPTIONAL_KEYS[@]}")
@@ -294,21 +294,21 @@ cmd_validate() {
 }
 
 # ── diff ──────────────────────────────────────────────────────────────────────
-# Compares Secret Manager values vs the TF_VAR_* environment variables
+# Compares Secret Manager values with the environment variables
 # currently exported in the shell. A mismatch means setup-env.sh has not been
 # re-sourced since the secret was last rotated in Secret Manager.
 
 cmd_diff() {
-  header "Secret Manager  vs  shell environment (TF_VAR_*)"
+  header "Secret Manager  vs  shell environment"
   echo ""
-  printf "  %-40s  %-9s  %-9s  %s\n" "KEY" "SM" "TF_VAR" "MATCH"
+  printf "  %-40s  %-9s  %-9s  %s\n" "KEY" "SM" "ENV" "MATCH"
   printf "  %-40s  %-9s  %-9s  %s\n" "---" "--" "------" "-----"
 
   local mismatches=0
 
   for i in "${!DIFF_SM_KEYS[@]}"; do
     local sm_key="${DIFF_SM_KEYS[$i]}"
-    local tf_var="${DIFF_TF_VARS[$i]}"
+    local tf_var="${DIFF_ENV_VARS[$i]}"
 
     local sm_val tf_val
     sm_val=$(_sm_get "$sm_key" 2>/dev/null) || sm_val=""
@@ -331,7 +331,7 @@ cmd_diff() {
     if [[ -z "$sm_val" && -z "$tf_val" ]]; then
       match_status=$(_dim "—")
     elif [[ -z "$tf_val" ]]; then
-      match_status=$(_yellow "TF_VAR not set — re-source setup-env.sh")
+      match_status=$(_yellow "not exported — re-source setup-env.sh")
       mismatches=$((mismatches + 1))
     elif [[ -z "$sm_val" ]]; then
       match_status=$(_yellow "SM missing — run setup-env.sh to backfill")
@@ -351,7 +351,7 @@ cmd_diff() {
     warn "$mismatches key(s) out of sync. Fix:"
     action "source infra/scripts/setup-env.sh"
   else
-    pass "Secret Manager and TF_VAR_* environment are in sync."
+    pass "Secret Manager and the exported environment are in sync."
   fi
 }
 
@@ -475,7 +475,7 @@ cmd_interactive() {
   echo "    2) get        — Read a secret value"
   echo "    3) set        — Create or update a secret"
   echo "    4) validate   — Check all required secrets are present"
-  echo "    5) diff       — Compare Secret Manager vs TF_VAR_* environment"
+  echo "    5) diff       — Compare Secret Manager vs the exported environment"
   echo "    6) delete     — Delete a secret (with confirmation)"
   echo ""
   printf "  What do you want to do? [1-6]: "
@@ -514,7 +514,7 @@ Commands:
   get <key>            Read and print a secret's current value
   set <key> [value]    Create or update a secret (prompts or reads stdin if value omitted)
   validate             Check all required secrets exist and are non-empty
-  diff                 Compare Secret Manager values vs TF_VAR_* environment
+  diff                 Compare Secret Manager values vs the exported environment
   delete <key>         Delete a secret (confirmation required; stable keys require key name)
 
 Required keys : ${REQUIRED_KEYS[*]}

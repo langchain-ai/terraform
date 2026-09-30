@@ -795,14 +795,12 @@ enable_bedrock_access = false
 # IMPORTANT: Generate each key once and never rotate on a live deployment.
 # Rotating breaks encrypted data stored by that feature.
 #
-# Set via environment variable (not this file) or let setup-env.sh manage them:
-#   export TF_VAR_langsmith_deployments_encryption_key="..."
-#   export TF_VAR_langsmith_agent_builder_encryption_key="..."
-#   export TF_VAR_langsmith_insights_encryption_key="..."
-#
-# langsmith_deployments_encryption_key   = ""   # set via TF_VAR or setup-env.sh
-# langsmith_agent_builder_encryption_key = ""   # set via TF_VAR or setup-env.sh
-# langsmith_insights_encryption_key      = ""   # set via TF_VAR or setup-env.sh
+# These are not Terraform variables, so they do not go in this file.
+# Run:     source infra/scripts/setup-env.sh  (auto-generates and stores)
+# Or set:  export LANGSMITH_DEPLOYMENTS_ENCRYPTION_KEY="..."
+#          export LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY="..."
+#          export LANGSMITH_INSIGHTS_ENCRYPTION_KEY="..."
+#          export LANGSMITH_POLLY_ENCRYPTION_KEY="..."
 
 #------------------------------------------------------------------------------
 # SMITHDB (chart 0.16+)

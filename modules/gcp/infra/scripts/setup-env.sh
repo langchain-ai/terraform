@@ -198,7 +198,8 @@ _sm_report_invalid() {
 
 # ── sm_secret helper ──────────────────────────────────────────────────────────
 # Reads a secret from Secret Manager; prompts or auto-generates if missing;
-# exports as a TF_VAR_* environment variable.
+# exports it: TF_VAR_* for a Terraform variable, LANGSMITH_* for a value only
+# the helm scripts read.
 #
 # Args:
 #   $1  sm_name      — Secret Manager leaf name (e.g. "postgres-password")
@@ -217,7 +218,7 @@ _sm_secret() {
   local prompt_text="$4"
   local silent="${5:-true}"
   local validator="${6:-}"
-  _tfvar_declared "${varname#TF_VAR_}" || return
+  [[ "$varname" != TF_VAR_* ]] || _tfvar_declared "${varname#TF_VAR_}" || return
 
   local val=""
   local _reason=""
@@ -401,14 +402,14 @@ _sm_secret "langsmith-license-key" "TF_VAR_langsmith_license_key" \
   "" "LangSmith license key" "true"
 
 # ── Core LangSmith secrets (must stay stable after first deploy) ─────────────
-_sm_secret "api-key-salt" "TF_VAR_langsmith_api_key_salt" \
+_sm_secret "api-key-salt" "LANGSMITH_API_KEY_SALT" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
 
-_sm_secret "jwt-secret" "TF_VAR_langsmith_jwt_secret" \
+_sm_secret "jwt-secret" "LANGSMITH_JWT_SECRET" \
   "openssl rand -base64 32 | tr -d '\n'" "" "true"
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  _sm_secret "sandbox-callback-signing-jwk" "TF_VAR_sandbox_callback_signing_jwk" \
+  _sm_secret "sandbox-callback-signing-jwk" "LANGSMITH_SANDBOX_CALLBACK_SIGNING_JWK" \
     "_ed25519_private_jwk_gen" "" "true"
 fi
 
@@ -455,7 +456,7 @@ _validate_admin_password() {
 # quotes would expand and which an earlier form escaped into the visible text.
 # `|| return 1` keeps the abort the rule needs — the value is never exported, so
 # continuing would only move the failure to terraform apply.
-_sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
+_sm_secret "admin-password" "LANGSMITH_ADMIN_PASSWORD" \
   "" 'Initial LangSmith admin password (min 12 bytes, one lowercase, one uppercase, one symbol from !#$%()+,-./:?@[]^_{~})' \
   "true" "_validate_admin_password" || return 1
 
@@ -464,16 +465,16 @@ _sm_secret "admin-password" "TF_VAR_langsmith_admin_password" \
 # Only used when the corresponding feature flag is set to true in terraform.tfvars.
 # WARNING: Never change these after the first deployment — existing data will
 # become unreadable. Rotation requires a coordinated migration procedure.
-_sm_secret "deployments-encryption-key" "TF_VAR_langsmith_deployments_encryption_key" \
+_sm_secret "deployments-encryption-key" "LANGSMITH_DEPLOYMENTS_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
-_sm_secret "agent-builder-encryption-key" "TF_VAR_langsmith_agent_builder_encryption_key" \
+_sm_secret "agent-builder-encryption-key" "LANGSMITH_AGENT_BUILDER_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
-_sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" \
+_sm_secret "insights-encryption-key" "LANGSMITH_INSIGHTS_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
-_sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
+_sm_secret "polly-encryption-key" "LANGSMITH_POLLY_ENCRYPTION_KEY" \
   "$_fernet_gen" "" "true"
 
 # ── Unreadable secrets ────────────────────────────────────────────────────────
