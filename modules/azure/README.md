@@ -421,8 +421,9 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 > **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
 > `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. To keep nginx,
 > set `ingress_controller = "nginx"`. To move to Envoy Gateway, set
-> `ingress_controller = "envoy-gateway"`, then run `make apply` and `make deploy`, and update any
-> DNS A record that points at the old IP.
+> `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
+> `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes.
+> Update any DNS A record that points at the old IP.
 
 ---
 

@@ -809,6 +809,34 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   else
     warn "Envoy Gateway LoadBalancer has no IP yet. Check: kubectl get gateway langsmith-gateway -n ${NAMESPACE}"
   fi
+
+  # A deployment moved off ingress-nginx still has the langsmith-tls Certificate
+  # its Ingress owned, and cert-manager's gateway-shim refuses to take it over.
+  # The helm upgrade above removed that Ingress, so garbage collection deletes
+  # the Certificate, and the shim does not retry on its own: the Secret keeps
+  # serving until it expires, and nothing renews it. Touching the Gateway makes
+  # the shim re-sync and create a Certificate the Gateway owns.
+  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
+    _eg_cert_owner=""
+    for _ in $(seq 1 24); do
+      _eg_cert_owner=$(kubectl get certificate langsmith-tls -n "$NAMESPACE" \
+        -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || echo "none")
+      [[ "$_eg_cert_owner" == "Ingress" ]] || break
+      sleep 5
+    done
+    case "$_eg_cert_owner" in
+      Gateway) ;;
+      Ingress)
+        warn "Certificate langsmith-tls is still owned by the old Ingress, so it will not renew."
+        action "Re-run make deploy once kubectl get ingress -n ${NAMESPACE} shows no langsmith Ingress"
+        ;;
+      *)
+        kubectl annotate gateway langsmith-gateway -n "$NAMESPACE" --overwrite \
+          "langsmith.com/cert-resync=$(date +%s)" >/dev/null
+        pass "Asked cert-manager to re-create Certificate langsmith-tls for the Gateway"
+        ;;
+    esac
+  fi
 fi
 
 # ── Post-deploy self-managed Istio TLS sync ───────────────────────────────

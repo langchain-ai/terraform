@@ -16,7 +16,7 @@
 #   ./infra/scripts/guard-ingress-default.sh [terraform args...]
 #
 # Pass the same args the plan or apply gets, so a -var or -var-file that sets
-# ingress_controller counts. Run by make plan, make apply, and tf-run.sh.
+# ingress_controller counts. Run by make plan, make apply, make tf, and tf-run.sh.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
@@ -65,5 +65,6 @@ fail "ingress_controller is not set, and this deployment runs ingress-nginx."
 info "The default is now envoy-gateway. Applying it removes ingress-nginx and its load balancer, and the public IP changes."
 action "To keep NGINX, add to terraform.tfvars:  ingress_controller = \"nginx\""
 action "To move to Envoy Gateway, add:  ingress_controller = \"envoy-gateway\""
-action "Then run make apply and make deploy, and update any DNS A record that points at the old IP."
+action "Then run make apply, make init-values, and make deploy back to back. LangSmith is unreachable from the apply until the deploy finishes."
+action "Update any DNS A record that points at the old IP."
 exit 1

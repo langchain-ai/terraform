@@ -604,6 +604,24 @@ run "nginx_leaves_cert_manager_gateway_api_off" {
   }
 }
 
+run "omitted_ingress_controller_defaults_to_envoy_gateway" {
+  command = plan
+
+  variables {
+    install_cert_manager = true
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_version != ""
+    error_message = "Omitting ingress_controller did not plan the Envoy Gateway release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_feature_gates == "ExperimentalGatewayAPISupport=true"
+    error_message = "Omitting ingress_controller left cert-manager without Gateway API support: \"${module.k8s_bootstrap.cert_manager_feature_gates}\""
+  }
+}
+
 run "cluster_components_absent_when_flags_are_false" {
   command = plan
 

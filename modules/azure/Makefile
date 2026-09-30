@@ -113,6 +113,7 @@ destroy-force: ## terraform destroy without confirmation prompt (use after make 
 	terraform -chdir=$(INFRA_DIR) destroy -auto-approve $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
+	@case "$(firstword $(ARGS))" in plan|apply) bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(wordlist 2,$(words $(ARGS)),$(ARGS)) ;; esac
 	terraform -chdir=$(INFRA_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)
