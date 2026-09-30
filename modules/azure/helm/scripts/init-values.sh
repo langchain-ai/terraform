@@ -796,8 +796,8 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   fi
 
   # terraform output -raw can exit 0 with a warning on stdout, so check the
-  # content rather than the exit code.
-  if [[ "$SMITHDB_HELM_VALUES" != smithdb:* ]]; then
+  # content rather than the exit code. yamlencode quotes keys: "smithdb":
+  if [[ "$SMITHDB_HELM_VALUES" != '"smithdb":'* ]]; then
     fail "enable_smithdb = true but the smithdb_helm_values Terraform output is missing"
     action "The state is older than this module. Run terraform apply, then re-run make init-values"
     exit 1
