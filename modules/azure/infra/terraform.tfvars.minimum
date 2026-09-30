@@ -3,7 +3,7 @@
 # =============================================================================
 # ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD.
 #
-# Smallest possible footprint: Standard_D4s_v3 nodes, in-cluster Postgres and
+# Smallest possible footprint: Standard_D4s_v5 nodes, in-cluster Postgres and
 # Redis, minimum Helm sizing. Exists to keep LangSmith alive at the lowest
 # possible cost for demos, CI smoke tests, or single-user POCs.
 #
@@ -43,9 +43,9 @@ redis_source      = "in-cluster"
 clickhouse_source = "in-cluster"
 
 #------------------------------------------------------------------------------
-# AKS — single Standard_D4s_v3 node (4 vCPU / 16 GiB), scales to 3
+# AKS — single Standard_D4s_v5 node (4 vCPU / 16 GiB), scales to 3
 #------------------------------------------------------------------------------
-default_node_pool_vm_size   = "Standard_D4s_v3"   # 4 vCPU, 16 GiB — absolute floor
+default_node_pool_vm_size   = "Standard_D4s_v5"   # 4 vCPU, 16 GiB — absolute floor
 default_node_pool_min_count = 1
 default_node_pool_max_count = 3
 default_node_pool_max_pods  = 60
@@ -58,7 +58,7 @@ additional_node_pools = {}
 #------------------------------------------------------------------------------
 # Ingress
 #------------------------------------------------------------------------------
-ingress_controller = "nginx"
+ingress_controller = "envoy-gateway"
 
 #------------------------------------------------------------------------------
 # DNS + TLS — Public IP DNS label + Let's Encrypt HTTP-01

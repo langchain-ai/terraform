@@ -51,12 +51,12 @@ variable "kubernetes_version" {
 variable "default_node_pool_vm_size" {
   type        = string
   description = "VM size of the default node pool"
-  default     = "Standard_D8s_v3" # 8 vCPU, 32GB RAM — Dsv3 family; matches the root module's production default
+  default     = "Standard_D8s_v5" # 8 vCPU, 32GB RAM — Dsv5 family; matches the root module's production default
 }
 
 variable "default_node_pool_min_count" {
   type        = number
-  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable."
+  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v5 provides 18,870m allocatable."
   default     = 1
 }
 
@@ -103,7 +103,7 @@ variable "additional_node_pools" {
   description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64GB RAM — Dsv3 family; matches the root module's production default
+      vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
       min_count = 0
       max_count = 2
     }
@@ -112,8 +112,8 @@ variable "additional_node_pools" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
-  default     = "nginx"
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'none' = skip."
+  default     = "envoy-gateway"
 
   validation {
     condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
@@ -245,7 +245,7 @@ variable "support_plan" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 

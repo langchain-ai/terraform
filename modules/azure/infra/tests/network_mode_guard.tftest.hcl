@@ -39,6 +39,7 @@ override_module {
   outputs = {
     cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
     cluster_name                       = "ls-aks-test"
+    node_subnet_ids                    = []
     oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
     host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
     kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -83,6 +84,7 @@ run "no_cluster_yet_plans_clean_in_either_mode" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -142,6 +144,7 @@ run "a_cluster_without_a_policy_engine_does_not_migrate_either" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -182,6 +185,7 @@ run "installing_a_policy_engine_where_none_runs_passes_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -220,6 +224,7 @@ run "overlay_does_not_go_back_to_node_subnet_even_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -261,6 +266,7 @@ run "a_data_plane_change_is_refused_without_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -299,6 +305,7 @@ run "the_azure_data_plane_moves_to_cilium_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -335,6 +342,7 @@ run "cilium_does_not_go_back_to_azure_even_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -375,6 +383,7 @@ run "a_pod_range_change_on_an_overlay_cluster_is_refused" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -417,6 +426,7 @@ run "an_imported_calico_cluster_does_not_move_to_azure_even_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
@@ -456,6 +466,7 @@ run "a_cluster_without_a_policy_engine_moves_to_cilium_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"

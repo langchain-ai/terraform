@@ -4,7 +4,7 @@
 # Enough headroom for a developer to run traces, test agents, and use the
 # playground without constant OOM kills. Single replica, no autoscaling.
 #
-# Fits comfortably on Standard_D8s_v3 (8 vCPU / 32 GiB) nodes.
+# Fits comfortably on Standard_D8s_v5 (8 vCPU / 32 GiB) nodes.
 # For production: use langsmith-values-sizing-production.yaml
 #   (sizing_profile = "production" in terraform.tfvars)
 #

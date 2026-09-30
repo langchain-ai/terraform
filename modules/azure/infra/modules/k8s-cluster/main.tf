@@ -15,13 +15,14 @@
 #     pods to authenticate to Azure Blob Storage without static keys.
 #   • System-assigned Managed Identity: AKS manages its own identity for
 #     pulling images, accessing node resource group, and VMSS operations.
-#   • Default node pool: Standard_D8s_v3 (8 vCPU, 32 GB RAM) — Dsv3 family,
-#     the production baseline (matches the root module default). DSv2
-#     (DS3_v2 / DS4_v2) is the documented fallback when Dsv3 quota is short.
-#   • Additional "large" pool: Standard_D16s_v3 (16 vCPU, 64 GB) for ClickHouse
+#   • Default node pool: Standard_D8s_v5 (8 vCPU, 32 GB RAM) — Dsv5 family,
+#     the production baseline (matches the root module default). Dsv3
+#     (D8s_v3 / D16s_v3) is the documented fallback when Dsv5 quota is short.
+#   • Additional "large" pool: Standard_D16s_v5 (16 vCPU, 64 GB) for ClickHouse
 #     and other stateful/memory-intensive workloads.
-#   • NGINX ingress: deployed via Helm, exposes a single Azure Load Balancer
-#     IP that routes to all LangSmith services by path/host.
+#   • Ingress controller (Envoy Gateway by default): deployed via Helm,
+#     exposes a single Azure Load Balancer IP that routes to all LangSmith
+#     services by path/host.
 # ══════════════════════════════════════════════════════════════════════════════
 
 locals {
@@ -216,7 +217,7 @@ check "existing_cluster_location" {
 }
 
 # Helm provider uses the AKS cluster credentials to deploy charts
-# (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
+# (the ingress controller, and later cert-manager/KEDA via k8s-bootstrap).
 # Credentials come from the AKS cluster (created here or pre-existing) —
 # no external kubeconfig needed.
 provider "helm" {
@@ -291,12 +292,12 @@ resource "azurerm_kubernetes_cluster" "main" {
   # token into pods annotated with azure.workload.identity/use: "true".
   workload_identity_enabled = true
 
-  # Default system node pool — runs kube-system, cert-manager, KEDA, NGINX,
+  # Default system node pool — runs kube-system, cert-manager, KEDA, ingress,
   # and LangSmith services that don't require extra resources.
   default_node_pool {
     name = "default"
 
-    # Default Standard_D8s_v3: 8 vCPU, 32 GB RAM — Dsv3 family, the production baseline.
+    # Default Standard_D8s_v5: 8 vCPU, 32 GB RAM — Dsv5 family, the production baseline.
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size
 
@@ -457,7 +458,7 @@ check "aks_node_pool_zone_drift" {
 }
 
 # Additional node pools for workloads that need different compute profiles.
-# Default: one "large" pool (Standard_D16s_v3, 16 vCPU / 64 GB) for ClickHouse
+# Default: one "large" pool (Standard_D16s_v5, 16 vCPU / 64 GB) for ClickHouse
 # and other memory-intensive services. Scales 0→2 (scales to zero when idle).
 resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   for_each = var.additional_node_pools
@@ -842,10 +843,12 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 }
 
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────
-# CNCF Gateway API implementation. Uses Gateway/HTTPRoute resources (not classic Ingress).
-# Published via OCI registry — no separate Helm repository needed.
-# After install: create a GatewayClass + Gateway + HTTPRoute to expose LangSmith.
-# See: helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml
+# CNCF Gateway API implementation and the default ingress_controller. Uses
+# Gateway/HTTPRoute resources (not classic Ingress). Published via OCI registry,
+# so no separate Helm repository is needed. The chart ships the Gateway API CRDs.
+# Terraform installs only the controller: helm/scripts/deploy.sh creates the
+# EnvoyProxy (which carries the DNS label onto the proxy Service), GatewayClass
+# and Gateway, and the LangSmith chart renders the HTTPRoutes.
 
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0

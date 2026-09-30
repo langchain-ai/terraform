@@ -31,18 +31,17 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
-if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
+if ! KV_NAME=$(_tf_out keyvault_name); then
   KV_NAME=$(_require_kv_name) || exit 1
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 
 # ── Resolve namespace ──────────────────────────────────────────────────────────
-NAMESPACE=$(cd "$INFRA_DIR" && terraform output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
+NAMESPACE=$(_tf_out langsmith_namespace) || NAMESPACE="langsmith"
 
 echo ""
 echo "LangSmith — create K8s config secret"

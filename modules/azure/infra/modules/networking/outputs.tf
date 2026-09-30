@@ -38,10 +38,11 @@ output "subnet_agic_id" {
   value       = var.enable_agic ? azurerm_subnet.subnet_agic[0].id : ""
 }
 
-# The VNet's address space, whichever path produced it, so the root module can
-# check the overlay pod range against it without knowing which path ran.
-output "address_space" {
-  description = "Address prefixes of the VNet the subnets live in: the created VNet's, or the existing VNet's when create_vnet = false"
-  # address_space is a set on the resource; the root concatenates it with lists.
-  value = var.create_vnet ? tolist(one(azurerm_virtual_network.vnet[*].address_space)) : null
+output "subnet_nsg_rules" {
+  description = "Security rules of the NSGs on the AKS, Postgres, and Redis subnets, keyed by subnet. Null for a subnet that has none, because enable_subnet_nsgs is false or the subnet was not created here."
+  value = {
+    aks      = one(azurerm_network_security_group.aks[*].security_rule)
+    postgres = one(azurerm_network_security_group.postgres[*].security_rule)
+    redis    = one(azurerm_network_security_group.redis[*].security_rule)
+  }
 }

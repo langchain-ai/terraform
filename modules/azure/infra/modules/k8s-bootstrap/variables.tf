@@ -182,6 +182,15 @@ variable "langsmith_license_key" {
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
 
+# Defaults true, unlike the GCP module's matching flag: this module installed
+# cert-manager unconditionally before the flag existed, so false as a default
+# would stop renewing certificates for anyone already deployed.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager. Set false when attaching to a cluster that already runs it. Helm cannot adopt a release it does not own, so a second install fails on the existing CRDs."
+  default     = true
+}
+
 variable "cert_manager_version" {
   type        = string
   description = "cert-manager Helm chart version"
@@ -190,8 +199,14 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
-  default     = "nginx"
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (envoy-gateway → envoy-gateway-system, nginx → ingress-nginx, istio → istio-system, istio-addon → aks-istio-ingress), and whether cert-manager runs with Gateway API support (envoy-gateway only). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
+  default     = "envoy-gateway"
+}
+
+variable "envoy_gateway_version" {
+  type        = string
+  description = "Version of the Envoy Gateway release, empty without one. Read only to install cert-manager after the Gateway API CRDs that release ships: cert-manager checks for them once, at startup."
+  default     = ""
 }
 
 variable "agic_subnet_cidrs" {
@@ -218,6 +233,13 @@ variable "cert_manager_identity_client_id" {
 }
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────
+
+# Defaults true for the same reason install_cert_manager does.
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  default     = true
+}
 
 variable "keda_version" {
   type        = string

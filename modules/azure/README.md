@@ -49,10 +49,17 @@ existing_cluster_resource_group_name = "customer-platform-rg"  # omit if same RG
 # Required, not optional: the cluster's nodes already run in an existing subnet,
 # and a subnet Terraform carves could never be one of them.
 create_vnet        = false
+vnet_id            = "/subscriptions/.../virtualNetworks/<vnet>"
 aks_subnet_id      = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<aks-subnet>"
 postgres_subnet_id = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<pg-subnet>"
 redis_subnet_id    = "/subscriptions/.../virtualNetworks/<vnet>/subnets/<redis-subnet>"
+
+# The ClusterIP range the cluster was created with, outside the VNet:
+# az aks show -n <cluster> -g <rg> --query networkProfile.serviceCidr -o tsv
+aks_service_cidr   = "<service-cidr>"
 ```
+
+To test this path without a customer cluster, [`test/existing-aks-cluster/`](test/existing-aks-cluster/) builds a cluster and network of this shape in its own state and prints the matching tfvars.
 
 Cluster prerequisites — verify before applying:
 
@@ -150,6 +157,34 @@ Terraform writes no diagnostic setting on an attached vault, since `enable_keyva
 `keyvault_name` is ignored when attaching. `existing_keyvault_name` is the name, with no fallback: leaving it empty fails the plan instead of quietly deriving `langsmith-kv{identifier}` and creating a vault nobody asked for.
 
 > **Attach to a vault dedicated to this deployment.** Microsoft recommends [one vault per application, per environment, and per region](https://learn.microsoft.com/en-us/azure/key-vault/general/secure-key-vault), because grouping unrelated secrets into one vault widens the blast radius of a compromise, and vault-level RBAC is what grants read access to every secret in it. A vault shared with the customer's other applications adds two failures this module can't prevent: secret names like `postgres-admin-password` colliding with theirs, where a write lands as a new version and breaks their app silently, and a `terraform destroy` that deletes secrets belonging to something else.
+
+Pass 1 installs cert-manager and KEDA. Helm will not adopt a release it does not own, so on a cluster already running either one the install fails on CRDs that are already registered, partway through an apply that has already built Azure resources. Turn off whichever the cluster provides:
+
+```hcl
+install_cert_manager = false   # cluster already runs cert-manager
+install_keda         = false   # cluster already runs KEDA
+```
+
+Both default to `true`. Something still has to provide the component: KEDA is what scales the LangSmith queue workers on Redis queue depth, and cert-manager is what issues and renews the certificate. Neither is replaced by turning the flag off. With `ingress_controller = "envoy-gateway"` and `tls_certificate_source = "letsencrypt"`, the cluster's cert-manager must also run with Gateway API support enabled: Terraform turns that on only for the cert-manager it installs.
+
+`install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
+
+### Deploying into an existing resource group
+
+Set `create_resource_group = false` to deploy into a resource group someone else created, typically one a platform team hands out with the deployer's rights granted on that group alone. Terraform reads the group and changes nothing about it: its tags, locks, and policy assignments stay as its owner configured them, and `terraform destroy` removes the LangSmith resources and leaves the group in place.
+
+```hcl
+create_resource_group        = false
+existing_resource_group_name = "platform-langsmith-rg"
+```
+
+`resource_group_name` is refused when attaching, and `existing_resource_group_name` has no fallback: leaving it empty fails the plan instead of deriving a name and creating a group. Every resource still deploys to `location`, whatever region the group itself records, since a group's region only says where its metadata lives.
+
+An existing deployment picks up this release as a `moved` block on its resource group, with nothing replaced. To hand a group Terraform created over to its new owner, set `existing_resource_group_name` to the same name and remove the group from state first, so Terraform forgets it rather than deleting it:
+
+```bash
+terraform state rm 'azurerm_resource_group.resource_group[0]'
+```
 
 ---
 
@@ -377,17 +412,24 @@ Set `ingress_controller` in `terraform.tfvars` before `make apply`. See [INGRESS
 
 | Value | What Terraform installs | Best for |
 |-------|------------------------|----------|
-| `nginx` **(default)** | `ingress-nginx` Helm chart → Azure LB | Standard deployments. Simplest setup. Use this for quickstart. |
+| `envoy-gateway` **(default)** | `gateway-helm` OCI chart (Envoy Gateway v1.2.0, ships the Gateway API CRDs) → Azure LB | Standard deployments. Gateway API-native. Use this for quickstart. |
+| `nginx` | `ingress-nginx` Helm chart → Azure LB | Legacy Ingress compatibility, for clusters standardized on classic Kubernetes Ingress. |
 | `istio-addon` | AKS Service Mesh add-on (Azure-managed Istio) | Azure-managed Istio mesh, multi-dataplane, service-to-service mTLS. |
 | `istio` | `istio-base` + `istiod` + `istio-ingressgateway` Helm charts | Self-managed Istio. Full mesh + sidecar injection. |
 | `agic` | Azure Application Gateway v2 + AKS `ingress-appgw` add-on | Enterprise Azure. Native L7 WAF. HTTP-only or dns01 + custom domain. |
-| `envoy-gateway` | `gateway-helm` OCI chart — Kubernetes Gateway API | Gateway API-native. Modern alternative to Ingress. |
+
+> **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
+> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. To keep nginx,
+> set `ingress_controller = "nginx"`. To move to Envoy Gateway, set
+> `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
+> `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes.
+> Update any DNS A record that points at the old IP.
 
 ---
 
 ## DNS + TLS
 
-`dns_label` gives you a free Azure subdomain — `<label>.<region>.cloudapp.azure.com` — with no domain registration or DNS zone needed. `deploy.sh` annotates the correct LB service automatically.
+`dns_label` gives you a free Azure subdomain — `<label>.<region>.cloudapp.azure.com` — with no domain registration or DNS zone needed. `deploy.sh` puts the DNS label on the correct LB service automatically.
 
 **Quickstart default (HTTP, zero setup):**
 ```hcl
@@ -395,7 +437,7 @@ dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 ```
 
-**Add HTTPS with Let's Encrypt (nginx only — HTTP-01 requires an IngressClass):**
+**Add HTTPS with Let's Encrypt (`envoy-gateway`, `nginx`, or self-managed `istio`):**
 ```hcl
 dns_label              = "langsmith-prod"
 tls_certificate_source = "letsencrypt"
@@ -450,7 +492,7 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 - Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
 - Validates deployment name format (`prod`, `staging`, `myco`)
-- Supports all 5 ingress options: `nginx`, `istio-addon`, `istio`, `agic`, `envoy-gateway`
+- Supports all 5 ingress options: `envoy-gateway` (default), `nginx`, `istio-addon`, `istio`, `agic`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
 
@@ -549,7 +591,7 @@ Catches the most common problems before you spend 20 minutes on a failing `terra
 - Prints the active subscription — prompts you to verify it is correct
 - Validates 11 required Azure resource providers are registered (`Microsoft.ContainerService`, `Microsoft.DBforPostgreSQL`, `Microsoft.Cache`, `Microsoft.KeyVault`, `Microsoft.Storage`, and others)
 - Reports which identity Terraform will authenticate as, since `ARM_CLIENT_ID`, `ARM_USE_MSI`, and `ARM_USE_OIDC` take precedence over your `az login`, and fails if `ARM_SUBSCRIPTION_ID` or `ARM_TENANT_ID` disagrees with the active `az` account
-- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription, at the resource group the deployment creates, and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
+- Checks RBAC by asking ARM for the decision rather than by matching role names. For that identity, at the subscription and the resource group the deployment creates (or only the group, when `create_resource_group = false` attaches one, which it also confirms exists), and at a bring-your-own VNet if one is configured, it asks whether `Microsoft.Authorization/roleAssignments/write`, its `delete` counterpart, and eight resource actions are permitted. `roleAssignments/write` is what the role assignments in the storage, Key Vault, DNS, bastion, and AKS modules need. Seven of the eight resource actions are creates; the eighth is `Microsoft.Resources/subscriptions/resourceGroups/read`, which plan needs before it needs any write, because refresh reads everything already in state. Deny assignments and ABAC conditions are already applied in the answer, so a refusal names the deny assignment when there is one, and a grant that carries a condition is flagged because the condition can still reject the specific roles the modules assign. A refusal is cross-checked against PIM, so a role held but not activated reads as "activate it" rather than "you do not have it"
 - Checks the subscription offer type and warns when it is one Azure blocks from provisioning PostgreSQL Flexible Server in high-demand regions, which surfaces as `LocationIsOfferRestricted` well into a long apply
 - Maps `postgres_sku_name` to the `Microsoft.Compute` vCPU family it draws on and fails when that family's quota in the region is 0 or has less headroom than the SKU needs. `az postgres flexible-server list-skus` reports what a region offers, not what the subscription may create, and fresh subscriptions commonly carry a limit of 0 on the v5 families. Also confirms the region carries `redisEnterprise`; Managed Redis capacity itself is not queryable ahead of an apply
 - Queries PostgreSQL Flexible Server capabilities for the active subscription and configured region. An empty result fails because the service cannot be created there; a non-empty result also verifies `postgres_version` and `postgres_sku_name`. CLI, permission, stderr, or response-shape failures warn and skip instead of claiming the region is unavailable
@@ -582,9 +624,9 @@ Runs `terraform apply` in `infra/` in three targeted stages, each of which shows
 - Azure Managed Redis (if `redis_source = "external"`)
 - Azure Blob storage account + container + managed identity
 - Azure Key Vault (RBAC mode, soft-delete) + the Postgres password and license key. The seven LangSmith app secrets are seeded separately by `make seed-secrets` so they stay out of Terraform state
-- cert-manager, KEDA, ingress controller (NGINX / Istio / AGIC / Envoy Gateway — based on `ingress_controller` in tfvars)
+- cert-manager, KEDA, ingress controller (Envoy Gateway / NGINX / Istio / AGIC — based on `ingress_controller` in tfvars)
 - For `agic`: Application Gateway v2 + static public IP + AGIC managed identity + Contributor/Reader/Network Contributor role assignments + the AKS `ingress-appgw` add-on
-- For `envoy-gateway`: `envoyproxy/gateway-helm` in `envoy-gateway-system` namespace
+- For `envoy-gateway`: `envoyproxy/gateway-helm` v1.2.0 in the `envoy-gateway-system` namespace, which ships the Gateway API CRDs, and the `ExperimentalGatewayAPISupport=true` feature gate on cert-manager, installed after Envoy Gateway
 - `langsmith` namespace + `langsmith-sa` service account
 
 ---
@@ -649,7 +691,7 @@ Translates Terraform outputs and `terraform.tfvars` flags into Helm values files
 - Reads from `terraform.tfvars`: `name_prefix`, `location`, `tls_certificate_source`, `ingress_controller`, `postgres_source`, `redis_source`, `sizing_profile`, `dns_label`, `langsmith_domain`, `enable_*` flags
 - Reads from `terraform output`: storage account name, container name, Workload Identity client ID, namespace, admin email, cluster name
 - Determines hostname in priority order: `langsmith_domain` → `dns_label` (→ `<label>.<region>.cloudapp.azure.com`) → AGIC: `terraform output agw_public_ip_fqdn` → existing value in file → interactive prompt
-- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`)
+- Sets `ingressClassName` based on `ingress_controller`: `nginx`→`"nginx"`, `istio`/`istio-addon`→`"istio"`, `agic`→`"azure-application-gateway"`, `envoy-gateway`→Gateway API (`ingress.enabled: false`, `gateway.enabled: true`, `gateway.name: langsmith-gateway`)
 - Generates `helm/values/values-overrides.yaml` with: hostname, auth config, Blob WI config, Postgres/Redis blocks, Workload Identity annotations for 5 service accounts, ingress/TLS block
 - Copies the selected sizing file from `examples/` into `helm/values/`
 - Copies addon files based on `enable_*` flags: `agent-deploys` (with `url` and `tlsEnabled` injected automatically), `agent-builder`, `insights` (minimal in-cluster file or full external example), `polly`
@@ -663,7 +705,8 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 
 - Validates `values-overrides.yaml` exists (fails fast with `make init-values` hint if missing)
 - Refreshes kubeconfig via `az aks get-credentials`
-- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) — dispatches to the right service/namespace based on `ingress_controller` (nginx, istio-addon, istio, envoy-gateway)
+- Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
+- For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
 - Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
 - Verifies `langsmith-config-secret` exists — auto-creates it from Key Vault if missing
@@ -688,6 +731,7 @@ Runs `apply → kubeconfig → k8s-secrets → init-values → deploy` in sequen
 - Refreshes kubeconfig from Terraform outputs
 - Deletes all `lgp` custom resources in the `langsmith` namespace (LangGraph Platform operator-managed deployments) before removing the operator that manages them
 - Helm uninstalls `langsmith` with `--wait --timeout 5m`
+- For `envoy-gateway`, deletes the Gateway (which removes the proxy LB service and its Azure LB IP), the GatewayClass, and the EnvoyProxy
 - Prompts before deleting the `langsmith` namespace
 
 > Run before `make destroy`. Follow with `make clean` to remove local secrets and generated files.
@@ -702,10 +746,10 @@ Runs 9 checks and prints a pass/warn/fail for each:
 1. **Terraform outputs** — reads cluster name, resource group, Key Vault name
 2. **Cluster connectivity** — `kubectl cluster-info`
 3. **Nodes** — Ready count vs total count
-4. **Bootstrap components** — pod counts for cert-manager, KEDA, ingress controller (dispatches by `ingress_controller`: nginx/istio-addon/istio/envoy-gateway/agic)
+4. **Bootstrap components** — pod counts for cert-manager, KEDA, and the namespace of the configured `ingress_controller` (`agic` and `none` run no controller pods)
 5. **LangSmith pods** — Running/Completed counts; flags anything not in those states
 6. **Helm release** — status (deployed / failed / pending-upgrade) and chart version
-7. **Ingress + TLS** — ingress hosts and certificate Ready status
+7. **Ingress + TLS** — ingress hosts (`gateway,httproute` for `envoy-gateway`) and certificate Ready status
 8. **Key Vault secrets** — total secret count in the vault _(skipped with `--quick`)_
 9. **`langsmith-config-secret`** — key count; warns if fewer than 8 keys _(skipped with `--quick`)_
 
@@ -784,7 +828,7 @@ All files in `helm/values/` are **gitignored** (generated or contain live secret
 ### `values.yaml` — Azure base config
 **Location:** `helm/values/values.yaml` (tracked in git)
 
-The Azure-specific base that applies on every deploy. Sets NGINX as the ingress class, configures Blob Storage with Workload Identity (no static credentials), and disables Istio gateway. You should not need to edit this file — environment-specific overrides go in `values-overrides.yaml`.
+The Azure-specific base that applies on every deploy. Sets `nginx` as the fallback ingress class (the overrides layer replaces it, or disables Ingress for `envoy-gateway`), configures Blob Storage with Workload Identity (no static credentials), and disables Istio gateway. You should not need to edit this file — environment-specific overrides go in `values-overrides.yaml`.
 
 ---
 
@@ -813,7 +857,7 @@ See **[helm/values/examples/SIZING.md](helm/values/examples/SIZING.md)** for tot
 
 | File | Profile | When to use |
 |------|---------|-------------|
-| `langsmith-values-sizing-minimum.yaml` | `minimum` | Absolute floor. Core LangSmith fits on one small node (4 vCPU / 16 Gi); with Deployments and Fleet on, plan on two D4s_v3 nodes. Rock-bottom CPU/memory requests from real `kubectl top` measurements on idle. **Expect OOM kills under any real traffic.** Use for cost parking, weekend standby, or single-user demos. |
+| `langsmith-values-sizing-minimum.yaml` | `minimum` | Absolute floor. Core LangSmith fits on one small node (4 vCPU / 16 Gi); with Deployments and Fleet on, plan on two D4s_v5 nodes. Rock-bottom CPU/memory requests from real `kubectl top` measurements on idle. **Expect OOM kills under any real traffic.** Use for cost parking, weekend standby, or single-user demos. |
 | `langsmith-values-sizing-dev.yaml` | `dev` | Light non-production profile for local dev, CI pipelines, integration tests, and short-lived POCs. Single replica per component, no autoscaling. Will show instability under real workloads — that is expected. |
 | `langsmith-values-sizing-production.yaml` | `production` | **Recommended for production.** Multi-replica deployments with HPA on all stateless components. Sensible CPU/memory starting points — tune with `kubectl top pods -n langsmith` after go-live. |
 | `langsmith-values-sizing-production-large.yaml` | `production-large` | High-volume starting point based on the LangSmith scale guide (~50 concurrent users, ~1000 traces/sec). Elevated HPA minimums (e.g. 10 backend replicas). Start with `production` and move here when monitoring shows sustained pressure. |
@@ -888,7 +932,7 @@ azure/
     │   ├── preflight-check.sh  # Tools check + cluster connectivity + Helm repo
     │   └── uninstall.sh        # Clean Helm uninstall (Azure LB warning included)
     └── values/
-        ├── values.yaml                              # Azure base (NGINX, Blob WI, external secrets)
+        ├── values.yaml                              # Azure base (fallback Ingress class, Blob WI, external secrets)
         ├── values-overrides.yaml                    # Live file — gitignored, generated by init-values.sh
         └── examples/
             ├── SIZING.md                                 # Sizing guide — resource tables for all profiles
@@ -914,7 +958,7 @@ azure/
 | Module | Required | Description |
 |--------|----------|-------------|
 | `networking` | yes | VNet, subnets (main, postgres, redis, bastion, agic). AGIC subnet (`10.0.96.0/24`) is created automatically when `ingress_controller = "agic"`. Not zonal — an Azure subnet spans every zone in its region. Can also create subnets inside a VNet you already own — see [Bring your own VNet](#bring-your-own-vnet). |
-| `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart) / envoy-gateway. |
+| `k8s-cluster` | yes | AKS cluster, node pools, OIDC issuer, managed identity, federated credentials (Workload Identity centralized here). Installs ingress controller via Helm: envoy-gateway (default) / nginx / istio / istio-addon / agic (App Gateway v2 + AGIC chart). |
 | `k8s-bootstrap` | yes | Kubernetes namespace, ServiceAccount, cert-manager, KEDA, postgres/redis K8s secrets. |
 | `storage` | yes | Azure Blob storage account + container. |
 | `keyvault` | yes | Azure Key Vault (RBAC mode, soft-delete), its network ACLs and role assignments, and the two secrets Terraform needs (Postgres password, license key). The LangSmith app secrets are seeded by `make seed-secrets`, not Terraform. |
@@ -1027,6 +1071,32 @@ names the one that is too long, so overriding `storage_account_name` and
 
 ---
 
+## VNet address space
+
+The VNet Terraform creates defaults to `10.0.0.0/17`. If your network already
+uses that range, or the VNet will be peered or reached over ExpressRoute or VPN
+from one that does, set `vnet_address_space` before the first apply. Azure
+creates an overlapping VNet without complaint, and the collision surfaces at the
+first peering.
+
+Every subnet prefix default sits inside `10.0.0.0/17`, so move them with it:
+
+```hcl
+vnet_address_space             = ["172.16.0.0/16"]
+aks_subnet_address_prefix      = ["172.16.0.0/19"]
+postgres_subnet_address_prefix = ["172.16.32.0/20"]
+redis_subnet_address_prefix    = ["172.16.48.0/20"]
+agic_subnet_address_prefix     = ["172.16.96.0/24"] # ingress_controller = "agic" only
+bastion_subnet_address_prefix  = ["172.16.80.0/27"] # create_bastion = true only
+```
+
+Plan rejects any prefix that falls outside `vnet_address_space` and names it.
+It also rejects a prefix that overlaps `aks_service_cidr`, whose `10.0.64.0/20`
+default fills the gap the default prefixes leave. If your space still holds
+`10.0.64.0/20`, keep every subnet clear of it or set `aks_service_cidr` too.
+
+---
+
 ## Bring your own VNet
 
 By default Terraform creates the VNet and every subnet. To deploy into a VNet
@@ -1060,15 +1130,13 @@ LangSmith one, and get the settings each service needs:
 The default prefixes above are sized against the `10.0.0.0/17` VNet Terraform
 builds, so they are a starting point rather than a default that fits your
 network. Plan reads your VNet and rejects a prefix that falls outside its
-address space, and rejects an AKS prefix too small for the node pools whether
-the subnet is one you supplied or one Terraform carves. What it cannot check is
-whether a prefix collides with a subnet that already exists in the VNet, because
-Azure's VNet read returns subnet names and not their ranges — so pick ranges you
-know are free.
+address space or collides with a subnet already in it, and rejects an AKS
+prefix too small for the node pools whether the subnet is one you supplied or
+one Terraform carves.
 
 `aks_service_cidr` is required on this path. Kubernetes assigns ClusterIPs from
 it, and AKS requires a range that nothing on or connected to your VNet uses. The
-`10.0.64.0/20` default only avoids the VNet Terraform builds, and an overlap with
+`10.0.64.0/20` default only avoids the subnets Terraform carves, and an overlap with
 your own address space can be accepted when the cluster is created and break
 later, so plan makes you name one and rejects one that lands inside your VNet.
 Peered and on-premises ranges are still yours to keep clear of, since plan only
@@ -1201,6 +1269,7 @@ an apply:
 - every prefix Terraform is about to carve sits inside your VNet's address
   space. The defaults describe the VNet Terraform builds, so this is usually the
   first thing to change on a network of your own
+- no prefix Terraform is about to carve overlaps a subnet already in your VNet
 - `aks_service_cidr` is set, and does not overlap your VNet's address space, and
   `aks_dns_service_ip` sits inside it when you set one
 - subnet IDs are not set while `create_vnet = true`, where they would be ignored
@@ -1208,8 +1277,7 @@ an apply:
 Whoever runs Terraform needs two kinds of access to the VNet, which normally
 lives in the network team's resource group rather than the LangSmith one:
 
-- **read** on `vnet_id` and on whichever subnets you supply, at plan time, for
-  the checks above
+- **read** on `vnet_id` and its subnets at plan time, for the checks above
 - **`Microsoft.Network/virtualNetworks/subnets/write`** on `vnet_id` for every
   subnet you leave Terraform to create. This is the larger ask of a network
   team, and it fails at apply rather than at plan, so settle it first
@@ -1233,6 +1301,24 @@ plan checks the name, and Azure enforces the size at apply.
 
 ---
 
+## Subnet network security groups
+
+Set `enable_subnet_nsgs = true` to put a network security group on each subnet Terraform creates, so the data tier admits only the cluster:
+
+| Subnet | Inbound it admits |
+|--------|-------------------|
+| AKS | TCP 80 and 443 from the Internet, for the ingress load balancer. Everything else follows Azure's default rules |
+| Postgres | TCP 5432 from the AKS subnet, and all traffic from the Postgres subnet itself, which high availability replicates over. The rest of the VNet is denied |
+| Redis | TCP 10000 and 8500-8599 from the AKS subnet. The rest of the VNet is denied |
+
+Both data-tier NSGs also admit Azure's platform probes, which arrive from the `AzureLoadBalancer` service tag. Outbound keeps Azure's defaults on all three. The NSGs land in the LangSmith resource group, even when the subnets sit in a bring-your-own VNet's group, and the Redis subnet enables private endpoint network policies so its NSG applies to the Managed Redis endpoint. A subnet you supply keeps whatever NSG you gave it, and nothing is attached to the bastion or AGIC subnets.
+
+Anything else that reaches Postgres or Redis directly from inside the VNet, such as a jump host or a peered network, is denied once this is on. Add a rule to the NSG for it, or leave the flag off.
+
+On an attached cluster, the plan refuses the flag when node pools run in more than one subnet, since only `aks_subnet_id` is admitted. A cluster that gives pods their own pod subnet reaches the data tier from that subnet's addresses, which these NSGs deny; attach your own NSGs for it instead.
+
+---
+
 ## Node OS
 
 Every pool runs Ubuntu unless you choose otherwise. `aks_os_sku` sets the default
@@ -1243,7 +1329,7 @@ aks_os_sku = "AzureLinux"
 
 additional_node_pools = {
   large = {
-    vm_size   = "Standard_D16s_v3"
+    vm_size   = "Standard_D16s_v5"
     min_count = 0
     max_count = 2
     # os_sku  = "Ubuntu"   # set only to differ from aks_os_sku
