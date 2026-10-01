@@ -183,9 +183,9 @@ through, or `make smithdb-configure` changes nothing. It must also re-export the
 ## Staged rollout
 
 Keep ClickHouse enabled in every phase. `make smithdb-phase` writes the three
-Terraform gates for one phase. Run `make deploy-all` after each phase.
-`make smithdb-status` shows the phase, the resolved size, the SmithDB pods,
-Jobs, and PVCs, and the backfill progress, and changes nothing.
+Terraform gates for one phase to `terraform.tfvars` and changes nothing in the
+cluster. `make smithdb-status` shows the phase, the resolved size, the SmithDB
+pods, Jobs, and PVCs, and the backfill progress, and also changes nothing.
 
 | Phase | Command | ingestion / migration / query |
 |---|---|---|
@@ -193,6 +193,29 @@ Jobs, and PVCs, and the backfill progress, and changes nothing.
 | Dual write | `make smithdb-phase PHASE=dual-write` | true / false / false |
 | Backfill | `make smithdb-phase PHASE=backfill` | true / true / false |
 | Cutover | `make smithdb-phase PHASE=cutover [FORCE=true]` | true / false / true |
+
+```mermaid
+flowchart TD
+  off["Off<br/>ClickHouse only"]
+  dual["Dual write<br/>writes: ClickHouse and SmithDB<br/>reads: ClickHouse"]
+  backfill["Backfill<br/>migration Job and taskdb copy the history"]
+  check{"Every migration_jobs row<br/>has promoted_at?"}
+  cutover["Cutover<br/>reads: SmithDB<br/>Job and taskdb removed"]
+  off -->|"PHASE=dual-write"| dual
+  dual -->|"segments arrive in the container<br/>PHASE=backfill"| backfill
+  backfill -->|"make smithdb-status"| check
+  check -->|"no: wait"| backfill
+  check -->|"yes: PHASE=cutover"| cutover
+  cutover -->|"rollback: PHASE=dual-write"| dual
+```
+
+Apply each phase before you start the next one:
+
+- In this repo's root, run `make deploy-all`.
+- Under a wrapper root, `make apply` refuses to run, so `make deploy-all` does
+  too. Run `terraform apply` in the wrapper root. Then export
+  `LANGSMITH_INFRA_DIR` and `LANGSMITH_VALUES_DIR` and run
+  `make seed-secrets k8s-secrets init-values deploy`.
 
 1. Dual write. LangSmith writes to ClickHouse and SmithDB, and reads stay on
    ClickHouse. Confirm that segments arrive in the SmithDB container.
@@ -205,6 +228,16 @@ Jobs, and PVCs, and the backfill progress, and changes nothing.
    keeps the old one. The backfill is complete when
    every row of the taskdb table `migration_jobs` has `promoted_at`. Do not use
    the percent or the pod phase.
+
+   The Job holds the tasks for the last two hours before its start time until
+   two hours after it, so it cannot miss late updates to runs that are still in
+   progress. The backfill therefore takes at least two hours, however little
+   data there is. `SMITHDB_MIGRATION__WORKER_POOL__RECENT_RUNS_SAFETY_DELAY`
+   sets the hold in seconds through `smithdb.migration.job.extraEnv`. A lower
+   value can miss those late updates. Set it before the backfill deploy. A
+   running Job keeps its pod spec, so to change the hold on one, delete the
+   `<release>-smithdb-migration` Job, then run `make deploy`. The new Job
+   resumes from the taskdb.
 3. Cutover. Reads move to SmithDB, and the deploy removes the migration Job and
    the taskdb, with its PVC and task state. `PHASE=cutover` refuses until every
    `migration_jobs` row has `promoted_at`, and also when the table is empty or
