@@ -418,8 +418,8 @@ _check_quota "CPUS" 8 "any 2-node cluster"
 #
 # An unset pool variable takes the default for the SmithDB size and cache mode.
 # terraform output shows the last apply, not a pending tfvars change, so this
-# repeats local.smithdb_sizing_by_profile and local.smithdb_pool_defaults from
-# infra/locals.tf. Keep them in step.
+# repeats local.smithdb_sizing_by_profile, local.smithdb_cache_storage_by_sizing
+# and local.smithdb_pool_defaults from infra/locals.tf. Keep them in step.
 _tfvar_or() { local v; v=$(_tfvar "$1"); [[ -z "$v" || "$v" == "null" ]] && v="$2"; printf '%s' "$v"; }
 _sdb_default_sizing=small
 case "$(_tfvar "sizing_profile")" in
@@ -428,8 +428,15 @@ case "$(_tfvar "sizing_profile")" in
   production-large) _sdb_default_sizing=large ;;
 esac
 _sdb_sizing=$(_tfvar_or "smithdb_sizing" "$_sdb_default_sizing")
-_sdb_cache=$(_tfvar_or "smithdb_cache_storage" "$([[ "$_sdb_sizing" == "minimal" ]] && echo network-disk || echo local-ssd)")
+case "$_sdb_sizing" in
+  medium|large) _sdb_default_cache=network-disk ;;
+  *)            _sdb_default_cache=default-disk ;;
+esac
+_sdb_cache=$(_tfvar_or "smithdb_cache_storage" "$_sdb_default_cache")
 case "$_sdb_sizing/$_sdb_cache" in
+  small/default-disk)  _sdb_pools="n2-standard-16 0 n2-standard-8" ;;
+  medium/default-disk) _sdb_pools="n2-standard-32 0 n2-standard-8" ;;
+  large/default-disk)  _sdb_pools="n2-standard-64 0 n2-standard-16" ;;
   small/local-ssd)     _sdb_pools="n2-standard-16 2 n2-standard-8" ;;
   medium/local-ssd)    _sdb_pools="n2-standard-32 4 n2-standard-8" ;;
   large/local-ssd)     _sdb_pools="n2-standard-64 8 n2-standard-16" ;;

@@ -410,15 +410,31 @@ if [[ "$USE_AUTOPILOT" == "false" ]]; then
       "medium  — 100 ingest / 40 query QPS" \
       "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
     _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
-    # minimal writes null: null gives network-disk for minimal, and a later
-    # size change gets local-ssd.
-    _smithdb_cache="network-disk"
+    # The default cache follows the size (infra/locals.tf,
+    # smithdb_cache_storage_by_sizing): default-disk for minimal and small,
+    # network-disk for medium and large. The default writes null, so a later
+    # size change gets the default for the new size. minimal has no choice.
+    _smithdb_cache_default="default-disk"
+    if [[ "$_smithdb_sizing" == "medium" || "$_smithdb_sizing" == "large" ]]; then
+      _smithdb_cache_default="network-disk"
+    fi
+    _smithdb_cache="$_smithdb_cache_default"
     _smithdb_cache_value="null"
     if [[ "$_smithdb_sizing" != "minimal" ]]; then
-      _ask_choice "SmithDB cache storage" \
-        "local-ssd    — node Local SSD (recommended)" "network-disk — Hyperdisk Balanced on C3 nodes"
-      [[ "$_CHOICE" == "1" ]] && _smithdb_cache="local-ssd"
-      _smithdb_cache_value="\"${_smithdb_cache}\""
+      _rec_dd="" _rec_nd=""
+      if [[ "$_smithdb_cache_default" == "default-disk" ]]; then
+        _rec_dd=" (recommended)"
+      else
+        _rec_nd=" (recommended)"
+      fi
+      _ask_choice "SmithDB cache storage (see SMITHDB.md#cache-storage)" \
+        "default-disk — standard-rwo volume per pod on N2 nodes${_rec_dd}" \
+        "network-disk — Hyperdisk Balanced 7,000 IOPS / 1,000 MiB/s on C3 nodes${_rec_nd}" \
+        "local-ssd    — node Local SSD (needs Local SSD quota)"
+      _smithdb_cache=$(echo "default-disk network-disk local-ssd" | cut -d' ' -f"$_CHOICE")
+      if [[ "$_smithdb_cache" != "$_smithdb_cache_default" ]]; then
+        _smithdb_cache_value="\"${_smithdb_cache}\""
+      fi
     fi
     SMITHDB_SIZING_LINES="
 smithdb_sizing            = \"${_smithdb_sizing}\"

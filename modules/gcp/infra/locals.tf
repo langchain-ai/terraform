@@ -70,10 +70,29 @@ locals {
     "production-large" = "large"
   }
 
-  smithdb_sizing        = coalesce(var.smithdb_sizing, local.smithdb_sizing_by_profile[var.sizing_profile])
-  smithdb_minimal       = local.smithdb_sizing == "minimal"
-  smithdb_cache_storage = coalesce(var.smithdb_cache_storage, local.smithdb_minimal ? "network-disk" : "local-ssd")
+  smithdb_sizing  = coalesce(var.smithdb_sizing, local.smithdb_sizing_by_profile[var.sizing_profile])
+  smithdb_minimal = local.smithdb_sizing == "minimal"
+
+  # Cache modes, with the same names on GCP and AWS:
+  # - default-disk: a per-pod PVC on the cluster default class (standard-rwo).
+  # - network-disk: a per-pod PVC on a Hyperdisk Balanced class with
+  #   provisioned speed (7,000 IOPS, 1,000 MiB/s). Needs a C3 or C3D pool.
+  # - local-ssd: an emptyDir on node Local SSD. Opt-in.
+  # Development sizes default to default-disk. Production sizes default to
+  # network-disk, which meets the chart minimum cache speed with no Local SSD
+  # quota. An explicit smithdb_cache_storage wins.
+  smithdb_cache_storage_by_sizing = {
+    minimal = "default-disk"
+    small   = "default-disk"
+    medium  = "network-disk"
+    large   = "network-disk"
+  }
+  smithdb_cache_storage = coalesce(var.smithdb_cache_storage, local.smithdb_cache_storage_by_sizing[local.smithdb_sizing])
+  smithdb_default_disk  = local.smithdb_cache_storage == "default-disk"
   smithdb_network_disk  = local.smithdb_cache_storage == "network-disk"
+  smithdb_local_ssd     = local.smithdb_cache_storage == "local-ssd"
+  # default-disk and network-disk both put each cache on a per-pod PVC.
+  smithdb_pvc_cache = !local.smithdb_local_ssd
 
   # The chart has the small, medium, and large tiers. minimal uses small with
   # explicit resources, and runs on the general node pool.
@@ -141,24 +160,28 @@ locals {
   }
 
   # Default node pool shapes. An explicit smithdb_* pool variable wins.
+  # default-disk uses N2 with no Local SSD, sized like the local-ssd pool.
   smithdb_pool_defaults = {
-    small  = { local_ssd_type = "n2-standard-16", local_ssd_count = 2, network_disk_type = "c3-standard-22", compute_type = "n2-standard-8" }
-    medium = { local_ssd_type = "n2-standard-32", local_ssd_count = 4, network_disk_type = "c3-standard-44", compute_type = "n2-standard-8" }
-    large  = { local_ssd_type = "n2-standard-64", local_ssd_count = 8, network_disk_type = "c3-standard-88", compute_type = "n2-standard-16" }
+    small  = { local_ssd_type = "n2-standard-16", local_ssd_count = 2, network_disk_type = "c3-standard-22", default_disk_type = "n2-standard-16", compute_type = "n2-standard-8" }
+    medium = { local_ssd_type = "n2-standard-32", local_ssd_count = 4, network_disk_type = "c3-standard-44", default_disk_type = "n2-standard-32", compute_type = "n2-standard-8" }
+    large  = { local_ssd_type = "n2-standard-64", local_ssd_count = 8, network_disk_type = "c3-standard-88", default_disk_type = "n2-standard-64", compute_type = "n2-standard-16" }
   }
   smithdb_pool_default = local.smithdb_pool_defaults[local.smithdb_resource_tier]
 
   smithdb_instance_store_machine_type = coalesce(
     var.smithdb_instance_store_machine_type,
-    local.smithdb_network_disk ? local.smithdb_pool_default.network_disk_type : local.smithdb_pool_default.local_ssd_type,
+    local.smithdb_local_ssd ? local.smithdb_pool_default.local_ssd_type : (
+      local.smithdb_network_disk ? local.smithdb_pool_default.network_disk_type : local.smithdb_pool_default.default_disk_type
+    ),
   )
   smithdb_instance_store_local_ssd_count = coalesce(
     var.smithdb_instance_store_local_ssd_count,
-    local.smithdb_network_disk ? 0 : local.smithdb_pool_default.local_ssd_count,
+    local.smithdb_local_ssd ? local.smithdb_pool_default.local_ssd_count : 0,
   )
-  # network-disk: the backfill Job takes 100Gi of ephemeral storage from the
-  # boot disk, and a 200 GB boot disk has only about 97 GiB allocatable.
-  smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_network_disk ? 300 : 100)
+  # default-disk and network-disk: the backfill Job takes 100Gi of ephemeral
+  # storage from the boot disk, and a 200 GB boot disk has only about 97 GiB
+  # allocatable.
+  smithdb_instance_store_disk_size = coalesce(var.smithdb_instance_store_disk_size, local.smithdb_pvc_cache ? 300 : 100)
   smithdb_compute_machine_type     = coalesce(var.smithdb_compute_machine_type, local.smithdb_pool_default.compute_type)
 
   # Default Cloud SQL tier of a created metastore, for each size. The docs
@@ -177,10 +200,31 @@ locals {
   smithdb_metastore_tier = coalesce(var.smithdb_metastore_tier, local.smithdb_metastore_tier_defaults[local.smithdb_sizing])
 
   # network-disk with dedicated pools: k8s-bootstrap creates a Hyperdisk
-  # Balanced class (cluster-scoped, so with the suffix). minimal uses the GKE
-  # built-in standard-rwo class.
+  # Balanced class (cluster-scoped, so with the suffix). default-disk, which
+  # includes minimal, uses the GKE built-in standard-rwo class.
   smithdb_create_cache_storage_class = local.smithdb_dedicated_pools && local.smithdb_network_disk
-  smithdb_cache_storage_class        = local.smithdb_minimal ? "standard-rwo" : "smithdb-cache${local.suffix}"
+  smithdb_cache_storage_class        = local.smithdb_default_disk ? "standard-rwo" : "smithdb-cache${local.suffix}"
+
+  # Speed rule for network-disk. All network disks on one VM share one
+  # throughput limit, so a cache volume gets its full 1,000 MiB/s only if
+  #   most cache pods on one node x 1,000 MiB/s <= node Hyperdisk limit.
+  # The HPA can add cache pods up to maxReplicas, so the most pods is the count
+  # of the smallest cache pod that fits in the node CPU (vCPU minus about 1 for
+  # system pods). The limits are the Hyperdisk Balanced per-VM throughput of the
+  # default C3 shapes. Another machine type is not checked. main.tf warns on
+  # both cases and does not fail.
+  smithdb_network_disk_vm_limit_mibps = {
+    "c3-standard-22" = 1800
+    "c3-standard-44" = 2400
+    "c3-standard-88" = 5000
+  }
+  smithdb_speed_rule_checked = contains(keys(local.smithdb_network_disk_vm_limit_mibps), local.smithdb_instance_store_machine_type)
+  smithdb_speed_rule_limit   = lookup(local.smithdb_network_disk_vm_limit_mibps, local.smithdb_instance_store_machine_type, 0)
+  smithdb_speed_rule_pods = local.smithdb_speed_rule_checked ? floor(
+    (tonumber(regex("-([0-9]+)$", local.smithdb_instance_store_machine_type)[0]) - 1) /
+    min([for c in local.smithdb_cache_components : tonumber(local.smithdb_tier[c].cpu)]...)
+  ) : 0
+  smithdb_speed_rule_need = local.smithdb_speed_rule_pods * 1000
 
   # With SmithDB off, the proxy is off, so the metastore TLS variables have no
   # effect and the preconditions in main.tf do not reject them.
@@ -313,9 +357,9 @@ locals {
     })
   }
 
-  # network-disk: the chart makes a per-pod cache volume from the StorageClass,
-  # sized from the tier.
-  smithdb_values_network_disk = {
+  # default-disk and network-disk: the chart makes a per-pod cache volume from
+  # the StorageClass, sized from the tier. Only the class name differs.
+  smithdb_values_pvc_cache = {
     smithdb = merge(
       local.smithdb_values_pools_common,
       { cache = { storageClassName = local.smithdb_cache_storage_class } },
@@ -350,7 +394,7 @@ locals {
 
   smithdb_helm_values = !var.enable_smithdb ? null : (
     local.smithdb_minimal ? yamlencode(local.smithdb_values_minimal) :
-    local.smithdb_network_disk ? yamlencode(local.smithdb_values_network_disk) : yamlencode(local.smithdb_values_local_ssd)
+    local.smithdb_local_ssd ? yamlencode(local.smithdb_values_local_ssd) : yamlencode(local.smithdb_values_pvc_cache)
   )
 
   #----------------------------------------------------------------------------

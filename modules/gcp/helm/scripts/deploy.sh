@@ -979,11 +979,11 @@ else
   echo "         Check with: kubectl get pods -n $NAMESPACE"
   if [[ "$_smithdb_enabled" == "true" ]]; then
     echo ""
-    echo "         If SmithDB pods are Pending, confirm the Local SSD nodes came up and"
-    echo "         advertise enough allocatable ephemeral-storage:"
+    echo "         If SmithDB pods are Pending, confirm the SmithDB cache nodes came up. In"
+    echo "         local-ssd mode, also confirm they advertise enough allocatable ephemeral-storage:"
     echo "           kubectl get nodes -l smithdb-local/instance-store=true"
     echo "           kubectl get node NODE -o jsonpath='{.status.allocatable.ephemeral-storage}'"
-    echo "         In network-disk mode, check the cache volumes: kubectl get pvc -n $NAMESPACE"
+    echo "         In default-disk and network-disk modes, check the cache volumes: kubectl get pvc -n $NAMESPACE"
   fi
 fi
 
@@ -1036,7 +1036,7 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo "  ingestion: $_smithdb_ingestion_enabled   migration: $_smithdb_migration_enabled   query: $_smithdb_query_enabled"
   echo "  Status and backfill progress: make smithdb-status"
   echo ""
-  echo "  Verify the cache mount (Local SSD for local-ssd, a PVC for network-disk):"
+  echo "  Verify the cache mount (Local SSD for local-ssd, a PVC for default-disk and network-disk):"
   echo "    kubectl exec -n $NAMESPACE deploy/${RELEASE_NAME}-smithdb-query -- df -h /data"
   echo ""
   echo "  Confirm the metastore migration Job completed:"

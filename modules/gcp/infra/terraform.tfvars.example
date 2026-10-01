@@ -406,15 +406,18 @@ enable_sso_oidc = false
 enable_smithdb = false
 
 # --- Sizing ----------------------------------------------------------------
-# minimal, small, medium, or large, and local-ssd or network-disk. Unset, the
-# size follows sizing_profile and the cache follows the size:
+# minimal, small, medium, or large, and default-disk, network-disk, or
+# local-ssd. Unset, the size follows sizing_profile and the cache follows the
+# size:
 #   minimum -> minimal, dev and default -> small, production -> medium,
 #   production-large -> large (12 SmithDB pods, about 350 vCPU).
+#   minimal and small -> default-disk, medium and large -> network-disk.
+#   local-ssd is an opt-in for small, medium, and large.
 # small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
 # size resolves to: modules/gcp/SMITHDB.md#sizing. Set both with
 #   make smithdb-configure SIZING=<size> CACHE=<mode>
 # smithdb_sizing        = "small"
-# smithdb_cache_storage = "local-ssd"
+# smithdb_cache_storage = "default-disk"
 
 # --- Staged rollout ---------------------------------------------------------
 # Migration and query both require ingestion, and Terraform enforces that.
@@ -514,7 +517,8 @@ enable_smithdb = false
 # ephemeral-storage and back the emptyDir cache. Raw block Local SSD does not.
 # C3 and Z3 "-lssd" types have a fixed disk count: set
 # smithdb_instance_store_local_ssd_count = 0 for them. network-disk requires a
-# C3 or C3D type with 0 Local SSD.
+# C3 or C3D type with 0 Local SSD. default-disk uses an N2 type with 0 Local
+# SSD. Both PVC modes default to a 300 GB boot disk for the backfill Job.
 #
 # The cluster is regional. An unpinned pool tries every zone in the region and
 # fails if the machine type or disk count is unavailable in any of them, so pin

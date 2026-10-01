@@ -7,7 +7,7 @@
 # smithdb.sh — SmithDB size, rollout phase, and status.
 #
 # Usage (from gcp/):
-#   make smithdb-configure SIZING=<minimal|small|medium|large> [CACHE=<local-ssd|network-disk>]
+#   make smithdb-configure SIZING=<minimal|small|medium|large> [CACHE=<default-disk|network-disk|local-ssd>]
 #   make smithdb-phase PHASE=<off|dual-write|backfill|cutover> [START_TIME=<RFC 3339>] [FORCE=true]
 #   make smithdb-status
 #
@@ -102,20 +102,21 @@ _cmd_configure() {
   case "$sizing" in
     minimal|small|medium|large) ;;
     *) _die "SIZING='$sizing' is not valid. Use minimal, small, medium, or large." \
-         "Example: make smithdb-configure SIZING=small CACHE=local-ssd" ;;
+         "Example: make smithdb-configure SIZING=small CACHE=default-disk" ;;
   esac
   case "$cache" in
-    ""|local-ssd|network-disk) ;;
-    *) _die "CACHE='$cache' is not valid. Use local-ssd or network-disk." ;;
+    ""|default-disk|network-disk|local-ssd) ;;
+    *) _die "CACHE='$cache' is not valid. Use default-disk, network-disk, or local-ssd." ;;
   esac
 
-  if [[ "$sizing" == "minimal" && "$cache" == "local-ssd" ]]; then
-    _die "SIZING=minimal requires network-disk. minimal has no SmithDB node pools, so no Local SSD." \
+  if [[ "$sizing" == "minimal" && -n "$cache" && "$cache" != "default-disk" ]]; then
+    _die "SIZING=minimal requires default-disk. minimal has no SmithDB node pools, so no Local SSD and no C3 pool for network-disk." \
       "Run: make smithdb-configure SIZING=minimal"
   fi
 
   # With no CACHE, the tfvars value stays. minimal writes null instead: null
-  # gives network-disk for minimal, and a later size change gets local-ssd.
+  # gives default-disk for minimal, and a later size change gets the default
+  # for that size (default-disk for small, network-disk for medium and large).
   header "SmithDB size and cache storage (infra/terraform.tfvars)"
   _set_tfvar smithdb_sizing "\"$sizing\""
   if [[ -n "$cache" ]]; then

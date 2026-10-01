@@ -1030,12 +1030,12 @@ variable "smithdb_sizing" {
 
 variable "smithdb_cache_storage" {
   type        = string
-  description = "SmithDB cache storage: local-ssd (emptyDir on node Local SSD) or network-disk. network-disk is a per-pod Hyperdisk Balanced volume on a C3 or C3D cache pool, or standard-rwo for minimal. Null gives network-disk for minimal and local-ssd for the other sizes. A change replaces the cache node pool."
+  description = "SmithDB cache storage: default-disk, network-disk, or local-ssd. default-disk is a per-pod volume on the cluster default class (standard-rwo, pd-balanced) on an N2 cache pool. network-disk is a per-pod Hyperdisk Balanced volume (7,000 IOPS, 1,000 MiB/s) on a C3 or C3D cache pool. local-ssd is an emptyDir on node Local SSD. Null gives default-disk for minimal and small, and network-disk for medium and large. minimal accepts only default-disk. A change recreates the cache nodes, and each cache starts empty."
   default     = null
 
   validation {
-    condition     = contains(["local-ssd", "network-disk"], coalesce(var.smithdb_cache_storage, "local-ssd"))
-    error_message = "smithdb_cache_storage must be local-ssd or network-disk."
+    condition     = contains(["default-disk", "network-disk", "local-ssd"], coalesce(var.smithdb_cache_storage, "default-disk"))
+    error_message = "smithdb_cache_storage must be default-disk, network-disk, or local-ssd."
   }
 }
 

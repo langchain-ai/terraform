@@ -538,10 +538,10 @@ List what is published with `helm search repo langchain/langsmith --versions`.
 
 ### Sizing and staged rollout
 
-`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`local-ssd`, `network-disk`) set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. The three gates `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, and `smithdb_query_enabled` move SmithDB through dual write, backfill, and cutover. ClickHouse stays enabled in every phase.
+`smithdb_sizing` (`minimal`, `small`, `medium`, `large`) and `smithdb_cache_storage` (`default-disk`, `network-disk`, `local-ssd`) set the chart tier, the resources, the node pool shapes, the namespace quota, and the default tier of a created metastore. An unset `smithdb_sizing` follows `sizing_profile`. An unset `smithdb_cache_storage` follows the size: `default-disk` for `minimal` and `small`, and `network-disk` for `medium` and `large` (see [SMITHDB.md](SMITHDB.md#cache-storage)). The three gates `smithdb_ingestion_enabled`, `smithdb_migration_enabled`, and `smithdb_query_enabled` move SmithDB through dual write, backfill, and cutover. ClickHouse stays enabled in every phase.
 
 ```bash
-make smithdb-configure SIZING=small CACHE=local-ssd    # size and cache mode
+make smithdb-configure SIZING=small                    # size; CACHE=<mode> is optional
 make smithdb-phase PHASE=dual-write                    # off | dual-write | backfill | cutover
 make smithdb-status                                    # read-only
 make deploy-all                                        # after each change

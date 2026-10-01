@@ -108,7 +108,7 @@ patch-lgp: ## Patch LGP CRs for minimum/dev profiles (right-sizes redis sidecars
 # configure and phase only edit infra/terraform.tfvars; run make deploy-all after.
 # make exports SIZING, CACHE, PHASE, START_TIME, and FORCE to the script.
 
-smithdb-configure: ## SmithDB size + cache: SIZING=<minimal|small|medium|large> [CACHE=<local-ssd|network-disk>]
+smithdb-configure: ## SmithDB size + cache: SIZING=<minimal|small|medium|large> [CACHE=<default-disk|network-disk|local-ssd>]
 	$(INFRA_DIR)/scripts/smithdb.sh configure
 
 smithdb-phase: ## SmithDB gates: PHASE=<off|dual-write|backfill|cutover> [START_TIME=<RFC 3339>] [FORCE=true]

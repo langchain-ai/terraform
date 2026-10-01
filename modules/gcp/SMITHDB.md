@@ -30,17 +30,19 @@ plan time.
 ## Configure infrastructure
 
 Set `enable_smithdb = true` in `infra/terraform.tfvars`, or answer yes in
-`make quickstart`. Then select the size and the cache mode:
+`make quickstart`. Then select the size, and optionally the cache mode:
 
 ```sh
-make smithdb-configure SIZING=small CACHE=local-ssd
+make smithdb-configure SIZING=small
 make deploy-all
 ```
 
 `make smithdb-configure` writes `smithdb_sizing` and `smithdb_cache_storage` to
-`infra/terraform.tfvars`. `CACHE` is optional. With no `CACHE`, the current
-`smithdb_cache_storage` stays. For `SIZING=minimal` with no `CACHE`, the script
-writes `null`, so a later size change gets the default cache mode, `local-ssd`.
+`infra/terraform.tfvars`. `CACHE` is optional: `default-disk`, `network-disk`,
+or `local-ssd`. With no `CACHE`, the current `smithdb_cache_storage` stays, and
+an unset value follows the size (see [Cache storage](#cache-storage)). For
+`SIZING=minimal` with no `CACHE`, the script writes `null`, so a later size
+change gets the default cache mode for that size.
 
 For BYO Postgres:
 
@@ -78,8 +80,10 @@ The component rows are per replica, as CPU / memory / cache size:
 | Backfill Job (CPU / memory / ephemeral) | 1 / 4Gi / 10Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi | 8 / 32Gi / 100Gi |
 | Backfill taskdb, requests; limits | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi | 2 / 4Gi; 4 / 8Gi |
 | Cache HPA `maxReplicas` | 1 | 10 (chart default) | 10 (chart default) | 10 (chart default) |
+| Default cache mode | `default-disk` | `default-disk` | `network-disk` | `network-disk` |
+| Cache pool, `default-disk` (boot disk) | no pool; `standard-rwo` | n2-standard-16 (300 GB) | n2-standard-32 (300 GB) | n2-standard-64 (300 GB) |
+| Cache pool, `network-disk` (boot disk) | not allowed | c3-standard-22 (300 GB), fails the [speed rule](#speed-rule-for-network-disk) | c3-standard-44 (300 GB) | c3-standard-88 (300 GB) |
 | Cache pool, `local-ssd` (boot disk) | not allowed | n2-standard-16, 2 LSSD (100 GB) | n2-standard-32, 4 LSSD (100 GB) | n2-standard-64, 8 LSSD (100 GB) |
-| Cache pool, `network-disk` (boot disk) | no pool; `standard-rwo` | c3-standard-22 (300 GB) | c3-standard-44 (300 GB) | c3-standard-88 (300 GB) |
 | Compute pool | no pool | n2-standard-8 | n2-standard-8 | n2-standard-16 |
 | Metastore: docs vCPU / memory; default Cloud SQL tier (vCPU / memory) | not in the docs; `db-custom-2-8192` (2 / 8Gi) | 2 / 16Gi; `db-custom-4-16384` (4 / 16Gi) | 4 / 32Gi; `db-custom-6-32768` (6 / 32Gi) | 8 / 64Gi; `db-custom-10-65536` (10 / 64Gi) |
 | Quota headroom: CPU / memory / pods | 7 / 11Gi / 12 | 27 / 53Gi / 12 | 93 / 169Gi / 12 | 404 / 870Gi / 26 |
@@ -122,16 +126,17 @@ The component rows are per replica, as CPU / memory / cache size:
   tell you to monitor the database resource use and the transaction latency
   during the rollout.
 
-`large` runs 10 cache pods. On `n2-standard-64` (`local-ssd`), each `ingestion`
-pod uses one node, and each other node holds two 28 CPU pods. That is about 6
-cache nodes, plus 1 node for the backfill Job. On `c3-standard-88`
-(`network-disk`), it is about 4 cache nodes, plus 1 for the backfill Job. The
-compute pool needs 1 node. `smithdb_instance_store_max_nodes` (default 3) is per
-zone, so 3 zones give a maximum of 9 cache nodes. If you set
-`smithdb_node_locations` to one zone, set `smithdb_instance_store_max_nodes` to
-7 or more. `make preflight` checks the quota at the maximum node count. For
-`large` with `local-ssd` in 3 zones, that is 720 N2 vCPU and 27,000 GB of Local
-SSD.
+`large` runs 10 cache pods. On `c3-standard-88` (`network-disk`, the default),
+it is about 4 cache nodes, plus 1 for the backfill Job. On `n2-standard-64`
+(`default-disk` or `local-ssd`), each `ingestion` pod uses one node, and each
+other node holds two 28 CPU pods. That is about 6 cache nodes, plus 1 node for
+the backfill Job. The compute pool needs 1 node.
+`smithdb_instance_store_max_nodes` (default 3) is per zone, so 3 zones give a
+maximum of 9 cache nodes. If you set `smithdb_node_locations` to one zone, set
+`smithdb_instance_store_max_nodes` to 7 or more. `make preflight` checks the
+quota at the maximum node count. For `large` with `network-disk` in 3 zones,
+that is 792 C3 vCPU for the cache pool and 144 N2 vCPU for the compute pool.
+With `local-ssd`, it is 720 N2 vCPU and 27,000 GB of Local SSD.
 
 The pool rows are defaults. A `smithdb_instance_store_*` or
 `smithdb_compute_machine_type` value that you set replaces them, also after a
@@ -151,33 +156,54 @@ size change. Terraform does not check that a pinned value fits the size:
   `smithdb_instance_store_local_ssd_count = 0` for them.
 
 Terraform rejects `local-ssd` when the cache pool has no Local SSD: a count of 0
-on a type that does not end in `lssd`. It also rejects `network-disk` with the
-backfill when the boot disk is below 300 GB, because the Job requests 100Gi.
+on a type that does not end in `lssd`. It also rejects `default-disk` and
+`network-disk` with the backfill when the boot disk is below 300 GB, because the
+Job requests 100Gi.
 
-A change of the machine type, the Local SSD count, or the cache mode replaces
-the node pool, and each cache starts empty. Object storage keeps the data.
+A change of the machine type, the Local SSD count, or the cache mode changes
+the cache pool. Terraform updates the pool in place or replaces it, and either
+way GKE recreates its nodes, so each cache starts empty. Object storage keeps
+the data.
 
 ## Cache storage
 
-`query`, `ingestion`, and `compactionWorker` keep a cache at `/data`. With no
-cache values, chart 0.17 gives each pod a PVC from the default StorageClass. On
-GKE, that class is `standard-rwo`, which is below the
+`query`, `ingestion`, and `compactionWorker` keep a cache at `/data`. SmithDB
+keeps its data in object storage, so a lost cache costs reads from GCS, not
+data. The cache disk speed sets the query and ingestion speed. The
 [cache floor](https://docs.langchain.com/langsmith/self-host-smithdb-infrastructure#cache-storage)
-of 7000 IOPS and 1000 MiB/s. The generated sizing file always sets the cache.
+is 7000 IOPS and 1000 MiB/s for each cache volume. The generated sizing file
+always sets the cache.
 
-### local-ssd
+`smithdb_cache_storage` selects one of three modes. The names and the meanings
+are the same on GCP and AWS:
 
-Use `local-ssd` for production. Each cache is an `emptyDir` on node Local SSD.
-The cache pool uses the GKE Local SSD-backed *ephemeral storage* mode, so the
-Local SSD capacity is node allocatable `ephemeral-storage`. Raw block Local SSD
-does not back `emptyDir`, and the cache then goes to the boot disk with no error.
+| Mode | Disk | Meets the floor | Default for |
+|---|---|---|---|
+| `default-disk` | A PVC for each pod on `standard-rwo` (pd-balanced), on an N2 cache pool | No | `minimal`, `small` |
+| `network-disk` | A PVC for each pod on Hyperdisk Balanced with provisioned speed, on a C3 cache pool | Yes, if the [speed rule](#speed-rule-for-network-disk) holds | `medium`, `large` |
+| `local-ssd` | An `emptyDir` on node Local SSD | Yes | none (opt-in) |
 
-For each cache component, the sizing file sets this cache block:
+An unset `smithdb_cache_storage` follows the size. A value that you set replaces
+the default, also after a size change. `smithdb_cache_storage_by_sizing` in
+`infra/locals.tf` is the code copy.
 
-- the cache pool pin;
-- `volumes: [{name: cache, emptyDir: {sizeLimit: <cache size>}}]`;
-- `resources` with `ephemeral-storage` in `requests` and `limits`. The chart
-  requires them for an `emptyDir` cache.
+- Development sizes do not need the floor, and `default-disk` needs no extra
+  setup.
+- Production sizes need the floor. `network-disk` meets it with no Local SSD
+  quota and no Local SSD machine types.
+- `local-ssd` is faster and has no fee for provisioned speed. It needs Local SSD
+  machine types and Local SSD quota.
+
+All three modes keep the node label and taint `smithdb-local/instance-store` on
+the cache pool, so the Helm node pins do not change with the mode. A change of
+the mode recreates the cache nodes, and each cache starts empty.
+
+### default-disk
+
+Each cache is a PVC for each pod from the GKE built-in `standard-rwo` class. The
+chart sizes each volume from the tier. The cache pool is N2 with no Local SSD
+and a 300 GB boot disk, because the backfill Job takes 100Gi of ephemeral
+storage from the boot disk. The module creates no StorageClass.
 
 ### network-disk
 
@@ -190,15 +216,54 @@ sizes each volume from the tier.
 - The cache machine type must be C3 or C3D, with 0 Local SSD. E2, N1, N2, and
   N2D cannot attach Hyperdisk Balanced, and C4 and N4 need a Hyperdisk boot
   disk. Terraform rejects other types.
-- All Hyperdisk and Persistent Disk volumes on a node share one VM throughput
-  limit. For c3-standard-22 that limit is 1800 MiB/s, so three 1000 MiB/s cache
-  volumes on one node cannot all get full throughput.
+- The boot disk defaults to 300 GB for the backfill Job, as in `default-disk`.
+
+#### Speed rule for network-disk
+
+All Hyperdisk and Persistent Disk volumes on a node share one VM throughput
+limit. A cache volume gets its full 1000 MiB/s only if:
+
+```text
+most cache pods on one node x 1000 MiB/s <= node Hyperdisk throughput limit
+```
+
+The HPA can add cache pods up to `maxReplicas` (chart default 10), so the most
+pods is the count of the smallest cache pod that fits in the node CPU. The node
+allocatable CPU is about 1 vCPU below the machine vCPU count.
+
+| Size | Machine | VM limit | Most cache pods on one node | Need | Result |
+|---|---|---|---|---|---|
+| `small` | c3-standard-22 | 1800 MiB/s | 5 (4 CPU each, with the HPA) | 5000 MiB/s | Fails |
+| `medium` | c3-standard-44 | 2400 MiB/s | 2 (16 + 16 CPU) | 2000 MiB/s | Passes |
+| `large` | c3-standard-88 | 5000 MiB/s | 3 (3 x 28 CPU) | 3000 MiB/s | Passes |
+
+The defaults use `network-disk` only for `medium` and `large`, and both pass.
+`small` with `network-disk` is an opt-in that fails the rule. A Terraform
+`check` block shows a warning for it, and the plan continues. A C3 or C3D type
+that you set, other than the three in the table, gets a warning that the rule is
+not checked. The limits come from the
+[Hyperdisk performance limits](https://cloud.google.com/compute/docs/disks/hyperdisk-perf-limits).
+
+### local-ssd
+
+Each cache is an `emptyDir` on node Local SSD. The cache pool uses the GKE Local
+SSD-backed *ephemeral storage* mode, so the Local SSD capacity is node
+allocatable `ephemeral-storage`. Raw block Local SSD does not back `emptyDir`,
+and the cache then goes to the boot disk with no error.
+
+For each cache component, the sizing file sets this cache block:
+
+- the cache pool pin;
+- `volumes: [{name: cache, emptyDir: {sizeLimit: <cache size>}}]`;
+- `resources` with `ephemeral-storage` in `requests` and `limits`. The chart
+  requires them for an `emptyDir` cache.
 
 ### minimal
 
 `minimal` runs SmithDB on the general node pool with reduced resources and one
-replica for each cache component. Each cache is a PVC from the GKE built-in
-`standard-rwo` class. Terraform rejects `minimal` with `local-ssd`.
+replica for each cache component. Its mode is `default-disk`: each cache is a
+PVC from the GKE built-in `standard-rwo` class. Terraform rejects `minimal` with
+`network-disk` or `local-ssd`, because `minimal` has no SmithDB node pools.
 
 ## Metastore TLS on GCP
 
@@ -342,11 +407,14 @@ kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
 gcloud storage ls "gs://$(terraform -chdir=infra output -raw smithdb_object_store_bucket)/**"
 ```
 
+- `default-disk`: one `<pod>-cache` PVC for each cache pod, on `standard-rwo`.
+  This includes `minimal`.
+- `network-disk`: one `<pod>-cache` PVC for each cache pod, on
+  `smithdb-cache<suffix>`.
 - `local-ssd`: no `*-cache` PVCs, and `df -h /data` shows about the Local SSD
   capacity. Do the check in `ingestion` and `compaction-worker` too. A size near
   the boot disk means raw block Local SSD.
-- `network-disk`: one `<pod>-cache` PVC for each cache pod, on
-  `smithdb-cache<suffix>`. `minimal`: the same, on `standard-rwo`.
+- `terraform -chdir=infra output smithdb_cache_storage` shows the resolved mode.
 
 ## Backfill access to the traces bucket
 
@@ -375,15 +443,20 @@ Do steps 1 to 4 before `make apply`. With the upgrade path in
 `MIGRATION-0.16-to-0.17.md`, do them before its step 3. Its steps 3 to 5 then
 run `make apply`, `make init-values`, and `make deploy`.
 
-1) Select the size. An unset `smithdb_sizing` now follows `sizing_profile`, so
-`production` gives `medium`, `production-large` gives `large`, and `minimum`
-gives `minimal` with no pools.
-For `medium`, Terraform replaces the cache pool with `n2-standard-32` and 4
-Local SSD. The compute pool stays `n2-standard-8`.
-For `large`, Terraform replaces the cache pool with `n2-standard-64` and 8
-Local SSD, and the compute pool with `n2-standard-16`. `large` runs 12 SmithDB
-pods that request about 350 vCPU. To stay smaller, set `smithdb_sizing` to
-`medium` or `small`. To keep the 0.16 pool (n2-standard-16, 2 Local SSD) and
+1) Select the size and the cache mode. An unset `smithdb_sizing` now follows
+`sizing_profile`, so `production` gives `medium`, `production-large` gives
+`large`, and `minimum` gives `minimal` with no pools. An unset
+`smithdb_cache_storage` follows the size (see [Cache storage](#cache-storage)).
+For `small`, Terraform changes the 0.16 cache pool (n2-standard-16, 2 Local
+SSD) to n2-standard-16 with no Local SSD and a 300 GB boot disk
+(`default-disk`).
+For `medium`, Terraform changes the cache pool to `c3-standard-44`
+(`network-disk`). The compute pool stays `n2-standard-8`.
+For `large`, Terraform changes the cache pool to `c3-standard-88`
+(`network-disk`), and the compute pool to `n2-standard-16`.
+In each case GKE recreates the cache nodes, and each cache starts empty. `large` runs 12
+SmithDB pods that request about 350 vCPU. To stay smaller, set `smithdb_sizing`
+to `medium` or `small`. To keep the 0.16 pool (n2-standard-16, 2 Local SSD) and
 the chart tier `small`:
 
 ```sh
@@ -441,6 +514,42 @@ helm upgrade langsmith langchain/langsmith -n langsmith --version <0.17 version>
 
 A rename of the volume on `query` only is not enough: `ingestion` and
 `compactionWorker` then get PVCs on the default class, with no error.
+
+### Keep the cache mode of an existing install
+
+The default cache mode now follows the size: `default-disk` for `minimal` and
+`small`, and `network-disk` for `medium` and `large`. Before, the default was
+`local-ssd` for `small`, `medium`, and `large`. An install that does not set
+`smithdb_cache_storage` gets the new default at the next `make apply`. For
+`small`, `medium`, and `large`, Terraform then changes the cache node pool, GKE
+recreates its nodes, and each cache starts empty. Object storage keeps the data. Terraform cannot tell an
+existing install from a new one, so set the mode before you apply the new code:
+
+1) Find the current mode, before you pull the new module code:
+
+```sh
+terraform -chdir=infra output smithdb_cache_storage
+kubectl get pvc -n langsmith -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName
+```
+
+A PVC name that ends in `-cache` shows a PVC cache. Its class shows the mode:
+`smithdb-cache<suffix>` is `network-disk`, and `standard-rwo` is the old
+`minimal` cache, now named `default-disk`. No `-cache` PVC shows `local-ssd`.
+
+2) Set that mode in `infra/terraform.tfvars`. For example, to keep Local SSD:
+
+```sh
+make smithdb-configure SIZING=<your size> CACHE=local-ssd
+```
+
+For `minimal`, set nothing: its cache stays on `standard-rwo`. A
+`smithdb_cache_storage = "network-disk"` line for `minimal` now fails the plan.
+Remove it, or set `default-disk`.
+
+3) Run `make plan`. Confirm that the plan has no change to
+`module.smithdb_nodes[0]` and does not create
+`module.k8s_bootstrap.kubernetes_storage_class_v1.smithdb_cache[0]`. Then run
+`make apply`.
 
 ## Namespace quota headroom
 
@@ -522,10 +631,10 @@ instance. Make the SmithDB user the owner of its database, run
 
 ### Cache volumes grow with HPA replicas
 
-In `network-disk` mode, each HPA replica of a cache component gets its own PVC
-at the tier cache size. Each PVC adds disk cost, and the replicas on a node
-share its throughput limit. `large` starts with 10 cache PVCs, 7200Gi in total.
-`minimal` caps each HPA at one replica.
+In `default-disk` and `network-disk` modes, each HPA replica of a cache
+component gets its own PVC at the tier cache size. Each PVC adds disk cost, and
+the replicas on a node share its throughput limit. `large` starts with 10 cache
+PVCs, 7200Gi in total. `minimal` caps each HPA at one replica.
 
 ## Node pools outside this module
 
@@ -546,6 +655,8 @@ gcloud container node-pools create smithdb-lssd \
 
 - Use `--ephemeral-storage-local-ssd`, not `--local-nvme-ssd-block`. With raw
   block Local SSD, the cache goes to the boot disk.
+- For `default-disk`, use an N2 type with a 300 GB boot disk and no Local SSD,
+  and set `smithdb.cache.storageClassName: standard-rwo`.
 - For `network-disk`, use a C3 or C3D type with a 300 GB boot disk and no Local
   SSD. Create the class from [network-disk](#network-disk), and set
   `smithdb.cache.storageClassName`.
@@ -556,7 +667,9 @@ gcloud container node-pools create smithdb-lssd \
 
 ## Production notes
 
-- Use `local-ssd` for the cache.
+- Use a cache mode that meets the cache floor: `network-disk` (the default for
+  `medium` and `large`) or `local-ssd`. `default-disk` does not meet it. See
+  [Cache storage](#cache-storage).
 - Keep Cloud SQL deletion protection and backups enabled.
 - Keep `smithdb_bucket_force_destroy = false`.
 - Set `smithdb_bucket_kms_key` to use CMEK. The module grants the Cloud Storage

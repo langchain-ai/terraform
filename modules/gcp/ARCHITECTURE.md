@@ -128,7 +128,7 @@ SmithDB stays disabled by default. When enabled, Pass 1 adds:
 - a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP;
 - a dedicated GCS object store;
 - a SmithDB service account with its own Workload Identity binding, scoped to that one bucket;
-- two GKE Standard node pools: a cache pool (node Local SSD, or Hyperdisk volumes in `network-disk` mode) and a compute pool. `smithdb_sizing = "minimal"` creates no pools.
+- two GKE Standard node pools: a cache pool (N2 with `standard-rwo` volumes in `default-disk` mode, C3 with Hyperdisk Balanced volumes in `network-disk` mode, or node Local SSD in `local-ssd` mode) and a compute pool. `smithdb_sizing = "minimal"` creates no pools.
 
 Object-store traffic uses the subnet's Private Google Access rather than Cloud NAT.
 
