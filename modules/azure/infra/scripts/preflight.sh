@@ -1272,6 +1272,19 @@ else
       warn "create_cluster = false — cannot confirm cluster '${EXISTING_AKS}' exists without an active az login"
     elif az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --only-show-errors -o none 2>/dev/null; then
       pass "Attaching to AKS cluster '${EXISTING_AKS}' in resource group '${EXISTING_AKS_RG}'"
+      # An Entra ID cluster returns no client certificate, so the Kubernetes and
+      # Helm providers sign in through kubelogin (aks_kube_auth = auto or entra).
+      KUBE_AUTH=$(_tfvar aks_kube_auth || echo "auto")
+      AAD_MANAGED=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile.managed" -o tsv --only-show-errors 2>/dev/null || echo "")
+      if [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_MANAGED" = "true" ]; }; then
+        if command -v kubelogin >/dev/null 2>&1; then
+          pass "Entra ID cluster: kubelogin found, the providers sign in with your az session"
+        else
+          fail "Cluster '${EXISTING_AKS}' uses Entra ID and kubelogin is not on the PATH — install it with 'az aks install-cli', and give the identity running apply an Azure Kubernetes Service RBAC role on the cluster"
+        fi
+      elif [ "$KUBE_AUTH" = "certificate" ] && [ "$AAD_MANAGED" = "true" ]; then
+        fail "aks_kube_auth = \"certificate\" but cluster '${EXISTING_AKS}' uses Entra ID, where azurerm returns no client certificate — use \"auto\""
+      fi
     else
       fail "AKS cluster '${EXISTING_AKS}' not found in resource group '${EXISTING_AKS_RG}' — check both names and the subscription"
     fi

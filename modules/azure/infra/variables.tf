@@ -356,8 +356,21 @@ variable "vnet_address_space" {
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
-#   • Local accounts NOT disabled — the kubernetes/helm providers authenticate via
-#     the cluster's kube_config, which Azure returns empty for AAD-only clusters.
+#   • On a cluster with Entra ID integration (local accounts on or off), the
+#     kubernetes/helm providers sign in through kubelogin with the caller's az
+#     session (aks_kube_auth): kubelogin on the PATH, and an Azure Kubernetes
+#     Service RBAC role on the cluster for whoever runs the apply.
+
+variable "aks_kube_auth" {
+  type        = string
+  description = "How Terraform's Kubernetes and Helm providers sign in to the cluster. 'auto' (default) uses Entra ID through kubelogin when the cluster has Entra ID integration, where azurerm returns no client certificate, and the kube_config certificate otherwise. 'entra' needs kubelogin on the PATH and an az login with an Azure Kubernetes Service RBAC role on the cluster."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "entra", "certificate"], var.aks_kube_auth)
+    error_message = "aks_kube_auth must be 'auto', 'entra', or 'certificate'."
+  }
+}
 
 variable "create_cluster" {
   type        = bool

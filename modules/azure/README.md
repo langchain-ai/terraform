@@ -71,7 +71,7 @@ az aks show --name <cluster> --resource-group <rg> \
 | Requirement | Why | Fix |
 |---|---|---|
 | OIDC issuer + Workload Identity enabled | Federated credentials trust the cluster's OIDC issuer; without it pods can't reach Blob or Key Vault | `az aks update -n <cluster> -g <rg> --enable-oidc-issuer --enable-workload-identity` (in-place, no recreate) |
-| Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
+| On an Entra ID cluster: `kubelogin` on the PATH and an Azure Kubernetes Service RBAC role for whoever runs the apply | azurerm returns no client certificate for any Entra-integrated cluster (local accounts on or off), so the Kubernetes and Helm providers sign in through `kubelogin` with your `az` session (`aks_kube_auth = "auto"`, the default) | `az aks install-cli`; grant the role (for example Azure Kubernetes Service RBAC Cluster Admin) and `az login` again |
 | API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
 
 `aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts.
