@@ -333,7 +333,7 @@ variable "entra_admin_group_object_ids" {
   default     = []
 }
 
-variable "cluster_identity_id" {
+variable "control_plane_identity_id" {
   type        = string
   description = "Resource ID of a user-assigned managed identity for the AKS control plane. Empty (default) keeps the system-assigned identity."
   default     = ""

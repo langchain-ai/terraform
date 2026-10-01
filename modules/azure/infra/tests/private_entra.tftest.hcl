@@ -58,7 +58,7 @@ run "defaults_plan_a_public_cluster_with_local_accounts_and_a_system_identity" {
   }
   assert {
     condition     = module.aks.access_profile.identity_type == "SystemAssigned" && module.aks.access_profile.identity_ids == null
-    error_message = "With aks_cluster_identity_id empty, the control plane was not planned with a system-assigned identity"
+    error_message = "With aks_control_plane_identity_id empty, the control plane was not planned with a system-assigned identity"
   }
   assert {
     condition     = module.aks.entra_auth == false
@@ -101,9 +101,9 @@ run "a_private_cluster_registers_in_a_supplied_zone_as_the_supplied_identity" {
   command = plan
 
   variables {
-    aks_private_cluster_enabled = true
-    aks_private_dns_zone_id     = var.fixture_dns_zone_id
-    aks_cluster_identity_id     = var.fixture_identity_id
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = var.fixture_dns_zone_id
+    aks_control_plane_identity_id = var.fixture_identity_id
   }
 
   assert {
@@ -112,7 +112,7 @@ run "a_private_cluster_registers_in_a_supplied_zone_as_the_supplied_identity" {
   }
   assert {
     condition     = module.aks.access_profile.identity_type == "UserAssigned" && module.aks.access_profile.identity_ids == toset([var.fixture_identity_id])
-    error_message = "aks_cluster_identity_id did not plan a user-assigned control-plane identity"
+    error_message = "aks_control_plane_identity_id did not plan a user-assigned control-plane identity"
   }
 }
 
@@ -120,12 +120,12 @@ run "a_user_assigned_identity_alone_leaves_the_api_server_public" {
   command = plan
 
   variables {
-    aks_cluster_identity_id = var.fixture_identity_id
+    aks_control_plane_identity_id = var.fixture_identity_id
   }
 
   assert {
     condition     = module.aks.access_profile.identity_type == "UserAssigned" && module.aks.access_profile.private_cluster_enabled == false
-    error_message = "aks_cluster_identity_id alone did not plan a public cluster with a user-assigned identity"
+    error_message = "aks_control_plane_identity_id alone did not plan a public cluster with a user-assigned identity"
   }
 }
 
@@ -178,9 +178,9 @@ run "a_dns_zone_that_is_not_a_zone_id_is_refused" {
   command = plan
 
   variables {
-    aks_private_cluster_enabled = true
-    aks_private_dns_zone_id     = "privatelink.eastus.azmk8s.io"
-    aks_cluster_identity_id     = var.fixture_identity_id
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = "privatelink.eastus.azmk8s.io"
+    aks_control_plane_identity_id = var.fixture_identity_id
   }
 
   expect_failures = [var.aks_private_dns_zone_id]
@@ -222,10 +222,10 @@ run "a_cluster_identity_that_is_not_a_user_assigned_identity_is_refused" {
   command = plan
 
   variables {
-    aks_cluster_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/identity-rg/providers/Microsoft.Network/virtualNetworks/not-an-identity"
+    aks_control_plane_identity_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/identity-rg/providers/Microsoft.Network/virtualNetworks/not-an-identity"
   }
 
-  expect_failures = [var.aks_cluster_identity_id]
+  expect_failures = [var.aks_control_plane_identity_id]
 }
 
 # ── An existing cluster ──────────────────────────────────────────────────────
@@ -328,9 +328,9 @@ run "moving_an_existing_private_cluster_to_another_zone_is_refused" {
   }
 
   variables {
-    aks_private_cluster_enabled = true
-    aks_private_dns_zone_id     = var.fixture_dns_zone_id
-    aks_cluster_identity_id     = var.fixture_identity_id
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = var.fixture_dns_zone_id
+    aks_control_plane_identity_id = var.fixture_identity_id
   }
 
   expect_failures = [terraform_data.aks_access_guard]
@@ -358,9 +358,9 @@ run "the_supplied_zone_in_another_case_plans_clean" {
   }
 
   variables {
-    aks_private_cluster_enabled = true
-    aks_private_dns_zone_id     = var.fixture_dns_zone_id
-    aks_cluster_identity_id     = var.fixture_identity_id
+    aks_private_cluster_enabled   = true
+    aks_private_dns_zone_id       = var.fixture_dns_zone_id
+    aks_control_plane_identity_id = var.fixture_identity_id
   }
 }
 

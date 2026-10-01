@@ -307,7 +307,7 @@ variable "aks_private_cluster_enabled" {
 
 variable "aks_private_dns_zone_id" {
   type        = string
-  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and resolving the API server is left to the caller's DNS. A zone resource ID: AKS registers the API server there, which requires aks_cluster_identity_id with Private DNS Zone Contributor on the zone. Set before the first apply."
+  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and resolving the API server is left to the caller's DNS. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity_id with Private DNS Zone Contributor on the zone. Set before the first apply."
   default     = ""
 
   validation {
@@ -323,8 +323,8 @@ variable "aks_private_dns_zone_id" {
   validation {
     # A system-assigned identity does not exist until the cluster does, so
     # nothing can grant it rights on the zone before AKS needs them.
-    condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || var.aks_cluster_identity_id != ""
-    error_message = "A custom aks_private_dns_zone_id requires aks_cluster_identity_id: AKS registers the API server in the zone as the control-plane identity, which needs Private DNS Zone Contributor on it before the cluster is created."
+    condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || var.aks_control_plane_identity_id != ""
+    error_message = "A custom aks_private_dns_zone_id requires aks_control_plane_identity_id: AKS registers the API server in the zone as the control-plane identity, which needs Private DNS Zone Contributor on it before the cluster is created."
   }
 }
 
@@ -350,14 +350,14 @@ variable "aks_entra_admin_group_object_ids" {
   }
 }
 
-variable "aks_cluster_identity_id" {
+variable "aks_control_plane_identity_id" {
   type        = string
   description = "Resource ID of a user-assigned managed identity for the AKS control plane. Empty (default) keeps the system-assigned identity. Grant it Network Contributor on the cluster VNet or subnet (and the route table, with user-defined routing) and, with a custom aks_private_dns_zone_id, Private DNS Zone Contributor on the zone, before the first apply. Changing it on an existing cluster moves the control plane to the new identity; grants held by the old one do not follow."
   default     = ""
 
   validation {
-    condition     = var.aks_cluster_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.aks_cluster_identity_id))
-    error_message = "aks_cluster_identity_id must be a user-assigned identity resource ID (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>)."
+    condition     = var.aks_control_plane_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.aks_control_plane_identity_id))
+    error_message = "aks_control_plane_identity_id must be a user-assigned identity resource ID (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>)."
   }
 }
 

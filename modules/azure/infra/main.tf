@@ -989,7 +989,7 @@ module "aks" {
   private_dns_zone_id          = var.aks_private_dns_zone_id
   entra_only                   = var.aks_entra_only
   entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
-  cluster_identity_id          = var.aks_cluster_identity_id
+  control_plane_identity_id    = var.aks_control_plane_identity_id
   kubelogin_environment        = local.azure_cloud.kubelogin_environment
 
   tags = local.common_tags

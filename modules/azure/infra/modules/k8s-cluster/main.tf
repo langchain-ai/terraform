@@ -353,14 +353,14 @@ resource "azurerm_kubernetes_cluster" "main" {
 
   # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
   # configured), and interact with the node resource group. System-assigned
-  # unless cluster_identity_id names a user-assigned identity, which a landing
-  # zone pre-grants Network Contributor on its VNet or route table (and Private
-  # DNS Zone Contributor on a zone it owns) before the cluster exists. The
-  # provider updates a change of identity in place, but grants held by the old
-  # identity do not follow it, so pick one before the first apply.
+  # unless control_plane_identity_id names a user-assigned identity, which a
+  # landing zone pre-grants Network Contributor on its VNet or route table (and
+  # Private DNS Zone Contributor on a zone it owns) before the cluster exists.
+  # The provider updates a change of identity in place, but grants held by the
+  # old identity do not follow it, so pick one before the first apply.
   identity {
-    type         = var.cluster_identity_id == "" ? "SystemAssigned" : "UserAssigned"
-    identity_ids = var.cluster_identity_id == "" ? null : [var.cluster_identity_id]
+    type         = var.control_plane_identity_id == "" ? "SystemAssigned" : "UserAssigned"
+    identity_ids = var.control_plane_identity_id == "" ? null : [var.control_plane_identity_id]
   }
 
   # Entra-only access: Kubernetes authorization through Azure RBAC, and no
