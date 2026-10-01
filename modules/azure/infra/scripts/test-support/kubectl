@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Stub `kubectl` for preflight.sh. Models only the calls preflight makes:
+#   config current-context -> $FIXTURE_DIR/kube_ctx, else no context
+#   get nodes -o json      -> $FIXTURE_DIR/nodes.json, else unreachable
+#   version                -> a fixed version line
+# Anything else exits non-zero with a STUB marker, so an unmodeled call fails loudly.
+set -uo pipefail
+FIX="${FIXTURE_DIR:?FIXTURE_DIR must be set}"
+ARGS="$*"
+case "$ARGS" in
+  "config current-context"*)
+    if [ -f "$FIX/kube_ctx" ]; then cat "$FIX/kube_ctx"; exit 0; fi
+    echo "error: current-context is not set" >&2; exit 1 ;;
+  "get nodes"*)
+    printf 'kubectl %s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/nodes.json" ]; then cat "$FIX/nodes.json"; exit 0; fi
+    echo "Unable to connect to the server" >&2; exit 1 ;;
+  version*) echo "Client Version: v1.31.0 (stub)"; exit 0 ;;
+esac
+echo "STUB: unmodeled kubectl call: $ARGS" >&2
+exit 97
