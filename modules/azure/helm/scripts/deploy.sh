@@ -164,6 +164,48 @@ fi
 # exists during plan). Applied here instead — idempotent, safe to re-run.
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 
+# ── Ingress class for ingress_controller = "none" ─────────────────────────
+# No class is set for none, so the chart's Ingress and the HTTP-01 solver's go
+# to the cluster's default IngressClass, unless values-overrides.yaml (or
+# values.yaml) names one. With neither, no controller serves them. Kubernetes
+# also refuses a classless Ingress when more than one class claims the default.
+_byo_ingress_class=""
+if [[ "$_ingress_controller" == "none" ]]; then
+  for _vf in "$OVERRIDES_FILE" "$BASE_VALUES_FILE"; do
+    [[ -f "$_vf" ]] || continue
+    _byo_ingress_class=$(_values_ingress_class "$_vf")
+    [[ -n "$_byo_ingress_class" ]] && { _byo_class_file=$(basename "$_vf"); break; }
+  done
+
+  if [[ -n "$_byo_ingress_class" ]]; then
+    if ! [[ "$_byo_ingress_class" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]]; then
+      fail "ingress.ingressClassName '${_byo_ingress_class}' in ${_byo_class_file} is not a valid IngressClass name."
+      exit 1
+    fi
+    pass "ingress_controller = none: Ingress uses class '${_byo_ingress_class}' from ${_byo_class_file}"
+  elif ! _default_classes=$(kubectl get ingressclass -o jsonpath='{range .items[?(@.metadata.annotations.ingressclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{" "}{end}' 2>/dev/null); then
+    warn "ingress_controller = none: could not list IngressClasses, so the default class is unverified."
+  else
+    read -r -a _default_class_list <<<"$_default_classes"
+    case "${#_default_class_list[@]}" in
+      1)
+        pass "ingress_controller = none: Ingress uses the cluster's default IngressClass '${_default_class_list[0]}'"
+        ;;
+      0)
+        if [[ "$_tls_source" == "letsencrypt" ]]; then
+          fail "ingress_controller = none: the cluster has no default IngressClass, so no controller would serve the Ingress or the Let's Encrypt HTTP-01 challenge. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default."
+          exit 1
+        fi
+        warn "ingress_controller = none: the cluster has no default IngressClass, so no controller will serve the LangSmith Ingress. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default. Port-forwarding to langsmith-frontend works regardless."
+        ;;
+      *)
+        fail "ingress_controller = none: IngressClasses ${_default_classes% } all claim the default, and Kubernetes rejects an Ingress with no class in that case. Set ingress.ingressClassName in values-overrides.yaml, or leave one default."
+        exit 1
+        ;;
+    esac
+  fi
+fi
+
 # With Envoy Gateway, both cert-manager TLS paths issue through its Gateway shim,
 # which Terraform switches on only for the cert-manager it installs.
 if [[ "$_ingress_controller" == "envoy-gateway" ]] && [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
@@ -204,12 +246,13 @@ spec:
 EOF
     pass "ClusterIssuer letsencrypt-prod configured (solver: gatewayHTTPRoute)"
   else
-    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers
+    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers.
+    # For none, an empty class leaves the solver's Ingress to the default class.
     case "$_ingress_controller" in
       istio|istio-addon) _acme_ingress_class="istio" ;;
       nginx)             _acme_ingress_class="nginx" ;;
       agic)              _acme_ingress_class="azure-application-gateway" ;;
-      *)                 _acme_ingress_class="nginx" ;;
+      *)                 _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
@@ -224,10 +267,9 @@ spec:
       name: letsencrypt-prod-account-key
     solvers:
     - http01:
-        ingress:
-          ingressClassName: ${_acme_ingress_class}
+        ingress: {${_acme_ingress_class:+ingressClassName: ${_acme_ingress_class}}}
 EOF
-    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class})"
+    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class:-cluster default})"
   fi
 fi
 
