@@ -13,8 +13,11 @@
 #   • OIDC issuer + Workload Identity: allows Kubernetes service accounts to
 #     federate with Azure AD and assume Managed Identities — used by LangSmith
 #     pods to authenticate to Azure Blob Storage without static keys.
-#   • System-assigned Managed Identity: AKS manages its own identity for
-#     pulling images, accessing node resource group, and VMSS operations.
+#   • Control-plane Managed Identity: system-assigned by default, or a
+#     user-assigned identity the caller pre-grants, for pulling images,
+#     accessing the node resource group, and VMSS operations.
+#   • Optional private API server and Entra-only access (Azure RBAC, local
+#     accounts disabled); providers then authenticate through kubelogin.
 #   • Default node pool: Standard_D8s_v5 (8 vCPU, 32 GB RAM) — Dsv5 family,
 #     the production baseline (matches the root module default). Dsv3
 #     (D8s_v3 / D16s_v3) is the documented fallback when Dsv5 quota is short.
@@ -82,6 +85,15 @@ locals {
   cluster_oidc_issuer_url = var.create_cluster ? azurerm_kubernetes_cluster.main[0].oidc_issuer_url : data.azurerm_kubernetes_cluster.existing[0].oidc_issuer_url
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
+
+  # Whether the providers authenticate through Entra rather than a client
+  # certificate. Read from the cluster on the attach path: an Entra-integrated
+  # cluster hands back a kube_config with no client certificate, whether or not
+  # its local accounts are disabled.
+  # On the create path the live cluster wins over the variable, so a plan that
+  # turns Entra on for an existing cluster still refreshes with the certificate
+  # the cluster accepts today.
+  cluster_entra = var.create_cluster ? (local.live_cluster != null ? try(local.live_cluster.entra, null) == true : var.entra_only) : length(data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control) > 0
 
   # var.location for a cluster created here, so the location check below is
   # trivially satisfied and only has something to say under create_cluster = false.
@@ -213,13 +225,25 @@ check "existing_cluster_location" {
 # Helm provider uses the AKS cluster credentials to deploy charts
 # (the ingress controller, and later cert-manager/KEDA via k8s-bootstrap).
 # Credentials come from the AKS cluster (created here or pre-existing) —
-# no external kubeconfig needed.
+# no external kubeconfig needed. On an Entra cluster the client certificate is
+# empty, so the provider runs kubelogin for a token as the az CLI identity
+# instead. The server ID is the AKS Entra server application, the same in
+# every cloud.
 provider "helm" {
   kubernetes {
     host                   = local.cluster_kube_config[0].host
-    client_certificate     = base64decode(local.cluster_kube_config[0].client_certificate)
-    client_key             = base64decode(local.cluster_kube_config[0].client_key)
+    client_certificate     = local.cluster_entra ? null : base64decode(local.cluster_kube_config[0].client_certificate)
+    client_key             = local.cluster_entra ? null : base64decode(local.cluster_kube_config[0].client_key)
     cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
+
+    dynamic "exec" {
+      for_each = local.cluster_entra ? [1] : []
+      content {
+        api_version = "client.authentication.k8s.io/v1beta1"
+        command     = "kubelogin"
+        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630", "--environment", var.kubelogin_environment]
+      }
+    }
   }
 }
 
@@ -240,13 +264,15 @@ provider "helm" {
 # caller can read; the resource group is matched in Terraform below, since a
 # name can repeat across groups. The comparison lives in the root module
 # (terraform_data.aks_network_mode_guard), where a failing precondition is
-# reachable by the test suite. Read-only GET, no writes.
+# reachable by the test suite. The same read feeds the access guard
+# (terraform_data.aks_access_guard) and tells the providers whether the cluster
+# already takes Entra tokens. Read-only GET, no writes.
 data "azapi_resource_list" "clusters" {
   count     = var.create_cluster ? 1 : 0
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed}"
   }
 }
 
@@ -325,11 +351,38 @@ resource "azurerm_kubernetes_cluster" "main" {
     zones = var.availability_zones
   }
 
-  # System-assigned Managed Identity: AKS uses this to manage node VMs,
-  # pull from ACR (if configured), and interact with the node resource group.
+  # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
+  # configured), and interact with the node resource group. System-assigned
+  # unless cluster_identity_id names a user-assigned identity, which a landing
+  # zone pre-grants Network Contributor on its VNet or route table (and Private
+  # DNS Zone Contributor on a zone it owns) before the cluster exists. The
+  # provider updates a change of identity in place, but grants held by the old
+  # identity do not follow it, so pick one before the first apply.
   identity {
-    type = "SystemAssigned"
+    type         = var.cluster_identity_id == "" ? "SystemAssigned" : "UserAssigned"
+    identity_ids = var.cluster_identity_id == "" ? null : [var.cluster_identity_id]
   }
+
+  # Entra-only access: Kubernetes authorization through Azure RBAC, and no
+  # local admin account, so kube_config carries no client certificate and the
+  # providers authenticate through kubelogin (see the exec blocks). Azure
+  # refuses to turn Entra integration off once it is on; the root module
+  # refuses the edit before Azure gets the chance.
+  local_account_disabled = var.entra_only ? true : null
+
+  dynamic "azure_active_directory_role_based_access_control" {
+    for_each = var.entra_only ? [1] : []
+    content {
+      azure_rbac_enabled     = true
+      admin_group_object_ids = var.entra_admin_group_object_ids
+    }
+  }
+
+  # Private API server: the endpoint lives in the cluster's VNet and the
+  # public FQDN goes away. Both settings force a new cluster, which is why the
+  # root module refuses to flip them on a cluster that already exists.
+  private_cluster_enabled = var.private_cluster_enabled
+  private_dns_zone_id     = var.private_cluster_enabled ? (var.private_dns_zone_id == "" ? "System" : var.private_dns_zone_id) : null
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply

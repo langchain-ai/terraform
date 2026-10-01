@@ -1,20 +1,45 @@
 # ── Providers ─────────────────────────────────────────────────────────────────
 # Credentials are passed in from the root module via variables (not from a local
 # kubeconfig) so this module works in CI/CD pipelines without file system access.
+# On an Entra cluster there is no client certificate, so both providers run
+# kubelogin for a token as the az CLI identity. The server ID is the AKS Entra
+# server application, the same in every cloud.
+
+locals {
+  kubelogin_args = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630", "--environment", var.kubelogin_environment]
+}
 
 provider "kubernetes" {
   host                   = var.host
-  client_certificate     = base64decode(var.client_certificate)
-  client_key             = base64decode(var.client_key)
+  client_certificate     = var.entra_auth ? null : base64decode(var.client_certificate)
+  client_key             = var.entra_auth ? null : base64decode(var.client_key)
   cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
+
+  dynamic "exec" {
+    for_each = var.entra_auth ? [1] : []
+    content {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "kubelogin"
+      args        = local.kubelogin_args
+    }
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = var.host
-    client_certificate     = base64decode(var.client_certificate)
-    client_key             = base64decode(var.client_key)
+    client_certificate     = var.entra_auth ? null : base64decode(var.client_certificate)
+    client_key             = var.entra_auth ? null : base64decode(var.client_key)
     cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
+
+    dynamic "exec" {
+      for_each = var.entra_auth ? [1] : []
+      content {
+        api_version = "client.authentication.k8s.io/v1beta1"
+        command     = "kubelogin"
+        args        = local.kubelogin_args
+      }
+    }
   }
 }
 

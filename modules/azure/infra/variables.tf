@@ -286,6 +286,81 @@ variable "aks_authorized_ip_ranges" {
   default     = []
 }
 
+# Private API server, Entra-only access, and a user-assigned control-plane
+# identity, for landing zones whose Azure Policy requires them. All off by
+# default and ignored when create_cluster = false. private_cluster_enabled and
+# private_dns_zone_id are fixed at creation: Azure has no in-place update, so
+# terraform_data.aks_access_guard refuses either edit on an existing cluster
+# rather than letting the provider replace it.
+variable "aks_private_cluster_enabled" {
+  type        = bool
+  description = "Give the AKS API server a private endpoint in the cluster VNet and no public address. The apply host needs a network path to it (a jumpbox, VPN, or a runner in a peered VNet) and DNS that resolves the private zone. Set before the first apply."
+  default     = false
+
+  validation {
+    # Authorized IP ranges filter the public endpoint, which a private cluster
+    # does not have; Azure rejects the pair.
+    condition     = !var.aks_private_cluster_enabled || length(var.aks_authorized_ip_ranges) == 0
+    error_message = "aks_authorized_ip_ranges filters the public API server endpoint, which a private cluster does not have. Clear aks_authorized_ip_ranges, or set aks_private_cluster_enabled = false."
+  }
+}
+
+variable "aks_private_dns_zone_id" {
+  type        = string
+  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and resolving the API server is left to the caller's DNS. A zone resource ID: AKS registers the API server there, which requires aks_cluster_identity_id with Private DNS Zone Contributor on the zone. Set before the first apply."
+  default     = ""
+
+  validation {
+    condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/[^/]+$", var.aks_private_dns_zone_id))
+    error_message = "aks_private_dns_zone_id must be empty, \"System\", \"None\", or a private DNS zone resource ID (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/<zone>)."
+  }
+
+  validation {
+    condition     = var.aks_private_dns_zone_id == "" || var.aks_private_cluster_enabled
+    error_message = "aks_private_dns_zone_id only applies to a private API server. Set aks_private_cluster_enabled = true, or leave aks_private_dns_zone_id empty."
+  }
+
+  validation {
+    # A system-assigned identity does not exist until the cluster does, so
+    # nothing can grant it rights on the zone before AKS needs them.
+    condition     = contains(["", "System", "None"], var.aks_private_dns_zone_id) || var.aks_cluster_identity_id != ""
+    error_message = "A custom aks_private_dns_zone_id requires aks_cluster_identity_id: AKS registers the API server in the zone as the control-plane identity, which needs Private DNS Zone Contributor on it before the cluster is created."
+  }
+}
+
+variable "aks_entra_only" {
+  type        = bool
+  description = "Entra-only access to AKS: Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled. Terraform's Helm and Kubernetes providers then authenticate through kubelogin, which must be on the apply host's PATH, as the az CLI identity, which needs cluster-admin through aks_entra_admin_group_object_ids or the Azure Kubernetes Service RBAC Cluster Admin role. Azure cannot turn Entra integration off once it is on."
+  default     = false
+}
+
+variable "aks_entra_admin_group_object_ids" {
+  type        = list(string)
+  description = "Object IDs of Entra groups granted cluster-admin on an Entra-only cluster. Requires aks_entra_only = true."
+  default     = []
+
+  validation {
+    condition     = alltrue([for id in var.aks_entra_admin_group_object_ids : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", id))])
+    error_message = "Each aks_entra_admin_group_object_ids entry must be an Entra group object ID (a GUID)."
+  }
+
+  validation {
+    condition     = length(var.aks_entra_admin_group_object_ids) == 0 || var.aks_entra_only
+    error_message = "aks_entra_admin_group_object_ids only applies to an Entra-only cluster. Set aks_entra_only = true, or leave the list empty."
+  }
+}
+
+variable "aks_cluster_identity_id" {
+  type        = string
+  description = "Resource ID of a user-assigned managed identity for the AKS control plane. Empty (default) keeps the system-assigned identity. Grant it Network Contributor on the cluster VNet or subnet (and the route table, with user-defined routing) and, with a custom aks_private_dns_zone_id, Private DNS Zone Contributor on the zone, before the first apply. Changing it on an existing cluster moves the control plane to the new identity; grants held by the old one do not follow."
+  default     = ""
+
+  validation {
+    condition     = var.aks_cluster_identity_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$", var.aks_cluster_identity_id))
+    error_message = "aks_cluster_identity_id must be a user-assigned identity resource ID (/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>)."
+  }
+}
+
 variable "location" {
   type        = string
   description = "The location of the LangSmith deployment"
@@ -356,8 +431,9 @@ variable "vnet_address_space" {
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
-#   • Local accounts NOT disabled — the kubernetes/helm providers authenticate via
-#     the cluster's kube_config, which Azure returns empty for AAD-only clusters.
+#   • kubelogin on the apply host if the cluster uses Entra ID — its kube_config
+#     carries no client certificate, so the kubernetes/helm providers fetch an
+#     Entra token through kubelogin as the az CLI identity instead.
 
 variable "create_cluster" {
   type        = bool

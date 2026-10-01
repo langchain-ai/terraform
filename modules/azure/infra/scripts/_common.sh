@@ -117,6 +117,27 @@ _cert_manager_azure_environment() {
   esac
 }
 
+# ── AKS credentials ──────────────────────────────────────────────────────────
+# Fetch a cluster's credentials into the kubeconfig and make it the current
+# context. An Entra-integrated cluster hands back a kubeconfig that runs
+# kubelogin's device-code login; that context is converted to the az CLI login
+# so kubectl and helm run unattended as the identity az is signed in as. The
+# cloud is passed explicitly, in the names kubelogin shares with cert-manager.
+_aks_get_credentials() {
+  local name="$1" rg="$2" entra
+  [[ -n "$name" && -n "$rg" ]] || { fail "Cluster name or resource group is empty"; return 1; }
+  az aks get-credentials --name "$name" --resource-group "$rg" --overwrite-existing || return 1
+  entra=$(az aks show --name "$name" --resource-group "$rg" --query "aadProfile.managed" -o tsv) || return 1
+  [[ "$entra" == "true" ]] || return 0
+  if ! command -v kubelogin >/dev/null 2>&1; then
+    fail "Cluster '$name' uses Entra ID, and kubelogin is not on PATH"
+    action "az aks install-cli  (installs kubectl and kubelogin)"
+    return 1
+  fi
+  kubelogin convert-kubeconfig --login azurecli --context "$name" \
+    --environment "$(_cert_manager_azure_environment)" || return 1
+}
+
 # ── Admin password rules ─────────────────────────────────────────────────────
 # The LangSmith Helm chart's auth-bootstrap job rejects an initial org admin
 # password without a symbol, and it fails ~10 minutes into the release rather

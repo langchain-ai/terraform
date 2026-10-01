@@ -306,3 +306,41 @@ variable "authorized_ip_ranges" {
   description = "External CIDRs permitted to reach the AKS API server. Empty list (default) omits the api_server_access_profile block, leaving the master publicly reachable so the apply host's Helm/kubectl steps work from any operator. Production deployments populate this with operator/CI egress CIDRs."
   default     = []
 }
+
+variable "private_cluster_enabled" {
+  type        = bool
+  description = "Give the API server a private endpoint in the cluster's VNet and no public address. The apply host then needs a network path to that endpoint."
+  default     = false
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "Private DNS zone for the API server: empty or \"System\" (AKS creates the zone in the node resource group), \"None\", or the resource ID of an existing zone. Only read when private_cluster_enabled = true."
+  default     = ""
+}
+
+# ── Identity and authentication ───────────────────────────────────────────────
+
+variable "entra_only" {
+  type        = bool
+  description = "Authenticate to the cluster with Entra ID only: Entra integration with Azure RBAC for Kubernetes authorization, and local accounts disabled. The Helm and Kubernetes providers then fetch tokens through kubelogin instead of a client certificate."
+  default     = false
+}
+
+variable "entra_admin_group_object_ids" {
+  type        = list(string)
+  description = "Object IDs of Entra groups granted cluster-admin when entra_only = true."
+  default     = []
+}
+
+variable "cluster_identity_id" {
+  type        = string
+  description = "Resource ID of a user-assigned managed identity for the AKS control plane. Empty (default) keeps the system-assigned identity."
+  default     = ""
+}
+
+variable "kubelogin_environment" {
+  type        = string
+  description = "Cloud name kubelogin targets when entra_only = true or the attached cluster uses Entra: AzurePublicCloud or AzureUSGovernmentCloud."
+  default     = "AzurePublicCloud"
+}

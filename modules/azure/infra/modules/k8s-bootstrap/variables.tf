@@ -1,5 +1,18 @@
 # ── Cluster connection ────────────────────────────────────────────────────────
 
+variable "entra_auth" {
+  type        = bool
+  description = "Authenticate through kubelogin with an Entra token instead of the client certificate, which an Entra cluster does not issue."
+  default     = false
+  nullable    = false
+}
+
+variable "kubelogin_environment" {
+  type        = string
+  description = "Cloud name kubelogin targets when entra_auth = true: AzurePublicCloud or AzureUSGovernmentCloud."
+  default     = "AzurePublicCloud"
+}
+
 variable "host" {
   type        = string
   description = "Kubernetes API server endpoint"

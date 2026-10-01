@@ -43,7 +43,7 @@ if [[ -n "$CLUSTER_NAME" && -n "$RESOURCE_GROUP" ]]; then
   info "Cluster: $CLUSTER_NAME"
   info "Resource group: $RESOURCE_GROUP"
   echo ""
-  az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing 2>/dev/null || true
+  _aks_get_credentials "$CLUSTER_NAME" "$RESOURCE_GROUP" 2>/dev/null || true
 fi
 
 # ── Validate cluster connectivity ───────────────────────────────────────────

@@ -114,8 +114,11 @@ _cluster_name=$(_tf_out aks_cluster_name) || {
 _rg_name=$(_tf_out resource_group_name) || _rg_name=""
 
 info "Cluster: ${_cluster_name}"
-az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
-  --overwrite-existing &>/dev/null
+_aks_get_credentials "$_cluster_name" "$_rg_name" >/dev/null 2>&1 || {
+  fail "Could not fetch credentials for cluster '${_cluster_name}'."
+  action "make kubeconfig  (shows the underlying error)"
+  exit 1
+}
 info "Active context: $(kubectl config current-context)"
 echo ""
 

@@ -446,3 +446,88 @@ run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {
 
   expect_failures = [terraform_data.validate_network]
 }
+
+# On an attached cluster the providers take their auth from the cluster: an
+# Entra-integrated one issues no client certificate, so they switch to
+# kubelogin whatever aks_entra_only says, and the create-path access variables
+# plan nothing.
+
+run "an_attached_entra_cluster_switches_the_providers_to_kubelogin" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+      azure_active_directory_role_based_access_control = [
+        { tenant_id = "00000000-0000-0000-0000-000000000000", azure_rbac_enabled = true, admin_group_object_ids = [] },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_private_cluster_enabled          = true
+  }
+
+  assert {
+    condition     = module.aks.entra_auth == true
+    error_message = "An attached Entra cluster did not switch the providers to kubelogin"
+  }
+  assert {
+    condition     = module.aks.access_profile == null && module.aks.live_access_profile == null
+    error_message = "The access variables planned something on an attached cluster"
+  }
+}
+
+run "an_attached_cluster_without_entra_keeps_the_certificate" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                  = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location            = "eastus"
+      oidc_issuer_enabled = true
+      kube_config         = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "" }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+      azure_active_directory_role_based_access_control = []
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_entra_only                       = true
+  }
+
+  assert {
+    condition     = module.aks.entra_auth == false
+    error_message = "aks_entra_only switched the providers to kubelogin on an attached cluster without Entra"
+  }
+}

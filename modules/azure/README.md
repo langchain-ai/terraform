@@ -65,14 +65,14 @@ Cluster prerequisites — verify before applying:
 
 ```bash
 az aks show --name <cluster> --resource-group <rg> \
-  --query "{oidc:oidcIssuerProfile.enabled, wi:securityProfile.workloadIdentity.enabled, localAccounts:disableLocalAccounts}"
+  --query "{oidc:oidcIssuerProfile.enabled, wi:securityProfile.workloadIdentity.enabled, entra:aadProfile.managed}"
 ```
 
 | Requirement | Why | Fix |
 |---|---|---|
 | OIDC issuer + Workload Identity enabled | Federated credentials trust the cluster's OIDC issuer; without it pods can't reach Blob or Key Vault | `az aks update -n <cluster> -g <rg> --enable-oidc-issuer --enable-workload-identity` (in-place, no recreate) |
-| Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
-| API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
+| `kubelogin` on the apply host, when `entra` is `true` | An Entra cluster issues no client certificate, so the Helm and Kubernetes providers fetch a token through `kubelogin` as the `az` CLI identity, which needs cluster-admin on the cluster | `az aks install-cli`, and see [Private API server and Entra-only access](#private-api-server-and-entra-only-access) for the role |
+| API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges, or for a private cluster, run from a host with a network path to its private endpoint |
 
 `aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts.
 
@@ -97,6 +97,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
+- `aks_private_cluster_enabled`, `aks_private_dns_zone_id`, `aks_entra_only`, `aks_entra_admin_group_object_ids`, `aks_cluster_identity_id`. Terraform detects Entra on the cluster itself and switches to `kubelogin` without `aks_entra_only`
 - `availability_zones`, for the cluster only — PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
@@ -226,6 +227,49 @@ Limits in Azure Government:
 The scripts (`make init-values`, `make deploy`, the quickstart wizard) read the cloud from the `azure_environment` output once the infrastructure is applied, then from `terraform.tfvars`, then from `TF_VAR_azure_environment`. The wizard keeps Redis in-cluster in Government.
 
 
+### Private API server and Entra-only access
+
+Some landing zones' Azure Policy requires a private API server, Entra ID with Azure RBAC, local accounts disabled, or a control-plane identity the network team grants in advance. Each setting is off by default and independent of the others:
+
+```hcl
+aks_private_cluster_enabled = true
+aks_private_dns_zone_id     = "/subscriptions/.../resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.<region>.azmk8s.io"
+
+aks_entra_only                   = true
+aks_entra_admin_group_object_ids = ["<entra-group-object-id>"]
+
+aks_cluster_identity_id = "/subscriptions/.../resourceGroups/<identity-rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+```
+
+| Variable | Effect |
+|---|---|
+| `aks_private_cluster_enabled` | The API server gets a private endpoint in the cluster VNet and no public address. Refused alongside `aks_authorized_ip_ranges`, which filters the public endpoint |
+| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and resolving the API server is left to your DNS. A zone ID: AKS registers the API server in your zone, which requires `aks_cluster_identity_id` |
+| `aks_entra_only` | Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled |
+| `aks_entra_admin_group_object_ids` | Entra groups granted cluster-admin. Requires `aks_entra_only` |
+| `aks_cluster_identity_id` | The control plane runs as this user-assigned identity instead of a system-assigned one |
+
+In Azure Government the AKS private zone is `privatelink.<region>.cx.aks.containerservice.azure.us`.
+
+Grant the user-assigned identity its roles before the first apply. AKS uses them while it creates the cluster:
+
+| Role | Scope |
+|---|---|
+| `Network Contributor` | The AKS subnet or its VNet, and the subnet's route table when it has one |
+| `Private DNS Zone Contributor` | The zone in `aks_private_dns_zone_id`, when it is a zone ID |
+
+The apply host needs three things on top of the [prerequisites](#prerequisites):
+
+- **A network path to the private endpoint.** On a private cluster, run Terraform and `make deploy` from a host in the cluster VNet or a peered one, or over a VPN, with DNS that resolves the private zone
+- **`kubelogin` on `PATH`, for an Entra cluster.** The cluster issues no client certificate, so the providers and the `make` scripts fetch an Entra token through `kubelogin` as the identity `az` is signed in as. The `kubelogin` environment follows `azure_environment`
+- **Cluster-admin for that identity, for an Entra cluster.** Put it in a group in `aks_entra_admin_group_object_ids`, or assign it `Azure Kubernetes Service RBAC Cluster Admin` on the cluster
+
+Set the private settings before the first apply. Azure cannot make an existing API server private or public, or move it to another zone, so the provider would replace the cluster and everything installed on it. Terraform compares the request with the cluster at plan time and refuses either change.
+
+Azure turns Entra integration on in place and cannot turn it off, so Terraform refuses `aks_entra_only = false` on a cluster that has it. To turn it on for an existing cluster, make that change in an apply of its own: that plan still authenticates with the certificate, and the next one switches to `kubelogin`.
+
+Changing `aks_cluster_identity_id` on an existing cluster moves the control plane to the new identity in place. Roles held by the old identity do not move with it, so grant the new one first.
+
 ## Prerequisites
 
 ### Required tools
@@ -246,6 +290,10 @@ kubectl version --client
 # Helm (>= 3.12)
 brew install helm
 helm version
+
+# kubelogin, only for an Entra cluster (aks_entra_only, or an attached cluster with Entra ID)
+brew install Azure/kubelogin/kubelogin
+kubelogin --version
 ```
 
 ### Required Azure RBAC
@@ -663,7 +711,7 @@ Same as `make clean` but skips the interactive confirmation — useful in non-in
 **Script:** `helm/scripts/get-kubeconfig.sh`
 
 - Reads `aks_cluster_name` and `resource_group_name` from `terraform output`
-- Runs `az aks get-credentials --overwrite-existing`
+- Runs `az aks get-credentials --overwrite-existing`, and on an Entra cluster converts the context to the `az` CLI login with `kubelogin convert-kubeconfig`
 - Merges the AKS context into `~/.kube/config` and sets it as the active context
 - Prints `kubectl get nodes` so you can confirm connectivity immediately
 
