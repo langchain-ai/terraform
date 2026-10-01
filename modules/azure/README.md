@@ -492,7 +492,7 @@ The key defaults to `ca.crt` (`langsmith_custom_ca_secret_key`).
 
 > ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
-> For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
+> For those controllers, use `dns01` with a custom domain, `existing` with your own certificate, or `none` for HTTP-only.
 >
 > See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix and validated paths.
 
