@@ -14,8 +14,9 @@ locals {
     "DNS Zone Contributor",
     "Storage Blob Data Reader",
   ]
+  # The condition compares bare role GUIDs. The data source returns resource IDs.
   assignable_role_ids = concat(
-    [for role in data.azurerm_role_definition.assignable : role.role_definition_id],
+    [for role in data.azurerm_role_definition.assignable : basename(role.role_definition_id)],
     [azurerm_role_definition.blob_objects.role_definition_id],
   )
   assignable_role_list = join(", ", local.assignable_role_ids)

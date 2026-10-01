@@ -90,6 +90,12 @@ Then create the data plane in LangSmith with the three output values.
 
 Azure can take a few minutes to apply a new federated credential or role assignment. If the first create fails with a sign-in or permission error, wait five minutes and retry.
 
+## Control plane issuer
+
+The issuer is a Kubernetes service account issuer of the LangSmith control plane, not a Microsoft Entra tenant. Azure accepts a managed identity token as an assertion only for an app in the same tenant, so a LangChain managed identity cannot sign in as your managed identity.
+
+The issuer of an AKS cluster changes when the cluster is rebuilt. For production, LangChain signs the control plane tokens with its own OIDC issuer, which does not change with a cluster, for example `https://oidc.byoc.langchain.com` with the signing key in Key Vault. Test control planes use the AKS issuer of the cluster.
+
 ## Change of control plane issuer
 
 LangChain tells you before a new control plane issuer goes into use. Add the new issuer to `control_plane_issuers` and apply. Remove the old issuer after LangChain confirms the move.
