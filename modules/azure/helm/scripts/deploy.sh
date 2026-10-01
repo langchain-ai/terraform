@@ -333,9 +333,12 @@ fi
 # With AKS managed Istio, ingressClassName: istio targets label istio: ingressgateway
 # but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
-if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+# Runs with either hostname source: langsmith_domain alone is the usual setup for
+# dns01 and existing, and without this Gateway the chart's VirtualServices bind to
+# nothing.
+_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_langsmith_domain" ) ]]; then
   _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
-  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
   _namespace="$NAMESPACE"
 
@@ -368,11 +371,11 @@ EOF
   pass "Istio Gateway created: ${_istio_hostname} (ports 80 + 443)"
 fi
 
-# ── Operator-supplied certificate and CA bundle ───────────────────────────
+# ── Your own certificate and CA bundle ─────────────────────────────────────
 # With tls_certificate_source = "existing" nothing issues langsmith-tls, so a
 # missing Secret would leave the site serving the controller's default
-# certificate. Every controller path reads it from the release namespace (the
-# Istio add-on path copies it to its gateway namespace below).
+# certificate. Every controller path reads it from the release namespace (both
+# Istio paths copy it to their gateway namespace after the Helm upgrade).
 if [[ "$_tls_source" == "existing" ]]; then
   _tls_type=$(kubectl get secret langsmith-tls -n "$NAMESPACE" -o jsonpath='{.type}' 2>/dev/null) || _tls_type=""
   if [[ -z "$_tls_type" ]]; then
@@ -919,7 +922,8 @@ fi
 # For self-managed Istio, the secret must exist in istio-system namespace
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
-if [[ "$_ingress_controller" == "istio" && ( "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ) ]]; then
+# Every TLS source but "none" leaves langsmith-tls in the release namespace.
+if [[ "$_ingress_controller" == "istio" && "$_tls_source" != "none" ]]; then
   _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
@@ -950,7 +954,8 @@ fi
 # After cert-manager issues the TLS cert, copy it to aks-istio-ingress namespace
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
-if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+# Same hostname gate as the Gateway above; skipped for "none", which has no Secret.
+if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_langsmith_domain" ) && "$_tls_source" != "none" ]]; then
   _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."

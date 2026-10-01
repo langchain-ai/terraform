@@ -374,9 +374,10 @@ else
   ingressClassName: \"${_ingress_class}\"}"
 fi
 
-# A CA bundle the LangSmith pods trust, for a certificate from a private CA.
-# Pods that call LangSmith's own hostname (agent deployments sending traces,
-# the operator) fail TLS without it. Read by the chart as config.customCa.
+# A CA bundle for endpoints a private CA signed. The chart (config.customCa)
+# mounts it in the pods that include langsmith.tlsVolumes: backend,
+# platform-backend, host-backend, the queues, listener, playground and the agent
+# features. The operator and the agent deployments it creates do not get it.
 _custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
 _custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
 _custom_ca_block=""

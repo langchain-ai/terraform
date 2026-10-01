@@ -1302,7 +1302,7 @@ variable "postgres_geo_redundant_backup" {
 # tflint-ignore: terraform_unused_declarations
 variable "langsmith_custom_ca_secret_name" {
   type        = string
-  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle the LangSmith pods trust (the chart's config.customCa), for a certificate from a private CA: pods that call LangSmith's own hostname need it. Read by helm/scripts/init-values.sh and deploy.sh; Terraform ignores this value."
+  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle (the chart's config.customCa), for endpoints a private CA signed. The chart mounts it in backend, platform-backend, host-backend, the queues, listener, playground and the agent features, not in the operator or the agent deployments it creates. Read by helm/scripts/init-values.sh and deploy.sh; Terraform ignores this value."
   default     = ""
 }
 

@@ -206,7 +206,7 @@ _validate_license_key() {
 # Keys deploy.sh re-reads from terraform.tfvars on every run — sizing_profile and
 # the enable_* flags, which select whole values files — are deliberately absent.
 # Those cannot go stale, so listing them would fail a deploy that is fine.
-_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location"
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key"
 
 # Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
 # leaves it empty when the key is absent — never the default a caller substitutes,
