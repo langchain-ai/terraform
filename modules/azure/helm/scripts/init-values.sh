@@ -397,13 +397,18 @@ info "Generating values-overrides.yaml..."
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
 #   envoy-gateway → ""     (uses Gateway API, not Ingress — see the gateway block below)
-#   none          → ""       (bring your own)
+#   none          → ""       (the cluster's default IngressClass, or one set by
+#                             hand in this file, kept on re-run)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
   nginx)             _ingress_class="nginx" ;;
   agic)              _ingress_class="azure-application-gateway" ;;
   *)                 _ingress_class="" ;;
 esac
+if [[ "$_ingress_controller" == "none" && -f "$OUT_FILE" ]]; then
+  _ingress_class=$(_values_ingress_class "$OUT_FILE")
+  [[ -n "$_ingress_class" ]] && info "Keeping ingressClassName from values-overrides.yaml: $_ingress_class"
+fi
 
 if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
   _ingress_block='ingress:
