@@ -358,12 +358,15 @@ variable "vnet_address_space" {
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
 #   • On a cluster with Entra ID integration (local accounts on or off), the
 #     kubernetes/helm providers sign in through kubelogin with the caller's az
-#     session (aks_kube_auth): kubelogin on the PATH, and an Azure Kubernetes
-#     Service RBAC role on the cluster for whoever runs the apply.
+#     session (aks_kube_auth): kubelogin on the PATH, and cluster-admin rights for
+#     whoever runs the apply. With Azure RBAC on the cluster that is an Azure role
+#     (Azure Kubernetes Service RBAC Cluster Admin); with Kubernetes RBAC it is
+#     membership in one of the cluster's admin_group_object_ids or a
+#     ClusterRoleBinding to cluster-admin, since Azure roles grant nothing there.
 
 variable "aks_kube_auth" {
   type        = string
-  description = "How Terraform's Kubernetes and Helm providers sign in to the cluster. 'auto' (default) uses Entra ID through kubelogin when the cluster has Entra ID integration, where azurerm returns no client certificate, and the kube_config certificate otherwise. 'entra' needs kubelogin on the PATH and an az login with an Azure Kubernetes Service RBAC role on the cluster."
+  description = "How Terraform's Kubernetes and Helm providers sign in to the cluster. 'auto' (default) uses Entra ID through kubelogin when the cluster has Entra ID integration, where azurerm returns no client certificate, and the kube_config certificate otherwise. Entra sign-in needs kubelogin on the PATH and an az login with cluster-admin rights: an Azure role such as Azure Kubernetes Service RBAC Cluster Admin when the cluster uses Azure RBAC, or membership in one of the cluster's admin_group_object_ids or a ClusterRoleBinding to cluster-admin when it uses Kubernetes RBAC (azure_rbac_enabled = false), where Azure roles grant nothing."
   default     = "auto"
 
   validation {

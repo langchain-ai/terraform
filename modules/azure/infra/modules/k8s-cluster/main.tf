@@ -87,8 +87,10 @@ locals {
   # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
   # whether or not local accounts are disabled, so certificate sign-in cannot work
   # there. Such clusters are signed in to through Entra ID with kubelogin, reusing
-  # the caller's az session; the server ID is the AKS Entra server application,
-  # the same in every Azure cloud.
+  # the caller's az session; the server ID is the AKS-managed Entra server
+  # application, the same in every Azure cloud (kubelogin docs/book concepts/aks.md).
+  # A cluster still on the legacy, customer-registered server app needs that
+  # app's ID instead, which this module does not take.
   cluster_entra_profile = var.create_cluster ? azurerm_kubernetes_cluster.main[0].azure_active_directory_role_based_access_control : data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control
   kube_auth             = var.kube_auth == "auto" ? (try(length(local.cluster_entra_profile) > 0, false) ? "entra" : "certificate") : var.kube_auth
 

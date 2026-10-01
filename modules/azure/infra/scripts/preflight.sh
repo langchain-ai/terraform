@@ -1275,14 +1275,16 @@ else
       # An Entra ID cluster returns no client certificate, so the Kubernetes and
       # Helm providers sign in through kubelogin (aks_kube_auth = auto or entra).
       KUBE_AUTH=$(_tfvar aks_kube_auth || echo "auto")
-      AAD_MANAGED=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile.managed" -o tsv --only-show-errors 2>/dev/null || echo "")
-      if [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_MANAGED" = "true" ]; }; then
+      AAD_PROFILE=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile != \`null\`" -o tsv --only-show-errors 2>/dev/null || echo "")
+      if [ "$KUBE_AUTH" = "entra" ] && [ "$AAD_PROFILE" = "false" ]; then
+        fail "aks_kube_auth = \"entra\" but cluster '${EXISTING_AKS}' has no Entra ID integration, so it accepts no Entra token — use \"auto\""
+      elif [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_PROFILE" = "true" ]; }; then
         if command -v kubelogin >/dev/null 2>&1; then
           pass "Entra ID cluster: kubelogin found, the providers sign in with your az session"
         else
-          fail "Cluster '${EXISTING_AKS}' uses Entra ID and kubelogin is not on the PATH — install it with 'az aks install-cli', and give the identity running apply an Azure Kubernetes Service RBAC role on the cluster"
+          fail "Cluster '${EXISTING_AKS}' uses Entra ID and kubelogin is not on the PATH — install it with 'az aks install-cli'. The identity running apply also needs cluster-admin rights: an Azure Kubernetes Service RBAC role under Azure RBAC, or an admin group or ClusterRoleBinding under Kubernetes RBAC"
         fi
-      elif [ "$KUBE_AUTH" = "certificate" ] && [ "$AAD_MANAGED" = "true" ]; then
+      elif [ "$KUBE_AUTH" = "certificate" ] && [ "$AAD_PROFILE" = "true" ]; then
         fail "aks_kube_auth = \"certificate\" but cluster '${EXISTING_AKS}' uses Entra ID, where azurerm returns no client certificate — use \"auto\""
       fi
     else
