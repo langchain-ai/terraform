@@ -29,9 +29,9 @@ set -euo pipefail
 #   .terraform/                     — provider cache, not sensitive
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-AZURE_DIR="$(cd "$INFRA_DIR/.." && pwd)"
-HELM_VALUES_DIR="$AZURE_DIR/helm/values"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+AZURE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+HELM_VALUES_DIR="${LANGSMITH_VALUES_DIR:-$AZURE_DIR/helm/values}"
 
 source "$SCRIPT_DIR/_common.sh"
 

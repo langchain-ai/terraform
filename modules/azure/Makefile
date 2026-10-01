@@ -13,10 +13,14 @@
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
+        smithdb-configure smithdb-phase smithdb-status \
         clean clean-force
 
 INFRA_DIR := infra
 HELM_DIR  := helm
+# The Terraform root the terraform targets run in. LANGSMITH_INFRA_DIR points it
+# (and the scripts) at a root outside this repo, such as a wrapper module.
+TF_DIR    := $(or $(LANGSMITH_INFRA_DIR),$(INFRA_DIR))
 
 help: ## Show available targets
 	@echo ""
@@ -72,18 +76,20 @@ test-preflight: ## Run the pre-flight tests (stubbed az, no Azure account needed
 	python3 $(INFRA_DIR)/scripts/test-preflight-rbac.py
 
 init: ## terraform init (infra)
-	terraform -chdir=$(INFRA_DIR) init $(ARGS)
+	terraform -chdir=$(TF_DIR) init $(ARGS)
 
 plan: ## terraform plan (infra) — runs setup-env.sh first to ensure secrets.auto.tfvars exists
 	@bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(ARGS)
-	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
-	terraform -chdir=$(INFRA_DIR) plan $(ARGS)
+	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
+	terraform -chdir=$(TF_DIR) plan $(ARGS)
 
 apply: ## terraform apply (infra) — three stages, each prompts for confirmation: Azure infra, then k8s bootstrap, then the rest (ARGS passed to each)
+	@# The stage targets are this root's addresses; a wrapper module prefixes them.
+	@if [ -n "$(LANGSMITH_INFRA_DIR)" ]; then echo "make apply stages this repo's addresses; run terraform apply in $(LANGSMITH_INFRA_DIR) instead."; exit 1; fi
 	@bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(ARGS)
-	@if [ ! -f $(INFRA_DIR)/secrets.auto.tfvars ]; then cd $(INFRA_DIR) && bash scripts/setup-env.sh; fi
+	@if [ ! -f $(TF_DIR)/secrets.auto.tfvars ]; then bash $(INFRA_DIR)/scripts/setup-env.sh; fi
 	@echo "→ Stage 1: Azure infrastructure (RG, VNet, AKS, Postgres, Redis, Blob, KeyVault)..."
-	terraform -chdir=$(INFRA_DIR) apply $(ARGS) \
+	terraform -chdir=$(TF_DIR) apply $(ARGS) \
 		-target=azurerm_resource_group.resource_group \
 		-target=module.vnet \
 		-target=module.aks \
@@ -92,7 +98,7 @@ apply: ## terraform apply (infra) — three stages, each prompts for confirmatio
 		-target=module.blob \
 		-target=module.keyvault
 	@echo "→ Stage 2: Kubernetes bootstrap (namespace, secrets, cert-manager, KEDA)..."
-	terraform -chdir=$(INFRA_DIR) apply $(ARGS) \
+	terraform -chdir=$(TF_DIR) apply $(ARGS) \
 		-target=module.k8s_bootstrap.kubernetes_namespace_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_service_account_v1.langsmith \
 		-target=module.k8s_bootstrap.kubernetes_resource_quota_v1.langsmith \
@@ -104,17 +110,17 @@ apply: ## terraform apply (infra) — three stages, each prompts for confirmatio
 		-target=module.k8s_bootstrap.helm_release.cert_manager \
 		-target=module.k8s_bootstrap.helm_release.keda
 	@echo "→ Stage 3: remaining resources (DNS zone, WAF, anything left in k8s bootstrap)..."
-	terraform -chdir=$(INFRA_DIR) apply $(ARGS)
+	terraform -chdir=$(TF_DIR) apply $(ARGS)
 
 destroy: ## terraform destroy (infra) — prompts for confirmation
-	terraform -chdir=$(INFRA_DIR) destroy $(ARGS)
+	terraform -chdir=$(TF_DIR) destroy $(ARGS)
 
 destroy-force: ## terraform destroy without confirmation prompt (use after make uninstall)
-	terraform -chdir=$(INFRA_DIR) destroy -auto-approve $(ARGS)
+	terraform -chdir=$(TF_DIR) destroy -auto-approve $(ARGS)
 
 tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 	@case "$(firstword $(ARGS))" in plan|apply) bash $(INFRA_DIR)/scripts/guard-ingress-default.sh $(wordlist 2,$(words $(ARGS)),$(ARGS)) ;; esac
-	terraform -chdir=$(INFRA_DIR) $(ARGS)
+	terraform -chdir=$(TF_DIR) $(ARGS)
 
 clean: ## Remove all local secrets and generated files (run after destroy)
 	$(INFRA_DIR)/scripts/clean.sh
@@ -143,6 +149,19 @@ deploy: ## Deploy LangSmith via Helm (values chain: base + overrides + addons + 
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
+
+# ── SmithDB ───────────────────────────────────────────────────────────────────
+# configure and phase only edit terraform.tfvars; run make deploy-all after.
+# make exports SIZING, PHASE, and FORCE to the script.
+
+smithdb-configure: ## SmithDB size: SIZING=<minimal|small|medium|large>
+	$(INFRA_DIR)/scripts/smithdb.sh configure
+
+smithdb-phase: ## SmithDB gates: PHASE=<off|dual-write|backfill|cutover> [FORCE=true]
+	$(INFRA_DIR)/scripts/smithdb.sh phase
+
+smithdb-status: ## SmithDB gates, sizing, pods, Jobs, and backfill progress (read-only)
+	$(INFRA_DIR)/scripts/smithdb.sh status
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

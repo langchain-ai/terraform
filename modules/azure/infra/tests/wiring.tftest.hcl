@@ -436,6 +436,155 @@ run "a_supplied_blob_zone_is_not_created_again" {
   }
 }
 
+# ── SmithDB sizing ───────────────────────────────────────────────────────────
+# Quota figures are the extras k8s-bootstrap adds: once to requests, twice to
+# limits. Worked from the tier table in main.tf, so a table edit that changes
+# the sums shows up here.
+
+run "smithdb_sizing_follows_sizing_profile_minimum" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    sizing_profile     = "minimum"
+    smithdb_sizing     = null
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "minimal"
+    error_message = "sizing_profile = minimum did not resolve smithdb_sizing to minimal"
+  }
+  assert {
+    condition     = output.smithdb_metastore_sku_name == "GP_Standard_D2ds_v5"
+    error_message = "minimal did not default the metastore SKU to GP_Standard_D2ds_v5"
+  }
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "small"
+    error_message = "minimal did not select the small chart tier"
+  }
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.query.autoscaling.hpa.maxReplicas == 1
+    error_message = "minimal did not cap the query HPA at one replica"
+  }
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources.requests.cpu == "1"
+    error_message = "minimal did not set explicit query resources"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 5, memory_gi = 10, pods = 12 }
+    error_message = "minimal quota extra is not 5 CPU, 10 GiB, 12 pods"
+  }
+}
+
+run "smithdb_sizing_follows_sizing_profile_production" {
+  command = plan
+
+  variables {
+    enable_smithdb     = true
+    availability_zones = ["1", "2", "3"]
+    sizing_profile     = "production"
+    smithdb_sizing     = null
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "medium"
+    error_message = "sizing_profile = production did not resolve smithdb_sizing to medium"
+  }
+  assert {
+    condition     = output.smithdb_metastore_sku_name == "MO_Standard_E4ds_v5"
+    error_message = "medium did not default the metastore SKU to MO_Standard_E4ds_v5"
+  }
+}
+
+run "smithdb_small_sets_the_tier_without_resources" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    smithdb_sizing            = "small"
+    smithdb_migration_enabled = false
+  }
+
+  assert {
+    condition     = yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "small"
+    error_message = "small did not select the small chart tier"
+  }
+  assert {
+    condition     = !can(yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources)
+    error_message = "small set explicit resources, which replace the chart tier"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
+    error_message = "small quota extra is not 27 CPU, 53 GiB, 12 pods"
+  }
+}
+
+run "smithdb_large_with_backfill_sets_replicas_and_quota" {
+  command = plan
+
+  variables {
+    enable_smithdb            = true
+    availability_zones        = ["1", "2", "3"]
+    sizing_profile            = "minimum"
+    smithdb_sizing            = "large"
+    smithdb_ingestion_enabled = true
+    smithdb_migration_enabled = true
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "large"
+    error_message = "An explicit smithdb_sizing did not win over sizing_profile"
+  }
+  assert {
+    condition = (
+      yamldecode(output.smithdb_helm_values).smithdb.query.autoscaling.hpa.minReplicas == 4 &&
+      yamldecode(output.smithdb_helm_values).smithdb.ingestion.autoscaling.hpa.minReplicas == 2 &&
+      yamldecode(output.smithdb_helm_values).smithdb.compactionWorker.autoscaling.hpa.minReplicas == 4
+    )
+    error_message = "large did not set the query 4, ingestion 2, compactionWorker 4 HPA minimums"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 412, memory_gi = 904, pods = 34 }
+    error_message = "large with the backfill quota extra is not 412 CPU, 904 GiB, 34 pods"
+  }
+}
+
+run "smithdb_explicit_metastore_sku_wins" {
+  command = plan
+
+  variables {
+    enable_smithdb             = true
+    availability_zones         = ["1", "2", "3"]
+    smithdb_sizing             = "large"
+    smithdb_metastore_sku_name = "GP_Standard_D2ds_v4"
+  }
+
+  assert {
+    condition     = output.smithdb_metastore_sku_name == "GP_Standard_D2ds_v4"
+    error_message = "An explicit smithdb_metastore_sku_name did not win over the large default"
+  }
+}
+
+run "smithdb_off_adds_no_quota_or_values" {
+  command = plan
+
+  variables {
+    enable_smithdb = false
+    smithdb_sizing = "large"
+  }
+
+  assert {
+    condition     = output.smithdb_helm_values == null && output.smithdb_sizing == null
+    error_message = "enable_smithdb = false still produced SmithDB sizing or Helm values"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 0, memory_gi = 0, pods = 0 }
+    error_message = "enable_smithdb = false still added namespace quota headroom"
+  }
+}
+
 # ── Resource group ───────────────────────────────────────────────────────────
 # Attaching reads the group instead of creating it, and every resource placed
 # in it takes the attached name.

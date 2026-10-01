@@ -17,7 +17,9 @@
 #   7b. langsmith-values-llm-gateway.yaml        — LLM Gateway (if enable_llm_gateway = true)
 #   7c. langsmith-values-gateway-pii.yaml        — its PII redaction (if enable_gateway_pii_redaction = true)
 #   8. langsmith-values-sizing-{profile}.yaml    — sizing profile (from sizing_profile in terraform.tfvars)
-#   9. langsmith-values-smithdb*.yaml             — SmithDB (if enable_smithdb = true)
+#   9. langsmith-values-smithdb-sizing.yaml      — SmithDB tier and replicas, from terraform output (if enable_smithdb = true)
+#  10. langsmith-values-smithdb.yaml             — SmithDB overlay, hand-edited (if enable_smithdb = true)
+#  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
@@ -29,10 +31,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELM_DIR="$SCRIPT_DIR/.."
-INFRA_DIR="$HELM_DIR/../infra"
-VALUES_DIR="$HELM_DIR/values"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$HELM_DIR/../infra}"
+VALUES_DIR="${LANGSMITH_VALUES_DIR:-$HELM_DIR/values}"
 
-source "$INFRA_DIR/scripts/_common.sh"
+source "$HELM_DIR/../infra/scripts/_common.sh"
 
 # The Helm release name: RELEASE_NAME from the environment if set, else
 # langsmith_release_name from terraform.tfvars, else langsmith. The chart names
@@ -50,7 +52,7 @@ fi
 NAMESPACE="${NAMESPACE:-$(_parse_tfvar langsmith_namespace || echo langsmith)}"
 CHART_VERSION="${CHART_VERSION:-}"
 
-BASE_VALUES_FILE="$VALUES_DIR/values.yaml"
+BASE_VALUES_FILE="$HELM_DIR/values/values.yaml"
 OVERRIDES_FILE="$VALUES_DIR/values-overrides.yaml"
 
 echo ""
@@ -335,7 +337,7 @@ fi
 info "Verifying langsmith-config-secret..."
 if ! kubectl get secret langsmith-config-secret -n "$NAMESPACE" &>/dev/null; then
   warn "langsmith-config-secret not found — creating from Key Vault..."
-  bash "$INFRA_DIR/scripts/create-k8s-secrets.sh"
+  bash "$HELM_DIR/../infra/scripts/create-k8s-secrets.sh"
 else
   pass "langsmith-config-secret exists"
 fi
@@ -369,6 +371,22 @@ if [[ "$_clickhouse_source" == "external" ]]; then
   pass "langsmith-clickhouse secret exists with all required keys"
 else
   skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
+fi
+
+# ── Ensure smithdb-taskdb secret exists (SmithDB backfill only) ───────────
+# The taskdb StatefulSet and the migration Job read postgres_password through
+# secretKeyRef, so a missing secret strands both in CreateContainerConfigError.
+if _tfvar_is_true "enable_smithdb" && _tfvar_is_true "smithdb_migration_enabled"; then
+  info "Verifying smithdb-taskdb secret..."
+  # go-template over key names only — secret values never leave the API server.
+  _taskdb_keys=$(kubectl get secret smithdb-taskdb -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _taskdb_keys=""
+  if ! grep -qx postgres_password <<< "$_taskdb_keys"; then
+    fail "smithdb_migration_enabled = true but secret smithdb-taskdb (key postgres_password) is missing in namespace $NAMESPACE."
+    action "Run: make seed-secrets && make k8s-secrets"
+    exit 1
+  fi
+  pass "smithdb-taskdb secret exists"
 fi
 
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
@@ -489,14 +507,17 @@ else
 fi
 
 if [[ "$_enable_smithdb" == "true" ]]; then
+  # The generated sizing file goes first, so the hand-edited overlay can
+  # override it, and the generated overrides go last.
+  _smithdb_sizing="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
-  if [[ ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
+  if [[ ! -f "$_smithdb_sizing" || ! -f "$_smithdb_base" || ! -f "$_smithdb_overrides" ]]; then
     fail "enable_smithdb = true but the SmithDB values files are missing — run: make init-values"
     exit 1
   fi
-  VALUES_ARGS+=(-f "$_smithdb_base" -f "$_smithdb_overrides")
-  echo "  ✔ langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+  VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
+  echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
 fi
 echo ""
 

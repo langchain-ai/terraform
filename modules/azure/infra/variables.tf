@@ -825,9 +825,10 @@ variable "additional_node_pools" {
     node_labels       = optional(map(string), {})
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
+    zones             = optional(list(string), [])
     os_sku            = optional(string)
   }))
-  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place."
+  description = "Additional node pools. The 'large' pool (Standard_D16s_v5, 16 vCPU / 64 GiB) is required for ClickHouse (requests 3.5 vCPU / 15 GiB) and LangGraph Platform agent pods. min_count = 0 means it scales to zero when idle. Increase max_count to 3+ for Pass 4 (Agent Builder) with multiple simultaneous deployments. os_sku takes the same values as aks_os_sku and falls back to it when unset; a change between those values updates the pool in place. zones places a pool in availability zones independently of availability_zones; set it when the pool is created. A zonal pool satisfies the SmithDB zone requirement on a cluster whose default pool is nonzonal (see SMITHDB.md)."
   default = {
     large = {
       vm_size   = "Standard_D16s_v5" # 16 vCPU, 64 GiB — ClickHouse (3.5 vCPU/15Gi request) + dataplane agent pods
@@ -960,6 +961,18 @@ variable "smithdb_query_enabled" {
   default     = false
 }
 
+variable "smithdb_sizing" {
+  type        = string
+  description = "SmithDB size: minimal, small, medium, or large. small, medium, and large select the chart resource tier and its replicas; minimal runs the small tier with explicit resources of 1 to 2 vCPU per pod. Also sets the default metastore SKU and the namespace quota headroom. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large."
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = contains(["minimal", "small", "medium", "large"], coalesce(var.smithdb_sizing, "small"))
+    error_message = "smithdb_sizing must be minimal, small, medium, or large."
+  }
+}
+
 variable "smithdb_metastore_admin_username" {
   type        = string
   description = "Administrator username for the SmithDB PostgreSQL metastore."
@@ -976,8 +989,9 @@ variable "smithdb_metastore_admin_password" {
 
 variable "smithdb_metastore_sku_name" {
   type        = string
-  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore."
-  default     = "GP_Standard_D2ds_v5"
+  description = "Azure Database for PostgreSQL Flexible Server SKU for the SmithDB metastore. Null follows smithdb_sizing: GP_Standard_D2ds_v5 for minimal, then MO_Standard_E2ds_v5, E4ds_v5, and E8ds_v5 for small, medium, and large."
+  default     = null
+  nullable    = true
 }
 
 variable "smithdb_metastore_storage_mb" {
@@ -1299,10 +1313,9 @@ variable "postgres_geo_redundant_backup" {
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
 
-# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh — Terraform ignores this value."
+  description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform reads it only for the default smithdb_sizing."
   default     = "production"
 }
 

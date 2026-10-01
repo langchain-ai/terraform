@@ -99,6 +99,7 @@ variable "additional_node_pools" {
     node_taints       = optional(list(string), [])
     kubelet_disk_type = optional(string, "OS")
     os_sku            = optional(string)
+    zones             = optional(list(string), [])
   }))
   description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
   default = {

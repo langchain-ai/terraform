@@ -23,10 +23,14 @@
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
 # ── Resolve INFRA_DIR ────────────────────────────────────────────────────────
-# Assumes this script lives in infra/scripts/. Consumers that live elsewhere
-# should override INFRA_DIR after sourcing.
+# INFRA_DIR is the Terraform root the deployment runs in: terraform.tfvars,
+# secrets.auto.tfvars, state, and outputs. It defaults to infra/ next to this
+# script. LANGSMITH_INFRA_DIR points it at a root outside this repo, such as a
+# wrapper module that sources modules/azure/infra; LANGSMITH_VALUES_DIR does the
+# same for the generated Helm values. Scripts, examples, and the base
+# values.yaml always come from this repo.
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="${INFRA_DIR:-$_COMMON_DIR/..}"
+INFRA_DIR="${INFRA_DIR:-${LANGSMITH_INFRA_DIR:-$(cd "$_COMMON_DIR/.." && pwd)}}"
 
 # ── terraform.tfvars parser ──────────────────────────────────────────────────
 _parse_tfvar() {

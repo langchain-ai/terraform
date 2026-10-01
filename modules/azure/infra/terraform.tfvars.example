@@ -139,12 +139,18 @@ additional_node_pools = {
 # set. See SMITHDB.md, "Version requirements".
 enable_smithdb = false
 
-# Roll out one stage at a time after the infrastructure-only deployment is healthy.
+# Roll out one stage at a time after the infrastructure-only deployment is
+# healthy: make smithdb-phase PHASE=<off|dual-write|backfill|cutover>.
 smithdb_ingestion_enabled = false
 smithdb_migration_enabled = false
 smithdb_query_enabled     = false
 
-# smithdb_metastore_sku_name       = "GP_Standard_D2ds_v5"
+# minimal, small, medium, or large: make smithdb-configure SIZING=<size>. Unset
+# follows sizing_profile. Also sets the default metastore SKU. See SMITHDB.md,
+# "Sizing".
+# smithdb_sizing = "small"
+
+# smithdb_metastore_sku_name       = "MO_Standard_E2ds_v5" # unset takes the default for smithdb_sizing
 # smithdb_metastore_storage_mb     = 32768
 # smithdb_storage_account_name     = "" # empty derives a globally unique name
 # smithdb_storage_container_name   = "smithdb"

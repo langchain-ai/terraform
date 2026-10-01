@@ -16,12 +16,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+INFRA_DIR="${LANGSMITH_INFRA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 # Run setup-env.sh to generate/refresh secrets.auto.tfvars if it doesn't exist yet
 if [[ ! -f "$INFRA_DIR/secrets.auto.tfvars" ]]; then
   echo "  secrets.auto.tfvars not found — running setup-env.sh first..."
-  bash "$INFRA_DIR/setup-env.sh"
+  bash "$SCRIPT_DIR/setup-env.sh"
   echo ""
 fi
 

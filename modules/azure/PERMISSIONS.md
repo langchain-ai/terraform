@@ -109,7 +109,7 @@ keyvault_manage_terraform_admin_assignment = false  # skip the self-grant
 keyvault_manage_secrets                    = false  # write no secrets
 ```
 
-The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all nine secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
+The first skips `Microsoft.Authorization/roleAssignments/write` on the vault, the second skips the data-plane writes that grant exists for. Apply then touches the vault's control plane only. `make seed-secrets` writes all ten secrets afterwards, under your own credentials rather than Terraform's, so it needs `Key Vault Secrets Officer` on the vault at that point and nothing earlier. Everything downstream is unchanged: `make k8s-secrets` still reads the vault to build `langsmith-config-secret`.
 
 This does not remove the deployment's need for `roleAssignments/write` altogether. `Storage Blob Data Contributor` on the storage account is not optional, because LangSmith pods need it at runtime, and it has no toggle. A deployer who holds no role-assignment rights at all still fails there.
 

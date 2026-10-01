@@ -141,6 +141,30 @@ output "smithdb_cache_storage_class_name" {
   value       = var.enable_smithdb ? module.k8s_bootstrap.smithdb_cache_storage_class_name : null
 }
 
+output "smithdb_sizing" {
+  description = "Resolved SmithDB size (minimal, small, medium, or large), or null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_sizing : null
+}
+
+output "smithdb_metastore_sku_name" {
+  description = "Flexible Server SKU of the SmithDB metastore, resolved from smithdb_metastore_sku_name and smithdb_sizing. Null when SmithDB is disabled."
+  value       = var.enable_smithdb ? local.smithdb_metastore_sku_name : null
+}
+
+output "smithdb_helm_values" {
+  description = "SmithDB chart tier, replicas, and minimal-size resources as YAML. init-values.sh writes it to helm/values/langsmith-values-smithdb-sizing.yaml. Null when SmithDB is disabled."
+  value       = local.smithdb_helm_values
+}
+
+output "smithdb_quota_extra" {
+  description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
+  value = {
+    cpu       = local.smithdb_quota_extra_cpu
+    memory_gi = local.smithdb_quota_extra_memory_gi
+    pods      = local.smithdb_quota_extra_pods
+  }
+}
+
 output "kubeconfig" {
   description = "Raw kubeconfig for connecting to the AKS cluster. Run: terraform output -raw kubeconfig > ~/.kube/config"
   sensitive   = true

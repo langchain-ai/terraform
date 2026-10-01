@@ -29,8 +29,6 @@ set -euo pipefail
 #
 # setup-env.sh is READ-ONLY against Key Vault — it never writes to KV directly.
 
-SECRETS_FILE="secrets.auto.tfvars"
-
 # ── Resolve the Key Vault name ────────────────────────────────────────────────
 # Priority: terraform output → _require_kv_name. Same order as manage-keyvault.sh.
 # Never derive the name here by hand — reading the wrong vault fails silently,
@@ -43,9 +41,10 @@ SECRETS_FILE="secrets.auto.tfvars"
 # warning is not.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
+SECRETS_FILE="$INFRA_DIR/secrets.auto.tfvars"
 
 _name_prefix=$(_parse_tfvar name_prefix || _parse_tfvar identifier || true)
-_kv_name=$(terraform output -raw keyvault_name 2>/dev/null || true)
+_kv_name=$(terraform -chdir="$INFRA_DIR" output -raw keyvault_name 2>/dev/null || true)
 case "$_kv_name" in
   "" | *[![:alnum:]-]*) _kv_name=$(_require_kv_name) || exit 1 ;;
 esac
