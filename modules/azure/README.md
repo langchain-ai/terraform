@@ -465,6 +465,27 @@ create_dns_zone        = true
 > That requires Azure DNS to be authoritative for the subdomain — NS delegation grants that authority.
 > A CNAME only aliases traffic and does not transfer DNS authority; the DNS-01 challenge will fail.
 
+**Your own certificate (`existing`, all controllers):** for a certificate from your organization's CA, or anywhere Let's Encrypt is not an option.
+```hcl
+langsmith_domain                = "langsmith.mycompany.com"
+tls_certificate_source          = "existing"
+langsmith_custom_ca_secret_name = "langsmith-ca"   # only for a private CA, see below
+```
+
+1. Put the certificate in a `kubernetes.io/tls` Secret named `langsmith-tls` in the LangSmith namespace. The PEM file holds the leaf first, then the intermediates; its SANs must include `langsmith_domain`.
+   ```bash
+   kubectl -n langsmith create secret tls langsmith-tls --cert=fullchain.pem --key=privkey.pem
+   ```
+2. `make init-values` writes the Ingress `tls:` entry for that Secret, with no cert-manager annotation. The Envoy Gateway Gateway references the same Secret, and `make deploy` copies it to the Istio gateway's namespace for `istio` and `istio-addon`.
+3. `make deploy` checks the Secret exists and is `kubernetes.io/tls` before it runs Helm, and stops with the command above if not.
+4. **Renewal is yours:** replace the Secret with the new certificate. NGINX and Envoy Gateway pick it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
+
+**A private CA needs one more Secret.** Browsers trust your CA through your organization's devices, but the LangSmith pods do not, and some of them call LangSmith's own hostname: agent deployments sending traces, and the operator. Give them the CA bundle (root and intermediates, PEM) as `langsmith_custom_ca_secret_name`. `init-values.sh` sets the chart's `config.customCa` from it, and `deploy.sh` checks it before Helm runs:
+```bash
+kubectl -n langsmith create secret generic langsmith-ca --from-file=ca.crt=ca-bundle.pem
+```
+The key defaults to `ca.crt` (`langsmith_custom_ca_secret_key`). After changing either variable, run `make init-values` again. The chart's own note applies: the bundle replaces the pods' default trust store for these calls, so include a public CA as well if they also reach public endpoints, such as Beacon for an online licence.
+
 > ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
 > For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
