@@ -904,6 +904,12 @@ smithdb:
     job:
       labels:
         azure.workload.identity/use: "true"
+    # make k8s-secrets writes this secret from Key Vault. The chart refuses to
+    # render the backfill without a taskdb credential.
+    taskdb:
+      postgres:
+        auth:
+          existingSecretName: "smithdb-taskdb"
   langsmith:
     ingestion:
       enabled: ${_smithdb_ingestion_enabled}

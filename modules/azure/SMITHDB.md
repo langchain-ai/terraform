@@ -198,7 +198,11 @@ Jobs, and PVCs, and the backfill progress, and changes nothing.
    ClickHouse. Confirm that segments arrive in the SmithDB container.
 2. Backfill. The deploy adds the migration Job and the taskdb to copy the
    ClickHouse history. The apply grants the trace-blob read role and waits 300
-   seconds; see [Infrastructure](#infrastructure). The backfill is complete when
+   seconds; see [Infrastructure](#infrastructure). The taskdb password comes
+   from the `smithdb-taskdb` secret, which `make seed-secrets` and
+   `make k8s-secrets` create inside `make deploy-all`, and `make deploy` stops
+   while it is missing. Never rotate it: a taskdb that already initialized
+   keeps the old one. The backfill is complete when
    every row of the taskdb table `migration_jobs` has `promoted_at`. Do not use
    the percent or the pod phase.
 3. Cutover. Reads move to SmithDB, and the deploy removes the migration Job and

@@ -373,6 +373,22 @@ else
   skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
 fi
 
+# ── Ensure smithdb-taskdb secret exists (SmithDB backfill only) ───────────
+# The taskdb StatefulSet and the migration Job read postgres_password through
+# secretKeyRef, so a missing secret strands both in CreateContainerConfigError.
+if _tfvar_is_true "enable_smithdb" && _tfvar_is_true "smithdb_migration_enabled"; then
+  info "Verifying smithdb-taskdb secret..."
+  # go-template over key names only — secret values never leave the API server.
+  _taskdb_keys=$(kubectl get secret smithdb-taskdb -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _taskdb_keys=""
+  if ! grep -qx postgres_password <<< "$_taskdb_keys"; then
+    fail "smithdb_migration_enabled = true but secret smithdb-taskdb (key postgres_password) is missing in namespace $NAMESPACE."
+    action "Run: make seed-secrets && make k8s-secrets"
+    exit 1
+  fi
+  pass "smithdb-taskdb secret exists"
+fi
+
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
 _configured_hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _configured_hostname=""
