@@ -251,6 +251,17 @@ _read_values_stamp() {
   printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
 }
 
+# Print ingress.ingressClassName from a values file, quotes stripped; nothing when
+# unset or empty. With ingress_controller = "none" this is the only place a class
+# comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
+_values_ingress_class() {
+  awk '
+    /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+    top == "ingress" && /^  ingressClassName:/ { v = $2; gsub(/["\047]/, "", v); cls = v }
+    END { print cls }
+  ' "$1" 2>/dev/null
+}
+
 # Resource-name suffix, mirroring local.name_suffix in main.tf.
 # name_prefix carries no hyphen ("prod") but every derived name needs one
 # ("langsmith-kv-prod"), so the separator is added here. Falls back to the

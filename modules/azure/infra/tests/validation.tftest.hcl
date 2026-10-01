@@ -513,7 +513,7 @@ run "byo_vnet_plans_beside_a_clear_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -537,7 +537,7 @@ run "byo_vnet_rejects_a_prefix_on_a_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   # Inside the default aks_subnet_address_prefix, 10.0.0.0/19.
   override_data {
@@ -561,7 +561,7 @@ run "byo_vnet_skips_the_subnets_terraform_carved" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings

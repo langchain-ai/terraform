@@ -220,29 +220,37 @@ locals {
   aks_default_pool_max_pods = 30
 
   # Held per pool rather than as a single total, so the number and the error
-  # message that has to justify it are built from the same place.
+  # message that has to justify it are built from the same place. Only the pools
+  # Terraform creates: an attached cluster's own pools are already in the subnet,
+  # and Terraform cannot see their sizes.
   aks_pool_sizing = merge(
-    {
+    var.create_cluster ? {
       default = {
         nodes              = var.default_node_pool_max_count + 1
         addresses_per_node = local.aks_overlay ? 1 : var.default_node_pool_max_pods + 1
       }
-    },
+    } : {},
     {
-      for name, pool in local.effective_node_pools : name => {
+      for name, pool in local.aks_managed_node_pools : name => {
         nodes              = pool.max_count + 1
         addresses_per_node = local.aks_overlay ? 1 : local.aks_default_pool_max_pods + 1
       }
     }
   )
-  aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+  # concat([0], ...) keeps sum() off an empty list, which an attached cluster
+  # with no pools to add produces.
+  aks_required_ips = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node]))
 
   # Overlay hands every node a /24 of the pod range, so the range's capacity is
   # counted in nodes, surge included, across every pool.
-  aks_node_total             = sum([for pool in local.aks_pool_sizing : pool.nodes])
+  aks_node_total             = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes]))
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
   effective_node_pools = var.additional_node_pools
+
+  # On a pre-existing cluster whose node pools the customer owns, an empty map, so
+  # Terraform doesn't attach pools to a cluster it doesn't manage.
+  aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -694,6 +702,18 @@ resource "terraform_data" "validate_network" {
       error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
     }
 
+    # AKS nodes, the delegated Postgres server, and the private endpoints all have
+    # to sit in the VNet's region, and Azure refuses each one partway through the
+    # apply, after the resources before it exist. The ternary guards the index,
+    # since || does not short-circuit before Terraform 1.14. Azure accepts both
+    # "East US" and "eastus" for the same region.
+    precondition {
+      condition = length(data.azurerm_virtual_network.byo_vnet) == 0 ? true : (
+        lower(replace(data.azurerm_virtual_network.byo_vnet[0].location, " ", "")) == lower(replace(var.location, " ", ""))
+      )
+      error_message = "vnet_id is in ${try(data.azurerm_virtual_network.byo_vnet[0].location, "another region")}, and location is ${var.location}. The cluster, Postgres, and the private endpoints have to be in the VNet's region, so set location to ${try(data.azurerm_virtual_network.byo_vnet[0].location, "the VNet's region")}."
+    }
+
     # Both subnets are carved only out of a VNet Terraform owns, so under
     # bring-your-own the operator has to name one that already exists.
     precondition {
@@ -766,7 +786,7 @@ resource "terraform_data" "validate_network" {
         local.aks_demand_rows,
         [
           "",
-          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
+          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. ${var.create_cluster ? "Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}." : "Or lower a pool's max_count in additional_node_pools."}",
         ]
       ))
     }
@@ -939,9 +959,7 @@ module "aks" {
   support_plan        = var.aks_support_plan
 
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
-  # On a pre-existing cluster whose node pools the customer owns, pass an empty
-  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
-  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
+  additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
   ingress_controller   = var.ingress_controller
