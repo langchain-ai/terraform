@@ -111,7 +111,7 @@ _cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
   exit 1
 }
-_rg_name=$(_tf_out resource_group_name) || _rg_name=""
+_rg_name=$(_tf_out aks_resource_group_name) || _rg_name=""
 
 info "Cluster: ${_cluster_name}"
 az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
