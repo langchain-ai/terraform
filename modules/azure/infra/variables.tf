@@ -1004,6 +1004,45 @@ variable "aks_allow_network_upgrade" {
   default     = false
 }
 
+variable "aks_outbound_type" {
+  type        = string
+  description = "How the cluster's nodes reach the internet. loadBalancer (the default, so no existing cluster moves) is an AKS-managed outbound public IP. userDefinedRouting sends egress by the route table on aks_subnet_id, to a firewall, a network virtual appliance or on-premises, and AKS creates no outbound IP. userAssignedNATGateway leaves through the NAT gateway on aks_subnet_id, which aks_nat_gateway checks or creates. Both need create_vnet = false and a supplied aks_subnet_id, because the route table or NAT gateway belongs to whoever owns the network; plan checks the subnet for it. Only for clusters this module creates: an attached cluster keeps its own. See \"Egress through your network\" in the README for what the route must allow."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting", "userAssignedNATGateway"], var.aks_outbound_type)
+    error_message = "aks_outbound_type must be \"loadBalancer\", \"userDefinedRouting\" or \"userAssignedNATGateway\". AKS's managedNATGateway type is for VNets AKS creates itself, and this module always places the cluster in a VNet; none and block are for network-isolated clusters."
+  }
+}
+
+variable "aks_nat_gateway" {
+  type        = string
+  description = "A NAT gateway on aks_subnet_id for the cluster's egress. none (the default) neither creates nor checks one. existing checks at plan that the network owner has already attached one. create makes a Standard NAT gateway and its public IP in this module's resource group and associates them with aks_subnet_id, the only change Terraform makes to that subnet; route tables stay the network owner's. Needs aks_outbound_type userAssignedNATGateway, which requires one, or userDefinedRouting, where the NAT gateway carries the routes whose next hop is Internet. Clusters this module creates only."
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "existing", "create"], var.aks_nat_gateway)
+    error_message = "aks_nat_gateway must be \"none\", \"existing\" or \"create\"."
+  }
+}
+
+variable "aks_nat_gateway_idle_timeout_minutes" {
+  type        = number
+  description = "TCP idle timeout of the NAT gateway Terraform creates (aks_nat_gateway = \"create\"), 4 to 120 minutes. Ignored otherwise."
+  default     = 4
+
+  validation {
+    condition     = var.aks_nat_gateway_idle_timeout_minutes >= 4 && var.aks_nat_gateway_idle_timeout_minutes <= 120
+    error_message = "aks_nat_gateway_idle_timeout_minutes must be between 4 and 120."
+  }
+}
+
+variable "aks_allow_outbound_type_change" {
+  type        = bool
+  description = "Permit changing aks_outbound_type on a cluster that already exists. Azure applies the change in place between all three values in a supplied VNet, but it moves the cluster's egress IP and drops existing connections, so firewall rules and aks_authorized_ip_ranges that name the old IP must change too. Off, the change is refused at plan."
+  default     = false
+}
+
 variable "aks_sku_tier" {
   type        = string
   description = "AKS pricing tier for the control plane. Free has no SLA and suits throwaway clusters. Standard (the default) carries the financially backed uptime SLA, 99.95% when availability_zones spans zones and 99.9% otherwise, and unlocks larger clusters. Premium adds long-term support for Kubernetes versions (see aks_support_plan). Updated in place, so an existing cluster changes tier without a rebuild."
