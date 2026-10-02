@@ -475,6 +475,11 @@ locals {
   # so that everything placed in the group waits for it on a first apply.
   rg_name = var.create_resource_group ? azurerm_resource_group.resource_group[0].name : data.azurerm_resource_group.existing[0].name
   rg_id   = var.create_resource_group ? azurerm_resource_group.resource_group[0].id : data.azurerm_resource_group.existing[0].id
+
+  # A pre-existing cluster lives in its own resource group, not the one this
+  # module uses for Key Vault and Storage. existing_cluster_resource_group_name
+  # is required when create_cluster = false, so this is never blank.
+  aks_rg_name = var.create_cluster ? local.rg_name : var.existing_cluster_resource_group_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -1910,7 +1915,8 @@ removed {
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
 # Deploy Azure WAF policy with OWASP 3.2 + bot protection.
-# Attach to Application Gateway or Azure Front Door after creation.
+# Attached to the Application Gateway when ingress_controller = "agic".
+# Front Door needs its own policy type (azurerm_cdn_frontdoor_firewall_policy).
 # Enable with: create_waf = true in terraform.tfvars
 
 module "waf" {
