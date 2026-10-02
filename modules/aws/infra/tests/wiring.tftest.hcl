@@ -283,6 +283,16 @@ run "create_vpc_false_plans_no_vpc" {
 run "node_subnet_mode_plans_no_pod_subnets" {
   command = plan
 
+  variables {
+    # Add-ons of different shapes, one of them vpc-cni, must plan in either
+    # mode. Both modes route them through the vpc-cni filter in the eks module.
+    eks_addons = {
+      coredns    = { most_recent = true, timeouts = { create = "25m" } }
+      kube-proxy = { addon_version = "v1.34.0-eksbuild.1" }
+      vpc-cni    = { most_recent = true, configuration_values = "{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\"}}" }
+    }
+  }
+
   assert {
     condition     = length(module.vpc[0].pod_subnets) == 0
     error_message = "eks_network_mode = node-subnet still planned pod subnets"
@@ -298,6 +308,13 @@ run "custom_networking_plans_a_pod_subnet_per_az" {
 
   variables {
     eks_network_mode = "custom-networking"
+    # Add-ons of different shapes, one of them vpc-cni, must plan in either
+    # mode. Both modes route them through the vpc-cni filter in the eks module.
+    eks_addons = {
+      coredns    = { most_recent = true, timeouts = { create = "25m" } }
+      kube-proxy = { addon_version = "v1.34.0-eksbuild.1" }
+      vpc-cni    = { most_recent = true, configuration_values = "{\"env\":{\"ENABLE_PREFIX_DELEGATION\":\"true\"}}" }
+    }
   }
 
   assert {
@@ -330,7 +347,7 @@ run "byo_custom_networking_uses_the_supplied_pod_subnets" {
   # One AZ for every subnet: a mock would invent a different one per subnet.
   override_data {
     target = data.aws_subnet.pod
-    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18" }
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000001" }
   }
   override_data {
     target = data.aws_subnet.cluster

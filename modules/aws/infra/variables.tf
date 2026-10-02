@@ -137,8 +137,13 @@ variable "eks_pod_cidr" {
   default     = "100.64.0.0/16"
 
   validation {
-    condition     = can(cidrsubnet(var.eks_pod_cidr, 2, 3))
-    error_message = "eks_pod_cidr must be a valid IPv4 CIDR no smaller than /26 (e.g., 100.64.0.0/16)."
+    # A VPC CIDR block is /16 to /28, and each pod subnet is two bits longer
+    # than eks_pod_cidr, so a /26 is the longest prefix that still fits.
+    condition = can(cidrhost(var.eks_pod_cidr, 0)) && try(
+      tonumber(split("/", var.eks_pod_cidr)[1]) >= 16 && tonumber(split("/", var.eks_pod_cidr)[1]) <= 26,
+      false,
+    )
+    error_message = "eks_pod_cidr must be an IPv4 CIDR from /16 to /26 (e.g., 100.64.0.0/16)."
   }
 }
 

@@ -18,9 +18,10 @@ locals {
       resolve_conflicts_on_update = local.user_vpc_cni.resolve_conflicts
     } : {},
     {
-      # Configure the CNI before any node group exists, so every node joins with
-      # custom networking already on. Nodes that joined without it keep pod IPs
-      # in the node subnets until they are replaced.
+      # Create the add-on without waiting for compute. Node groups wait only on
+      # dataplane_wait_duration, not on this add-on, so that wait is what gives
+      # the CNI time to be configured before nodes join. Nodes that joined
+      # without it keep pod IPs in the node subnets until they are replaced.
       before_compute = true
       configuration_values = jsonencode(merge(local.user_vpc_cni_config, {
         env = merge(try(local.user_vpc_cni_config.env, {}), {
@@ -69,6 +70,9 @@ module "eks" {
   }
 
   cluster_addons = local.custom_networking ? { vpc-cni = local.vpc_cni_addon } : {}
+  # 30s is the upstream default. Custom networking waits longer so the vpc-cni
+  # add-on is active before the first nodes join.
+  dataplane_wait_duration = local.custom_networking ? "2m" : "30s"
 
   tags = var.tags
 }
@@ -155,7 +159,10 @@ module "eks_blueprints_addons" {
   }
 
   # EKS managed addons (coredns, kube-proxy, vpc-cni, etc.)
-  eks_addons = local.custom_networking ? { for k, v in var.eks_addons : k => v if k != "vpc-cni" } : var.eks_addons
+  # One filter rather than a conditional: the two branches of a conditional are
+  # objects with different attributes, and differently shaped add-ons fail to
+  # unify into one type even when custom networking is off.
+  eks_addons = { for k, v in var.eks_addons : k => v if !(local.custom_networking && k == "vpc-cni") }
 
   depends_on = [module.eks]
 }

@@ -192,7 +192,7 @@ run "two_pod_subnets_in_one_az_are_rejected" {
 
   override_data {
     target = data.aws_subnet.pod
-    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18" }
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000001" }
   }
   override_data {
     target = data.aws_subnet.cluster
@@ -217,11 +217,36 @@ run "pod_subnets_missing_a_cluster_az_are_rejected" {
 
   override_data {
     target = data.aws_subnet.pod
-    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18" }
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000001" }
   }
   override_data {
     target = data.aws_subnet.cluster
     values = { availability_zone = "us-east-2b" }
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "pod_subnets_in_another_vpc_are_rejected" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  override_data {
+    target = data.aws_subnet.pod
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18", vpc_id = "vpc-00000000000000009" }
+  }
+  override_data {
+    target = data.aws_subnet.cluster
+    values = { availability_zone = "us-east-2a" }
   }
 
   expect_failures = [terraform_data.validate_inputs]
