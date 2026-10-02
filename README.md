@@ -148,6 +148,12 @@ The per-release history is published in [GitHub Releases](https://github.com/lan
 - [Self-Hosted changelog](https://docs.langchain.com/langsmith/self-hosted-changelog)
 - Per-provider architecture and troubleshooting: `modules/<provider>/ARCHITECTURE.md` and `TROUBLESHOOTING.md`
 
+## Sandbox observability
+
+For an existing self-hosted sandbox deployment, use the [Sandbox Vitals dashboard and collection examples](https://github.com/langchain-ai/helm/tree/main/charts/langsmith/examples/sandbox-observability) from the Helm repository. The [Datadog setup guide](https://docs.langchain.com/langsmith/self-host-sandbox-observability) covers prerequisites, deployment filters, and optional API, JuiceFS, and cloud storage metrics.
+
+Import the dashboard into your own Datadog organization. The examples require an existing Datadog Agent and a compatible sandbox-host chart configuration; they do not provision Datadog or enable sandboxes. Keep your installed chart version and merge collection values through your existing release workflow. Updating sandbox-host pod annotations rolls the hosts and suspends their running sandboxes, so schedule the change in a maintenance window.
+
 ## Support
 
 - **Enterprise customers:** start at [enterprise-hub.langchain.com](https://enterprise-hub.langchain.com/) — the front door for onboarding, education, professional services, and support.
