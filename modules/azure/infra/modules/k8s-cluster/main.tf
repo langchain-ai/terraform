@@ -272,7 +272,7 @@ data "azapi_resource_list" "clusters" {
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType}"
   }
 }
 
@@ -284,6 +284,15 @@ locals {
     for c in try(data.azapi_resource_list.clusters[0].output.clusters, []) : c
     if lower(c.name) == lower(var.cluster_name) && lower(split("/", c.id)[4]) == lower(var.resource_group_name)
   ])
+}
+
+# Orders the cluster after anything its egress needs that the root module
+# creates (a NAT gateway's association with the node subnet). A module-level
+# depends_on would also defer this module's plan-time reads to apply, so the
+# dependency is carried by this resource alone.
+resource "terraform_data" "egress_ready" {
+  count = var.create_cluster ? 1 : 0
+  input = var.egress_dependencies
 }
 
 resource "azurerm_kubernetes_cluster" "main" {
@@ -386,6 +395,15 @@ resource "azurerm_kubernetes_cluster" "main" {
     network_policy      = var.network_policy
     service_cidr        = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
     dns_service_ip      = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+
+    # Egress. loadBalancer (the provider's default) gives the cluster an
+    # AKS-managed outbound public IP. userDefinedRouting sends it by the node
+    # subnet's route table, to a firewall or on-premises, and AKS creates no
+    # outbound IP; userAssignedNATGateway leaves through the NAT gateway on the
+    # subnet. The provider updates a change in place, and Azure supports each
+    # change between these three on a cluster in a supplied VNet, but it moves
+    # the egress IP and drops connections, so the root refuses one unasked.
+    outbound_type = var.outbound_type
   }
 
   # Key Vault CSI Secrets Store driver — enables pods to mount secrets from
@@ -438,6 +456,8 @@ resource "azurerm_kubernetes_cluster" "main" {
       default_node_pool[0].zones,
     ]
   }
+
+  depends_on = [terraform_data.egress_ready]
 }
 
 # ignore_changes on default_node_pool[0].zones makes an availability_zones edit
