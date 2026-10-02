@@ -301,6 +301,10 @@ run "node_subnet_mode_plans_no_pod_subnets" {
     condition     = length(local.pod_subnet_ids_by_az) == 0 && length(local.pod_cidr_blocks) == 0
     error_message = "eks_network_mode = node-subnet still turned on custom networking"
   }
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["0.0.0.0/0"])
+    error_message = "eks_network_mode = node-subnet changed the ALB ingress CIDRs"
+  }
 }
 
 run "custom_networking_plans_a_pod_subnet_per_az" {
@@ -328,6 +332,21 @@ run "custom_networking_plans_a_pod_subnet_per_az" {
   assert {
     condition     = local.pod_cidr_blocks == tolist(["100.64.0.0/16"])
     error_message = "custom networking did not add eks_pod_cidr to the security group rules"
+  }
+}
+
+run "custom_networking_admits_pods_to_a_restricted_alb" {
+  command = plan
+
+  variables {
+    eks_network_mode        = "custom-networking"
+    alb_scheme              = "internal"
+    alb_allowed_cidr_blocks = ["10.0.0.0/16"]
+  }
+
+  assert {
+    condition     = local.alb_ingress_cidr_blocks == tolist(["10.0.0.0/16", "100.64.0.0/16"])
+    error_message = "custom networking did not add eks_pod_cidr to the ALB ingress rules"
   }
 }
 

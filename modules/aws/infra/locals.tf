@@ -58,6 +58,9 @@ locals {
   pod_cidr_blocks = !local.custom_networking ? [] : (
     var.create_vpc ? [var.eks_pod_cidr] : [for s in data.aws_subnet.pod : s.cidr_block]
   )
+  # In-cluster callers of the LangSmith hostname reach an internal ALB from
+  # their pod IPs, so a restricted alb_allowed_cidr_blocks still admits them.
+  alb_ingress_cidr_blocks = concat(var.alb_allowed_cidr_blocks, local.pod_cidr_blocks)
 
   # Envoy Gateway is the default ingress mode, but a bare default of `true` would
   # silently add a second gateway controller to every existing Istio/NGINX tfvars
