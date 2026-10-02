@@ -63,7 +63,7 @@ terraform apply -var-file=terraform.tfvars
 
 **Symptom:** `kubectl get nodes` shows no nodes or nodes stuck in `NotReady`.
 
-**Cause:** Node pool service account lacks `roles/container.nodeServiceAccount`, or VPC firewall rules block node-to-control-plane communication.
+**Cause:** Node pool service account lacks `roles/container.defaultNodeServiceAccount`, or VPC firewall rules block node-to-control-plane communication.
 
 **Fix:**
 
@@ -76,7 +76,7 @@ gcloud container node-pools describe <pool-name> \
 # Grant required role if missing
 gcloud projects add-iam-policy-binding <project-id> \
   --member="serviceAccount:<node-sa-email>" \
-  --role="roles/container.nodeServiceAccount"
+  --role="roles/container.defaultNodeServiceAccount"
 
 # Check firewall rules
 gcloud compute firewall-rules list --filter="network:<vpc-name>"

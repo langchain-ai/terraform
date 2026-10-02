@@ -199,8 +199,14 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
-  default     = "nginx"
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (envoy-gateway → envoy-gateway-system, nginx → ingress-nginx, istio → istio-system, istio-addon → aks-istio-ingress), and whether cert-manager runs with Gateway API support (envoy-gateway only). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
+  default     = "envoy-gateway"
+}
+
+variable "envoy_gateway_version" {
+  type        = string
+  description = "Version of the Envoy Gateway release, empty without one. Read only to install cert-manager after the Gateway API CRDs that release ships: cert-manager checks for them once, at startup."
+  default     = ""
 }
 
 variable "agic_subnet_cidrs" {

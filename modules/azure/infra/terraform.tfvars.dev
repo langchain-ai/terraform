@@ -49,11 +49,11 @@ postgres_database_name       = "langsmith"
 amr_sku = "Balanced_B1"   # Azure Managed Redis, 1 GB. Bump (Balanced_B3/B5/...) if the region reports AllocationFailed.
 
 #------------------------------------------------------------------------------
-# AKS — Standard_D8s_v3 (8 vCPU, 32 GiB), 3 nodes minimum
+# AKS — Standard_D8s_v5 (8 vCPU, 32 GiB), 3 nodes minimum
 #------------------------------------------------------------------------------
-# 3× Standard_D8s_v3 = 18,870m allocatable vCPU.
+# 3× Standard_D8s_v5 = 18,870m allocatable vCPU.
 # Pass 2 core LangSmith requires ~14.4 vCPU — fits with headroom.
-default_node_pool_vm_size   = "Standard_D8s_v3"
+default_node_pool_vm_size   = "Standard_D8s_v5"
 default_node_pool_min_count = 3
 default_node_pool_max_count = 6
 default_node_pool_max_pods  = 60
@@ -62,7 +62,7 @@ aks_sku_tier                = "Standard"       # uptime SLA; Free has none
 
 additional_node_pools = {
   large = {
-    vm_size   = "Standard_D16s_v3"
+    vm_size   = "Standard_D16s_v5"
     min_count = 0
     max_count = 1
   }
@@ -71,7 +71,7 @@ additional_node_pools = {
 #------------------------------------------------------------------------------
 # Ingress
 #------------------------------------------------------------------------------
-ingress_controller = "nginx"
+ingress_controller = "envoy-gateway"
 
 #------------------------------------------------------------------------------
 # DNS + TLS — Public IP DNS label + Let's Encrypt HTTP-01

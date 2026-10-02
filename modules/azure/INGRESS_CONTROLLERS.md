@@ -3,7 +3,17 @@
 All controllers and TLS paths below have been **end-to-end validated** on AKS (chart 0.13.38)
 including LangGraph Platform (Passes 3–5, `enable_deployments = true`).
 
+`ingress_controller` defaults to `envoy-gateway`. `nginx` stays fully supported for clusters standardized on classic Kubernetes Ingress.
+
 Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `make apply`.
+
+> **Upgrading a deployment created on the old `nginx` default:** if `terraform.tfvars` omits
+> `ingress_controller`, `make plan` and `make apply` stop before Terraform runs. To keep nginx,
+> set `ingress_controller = "nginx"` in `terraform.tfvars`. To move to Envoy Gateway, set
+> `ingress_controller = "envoy-gateway"`, then run `make apply`, `make init-values`, and
+> `make deploy` back to back. The apply removes ingress-nginx and its load balancer IP, so
+> LangSmith is unreachable until the deploy finishes. Update any DNS A record that points at the
+> old IP.
 
 ---
 
@@ -13,11 +23,11 @@ Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `ma
 
 | Controller | `letsencrypt` (HTTP-01) | `dns01` (DNS-01) | `none` (HTTP only) |
 |---|---|---|---|
+| **envoy-gateway** (default) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 | **nginx** | ✅ Validated | ✅ Validated (langsmith.example.com) | ✅ Validated |
 | **istio-addon** | ❌ No IngressClass — HTTP-01 solver cannot receive traffic | ✅ Requires custom domain | ✅ Validated |
 | **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 | **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | ✅ Validated (Standard_v2) |
-| **envoy-gateway** | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 
 ### Why istio-addon + letsencrypt fails
 
@@ -41,12 +51,12 @@ and Let's Encrypt cannot verify the token.
 
 ## Quick Decision Guide
 
-```
+```text
 Do you have a custom domain (langsmith.mycompany.com)?
 │
 ├── No  → Use dns_label (Azure free subdomain: <label>.eastus.cloudapp.azure.com)
-│         ├── Want HTTPS?  → nginx + letsencrypt  ✅ (5 min, just need an email)
-│         └── HTTP ok?     → nginx + none         ✅ (fastest, quickstart default)
+│         ├── Want HTTPS?  → envoy-gateway + letsencrypt  ✅ (5 min, just need an email)
+│         └── HTTP ok?     → envoy-gateway + none         ✅ (fastest, quickstart default)
 │
 └── Yes → langsmith_domain + create_dns_zone = true + NS delegation at registrar
           └── Any controller → dns01  ✅ (works behind firewalls, no port 80 needed)
@@ -56,7 +66,52 @@ Do you have a custom domain (langsmith.mycompany.com)?
 
 ## Controller Reference
 
-### nginx — recommended default
+### envoy-gateway — recommended default
+
+**Validated: ✅ envoy-gateway + none (HTTP), envoy-gateway + letsencrypt (HTTPS), full 5-pass including LangGraph Platform**
+
+```hcl
+# Quickstart default: HTTP, zero cert setup
+ingress_controller     = "envoy-gateway"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "none"
+```
+
+```hcl
+# HTTPS via Let's Encrypt
+ingress_controller     = "envoy-gateway"
+dns_label              = "langsmith-prod"
+tls_certificate_source = "letsencrypt"
+letsencrypt_email      = "you@example.com"
+```
+
+**How it works:**
+- Terraform installs the Envoy Gateway v1.2.0 Helm chart in `envoy-gateway-system`; the chart ships the Gateway API CRDs
+- Terraform installs cert-manager after Envoy Gateway and sets its `ExperimentalGatewayAPISupport=true` feature gate, so no `kubectl patch` is needed
+- With `install_cert_manager = false`, the cluster's own cert-manager must run with Gateway API support enabled; `make deploy` warns about this
+- `deploy.sh` creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` **before** helm install (required for chart validation)
+- The EnvoyProxy lists the `service.beta.kubernetes.io/azure-dns-label-name` annotation, so Envoy Gateway creates the proxy LB service with the DNS label already on it
+- For `letsencrypt` and `dns01`, the Gateway has the `cert-manager.io/cluster-issuer: letsencrypt-prod` annotation, and cert-manager issues `langsmith-tls` for its HTTPS listener
+- cert-manager uses the `gatewayHTTPRoute` solver for `letsencrypt`
+- The LangSmith chart uses `gateway.enabled: true` (Gateway API mode) and creates the `HTTPRoute` resources
+- `init-values.sh` sets `ingress.enabled: false`, `gateway.enabled: true`, `gateway.name: langsmith-gateway`, `gateway.namespace: langsmith`
+
+**Key: Gateway is created pre-deploy.** Without this, chart validation fails when
+`enable_deployments = true` (`Either ingress, gateway, or istioGateway must be enabled`).
+
+**LB service:** Envoy Gateway names the proxy service `envoy-<namespace>-langsmith-gateway-<hash>` in the `envoy-gateway-system` namespace. Find it by its Gateway:
+
+```bash
+kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway
+```
+
+**URL:** `http://langsmith-prod.eastus.cloudapp.azure.com` (or `https://` with letsencrypt)
+
+---
+
+### nginx — legacy Ingress compatibility
+
+For clusters standardized on classic Kubernetes Ingress. Set `ingress_controller = "nginx"` explicitly.
 
 **Validated: ✅ nginx + none (HTTP) — full 5-pass including LangGraph Platform, Agent Builder, Insights, Polly**
 **Validated: ✅ nginx + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform, Agent Builder, Insights, Polly**
@@ -64,7 +119,7 @@ Do you have a custom domain (langsmith.mycompany.com)?
 **Validated: ✅ nginx + none + production sizing profile — multi-replica HPA, Standard_D8s_v3 ×3**
 
 ```hcl
-# Quickstart default — HTTP, zero cert setup
+# HTTP only
 ingress_controller     = "nginx"
 dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
@@ -278,40 +333,6 @@ letsencrypt_email      = "you@example.com"
 
 ---
 
-### envoy-gateway — Kubernetes Gateway API
-
-**Validated: ✅ envoy-gateway + none (HTTP), envoy-gateway + letsencrypt (HTTPS) — full 5-pass including LangGraph Platform**
-
-```hcl
-# HTTP only
-ingress_controller     = "envoy-gateway"
-dns_label              = "langsmith-prod"
-tls_certificate_source = "none"
-```
-
-```hcl
-# HTTPS via Let's Encrypt
-ingress_controller     = "envoy-gateway"
-dns_label              = "langsmith-prod"
-tls_certificate_source = "letsencrypt"
-letsencrypt_email      = "you@example.com"
-```
-
-**How it works:**
-- Terraform installs Envoy Gateway via Helm + Gateway API CRDs
-- `deploy.sh` creates `GatewayClass` + `Gateway` **before** helm install (required for chart validation)
-- LangSmith chart uses `gateway.enabled: true` (Gateway API mode) — creates `HTTPRoute` resources
-- `init-values.sh` sets `gateway.enabled: true`, `gateway.name: langsmith-gateway`, `gateway.namespace: langsmith`
-- cert-manager uses `gatewayHTTPRoute` solver + `ExperimentalGatewayAPISupport=true` feature gate
-- DNS label applied to Envoy LB service in `envoy-gateway-system` namespace (post-deploy)
-
-**Key: Gateway is created pre-deploy.** Without this, chart validation fails when
-`enable_deployments = true` (`Either ingress, gateway, or istioGateway must be enabled`).
-
-**DNS label:** Applied to Envoy Gateway LB service in `envoy-gateway-system` namespace.
-
----
-
 ## dns01 — Custom Domain Path (Validated ✅)
 
 **Validated: nginx + dns01 + custom domain (`langsmith.example.com`) — cert issued in < 4 min, HTTPS 200**
@@ -324,7 +345,7 @@ Your registrar (Cloudflare, Route53, Squarespace, etc.)
         └── cert-manager (Workload Identity) writes TXT record:
               _acme-challenge.langsmith.mycompany.com = <token>
                 └── Let's Encrypt validates → issues cert
-                      └── cert-manager stores cert as K8s secret → nginx serves HTTPS
+                      └── cert-manager stores cert as K8s secret → ingress controller serves HTTPS
 ```
 
 cert-manager uses **Workload Identity** (no static credentials) to write TXT records in the Azure DNS zone. The managed identity is created by Terraform and scoped to DNS Zone Contributor on that zone only.
@@ -365,6 +386,9 @@ A CNAME aliases traffic but does not delegate DNS authority. cert-manager needs 
 
 7. **After deploy — get LB IP and set A record:**
    ```bash
+   # envoy-gateway
+   kubectl get gateway langsmith-gateway -n langsmith -o jsonpath='{.status.addresses[0].value}'
+   # nginx
    kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
    # Add to terraform.tfvars: ingress_ip = "<lb-ip>"
    make apply   # creates A record in Azure DNS zone
@@ -397,11 +421,11 @@ make init-values && make deploy             # re-deploy LangSmith
 
 | Controller | `ingress.enabled` | `istioGateway.enabled` | `gateway.enabled` | Routing mechanism |
 |---|---|---|---|---|
+| envoy-gateway | `false` | `false` | `true` (`name: langsmith-gateway`) | Gateway (deploy.sh) + HTTPRoute (chart) |
 | nginx | `true` | `false` | `false` | K8s Ingress → nginx |
 | istio-addon | `false` | `true` (`name: langsmith-gateway`) | `false` | Gateway (deploy.sh) + VS (chart) |
 | istio | `true` (`class: istio`) | `false` | `false` | K8s Ingress → Istio ingressgateway |
 | agic | `true` | `false` | `false` | K8s Ingress → AGW rules |
-| envoy-gateway | `false` | `false` | `true` (`name: langsmith-gateway`) | Gateway API HTTPRoute (chart) |
 
 ---
 
@@ -410,6 +434,8 @@ make init-values && make deploy             # re-deploy LangSmith
 | Symptom | Cause | Fix |
 |---|---|---|
 | Cert stuck Pending, `istio-addon` + `letsencrypt` | No IngressClass — not supported | Switch to `dns01` + custom domain, or `none` |
+| No certificate, `envoy-gateway` + `letsencrypt` or `dns01` | cert-manager runs without Gateway API support | Run `kubectl describe certificate langsmith-tls -n langsmith` for the failing step. Confirm cert-manager runs with `--feature-gates=ExperimentalGatewayAPISupport=true`: Terraform sets it on the cert-manager it installs; with `install_cert_manager = false`, enable it on yours |
+| No external IP, `envoy-gateway` | Gateway not programmed, or Azure has not assigned the LB IP | Run `kubectl get gateway langsmith-gateway -n langsmith` for the address and `Programmed` status. Run `kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway` for the proxy service |
 | Cert stuck Pending, `nginx` + `letsencrypt` | DNS label not on nginx LB | Re-run `make deploy` |
 | Chart validation error: must enable ingress or gateway | LangGraph Platform enabled, istioGateway disabled | Re-run `make init-values && make deploy` |
 | VirtualService ownership conflict on re-deploy | VS was created by kubectl, not Helm | `kubectl delete vs langsmith -n langsmith` then `make deploy` |
