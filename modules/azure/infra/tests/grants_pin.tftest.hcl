@@ -32,9 +32,24 @@ mock_provider "azurerm" {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.Network/virtualNetworks/ls-vnet-test"
     }
   }
+  # Teardown at Terraform 1.11 evaluates the outputs, which index the cluster's
+  # kube_config and parse the resource group's ID.
   mock_resource "azurerm_kubernetes_cluster" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+      kube_config = [{
+        host                   = "https://ls-aks-test.example.invalid:443"
+        client_certificate     = "Zml4dHVyZQ=="
+        client_key             = "Zml4dHVyZQ=="
+        cluster_ca_certificate = "Zml4dHVyZQ=="
+        username               = "fixture"
+        password               = "fixture"
+      }]
+    }
+  }
+  mock_resource "azurerm_resource_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test"
     }
   }
   mock_resource "azurerm_user_assigned_identity" {
