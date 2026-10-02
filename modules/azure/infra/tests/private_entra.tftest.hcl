@@ -266,9 +266,8 @@ run "a_supplied_network_without_the_grants_is_refused" {
   expect_failures = [azurerm_kubernetes_cluster.main]
 }
 
-# AKS links a supplied zone to the VNet, so a grant on the node subnet below it
-# does not count.
-run "a_subnet_grant_does_not_cover_the_vnet_a_zone_is_linked_to" {
+# A grant on the node subnet covers the network, but not the zone.
+run "a_supplied_zone_without_its_grant_is_refused" {
   command = plan
 
   # The check is a precondition on the cluster, which expect_failures reaches
@@ -301,8 +300,50 @@ run "a_subnet_grant_does_not_cover_the_vnet_a_zone_is_linked_to" {
   expect_failures = [azurerm_kubernetes_cluster.main]
 }
 
-# Any role counts, so a custom one on the node subnet passes when no zone is
-# linked to the VNet.
+# A zone its owner linked to the VNet leaves AKS nothing to do there, so a
+# subnet grant and a zone grant are enough, with no role on the VNet. The
+# override answers both checks, and each keeps the grant at or above its scope.
+run "a_subnet_grant_and_a_zone_grant_pass_with_a_supplied_zone" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  override_data {
+    target = data.azurerm_role_assignments.control_plane
+    values = {
+      role_assignments = [
+        {
+          role_definition_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7"
+          role_assignment_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks"
+        },
+        {
+          role_definition_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f"
+          role_assignment_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.usgovvirginia.cx.aks.containerservice.azure.us"
+        },
+      ]
+    }
+  }
+
+  variables {
+    location                             = "eastus"
+    subnet_id                            = "${var.fixture_vnet_id}/subnets/aks"
+    vnet_id                              = var.fixture_vnet_id
+    private_cluster_enabled              = true
+    private_dns_zone_id                  = var.fixture_dns_zone_id
+    control_plane_identity               = "user"
+    control_plane_identity_id            = var.fixture_identity_id
+    control_plane_identity_manage_grants = false
+  }
+
+  assert {
+    condition     = length(azurerm_kubernetes_cluster.main) == 1
+    error_message = "A subnet grant and a zone grant did not satisfy the check with a supplied zone"
+  }
+}
+
+# Any role counts, so a custom one on the node subnet passes.
 run "a_custom_role_on_the_subnet_passes_the_check" {
   command = plan
 

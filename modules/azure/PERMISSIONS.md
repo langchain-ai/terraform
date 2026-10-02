@@ -109,15 +109,16 @@ With `aks_control_plane_identity = "user"`, the AKS control plane runs as a user
 | Role | Scope | Needed when |
 |------|-------|-------------|
 | `Network Contributor` | The AKS subnet | Always |
-| `Network Contributor` | The cluster's VNet, in place of the subnet grant | The API server is private and registers in a zone you supply, which AKS links to the VNet |
-| `Private DNS Zone Contributor` | The zone in `aks_private_dns_zone_id` | As above |
+| `Network Contributor` | The subnet's route table | The subnet has one. Terraform does not make this grant |
+| `Network Contributor` | The cluster's VNet | The API server is private and registers in a zone you supply that is not yet linked to the VNet, because AKS then links it |
+| `Private DNS Zone Contributor` | The zone in `aks_private_dns_zone_id` | The API server is private and registers in a zone you supply |
 
 Who makes the grants follows `aks_control_plane_identity_manage_grants`, which defaults to `create_vnet`:
 
-- **`true`.** Terraform makes the grants, waits 300 seconds for Azure to apply them, then creates the cluster. The deploying identity needs `roleAssignments/write` at each scope. This is the default when Terraform built the VNet.
+- **`true`.** Terraform makes the grants, waits 300 seconds for Azure to apply them, then creates the cluster. With a zone you supply, it grants on the VNet in place of the subnet, whether or not the zone is linked already. The deploying identity needs `roleAssignments/write` at each scope. This is the default when Terraform built the VNet.
 - **`false`.** Terraform makes no grants, and the network's owner makes them. This is the default on a supplied VNet. The identity must already exist and be set in `aks_control_plane_identity_id`. The plan reads its assignments and fails if a scope has none. The error names the principal ID and gives the `az role assignment create` command for each missing grant.
 
-The check accepts any role at the scope or above it, so a custom role passes, and so does a grant on the VNet's resource group or subscription. Azure decides whether the role carries enough permissions when it creates the cluster, and fails the create if it does not. A subnet grant does not cover the VNet, so with a zone of your own it fails the check.
+The check covers the subnet and the zone. It does not check the route table, or the VNet, which needs a grant only when the zone is not linked yet. It accepts any role at the scope or above it, so a custom role passes, and so does a grant on the VNet's resource group or subscription. A grant at management-group scope is reported missing, because a management group's path is not a prefix of the subscription's: grant at the subnet and the zone as well. Azure decides whether the role carries enough permissions when it creates the cluster, and fails the create if it does not.
 
 To deploy with `false`:
 
@@ -145,7 +146,7 @@ This does not remove the deployment's need for `roleAssignments/write` altogethe
 
 ### Turning it off on a deployment that already applied
 
-Leaving `keyvault_manage_secrets` at its default needs no migration. Setting it to false afterwards does, because Terraform reads `count = 0` as "delete these two secrets from the vault". Nothing breaks at the moment of the delete, since no runtime path reads the vault — the failure surfaces later, when `make k8s-secrets` cannot read `langsmith-license-key` to build `langsmith-config-secret`. Soft delete keeps both recoverable for the vault's retention window.
+Leaving `keyvault_manage_secrets` at its default needs no migration. Setting it to false afterwards does, because Terraform reads `count = 0` as "delete these two secrets from the vault". Nothing breaks at the moment of the delete, since no runtime path reads the vault: the failure surfaces later, when `make k8s-secrets` cannot read `langsmith-license-key` to build `langsmith-config-secret`. Soft delete keeps both recoverable for the vault's retention window.
 
 Drop them from state first, which leaves the vault untouched. Read the addresses out of state rather than typing them: `postgres_admin_password` is un-indexed on deployments that last applied before this flag existed and `[0]` after, while `langsmith_license_key` carried a `count` already and is `[0]` either way:
 

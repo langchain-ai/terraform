@@ -358,7 +358,7 @@ variable "control_plane_identity_id" {
 
 variable "control_plane_identity_manage_grants" {
   type        = bool
-  description = "With control_plane_identity = \"user\": true grants the identity Network Contributor on subnet_id, or on vnet_id with a custom private_dns_zone_id, and Private DNS Zone Contributor on that zone; false checks the identity holds a role at those scopes and stops before the cluster is created when it does not."
+  description = "With control_plane_identity = \"user\": true grants the identity Network Contributor on subnet_id, or on vnet_id with a custom private_dns_zone_id, and Private DNS Zone Contributor on that zone; false checks the identity holds a role on subnet_id and on that zone, and stops before the cluster is created when it does not. The check skips the VNet, which a zone its owner already linked does not need."
   default     = true
 }
 

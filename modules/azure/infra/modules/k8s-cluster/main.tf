@@ -319,9 +319,10 @@ locals {
   # control-plane identity; System and None need no grant.
   control_plane_dns_zone = var.private_cluster_enabled && !contains(["", "System", "None"], var.private_dns_zone_id)
 
-  # AKS links a supplied zone to the cluster's VNet, which takes Network
-  # Contributor on the VNet. Without one, Microsoft documents the node subnet
-  # as enough.
+  # AKS links a supplied zone to the cluster's VNet unless the zone's owner
+  # already has, which takes Network Contributor on the VNet. Terraform cannot
+  # tell which, so the grants it makes cover the VNet. Without a zone, Microsoft
+  # documents the node subnet as enough.
   control_plane_network_scope = local.control_plane_dns_zone ? var.vnet_id : var.subnet_id
 
   control_plane_grant = local.control_plane_user && var.control_plane_identity_manage_grants
@@ -381,11 +382,13 @@ resource "time_sleep" "control_plane_grant_propagation" {
 # minimum for a custom role differs between its pages, so Azure, not this
 # check, decides whether the role is enough when the cluster is created.
 # Azure lists a principal's assignments at, above, and below the scope it is
-# asked about, so each check keeps the ones at or above it: a grant on the node
-# subnet does not cover the VNet a supplied zone is linked to. The root requires
-# a supplied identity here, so its principal, and the check, resolve at plan.
+# asked about, so each check keeps the ones at or above it. The network check
+# stays on the node subnet with a supplied zone: an owner who linked the zone to
+# the VNet first leaves AKS nothing to do on the VNet, and the check cannot tell
+# a linked zone from one AKS would link. The root requires a supplied identity
+# here, so its principal, and the check, resolve at plan.
 data "azurerm_role_assignments" "control_plane" {
-  for_each     = local.control_plane_check ? merge({ network = local.control_plane_network_scope }, local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {}) : {}
+  for_each     = local.control_plane_check ? merge({ network = var.subnet_id }, local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {}) : {}
   scope        = each.value
   principal_id = local.control_plane_principal_id
 }
@@ -393,7 +396,7 @@ data "azurerm_role_assignments" "control_plane" {
 locals {
   control_plane_missing_grants = [
     for g in [
-      { key = "network", role = "Network Contributor", scope = local.control_plane_network_scope },
+      { key = "network", role = "Network Contributor", scope = var.subnet_id },
       { key = "dns_zone", role = "Private DNS Zone Contributor", scope = var.private_dns_zone_id },
     ] : g
     # ?: rather than &&, which evaluates both sides and would index a check
