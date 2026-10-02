@@ -410,14 +410,29 @@ if [[ "$USE_AUTOPILOT" == "false" ]]; then
       "medium  — 100 ingest / 40 query QPS" \
       "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
     _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
-    # minimal writes null: null gives network-disk for minimal, and a later
-    # size change gets local-ssd.
-    _smithdb_cache="network-disk"
+    # The cache mode is required for small, medium, and large, so the script
+    # always writes it. The recommendation follows the deployment profile, not
+    # the size (infra/locals.tf, smithdb_cache_storage_recommended):
+    # default-disk for dev, network-disk for prod. minimal has no choice and
+    # writes null, which gives default-disk.
+    _smithdb_cache_recommended="default-disk"
+    if [[ "$PROFILE" == "prod" ]]; then
+      _smithdb_cache_recommended="network-disk"
+    fi
+    _smithdb_cache="default-disk"
     _smithdb_cache_value="null"
     if [[ "$_smithdb_sizing" != "minimal" ]]; then
-      _ask_choice "SmithDB cache storage" \
-        "local-ssd    — node Local SSD (recommended)" "network-disk — Hyperdisk Balanced on C3 nodes"
-      [[ "$_CHOICE" == "1" ]] && _smithdb_cache="local-ssd"
+      _rec_dd="" _rec_nd=""
+      if [[ "$_smithdb_cache_recommended" == "default-disk" ]]; then
+        _rec_dd=" (recommended for dev)"
+      else
+        _rec_nd=" (recommended for prod)"
+      fi
+      _ask_choice "SmithDB cache storage (see SMITHDB.md#cache-storage)" \
+        "default-disk — standard-rwo volume per pod on N2 nodes, for development and test${_rec_dd}" \
+        "network-disk — Hyperdisk Balanced 7,000 IOPS / 1,000 MiB/s on C3 nodes${_rec_nd}" \
+        "local-ssd    — node Local SSD, the performance option (needs Local SSD quota)"
+      _smithdb_cache=$(echo "default-disk network-disk local-ssd" | cut -d' ' -f"$_CHOICE")
       _smithdb_cache_value="\"${_smithdb_cache}\""
     fi
     SMITHDB_SIZING_LINES="

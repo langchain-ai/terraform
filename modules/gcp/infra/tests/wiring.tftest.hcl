@@ -316,8 +316,9 @@ run "smithdb_plans_its_own_node_pool" {
   command = plan
 
   variables {
-    enable_smithdb    = true
-    gke_use_autopilot = false
+    enable_smithdb        = true
+    smithdb_cache_storage = "default-disk"
+    gke_use_autopilot     = false
   }
 
   assert {
@@ -326,39 +327,40 @@ run "smithdb_plans_its_own_node_pool" {
   }
   assert {
     condition     = length(module.smithdb_nodes) == 1
-    error_message = "SmithDB did not plan the Local SSD node pool it needs"
+    error_message = "SmithDB did not plan the cache node pool it needs"
   }
+  # small with default-disk: an N2 pool with no Local SSD, and a 300 GB
+  # boot disk for the backfill Job.
   assert {
-    condition = output.smithdb_sizing == "small" && output.smithdb_cache_storage == "local-ssd" && output.smithdb_node_pool_config == {
+    condition = output.smithdb_sizing == "small" && output.smithdb_cache_storage == "default-disk" && output.smithdb_node_pool_config == {
       instance_store_machine_type    = "n2-standard-16"
-      instance_store_local_ssd_count = 2
-      instance_store_disk_size_gb    = 100
+      instance_store_local_ssd_count = 0
+      instance_store_disk_size_gb    = 300
       compute_machine_type           = "n2-standard-8"
     } && output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
-    error_message = "sizing_profile = default did not resolve to SmithDB small local-ssd (n2-standard-16, 2 Local SSD, quota 27 CPU / 53 GiB)"
+    error_message = "sizing_profile = default did not resolve to SmithDB small default-disk (n2-standard-16, 0 Local SSD, 300 GB, quota 27 CPU / 53 GiB)"
   }
   assert {
-    condition = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources == {
-      requests = { cpu = "4", memory = "8Gi", "ephemeral-storage" = "200Gi" }
-      limits   = { cpu = "4", memory = "8Gi", "ephemeral-storage" = "200Gi" }
-      } && alltrue([
+    condition = (
+      yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "standard-rwo" } &&
+      alltrue([
         for c in ["query", "ingestion", "compactionWorker"] :
-        yamldecode(output.smithdb_helm_values).smithdb[c].deployment.volumes == [{ name = "cache", emptyDir = { sizeLimit = c == "query" ? "200Gi" : "100Gi" } }] &&
+        keys(yamldecode(output.smithdb_helm_values).smithdb[c].deployment) == ["nodeSelector", "replicas", "tolerations"] &&
         yamldecode(output.smithdb_helm_values).smithdb[c].deployment.nodeSelector == { "smithdb-local/instance-store" = "true" } &&
         yamldecode(output.smithdb_helm_values).smithdb[c].deployment.replicas == 1 &&
         yamldecode(output.smithdb_helm_values).smithdb[c].autoscaling == { hpa = { minReplicas = 1 } }
-    ])
-    error_message = "SmithDB local-ssd cache components are not an emptyDir named cache on the cache pool with the tier resources, 1 replica, and an HPA minimum of 1"
+      ])
+    )
+    error_message = "SmithDB default-disk cache components are not a PVC on standard-rwo with only the pool pins, 1 replica, and an HPA minimum of 1"
   }
   assert {
     condition = (
       yamldecode(output.smithdb_helm_values).smithdb.compaction.deployment.nodeSelector == { "smithdb-local/compute" = "true" } &&
       yamldecode(output.smithdb_helm_values).smithdb.migration.job.nodeSelector == { "smithdb-local/instance-store" = "true" } &&
       yamldecode(output.smithdb_helm_values).smithdb.migration.taskdb.postgres.statefulSet.nodeSelector == { "smithdb-local/compute" = "true" } &&
-      !contains(keys(yamldecode(output.smithdb_helm_values).smithdb), "cache") &&
       module.k8s_bootstrap.smithdb_cache_storage_class_name == null
     )
-    error_message = "SmithDB local-ssd pins or cache settings are wrong"
+    error_message = "SmithDB default-disk pins are wrong, or default-disk created a StorageClass"
   }
   # An existing install must not start dual write when it upgrades the chart.
   assert {
@@ -383,13 +385,83 @@ run "smithdb_on_autopilot_is_rejected" {
   command = plan
 
   variables {
-    enable_smithdb    = true
-    gke_use_autopilot = true
+    enable_smithdb        = true
+    smithdb_cache_storage = "default-disk"
+    gke_use_autopilot     = true
   }
 
   # SmithDB needs the Local SSD node pools that Autopilot will not let this
   # module create.
   expect_failures = [terraform_data.validate_inputs]
+}
+
+# The cache mode is a required value for small, medium, and large, so a new
+# recommendation never moves the cache pool of an existing deployment.
+run "smithdb_cache_storage_is_required" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# dev with default-disk plans with no warning: default-disk is the dev mode.
+run "smithdb_dev_default_disk_does_not_warn" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    sizing_profile        = "dev"
+    smithdb_cache_storage = "default-disk"
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "small" && output.smithdb_cache_storage == "default-disk"
+    error_message = "sizing_profile = dev with default-disk did not resolve to SmithDB small default-disk"
+  }
+}
+
+# local-ssd is an opt-in: an emptyDir on node Local SSD, with the tier
+# ephemeral-storage, and no StorageClass.
+run "smithdb_local_ssd_is_an_opt_in" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    smithdb_cache_storage = "local-ssd"
+  }
+
+  assert {
+    condition = output.smithdb_sizing == "small" && output.smithdb_cache_storage == "local-ssd" && output.smithdb_node_pool_config == {
+      instance_store_machine_type    = "n2-standard-16"
+      instance_store_local_ssd_count = 2
+      instance_store_disk_size_gb    = 100
+      compute_machine_type           = "n2-standard-8"
+    } && output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
+    error_message = "smithdb_cache_storage = local-ssd did not resolve to SmithDB small on n2-standard-16 with 2 Local SSD and a 100 GB boot disk, quota 27 CPU / 53 GiB"
+  }
+  assert {
+    condition = yamldecode(output.smithdb_helm_values).smithdb.query.deployment.resources == {
+      requests = { cpu = "4", memory = "8Gi", "ephemeral-storage" = "200Gi" }
+      limits   = { cpu = "4", memory = "8Gi", "ephemeral-storage" = "200Gi" }
+      } && alltrue([
+        for c in ["query", "ingestion", "compactionWorker"] :
+        yamldecode(output.smithdb_helm_values).smithdb[c].deployment.volumes == [{ name = "cache", emptyDir = { sizeLimit = c == "query" ? "200Gi" : "100Gi" } }] &&
+        yamldecode(output.smithdb_helm_values).smithdb[c].deployment.nodeSelector == { "smithdb-local/instance-store" = "true" } &&
+        yamldecode(output.smithdb_helm_values).smithdb[c].deployment.replicas == 1 &&
+        yamldecode(output.smithdb_helm_values).smithdb[c].autoscaling == { hpa = { minReplicas = 1 } }
+    ])
+    error_message = "SmithDB local-ssd cache components are not an emptyDir named cache on the cache pool with the tier resources, 1 replica, and an HPA minimum of 1"
+  }
+  assert {
+    condition = (
+      !contains(keys(yamldecode(output.smithdb_helm_values).smithdb), "cache") &&
+      module.k8s_bootstrap.smithdb_cache_storage_class_name == null
+    )
+    error_message = "SmithDB local-ssd set smithdb.cache or created a StorageClass"
+  }
 }
 
 run "smithdb_minimal_runs_on_the_general_pool" {
@@ -403,7 +475,7 @@ run "smithdb_minimal_runs_on_the_general_pool" {
   # Limits decide the extra: half of 12.5 CPU and 21.5 GiB, rounded up.
   assert {
     condition = (
-      output.smithdb_sizing == "minimal" && output.smithdb_cache_storage == "network-disk" &&
+      output.smithdb_sizing == "minimal" && output.smithdb_cache_storage == "default-disk" &&
       length(module.smithdb_nodes) == 0 && module.k8s_bootstrap.smithdb_cache_storage_class_name == null &&
       output.smithdb_quota_extra == { cpu = 7, memory_gi = 11, pods = 12 }
     )
@@ -473,6 +545,22 @@ run "smithdb_minimal_with_local_ssd_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+# minimal has no C3 cache pool for the Hyperdisk class.
+run "smithdb_minimal_with_network_disk_is_rejected" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    smithdb_sizing        = "minimal"
+    smithdb_cache_storage = "network-disk"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# small with network-disk is an opt-in that fails the speed rule: up to 5
+# cache pods fit on a c3-standard-22, and its limit is 1,800 MiB/s. The check
+# warns and does not stop the plan.
 run "smithdb_network_disk_uses_the_created_storage_class" {
   command = plan
 
@@ -508,6 +596,8 @@ run "smithdb_network_disk_uses_the_created_storage_class" {
     )
     error_message = "SmithDB network-disk did not select the created StorageClass and the start time, or a cache pod carries more than the pool pins, 1 replica, and an HPA minimum of 1"
   }
+
+  expect_failures = [check.smithdb_network_disk_speed]
 }
 
 # N2 cannot attach the Hyperdisk Balanced cache volumes.
@@ -534,7 +624,8 @@ run "smithdb_network_disk_with_local_ssd_is_rejected" {
     smithdb_instance_store_local_ssd_count = 2
   }
 
-  expect_failures = [terraform_data.validate_inputs]
+  # small on c3-standard-22 also fails the speed rule, which warns.
+  expect_failures = [terraform_data.validate_inputs, check.smithdb_network_disk_speed]
 }
 
 # The 300 GB default passes in smithdb_network_disk_uses_the_created_storage_class.
@@ -544,6 +635,22 @@ run "smithdb_network_disk_backfill_on_a_small_boot_disk_is_rejected" {
   variables {
     enable_smithdb                   = true
     smithdb_cache_storage            = "network-disk"
+    smithdb_instance_store_disk_size = 100
+    smithdb_ingestion_enabled        = true
+    smithdb_migration_enabled        = true
+  }
+
+  # small on c3-standard-22 also fails the speed rule, which warns.
+  expect_failures = [terraform_data.validate_inputs, check.smithdb_network_disk_speed]
+}
+
+# default-disk also puts the 100Gi backfill Job on the cache pool boot disk.
+run "smithdb_default_disk_backfill_on_a_small_boot_disk_is_rejected" {
+  command = plan
+
+  variables {
+    enable_smithdb                   = true
+    smithdb_cache_storage            = "default-disk"
     smithdb_instance_store_disk_size = 100
     smithdb_ingestion_enabled        = true
     smithdb_migration_enabled        = true
@@ -565,58 +672,30 @@ run "smithdb_local_ssd_without_local_ssd_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+# medium with network-disk on c3-standard-44, which passes the speed
+# rule: 2 cache pods (16 + 16 CPU) x 1,000 MiB/s <= 2,400 MiB/s. A failed check
+# fails a test run, so this run also proves that the check passes.
 run "smithdb_sizing_follows_sizing_profile_production" {
   command = plan
 
   variables {
-    enable_smithdb = true
-    sizing_profile = "production"
-  }
-
-  assert {
-    condition = yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "medium" && output.smithdb_node_pool_config == {
-      instance_store_machine_type    = "n2-standard-32"
-      instance_store_local_ssd_count = 4
-      instance_store_disk_size_gb    = 100
-      compute_machine_type           = "n2-standard-8"
-    } && output.smithdb_quota_extra == { cpu = 93, memory_gi = 169, pods = 12 }
-    error_message = "sizing_profile = production did not resolve to SmithDB medium on n2-standard-32 with 4 Local SSD, quota 93 CPU / 169 GiB / 12 pods"
-  }
-  assert {
-    condition = alltrue([
-      for c in ["query", "ingestion", "compactionWorker"] :
-      yamldecode(output.smithdb_helm_values).smithdb[c].deployment.replicas == 1 &&
-      yamldecode(output.smithdb_helm_values).smithdb[c].autoscaling == { hpa = { minReplicas = 1 } }
-    ])
-    error_message = "SmithDB medium local-ssd values do not set 1 replica and an HPA minimum of 1 for query, ingestion, and compactionWorker"
-  }
-  assert {
-    condition     = output.smithdb_metastore_tier == "db-custom-6-32768"
-    error_message = "SmithDB medium did not give the created metastore the tier db-custom-6-32768"
-  }
-}
-
-run "smithdb_medium_network_disk_uses_the_c3_pool" {
-  command = plan
-
-  variables {
     enable_smithdb        = true
-    sizing_profile        = "production"
     smithdb_cache_storage = "network-disk"
+    sizing_profile        = "production"
   }
 
   assert {
-    condition = output.smithdb_sizing == "medium" && output.smithdb_node_pool_config == {
+    condition = yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "medium" && output.smithdb_cache_storage == "network-disk" && output.smithdb_node_pool_config == {
       instance_store_machine_type    = "c3-standard-44"
       instance_store_local_ssd_count = 0
       instance_store_disk_size_gb    = 300
       compute_machine_type           = "n2-standard-8"
     } && output.smithdb_quota_extra == { cpu = 93, memory_gi = 169, pods = 12 }
-    error_message = "sizing_profile = production with network-disk did not resolve to medium on c3-standard-44, 0 Local SSD, 300 GB, quota 93 CPU / 169 GiB / 12 pods"
+    error_message = "sizing_profile = production did not resolve to SmithDB medium network-disk on c3-standard-44, 0 Local SSD, 300 GB, quota 93 CPU / 169 GiB / 12 pods"
   }
   assert {
     condition = (
-      yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "medium" &&
+      module.k8s_bootstrap.smithdb_cache_storage_class_name == "smithdb-cache-a1b2c3d4" &&
       yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "smithdb-cache-a1b2c3d4" } &&
       alltrue([
         for c in ["query", "ingestion", "compactionWorker"] :
@@ -627,28 +706,120 @@ run "smithdb_medium_network_disk_uses_the_c3_pool" {
     )
     error_message = "SmithDB medium network-disk values are not the medium tier on the created StorageClass, with only the pool pins, 1 replica, and an HPA minimum of 1 on each cache pod"
   }
+  assert {
+    condition     = output.smithdb_metastore_tier == "db-custom-6-32768"
+    error_message = "SmithDB medium did not give the created metastore the tier db-custom-6-32768"
+  }
+}
+
+run "smithdb_medium_local_ssd_is_an_opt_in" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    sizing_profile        = "production"
+    smithdb_cache_storage = "local-ssd"
+  }
+
+  assert {
+    condition = output.smithdb_sizing == "medium" && output.smithdb_node_pool_config == {
+      instance_store_machine_type    = "n2-standard-32"
+      instance_store_local_ssd_count = 4
+      instance_store_disk_size_gb    = 100
+      compute_machine_type           = "n2-standard-8"
+    } && output.smithdb_quota_extra == { cpu = 93, memory_gi = 169, pods = 12 }
+    error_message = "sizing_profile = production with local-ssd did not resolve to medium on n2-standard-32 with 4 Local SSD, quota 93 CPU / 169 GiB / 12 pods"
+  }
+  assert {
+    condition = (
+      module.k8s_bootstrap.smithdb_cache_storage_class_name == null &&
+      alltrue([
+        for c in ["query", "ingestion", "compactionWorker"] :
+        yamldecode(output.smithdb_helm_values).smithdb[c].deployment.volumes[0].name == "cache" &&
+        yamldecode(output.smithdb_helm_values).smithdb[c].deployment.replicas == 1 &&
+        yamldecode(output.smithdb_helm_values).smithdb[c].autoscaling == { hpa = { minReplicas = 1 } }
+      ])
+    )
+    error_message = "SmithDB medium local-ssd values do not use an emptyDir cache with 1 replica and an HPA minimum of 1, or created a StorageClass"
+  }
+}
+
+# default-disk for medium: an N2 pool with no Local SSD, standard-rwo, and no
+# created StorageClass. The speed rule does not apply.
+run "smithdb_medium_default_disk_uses_standard_rwo" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    sizing_profile        = "production"
+    smithdb_cache_storage = "default-disk"
+  }
+
+  assert {
+    condition = output.smithdb_sizing == "medium" && output.smithdb_node_pool_config == {
+      instance_store_machine_type    = "n2-standard-32"
+      instance_store_local_ssd_count = 0
+      instance_store_disk_size_gb    = 300
+      compute_machine_type           = "n2-standard-8"
+    } && output.smithdb_quota_extra == { cpu = 93, memory_gi = 169, pods = 12 }
+    error_message = "sizing_profile = production with default-disk did not resolve to medium on n2-standard-32, 0 Local SSD, 300 GB, quota 93 CPU / 169 GiB / 12 pods"
+  }
+  assert {
+    condition = (
+      module.k8s_bootstrap.smithdb_cache_storage_class_name == null &&
+      yamldecode(output.smithdb_helm_values).smithdb.resourceTier == "medium" &&
+      yamldecode(output.smithdb_helm_values).smithdb.cache == { storageClassName = "standard-rwo" }
+    )
+    error_message = "SmithDB medium default-disk values are not the medium tier on standard-rwo, or default-disk created a StorageClass"
+  }
+
+  # production with default-disk warns: the cache is below the minimum.
+  expect_failures = [check.smithdb_default_disk_purpose]
+}
+
+# A machine type outside the default network-disk shapes is not checked, and
+# the check warns. c3-standard-176 is a valid C3 type for the Hyperdisk class.
+run "smithdb_network_disk_on_a_custom_type_is_not_checked" {
+  command = plan
+
+  variables {
+    enable_smithdb                      = true
+    smithdb_cache_storage               = "network-disk"
+    sizing_profile                      = "production"
+    smithdb_instance_store_machine_type = "c3-standard-176"
+  }
+
+  assert {
+    condition     = output.smithdb_node_pool_config.instance_store_machine_type == "c3-standard-176"
+    error_message = "smithdb_instance_store_machine_type did not win in network-disk mode"
+  }
+
+  expect_failures = [check.smithdb_network_disk_speed]
 }
 
 # The largest figure: 10 cache pods and 2 compute pods, with the backfill.
-# k8s-bootstrap bounds the extra at 1024 CPU and 2048 GiB.
+# k8s-bootstrap bounds the extra at 1024 CPU and 2048 GiB. large with
+# network-disk on c3-standard-88, which passes the speed rule: 3 cache pods
+# (3 x 28 CPU) x 1,000 MiB/s <= 4,800 MiB/s.
 run "smithdb_sizing_follows_sizing_profile_production_large" {
   command = plan
 
   variables {
     enable_smithdb            = true
+    smithdb_cache_storage     = "network-disk"
     sizing_profile            = "production-large"
     smithdb_ingestion_enabled = true
     smithdb_migration_enabled = true
   }
 
   assert {
-    condition = output.smithdb_sizing == "large" && output.smithdb_cache_storage == "local-ssd" && output.smithdb_node_pool_config == {
-      instance_store_machine_type    = "n2-standard-64"
-      instance_store_local_ssd_count = 8
-      instance_store_disk_size_gb    = 100
+    condition = output.smithdb_sizing == "large" && output.smithdb_cache_storage == "network-disk" && output.smithdb_node_pool_config == {
+      instance_store_machine_type    = "c3-standard-88"
+      instance_store_local_ssd_count = 0
+      instance_store_disk_size_gb    = 300
       compute_machine_type           = "n2-standard-16"
     } && output.smithdb_quota_extra == { cpu = 414, memory_gi = 906, pods = 34 }
-    error_message = "sizing_profile = production-large did not resolve to SmithDB large on n2-standard-64 with 8 Local SSD and n2-standard-16 compute, quota 414 CPU / 906 GiB / 34 pods with the backfill"
+    error_message = "sizing_profile = production-large did not resolve to SmithDB large network-disk on c3-standard-88, 0 Local SSD, 300 GB, and n2-standard-16 compute, quota 414 CPU / 906 GiB / 34 pods with the backfill"
   }
   assert {
     condition = (
@@ -677,6 +848,7 @@ run "smithdb_explicit_pool_variables_win_over_the_size" {
   variables {
     enable_smithdb                         = true
     sizing_profile                         = "production-large"
+    smithdb_cache_storage                  = "local-ssd"
     smithdb_instance_store_machine_type    = "c3-standard-88-lssd"
     smithdb_instance_store_local_ssd_count = 0
     smithdb_instance_store_disk_size       = 150
@@ -700,6 +872,7 @@ run "smithdb_explicit_sizing_wins_over_sizing_profile" {
 
   variables {
     enable_smithdb            = true
+    smithdb_cache_storage     = "network-disk"
     sizing_profile            = "production-large"
     smithdb_sizing            = "medium"
     smithdb_ingestion_enabled = true
@@ -707,16 +880,16 @@ run "smithdb_explicit_sizing_wins_over_sizing_profile" {
   }
 
   assert {
-    condition = output.smithdb_sizing == "medium" && output.smithdb_node_pool_config == {
-      instance_store_machine_type    = "n2-standard-32"
-      instance_store_local_ssd_count = 4
-      instance_store_disk_size_gb    = 100
+    condition = output.smithdb_sizing == "medium" && output.smithdb_cache_storage == "network-disk" && output.smithdb_node_pool_config == {
+      instance_store_machine_type    = "c3-standard-44"
+      instance_store_local_ssd_count = 0
+      instance_store_disk_size_gb    = 300
       compute_machine_type           = "n2-standard-8"
       } && output.smithdb_quota_extra == { cpu = 103, memory_gi = 206, pods = 20 } && alltrue([
         for c in ["query", "ingestion", "compactionWorker"] :
         yamldecode(output.smithdb_helm_values).smithdb[c].autoscaling == { hpa = { minReplicas = 1 } }
     ])
-    error_message = "smithdb_sizing = medium did not win over sizing_profile = production-large: n2-standard-32, 4 Local SSD, n2-standard-8 compute, quota 103 CPU / 206 GiB / 20 pods with the backfill, HPA minimum 1"
+    error_message = "smithdb_sizing = medium did not win over sizing_profile = production-large: network-disk on c3-standard-44, 0 Local SSD, 300 GB, n2-standard-8 compute, quota 103 CPU / 206 GiB / 20 pods with the backfill, HPA minimum 1"
   }
   # The metastore tier follows the resolved smithdb_sizing, not sizing_profile.
   assert {
@@ -731,6 +904,7 @@ run "smithdb_explicit_metastore_tier_wins_over_the_size" {
 
   variables {
     enable_smithdb         = true
+    smithdb_cache_storage  = "network-disk"
     sizing_profile         = "production-large"
     smithdb_metastore_tier = "db-custom-2-8192"
   }
@@ -772,6 +946,7 @@ run "smithdb_external_metastore_ignores_the_size_tier" {
 
   variables {
     enable_smithdb                      = true
+    smithdb_cache_storage               = "network-disk"
     sizing_profile                      = "production-large"
     smithdb_metastore_source            = "external"
     smithdb_external_metastore_host     = "10.0.0.5"
@@ -792,6 +967,7 @@ run "smithdb_auth_proxy_on_an_external_metastore_is_rejected" {
 
   variables {
     enable_smithdb                      = true
+    smithdb_cache_storage               = "default-disk"
     smithdb_metastore_source            = "external"
     smithdb_external_metastore_host     = "10.0.0.5"
     smithdb_external_metastore_username = "smithdb"
@@ -807,6 +983,7 @@ run "smithdb_direct_tls_with_the_auth_proxy_is_rejected" {
 
   variables {
     enable_smithdb            = true
+    smithdb_cache_storage     = "default-disk"
     smithdb_metastore_source  = "create"
     smithdb_metastore_use_ssl = true
   }
@@ -821,6 +998,7 @@ run "smithdb_created_metastore_without_the_proxy_is_rejected" {
 
   variables {
     enable_smithdb                   = true
+    smithdb_cache_storage            = "default-disk"
     smithdb_metastore_source         = "create"
     smithdb_metastore_use_auth_proxy = false
   }
@@ -834,6 +1012,7 @@ run "smithdb_created_metastore_mode_2_plans" {
 
   variables {
     enable_smithdb                   = true
+    smithdb_cache_storage            = "default-disk"
     smithdb_metastore_source         = "create"
     smithdb_metastore_use_auth_proxy = false
     smithdb_metastore_use_ssl        = false
