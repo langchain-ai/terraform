@@ -153,15 +153,21 @@ The GCP module now writes the SmithDB tier, resources, HPA minimum replicas, cac
 volumes, and node placement to the generated `langsmith-values-smithdb-sizing.yaml`.
 The Cloud SQL Auth Proxy is now the default for a created metastore.
 
+- Set the cache mode. `smithdb_cache_storage` is now required for `small`,
+  `medium`, and `large`, and `terraform plan` stops until you set it. The 0.16
+  cache is `local-ssd`. To keep it, set `smithdb_cache_storage = "local-ssd"`.
+  A change to `default-disk` or `network-disk` recreates the cache nodes, and
+  each cache starts empty. See "Cache storage" in `modules/gcp/SMITHDB.md`.
 - Check the size. An unset `smithdb_sizing` follows `sizing_profile`.
-  - An existing `production` install resolves to `medium`. Terraform then replaces
-    the cache pool with `n2-standard-32` and 4 Local SSD. The compute pool stays
-    `n2-standard-8`.
-  - An existing `production-large` install resolves to `large`. Terraform then
-    replaces the cache pool with `n2-standard-64` and 8 Local SSD, and the compute
-    pool with `n2-standard-16`. `large` runs 12 SmithDB pods that request about
+  - An existing `production` install resolves to `medium`. With `local-ssd`, the
+    cache pool changes to `n2-standard-32` with 4 Local SSD. The compute pool
+    stays `n2-standard-8`.
+  - An existing `production-large` install resolves to `large`. With `local-ssd`,
+    the cache pool changes to `n2-standard-64` with 8 Local SSD, and the compute
+    pool to `n2-standard-16`. `large` runs 12 SmithDB pods that request about
     350 vCPU. To avoid this, set `smithdb_sizing = "medium"` or `"small"`.
-  - A `minimum` install resolves to `minimal` and has no SmithDB node pools.
+  - A `minimum` install resolves to `minimal` and has no SmithDB node pools. Its
+    cache mode is `default-disk`, and it needs no value.
   - To keep the 0.16 pool (n2-standard-16, 2 Local SSD), set
     `smithdb_sizing = "small"`: `make smithdb-configure SIZING=small CACHE=local-ssd`.
 - Check the metastore tier. An unset `smithdb_metastore_tier` now follows the size.

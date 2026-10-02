@@ -74,20 +74,27 @@ locals {
   smithdb_minimal = local.smithdb_sizing == "minimal"
 
   # Cache modes, with the same names on GCP and AWS:
-  # - default-disk: a per-pod PVC on the cluster default class (standard-rwo).
+  # - default-disk: a per-pod PVC on the GKE built-in standard-rwo class.
+  #   Development and test only: below the chart minimum cache speed.
   # - network-disk: a per-pod PVC on a Hyperdisk Balanced class with
   #   provisioned speed (7,000 IOPS, 1,000 MiB/s). Needs a C3 or C3D pool.
-  # - local-ssd: an emptyDir on node Local SSD. Opt-in.
-  # Development sizes default to default-disk. Production sizes default to
-  # network-disk, which meets the chart minimum cache speed with no Local SSD
-  # quota. An explicit smithdb_cache_storage wins.
-  smithdb_cache_storage_by_sizing = {
-    minimal = "default-disk"
-    small   = "default-disk"
-    medium  = "network-disk"
-    large   = "network-disk"
+  # - local-ssd: an emptyDir on node Local SSD. The performance option.
+  # smithdb_cache_storage is required for small, medium, and large (see the
+  # precondition in main.tf), so a new recommendation never moves the cache
+  # pool of an existing deployment. The recommendation follows the purpose in
+  # sizing_profile, not the size: the docs start production at small when the
+  # load is unknown. The setup scripts and the plan error use this map.
+  smithdb_cache_storage_recommended = {
+    minimum            = "default-disk"
+    dev                = "default-disk"
+    default            = "network-disk"
+    production         = "network-disk"
+    "production-large" = "network-disk"
   }
-  smithdb_cache_storage = coalesce(var.smithdb_cache_storage, local.smithdb_cache_storage_by_sizing[local.smithdb_sizing])
+  # A null for small, medium, and large stops the plan (main.tf). The fallback
+  # is local-ssd, the earlier default, so that no check or precondition reports
+  # on a mode that the user did not select.
+  smithdb_cache_storage = coalesce(var.smithdb_cache_storage, local.smithdb_minimal ? "default-disk" : "local-ssd")
   smithdb_default_disk  = local.smithdb_cache_storage == "default-disk"
   smithdb_network_disk  = local.smithdb_cache_storage == "network-disk"
   smithdb_local_ssd     = local.smithdb_cache_storage == "local-ssd"
@@ -211,12 +218,13 @@ locals {
   # The HPA can add cache pods up to maxReplicas, so the most pods is the count
   # of the smallest cache pod that fits in the node CPU (vCPU minus about 1 for
   # system pods). The limits are the Hyperdisk Balanced per-VM throughput of the
-  # default C3 shapes. Another machine type is not checked. main.tf warns on
-  # both cases and does not fail.
+  # default C3 shapes, from the Hyperdisk Balanced table (not the higher
+  # all-Hyperdisk machine-type table). Another machine type is not checked.
+  # main.tf warns on both cases and does not fail.
   smithdb_network_disk_vm_limit_mibps = {
     "c3-standard-22" = 1800
     "c3-standard-44" = 2400
-    "c3-standard-88" = 5000
+    "c3-standard-88" = 4800
   }
   smithdb_speed_rule_checked = contains(keys(local.smithdb_network_disk_vm_limit_mibps), local.smithdb_instance_store_machine_type)
   smithdb_speed_rule_limit   = lookup(local.smithdb_network_disk_vm_limit_mibps, local.smithdb_instance_store_machine_type, 0)

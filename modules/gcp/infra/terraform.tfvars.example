@@ -407,17 +407,19 @@ enable_smithdb = false
 
 # --- Sizing ----------------------------------------------------------------
 # minimal, small, medium, or large, and default-disk, network-disk, or
-# local-ssd. Unset, the size follows sizing_profile and the cache follows the
-# size:
+# local-ssd. Unset, the size follows sizing_profile:
 #   minimum -> minimal, dev and default -> small, production -> medium,
 #   production-large -> large (12 SmithDB pods, about 350 vCPU).
-#   minimal and small -> default-disk, medium and large -> network-disk.
-#   local-ssd is an opt-in for small, medium, and large.
+# The cache mode is required for small, medium, and large, and the plan stops
+# without it. default-disk is for development and test, network-disk is
+# recommended for production, and local-ssd is the performance option.
+# minimal uses default-disk and can leave it unset. Set local-ssd to keep the
+# cache pool of a deployment from before the value was required.
 # small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
 # size resolves to: modules/gcp/SMITHDB.md#sizing. Set both with
 #   make smithdb-configure SIZING=<size> CACHE=<mode>
 # smithdb_sizing        = "small"
-# smithdb_cache_storage = "default-disk"
+# smithdb_cache_storage = "network-disk"
 
 # --- Staged rollout ---------------------------------------------------------
 # Migration and query both require ingestion, and Terraform enforces that.

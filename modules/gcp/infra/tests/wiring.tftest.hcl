@@ -316,8 +316,9 @@ run "smithdb_plans_its_own_node_pool" {
   command = plan
 
   variables {
-    enable_smithdb    = true
-    gke_use_autopilot = false
+    enable_smithdb        = true
+    smithdb_cache_storage = "default-disk"
+    gke_use_autopilot     = false
   }
 
   assert {
@@ -328,7 +329,7 @@ run "smithdb_plans_its_own_node_pool" {
     condition     = length(module.smithdb_nodes) == 1
     error_message = "SmithDB did not plan the cache node pool it needs"
   }
-  # small defaults to default-disk: an N2 pool with no Local SSD, and a 300 GB
+  # small with default-disk: an N2 pool with no Local SSD, and a 300 GB
   # boot disk for the backfill Job.
   assert {
     condition = output.smithdb_sizing == "small" && output.smithdb_cache_storage == "default-disk" && output.smithdb_node_pool_config == {
@@ -384,13 +385,42 @@ run "smithdb_on_autopilot_is_rejected" {
   command = plan
 
   variables {
-    enable_smithdb    = true
-    gke_use_autopilot = true
+    enable_smithdb        = true
+    smithdb_cache_storage = "default-disk"
+    gke_use_autopilot     = true
   }
 
   # SmithDB needs the Local SSD node pools that Autopilot will not let this
   # module create.
   expect_failures = [terraform_data.validate_inputs]
+}
+
+# The cache mode is a required value for small, medium, and large, so a new
+# recommendation never moves the cache pool of an existing deployment.
+run "smithdb_cache_storage_is_required" {
+  command = plan
+
+  variables {
+    enable_smithdb = true
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# dev with default-disk plans with no warning: default-disk is the dev mode.
+run "smithdb_dev_default_disk_does_not_warn" {
+  command = plan
+
+  variables {
+    enable_smithdb        = true
+    sizing_profile        = "dev"
+    smithdb_cache_storage = "default-disk"
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "small" && output.smithdb_cache_storage == "default-disk"
+    error_message = "sizing_profile = dev with default-disk did not resolve to SmithDB small default-disk"
+  }
 }
 
 # local-ssd is an opt-in: an emptyDir on node Local SSD, with the tier
@@ -620,6 +650,7 @@ run "smithdb_default_disk_backfill_on_a_small_boot_disk_is_rejected" {
 
   variables {
     enable_smithdb                   = true
+    smithdb_cache_storage            = "default-disk"
     smithdb_instance_store_disk_size = 100
     smithdb_ingestion_enabled        = true
     smithdb_migration_enabled        = true
@@ -641,15 +672,16 @@ run "smithdb_local_ssd_without_local_ssd_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-# medium defaults to network-disk on c3-standard-44, which passes the speed
+# medium with network-disk on c3-standard-44, which passes the speed
 # rule: 2 cache pods (16 + 16 CPU) x 1,000 MiB/s <= 2,400 MiB/s. A failed check
 # fails a test run, so this run also proves that the check passes.
 run "smithdb_sizing_follows_sizing_profile_production" {
   command = plan
 
   variables {
-    enable_smithdb = true
-    sizing_profile = "production"
+    enable_smithdb        = true
+    smithdb_cache_storage = "network-disk"
+    sizing_profile        = "production"
   }
 
   assert {
@@ -740,6 +772,9 @@ run "smithdb_medium_default_disk_uses_standard_rwo" {
     )
     error_message = "SmithDB medium default-disk values are not the medium tier on standard-rwo, or default-disk created a StorageClass"
   }
+
+  # production with default-disk warns: the cache is below the minimum.
+  expect_failures = [check.smithdb_default_disk_purpose]
 }
 
 # A machine type outside the default network-disk shapes is not checked, and
@@ -749,6 +784,7 @@ run "smithdb_network_disk_on_a_custom_type_is_not_checked" {
 
   variables {
     enable_smithdb                      = true
+    smithdb_cache_storage               = "network-disk"
     sizing_profile                      = "production"
     smithdb_instance_store_machine_type = "c3-standard-176"
   }
@@ -762,14 +798,15 @@ run "smithdb_network_disk_on_a_custom_type_is_not_checked" {
 }
 
 # The largest figure: 10 cache pods and 2 compute pods, with the backfill.
-# k8s-bootstrap bounds the extra at 1024 CPU and 2048 GiB. large defaults to
+# k8s-bootstrap bounds the extra at 1024 CPU and 2048 GiB. large with
 # network-disk on c3-standard-88, which passes the speed rule: 3 cache pods
-# (3 x 28 CPU) x 1,000 MiB/s <= 5,000 MiB/s.
+# (3 x 28 CPU) x 1,000 MiB/s <= 4,800 MiB/s.
 run "smithdb_sizing_follows_sizing_profile_production_large" {
   command = plan
 
   variables {
     enable_smithdb            = true
+    smithdb_cache_storage     = "network-disk"
     sizing_profile            = "production-large"
     smithdb_ingestion_enabled = true
     smithdb_migration_enabled = true
@@ -835,6 +872,7 @@ run "smithdb_explicit_sizing_wins_over_sizing_profile" {
 
   variables {
     enable_smithdb            = true
+    smithdb_cache_storage     = "network-disk"
     sizing_profile            = "production-large"
     smithdb_sizing            = "medium"
     smithdb_ingestion_enabled = true
@@ -866,6 +904,7 @@ run "smithdb_explicit_metastore_tier_wins_over_the_size" {
 
   variables {
     enable_smithdb         = true
+    smithdb_cache_storage  = "network-disk"
     sizing_profile         = "production-large"
     smithdb_metastore_tier = "db-custom-2-8192"
   }
@@ -907,6 +946,7 @@ run "smithdb_external_metastore_ignores_the_size_tier" {
 
   variables {
     enable_smithdb                      = true
+    smithdb_cache_storage               = "network-disk"
     sizing_profile                      = "production-large"
     smithdb_metastore_source            = "external"
     smithdb_external_metastore_host     = "10.0.0.5"
@@ -927,6 +967,7 @@ run "smithdb_auth_proxy_on_an_external_metastore_is_rejected" {
 
   variables {
     enable_smithdb                      = true
+    smithdb_cache_storage               = "default-disk"
     smithdb_metastore_source            = "external"
     smithdb_external_metastore_host     = "10.0.0.5"
     smithdb_external_metastore_username = "smithdb"
@@ -942,6 +983,7 @@ run "smithdb_direct_tls_with_the_auth_proxy_is_rejected" {
 
   variables {
     enable_smithdb            = true
+    smithdb_cache_storage     = "default-disk"
     smithdb_metastore_source  = "create"
     smithdb_metastore_use_ssl = true
   }
@@ -956,6 +998,7 @@ run "smithdb_created_metastore_without_the_proxy_is_rejected" {
 
   variables {
     enable_smithdb                   = true
+    smithdb_cache_storage            = "default-disk"
     smithdb_metastore_source         = "create"
     smithdb_metastore_use_auth_proxy = false
   }
@@ -969,6 +1012,7 @@ run "smithdb_created_metastore_mode_2_plans" {
 
   variables {
     enable_smithdb                   = true
+    smithdb_cache_storage            = "default-disk"
     smithdb_metastore_source         = "create"
     smithdb_metastore_use_auth_proxy = false
     smithdb_metastore_use_ssl        = false

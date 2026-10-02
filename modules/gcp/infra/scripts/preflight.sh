@@ -418,21 +418,32 @@ _check_quota "CPUS" 8 "any 2-node cluster"
 #
 # An unset pool variable takes the default for the SmithDB size and cache mode.
 # terraform output shows the last apply, not a pending tfvars change, so this
-# repeats local.smithdb_sizing_by_profile, local.smithdb_cache_storage_by_sizing
+# repeats local.smithdb_sizing_by_profile, local.smithdb_cache_storage_recommended
 # and local.smithdb_pool_defaults from infra/locals.tf. Keep them in step.
 _tfvar_or() { local v; v=$(_tfvar "$1"); [[ -z "$v" || "$v" == "null" ]] && v="$2"; printf '%s' "$v"; }
+_sdb_profile=$(_tfvar_or "sizing_profile" "default")
 _sdb_default_sizing=small
-case "$(_tfvar "sizing_profile")" in
+case "$_sdb_profile" in
   minimum)          _sdb_default_sizing=minimal ;;
   production)       _sdb_default_sizing=medium ;;
   production-large) _sdb_default_sizing=large ;;
 esac
 _sdb_sizing=$(_tfvar_or "smithdb_sizing" "$_sdb_default_sizing")
-case "$_sdb_sizing" in
-  medium|large) _sdb_default_cache=network-disk ;;
-  *)            _sdb_default_cache=default-disk ;;
+# The recommended mode follows the purpose in sizing_profile, not the size.
+case "$_sdb_profile" in
+  minimum|dev) _sdb_default_cache=default-disk ;;
+  *)           _sdb_default_cache=network-disk ;;
 esac
+if [[ "$_sdb_sizing" == "minimal" ]]; then
+  _sdb_default_cache=default-disk
+fi
 _sdb_cache=$(_tfvar_or "smithdb_cache_storage" "$_sdb_default_cache")
+# terraform plan stops when smithdb_cache_storage is null for small, medium,
+# or large. Check the quota for the recommended mode in the meantime.
+if [[ "$ENABLE_SMITHDB" == "true" && "$_sdb_sizing" != "minimal" && -z "$(_tfvar_or "smithdb_cache_storage" "")" ]]; then
+  printf "\n"
+  warning "smithdb_cache_storage is not set, and terraform plan stops until it is. Set local-ssd to keep the cache pool of an existing deployment. The checks below use the recommended mode for sizing_profile = ${_sdb_profile}: ${_sdb_default_cache}."
+fi
 case "$_sdb_sizing/$_sdb_cache" in
   small/default-disk)  _sdb_pools="n2-standard-16 0 n2-standard-8" ;;
   medium/default-disk) _sdb_pools="n2-standard-32 0 n2-standard-8" ;;

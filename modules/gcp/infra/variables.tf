@@ -1030,7 +1030,7 @@ variable "smithdb_sizing" {
 
 variable "smithdb_cache_storage" {
   type        = string
-  description = "SmithDB cache storage: default-disk, network-disk, or local-ssd. default-disk is a per-pod volume on the cluster default class (standard-rwo, pd-balanced) on an N2 cache pool. network-disk is a per-pod Hyperdisk Balanced volume (7,000 IOPS, 1,000 MiB/s) on a C3 or C3D cache pool. local-ssd is an emptyDir on node Local SSD. Null gives default-disk for minimal and small, and network-disk for medium and large. minimal accepts only default-disk. A change recreates the cache nodes, and each cache starts empty."
+  description = "SmithDB cache storage: default-disk, network-disk, or local-ssd. Required with enable_smithdb = true, except for smithdb_sizing = minimal, which accepts only default-disk and can stay null. default-disk is a per-pod volume on the GKE built-in standard-rwo class (pd-balanced) on an N2 cache pool, for development and test. network-disk is a per-pod Hyperdisk Balanced volume (7,000 IOPS, 1,000 MiB/s) on a C3 or C3D cache pool, recommended for production. local-ssd is an emptyDir on node Local SSD, the performance option. Before this value was required, the default for small, medium, and large was local-ssd. A change recreates the cache nodes, and each cache starts empty."
   default     = null
 
   validation {
@@ -1206,13 +1206,13 @@ variable "smithdb_node_locations" {
 # the resolved smithdb_sizing and smithdb_cache_storage (local.smithdb_pool_defaults).
 variable "smithdb_instance_store_machine_type" {
   type        = string
-  description = "Machine type for the SmithDB cache pool. Null takes the default for the size and cache mode. N2/N2D take an explicit disk count; C3 and Z3 '-lssd' types bundle a fixed count and require smithdb_instance_store_local_ssd_count = 0. network-disk requires a C3 or C3D type."
+  description = "Machine type for the SmithDB cache pool. Null takes the default for the size and cache mode. N2/N2D take an explicit disk count; C3 and Z3 '-lssd' types bundle a fixed count and require smithdb_instance_store_local_ssd_count = 0. network-disk requires a C3 or C3D type. default-disk uses an N2 type with no Local SSD."
   default     = null
 }
 
 variable "smithdb_instance_store_local_ssd_count" {
   type        = number
-  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Null takes the default for the size, and 0 for network-disk. Compute Engine accepts only specific counts per machine type; see SMITHDB.md#sizing."
+  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Null takes the default for the size in local-ssd mode, and 0 in default-disk and network-disk modes. Compute Engine accepts only specific counts per machine type; see SMITHDB.md#sizing."
   default     = null
 
   validation {
@@ -1225,7 +1225,7 @@ variable "smithdb_instance_store_local_ssd_count" {
 
 variable "smithdb_instance_store_disk_size" {
   type        = number
-  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd and 300 for network-disk, where the backfill Job takes its 100Gi of ephemeral storage from the boot disk. network-disk with the backfill requires at least 300."
+  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd, and 300 for default-disk and network-disk, where the backfill Job takes its 100Gi of ephemeral storage from the boot disk. default-disk and network-disk with the backfill require at least 300."
   default     = null
 }
 

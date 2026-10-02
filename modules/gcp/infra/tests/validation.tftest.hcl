@@ -241,6 +241,7 @@ run "smithdb_null_start_time_keeps_the_chart_window" {
 
   variables {
     enable_smithdb               = true
+    smithdb_cache_storage        = "default-disk"
     smithdb_migration_start_time = null
   }
 

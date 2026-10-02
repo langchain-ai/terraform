@@ -8,6 +8,8 @@
 #
 # Usage (from gcp/):
 #   make smithdb-configure SIZING=<minimal|small|medium|large> [CACHE=<default-disk|network-disk|local-ssd>]
+#     CACHE is required for small, medium, and large when terraform.tfvars
+#     does not set smithdb_cache_storage.
 #   make smithdb-phase PHASE=<off|dual-write|backfill|cutover> [START_TIME=<RFC 3339>] [FORCE=true]
 #   make smithdb-status
 #
@@ -114,9 +116,23 @@ _cmd_configure() {
       "Run: make smithdb-configure SIZING=minimal"
   fi
 
-  # With no CACHE, the tfvars value stays. minimal writes null instead: null
-  # gives default-disk for minimal, and a later size change gets the default
-  # for that size (default-disk for small, network-disk for medium and large).
+  # The cache mode is required for small, medium, and large. With no CACHE,
+  # the tfvars value stays, and with no value either, stop here. The
+  # recommendation follows the purpose in sizing_profile (infra/locals.tf,
+  # smithdb_cache_storage_recommended). minimal writes null: default-disk.
+  if [[ "$sizing" != "minimal" && -z "$cache" && -z "$(_tfvar smithdb_cache_storage)" ]]; then
+    local profile rec
+    profile="$(_tfvar sizing_profile)"
+    profile="${profile:-default}"
+    case "$profile" in
+      minimum|dev) rec=default-disk ;;
+      *)           rec=network-disk ;;
+    esac
+    _die "SIZING=$sizing requires a cache mode: CACHE=default-disk, network-disk, or local-ssd." \
+      "To keep the cache pool of an existing deployment: make smithdb-configure SIZING=$sizing CACHE=local-ssd" \
+      "Recommended for sizing_profile = $profile: make smithdb-configure SIZING=$sizing CACHE=$rec"
+  fi
+
   header "SmithDB size and cache storage (infra/terraform.tfvars)"
   _set_tfvar smithdb_sizing "\"$sizing\""
   if [[ -n "$cache" ]]; then
