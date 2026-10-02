@@ -190,6 +190,8 @@ Internal traffic (private IPs, never leaving VPC):
   operator      → K8s API               creates/manages deployment pods
 ```
 
+Envoy cuts a request at 15 s by default, and the chart's HTTPRoute sets no timeout. With `ingress_type = "envoy"`, the ingress module creates the BackendTrafficPolicy `<gateway_name>-timeout`, which raises the Gateway's request timeout to 300 s, the `proxy_read_timeout` of the frontend nginx behind it.
+
 ---
 
 ## Component → Storage Mapping

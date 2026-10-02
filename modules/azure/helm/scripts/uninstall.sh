@@ -75,10 +75,11 @@ fi
 # Service and with it the Azure Load Balancer IP.
 _ingress_controller=$(_parse_tfvar ingress_controller) || _ingress_controller="envoy-gateway"
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  kubectl delete backendtrafficpolicy langsmith-gateway-timeout -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete gateway langsmith-gateway -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s >/dev/null 2>&1 || true
   kubectl delete gatewayclass langsmith-eg --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete envoyproxy langsmith-proxy -n envoy-gateway-system --ignore-not-found >/dev/null 2>&1 || true
-  pass "Envoy Gateway resources removed (Gateway, GatewayClass, EnvoyProxy)"
+  pass "Envoy Gateway resources removed (timeout policy, Gateway, GatewayClass, EnvoyProxy)"
 fi
 
 # ── Optionally delete namespace ─────────────────────────────────────────────
