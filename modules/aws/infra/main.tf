@@ -98,6 +98,31 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !local.custom_networking || var.create_vpc || length(var.eks_pod_subnet_ids) > 0
+      error_message = "eks_network_mode = \"custom-networking\" with create_vpc = false requires eks_pod_subnet_ids: one pod subnet per AZ the cluster subnets are in."
+    }
+
+    precondition {
+      condition     = length(var.eks_pod_subnet_ids) == 0 || (local.custom_networking && !var.create_vpc)
+      error_message = "eks_pod_subnet_ids is only used when eks_network_mode = \"custom-networking\" and create_vpc = false. With create_vpc = true, set eks_pod_cidr instead."
+    }
+
+    precondition {
+      condition     = length(distinct([for s in data.aws_subnet.pod : s.availability_zone])) == length(data.aws_subnet.pod)
+      error_message = "eks_pod_subnet_ids has two subnets in the same AZ. The VPC CNI uses one pod subnet per AZ, so list exactly one for each."
+    }
+
+    # A node in an AZ with no pod subnet has no ENIConfig, so the VPC CNI can
+    # attach no pod ENIs and every pod scheduled there waits for an IP forever.
+    precondition {
+      condition = length(setsubtract(
+        [for s in data.aws_subnet.cluster : s.availability_zone],
+        [for s in data.aws_subnet.pod : s.availability_zone],
+      )) == 0
+      error_message = "eks_pod_subnet_ids must include a subnet in every AZ that private_subnets and public_subnets are in."
+    }
+
+    precondition {
       condition     = !var.create_firewall || var.create_vpc
       error_message = "create_firewall = true requires create_vpc = true. Bring-your-own-VPC deployments must configure firewall routing manually."
     }
@@ -189,6 +214,8 @@ module "vpc" {
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
   extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+
+  pod_cidr = local.custom_networking ? var.eks_pod_cidr : null
 }
 
 module "firewall" {
@@ -205,6 +232,18 @@ module "firewall" {
   tags                    = local.common_tags
 
   depends_on = [module.vpc]
+}
+
+# BYO VPC with custom networking: the pod subnets' AZs and CIDRs, and the AZs of
+# the cluster subnets they must cover. Both sets are empty otherwise.
+data "aws_subnet" "pod" {
+  for_each = local.custom_networking && !var.create_vpc ? toset(var.eks_pod_subnet_ids) : toset([])
+  id       = each.value
+}
+
+data "aws_subnet" "cluster" {
+  for_each = local.custom_networking && !var.create_vpc ? toset(concat(var.private_subnets, var.public_subnets)) : toset([])
+  id       = each.value
 }
 
 module "eks" {
@@ -225,6 +264,7 @@ module "eks" {
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
   langsmith_namespace             = var.langsmith_namespace
   eks_addons                      = var.eks_addons
+  pod_subnet_ids_by_az            = local.pod_subnet_ids_by_az
   cluster_enabled_log_types       = var.eks_cluster_enabled_log_types
   enable_istio_gateway            = var.enable_istio_gateway
 }
@@ -249,7 +289,7 @@ module "redis" {
   vpc_id               = local.vpc_id
   subnet_ids           = local.private_subnets
   instance_type        = var.redis_instance_type
-  ingress_cidrs        = [local.vpc_cidr_block]
+  ingress_cidrs        = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
   vpc_cidr_block       = local.vpc_cidr_block
   auth_token           = var.redis_auth_token
   parameter_group_name = "default.redis7"
@@ -278,7 +318,7 @@ module "sandbox_juicefs_redis" {
   vpc_id                   = local.vpc_id
   subnet_ids               = local.private_subnets
   instance_type            = var.sandbox_juicefs_redis_instance_type
-  ingress_cidrs            = [local.vpc_cidr_block]
+  ingress_cidrs            = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
   vpc_cidr_block           = local.vpc_cidr_block
   auth_token               = var.sandbox_juicefs_redis_auth_token
   parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
@@ -308,7 +348,7 @@ module "postgres" {
   engine_version = var.postgres_engine_version
   vpc_id         = local.vpc_id
   subnet_ids     = local.private_subnets
-  ingress_cidrs  = [local.vpc_cidr_block]
+  ingress_cidrs  = concat([local.vpc_cidr_block], local.pod_cidr_blocks)
   vpc_cidr_block = local.vpc_cidr_block
   instance_type  = var.postgres_instance_type
   storage_gb     = var.postgres_storage_gb
@@ -528,6 +568,7 @@ module "alb" {
   name                   = local.alb_name
   vpc_id                 = local.vpc_id
   vpc_cidr_block         = local.vpc_cidr_block
+  pod_cidr_blocks        = local.pod_cidr_blocks
   subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
   internal               = var.alb_scheme == "internal"
   allowed_cidr_blocks    = var.alb_allowed_cidr_blocks
