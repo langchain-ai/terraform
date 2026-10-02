@@ -112,10 +112,15 @@ resource "terraform_data" "validate_inputs" {
       error_message = "eks_pod_subnet_ids has two subnets in the same AZ. The VPC CNI uses one pod subnet per AZ, so list exactly one for each."
     }
 
+    precondition {
+      condition     = alltrue([for s in data.aws_subnet.pod : s.vpc_id == var.vpc_id])
+      error_message = "Every subnet in eks_pod_subnet_ids must be in vpc_id. A node cannot attach a pod ENI in another VPC's subnet."
+    }
+
     # A node in an AZ with no pod subnet has no ENIConfig, so the VPC CNI can
     # attach no pod ENIs and every pod scheduled there waits for an IP forever.
     precondition {
-      condition = length(setsubtract(
+      condition = length(data.aws_subnet.pod) == 0 || length(setsubtract(
         [for s in data.aws_subnet.cluster : s.availability_zone],
         [for s in data.aws_subnet.pod : s.availability_zone],
       )) == 0

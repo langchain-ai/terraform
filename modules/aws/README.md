@@ -285,21 +285,37 @@ eks_network_mode   = "custom-networking"
 eks_pod_subnet_ids = ["subnet-0aaa", "subnet-0bbb", "subnet-0ccc"]
 ```
 
-Supply one pod subnet per AZ, covering every AZ that `private_subnets` and
-`public_subnets` are in. The plan fails if two pod subnets share an AZ or a
-cluster AZ has no pod subnet.
+Supply one pod subnet per AZ in `vpc_id`, covering every AZ that
+`private_subnets` and `public_subnets` are in. The plan fails if two pod
+subnets share an AZ, a pod subnet is in another VPC, or a cluster AZ has no
+pod subnet.
 
 Pod IPs stay routable VPC addresses, so the ALB still targets pods directly.
 Terraform adds the pod CIDRs to the ingress rules on the RDS and ElastiCache
 security groups and to the ALB's egress rule. It configures the `vpc-cni`
-add-on with one ENIConfig per AZ before any node joins, and merges any
-`eks_addons["vpc-cni"]` configuration you supply into that add-on. When
-`enable_smithdb = true`, it also sets Karpenter's `settings.reservedENIs` to
-`1`, so Karpenter's pod-capacity math leaves out the node's primary ENI.
+add-on with one ENIConfig per AZ and holds node group creation for two minutes
+after the cluster is active, so the add-on is configured before the first
+nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
+into that add-on. When `enable_smithdb = true`, it also sets Karpenter's
+`settings.reservedENIs` to `1`, so Karpenter's pod-capacity math leaves out the
+node's primary ENI.
 
 Choose the mode at cluster creation. Switching an existing cluster changes the
 add-on configuration only: nodes that joined before the switch keep their pod
-IPs in the node subnets until you replace them.
+IPs in the node subnets until you replace them. If the cluster already sets
+`eks_addons["vpc-cni"]`, move that add-on's state before the first apply in
+the new mode, or the apply tries to create a second `vpc-cni` add-on next to
+the existing one:
+
+```bash
+terraform state mv \
+  'module.eks.module.eks_blueprints_addons.aws_eks_addon.this["vpc-cni"]' \
+  'module.eks.module.eks.aws_eks_addon.before_compute["vpc-cni"]'
+```
+
+Switching back to `node-subnet` does not turn custom networking off. Terraform
+removes the add-on with `preserve = true`, so the CNI keeps its custom
+networking settings. Treat the mode as fixed for the life of the cluster.
 
 ---
 
