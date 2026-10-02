@@ -560,3 +560,127 @@ run "an_attached_cluster_counts_the_pools_terraform_adds" {
 
   expect_failures = [terraform_data.validate_network]
 }
+
+
+# On a cluster with Entra ID integration azurerm returns an empty client
+# certificate, so the providers must sign in through kubelogin instead. The
+# choice is module.aks.kube_auth, which feeds all three provider blocks.
+
+run "kube_auth_is_certificate_on_an_attached_cluster_without_entra" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                                               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location                                         = "eastus"
+      oidc_issuer_enabled                              = true
+      kube_config                                      = [{ host = "https://platform-aks.example", client_certificate = "Y2VydA==", client_key = "a2V5", cluster_ca_certificate = "Y2E=" }]
+      azure_active_directory_role_based_access_control = []
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = module.aks.kube_auth == "certificate"
+    error_message = "an attached cluster without an Entra profile did not choose certificate sign-in"
+  }
+}
+
+run "kube_auth_is_entra_on_an_attached_entra_cluster" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                                               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location                                         = "eastus"
+      oidc_issuer_enabled                              = true
+      kube_config                                      = [{ host = "https://platform-aks.example", client_certificate = "", client_key = "", cluster_ca_certificate = "Y2E=" }]
+      azure_active_directory_role_based_access_control = [{ azure_rbac_enabled = true, tenant_id = "00000000-0000-0000-0000-000000000000", admin_group_object_ids = [] }]
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+  }
+
+  assert {
+    condition     = module.aks.kube_auth == "entra"
+    error_message = "an attached Entra ID cluster did not choose kubelogin sign-in"
+  }
+}
+
+run "kube_auth_override_wins_over_detection" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azurerm_kubernetes_cluster.existing
+    values = {
+      id                                               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-aks-rg/providers/Microsoft.ContainerService/managedClusters/platform-aks"
+      location                                         = "eastus"
+      oidc_issuer_enabled                              = true
+      kube_config                                      = [{ host = "https://platform-aks.example", client_certificate = "Y2VydA==", client_key = "a2V5", cluster_ca_certificate = "Y2E=" }]
+      azure_active_directory_role_based_access_control = []
+      agent_pool_profile = [
+        { name = "system", vnet_subnet_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks" },
+      ]
+    }
+  }
+  override_data {
+    target = module.aks.data.azapi_resource.existing_security_profile
+    values = {
+      output = { properties = { securityProfile = { workloadIdentity = { enabled = true } } } }
+    }
+  }
+
+  variables {
+    create_cluster                       = false
+    existing_cluster_name                = "platform-aks"
+    existing_cluster_resource_group_name = "platform-aks-rg"
+    aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_kube_auth                        = "entra"
+  }
+
+  assert {
+    condition     = module.aks.kube_auth == "entra"
+    error_message = "aks_kube_auth = \"entra\" did not override detection"
+  }
+}
+
+run "aks_kube_auth_rejects_an_unknown_mode" {
+  command = plan
+
+  variables {
+    aks_kube_auth = "token"
+  }
+
+  expect_failures = [var.aks_kube_auth]
+}

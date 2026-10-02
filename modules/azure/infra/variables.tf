@@ -356,8 +356,24 @@ variable "vnet_address_space" {
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
-#   • Local accounts NOT disabled — the kubernetes/helm providers authenticate via
-#     the cluster's kube_config, which Azure returns empty for AAD-only clusters.
+#   • On a cluster with Entra ID integration (local accounts on or off), the
+#     kubernetes/helm providers sign in through kubelogin with the caller's az
+#     session (aks_kube_auth): kubelogin on the PATH, and cluster-admin rights for
+#     whoever runs the apply. With Azure RBAC on the cluster that is an Azure role
+#     (Azure Kubernetes Service RBAC Cluster Admin); with Kubernetes RBAC it is
+#     membership in one of the cluster's admin_group_object_ids or a
+#     ClusterRoleBinding to cluster-admin, since Azure roles grant nothing there.
+
+variable "aks_kube_auth" {
+  type        = string
+  description = "How Terraform's Kubernetes and Helm providers sign in to the cluster. 'auto' (default) uses Entra ID through kubelogin when the cluster has Entra ID integration, where azurerm returns no client certificate, and the kube_config certificate otherwise. Entra sign-in needs kubelogin on the PATH and an az login with cluster-admin rights: an Azure role such as Azure Kubernetes Service RBAC Cluster Admin when the cluster uses Azure RBAC, or membership in one of the cluster's admin_group_object_ids or a ClusterRoleBinding to cluster-admin when it uses Kubernetes RBAC (azure_rbac_enabled = false), where Azure roles grant nothing."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "entra", "certificate"], var.aks_kube_auth)
+    error_message = "aks_kube_auth must be 'auto', 'entra', or 'certificate'."
+  }
+}
 
 variable "create_cluster" {
   type        = bool
@@ -908,6 +924,45 @@ variable "aks_allow_network_upgrade" {
   default     = false
 }
 
+variable "aks_outbound_type" {
+  type        = string
+  description = "How the cluster's nodes reach the internet. loadBalancer (the default, so no existing cluster moves) is an AKS-managed outbound public IP. userDefinedRouting sends egress by the route table on aks_subnet_id, to a firewall, a network virtual appliance or on-premises, and AKS creates no outbound IP. userAssignedNATGateway leaves through the NAT gateway on aks_subnet_id, which aks_nat_gateway checks or creates. Both need create_vnet = false and a supplied aks_subnet_id, because the route table or NAT gateway belongs to whoever owns the network; plan checks the subnet for it. Only for clusters this module creates: an attached cluster keeps its own. See \"Egress through your network\" in the README for what the route must allow."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting", "userAssignedNATGateway"], var.aks_outbound_type)
+    error_message = "aks_outbound_type must be \"loadBalancer\", \"userDefinedRouting\" or \"userAssignedNATGateway\". AKS's managedNATGateway type is for VNets AKS creates itself, and this module always places the cluster in a VNet; none and block are for network-isolated clusters."
+  }
+}
+
+variable "aks_nat_gateway" {
+  type        = string
+  description = "A NAT gateway on aks_subnet_id for the cluster's egress. none (the default) neither creates nor checks one. existing checks at plan that the network owner has already attached one. create makes a Standard NAT gateway and its public IP in this module's resource group and associates them with aks_subnet_id, the only change Terraform makes to that subnet; route tables stay the network owner's. Needs aks_outbound_type userAssignedNATGateway, which requires one, or userDefinedRouting, where the NAT gateway carries the routes whose next hop is Internet. Clusters this module creates only."
+  default     = "none"
+
+  validation {
+    condition     = contains(["none", "existing", "create"], var.aks_nat_gateway)
+    error_message = "aks_nat_gateway must be \"none\", \"existing\" or \"create\"."
+  }
+}
+
+variable "aks_nat_gateway_idle_timeout_minutes" {
+  type        = number
+  description = "TCP idle timeout of the NAT gateway Terraform creates (aks_nat_gateway = \"create\"), 4 to 120 minutes. Ignored otherwise."
+  default     = 4
+
+  validation {
+    condition     = var.aks_nat_gateway_idle_timeout_minutes >= 4 && var.aks_nat_gateway_idle_timeout_minutes <= 120
+    error_message = "aks_nat_gateway_idle_timeout_minutes must be between 4 and 120."
+  }
+}
+
+variable "aks_allow_outbound_type_change" {
+  type        = bool
+  description = "Permit changing aks_outbound_type on a cluster that already exists. Azure applies the change in place between all three values in a supplied VNet, but it moves the cluster's egress IP and drops existing connections, so firewall rules and aks_authorized_ip_ranges that name the old IP must change too. Off, the change is refused at plan."
+  default     = false
+}
+
 variable "aks_sku_tier" {
   type        = string
   description = "AKS pricing tier for the control plane. Free has no SLA and suits throwaway clusters. Standard (the default) carries the financially backed uptime SLA, 99.95% when availability_zones spans zones and 99.9% otherwise, and unlocks larger clusters. Premium adds long-term support for Kubernetes versions (see aks_support_plan). Updated in place, so an existing cluster changes tier without a rebuild."
@@ -1111,7 +1166,7 @@ variable "langsmith_helm_chart_version" {
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = bring your own cert. 'none' = HTTP only (demo/dev)."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = your own certificate, in a kubernetes.io/tls Secret named langsmith-tls in the LangSmith namespace (deploy.sh checks it; see the README). 'none' = HTTP only (demo/dev)."
   default     = "letsencrypt"
 
   validation {
@@ -1298,6 +1353,20 @@ variable "postgres_geo_redundant_backup" {
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_name" {
+  type        = string
+  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle (the chart's config.customCa), for endpoints a private CA signed. The chart mounts it in backend, platform-backend, host-backend, the queues, listener, playground and the agent features, not in the operator or the agent deployments it creates. Read by helm/scripts/init-values.sh and deploy.sh; Terraform ignores this value."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_key" {
+  type        = string
+  description = "The key in langsmith_custom_ca_secret_name that holds the PEM bundle. Read by helm/scripts/; Terraform ignores this value."
+  default     = "ca.crt"
+}
 
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {

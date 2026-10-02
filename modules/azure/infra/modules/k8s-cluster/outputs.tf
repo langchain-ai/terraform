@@ -86,17 +86,18 @@ output "agw_id" {
 }
 
 output "live_network_profile" {
-  description = "The network profile Azure reports for the cluster at plan time: mode (node-subnet or overlay), data plane, policy engine (none when no engine is installed) and pod range (null in node-subnet mode). null until the cluster exists, and when create_cluster = false."
+  description = "The network profile Azure reports for the cluster at plan time: mode (node-subnet or overlay), data plane, policy engine (none when no engine is installed), pod range (null in node-subnet mode) and outbound type (null when the read does not carry one). null until the cluster exists, and when create_cluster = false."
   value = local.live_cluster == null ? null : {
     mode      = coalesce(try(local.live_cluster.mode, null), "node-subnet")
     dataplane = coalesce(try(local.live_cluster.dataplane, null), "azure")
     policy    = coalesce(try(local.live_cluster.policy, null), "none")
     pod_cidr  = try(local.live_cluster.pod_cidr, null)
+    outbound  = try(local.live_cluster.outbound, null)
   }
 }
 
 output "network_profile" {
-  description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane and policy engine. null when create_cluster = false."
+  description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane, policy engine and outbound type. null when create_cluster = false."
   # Keyed off the flag rather than the resource object: a comparison against the
   # whole object would carry its sensitive kube-config marks into this output.
   value = !var.create_cluster ? null : {
@@ -104,6 +105,7 @@ output "network_profile" {
     pod_cidr            = one(azurerm_kubernetes_cluster.main[*].network_profile[0].pod_cidr)
     network_data_plane  = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_data_plane)
     network_policy      = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_policy)
+    outbound_type       = one(azurerm_kubernetes_cluster.main[*].network_profile[0].outbound_type)
   }
 }
 
@@ -140,4 +142,9 @@ output "envoy_gateway_version" {
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "kube_auth" {
+  description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
+  value       = local.kube_auth
 }

@@ -83,6 +83,17 @@ locals {
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
 
+  # On a cluster with Entra ID integration, azurerm returns kube_config with an
+  # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
+  # whether or not local accounts are disabled, so certificate sign-in cannot work
+  # there. Such clusters are signed in to through Entra ID with kubelogin, reusing
+  # the caller's az session; the server ID is the AKS-managed Entra server
+  # application, the same in every Azure cloud (kubelogin docs/book concepts/aks.md).
+  # A cluster still on the legacy, customer-registered server app needs that
+  # app's ID instead, which this module does not take.
+  cluster_entra_profile = var.create_cluster ? azurerm_kubernetes_cluster.main[0].azure_active_directory_role_based_access_control : data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control
+  kube_auth             = var.kube_auth == "auto" ? (try(length(local.cluster_entra_profile) > 0, false) ? "entra" : "certificate") : var.kube_auth
+
   # var.location for a cluster created here, so the location check below is
   # trivially satisfied and only has something to say under create_cluster = false.
   cluster_location = var.create_cluster ? var.location : data.azurerm_kubernetes_cluster.existing[0].location
@@ -217,9 +228,18 @@ check "existing_cluster_location" {
 provider "helm" {
   kubernetes {
     host                   = local.cluster_kube_config[0].host
-    client_certificate     = base64decode(local.cluster_kube_config[0].client_certificate)
-    client_key             = base64decode(local.cluster_kube_config[0].client_key)
+    client_certificate     = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_certificate)
+    client_key             = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_key)
     cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
+
+    dynamic "exec" {
+      for_each = local.kube_auth == "entra" ? [1] : []
+      content {
+        api_version = "client.authentication.k8s.io/v1beta1"
+        command     = "kubelogin"
+        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
+      }
+    }
   }
 }
 
@@ -246,7 +266,7 @@ data "azapi_resource_list" "clusters" {
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType}"
   }
 }
 
@@ -258,6 +278,15 @@ locals {
     for c in try(data.azapi_resource_list.clusters[0].output.clusters, []) : c
     if lower(c.name) == lower(var.cluster_name) && lower(split("/", c.id)[4]) == lower(var.resource_group_name)
   ])
+}
+
+# Orders the cluster after anything its egress needs that the root module
+# creates (a NAT gateway's association with the node subnet). A module-level
+# depends_on would also defer this module's plan-time reads to apply, so the
+# dependency is carried by this resource alone.
+resource "terraform_data" "egress_ready" {
+  count = var.create_cluster ? 1 : 0
+  input = var.egress_dependencies
 }
 
 resource "azurerm_kubernetes_cluster" "main" {
@@ -360,6 +389,15 @@ resource "azurerm_kubernetes_cluster" "main" {
     network_policy      = var.network_policy
     service_cidr        = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
     dns_service_ip      = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+
+    # Egress. loadBalancer (the provider's default) gives the cluster an
+    # AKS-managed outbound public IP. userDefinedRouting sends it by the node
+    # subnet's route table, to a firewall or on-premises, and AKS creates no
+    # outbound IP; userAssignedNATGateway leaves through the NAT gateway on the
+    # subnet. The provider updates a change in place, and Azure supports each
+    # change between these three on a cluster in a supplied VNet, but it moves
+    # the egress IP and drops connections, so the root refuses one unasked.
+    outbound_type = var.outbound_type
   }
 
   # Key Vault CSI Secrets Store driver — enables pods to mount secrets from
@@ -412,6 +450,8 @@ resource "azurerm_kubernetes_cluster" "main" {
       default_node_pool[0].zones,
     ]
   }
+
+  depends_on = [terraform_data.egress_ready]
 }
 
 # ignore_changes on default_node_pool[0].zones makes an availability_zones edit
