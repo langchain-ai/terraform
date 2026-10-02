@@ -277,6 +277,36 @@ variable "dns_label" {
   default     = ""
 }
 
+variable "ingress_load_balancer" {
+  type        = string
+  description = "'public' or 'internal': whether the ingress controller's load balancer gets a public IP or a private one in the cluster's VNet. Validated at the root."
+  default     = "public"
+}
+
+variable "ingress_load_balancer_subnet_id" {
+  type        = string
+  description = "Subnet for the internal load balancer's private IP. Empty uses the node subnet."
+  default     = ""
+}
+
+variable "ingress_load_balancer_ip" {
+  type        = string
+  description = "Static private IPv4 address for the internal load balancer. Empty lets Azure pick one."
+  default     = ""
+}
+
+variable "ingress_load_balancer_needs_subnet_grant" {
+  type        = bool
+  description = "Whether the internal load balancer takes its IP from a subnet other than the node subnet, so the cluster identity needs a grant there. Computed by the root from inputs known at plan."
+  default     = false
+}
+
+variable "ingress_load_balancer_manage_subnet_assignment" {
+  type        = bool
+  description = "Whether Terraform grants the cluster identity Network Contributor on ingress_load_balancer_subnet_id when it is not the node subnet."
+  default     = true
+}
+
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
 
 variable "subscription_id" {

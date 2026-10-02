@@ -193,3 +193,32 @@ output "kube_auth" {
   description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
   value       = local.kube_auth
 }
+
+output "ingress_internal_annotations" {
+  description = "Service annotations that make the ingress controller's load balancer internal. Empty with ingress_load_balancer = \"public\"."
+  value       = local.ingress_internal_annotations
+}
+
+output "ingress_load_balancer_subnet_grant" {
+  description = "The grant the internal load balancer needs on a subnet other than the node subnet, or null when none is needed. made_by is \"terraform\" when this module creates it and \"owner\" when the network owner must."
+  value = local.ingress_lb_other_subnet ? {
+    role         = "Network Contributor"
+    actions      = ["Microsoft.Network/virtualNetworks/subnets/join/action", "Microsoft.Network/virtualNetworks/subnets/read"]
+    scope        = var.ingress_load_balancer_subnet_id
+    principal_id = local.cluster_identity_principal_id
+    made_by      = var.ingress_load_balancer_manage_subnet_assignment ? "terraform" : "owner"
+  } : null
+}
+
+output "nginx_service_annotations" {
+  description = "Annotations on the NGINX controller's LoadBalancer Service, as passed to the chart."
+  value       = local.nginx_service_annotations
+}
+
+output "istio_addon_gateways" {
+  description = "Which Istio add-on ingress gateways service_mesh_profile enables."
+  value = {
+    external = local.istio_addon_external_gateway
+    internal = local.istio_addon_internal_gateway
+  }
+}

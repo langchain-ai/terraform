@@ -240,6 +240,16 @@ output "ingress_controller" {
   value       = var.ingress_controller
 }
 
+output "ingress_load_balancer" {
+  description = "'public' or 'internal': whether the ingress controller's load balancer has a public or a private IP."
+  value       = var.ingress_load_balancer
+}
+
+output "ingress_load_balancer_subnet_grant" {
+  description = "With an internal load balancer in a subnet other than the node subnet: the role, actions, scope and principal the cluster identity needs there, and whether Terraform makes the grant (made_by = \"terraform\") or the network owner must (\"owner\"). Null when no grant is needed."
+  value       = module.aks.ingress_load_balancer_subnet_grant
+}
+
 output "tls_certificate_source" {
   description = "TLS certificate source passed through from var.tls_certificate_source"
   value       = var.tls_certificate_source

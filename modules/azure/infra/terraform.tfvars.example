@@ -192,6 +192,11 @@ ingress_controller = "envoy-gateway"
 #   → http://<dns_label>.<location>.cloudapp.azure.com
 #
 dns_label              = "langsmith-prod"     # → langsmith-prod.eastus.cloudapp.azure.com
+# A private IP in the VNet instead of a public one (no dns_label, no letsencrypt);
+# see INGRESS_CONTROLLERS.md, "Private ingress".
+# ingress_load_balancer           = "internal"
+# ingress_load_balancer_subnet_id = "<subnet resource ID in the cluster's VNet>"   # optional
+# ingress_load_balancer_ip        = "10.0.40.10"                                   # optional
 tls_certificate_source = "none"
 
 # Option B: HTTPS via Let's Encrypt HTTP-01 — envoy-gateway, nginx, istio (validated ✅)
