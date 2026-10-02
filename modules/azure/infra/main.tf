@@ -1007,8 +1007,14 @@ module "aks" {
   private_dns_zone_id          = var.aks_private_dns_zone_id
   entra_only                   = var.aks_entra_only
   entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
+  control_plane_identity       = var.aks_control_plane_identity
   control_plane_identity_id    = var.aks_control_plane_identity_id
   kubelogin_environment        = local.azure_cloud.kubelogin_environment
+
+  # A network the module built is the module's to grant on; a supplied one is
+  # its owner's, unless asked otherwise.
+  control_plane_identity_manage_grants = coalesce(var.aks_control_plane_identity_manage_grants, var.create_vnet)
+  vnet_id                              = local.vnet_id
 
   tags = local.common_tags
 }
@@ -1124,8 +1130,11 @@ resource "terraform_data" "aks_network_guard" {
 # turns it on in place and refuses to turn it off. Each follows from a one-line
 # tfvars edit, so the requested access is compared with what Azure reports for
 # the cluster (module.aks reads it at plan time; null until the cluster exists)
-# and a change is refused with no override. The read depends on variables
-# alone, so a failure stops the plan before anything is applied.
+# and a change is refused with no override. The control-plane identity is
+# refused the same way, though Azure swaps it in place: the grants the old
+# identity holds on the network do not follow the control plane to the new one.
+# The read depends on variables alone, so a failure stops the plan before
+# anything is applied.
 locals {
   aks_live_access = var.create_cluster ? module.aks.live_access_profile : null
 
@@ -1136,6 +1145,12 @@ locals {
   aks_private_changing  = local.aks_live_access != null && try(local.aks_live_access.private, null) != var.aks_private_cluster_enabled
   aks_dns_zone_changing = local.aks_live_access != null && try(local.aks_live_access.private, null) == true && var.aks_private_cluster_enabled && lower(coalesce(try(local.aks_live_access.private_dns_zone, null), "system")) != local.aks_private_dns_zone
   aks_entra_removing    = local.aks_live_access != null && try(local.aks_live_access.entra, null) == true && !var.aks_entra_only
+
+  # Azure reports the identity type and the user-assigned IDs; a cluster that
+  # reports no identity is skipped.
+  aks_identity          = var.create_cluster ? module.aks.control_plane_identity : null
+  aks_live_identity     = try(local.aks_live_access.identity, null)
+  aks_identity_changing = local.aks_live_identity != null && local.aks_identity != null ? (local.aks_live_identity != local.aks_identity.type || (local.aks_identity.type == "user" && !contains(try(local.aks_live_access.identity_ids, []), lower(local.aks_identity.id)))) : false
 }
 
 resource "terraform_data" "aks_access_guard" {
@@ -1143,6 +1158,7 @@ resource "terraform_data" "aks_access_guard" {
     private          = var.aks_private_cluster_enabled
     private_dns_zone = local.aks_private_dns_zone
     entra_only       = var.aks_entra_only
+    identity         = local.aks_identity
   }
 
   lifecycle {
@@ -1167,6 +1183,14 @@ resource "terraform_data" "aks_access_guard" {
       error_message = join(" ", [
         "aks_entra_only is false, but the cluster already has Entra integration, and Azure cannot turn it off.",
         "Set aks_entra_only = true to keep the cluster as it is.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_identity_changing
+      error_message = join(" ", [
+        "The control-plane identity is changing on a cluster that already exists: Azure reports ${coalesce(local.aks_live_identity, "unknown")}${length(try(local.aks_live_access.identity_ids, [])) > 0 ? " (${join(", ", local.aks_live_access.identity_ids)})" : ""}, and the configuration asks for ${try(local.aks_identity.type, "unknown")}${try(local.aks_identity.id, null) != null ? " (${local.aks_identity.id})" : ""}.",
+        "The grants the current identity holds on the network and the private DNS zone do not follow the control plane to a new one. Revert aks_control_plane_identity and aks_control_plane_identity_id, or build a new cluster with the identity you want.",
       ])
     }
   }
