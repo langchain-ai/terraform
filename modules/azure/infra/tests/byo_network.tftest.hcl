@@ -283,6 +283,50 @@ run "an_aks_subnet_without_service_endpoints_is_refused" {
   expect_failures = [terraform_data.validate_network]
 }
 
+# With the Key Vault on a private endpoint its firewall drops the subnet rule,
+# so Microsoft.KeyVault is no longer needed on the subnet. Microsoft.Storage
+# still is: both accounts keep their default-deny rule for the AKS subnet.
+run "a_keyvault_private_endpoint_drops_only_the_keyvault_endpoint_requirement" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/19"]
+      service_endpoints = ["Microsoft.Storage"]
+    }
+  }
+
+  variables {
+    aks_subnet_id                     = "${var.vnet_id}/subnets/aks"
+    keyvault_private_endpoint_enabled = true
+  }
+
+  assert {
+    condition     = length(module.keyvault.firewall_subnet_ids) == 0
+    error_message = "With the Key Vault private endpoint on, the AKS subnet is still allowlisted on the vault firewall"
+  }
+}
+
+run "a_keyvault_private_endpoint_still_needs_the_storage_endpoint" {
+  command = plan
+
+  override_data {
+    target = data.azurerm_subnet.byo_aks_subnet
+    values = {
+      address_prefixes  = ["10.0.0.0/19"]
+      service_endpoints = ["Microsoft.KeyVault"]
+    }
+  }
+
+  variables {
+    aks_subnet_id                     = "${var.vnet_id}/subnets/aks"
+    keyvault_private_endpoint_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_network]
+}
+
 # With the flag on, the missing endpoint is Terraform's to add, so the check
 # steps aside. The patch appends to what is there: Azure replaces the whole
 # list on write, so rebuilding it would drop the existing endpoint's locations.

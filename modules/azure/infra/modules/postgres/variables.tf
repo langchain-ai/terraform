@@ -111,6 +111,13 @@ variable "enable_fleet" {
   default     = false
 }
 
+variable "private_dns_zone_id" {
+  type        = string
+  description = "Resource ID of an existing private DNS zone for the server. Null (default) creates the zone named by private_dns_zone_name and links it to vnet_id; set, the module creates neither and the zone's owner keeps its VNet links."
+  default     = null
+  nullable    = true
+}
+
 variable "private_dns_zone_name" {
   type        = string
   description = "Name of the private DNS zone for the server. The root passes the name for its azure_environment; Government uses privatelink.postgres.database.usgovcloudapi.net."
