@@ -9,9 +9,10 @@
 #   ingress_controller = "agic": the root module passes this policy to the
 #     Application Gateway and moves it to WAF_v2, the one tier Azure allows a
 #     policy association on.
-#   any other controller: nothing references the policy. It exists for an Azure
-#     Front Door or a gateway you own to point at, and inspects nothing until
-#     something does.
+#   any other controller: nothing references the policy. It exists for an
+#     Application Gateway you own to point at, and inspects nothing until
+#     something does. Azure Front Door cannot use it: Front Door takes an
+#     azurerm_cdn_frontdoor_firewall_policy, a separate resource type.
 #
 # Cost: the policy itself is free. A WAF_v2 gateway is ~$250/mo over Standard_v2,
 # so create_waf with AGIC changes the gateway's bill.

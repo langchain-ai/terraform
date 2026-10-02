@@ -437,6 +437,10 @@ run "subnet_nsgs_plan_on_an_attached_cluster_in_one_subnet" {
     condition     = module.vnet.subnet_nsg_rules.postgres != null
     error_message = "enable_subnet_nsgs = true on an attached cluster in one subnet did not plan the Postgres NSG"
   }
+  assert {
+    condition     = output.aks_resource_group_name == "platform-aks-rg" && output.aks_resource_group_name != output.resource_group_name
+    error_message = "the aks_resource_group_name output is not the attached cluster's resource group"
+  }
 }
 
 run "subnet_nsgs_are_refused_on_an_attached_cluster_across_subnets" {

@@ -111,13 +111,16 @@ _cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
   exit 1
 }
-_rg_name=$(_tf_out resource_group_name) || _rg_name=""
+_rg_name=$(_tf_out aks_resource_group_name) || {
+  fail "Could not read aks_resource_group_name. Run 'make apply' to record it."
+  exit 1
+}
 
 info "Cluster: ${_cluster_name}"
 az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
-  --overwrite-existing &>/dev/null || {
+  --overwrite-existing >/dev/null || {
   fail "Could not fetch credentials for cluster '${_cluster_name}'."
-  action "make kubeconfig  (shows the underlying error)"
+  action "make kubeconfig  (to retry once the error above is fixed)"
   exit 1
 }
 _aks_kubelogin_convert "$_cluster_name" "$_rg_name"
