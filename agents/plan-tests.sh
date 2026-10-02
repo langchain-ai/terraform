@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Terraform plan tests, one provider per invocation:
+# Terraform plan tests for one or more providers:
+#   bash agents/plan-tests.sh                        # every provider
 #   bash agents/plan-tests.sh modules/azure
+#   bash agents/plan-tests.sh modules/aws modules/gcp
 #
 # terraform validate parses the HCL but resolves no conditionals. A module gated
 # on a variable nothing ever sets validates clean, and so does one gated on the
@@ -37,12 +39,29 @@ SKIP_PROVIDERS="byoc ocp"
 : "${TF_PLUGIN_CACHE_DIR:=$HOME/.terraform.d/plugin-cache}"
 export TF_PLUGIN_CACHE_DIR
 
-if [ $# -ne 1 ]; then
-  echo "usage: bash agents/plan-tests.sh modules/<provider>" >&2
-  exit 2
+# No argument means every provider, as in check.sh. byoc and ocp skip by name.
+if [ $# -eq 0 ]; then
+  for d in "$REPO_ROOT"/modules/*/; do
+    d=${d%/}
+    set -- "$@" "modules/${d##*/}"
+  done
 fi
 
-arg=${1%/}
+# Several dirs are accepted, as in check.sh. Each runs in its own process so it
+# gets its own temp copy and cleanup trap, and the highest exit code wins.
+if [ $# -gt 1 ]; then
+  status=0
+  for arg in "$@"; do
+    bash "$0" "$arg"
+    rc=$?
+    [ "$rc" -le "$status" ] || status=$rc
+  done
+  exit "$status"
+fi
+
+# An absolute path is accepted as long as it sits inside the repo, as in check.sh.
+arg=${1#"$REPO_ROOT/"}
+arg=${arg%/}
 provider=$(basename "$arg")
 PROVIDER_DIR="$REPO_ROOT/$arg"
 
