@@ -11,6 +11,9 @@
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
+#
+# Exit 0 clean or nothing to run, 1 a failing check, 2 a check could not run,
+# as in plan-tests.sh. Across roots the highest code wins.
 set -u
 
 unset CDPATH
@@ -118,6 +121,8 @@ fi
 # than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
 status=0
+# Raise status, never lower it, so a later failing check cannot mask a 2.
+fail() { [ "$1" -le "$status" ] || status=$1; }
 
 for rel in "${roots[@]}"; do
   dir="$REPO_ROOT/$rel"
@@ -134,9 +139,9 @@ for rel in "${roots[@]}"; do
   # whatever backend the root was already initialized with. Stdout is dropped
   # as in plan-tests.sh, since it now repeats every run; errors go to stderr.
   (cd "$dir" && terraform init -backend=false -input=false -no-color >/dev/null) || {
-    status=1; continue; }
+    fail 2; continue; }
 
-  (cd "$dir" && terraform validate -no-color) || status=1
+  (cd "$dir" && terraform validate -no-color) || fail 1
 
   if command -v tflint >/dev/null 2>&1; then
     # The provider plugin pin lives in modules/<provider>/.tflint.hcl. tflint
@@ -155,21 +160,21 @@ for rel in "${roots[@]}"; do
         *" $provider "*) ;;
         *)
           tflint --init --config="$tflint_cfg" >/dev/null || {
-            echo "   tflint --init failed for $provider" >&2; status=1; }
+            echo "   tflint --init failed for $provider" >&2; fail 2; }
           tflint_inited="$tflint_inited$provider "
           ;;
       esac
     else
       echo "   (no $provider/.tflint.hcl, bundled terraform rules only)"
     fi
-    tflint "${tflint_args[@]}" || status=1
+    tflint "${tflint_args[@]}" || fail 1
   else
     echo "   (tflint not installed, skipping lint)"
   fi
 done
 
 if [ "$lint_all" -eq 1 ]; then
-  lint_scripts || status=1
+  lint_scripts || fail $?
 fi
 
 exit "$status"
