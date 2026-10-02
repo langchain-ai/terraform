@@ -561,10 +561,11 @@ run "an_attached_cluster_counts_the_pools_terraform_adds" {
   expect_failures = [terraform_data.validate_network]
 }
 
-
 # On a cluster with Entra ID integration azurerm returns an empty client
 # certificate, so the providers must sign in through kubelogin instead. The
-# choice is module.aks.kube_auth, which feeds all three provider blocks.
+# choice is module.aks.kube_auth, which feeds all three provider blocks. On an
+# attached cluster it follows the cluster whatever aks_entra_only says, and the
+# create-path access variables plan nothing.
 
 run "kube_auth_is_certificate_on_an_attached_cluster_without_entra" {
   command = plan
@@ -594,6 +595,7 @@ run "kube_auth_is_certificate_on_an_attached_cluster_without_entra" {
     existing_cluster_name                = "platform-aks"
     existing_cluster_resource_group_name = "platform-aks-rg"
     aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_entra_only                       = true
   }
 
   assert {
@@ -630,11 +632,16 @@ run "kube_auth_is_entra_on_an_attached_entra_cluster" {
     existing_cluster_name                = "platform-aks"
     existing_cluster_resource_group_name = "platform-aks-rg"
     aks_subnet_id                        = "${var.vnet_id}/subnets/aks"
+    aks_private_cluster_enabled          = true
   }
 
   assert {
     condition     = module.aks.kube_auth == "entra"
     error_message = "an attached Entra ID cluster did not choose kubelogin sign-in"
+  }
+  assert {
+    condition     = module.aks.access_profile == null && module.aks.live_access_profile == null
+    error_message = "The access variables planned something on an attached cluster"
   }
 }
 
