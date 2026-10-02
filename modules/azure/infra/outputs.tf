@@ -252,15 +252,21 @@ output "dns_nameservers" {
 }
 
 output "aks_network" {
-  description = "Effective AKS network mode, pod range, data plane, policy engine and tier, as planned or created. null for an attached cluster."
+  description = "Effective AKS network mode, pod range, data plane, policy engine, outbound type and tier, as planned or created. null for an attached cluster."
   value = module.aks.network_profile == null ? null : {
     mode         = coalesce(module.aks.network_profile.network_plugin_mode, "node-subnet")
     pod_cidr     = module.aks.network_profile.pod_cidr
     data_plane   = module.aks.network_profile.network_data_plane
     policy       = module.aks.network_profile.network_policy
+    outbound     = try(module.aks.network_profile.outbound_type, null)
     sku_tier     = module.aks.sku_tier
     support_plan = module.aks.support_plan
   }
+}
+
+output "aks_nat_gateway_public_ip" {
+  description = "Public IP of the NAT gateway Terraform created on the AKS subnet (aks_nat_gateway = \"create\"): the source address of traffic that leaves through it, for firewall rules and aks_authorized_ip_ranges. null otherwise."
+  value       = one(azurerm_public_ip.aks_nat[*].ip_address)
 }
 
 # The chart builds https://<account>.blob.core.windows.net/ when no override is

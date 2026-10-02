@@ -585,6 +585,228 @@ data "azapi_resource" "byo_agic_subnet_delegations" {
   response_export_values = ["properties.delegations"]
 }
 
+# ── Cluster egress (aks_outbound_type) ───────────────────────────────────────
+# userDefinedRouting sends node egress by the supplied subnet's route table and
+# userAssignedNATGateway by the NAT gateway on it, and AKS needs either in place
+# when it creates the cluster, by which time the identities, Key Vault and
+# storage already exist. Both are therefore read here, at plan: the route table ID from the
+# subnet read above, and the NAT gateway in its own block below. The route
+# table's own routes are read too. AKS accepts a 0.0.0.0/0 route there only
+# with next hop VirtualAppliance or VirtualNetworkGateway, and refuses any
+# other (None, Internet, VnetLocal) with RouteTableInvalidNextHop (seen live
+# for None, on a test cluster in eastus2), so such a route is refused here.
+# No 0.0.0.0/0 route at all is only a warning: a default route learned over
+# BGP from ExpressRoute or VPN never appears in the table.
+locals {
+  aks_outbound_custom   = var.aks_outbound_type != "loadBalancer"
+  aks_subnet_route_tbl  = try(one(data.azurerm_subnet.byo_aks_subnet[*].route_table_id), null)
+  aks_subnet_has_routes = local.aks_subnet_route_tbl != null && local.aks_subnet_route_tbl != ""
+  # Resource group and name of the route table, null when the ID has another
+  # shape, so a mocked read reaches the precondition rather than a bad index.
+  aks_route_tbl_parts = local.aks_subnet_has_routes ? try(regex("(?i)^/subscriptions/[^/]+/resourceGroups/([^/]+)/providers/Microsoft\\.Network/routeTables/([^/]+)$", local.aks_subnet_route_tbl), null) : null
+
+  # The table's 0.0.0.0/0 routes, empty when it was not read, and the ones AKS
+  # would refuse. A for over the zero-or-one tables, not an index: Terraform
+  # 1.11 evaluates both sides of || and &&, so [0] would fail with no table.
+  aks_udr_next_hops_allowed = ["virtualappliance", "virtualnetworkgateway"]
+  aks_udr_default_routes = flatten([
+    for t in data.azurerm_route_table.byo_aks_subnet : [for r in t.route : r if r.address_prefix == "0.0.0.0/0"]
+  ])
+  aks_udr_bad_default_routes = [
+    for r in local.aks_udr_default_routes : r if !contains(local.aks_udr_next_hops_allowed, lower(coalesce(r.next_hop_type, "")))
+  ]
+
+  # Routes straight to the internet. When every one of them names a service tag
+  # (AzureCloud, say) rather than an address range, the routes send only Azure's
+  # own ranges out directly, and the AKS required FQDNs, several of which
+  # resolve outside AzureCloud, depend on whatever sits behind the default route.
+  aks_udr_internet_routes = flatten([
+    for t in data.azurerm_route_table.byo_aks_subnet : [for r in t.route : r if lower(coalesce(r.next_hop_type, "")) == "internet"]
+  ])
+  aks_udr_service_tag_only_egress = length(local.aks_udr_internet_routes) > 0 && alltrue([
+    for r in local.aks_udr_internet_routes : !can(cidrnetmask(r.address_prefix))
+  ])
+
+  # The live outbound type, null until the cluster exists or when the read
+  # carries none; null never counts as a change.
+  aks_outbound_live     = try(local.aks_live.outbound, null)
+  aks_outbound_changing = local.aks_outbound_live != null && try(lower(local.aks_outbound_live), "") != lower(var.aks_outbound_type)
+}
+
+data "azurerm_route_table" "byo_aks_subnet" {
+  count               = var.create_cluster && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
+  name                = local.aks_route_tbl_parts[1]
+  resource_group_name = local.aks_route_tbl_parts[0]
+}
+
+resource "terraform_data" "aks_outbound_guard" {
+  input = var.aks_outbound_type
+
+  lifecycle {
+    # An attached cluster's egress belongs to whoever built it.
+    precondition {
+      condition     = var.create_cluster || !local.aks_outbound_custom
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" has no effect with create_cluster = false: an attached cluster keeps the outbound type it was built with. Remove the setting, or leave it at \"loadBalancer\"."
+    }
+
+    # The route table or NAT gateway belongs to the network's owner, on a subnet
+    # they supply.
+    precondition {
+      condition     = !var.create_cluster || !local.aks_outbound_custom || local.byo_aks_subnet
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" needs create_vnet = false and aks_subnet_id set to a subnet that already carries your ${var.aks_outbound_type == "userDefinedRouting" ? "route table" : "NAT gateway"}. A subnet this module creates or carves has none."
+    }
+
+    precondition {
+      condition     = !var.create_cluster || var.aks_outbound_type != "userDefinedRouting" || !local.byo_aks_subnet || local.aks_subnet_has_routes
+      error_message = "aks_outbound_type = \"userDefinedRouting\" but aks_subnet_id has no route table, which AKS requires on the subnet for this outbound type. Associate the route table that carries your egress route with the subnet: az network vnet subnet update --ids ${var.aks_subnet_id} --route-table <route-table-id>."
+    }
+
+    precondition {
+      condition     = length(local.aks_udr_bad_default_routes) == 0
+      error_message = "aks_outbound_type = \"userDefinedRouting\", and the route table on aks_subnet_id sends 0.0.0.0/0 to next hop ${join(", ", distinct([for r in local.aks_udr_bad_default_routes : coalesce(r.next_hop_type, "unset")]))}. AKS accepts a default route only to VirtualAppliance or VirtualNetworkGateway and refuses any other at create with RouteTableInvalidNextHop. Point the route at your firewall or appliance (VirtualAppliance with its private IP) or at the VPN or ExpressRoute gateway (VirtualNetworkGateway)."
+    }
+
+    # A change moves the egress IP and drops connections, so it is never a
+    # side effect of a tfvars edit.
+    precondition {
+      condition     = !local.aks_outbound_changing || var.aks_allow_outbound_type_change
+      error_message = "Changing aks_outbound_type from ${coalesce(local.aks_outbound_live, "unknown")} to ${var.aks_outbound_type} on a cluster that already exists. Azure applies it in place, but it moves the cluster's egress IP and drops existing connections. Revert the change to keep the cluster as it is, or set aks_allow_outbound_type_change = true once firewall rules and aks_authorized_ip_ranges allow the new egress IP."
+    }
+  }
+}
+
+# ── NAT gateway on the AKS subnet (aks_nat_gateway) ───────────────────────────
+# Kept apart from the outbound guard above so either mode can change or go on
+# its own. existing: the network owner attached a NAT gateway, and plan checks
+# it is there. create: Terraform makes a Standard NAT gateway and public IP in
+# the deployment group and associates them with the supplied subnet, which is
+# the only change it makes to that subnet; route tables stay the owner's. A
+# NAT gateway serves the routes whose next hop is Internet: Azure prefers a
+# route to a virtual appliance or gateway over it, and it over the system
+# default route (Microsoft, "What is Azure NAT Gateway?").
+locals {
+  aks_nat_wanted = var.aks_nat_gateway != "none"
+  aks_nat_create = var.create_cluster && local.byo_aks_subnet && var.aks_nat_gateway == "create"
+
+  # The NAT gateway the subnet carries now, null when none; read for both modes.
+  aks_subnet_nat_id = try(data.azapi_resource.byo_aks_subnet_nat[0].output.properties.natGateway.id, null)
+
+  aks_nat_gateway_name = "${local.name_base}-nat${local.name_suffix}"
+  # A Standard NAT gateway lives in one zone or none. Pin it, and its public IP,
+  # only when availability_zones names exactly one zone; otherwise Azure places
+  # it (Microsoft: "By default, a Standard NAT gateway is placed in No zone").
+  aks_nat_zones = length(var.availability_zones) == 1 ? var.availability_zones : null
+
+  # True when the subnet's NAT gateway is the one this module creates. Compared
+  # by resource group and name, both known at plan, so a first apply (no NAT
+  # gateway yet) and later ones (ours) both pass.
+  aks_subnet_nat_is_ours = local.aks_subnet_nat_id == null ? true : (
+    lower(try(split("/", local.aks_subnet_nat_id)[4], "")) == lower(local.resource_group_name) &&
+    lower(try(split("/", local.aks_subnet_nat_id)[8], "")) == lower(local.aks_nat_gateway_name)
+  )
+}
+
+# azurerm_subnet does not expose the NAT gateway, so this goes through azapi.
+data "azapi_resource" "byo_aks_subnet_nat" {
+  count                  = var.create_cluster && local.byo_aks_subnet && local.aks_nat_wanted ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.aks_subnet_id
+  response_export_values = ["properties.natGateway"]
+}
+
+resource "terraform_data" "aks_nat_gateway_guard" {
+  input = var.aks_nat_gateway
+
+  lifecycle {
+    precondition {
+      condition     = !local.aks_nat_wanted || var.create_cluster
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" has no effect with create_cluster = false: an attached cluster keeps the egress it was built with. Leave it at \"none\"."
+    }
+
+    precondition {
+      condition     = !local.aks_nat_wanted || !var.create_cluster || local.byo_aks_subnet
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" needs create_vnet = false and aks_subnet_id set: the NAT gateway goes on a subnet you supply."
+    }
+
+    precondition {
+      condition     = !local.aks_nat_wanted || contains(["userDefinedRouting", "userAssignedNATGateway"], var.aks_outbound_type)
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" needs aks_outbound_type = \"userAssignedNATGateway\" or \"userDefinedRouting\". With \"loadBalancer\", the cluster's own outbound IP is the egress path."
+    }
+
+    precondition {
+      condition     = var.aks_outbound_type != "userAssignedNATGateway" || local.aks_nat_wanted
+      error_message = "aks_outbound_type = \"userAssignedNATGateway\" needs a NAT gateway on aks_subnet_id: set aks_nat_gateway = \"existing\" for one already attached, or \"create\" to have Terraform create and attach it."
+    }
+
+    precondition {
+      condition     = var.aks_nat_gateway != "existing" || !var.create_cluster || !local.byo_aks_subnet || try(local.aks_subnet_nat_id != null && local.aks_subnet_nat_id != "", false)
+      error_message = "aks_nat_gateway = \"existing\" but aks_subnet_id has no NAT gateway. Attach one first (az network vnet subnet update --ids ${var.aks_subnet_id} --nat-gateway <nat-gateway-id>), or set aks_nat_gateway = \"create\"."
+    }
+
+    precondition {
+      condition     = var.aks_nat_gateway != "create" || local.aks_subnet_nat_is_ours
+      error_message = "aks_nat_gateway = \"create\" but aks_subnet_id already has a NAT gateway (${coalesce(local.aks_subnet_nat_id, "unknown")}), and associating a new one would replace it. Set aks_nat_gateway = \"existing\" to use it."
+    }
+  }
+}
+
+resource "azurerm_public_ip" "aks_nat" {
+  count               = local.aks_nat_create ? 1 : 0
+  name                = "${local.aks_nat_gateway_name}-pip"
+  location            = var.location
+  resource_group_name = local.rg_name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  zones               = local.aks_nat_zones
+  tags                = local.common_tags
+}
+
+resource "azurerm_nat_gateway" "aks" {
+  count                   = local.aks_nat_create ? 1 : 0
+  name                    = local.aks_nat_gateway_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = var.aks_nat_gateway_idle_timeout_minutes
+  zones                   = local.aks_nat_zones
+  tags                    = local.common_tags
+
+  depends_on = [terraform_data.aks_nat_gateway_guard]
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "aks" {
+  count                = local.aks_nat_create ? 1 : 0
+  nat_gateway_id       = azurerm_nat_gateway.aks[0].id
+  public_ip_address_id = azurerm_public_ip.aks_nat[0].id
+}
+
+# The one write to the supplied subnet. A standalone association rather than an
+# azapi patch so destroy detaches the NAT gateway before deleting it. After the
+# service-endpoint patch, so the two never write the subnet at once.
+resource "azurerm_subnet_nat_gateway_association" "aks" {
+  count          = local.aks_nat_create ? 1 : 0
+  subnet_id      = var.aks_subnet_id
+  nat_gateway_id = azurerm_nat_gateway.aks[0].id
+
+  depends_on = [azapi_update_resource.byo_aks_subnet_endpoints, azurerm_nat_gateway_public_ip_association.aks]
+}
+
+# Only a warning, for the same reason as the default-route check: a firewall
+# or proxy behind the gateway that does reach those FQDNs is invisible here.
+check "aks_route_table_service_tag_egress" {
+  assert {
+    condition     = !local.aks_udr_service_tag_only_egress
+    error_message = "aks_outbound_type = \"userDefinedRouting\", and the only routes on aks_subnet_id's route table that go straight to Internet name service tags (${join(", ", distinct([for r in local.aks_udr_internet_routes : r.address_prefix]))}). Several destinations AKS needs to bootstrap nodes resolve outside AzureCloud, among them packages.microsoft.com, mcr.microsoft.com, packages.aks.azure.com and acs-mirror.azureedge.net. If nothing behind the default route reaches them, AKS accepts the create and node bootstrap then fails with CSE exit status 99. See Microsoft's outbound network and FQDN rules for AKS."
+  }
+}
+
+check "aks_route_table_default_route" {
+  assert {
+    condition     = length(data.azurerm_route_table.byo_aks_subnet) == 0 || length(local.aks_udr_default_routes) > 0
+    error_message = "aks_outbound_type = \"userDefinedRouting\", and the route table on aks_subnet_id has no 0.0.0.0/0 route. That is expected when the default route is learned over BGP from ExpressRoute or VPN. Otherwise add one with next hop VirtualAppliance or VirtualNetworkGateway, which Microsoft's UDR page requires."
+  }
+}
+
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
 # Only when manage_byo_subnet_service_endpoints is on. Reads the endpoints
 # already on the subnet so the patch below appends to them instead of replacing
@@ -953,6 +1175,9 @@ module "aks" {
   pod_cidr            = local.aks_pod_cidr
   network_data_plane  = local.aks_network_dataplane
   network_policy      = local.aks_network_policy
+  outbound_type       = var.aks_outbound_type
+  # A NAT gateway Terraform creates is on the subnet before the cluster is.
+  egress_dependencies = azurerm_subnet_nat_gateway_association.aks[*].id
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 

@@ -232,6 +232,23 @@ variable "network_policy" {
   }
 }
 
+variable "egress_dependencies" {
+  type        = list(string)
+  description = "IDs of resources the cluster's egress needs in place before it is created, such as the association of a NAT gateway the root module creates with the node subnet. Only orders the create; the values are not read."
+  default     = []
+}
+
+variable "outbound_type" {
+  type        = string
+  description = "How nodes reach the internet: \"loadBalancer\" (an AKS-managed public IP on the Standard Load Balancer), \"userDefinedRouting\" (the node subnet's route table) or \"userAssignedNATGateway\" (the NAT gateway on the node subnet). The root module checks the subnet before passing either of the last two."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting", "userAssignedNATGateway"], var.outbound_type)
+    error_message = "outbound_type must be \"loadBalancer\", \"userDefinedRouting\" or \"userAssignedNATGateway\"."
+  }
+}
+
 variable "sku_tier" {
   type        = string
   description = "AKS pricing tier for the control plane: \"Free\" (no SLA), \"Standard\" (financially backed uptime SLA; 99.95% with availability zones) or \"Premium\" (Standard plus long-term support). Updated in place."
