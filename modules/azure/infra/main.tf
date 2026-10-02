@@ -923,6 +923,7 @@ module "aks" {
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
   create_vnet    = var.create_vnet
+  kube_auth      = var.aks_kube_auth
 
   # Both of these are passed straight from variables, never derived from another
   # resource. azurerm_resource_group.resource_group[0] is pending creation on a first
@@ -1494,6 +1495,7 @@ module "k8s_bootstrap" {
   client_certificate     = module.aks.client_certificate
   client_key             = module.aks.client_key
   cluster_ca_certificate = module.aks.cluster_ca_certificate
+  kube_auth              = module.aks.kube_auth
 
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace

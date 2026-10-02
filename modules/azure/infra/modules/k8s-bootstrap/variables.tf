@@ -18,6 +18,17 @@ variable "client_key" {
   sensitive   = true
 }
 
+variable "kube_auth" {
+  type        = string
+  description = "'entra' signs the providers in through kubelogin with the caller's az session; 'certificate' uses client_certificate and client_key. Set from the k8s-cluster module's kube_auth output."
+  default     = "certificate"
+
+  validation {
+    condition     = contains(["entra", "certificate"], var.kube_auth)
+    error_message = "kube_auth must be 'entra' or 'certificate'."
+  }
+}
+
 variable "cluster_ca_certificate" {
   type        = string
   description = "Base64-encoded cluster CA certificate from AKS kube_config"
