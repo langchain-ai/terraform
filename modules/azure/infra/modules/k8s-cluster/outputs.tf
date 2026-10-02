@@ -43,11 +43,6 @@ output "cluster_ca_certificate" {
   sensitive   = true
 }
 
-output "entra_auth" {
-  description = "Whether the cluster takes Entra tokens rather than client certificates, so Kubernetes providers authenticate through kubelogin. Read from the cluster on the attach path."
-  value       = local.cluster_entra
-}
-
 output "workload_identity_client_id" {
   description = "Client ID of the User-Assigned Managed Identity for LangSmith pods (Workload Identity)"
   value       = azurerm_user_assigned_identity.k8s_app.client_id
@@ -190,4 +185,9 @@ output "control_plane_grants" {
     for r in concat(azurerm_role_assignment.control_plane_network_contributor, azurerm_role_assignment.control_plane_dns_zone_contributor) :
     { role = r.role_definition_name, scope = r.scope }
   ]
+}
+
+output "kube_auth" {
+  description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
+  value       = local.kube_auth
 }

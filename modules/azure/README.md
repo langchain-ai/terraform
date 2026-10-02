@@ -71,8 +71,8 @@ az aks show --name <cluster> --resource-group <rg> \
 | Requirement | Why | Fix |
 |---|---|---|
 | OIDC issuer + Workload Identity enabled | Federated credentials trust the cluster's OIDC issuer; without it pods can't reach Blob or Key Vault | `az aks update -n <cluster> -g <rg> --enable-oidc-issuer --enable-workload-identity` (in-place, no recreate) |
-| `kubelogin` on the apply host, when `entra` is `true` | An Entra cluster issues no client certificate, so the Helm and Kubernetes providers fetch a token through `kubelogin` as the `az` CLI identity, which needs cluster-admin on the cluster | `az aks install-cli`, and see [Private API server and Entra-only access](#private-api-server-and-entra-only-access) for the role |
-| API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges, or for a private cluster, run from a host with a network path to its private endpoint |
+| On an Entra ID cluster: `kubelogin` on the PATH, and cluster-admin rights in Kubernetes for whoever runs the apply | azurerm returns no client certificate for any Entra-integrated cluster (local accounts on or off), so the Kubernetes and Helm providers sign in through `kubelogin` with your `az` session (`aks_kube_auth = "auto"`, the default). Pass 1 installs cluster-scoped resources (cert-manager and KEDA CRDs), so namespace rights are not enough | `az aks install-cli`, then grant the rights the way the cluster authorizes. **Azure RBAC** (`azure_rbac_enabled = true` on the cluster's Entra profile): an Azure role such as Azure Kubernetes Service RBAC Cluster Admin. **Kubernetes RBAC** (`azure_rbac_enabled = false`): Azure roles grant nothing inside the cluster; add the identity to one of the cluster's `admin_group_object_ids`, or bind it to `cluster-admin` with a ClusterRoleBinding. After a group change, `az login` again so the token carries the new membership |
+| API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
 
 `aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts.
 
@@ -258,12 +258,12 @@ AKS uses the user-assigned identity's roles while it creates the cluster. [PERMI
 The apply host needs three things on top of the [prerequisites](#prerequisites):
 
 - **A network path to the private endpoint.** On a private cluster, run Terraform and `make deploy` from a host in the cluster VNet or a peered one, or over a VPN, with DNS that resolves the private zone
-- **`kubelogin` on `PATH`, for an Entra cluster.** The cluster issues no client certificate, so the providers and the `make` scripts fetch an Entra token through `kubelogin` as the identity `az` is signed in as. The `kubelogin` environment follows `azure_environment`
+- **`kubelogin` on `PATH`, for an Entra cluster.** The cluster issues no client certificate, so the providers and the `make` scripts fetch an Entra token through `kubelogin` as the identity `az` is signed in as
 - **Cluster-admin for that identity, for an Entra cluster.** Put it in a group in `aks_entra_admin_group_object_ids`, or assign it `Azure Kubernetes Service RBAC Cluster Admin` on the cluster
 
 Set the private settings before the first apply. Azure cannot make an existing API server private or public, or move it to another zone, so the provider would replace the cluster and everything installed on it. Terraform compares the request with the cluster at plan time and refuses either change.
 
-Azure turns Entra integration on in place and cannot turn it off, so Terraform refuses `aks_entra_only = false` on a cluster that has it. To turn it on for an existing cluster, make that change in an apply of its own: that plan still authenticates with the certificate, and the next one switches to `kubelogin`.
+Azure turns Entra integration on in place and cannot turn it off, so Terraform refuses `aks_entra_only = false` on a cluster that has it. To turn it on for an existing cluster, make that change in an apply of its own, with nothing else changing. That apply still authenticates with the certificate, which stops working once the cluster update disables local accounts, so a Helm or Kubernetes change in the same apply fails with a 401. The next plan switches to `kubelogin`.
 
 Set the control-plane identity before the first apply too. Azure moves a control plane to another identity in place, but the roles the old identity holds do not move with it, so Terraform refuses a change to `aks_control_plane_identity` or `aks_control_plane_identity_id` on an existing cluster.
 
@@ -510,9 +510,34 @@ create_dns_zone        = true
 > That requires Azure DNS to be authoritative for the subdomain — NS delegation grants that authority.
 > A CNAME only aliases traffic and does not transfer DNS authority; the DNS-01 challenge will fail.
 
+**Your own certificate (`existing`, all controllers):** for a certificate from your organization's CA, or anywhere Let's Encrypt is not an option.
+```hcl
+langsmith_domain                = "langsmith.mycompany.com"
+tls_certificate_source          = "existing"
+langsmith_custom_ca_secret_name = "langsmith-ca"   # only for a private CA, see below
+```
+
+1. Put the certificate in a `kubernetes.io/tls` Secret named `langsmith-tls` in the LangSmith namespace. The PEM file holds the leaf first, then the intermediates; its SANs must include `langsmith_domain`.
+   ```bash
+   kubectl -n langsmith create secret tls langsmith-tls --cert=fullchain.pem --key=privkey.pem
+   ```
+2. `make init-values` writes the Ingress `tls:` entry for that Secret, with no cert-manager annotation. The Envoy Gateway Gateway references the same Secret, and `make deploy` copies it to the Istio gateway's namespace for `istio` and `istio-addon`. `langsmith_domain` alone is enough for every controller; `dns_label` is not needed.
+3. `make deploy` checks the Secret exists and is `kubernetes.io/tls` before it runs Helm, and stops with the command above if not.
+4. **Renewal is yours:** replace the Secret with the new certificate. NGINX and Envoy Gateway pick it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
+
+**A private CA needs one more Secret** if LangSmith's pods call anything that CA signed, such as an OIDC provider or a Postgres or ClickHouse server. Browsers trust your CA through your organization's devices; the pods do not. Give them the CA bundle (root and intermediates, PEM) as `langsmith_custom_ca_secret_name`. `init-values.sh` sets the chart's `config.customCa` from it, and `deploy.sh` checks it before Helm runs:
+```bash
+kubectl -n langsmith create secret generic langsmith-ca --from-file=ca.crt=ca-bundle.pem
+```
+The key defaults to `ca.crt` (`langsmith_custom_ca_secret_key`).
+
+- **Which pods get it:** the chart mounts the bundle and sets `SSL_CERT_FILE` in backend, platform-backend, host-backend, queue, ingest-queue, listener and playground; in the Insights, Polly and Fleet workloads, agent-gateway, presidio-analyzer and the sandbox host when those are enabled; and in the migration and bootstrap Jobs.
+- **Which pods do not:** the frontend, the operator, and the agent deployments the operator creates. If those must trust the CA, they need wiring this module does not yet do.
+- **It replaces the default trust store** for those pods, so include a public CA as well if they also reach public endpoints, such as Beacon for an online license.
+
 > ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
-> For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
+> For those controllers, use `dns01` with a custom domain, `existing` with your own certificate, or `none` for HTTP-only.
 >
 > See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix and validated paths.
 

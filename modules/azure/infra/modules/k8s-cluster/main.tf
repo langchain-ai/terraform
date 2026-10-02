@@ -86,14 +86,20 @@ locals {
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
 
-  # Whether the providers authenticate through Entra rather than a client
-  # certificate. Read from the cluster on the attach path: an Entra-integrated
-  # cluster hands back a kube_config with no client certificate, whether or not
-  # its local accounts are disabled.
-  # On the create path the live cluster wins over the variable, so a plan that
-  # turns Entra on for an existing cluster still refreshes with the certificate
-  # the cluster accepts today.
-  cluster_entra = var.create_cluster ? (local.live_cluster != null ? try(local.live_cluster.entra, null) == true : var.entra_only) : length(data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control) > 0
+  # On a cluster with Entra ID integration, azurerm returns kube_config with an
+  # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
+  # whether or not local accounts are disabled, so certificate sign-in cannot work
+  # there. Such clusters are signed in to through Entra ID with kubelogin, reusing
+  # the caller's az session; the server ID is the AKS-managed Entra server
+  # application, the same in every Azure cloud (kubelogin docs/book concepts/aks.md).
+  # A cluster still on the legacy, customer-registered server app needs that
+  # app's ID instead, which this module does not take.
+  # On the create path the live cluster wins over the planned block, so a plan
+  # that turns Entra on for an existing cluster still refreshes with the
+  # certificate the cluster accepts today.
+  cluster_entra_profile = var.create_cluster ? azurerm_kubernetes_cluster.main[0].azure_active_directory_role_based_access_control : data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control
+  cluster_entra         = var.create_cluster && local.live_cluster != null ? try(local.live_cluster.entra, null) == true : try(length(local.cluster_entra_profile) > 0, false)
+  kube_auth             = var.kube_auth == "auto" ? (local.cluster_entra ? "entra" : "certificate") : var.kube_auth
 
   # var.location for a cluster created here, so the location check below is
   # trivially satisfied and only has something to say under create_cluster = false.
@@ -232,16 +238,16 @@ check "existing_cluster_location" {
 provider "helm" {
   kubernetes {
     host                   = local.cluster_kube_config[0].host
-    client_certificate     = local.cluster_entra ? null : base64decode(local.cluster_kube_config[0].client_certificate)
-    client_key             = local.cluster_entra ? null : base64decode(local.cluster_kube_config[0].client_key)
+    client_certificate     = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_certificate)
+    client_key             = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_key)
     cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
 
     dynamic "exec" {
-      for_each = local.cluster_entra ? [1] : []
+      for_each = local.kube_auth == "entra" ? [1] : []
       content {
         api_version = "client.authentication.k8s.io/v1beta1"
         command     = "kubelogin"
-        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630", "--environment", var.kubelogin_environment]
+        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
       }
     }
   }

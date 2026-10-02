@@ -35,7 +35,11 @@ info "Cluster       : $CLUSTER_NAME"
 info "Resource group: $RESOURCE_GROUP"
 echo ""
 
-_aks_get_credentials "$CLUSTER_NAME" "$RESOURCE_GROUP" || exit 1
+az aks get-credentials \
+  --name "$CLUSTER_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --overwrite-existing
+_aks_kubelogin_convert "$CLUSTER_NAME" "$RESOURCE_GROUP"
 
 echo ""
 pass "kubeconfig updated"
