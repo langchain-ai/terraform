@@ -1279,6 +1279,7 @@ module "aks" {
 
   control_plane_identity_manage_grants = local.aks_control_plane_manage_grants
   vnet_id                              = local.vnet_id
+  subnet_route_table_id                = local.aks_subnet_has_routes ? local.aks_subnet_route_tbl : ""
 
   tags = local.common_tags
 }

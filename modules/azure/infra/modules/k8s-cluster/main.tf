@@ -386,9 +386,14 @@ resource "time_sleep" "control_plane_grant_propagation" {
 # stays on the node subnet with a supplied zone: an owner who linked the zone to
 # the VNet first leaves AKS nothing to do on the VNet, and the check cannot tell
 # a linked zone from one AKS would link. The root requires a supplied identity
-# here, so its principal, and the check, resolve at plan.
+# here, so its principal, and the check, resolve at plan. A route table on the
+# subnet is checked too: Microsoft lists it among the identity's scopes.
 data "azurerm_role_assignments" "control_plane" {
-  for_each     = local.control_plane_check ? merge({ network = var.subnet_id }, local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {}) : {}
+  for_each = local.control_plane_check ? merge(
+    { network = var.subnet_id },
+    var.subnet_route_table_id != "" ? { route_table = var.subnet_route_table_id } : {},
+    local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {},
+  ) : {}
   scope        = each.value
   principal_id = local.control_plane_principal_id
 }
@@ -397,6 +402,7 @@ locals {
   control_plane_missing_grants = [
     for g in [
       { key = "network", role = "Network Contributor", scope = var.subnet_id },
+      { key = "route_table", role = "Network Contributor", scope = var.subnet_route_table_id },
       { key = "dns_zone", role = "Private DNS Zone Contributor", scope = var.private_dns_zone_id },
     ] : g
     # ?: rather than &&, which evaluates both sides and would index a check

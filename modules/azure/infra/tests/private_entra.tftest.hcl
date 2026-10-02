@@ -48,6 +48,8 @@ variables {
   fixture_dns_zone_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/dns-rg/providers/Microsoft.Network/privateDnsZones/privatelink.usgovvirginia.cx.aks.containerservice.azure.us"
   fixture_group_id    = "55555555-5555-5555-5555-555555555555"
   fixture_vnet_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet"
+
+  fixture_route_table_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/route-rg/providers/Microsoft.Network/routeTables/egress"
 }
 
 # ── What the cluster is planned with ─────────────────────────────────────────
@@ -298,6 +300,77 @@ run "a_supplied_zone_without_its_grant_is_refused" {
   }
 
   expect_failures = [azurerm_kubernetes_cluster.main]
+}
+
+# A grant on the node subnet does not cover the subnet's route table, which sits
+# in a resource group of its own.
+run "a_route_table_without_its_grant_is_refused" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  override_data {
+    target = data.azurerm_role_assignments.control_plane
+    values = {
+      role_assignments = [{
+        role_definition_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7"
+        role_assignment_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks"
+      }]
+    }
+  }
+
+  variables {
+    location                             = "eastus"
+    subnet_id                            = "${var.fixture_vnet_id}/subnets/aks"
+    subnet_route_table_id                = var.fixture_route_table_id
+    vnet_id                              = var.fixture_vnet_id
+    control_plane_identity               = "user"
+    control_plane_identity_id            = var.fixture_identity_id
+    control_plane_identity_manage_grants = false
+  }
+
+  expect_failures = [azurerm_kubernetes_cluster.main]
+}
+
+run "a_subnet_grant_and_a_route_table_grant_pass" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  override_data {
+    target = data.azurerm_role_assignments.control_plane
+    values = {
+      role_assignments = [
+        {
+          role_definition_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7"
+          role_assignment_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network-rg/providers/Microsoft.Network/virtualNetworks/shared-vnet/subnets/aks"
+        },
+        {
+          role_definition_id    = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7"
+          role_assignment_scope = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/route-rg/providers/Microsoft.Network/routeTables/egress"
+        },
+      ]
+    }
+  }
+
+  variables {
+    location                             = "eastus"
+    subnet_id                            = "${var.fixture_vnet_id}/subnets/aks"
+    subnet_route_table_id                = var.fixture_route_table_id
+    vnet_id                              = var.fixture_vnet_id
+    control_plane_identity               = "user"
+    control_plane_identity_id            = var.fixture_identity_id
+    control_plane_identity_manage_grants = false
+  }
+
+  assert {
+    condition     = length(azurerm_kubernetes_cluster.main) == 1 && contains(keys(data.azurerm_role_assignments.control_plane), "route_table")
+    error_message = "A subnet grant and a route table grant did not satisfy the check, or the route table was not checked"
+  }
 }
 
 # A zone its owner linked to the VNet leaves AKS nothing to do there, so a
