@@ -382,10 +382,8 @@ resource "time_sleep" "control_plane_grant_propagation" {
 # check, decides whether the role is enough when the cluster is created.
 # Azure lists a principal's assignments at, above, and below the scope it is
 # asked about, so each check keeps the ones at or above it: a grant on the node
-# subnet does not cover the VNet a supplied zone is linked to. The principal of
-# an identity created in this apply is unknown at plan, so on a first apply the
-# check runs after the identity exists and before the cluster does, and a
-# missing grant stops the apply there with the principal ID to grant.
+# subnet does not cover the VNet a supplied zone is linked to. The root requires
+# a supplied identity here, so its principal, and the check, resolve at plan.
 data "azurerm_role_assignments" "control_plane" {
   for_each     = local.control_plane_check ? merge({ network = local.control_plane_network_scope }, local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {}) : {}
   scope        = each.value

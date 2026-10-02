@@ -1144,10 +1144,12 @@ locals {
   aks_entra_removing    = local.aks_live_access != null && try(local.aks_live_access.entra, null) == true && !var.aks_entra_only
 
   # Azure reports the identity type and the user-assigned IDs; a cluster that
-  # reports no identity is skipped.
+  # reports no identity is skipped. ?: rather than && and ||, which evaluate
+  # both sides before Terraform 1.14 and would lower() a system identity's null
+  # ID.
   aks_identity          = var.create_cluster ? module.aks.control_plane_identity : null
   aks_live_identity     = try(local.aks_live_access.identity, null)
-  aks_identity_changing = local.aks_live_identity != null && local.aks_identity != null ? (local.aks_live_identity != local.aks_identity.type || (local.aks_identity.type == "user" && !contains(try(local.aks_live_access.identity_ids, []), lower(local.aks_identity.id)))) : false
+  aks_identity_changing = local.aks_live_identity == null || local.aks_identity == null ? false : local.aks_live_identity != local.aks_identity.type ? true : local.aks_identity.type == "user" ? !contains(try(local.aks_live_access.identity_ids, []), lower(local.aks_identity.id)) : false
 }
 
 resource "terraform_data" "aks_access_guard" {

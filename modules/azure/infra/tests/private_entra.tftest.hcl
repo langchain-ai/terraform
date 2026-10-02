@@ -782,6 +782,29 @@ run "the_live_identity_plans_clean" {
   }
 }
 
+run "the_live_system_identity_plans_clean" {
+  command = plan
+
+  override_data {
+    target = module.aks.data.azapi_resource_list.clusters
+    values = {
+      output = {
+        clusters = [{
+          id               = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
+          name             = "ls-aks-test"
+          dataplane        = "azure"
+          policy           = "azure"
+          private          = null
+          private_dns_zone = null
+          entra            = null
+          identity         = "SystemAssigned"
+          identity_ids     = null
+        }]
+      }
+    }
+  }
+}
+
 run "moving_an_existing_cluster_to_a_user_identity_is_refused" {
   command = plan
 
