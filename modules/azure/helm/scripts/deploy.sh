@@ -708,7 +708,25 @@ spec:
         from: Same
 EOF
   fi
-  pass "Envoy Gateway EnvoyProxy + GatewayClass + Gateway created (tls: ${_tls_source})"
+
+  # Envoy cuts a request at 15 s by default, and the chart's HTTPRoute sets no
+  # timeout. 300 s matches the frontend nginx's proxy_read_timeout behind it.
+  kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: langsmith-gateway-timeout
+  namespace: ${_eg_namespace}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: langsmith-gateway
+  timeout:
+    http:
+      requestTimeout: 300s
+EOF
+  pass "Envoy Gateway EnvoyProxy + GatewayClass + Gateway + timeout policy created (tls: ${_tls_source})"
 fi
 
 # ── Deploy ────────────────────────────────────────────────────────────────

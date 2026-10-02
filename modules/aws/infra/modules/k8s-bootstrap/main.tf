@@ -550,6 +550,59 @@ MANIFEST
   depends_on = [helm_release.envoy_gateway, kubernetes_namespace.langsmith]
 }
 
+# ── Envoy Gateway request timeout ────────────────────────────────────────────
+# Envoy cuts a request at 15 s by default, and the chart's HTTPRoute sets no
+# timeout. 300 s matches the frontend nginx's proxy_read_timeout behind it. A
+# route's own timeouts.request wins over this policy, so the fleet stream route
+# keeps its 0s. A separate resource, so an existing install gets it on apply.
+resource "terraform_data" "envoy_gateway_timeout_policy" {
+  count = var.enable_envoy_gateway ? 1 : 0
+
+  input = {
+    namespace    = var.namespace
+    cluster_name = var.cluster_name
+    region       = var.region
+  }
+
+  triggers_replace = [
+    var.namespace,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      ${local._ctx_check}
+      cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: langsmith-gateway-timeout
+  namespace: ${var.namespace}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: langsmith-gateway
+  timeout:
+    http:
+      requestTimeout: 300s
+MANIFEST
+    EOT
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
+      kubectl delete backendtrafficpolicy langsmith-gateway-timeout -n ${self.input.namespace} --ignore-not-found=true 2>/dev/null || true
+    EOT
+  }
+
+  depends_on = [terraform_data.envoy_gateway_resource]
+}
+
 # ── Envoy Gateway TargetGroupBinding ─────────────────────────────────────────
 # Binds the Terraform-managed ALB target group to the Envoy proxy service so the
 # AWS Load Balancer Controller automatically registers Envoy proxy pod IPs as ALB

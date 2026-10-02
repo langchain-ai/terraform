@@ -223,6 +223,58 @@ resource "null_resource" "apply_gateway" {
 }
 
 #------------------------------------------------------------------------------
+# Gateway request timeout
+#------------------------------------------------------------------------------
+# Envoy cuts a request at 15 s by default, and the chart's HTTPRoute sets no
+# timeout. 300 s matches the frontend nginx's proxy_read_timeout behind it.
+locals {
+  gateway_timeout_policy_yaml = var.ingress_type == "envoy" ? yamlencode({
+    apiVersion = "gateway.envoyproxy.io/v1alpha1"
+    kind       = "BackendTrafficPolicy"
+    metadata = {
+      name      = "${var.gateway_name}-timeout"
+      namespace = "envoy-gateway-system"
+    }
+    spec = {
+      targetRefs = [{
+        group = "gateway.networking.k8s.io"
+        kind  = "Gateway"
+        name  = var.gateway_name
+      }]
+      timeout = {
+        http = {
+          requestTimeout = "300s"
+        }
+      }
+    }
+  }) : ""
+}
+
+resource "local_file" "gateway_timeout_policy" {
+  count    = var.ingress_type == "envoy" ? 1 : 0
+  filename = "${path.module}/gateway-timeout-policy.yaml"
+  content  = local.gateway_timeout_policy_yaml
+}
+
+resource "null_resource" "apply_gateway_timeout_policy" {
+  count = var.ingress_type == "envoy" ? 1 : 0
+
+  triggers = {
+    policy_content = local_file.gateway_timeout_policy[0].content
+    gateway_ready  = null_resource.apply_gateway[0].id
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      ${local.kubectl_creds}
+      kubectl apply -f ${local_file.gateway_timeout_policy[0].filename}
+    EOT
+  }
+
+  depends_on = [null_resource.apply_gateway, local_file.gateway_timeout_policy]
+}
+
+#------------------------------------------------------------------------------
 # Gateway delete on destroy
 #------------------------------------------------------------------------------
 # Envoy Gateway gives the Gateway a LoadBalancer Service. Without this step,

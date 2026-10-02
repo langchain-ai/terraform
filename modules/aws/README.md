@@ -412,6 +412,7 @@ Enabling two controllers is rejected at plan time by a precondition in `infra/ma
 When enabled, the `k8s-bootstrap` module:
 1. Installs the Envoy Gateway Helm chart (`envoyproxy/gateway-helm` v1.3.0) in the `envoy-gateway-system` namespace.
 2. Creates a `GatewayClass` named `eg` and a `Gateway` named `langsmith-gateway` in the `langsmith` namespace.
+3. Creates a `BackendTrafficPolicy` named `langsmith-gateway-timeout` that raises the Gateway's request timeout from Envoy's 15 s default to 300 s, the `proxy_read_timeout` of the frontend nginx behind it. A route that sets its own `timeouts.request`, such as the fleet stream route with `0s`, keeps its value.
 
 The LangSmith Helm chart then creates an `HTTPRoute` (not an `Ingress`) pointing to `langsmith-frontend`.
 
