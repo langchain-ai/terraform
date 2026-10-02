@@ -431,9 +431,29 @@ variable "vnet_address_space" {
 #   • OIDC issuer + Workload Identity enabled (az aks update --enable-oidc-issuer
 #     --enable-workload-identity) — required for the federated credentials below.
 #   • Reachable API server from the apply host (k8s-bootstrap installs cert-manager/KEDA).
-#   • kubelogin on the apply host if the cluster uses Entra ID — its kube_config
-#     carries no client certificate, so the kubernetes/helm providers fetch an
-#     Entra token through kubelogin as the az CLI identity instead.
+#   • On a cluster with Entra ID integration (local accounts on or off), the
+#     kubernetes/helm providers sign in through kubelogin with the caller's az
+#     session (aks_kube_auth): kubelogin on the PATH, and cluster-admin rights for
+#     whoever runs the apply. With Azure RBAC on the cluster that is an Azure role
+#     (Azure Kubernetes Service RBAC Cluster Admin); with Kubernetes RBAC it is
+#     membership in one of the cluster's admin_group_object_ids or a
+#     ClusterRoleBinding to cluster-admin, since Azure roles grant nothing there.
+
+variable "aks_kube_auth" {
+  type        = string
+  description = "How Terraform's Kubernetes and Helm providers sign in to the cluster. 'auto' (default) uses Entra ID through kubelogin when the cluster has Entra ID integration, where azurerm returns no client certificate, and the kube_config certificate otherwise. Entra sign-in needs kubelogin on the PATH and an az login with cluster-admin rights: an Azure role such as Azure Kubernetes Service RBAC Cluster Admin when the cluster uses Azure RBAC, or membership in one of the cluster's admin_group_object_ids or a ClusterRoleBinding to cluster-admin when it uses Kubernetes RBAC (azure_rbac_enabled = false), where Azure roles grant nothing."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "entra", "certificate"], var.aks_kube_auth)
+    error_message = "aks_kube_auth must be 'auto', 'entra', or 'certificate'."
+  }
+
+  validation {
+    condition     = !var.create_cluster || !var.aks_entra_only || var.aks_kube_auth != "certificate"
+    error_message = "aks_kube_auth = 'certificate' cannot sign in to a cluster with aks_entra_only = true, which disables local accounts. Use 'auto' or 'entra'."
+  }
+}
 
 variable "create_cluster" {
   type        = bool
@@ -1187,7 +1207,7 @@ variable "langsmith_helm_chart_version" {
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = bring your own cert. 'none' = HTTP only (demo/dev)."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = your own certificate, in a kubernetes.io/tls Secret named langsmith-tls in the LangSmith namespace (deploy.sh checks it; see the README). 'none' = HTTP only (demo/dev)."
   default     = "letsencrypt"
 
   validation {
@@ -1374,6 +1394,20 @@ variable "postgres_geo_redundant_backup" {
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_name" {
+  type        = string
+  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle (the chart's config.customCa), for endpoints a private CA signed. The chart mounts it in backend, platform-backend, host-backend, the queues, listener, playground and the agent features, not in the operator or the agent deployments it creates. Read by helm/scripts/init-values.sh and deploy.sh; Terraform ignores this value."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_key" {
+  type        = string
+  description = "The key in langsmith_custom_ca_secret_name that holds the PEM bundle. Read by helm/scripts/; Terraform ignores this value."
+  default     = "ca.crt"
+}
 
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {

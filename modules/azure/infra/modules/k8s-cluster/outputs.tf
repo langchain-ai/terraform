@@ -43,11 +43,6 @@ output "cluster_ca_certificate" {
   sensitive   = true
 }
 
-output "entra_auth" {
-  description = "Whether the cluster takes Entra tokens rather than client certificates, so Kubernetes providers authenticate through kubelogin. Read from the cluster on the attach path."
-  value       = local.cluster_entra
-}
-
 output "workload_identity_client_id" {
   description = "Client ID of the User-Assigned Managed Identity for LangSmith pods (Workload Identity)"
   value       = azurerm_user_assigned_identity.k8s_app.client_id
@@ -167,4 +162,9 @@ output "envoy_gateway_version" {
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "kube_auth" {
+  description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
+  value       = local.kube_auth
 }

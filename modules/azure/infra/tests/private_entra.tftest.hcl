@@ -1,6 +1,6 @@
 # Private API server, Entra-only access, and a user-assigned control-plane
 # identity. The first runs plan the cluster module itself and read what it
-# would create through module.aks.access_profile and module.aks.entra_auth. The
+# would create through module.aks.access_profile and module.aks.kube_auth. The
 # variable rules each get a run of their own, since expect_failures names the
 # variable and not the rule. The remaining runs stub the subscription's cluster
 # list with a cluster of this name in this resource group, which the module
@@ -61,7 +61,7 @@ run "defaults_plan_a_public_cluster_with_local_accounts_and_a_system_identity" {
     error_message = "With aks_control_plane_identity_id empty, the control plane was not planned with a system-assigned identity"
   }
   assert {
-    condition     = module.aks.entra_auth == false
+    condition     = module.aks.kube_auth == "certificate"
     error_message = "With aks_entra_only off, the providers were set to authenticate through kubelogin"
   }
 }
@@ -146,7 +146,7 @@ run "entra_only_plans_azure_rbac_and_disables_local_accounts" {
     error_message = "aks_entra_only = true did not plan Entra integration with Azure RBAC and the admin group"
   }
   assert {
-    condition     = module.aks.entra_auth == true
+    condition     = module.aks.kube_auth == "entra"
     error_message = "aks_entra_only = true on a new cluster did not switch the providers to kubelogin"
   }
 }
@@ -216,6 +216,18 @@ run "an_admin_group_that_is_not_a_guid_is_refused" {
   }
 
   expect_failures = [var.aks_entra_admin_group_object_ids]
+}
+
+# Local accounts are disabled, so the certificate can never sign in.
+run "certificate_sign_in_with_entra_only_is_refused" {
+  command = plan
+
+  variables {
+    aks_entra_only = true
+    aks_kube_auth  = "certificate"
+  }
+
+  expect_failures = [var.aks_kube_auth]
 }
 
 run "a_cluster_identity_that_is_not_a_user_assigned_identity_is_refused" {
@@ -414,7 +426,7 @@ run "turning_entra_on_for_an_existing_cluster_keeps_the_certificate_for_now" {
   }
 
   assert {
-    condition     = module.aks.entra_auth == false
+    condition     = module.aks.kube_auth == "certificate"
     error_message = "Turning Entra on for an existing cluster switched the providers to kubelogin before the cluster takes Entra tokens"
   }
 }
@@ -444,7 +456,7 @@ run "providers_use_kubelogin_once_the_cluster_takes_entra" {
   }
 
   assert {
-    condition     = module.aks.entra_auth == true
+    condition     = module.aks.kube_auth == "entra"
     error_message = "A cluster that already takes Entra tokens did not switch the providers to kubelogin"
   }
 }

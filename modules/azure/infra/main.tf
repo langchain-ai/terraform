@@ -119,20 +119,17 @@ locals {
   # a private endpoint only registers its record automatically in a zone with
   # exactly this name. The cloudapp suffix is what Azure appends to a public IP
   # DNS label. Managed Redis has no Government zone because the service is not
-  # offered there; redis_source refuses that combination at plan. The kubelogin
-  # environment is the cloud name kubelogin's --environment flag takes.
+  # offered there; redis_source refuses that combination at plan.
   azure_clouds = {
     public = {
       postgres_private_dns_zone = "privatelink.postgres.database.azure.com"
       blob_private_dns_zone     = "privatelink.blob.core.windows.net"
       cloudapp_suffix           = "cloudapp.azure.com"
-      kubelogin_environment     = "AzurePublicCloud"
     }
     usgovernment = {
       postgres_private_dns_zone = "privatelink.postgres.database.usgovcloudapi.net"
       blob_private_dns_zone     = "privatelink.blob.core.usgovcloudapi.net"
       cloudapp_suffix           = "cloudapp.usgovcloudapi.net"
-      kubelogin_environment     = "AzureUSGovernmentCloud"
     }
   }
   azure_cloud = local.azure_clouds[var.azure_environment]
@@ -926,6 +923,7 @@ module "aks" {
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
   create_vnet    = var.create_vnet
+  kube_auth      = var.aks_kube_auth
 
   # Both of these are passed straight from variables, never derived from another
   # resource. azurerm_resource_group.resource_group[0] is pending creation on a first
@@ -1002,13 +1000,12 @@ module "aks" {
   authorized_ip_ranges = var.aks_authorized_ip_ranges
 
   # Private API server, Entra-only access, and the control-plane identity, all
-  # off by default. The kubelogin environment follows azure_environment.
+  # off by default.
   private_cluster_enabled      = var.aks_private_cluster_enabled
   private_dns_zone_id          = var.aks_private_dns_zone_id
   entra_only                   = var.aks_entra_only
   entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
   control_plane_identity_id    = var.aks_control_plane_identity_id
-  kubelogin_environment        = local.azure_cloud.kubelogin_environment
 
   tags = local.common_tags
 }
@@ -1561,8 +1558,7 @@ module "k8s_bootstrap" {
   client_certificate     = module.aks.client_certificate
   client_key             = module.aks.client_key
   cluster_ca_certificate = module.aks.cluster_ca_certificate
-  entra_auth             = module.aks.entra_auth
-  kubelogin_environment  = local.azure_cloud.kubelogin_environment
+  kube_auth              = module.aks.kube_auth
 
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace

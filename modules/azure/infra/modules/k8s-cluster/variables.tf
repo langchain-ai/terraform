@@ -8,6 +8,17 @@ variable "cluster_name" {
   description = "Name of the cluster"
 }
 
+variable "kube_auth" {
+  type        = string
+  description = "How the module's Kubernetes and Helm providers sign in to the cluster. 'auto' uses Entra ID through kubelogin when the cluster has an Entra profile and the kube_config client certificate otherwise; 'entra' and 'certificate' force one."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "entra", "certificate"], var.kube_auth)
+    error_message = "kube_auth must be 'auto', 'entra', or 'certificate'."
+  }
+}
+
 variable "create_cluster" {
   type        = bool
   description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster (BYOC) — Terraform reads it via a data source instead of managing it, while still creating the Managed Identities, federated credentials, and (optionally) additional node pools in this module. 'istio-addon' requires create_cluster = true, since service_mesh_profile is only settable on a Terraform-owned cluster resource. 'agic' works on an attached cluster only when the ingress-appgw add-on is already enabled on it, because enabling it is the same kind of resource-only argument."
@@ -337,10 +348,4 @@ variable "control_plane_identity_id" {
   type        = string
   description = "Resource ID of a user-assigned managed identity for the AKS control plane. Empty (default) keeps the system-assigned identity."
   default     = ""
-}
-
-variable "kubelogin_environment" {
-  type        = string
-  description = "Cloud name kubelogin targets when entra_only = true or the attached cluster uses Entra: AzurePublicCloud or AzureUSGovernmentCloud."
-  default     = "AzurePublicCloud"
 }
