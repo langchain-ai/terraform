@@ -86,6 +86,10 @@ before the PR does, not a separate standard.
   through `.github/actions/setup-terraform` (tfenv and tfswitch read it too).
   `check.sh` warns when the local binary differs, since fmt and validate can
   disagree across versions. Bump the pin in that file, never in a workflow.
+  The plan tests also run at the floor, the last patch of the oldest version
+  the roots' `required_version` accepts, so a suite that passes only on the pin
+  fails its `plan tests (<provider>, tf <floor>)` leg. The floor is set in
+  `checks.yaml`; raise it when `required_version` moves.
 - **US spelling in prose** — comments, docs, and PR bodies: normalize, behavior,
   initialize, not the `-ise`/`-our` forms. No linter covers spelling, so British
   forms slip in from model output unnoticed.

@@ -1,6 +1,12 @@
 name: Setup Terraform
 description: Install the Terraform version pinned in .terraform-version, so every job and a local run grade against the same fmt and validate rules.
 
+inputs:
+  version:
+    description: A Terraform version to install in place of the pin, for a leg that tests another version. Empty installs the pin.
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
@@ -10,7 +16,9 @@ runs:
     - name: Read pinned version
       id: pin
       shell: bash
-      run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      env:
+        VERSION: ${{ inputs.version }}
+      run: echo "version=${VERSION:-$(tr -d '[:space:]' < .terraform-version)}" >> "$GITHUB_OUTPUT"
 
     - name: Install Terraform ${{ steps.pin.outputs.version }}
       uses: hashicorp/setup-terraform@v3
