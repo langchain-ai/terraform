@@ -101,6 +101,15 @@ output "live_network_profile" {
   }
 }
 
+output "live_access_profile" {
+  description = "API server access Azure reports for the cluster at plan time: whether it is private, its private DNS zone (\"system\", \"none\", a zone ID, or null on a public cluster), and whether Entra integration is on. null until the cluster exists, and when create_cluster = false."
+  value = local.live_cluster == null ? null : {
+    private          = try(local.live_cluster.private, null) == true
+    private_dns_zone = try(local.live_cluster.private_dns_zone, null)
+    entra            = try(local.live_cluster.entra, null) == true
+  }
+}
+
 output "network_profile" {
   description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane, policy engine and outbound type. null when create_cluster = false."
   # Keyed off the flag rather than the resource object: a comparison against the
@@ -111,6 +120,19 @@ output "network_profile" {
     network_data_plane  = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_data_plane)
     network_policy      = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_policy)
     outbound_type       = one(azurerm_kubernetes_cluster.main[*].network_profile[0].outbound_type)
+  }
+}
+
+output "access_profile" {
+  description = "API server access and identity the cluster is planned or created with: private endpoint and DNS zone (null on a public cluster), local accounts, Entra with Azure RBAC, and the control-plane identity. null when create_cluster = false."
+  value = !var.create_cluster ? null : {
+    private_cluster_enabled = one(azurerm_kubernetes_cluster.main[*].private_cluster_enabled)
+    private_dns_zone_id     = var.private_cluster_enabled ? one(azurerm_kubernetes_cluster.main[*].private_dns_zone_id) : null
+    local_account_disabled  = one(azurerm_kubernetes_cluster.main[*].local_account_disabled)
+    azure_rbac_enabled      = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].azure_rbac_enabled, false)
+    admin_group_object_ids  = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].admin_group_object_ids, [])
+    identity_type           = one(azurerm_kubernetes_cluster.main[*].identity[0].type)
+    identity_ids            = one(azurerm_kubernetes_cluster.main[*].identity[0].identity_ids)
   }
 }
 
