@@ -906,7 +906,7 @@ config:
   deployment:
     enabled: true
     url: "https://langsmith-demo.eastus.cloudapp.azure.com"   # must include https://
-    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt or dns01
+    tlsEnabled: true   # must be true when tls_certificate_source = letsencrypt, dns01 or existing
 ```
 
 ---

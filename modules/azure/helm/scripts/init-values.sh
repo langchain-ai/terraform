@@ -420,6 +420,16 @@ if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
     - secretName: langsmith-tls
       hosts:
         - "'"${HOSTNAME}"'"'
+elif [[ "$_tls_source" == "existing" ]]; then
+  # The operator supplies the Secret (deploy.sh checks it before the Helm
+  # upgrade). No cert-manager annotation: nothing here issues or renews it.
+  _ingress_block='ingress:
+  enabled: true'"${_ingress_class:+
+  ingressClassName: \"${_ingress_class}\"}"'
+  tls:
+    - secretName: langsmith-tls
+      hosts:
+        - "'"${HOSTNAME}"'"'
 else
   _ingress_block='ingress:
   enabled: true'"${_ingress_class:+
@@ -446,6 +456,20 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
 else
   _auth_block='  basicAuth:
     enabled: true'
+fi
+
+# A CA bundle for endpoints a private CA signed. The chart (config.customCa)
+# mounts it in the pods that include langsmith.tlsVolumes: backend,
+# platform-backend, host-backend, the queues, listener, playground and the agent
+# features. The operator and the agent deployments it creates do not get it.
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+_custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+_custom_ca_block=""
+if [[ -n "$_custom_ca_secret" ]]; then
+  _custom_ca_block="
+  customCa:
+    secretName: \"${_custom_ca_secret}\"
+    secretKey: \"${_custom_ca_key}\""
 fi
 
 # Build postgres block
@@ -540,7 +564,7 @@ ${_blob_endpoint_line}
   deployment:
     # Full URL used by the operator to build agent deployment endpoints.
     # Must include protocol — wrong value keeps deployments stuck in DEPLOYING state.
-    url: "${_protocol}://${HOSTNAME}"
+    url: "${_protocol}://${HOSTNAME}"${_custom_ca_block}
 
 ${_postgres_block}
 
