@@ -102,12 +102,27 @@ output "live_network_profile" {
 }
 
 output "live_access_profile" {
-  description = "API server access Azure reports for the cluster at plan time: whether it is private, its private DNS zone (\"system\", \"none\", a zone ID, or null on a public cluster), and whether Entra integration is on. null until the cluster exists, and when create_cluster = false."
+  description = "API server access Azure reports for the cluster at plan time: whether it is private, its private DNS zone (\"system\", \"none\", a zone ID, or null on a public cluster), whether Entra integration is on, and the control-plane identity (\"system\" or \"user\", null when Azure reports none) with its lowercased user-assigned identity IDs. null until the cluster exists, and when create_cluster = false."
   value = local.live_cluster == null ? null : {
     private          = try(local.live_cluster.private, null) == true
     private_dns_zone = try(local.live_cluster.private_dns_zone, null)
     entra            = try(local.live_cluster.entra, null) == true
+    identity         = lookup({ systemassigned = "system", userassigned = "user" }, lower(coalesce(try(local.live_cluster.identity, null), "none")), null)
+    identity_ids     = [for id in keys(coalesce(try(local.live_cluster.identity_ids, null), {})) : lower(id)]
   }
+}
+
+output "control_plane_identity" {
+  description = "The control-plane identity requested: \"system\" or \"user\", with the user-assigned identity's resource ID (built from its name when the module creates it, so known at plan). null when create_cluster = false."
+  value = !var.create_cluster ? null : {
+    type = local.control_plane_user ? "user" : "system"
+    id   = local.control_plane_identity_id
+  }
+}
+
+output "control_plane_principal_id" {
+  description = "Principal ID of the user-assigned control-plane identity, for the network owner's grants. null with a system-assigned identity, and when create_cluster = false."
+  value       = local.control_plane_principal_id
 }
 
 output "network_profile" {
@@ -164,6 +179,14 @@ output "envoy_gateway_version" {
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "control_plane_grants" {
+  description = "The role assignments the module makes for the user-assigned control-plane identity, as role and scope. Empty with a system-assigned identity, and when the grants are left to the network's owner."
+  value = [
+    for r in concat(azurerm_role_assignment.control_plane_network_contributor, azurerm_role_assignment.control_plane_dns_zone_contributor) :
+    { role = r.role_definition_name, scope = r.scope }
+  ]
 }
 
 output "kube_auth" {

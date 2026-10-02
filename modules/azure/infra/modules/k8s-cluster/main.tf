@@ -277,14 +277,15 @@ provider "helm" {
 # name can repeat across groups. The comparison lives in the root module
 # (terraform_data.aks_network_mode_guard), where a failing precondition is
 # reachable by the test suite. The same read feeds the access guard
-# (terraform_data.aks_access_guard) and tells the providers whether the cluster
-# already takes Entra tokens. Read-only GET, no writes.
+# (terraform_data.aks_access_guard), with the control-plane identity it runs
+# as, and tells the providers whether the cluster already takes Entra tokens.
+# Read-only GET, no writes.
 data "azapi_resource_list" "clusters" {
   count     = var.create_cluster ? 1 : 0
   type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
   parent_id = "/subscriptions/${var.subscription_id}"
   response_export_values = {
-    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed}"
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
   }
 }
 
@@ -296,6 +297,127 @@ locals {
     for c in try(data.azapi_resource_list.clusters[0].output.clusters, []) : c
     if lower(c.name) == lower(var.cluster_name) && lower(split("/", c.id)[4]) == lower(var.resource_group_name)
   ])
+}
+
+# ── Control-plane identity ────────────────────────────────────────────────────
+# A system-assigned identity exists only once the cluster does, so its grants on
+# a supplied VNet can only be made at or after creation. A user-assigned one is
+# created, or supplied, and granted first, which is Microsoft's recommendation
+# for a cluster in a VNet, route table, or private DNS zone the caller owns.
+locals {
+  control_plane_user   = var.create_cluster && var.control_plane_identity == "user"
+  control_plane_create = local.control_plane_user && var.control_plane_identity_id == ""
+
+  # The identity's ID as the access guard compares it, known at plan for both
+  # sources: the created identity's ID is built from its name.
+  control_plane_identity_id = !local.control_plane_user ? null : (
+    local.control_plane_create
+    ? "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${var.cluster_name}-control-plane"
+    : var.control_plane_identity_id
+  )
+  control_plane_principal_id = !local.control_plane_user ? null : (
+    local.control_plane_create
+    ? one(azurerm_user_assigned_identity.control_plane[*].principal_id)
+    : one(data.azurerm_user_assigned_identity.control_plane[*].principal_id)
+  )
+
+  # AKS registers a private API server in a zone the caller supplies as the
+  # control-plane identity; System and None need no grant.
+  control_plane_dns_zone = var.private_cluster_enabled && !contains(["", "System", "None"], var.private_dns_zone_id)
+
+  # AKS links a supplied zone to the cluster's VNet unless the zone's owner
+  # already has, which takes Network Contributor on the VNet. Terraform cannot
+  # tell which, so the grants it makes cover the VNet. Without a zone, Microsoft
+  # documents the node subnet as enough.
+  control_plane_network_scope = local.control_plane_dns_zone ? var.vnet_id : var.subnet_id
+
+  control_plane_grant = local.control_plane_user && var.control_plane_identity_manage_grants
+  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants
+}
+
+resource "azurerm_user_assigned_identity" "control_plane" {
+  count               = local.control_plane_create ? 1 : 0
+  name                = "${var.cluster_name}-control-plane"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+# A supplied identity is read for its principal ID, which the grants and the
+# check below are keyed on. Its resource ID passed validation, so the name and
+# group are positions 8 and 4.
+data "azurerm_user_assigned_identity" "control_plane" {
+  count               = local.control_plane_user && !local.control_plane_create ? 1 : 0
+  name                = split("/", var.control_plane_identity_id)[8]
+  resource_group_name = split("/", var.control_plane_identity_id)[4]
+}
+
+# principal_type spares a just-created identity the directory lookup Azure
+# otherwise makes before the identity has replicated.
+resource "azurerm_role_assignment" "control_plane_network_contributor" {
+  count                = local.control_plane_grant ? 1 : 0
+  scope                = local.control_plane_network_scope
+  role_definition_name = "Network Contributor"
+  principal_id         = local.control_plane_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
+  count                = local.control_plane_grant && local.control_plane_dns_zone ? 1 : 0
+  scope                = var.private_dns_zone_id
+  role_definition_name = "Private DNS Zone Contributor"
+  principal_id         = local.control_plane_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# AKS documents up to 60 minutes for a grant to its identity to take effect,
+# and a cluster created before then fails on the network it cannot yet join.
+# Hold the cluster back once, when the grants are made. 300s covers the common
+# case, as time_sleep.agic_identity_propagation below does for the AGIC grants.
+resource "time_sleep" "control_plane_grant_propagation" {
+  count           = local.control_plane_grant ? 1 : 0
+  create_duration = "300s"
+  depends_on = [
+    azurerm_role_assignment.control_plane_network_contributor,
+    azurerm_role_assignment.control_plane_dns_zone_contributor,
+  ]
+}
+
+# With grants left to the network's owner, the cluster's preconditions check
+# that the identity holds a role at each scope. Any role counts: Microsoft's
+# minimum for a custom role differs between its pages, so Azure, not this
+# check, decides whether the role is enough when the cluster is created.
+# Azure lists a principal's assignments at, above, and below the scope it is
+# asked about, so each check keeps the ones at or above it. The network check
+# stays on the node subnet with a supplied zone: an owner who linked the zone to
+# the VNet first leaves AKS nothing to do on the VNet, and the check cannot tell
+# a linked zone from one AKS would link. The root requires a supplied identity
+# here, so its principal, and the check, resolve at plan. A route table on the
+# subnet is checked too: Microsoft lists it among the identity's scopes.
+data "azurerm_role_assignments" "control_plane" {
+  for_each = local.control_plane_check ? merge(
+    { network = var.subnet_id },
+    var.subnet_route_table_id != "" ? { route_table = var.subnet_route_table_id } : {},
+    local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {},
+  ) : {}
+  scope        = each.value
+  principal_id = local.control_plane_principal_id
+}
+
+locals {
+  control_plane_missing_grants = [
+    for g in [
+      { key = "network", role = "Network Contributor", scope = var.subnet_id },
+      { key = "route_table", role = "Network Contributor", scope = var.subnet_route_table_id },
+      { key = "dns_zone", role = "Private DNS Zone Contributor", scope = var.private_dns_zone_id },
+    ] : g
+    # ?: rather than &&, which evaluates both sides and would index a check
+    # that does not exist.
+    if contains(keys(data.azurerm_role_assignments.control_plane), g.key) ? !anytrue([
+      for a in data.azurerm_role_assignments.control_plane[g.key].role_assignments :
+      startswith("${lower(g.scope)}/", "${lower(trimsuffix(a.role_assignment_scope, "/"))}/")
+    ]) : false
+  ]
 }
 
 # Orders the cluster after anything its egress needs that the root module
@@ -373,15 +495,13 @@ resource "azurerm_kubernetes_cluster" "main" {
   }
 
   # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
-  # configured), and interact with the node resource group. System-assigned
-  # unless control_plane_identity_id names a user-assigned identity, which a
-  # landing zone pre-grants Network Contributor on its VNet or route table (and
-  # Private DNS Zone Contributor on a zone it owns) before the cluster exists.
+  # configured), and interact with the node resource group. System-assigned,
+  # or the user-assigned identity above, granted before the cluster exists.
   # The provider updates a change of identity in place, but grants held by the
-  # old identity do not follow it, so pick one before the first apply.
+  # old identity do not follow it, so the root module refuses the change.
   identity {
-    type         = var.control_plane_identity_id == "" ? "SystemAssigned" : "UserAssigned"
-    identity_ids = var.control_plane_identity_id == "" ? null : [var.control_plane_identity_id]
+    type         = local.control_plane_user ? "UserAssigned" : "SystemAssigned"
+    identity_ids = local.control_plane_user ? [local.control_plane_create ? azurerm_user_assigned_identity.control_plane[0].id : var.control_plane_identity_id] : null
   }
 
   # Entra-only access: Kubernetes authorization through Azure RBAC, and no
@@ -494,9 +614,21 @@ resource "azurerm_kubernetes_cluster" "main" {
       default_node_pool[0].upgrade_settings,
       default_node_pool[0].zones,
     ]
+
+    precondition {
+      condition = length(local.control_plane_missing_grants) == 0
+      error_message = join(" ", concat(
+        [
+          "The control-plane identity (principal ${coalesce(local.control_plane_principal_id, "unknown")}) holds no role on ${join(" or ", [for g in local.control_plane_missing_grants : g.scope])}.",
+          "aks_control_plane_identity_manage_grants = false leaves these grants to the network's owner, and AKS needs them before the cluster is created.",
+          "A grant counts at that scope or above it, in the built-in role below or a custom role with the same permissions. Run, then apply again:",
+        ],
+        [for g in local.control_plane_missing_grants : "az role assignment create --assignee-object-id ${coalesce(local.control_plane_principal_id, "unknown")} --assignee-principal-type ServicePrincipal --role \"${g.role}\" --scope ${g.scope};"],
+      ))
+    }
   }
 
-  depends_on = [terraform_data.egress_ready]
+  depends_on = [time_sleep.control_plane_grant_propagation, terraform_data.egress_ready]
 }
 
 # ignore_changes on default_node_pool[0].zones makes an availability_zones edit
