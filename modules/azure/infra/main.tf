@@ -1022,8 +1022,8 @@ module "aks" {
 # ForceNewIfChange (main, read 2026-09-25): network_policy changes in place from
 # none and from azure or calico to cilium; network_data_plane from azure to
 # cilium; network_plugin_mode only towards overlay. Those in-place paths exist
-# from azurerm 4.58.0 (to cilium) and 4.59.0 (calico to cilium), which is why
-# versions.tf floors the provider at 4.59.0.
+# from azurerm 4.58.0 (to cilium) and 4.59.0 (calico to cilium), both below the
+# 4.65.0 floor in versions.tf.
 locals {
   aks_live = var.create_cluster ? module.aks.live_network_profile : null
 

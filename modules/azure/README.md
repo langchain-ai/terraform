@@ -1333,7 +1333,7 @@ OS: every component runs in its own container image. The accepted values are
 `Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3` and
 `Ubuntu2204`. Windows SKUs are refused, because every pool here is Linux.
 `Ubuntu2404` is not accepted yet: the azurerm provider added it in 4.67.0, and
-this module still allows versions back to 4.59.0.
+this module still allows versions back to 4.65.0.
 
 On an existing cluster, a change between any two accepted values is an in-place
 update of the pool, for the default pool and additional pools alike. The provider
