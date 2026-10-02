@@ -1275,7 +1275,7 @@ else
       # An Entra ID cluster returns no client certificate, so the Kubernetes and
       # Helm providers sign in through kubelogin (aks_kube_auth = auto or entra).
       KUBE_AUTH=$(_tfvar aks_kube_auth || echo "auto")
-      AAD_PROFILE=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile != \`null\`" -o tsv --only-show-errors 2>/dev/null || echo "")
+      AAD_PROFILE=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null || echo "")
       if [ "$KUBE_AUTH" = "entra" ] && [ "$AAD_PROFILE" = "false" ]; then
         fail "aks_kube_auth = \"entra\" but cluster '${EXISTING_AKS}' has no Entra ID integration, so it accepts no Entra token — use \"auto\""
       elif [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_PROFILE" = "true" ]; }; then

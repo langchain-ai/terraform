@@ -135,7 +135,7 @@ _aks_kubelogin_convert() {
   if [[ "$mode" == "auto" ]]; then
     # Same test as aks_kube_auth = "auto" in Terraform: any Entra profile,
     # AKS-managed or legacy, is what makes azurerm drop the client certificate.
-    aad=$(az aks show --name "$cluster" --resource-group "$rg" --query "aadProfile != \`null\`" -o tsv --only-show-errors 2>/dev/null) || aad=""
+    aad=$(az aks show --name "$cluster" --resource-group "$rg" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null) || aad=""
     [[ "$aad" == "true" ]] || return 0
   fi
   if ! command -v kubelogin >/dev/null 2>&1; then
