@@ -732,7 +732,7 @@ Same as `make clean` but skips the interactive confirmation — useful in non-in
 ### `make kubeconfig` — Fetch cluster credentials
 **Script:** `helm/scripts/get-kubeconfig.sh`
 
-- Reads `aks_cluster_name` and `resource_group_name` from `terraform output`
+- Reads `aks_cluster_name` and `aks_resource_group_name` from `terraform output`
 - Runs `az aks get-credentials --overwrite-existing`, and on an Entra cluster converts the context to the `az` CLI login with `kubelogin convert-kubeconfig`
 - Merges the AKS context into `~/.kube/config` and sets it as the active context
 - Prints `kubectl get nodes` so you can confirm connectivity immediately
