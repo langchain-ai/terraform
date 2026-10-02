@@ -120,3 +120,9 @@ variable "eks_addons" {
   description = "Map of EKS managed add-on configurations to enable for the cluster (coredns, kube-proxy, vpc-cni, etc.)"
   default     = {}
 }
+
+variable "pod_subnet_ids_by_az" {
+  type        = map(string)
+  description = "VPC CNI custom networking: pod subnet ID keyed by availability zone name. Empty leaves pods in the node subnets."
+  default     = {}
+}
