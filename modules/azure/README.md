@@ -97,7 +97,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
-- `aks_private_cluster_enabled`, `aks_private_dns_zone_id`, `aks_entra_only`, `aks_entra_admin_group_object_ids`, `aks_control_plane_identity_id`. Terraform detects Entra on the cluster itself and switches to `kubelogin` without `aks_entra_only`
+- `aks_private_cluster_enabled`, `aks_private_dns_zone_id`, `aks_entra_only`, `aks_entra_admin_group_object_ids`, `aks_control_plane_identity`, `aks_control_plane_identity_id`, `aks_control_plane_identity_manage_grants`. Terraform makes no control-plane grants on an attached cluster, and detects Entra on the cluster itself and switches to `kubelogin` without `aks_entra_only`
 - `availability_zones`, for the cluster only — PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
@@ -238,25 +238,22 @@ aks_private_dns_zone_id     = "/subscriptions/.../resourceGroups/<dns-rg>/provid
 aks_entra_only                   = true
 aks_entra_admin_group_object_ids = ["<entra-group-object-id>"]
 
-aks_control_plane_identity_id = "/subscriptions/.../resourceGroups/<identity-rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name>"
+aks_control_plane_identity = "user"
 ```
 
 | Variable | Effect |
 |---|---|
 | `aks_private_cluster_enabled` | The API server gets a private endpoint in the cluster VNet and no public address. Refused alongside `aks_authorized_ip_ranges`, which filters the public endpoint |
-| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and resolving the API server is left to your DNS. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity_id` |
+| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and resolving the API server is left to your DNS. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity = "user"` |
 | `aks_entra_only` | Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled |
 | `aks_entra_admin_group_object_ids` | Entra groups granted cluster-admin. Requires `aks_entra_only` |
-| `aks_control_plane_identity_id` | The control plane runs as this user-assigned identity instead of a system-assigned one |
+| `aks_control_plane_identity` | `system` (default): AKS creates a system-assigned control-plane identity. `user`: the control plane runs as a user-assigned identity, `<cluster_name>-control-plane` in the deployment's resource group |
+| `aks_control_plane_identity_id` | An existing user-assigned identity to use instead of the one Terraform creates. Requires `aks_control_plane_identity = "user"`, and is required when `aks_control_plane_identity_manage_grants` is false |
+| `aks_control_plane_identity_manage_grants` | Whether Terraform grants the user-assigned identity its roles. Defaults to `create_vnet`: Terraform grants on a VNet it built, and leaves a supplied VNet's grants to its owner |
 
 In Azure Government, confirm the private zone's name before you create your own. Microsoft's private-endpoint DNS table gives `privatelink.<region>.azmk8s.io`, but Government API servers use the `cx.aks.containerservice.azure.us` suffix. With `aks_private_dns_zone_id = "System"`, AKS creates the zone in the node resource group, and that zone's name is the one to copy.
 
-Grant the user-assigned identity its roles before the first apply. AKS uses them while it creates the cluster:
-
-| Role | Scope |
-|---|---|
-| `Network Contributor` | The AKS node subnets, and their route table when they have one. A grant on the whole VNet also works, but none is needed |
-| `Private DNS Zone Contributor` | The zone in `aks_private_dns_zone_id`, when it is a zone ID |
+AKS uses the user-assigned identity's roles while it creates the cluster. [PERMISSIONS.md](PERMISSIONS.md#control-plane-identity-grants) lists them and the steps for a VNet whose owner grants them.
 
 The apply host needs three things on top of the [prerequisites](#prerequisites):
 
@@ -268,7 +265,7 @@ Set the private settings before the first apply. Azure cannot make an existing A
 
 Azure turns Entra integration on in place and cannot turn it off, so Terraform refuses `aks_entra_only = false` on a cluster that has it. To turn it on for an existing cluster, make that change in an apply of its own, with nothing else changing. That apply still authenticates with the certificate, which stops working once the cluster update disables local accounts, so a Helm or Kubernetes change in the same apply fails with a 401. The next plan switches to `kubelogin`.
 
-Changing `aks_control_plane_identity_id` on an existing cluster moves the control plane to the new identity in place. Roles held by the old identity do not move with it, so grant the new one first.
+Set the control-plane identity before the first apply too. Azure moves a control plane to another identity in place, but the roles the old identity holds do not move with it, so Terraform refuses a change to `aks_control_plane_identity` or `aks_control_plane_identity_id` on an existing cluster.
 
 ## Prerequisites
 

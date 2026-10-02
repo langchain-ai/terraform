@@ -89,6 +89,11 @@ output "aks_oidc_issuer_url" {
   value       = module.aks.oidc_issuer_url
 }
 
+output "aks_control_plane_principal_id" {
+  description = "Principal ID of the user-assigned AKS control-plane identity, for the network owner's grants when aks_control_plane_identity_manage_grants = false. null with a system-assigned identity."
+  value       = module.aks.control_plane_principal_id
+}
+
 # ── SmithDB ──────────────────────────────────────────────────────────────────
 
 output "smithdb_metastore_host" {

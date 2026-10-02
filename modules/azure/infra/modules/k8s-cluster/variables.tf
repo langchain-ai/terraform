@@ -361,8 +361,32 @@ variable "entra_admin_group_object_ids" {
   default     = []
 }
 
+variable "control_plane_identity" {
+  type        = string
+  description = "Identity the control plane runs as: \"system\" (default) or \"user\"."
+  default     = "system"
+}
+
 variable "control_plane_identity_id" {
   type        = string
-  description = "Resource ID of a user-assigned managed identity for the AKS control plane. Empty (default) keeps the system-assigned identity."
+  description = "Resource ID of an existing user-assigned identity for the control plane. Empty (default) with control_plane_identity = \"user\": the module creates <cluster_name>-control-plane."
+  default     = ""
+}
+
+variable "control_plane_identity_manage_grants" {
+  type        = bool
+  description = "With control_plane_identity = \"user\": true grants the identity Network Contributor on subnet_id, or on vnet_id with a custom private_dns_zone_id, and Private DNS Zone Contributor on that zone; false checks the identity holds a role on subnet_id, on subnet_route_table_id when set, and on that zone, and stops before the cluster is created when it does not. The check skips the VNet, which a zone its owner already linked does not need."
+  default     = true
+}
+
+variable "vnet_id" {
+  type        = string
+  description = "Resource ID of the cluster VNet. Read only with control_plane_identity = \"user\" and a custom private_dns_zone_id, as the scope of its Network Contributor grant."
+  default     = ""
+}
+
+variable "subnet_route_table_id" {
+  type        = string
+  description = "Resource ID of the route table on subnet_id, empty when it has none. Read only with control_plane_identity = \"user\" and control_plane_identity_manage_grants = false, as a scope the identity must hold a role on."
   default     = ""
 }

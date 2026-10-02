@@ -1279,7 +1279,12 @@ module "aks" {
   private_dns_zone_id          = var.aks_private_dns_zone_id
   entra_only                   = var.aks_entra_only
   entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
+  control_plane_identity       = var.aks_control_plane_identity
   control_plane_identity_id    = var.aks_control_plane_identity_id
+
+  control_plane_identity_manage_grants = local.aks_control_plane_manage_grants
+  vnet_id                              = local.vnet_id
+  subnet_route_table_id                = local.aks_subnet_has_routes ? local.aks_subnet_route_tbl : ""
 
   tags = local.common_tags
 }
@@ -1395,8 +1400,13 @@ resource "terraform_data" "aks_network_guard" {
 # turns it on in place and refuses to turn it off. Each follows from a one-line
 # tfvars edit, so the requested access is compared with what Azure reports for
 # the cluster (module.aks reads it at plan time; null until the cluster exists)
-# and a change is refused with no override. The read depends on variables
-# alone, so a failure stops the plan before anything is applied.
+# and a change is refused with no override. The control-plane identity is
+# refused the same way, though Azure swaps it in place: the grants the old
+# identity holds on the network do not follow the control plane to the new one.
+# The read depends on variables alone, so a failure stops the plan before
+# anything is applied. Who owns that identity and its grants is not something
+# Azure reports, so terraform_data.aks_grants_pin keeps the setting the cluster
+# was created with, and a change to it is refused until it is made on purpose.
 locals {
   aks_live_access = var.create_cluster ? module.aks.live_access_profile : null
 
@@ -1407,6 +1417,46 @@ locals {
   aks_private_changing  = local.aks_live_access != null && try(local.aks_live_access.private, null) != var.aks_private_cluster_enabled
   aks_dns_zone_changing = local.aks_live_access != null && try(local.aks_live_access.private, null) == true && var.aks_private_cluster_enabled && lower(coalesce(try(local.aks_live_access.private_dns_zone, null), "system")) != local.aks_private_dns_zone
   aks_entra_removing    = local.aks_live_access != null && try(local.aks_live_access.entra, null) == true && !var.aks_entra_only
+
+  # Azure reports the identity type and the user-assigned IDs; a cluster that
+  # reports no identity is skipped. ?: rather than && and ||, which evaluate
+  # both sides before Terraform 1.14 and would lower() a system identity's null
+  # ID.
+  aks_identity          = var.create_cluster ? module.aks.control_plane_identity : null
+  aks_live_identity     = try(local.aks_live_access.identity, null)
+  aks_identity_changing = local.aks_live_identity == null || local.aks_identity == null ? false : local.aks_live_identity != local.aks_identity.type ? true : local.aks_identity.type == "user" ? !contains(try(local.aks_live_access.identity_ids, []), lower(local.aks_identity.id)) : false
+
+  # A network the module built is the module's to grant on; a supplied one is
+  # its owner's, unless asked otherwise.
+  aks_control_plane_manage_grants = coalesce(var.aks_control_plane_identity_manage_grants, var.create_vnet)
+
+  # Whether the module creates the user-assigned identity and makes its grants.
+  # Changing either on a live cluster deletes, with a clean plan, the identity or
+  # the grants the cluster still runs on, or creates grants the owner already
+  # made. Skipped while the identity itself is changing, which the identity
+  # check already refuses.
+  aks_grants_mode = var.create_cluster && var.aks_control_plane_identity == "user" ? {
+    create_identity = var.aks_control_plane_identity_id == ""
+    manage_grants   = local.aks_control_plane_manage_grants
+  } : null
+  aks_grants_pinned   = try(one(terraform_data.aks_grants_pin[*].output).mode, local.aks_grants_mode)
+  aks_grants_changing = local.aks_live_access == null || local.aks_identity_changing ? false : local.aks_grants_pinned != local.aks_grants_mode
+}
+
+# The setting the cluster was created with. The cluster's ID holds the write
+# back until the cluster exists, so a failed first apply does not pin a setting
+# no cluster has; ignore_changes keeps it after that, and -replace records a new
+# one.
+resource "terraform_data" "aks_grants_pin" {
+  count = var.create_cluster ? 1 : 0
+  input = {
+    cluster_id = module.aks.cluster_id
+    mode       = local.aks_grants_mode
+  }
+
+  lifecycle {
+    ignore_changes = [input]
+  }
 }
 
 resource "terraform_data" "aks_access_guard" {
@@ -1414,6 +1464,7 @@ resource "terraform_data" "aks_access_guard" {
     private          = var.aks_private_cluster_enabled
     private_dns_zone = local.aks_private_dns_zone
     entra_only       = var.aks_entra_only
+    identity         = local.aks_identity
   }
 
   lifecycle {
@@ -1438,6 +1489,27 @@ resource "terraform_data" "aks_access_guard" {
       error_message = join(" ", [
         "aks_entra_only is false, but the cluster already has Entra integration, and Azure cannot turn it off.",
         "Set aks_entra_only = true to keep the cluster as it is.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_identity_changing
+      error_message = join(" ", [
+        "The control-plane identity is changing on a cluster that already exists: Azure reports ${coalesce(local.aks_live_identity, "unknown")}${length(try(local.aks_live_access.identity_ids, [])) > 0 ? " (${join(", ", local.aks_live_access.identity_ids)})" : ""}, and the configuration asks for ${try(local.aks_identity.type, "unknown")}${try(local.aks_identity.id, null) != null ? " (${local.aks_identity.id})" : ""}.",
+        "The grants the current identity holds on the network and the private DNS zone do not follow the control plane to a new one. Revert aks_control_plane_identity and aks_control_plane_identity_id, or build a new cluster with the identity you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_grants_changing
+      error_message = join(" ", [
+        "The cluster was created with ${try(local.aks_grants_pinned.create_identity, false) ? "an identity the module created" : "a supplied identity"} and ${try(local.aks_grants_pinned.manage_grants, false) ? "grants the module made" : "grants left to the network's owner"}.",
+        "The configuration now asks for ${try(local.aks_grants_mode.create_identity, false) ? "an identity the module creates" : "a supplied identity"} and ${try(local.aks_grants_mode.manage_grants, false) ? "grants the module makes" : "grants left to the network's owner"}.",
+        "On apply, Terraform would delete the identity or the grants the cluster runs on, or create grants that already exist.",
+        "Revert aks_control_plane_identity_id and aks_control_plane_identity_manage_grants. To hand them over on purpose, first move them in state.",
+        "To leave them to the owner, run terraform state rm on module.aks.azurerm_role_assignment.control_plane_network_contributor[0] and module.aks.azurerm_role_assignment.control_plane_dns_zone_contributor[0], and on module.aks.azurerm_user_assigned_identity.control_plane[0] when supplying the identity the module created.",
+        "To take them over, run terraform import on the owner's assignments at the same addresses.",
+        "Then apply with -replace='terraform_data.aks_grants_pin[0]' to record the new setting.",
       ])
     }
   }
