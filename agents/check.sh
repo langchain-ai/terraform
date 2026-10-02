@@ -22,6 +22,12 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
 
+# Every root inits its own providers, and the aws provider alone is ~650MB, so
+# without a shared cache a full run puts several GB into each checkout.
+: "${TF_PLUGIN_CACHE_DIR:=$HOME/.terraform.d/plugin-cache}"
+export TF_PLUGIN_CACHE_DIR
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
 # Every tracked *.sh at one bar, whole repo, once. Not scoped per provider:
 # the sweep takes about a second, and scoping it left the scripts outside a
 # provider tree (agents/, .github/scripts/, modules/ocp/) with no cover at all.
