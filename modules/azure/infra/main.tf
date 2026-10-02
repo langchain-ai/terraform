@@ -1268,6 +1268,14 @@ module "aks" {
   # in terraform.tfvars to restrict to operator/CI CIDRs.
   authorized_ip_ranges = var.aks_authorized_ip_ranges
 
+  # Private API server, Entra-only access, and the control-plane identity, all
+  # off by default.
+  private_cluster_enabled      = var.aks_private_cluster_enabled
+  private_dns_zone_id          = var.aks_private_dns_zone_id
+  entra_only                   = var.aks_entra_only
+  entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
+  control_plane_identity_id    = var.aks_control_plane_identity_id
+
   tags = local.common_tags
 }
 
@@ -1370,6 +1378,61 @@ resource "terraform_data" "aks_network_guard" {
       error_message = join(" ", [
         "aks_pod_cidr is changing from ${coalesce(try(local.aks_live.pod_cidr, null), "unknown")} to ${var.aks_pod_cidr} on a cluster that already runs overlay mode.",
         "Azure does not change a cluster's pod range, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_pod_cidr, or build a new cluster with the range you want.",
+      ])
+    }
+  }
+}
+
+# ── AKS access guard ──────────────────────────────────────────────────────────
+# Whether the API server is private, and its private DNS zone, are fixed when a
+# cluster is created: the provider applies a change to either by replacing the
+# cluster and everything installed on it. Entra integration goes one way: Azure
+# turns it on in place and refuses to turn it off. Each follows from a one-line
+# tfvars edit, so the requested access is compared with what Azure reports for
+# the cluster (module.aks reads it at plan time; null until the cluster exists)
+# and a change is refused with no override. The read depends on variables
+# alone, so a failure stops the plan before anything is applied.
+locals {
+  aks_live_access = var.create_cluster ? module.aks.live_access_profile : null
+
+  # Azure reports the zone as "system", "none", or the zone ID; compare the
+  # requested one in that form.
+  aks_private_dns_zone = var.aks_private_dns_zone_id == "" ? "system" : lower(var.aks_private_dns_zone_id)
+
+  aks_private_changing  = local.aks_live_access != null && try(local.aks_live_access.private, null) != var.aks_private_cluster_enabled
+  aks_dns_zone_changing = local.aks_live_access != null && try(local.aks_live_access.private, null) == true && var.aks_private_cluster_enabled && lower(coalesce(try(local.aks_live_access.private_dns_zone, null), "system")) != local.aks_private_dns_zone
+  aks_entra_removing    = local.aks_live_access != null && try(local.aks_live_access.entra, null) == true && !var.aks_entra_only
+}
+
+resource "terraform_data" "aks_access_guard" {
+  input = {
+    private          = var.aks_private_cluster_enabled
+    private_dns_zone = local.aks_private_dns_zone
+    entra_only       = var.aks_entra_only
+  }
+
+  lifecycle {
+    precondition {
+      condition = !local.aks_private_changing
+      error_message = join(" ", [
+        "aks_private_cluster_enabled is changing to ${var.aks_private_cluster_enabled} on a cluster that already exists.",
+        "Azure does not change whether an API server is private, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_private_cluster_enabled, or build a new cluster with the access you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_dns_zone_changing
+      error_message = join(" ", [
+        "aks_private_dns_zone_id is changing from ${coalesce(try(local.aks_live_access.private_dns_zone, null), "system")} to ${local.aks_private_dns_zone} on a cluster that already exists.",
+        "Azure does not move a private API server to another zone, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_private_dns_zone_id, or build a new cluster with the zone you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_entra_removing
+      error_message = join(" ", [
+        "aks_entra_only is false, but the cluster already has Entra integration, and Azure cannot turn it off.",
+        "Set aks_entra_only = true to keep the cluster as it is.",
       ])
     }
   }
