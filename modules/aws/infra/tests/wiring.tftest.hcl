@@ -274,6 +274,79 @@ run "create_vpc_false_plans_no_vpc" {
   }
 }
 
+# ── EKS network mode ─────────────────────────────────────────────────────────
+# custom-networking moves pods to their own subnets. Everything downstream (the
+# vpc-cni add-on, Karpenter's reserved ENI, the pod CIDRs in the security group
+# rules) keys off pod_subnet_ids_by_az and pod_cidr_blocks, so the runs assert
+# those two and the subnets behind them.
+
+run "node_subnet_mode_plans_no_pod_subnets" {
+  command = plan
+
+  assert {
+    condition     = length(module.vpc[0].pod_subnets) == 0
+    error_message = "eks_network_mode = node-subnet still planned pod subnets"
+  }
+  assert {
+    condition     = length(local.pod_subnet_ids_by_az) == 0 && length(local.pod_cidr_blocks) == 0
+    error_message = "eks_network_mode = node-subnet still turned on custom networking"
+  }
+}
+
+run "custom_networking_plans_a_pod_subnet_per_az" {
+  command = plan
+
+  variables {
+    eks_network_mode = "custom-networking"
+  }
+
+  assert {
+    condition     = length(module.vpc[0].pod_subnets) == 3
+    error_message = "custom networking did not plan one pod subnet per AZ"
+  }
+  assert {
+    condition     = keys(local.pod_subnet_ids_by_az) == tolist(["us-east-2a", "us-east-2b", "us-east-2c"])
+    error_message = "custom networking did not key the pod subnets by AZ"
+  }
+  assert {
+    condition     = local.pod_cidr_blocks == tolist(["100.64.0.0/16"])
+    error_message = "custom networking did not add eks_pod_cidr to the security group rules"
+  }
+}
+
+run "byo_custom_networking_uses_the_supplied_pod_subnets" {
+  command = plan
+
+  variables {
+    eks_network_mode   = "custom-networking"
+    create_vpc         = false
+    vpc_id             = "vpc-00000000000000001"
+    vpc_cidr_block     = "10.0.0.0/16"
+    private_subnets    = ["subnet-00000000000000001", "subnet-00000000000000002"]
+    public_subnets     = ["subnet-00000000000000003", "subnet-00000000000000004"]
+    eks_pod_subnet_ids = ["subnet-00000000000000005"]
+  }
+
+  # One AZ for every subnet: a mock would invent a different one per subnet.
+  override_data {
+    target = data.aws_subnet.pod
+    values = { availability_zone = "us-east-2a", cidr_block = "100.64.0.0/18" }
+  }
+  override_data {
+    target = data.aws_subnet.cluster
+    values = { availability_zone = "us-east-2a" }
+  }
+
+  assert {
+    condition     = local.pod_subnet_ids_by_az == tomap({ "us-east-2a" = "subnet-00000000000000005" })
+    error_message = "a BYO VPC did not key the supplied pod subnet by its AZ"
+  }
+  assert {
+    condition     = local.pod_cidr_blocks == tolist(["100.64.0.0/18"])
+    error_message = "a BYO VPC did not add the pod subnet CIDR to the security group rules"
+  }
+}
+
 # ── Data plane source switches ───────────────────────────────────────────────
 # in-cluster means the chart runs it, so Terraform must plan nothing.
 

@@ -261,6 +261,48 @@ terraform {
 
 ---
 
+## Pod networking
+
+By default each pod gets an IP address from its node's subnet, so the private
+subnets must hold an address for every pod as well as every node. To move pods
+onto dedicated pod subnets instead (VPC CNI custom networking), set:
+
+```hcl
+eks_network_mode = "custom-networking"
+eks_pod_cidr     = "100.64.0.0/16"   # default; create_vpc = true only
+```
+
+With `create_vpc = true`, Terraform adds `eks_pod_cidr` to the VPC as a
+secondary CIDR and splits it into one pod subnet per AZ (a /18 each from the
+default /16). The pod subnets carry only local routes. Traffic from a pod to a
+destination outside the VPC leaves with the node's IP address through the
+private subnet's NAT route.
+
+With `create_vpc = false`, create the pod subnets yourself and pass their IDs:
+
+```hcl
+eks_network_mode   = "custom-networking"
+eks_pod_subnet_ids = ["subnet-0aaa", "subnet-0bbb", "subnet-0ccc"]
+```
+
+Supply one pod subnet per AZ, covering every AZ that `private_subnets` and
+`public_subnets` are in. The plan fails if two pod subnets share an AZ or a
+cluster AZ has no pod subnet.
+
+Pod IPs stay routable VPC addresses, so the ALB still targets pods directly.
+Terraform adds the pod CIDRs to the ingress rules on the RDS and ElastiCache
+security groups and to the ALB's egress rule. It configures the `vpc-cni`
+add-on with one ENIConfig per AZ before any node joins, and merges any
+`eks_addons["vpc-cni"]` configuration you supply into that add-on. When
+`enable_smithdb = true`, it also sets Karpenter's `settings.reservedENIs` to
+`1`, so Karpenter's pod-capacity math leaves out the node's primary ENI.
+
+Choose the mode at cluster creation. Switching an existing cluster changes the
+add-on configuration only: nodes that joined before the switch keep their pod
+IPs in the node subnets until you replace them.
+
+---
+
 ## Bring your own security groups
 
 By default, every module that needs one creates a dedicated security group: ALB,
@@ -285,7 +327,10 @@ Each is independent: supply one, some, or all of them. Leave a variable unset
 
 For every component above, a supplied security group is **attach-only**. Terraform
 associates it with the resource but never writes an ingress or egress rule onto
-it. The group must already allow what that component needs before you apply:
+it. The group must already allow what that component needs before you apply.
+With `eks_network_mode = "custom-networking"`, every "VPC CIDR" rule in the
+table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
+`eks_pod_subnet_ids`):
 
 | Component | Your security group must allow |
 |-----------|-------------------------------|
@@ -989,6 +1034,9 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `eks_cluster_version` | `1.34` | no | EKS Kubernetes version |
 | `eks_managed_node_group_defaults` | `{ami_type: AL2023}` | no | Default config for managed node groups |
 | `eks_managed_node_groups` | `{default: m5.4xlarge}` | no | Managed node group definitions |
+| `eks_network_mode` | `node-subnet` | no | `node-subnet` or `custom-networking` (pods on dedicated pod subnets). See [pod networking](#pod-networking) |
+| `eks_pod_cidr` | `100.64.0.0/16` | no | Secondary VPC CIDR split into the pod subnets (custom networking with `create_vpc = true`) |
+| `eks_pod_subnet_ids` | `[]` | when custom networking and !create_vpc | Existing pod subnet IDs, one per cluster AZ |
 | `create_gp3_storage_class` | `true` | no | Create and set gp3 as default StorageClass |
 | `eks_cluster_enabled_log_types` | `["api", "audit", ...]` | no | EKS control plane log types (CloudWatch) |
 | `eks_addons` | `{}` | no | EKS managed add-on configurations |
