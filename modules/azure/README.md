@@ -1237,7 +1237,11 @@ subnet. Route tables stay yours, and plan refuses `create` when the subnet
 already has a NAT gateway other than the one this module made, because
 associating a new one would replace it. A Standard NAT gateway runs in one
 zone, so it and its public IP are pinned only when `availability_zones` names
-exactly one zone; otherwise Azure places them.
+exactly one zone; otherwise Azure places them. The zones are set once, at
+creation: a later `availability_zones` edit leaves the NAT gateway and its
+public IP where they are, and plan warns about the drift. Changing them would
+replace both, changing the egress address and cutting the cluster's egress until
+the new one is attached. The cluster's node pool treats a zone edit the same way.
 `aks_nat_gateway_idle_timeout_minutes` (4 to 120, default 4) sets its TCP idle
 timeout. Traffic that leaves through the NAT gateway comes from its public IP,
 which is the address to allow in the firewall rules and

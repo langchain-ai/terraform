@@ -759,6 +759,12 @@ resource "azurerm_public_ip" "aks_nat" {
   sku                 = "Standard"
   zones               = local.aks_nat_zones
   tags                = local.common_tags
+
+  # Zones are creation-time on a public IP, so a change would replace it and
+  # move the egress address. See check.aks_nat_gateway_zone_drift.
+  lifecycle {
+    ignore_changes = [zones]
+  }
 }
 
 resource "azurerm_nat_gateway" "aks" {
@@ -771,7 +777,45 @@ resource "azurerm_nat_gateway" "aks" {
   zones                   = local.aks_nat_zones
   tags                    = local.common_tags
 
+  # Zones are creation-time on a NAT gateway, and local.aks_nat_zones follows
+  # availability_zones: ["1"] pins it, ["1","2","3"] leaves it unpinned. Without
+  # this, widening availability_zones on a running deployment replaces the NAT
+  # gateway and its public IP, which changes the egress address and cuts a
+  # userAssignedNATGateway cluster's egress during the replace. The cluster
+  # ignores the same edit to its node pool zones (modules/k8s-cluster), so the
+  # NAT gateway does the same, and the check below reports the drift.
+  lifecycle {
+    ignore_changes = [zones]
+  }
+
   depends_on = [terraform_data.aks_nat_gateway_guard]
+}
+
+# ignore_changes on zones makes an availability_zones edit a no-op for the NAT
+# gateway and its public IP. Warn on every plan when the live zones differ from
+# what availability_zones now asks for, so the discarded change isn't mistaken
+# for an applied one. A check block, not a postcondition, for the same reason as
+# check.aks_node_pool_zone_drift: report the drift, don't block unrelated work.
+check "aks_nat_gateway_zone_drift" {
+  assert {
+    condition = length(azurerm_nat_gateway.aks) == 0 ? true : (
+      toset(azurerm_nat_gateway.aks[0].zones == null ? [] : azurerm_nat_gateway.aks[0].zones) ==
+      toset(local.aks_nat_zones == null ? [] : local.aks_nat_zones)
+    )
+    error_message = join("", [
+      "The NAT gateway on the AKS subnet is in zones [",
+      join(",", sort(tolist(length(azurerm_nat_gateway.aks) == 0 ? [] : (azurerm_nat_gateway.aks[0].zones == null ? [] : azurerm_nat_gateway.aks[0].zones)))),
+      "] but availability_zones now asks for [",
+      join(",", sort(local.aks_nat_zones == null ? [] : local.aks_nat_zones)),
+      "] (a NAT gateway is pinned only when availability_zones names exactly one zone). ",
+      "This module ignores zone changes on an existing NAT gateway and its public IP, because ",
+      "changing them replaces both: the egress address changes, and the cluster loses egress ",
+      "until the new one is attached. To make it take effect, revert availability_zones, or ",
+      "drop zones from ignore_changes on azurerm_nat_gateway.aks and azurerm_public_ip.aks_nat ",
+      "in main.tf and apply in a maintenance window, then update any firewall rule that names ",
+      "the old address (output aks_nat_gateway_public_ip).",
+    ])
+  }
 }
 
 resource "azurerm_nat_gateway_public_ip_association" "aks" {
