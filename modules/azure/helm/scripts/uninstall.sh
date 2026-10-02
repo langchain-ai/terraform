@@ -36,16 +36,26 @@ echo "════════════════════════�
 echo ""
 
 # ── Resolve cluster from terraform outputs ─────────────────────────────────
-CLUSTER_NAME=$(_tf_out aks_cluster_name) || CLUSTER_NAME=""
-RESOURCE_GROUP=$(_tf_out aks_resource_group_name) || RESOURCE_GROUP=""
+# Stop without both outputs, or if the credential fetch fails: kubectl would
+# otherwise act on whatever its current context is, which may be another cluster.
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || {
+  fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
+  exit 1
+}
+RESOURCE_GROUP=$(_tf_out aks_resource_group_name) || {
+  fail "Could not read aks_resource_group_name. Run 'make apply' to record it."
+  exit 1
+}
 
-if [[ -n "$CLUSTER_NAME" && -n "$RESOURCE_GROUP" ]]; then
-  info "Cluster: $CLUSTER_NAME"
-  info "Resource group: $RESOURCE_GROUP"
-  echo ""
-  az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing 2>/dev/null || true
-  _aks_kubelogin_convert "$CLUSTER_NAME" "$RESOURCE_GROUP" || true
-fi
+info "Cluster: $CLUSTER_NAME"
+info "Resource group: $RESOURCE_GROUP"
+echo ""
+az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing >/dev/null || {
+  fail "Could not fetch credentials for cluster '${CLUSTER_NAME}'."
+  action "make kubeconfig  (to retry once the error above is fixed)"
+  exit 1
+}
+_aks_kubelogin_convert "$CLUSTER_NAME" "$RESOURCE_GROUP" || true
 
 # ── Validate cluster connectivity ───────────────────────────────────────────
 if ! kubectl cluster-info --request-timeout=5s &>/dev/null; then
