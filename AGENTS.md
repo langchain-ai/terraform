@@ -58,7 +58,8 @@ before the PR does, not a separate standard.
     with no credentials and no state. `validate` resolves no conditionals and
     passes a module gated on a variable nothing sets, which is the gap this
     closes. Suites are `modules/<provider>/infra/tests/*.tftest.hcl`; a new flag
-    or gate needs a run there in both directions.
+    or gate needs a run there in both directions. With no argument it runs
+    every provider.
 
   **shellcheck fails on warnings** (the repo is clean at that bar — keep it
   there); tflint fails only on errors, because the HCL still carries

@@ -11,6 +11,9 @@
 #
 # set -u, deliberately without -e: a failing root records a non-zero status and
 # the loop continues, so one broken root still reports on the rest.
+#
+# Exit 0 clean or nothing to run, 1 a failing check, 2 a check could not run,
+# as in plan-tests.sh. Across roots the highest code wins.
 set -u
 
 unset CDPATH
@@ -21,6 +24,12 @@ REPO_ROOT=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # CI sets neither, it inherits these, so a green local run is a green PR.
 SHELLCHECK_SEVERITY=${SHELLCHECK_SEVERITY:-warning}
 TFLINT_SEVERITY=${TFLINT_SEVERITY:-error}
+
+# Every root inits its own providers, and the aws provider alone is ~650MB, so
+# without a shared cache a full run puts several GB into each checkout.
+: "${TF_PLUGIN_CACHE_DIR:=$HOME/.terraform.d/plugin-cache}"
+export TF_PLUGIN_CACHE_DIR
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
 
 # Every tracked *.sh at one bar, whole repo, once. Not scoped per provider:
 # the sweep takes about a second, and scoping it left the scripts outside a
@@ -98,10 +107,22 @@ EOF
   fi
 done
 
+# Skipped rather than failed, like tflint and shellcheck below and like
+# plan-tests.sh. CI installs terraform, so this never passes a CI leg.
+if ! command -v terraform >/dev/null 2>&1; then
+  echo "   (terraform not installed, skipping validate and tflint)"
+  if [ "$lint_all" -eq 1 ]; then
+    lint_scripts; exit $?
+  fi
+  exit 0
+fi
+
 # Provider dirs already handled, so tflint --init runs once per provider rather
 # than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
 status=0
+# Raise status, never lower it, so a later failing check cannot mask a 2.
+fail() { [ "$1" -le "$status" ] || status=$1; }
 
 for rel in "${roots[@]}"; do
   dir="$REPO_ROOT/$rel"
@@ -112,12 +133,15 @@ for rel in "${roots[@]}"; do
 
   echo "== check $rel"
 
-  if [ ! -d "$dir/.terraform" ]; then
-    (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
-      status=1; continue; }
-  fi
+  # Init every run, not only when .terraform is missing: one left from before a
+  # child module was added fails validate with "Module not installed". With the
+  # plugin cache warm, a re-init only relinks providers. -backend=false keeps
+  # whatever backend the root was already initialized with. Stdout is dropped
+  # as in plan-tests.sh, since it now repeats every run; errors go to stderr.
+  (cd "$dir" && terraform init -backend=false -input=false -no-color >/dev/null) || {
+    fail 2; continue; }
 
-  (cd "$dir" && terraform validate -no-color) || status=1
+  (cd "$dir" && terraform validate -no-color) || fail 1
 
   if command -v tflint >/dev/null 2>&1; then
     # The provider plugin pin lives in modules/<provider>/.tflint.hcl. tflint
@@ -136,21 +160,21 @@ for rel in "${roots[@]}"; do
         *" $provider "*) ;;
         *)
           tflint --init --config="$tflint_cfg" >/dev/null || {
-            echo "   tflint --init failed for $provider" >&2; status=1; }
+            echo "   tflint --init failed for $provider" >&2; fail 2; }
           tflint_inited="$tflint_inited$provider "
           ;;
       esac
     else
       echo "   (no $provider/.tflint.hcl, bundled terraform rules only)"
     fi
-    tflint "${tflint_args[@]}" || status=1
+    tflint "${tflint_args[@]}" || fail 1
   else
     echo "   (tflint not installed, skipping lint)"
   fi
 done
 
 if [ "$lint_all" -eq 1 ]; then
-  lint_scripts || status=1
+  lint_scripts || fail $?
 fi
 
 exit "$status"
