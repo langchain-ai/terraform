@@ -1305,6 +1305,20 @@ else
       fail "Key Vault '${EXISTING_KV}' not found in resource group '${EXISTING_KV_RG}' — check both names and the subscription"
     fi
   fi
+
+  # The private endpoint turns the vault's public network access off, so every
+  # data-plane call has to come from inside the network. Nothing here can tell
+  # whether this machine is, before the vault exists, so this is a reminder
+  # rather than a check. Terraform refuses the flag with create_keyvault = false.
+  KV_PRIVATE_ENDPOINT=$(_tfvar keyvault_private_endpoint_enabled || echo "false")
+  if [ "$KV_PRIVATE_ENDPOINT" = "true" ] && [ "$CREATE_KEYVAULT" != "false" ]; then
+    KV_MANAGE_SECRETS=$(_tfvar keyvault_manage_secrets || echo "true")
+    if [ "$KV_MANAGE_SECRETS" = "false" ]; then
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network)"
+    else
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. terraform plan and apply (which read and write two secrets on every run), make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network), or set keyvault_manage_secrets = false"
+    fi
+  fi
 fi
 
 # ── 8. PostgreSQL regional capabilities ─────────────────────────────────────
