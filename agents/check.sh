@@ -104,6 +104,16 @@ EOF
   fi
 done
 
+# Skipped rather than failed, like tflint and shellcheck below and like
+# plan-tests.sh. CI installs terraform, so this never passes a CI leg.
+if ! command -v terraform >/dev/null 2>&1; then
+  echo "   (terraform not installed, skipping validate and tflint)"
+  if [ "$lint_all" -eq 1 ]; then
+    lint_scripts; exit $?
+  fi
+  exit 0
+fi
+
 # Provider dirs already handled, so tflint --init runs once per provider rather
 # than per root. Space-delimited for bash 3.2 (no associative arrays).
 tflint_inited=" "
@@ -118,10 +128,12 @@ for rel in "${roots[@]}"; do
 
   echo "== check $rel"
 
-  if [ ! -d "$dir/.terraform" ]; then
-    (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
-      status=1; continue; }
-  fi
+  # Init every run, not only when .terraform is missing: one left from before a
+  # child module was added fails validate with "Module not installed". With the
+  # plugin cache warm, a re-init only relinks providers. -backend=false keeps
+  # whatever backend the root was already initialized with.
+  (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
+    status=1; continue; }
 
   (cd "$dir" && terraform validate -no-color) || status=1
 
