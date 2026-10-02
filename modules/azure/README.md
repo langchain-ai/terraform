@@ -249,13 +249,13 @@ aks_control_plane_identity_id = "/subscriptions/.../resourceGroups/<identity-rg>
 | `aks_entra_admin_group_object_ids` | Entra groups granted cluster-admin. Requires `aks_entra_only` |
 | `aks_control_plane_identity_id` | The control plane runs as this user-assigned identity instead of a system-assigned one |
 
-In Azure Government the AKS private zone is `privatelink.<region>.cx.aks.containerservice.azure.us`.
+In Azure Government, confirm the private zone's name before you create your own. Microsoft's private-endpoint DNS table gives `privatelink.<region>.azmk8s.io`, but Government API servers use the `cx.aks.containerservice.azure.us` suffix. With `aks_private_dns_zone_id = "System"`, AKS creates the zone in the node resource group, and that zone's name is the one to copy.
 
 Grant the user-assigned identity its roles before the first apply. AKS uses them while it creates the cluster:
 
 | Role | Scope |
 |---|---|
-| `Network Contributor` | The AKS subnet or its VNet, and the subnet's route table when it has one |
+| `Network Contributor` | The AKS node subnets, and their route table when they have one. A grant on the whole VNet also works, but none is needed |
 | `Private DNS Zone Contributor` | The zone in `aks_private_dns_zone_id`, when it is a zone ID |
 
 The apply host needs three things on top of the [prerequisites](#prerequisites):
