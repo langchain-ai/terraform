@@ -131,8 +131,9 @@ for rel in "${roots[@]}"; do
   # Init every run, not only when .terraform is missing: one left from before a
   # child module was added fails validate with "Module not installed". With the
   # plugin cache warm, a re-init only relinks providers. -backend=false keeps
-  # whatever backend the root was already initialized with.
-  (cd "$dir" && terraform init -backend=false -input=false -no-color) || {
+  # whatever backend the root was already initialized with. Stdout is dropped
+  # as in plan-tests.sh, since it now repeats every run; errors go to stderr.
+  (cd "$dir" && terraform init -backend=false -input=false -no-color >/dev/null) || {
     status=1; continue; }
 
   (cd "$dir" && terraform validate -no-color) || status=1
