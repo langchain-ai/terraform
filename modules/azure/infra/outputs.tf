@@ -203,7 +203,7 @@ output "keyvault_uri" {
 
 # ── WAF ───────────────────────────────────────────────────────────────────────
 output "waf_policy_id" {
-  description = "WAF policy resource ID (attach to App Gateway or Front Door)"
+  description = "WAF policy resource ID (attach to an Application Gateway; Front Door cannot use this policy type)"
   value       = var.create_waf ? module.waf[0].waf_policy_id : ""
 }
 

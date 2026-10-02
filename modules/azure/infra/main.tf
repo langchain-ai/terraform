@@ -1852,7 +1852,8 @@ removed {
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
 # Deploy Azure WAF policy with OWASP 3.2 + bot protection.
-# Attach to Application Gateway or Azure Front Door after creation.
+# Attached to the Application Gateway when ingress_controller = "agic".
+# Front Door needs its own policy type (azurerm_cdn_frontdoor_firewall_policy).
 # Enable with: create_waf = true in terraform.tfvars
 
 module "waf" {
