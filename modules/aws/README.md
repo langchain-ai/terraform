@@ -292,7 +292,8 @@ pod subnet.
 
 Pod IPs stay routable VPC addresses, so the ALB still targets pods directly.
 Terraform adds the pod CIDRs to the ingress rules on the RDS and ElastiCache
-security groups and to the ALB's egress rule. It configures the `vpc-cni`
+security groups and to the ALB's ingress and egress rules, so in-cluster
+callers still reach an ALB restricted by `alb_allowed_cidr_blocks`. It configures the `vpc-cni`
 add-on with one ENIConfig per AZ and holds node group creation for two minutes
 after the cluster is active, so the add-on is configured before the first
 nodes join. It merges any `eks_addons["vpc-cni"]` configuration you supply
@@ -350,7 +351,7 @@ table also needs the pod CIDRs (`eks_pod_cidr`, or the CIDRs of
 
 | Component | Your security group must allow |
 |-----------|-------------------------------|
-| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks`. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
+| ALB | Inbound tcp/80, and tcp/443 unless `tls_certificate_source = "none"`, from `alb_allowed_cidr_blocks` and, with custom networking, the pod CIDRs. Outbound to the VPC CIDR (to reach EKS pod IPs, target-type: ip) |
 | Bastion | Outbound to `0.0.0.0/0` (SSM agent, package installs, kubectl/helm/aws-cli). If you also set `bastion_enable_ssh = true`, inbound tcp/22 from `bastion_ssh_allowed_cidrs`; Terraform will **not** add this rule for a supplied group, so add it yourself first |
 | Postgres (RDS) | Inbound tcp/5432 from within the VPC CIDR. Outbound within the VPC CIDR |
 | Redis (ElastiCache) | Inbound tcp/6379 from within the VPC CIDR. Outbound within the VPC CIDR |

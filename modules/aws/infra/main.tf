@@ -576,7 +576,7 @@ module "alb" {
   pod_cidr_blocks        = local.pod_cidr_blocks
   subnets                = var.alb_scheme == "internal" ? local.private_subnets : local.public_subnets
   internal               = var.alb_scheme == "internal"
-  allowed_cidr_blocks    = var.alb_allowed_cidr_blocks
+  allowed_cidr_blocks    = local.alb_ingress_cidr_blocks
   tls_certificate_source = var.tls_certificate_source
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
