@@ -1127,7 +1127,7 @@ variable "langsmith_helm_chart_version" {
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = bring your own cert. 'none' = HTTP only (demo/dev)."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via cert-manager. 'existing' = your own certificate, in a kubernetes.io/tls Secret named langsmith-tls in the LangSmith namespace (deploy.sh checks it; see the README). 'none' = HTTP only (demo/dev)."
   default     = "letsencrypt"
 
   validation {
@@ -1314,6 +1314,20 @@ variable "postgres_geo_redundant_backup" {
 
 # ── Helm / deployment flags (read by bash scripts, not by Terraform) ──────────
 # Declared so terraform.tfvars can carry them; read by helm/scripts/, not Terraform.
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_name" {
+  type        = string
+  description = "Optional. A Secret in the LangSmith namespace holding a CA bundle (the chart's config.customCa), for endpoints a private CA signed. The chart mounts it in backend, platform-backend, host-backend, the queues, listener, playground and the agent features, not in the operator or the agent deployments it creates. Read by helm/scripts/init-values.sh and deploy.sh; Terraform ignores this value."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_custom_ca_secret_key" {
+  type        = string
+  description = "The key in langsmith_custom_ca_secret_name that holds the PEM bundle. Read by helm/scripts/; Terraform ignores this value."
+  default     = "ca.crt"
+}
 
 # tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
