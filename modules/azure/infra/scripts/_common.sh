@@ -117,6 +117,34 @@ _cert_manager_azure_environment() {
   esac
 }
 
+# ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
+# On a cluster with Entra ID integration, `az aks get-credentials` writes a
+# kubeconfig whose user signs in interactively. Convert it to reuse the caller's
+# az session, the same sign-in the Terraform providers use (aks_kube_auth), so
+# scripts run unattended from a workstation, a pipeline, or a managed identity.
+# Run it right after get-credentials, which rewrites the user entry each time.
+# --context limits the conversion to this cluster's user: without it kubelogin
+# rewrites every kubelogin or legacy Azure user in the kubeconfig, switching the
+# operator's other AKS contexts to azurecli sign-in. get-credentials (without
+# --admin or --context) names the context after the cluster.
+# Returns 1 when the cluster needs kubelogin and it is not installed.
+_aks_kubelogin_convert() {
+  local cluster="$1" rg="$2" mode aad
+  mode=$(_parse_tfvar aks_kube_auth) || mode="auto"
+  [[ "$mode" == "certificate" ]] && return 0
+  if [[ "$mode" == "auto" ]]; then
+    # Same test as aks_kube_auth = "auto" in Terraform: any Entra profile,
+    # AKS-managed or legacy, is what makes azurerm drop the client certificate.
+    aad=$(az aks show --name "$cluster" --resource-group "$rg" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null) || aad=""
+    [[ "$aad" == "true" ]] || return 0
+  fi
+  if ! command -v kubelogin >/dev/null 2>&1; then
+    fail "Cluster '${cluster}' uses Entra ID and kubelogin is not on the PATH. Install it with 'az aks install-cli'"
+    return 1
+  fi
+  kubelogin convert-kubeconfig -l azurecli --context "$cluster"
+}
+
 # ── Admin password rules ─────────────────────────────────────────────────────
 # The LangSmith Helm chart's auth-bootstrap job rejects an initial org admin
 # password without a symbol, and it fails ~10 minutes into the release rather
