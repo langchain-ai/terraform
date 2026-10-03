@@ -447,6 +447,49 @@ else
       skip "No gateway found in ${_NAMESPACE}"
     fi
   fi
+
+  # TLS certificate. Read-only: Certificate Manager for google-managed, the
+  # cert-manager Certificate for letsencrypt and cert-manager.
+  case "${_tls:-none}" in
+    google-managed)
+      _cert_name=$(terraform -chdir="$INFRA_DIR" output -raw managed_certificate_name 2>/dev/null) || _cert_name=""
+      if [[ -z "$_cert_name" || "$_cert_name" == "null" ]]; then
+        skip "TLS certificate: not created yet (run make apply)"
+      elif ! command -v gcloud >/dev/null 2>&1; then
+        skip "TLS certificate ${_cert_name}: gcloud not installed, state not checked"
+      else
+        _cert_state=$(gcloud certificate-manager certificates describe "$_cert_name" \
+          --project "${_project_id:-}" --format='value(managed.state)' 2>/dev/null) || _cert_state=""
+        if [[ "$_cert_state" == "ACTIVE" ]]; then
+          pass "TLS certificate ${_cert_name}: ACTIVE"
+        else
+          warn "TLS certificate ${_cert_name}: ${_cert_state:-state unknown}"
+          # The DNS authorization CNAME is the usual reason a certificate stays
+          # in PROVISIONING. Show it unless Terraform wrote it to Cloud DNS.
+          _auth_managed=$(terraform -chdir="$INFRA_DIR" output -raw tls_dns_authorization_record_managed 2>/dev/null) || _auth_managed=""
+          _auth_json=$(terraform -chdir="$INFRA_DIR" output -json tls_dns_authorization_record 2>/dev/null) || _auth_json=""
+          if [[ "$_auth_managed" != "true" && -n "$_auth_json" && "$_auth_json" != "null" ]]; then
+            _auth_name=$(printf '%s' "$_auth_json" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+            _auth_data=$(printf '%s' "$_auth_json" | sed -n 's/.*"data":"\([^"]*\)".*/\1/p')
+            info "Add this DNS record if you have not: ${_auth_name} CNAME ${_auth_data}"
+          fi
+          action "gcloud certificate-manager certificates describe ${_cert_name} --project ${_project_id:-<project>}"
+        fi
+      fi
+      ;;
+    letsencrypt|cert-manager)
+      _tls_secret=$(terraform -chdir="$INFRA_DIR" output -raw tls_secret_name 2>/dev/null) || _tls_secret=""
+      _tls_secret="${_tls_secret:-langsmith-tls}"
+      _cert_ready=$(kubectl get certificate "$_tls_secret" -n "$_NAMESPACE" \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null) || _cert_ready=""
+      if [[ "$_cert_ready" == "True" ]]; then
+        pass "TLS certificate ${_tls_secret}: Ready"
+      else
+        warn "TLS certificate ${_tls_secret}: ${_cert_ready:-not found or not ready}"
+        action "kubectl describe certificate ${_tls_secret} -n ${_NAMESPACE}"
+      fi
+      ;;
+  esac
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

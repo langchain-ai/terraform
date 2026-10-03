@@ -152,11 +152,16 @@ if [[ -z "$_project_id" || -z "$_name_prefix" || -z "$_environment" ]]; then
   exit 1
 fi
 
-# Derive protocol
-if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ]]; then
+# Derive protocol. Every source except "none" puts an HTTPS listener on the
+# Gateway, and its HTTP listener only redirects to HTTPS. The LangSmith
+# HTTPRoute then attaches to the https listener alone (gateway.sectionName), so
+# it does not compete with the redirect route for plain-HTTP requests.
+if [[ "$_tls_source" != "none" ]]; then
   _protocol="https"
+  _gateway_section_line='  sectionName: "https"'
 else
   _protocol="http"
+  _gateway_section_line=""
 fi
 
 OUT_FILE="$VALUES_DIR/values-overrides.yaml"
@@ -703,7 +708,7 @@ fi
 
 # Patch tlsEnabled in agent-deploys if TLS is configured
 if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
-  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "existing" ]]; then
+  if [[ "$_tls_source" != "none" ]]; then
     sed -i.bak 's/tlsEnabled: false/tlsEnabled: true/' "$_deploys_file" && rm -f "$_deploys_file.bak"
   fi
 fi
@@ -1095,6 +1100,7 @@ ${_sandbox_config_block}
 gateway:
   name: "${_gateway_name}"
   namespace: "${_gateway_namespace}"
+${_gateway_section_line}
 ${_wi_block}
 ${_external_services_block}
 ${_fleet_key_block}

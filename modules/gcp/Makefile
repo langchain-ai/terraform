@@ -7,7 +7,7 @@
 # Where am I?           make status
 # Terraform flags:      make plan ARGS="-target=module.gke_cluster"   (see make help)
 
-.PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy tf \
+.PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy tf cert-manager-upgrade \
         preflight kubeconfig \
         init-values deploy uninstall deploy-all \
         patch-lgp
@@ -82,6 +82,9 @@ tf: ## Any terraform command in infra/ (make tf ARGS="state list")
 
 preflight: ## Run GCP infra preflight checks
 	$(INFRA_DIR)/scripts/preflight.sh
+
+cert-manager-upgrade: ## Step cert-manager up to cert_manager_version, one minor at a time (then make apply)
+	$(INFRA_DIR)/scripts/cert-manager-upgrade.sh
 
 kubeconfig: ## Fetch kubeconfig for the GKE cluster
 	$(HELM_DIR)/scripts/get-kubeconfig.sh

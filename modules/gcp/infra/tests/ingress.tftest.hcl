@@ -86,7 +86,7 @@ run "gke_plans_the_gateway_and_no_envoy_resources" {
   }
 }
 
-run "gke_with_existing_tls_is_https_only" {
+run "gke_with_existing_tls_serves_https_and_redirects_http" {
   command = plan
 
   module {
@@ -96,11 +96,187 @@ run "gke_with_existing_tls_is_https_only" {
   variables {
     ingress_type           = "gke"
     tls_certificate_source = "existing"
+    tls_secret_name        = "corp-langsmith-tls"
   }
 
   assert {
-    condition     = [for l in yamldecode(local_file.gke_gateway[0].content).spec.listeners : l.name] == ["https"]
-    error_message = "tls_certificate_source = existing should produce only the HTTPS listener"
+    condition     = [for l in yamldecode(local_file.gke_gateway[0].content).spec.listeners : l.name] == ["http", "https"]
+    error_message = "With TLS, the Gateway should have the HTTP listener for the redirect and the HTTPS listener"
+  }
+  assert {
+    condition     = yamldecode(local_file.gke_gateway[0].content).spec.listeners[1].tls.certificateRefs[0].name == "corp-langsmith-tls"
+    error_message = "The HTTPS listener should terminate with tls_secret_name"
+  }
+  assert {
+    condition = (
+      length(null_resource.apply_https_redirect) == 1 &&
+      yamldecode(local_file.https_redirect[0].content).metadata.namespace == "langsmith" &&
+      yamldecode(local_file.https_redirect[0].content).spec.parentRefs[0].sectionName == "http" &&
+      yamldecode(local_file.https_redirect[0].content).spec.rules[0].filters[0].requestRedirect == { scheme = "https", statusCode = 301 }
+    )
+    error_message = "The redirect route should sit beside the GKE Gateway and 301 the http listener to HTTPS"
+  }
+  # The GKE Gateway shares the LangSmith namespace with the Secret.
+  assert {
+    condition     = length(null_resource.apply_reference_grant) == 0
+    error_message = "The GKE Gateway needs no ReferenceGrant"
+  }
+}
+
+run "gke_with_google_managed_tls_uses_the_certificate_map" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    ingress_type             = "gke"
+    tls_certificate_source   = "google-managed"
+    tls_certificate_map_name = "ls-prod-langsmith-tls-map"
+  }
+
+  assert {
+    condition     = yamldecode(local_file.gke_gateway[0].content).metadata.annotations["networking.gke.io/certmap"] == "ls-prod-langsmith-tls-map"
+    error_message = "The GKE Gateway should name the certificate map in networking.gke.io/certmap"
+  }
+  # GKE rejects a Gateway with both the certmap annotation and certificateRefs.
+  assert {
+    condition = (
+      [for l in yamldecode(local_file.gke_gateway[0].content).spec.listeners : l.name] == ["http", "https"] &&
+      !contains(keys(yamldecode(local_file.gke_gateway[0].content).spec.listeners[1]), "tls")
+    )
+    error_message = "With a certificate map, the HTTPS listener must carry no tls block"
+  }
+  assert {
+    condition     = length(null_resource.apply_https_redirect) == 1
+    error_message = "google-managed should redirect HTTP to HTTPS"
+  }
+}
+
+run "gke_google_managed_on_a_regional_class_is_rejected" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    ingress_type             = "gke"
+    gke_gateway_class        = "gke-l7-rilb"
+    tls_certificate_source   = "google-managed"
+    tls_certificate_map_name = "ls-prod-langsmith-tls-map"
+  }
+
+  expect_failures = [local_file.gke_gateway]
+}
+
+# ── Envoy Gateway TLS ────────────────────────────────────────────────────────
+
+run "envoy_without_tls_serves_http_only" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    tls_certificate_source = "none"
+  }
+
+  assert {
+    condition = (
+      [for l in yamldecode(local_file.gateway[0].content).spec.listeners : l.name] == ["http"] &&
+      length(null_resource.apply_https_redirect) == 0 &&
+      length(null_resource.apply_reference_grant) == 0
+    )
+    error_message = "With no TLS, Envoy should serve LangSmith on the HTTP listener with no redirect"
+  }
+}
+
+# The ReferenceGrant used to exist only for Let's Encrypt, so an 'existing'
+# Secret in the LangSmith namespace was not readable from envoy-gateway-system.
+run "envoy_with_existing_tls_grants_the_secret_and_redirects" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    tls_certificate_source = "existing"
+    tls_secret_name        = "corp-langsmith-tls"
+  }
+
+  assert {
+    condition = (
+      length(null_resource.apply_reference_grant) == 1 &&
+      yamldecode(local_file.reference_grant[0].content).spec.to[0].name == "corp-langsmith-tls"
+    )
+    error_message = "Envoy with an existing Secret should plan the ReferenceGrant for it"
+  }
+  assert {
+    condition = (
+      [for l in yamldecode(local_file.gateway[0].content).spec.listeners : l.name] == ["http", "https"] &&
+      yamldecode(local_file.https_redirect[0].content).metadata.namespace == "envoy-gateway-system"
+    )
+    error_message = "Envoy with TLS should redirect the HTTP listener, from beside the Gateway"
+  }
+}
+
+run "envoy_with_letsencrypt_has_no_gateway_shim_annotation" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    tls_certificate_source = "letsencrypt"
+  }
+
+  assert {
+    condition     = !contains(keys(yamldecode(local_file.gateway[0].content).metadata), "annotations")
+    error_message = "The Envoy Gateway should not carry cert-manager.io/cluster-issuer: k8s-bootstrap owns the Certificate"
+  }
+  assert {
+    condition     = length(null_resource.apply_reference_grant) == 1 && length(null_resource.apply_https_redirect) == 1
+    error_message = "Let's Encrypt on Envoy should plan the ReferenceGrant and the redirect"
+  }
+}
+
+run "envoy_rejects_google_managed" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    tls_certificate_source = "google-managed"
+  }
+
+  expect_failures = [local_file.gateway]
+}
+
+run "gke_with_your_own_issuer_terminates_from_the_secret" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    ingress_type           = "gke"
+    tls_certificate_source = "cert-manager"
+  }
+
+  assert {
+    condition = (
+      yamldecode(local_file.gke_gateway[0].content).spec.listeners[1].tls.certificateRefs[0].name == "langsmith-tls" &&
+      !contains(keys(yamldecode(local_file.gke_gateway[0].content).metadata), "annotations")
+    )
+    error_message = "cert-manager on the GKE Gateway should terminate from the Secret, with no certificate map"
   }
 }
 

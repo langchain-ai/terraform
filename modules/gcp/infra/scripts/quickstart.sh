@@ -323,30 +323,64 @@ _section "5. TLS / HTTPS"
 TLS_SOURCE="none"
 LE_EMAIL=""
 DOMAIN=""
+INGRESS_TYPE="envoy"
+TLS_EXISTING_SECRET=""
+CM_ISSUER_NAME=""
+CM_ISSUER_KIND=""
 
+# Production choices first. A Google-managed certificate lives on the Google
+# Cloud load balancer, which only the GKE Gateway creates, so it switches
+# ingress_type to gke. Let's Encrypt needs the domain reachable from the
+# internet on port 80, which most production networks do not allow.
 _ask_choice "TLS certificate:" \
-  "Let's Encrypt — auto-provisioned via cert-manager (recommended)" \
-  "Existing certificate — provide your own TLS cert and key" \
-  "None — HTTP only (deploy first, add TLS after DNS is pointed)"
+  "Google-managed certificate — Certificate Manager on the GKE Gateway (recommended for production)" \
+  "Existing certificate — your own cert in a Kubernetes TLS Secret, on Envoy Gateway" \
+  "cert-manager with your own issuer — Vault, Venafi, Google CAS, or a private ACME CA" \
+  "Let's Encrypt — public CA via cert-manager (evaluation only: needs inbound port 80)" \
+  "None — HTTP only"
 
 case "$_CHOICE" in
   1)
-    TLS_SOURCE="letsencrypt"
+    TLS_SOURCE="google-managed"
+    INGRESS_TYPE="gke"
     echo ""
-    _ask "Email for Let's Encrypt registration" ""
-    LE_EMAIL="$_REPLY"
+    printf "  ${DIM}Uses ingress_type = \"gke\" (GKE Gateway with a global external load balancer).${RESET}\n"
+    printf "  ${DIM}After make apply, add the DNS authorization CNAME from${RESET}\n"
+    printf "  ${DIM}'terraform output tls_dns_authorization_record' unless the DNS module manages your zone.${RESET}\n"
     ;;
   2)
     TLS_SOURCE="existing"
     echo ""
-    printf "  ${DIM}Set tls_certificate_crt and tls_certificate_key in terraform.tfvars.${RESET}\n"
-    printf "  ${DIM}You can use file() references or inline PEM strings.${RESET}\n"
+    _ask "Name of the kubernetes.io/tls Secret you will create in the LangSmith namespace" "langsmith-tls"
+    TLS_EXISTING_SECRET="$_REPLY"
+    printf "  ${DIM}Create it before make deploy, for example:${RESET}\n"
+    printf "  ${DIM}  kubectl create secret tls %s -n langsmith --cert=tls.crt --key=tls.key${RESET}\n" "$TLS_EXISTING_SECRET"
     ;;
   3)
+    TLS_SOURCE="cert-manager"
+    echo ""
+    _ask "Issuer or ClusterIssuer name" ""
+    CM_ISSUER_NAME="$_REPLY"
+    _ask_choice "Issuer kind:" "ClusterIssuer" "Issuer (in the LangSmith namespace)"
+    CM_ISSUER_KIND="ClusterIssuer"
+    [[ "$_CHOICE" == "2" ]] && CM_ISSUER_KIND="Issuer"
+    printf "  ${DIM}Terraform installs cert-manager and creates the Certificate; create the issuer yourself.${RESET}\n"
+    ;;
+  4)
+    TLS_SOURCE="letsencrypt"
+    echo ""
+    _ask "Email for Let's Encrypt registration" ""
+    LE_EMAIL="$_REPLY"
+    if [[ "$PROFILE" == "prod" ]]; then
+      echo ""
+      _yellow "NOTE"; printf ": Let's Encrypt is for evaluation. For production, use a Google-managed or existing certificate.\n"
+    fi
+    ;;
+  5)
     TLS_SOURCE="none"
     if [[ "$PROFILE" == "prod" ]]; then
       echo ""
-      _yellow "NOTE"; printf ": Consider using TLS for production (staged-deploy walkthrough in tfvars.example).\n"
+      _yellow "NOTE"; printf ": Use TLS for production. A Google-managed certificate needs no extra pass: it is issued before DNS points at the Gateway.\n"
     fi
     ;;
 esac
@@ -527,8 +561,11 @@ storage_ttl_long_days  = ${TTL_LONG}
 tls_certificate_source = "${TLS_SOURCE}"
 TFVARS
 
-[[ -n "$LE_EMAIL" ]] && echo "letsencrypt_email      = \"${LE_EMAIL}\"" >> "$OUTPUT"
-[[ -n "$DOMAIN" ]]   && echo "langsmith_domain       = \"${DOMAIN}\""   >> "$OUTPUT"
+[[ -n "$LE_EMAIL" ]]            && echo "letsencrypt_email        = \"${LE_EMAIL}\""            >> "$OUTPUT"
+[[ -n "$TLS_EXISTING_SECRET" ]] && echo "tls_existing_secret_name = \"${TLS_EXISTING_SECRET}\"" >> "$OUTPUT"
+[[ -n "$CM_ISSUER_NAME" ]]      && echo "cert_manager_issuer_name = \"${CM_ISSUER_NAME}\""      >> "$OUTPUT"
+[[ -n "$CM_ISSUER_KIND" ]]      && echo "cert_manager_issuer_kind = \"${CM_ISSUER_KIND}\""      >> "$OUTPUT"
+[[ -n "$DOMAIN" ]]              && echo "langsmith_domain         = \"${DOMAIN}\""              >> "$OUTPUT"
 
 cat >> "$OUTPUT" << TFVARS
 
@@ -536,7 +573,7 @@ cat >> "$OUTPUT" << TFVARS
 # Ingress
 #------------------------------------------------------------------------------
 install_ingress = ${INSTALL_INGRESS}
-ingress_type    = "envoy"
+ingress_type    = "${INGRESS_TYPE}"
 
 #------------------------------------------------------------------------------
 # GCP Modules
@@ -594,6 +631,7 @@ printf "  %-22s %s\n" "PostgreSQL:" "$PG_SOURCE"
 printf "  %-22s %s\n" "Redis:"      "$REDIS_SOURCE"
 printf "  %-22s %s\n" "ClickHouse:" "$CH_SOURCE"
 printf "  %-22s %s\n" "TLS:"        "$TLS_SOURCE"
+printf "  %-22s %s\n" "Ingress:"    "$INGRESS_TYPE"
 [[ -n "$DOMAIN" ]] && printf "  %-22s %s\n" "Domain:" "$DOMAIN"
 printf "  %-22s %s\n" "Features:"   "deployments=${ENABLE_DEPLOYMENTS}  agent_builder=${ENABLE_AGENT_BUILDER}  insights=${ENABLE_INSIGHTS}"
 printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB"

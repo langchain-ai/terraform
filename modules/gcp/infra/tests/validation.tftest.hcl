@@ -50,6 +50,7 @@ run "enums_reject_an_unlisted_value" {
     ingress_type                              = "nginx"
     clickhouse_source                         = "clickhouse-cloud"
     tls_certificate_source                    = "acm"
+    cert_manager_issuer_kind                  = "Certificate"
     sizing_profile                            = "small"
     smithdb_metastore_source                  = "import"
     smithdb_metastore_ssl_mode                = "REQUIRED"
@@ -67,6 +68,7 @@ run "enums_reject_an_unlisted_value" {
     var.ingress_type,
     var.clickhouse_source,
     var.tls_certificate_source,
+    var.cert_manager_issuer_kind,
     var.sizing_profile,
     var.smithdb_metastore_source,
     var.smithdb_metastore_ssl_mode,
@@ -90,6 +92,8 @@ run "names_and_versions_reject_a_malformed_value" {
     smithdb_auth_proxy_image           = "gcr.io/langsmith/auth-proxy"
     labels                             = { "Owner" = "platform" }
     sandbox_default_container_requests = { cpu = "100m" }
+    cert_manager_version               = "1.21.2"
+    tls_google_managed_issuance_config = "corp-ca"
   }
 
   expect_failures = [
@@ -104,6 +108,8 @@ run "names_and_versions_reject_a_malformed_value" {
     var.smithdb_auth_proxy_image,
     var.labels,
     var.sandbox_default_container_requests,
+    var.cert_manager_version,
+    var.tls_google_managed_issuance_config,
   ]
 }
 

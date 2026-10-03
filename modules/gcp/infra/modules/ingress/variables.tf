@@ -52,13 +52,30 @@ variable "gateway_name" {
 }
 
 variable "tls_certificate_source" {
-  description = "TLS certificate source: 'none', 'letsencrypt', or 'existing'"
+  description = "TLS certificate source: 'none', 'google-managed', 'existing', 'cert-manager', or 'letsencrypt'"
   type        = string
   default     = "none"
+
+  validation {
+    condition     = contains(["none", "google-managed", "existing", "cert-manager", "letsencrypt"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager, letsencrypt."
+  }
 }
 
 variable "tls_secret_name" {
-  description = "Name of the TLS secret for Gateway HTTPS listener"
+  description = "Name of the TLS Secret, in the LangSmith namespace, for the Gateway HTTPS listener. Not used with 'none' or 'google-managed'."
   type        = string
   default     = "langsmith-tls"
+}
+
+variable "tls_certificate_map_name" {
+  description = "Certificate Manager certificate map for the GKE Gateway, with tls_certificate_source = 'google-managed'."
+  type        = string
+  default     = ""
+}
+
+variable "gateway_api_crds_url" {
+  description = "Gateway API CRD bundle that Envoy Gateway needs. k8s-bootstrap applies the same file ahead of cert-manager when Let's Encrypt is on, so the root passes one URL to both."
+  type        = string
+  default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
 }

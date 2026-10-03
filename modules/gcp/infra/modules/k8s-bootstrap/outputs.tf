@@ -45,19 +45,24 @@ output "cert_manager_namespace" {
   value       = var.install_cert_manager ? "cert-manager" : null
 }
 
+output "cert_manager_version" {
+  description = "cert-manager chart version, when cert-manager is installed"
+  value       = var.install_cert_manager ? var.cert_manager_version : null
+}
+
 output "letsencrypt_issuer_name" {
   description = "Name of the Let's Encrypt ClusterIssuer"
-  value       = var.install_cert_manager && var.letsencrypt_email != "" ? "letsencrypt-prod" : null
+  value       = local.letsencrypt_enabled ? "letsencrypt-prod" : null
 }
 
 output "tls_certificate_source" {
-  description = "TLS certificate source: none, letsencrypt, or existing"
+  description = "TLS certificate source: none, google-managed, existing, cert-manager, or letsencrypt"
   value       = var.tls_certificate_source
 }
 
 output "tls_secret_name" {
-  description = "Name of the TLS secret in Kubernetes"
-  value       = var.tls_certificate_source == "existing" ? var.tls_secret_name : (var.tls_certificate_source == "letsencrypt" ? var.tls_secret_name : null)
+  description = "Name of the TLS Secret the Gateway reads (null when no Secret is used)"
+  value       = var.tls_secret_name != "" && contains(["existing", "cert-manager", "letsencrypt"], var.tls_certificate_source) ? var.tls_secret_name : null
 }
 
 output "tls_configured" {
@@ -78,9 +83,12 @@ output "clickhouse_secret_name" {
   value       = var.clickhouse_source != "in-cluster" && var.clickhouse_host != "" ? "langsmith-clickhouse-credentials" : null
 }
 
+# Whether a CA certificate is set is not secret, and the output is only a fixed
+# Secret name. Without nonsensitive() the output inherits the variable's
+# sensitivity, which stops this module from being planned on its own in tests.
 output "clickhouse_ca_secret_name" {
   description = "ClickHouse CA certificate secret name (null if not configured)"
-  value       = var.clickhouse_source != "in-cluster" && var.clickhouse_ca_cert != "" ? "langsmith-clickhouse-ca" : null
+  value       = var.clickhouse_source != "in-cluster" && nonsensitive(var.clickhouse_ca_cert != "") ? "langsmith-clickhouse-ca" : null
 }
 
 output "uses_external_clickhouse" {

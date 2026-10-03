@@ -138,8 +138,9 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 
 ### cert-manager
 - **What**: Automates TLS certificate issuance and renewal
-- **Deployed by**: Terraform `k8s-bootstrap` module when `tls_certificate_source = "letsencrypt"` or `install_cert_manager = true`
-- **ClusterIssuers**: `letsencrypt-staging`, `letsencrypt-prod` (only active when `tls_certificate_source = "letsencrypt"`)
+- **Deployed by**: Terraform `k8s-bootstrap` module when `tls_certificate_source` is `"letsencrypt"` or `"cert-manager"`, or `install_cert_manager = true`. Not used by `"google-managed"`.
+- **Version**: `cert_manager_version`, default `v1.21.2`, from `oci://quay.io/jetstack/charts/cert-manager`. Upgrade an existing install with `make cert-manager-upgrade`; see [TLS.md](TLS.md#cert-manager-version).
+- **ClusterIssuers**: `letsencrypt-prod` (only when `tls_certificate_source = "letsencrypt"`). With `"cert-manager"`, the issuer is yours (`cert_manager_issuer_name`).
 
 ### External Secrets Operator (ESO)
 - **What**: Can sync Secret Manager secrets into Kubernetes secrets

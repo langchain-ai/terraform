@@ -444,38 +444,105 @@ resource "helm_release" "keda" {
 }
 
 #------------------------------------------------------------------------------
-# cert-manager - Automatic TLS Certificate Management
-# Provisions Let's Encrypt certificates automatically
-# Reference: https://cert-manager.io/docs/
+# cert-manager - TLS certificates from Let's Encrypt or your own issuer
+# Installed for tls_certificate_source = "letsencrypt" or "cert-manager", or
+# with install_cert_manager. Reference: https://cert-manager.io/docs/
 #------------------------------------------------------------------------------
+locals {
+  cert_manager_minor = tonumber(regex("^v1\\.([0-9]+)\\.", var.cert_manager_version)[0])
+
+  letsencrypt_enabled = var.install_cert_manager && var.tls_certificate_source == "letsencrypt" && var.letsencrypt_email != ""
+
+  # One Certificate for both cert-manager sources. Only the issuer differs.
+  certificate_enabled = (
+    var.install_cert_manager &&
+    contains(["letsencrypt", "cert-manager"], var.tls_certificate_source) &&
+    var.langsmith_domain != "" && var.tls_secret_name != ""
+  )
+  certificate_issuer_ref = var.tls_certificate_source == "letsencrypt" ? {
+    name = "letsencrypt-prod"
+    kind = "ClusterIssuer"
+    } : {
+    name = var.cert_manager_issuer_name
+    kind = var.cert_manager_issuer_kind
+  }
+}
+
+# cert-manager with Gateway API support on exits at startup when the Gateway API
+# CRDs are missing, and the Envoy Gateway path installs them only later, in the
+# ingress module (which depends on this one). Apply the same bundle here first.
+# kubectl apply is idempotent, so the ingress module's apply is then a no-op.
+resource "null_resource" "gateway_api_crds_for_cert_manager" {
+  count = var.install_cert_manager && var.cert_manager_enable_gateway_api ? 1 : 0
+
+  triggers = {
+    crds_url = var.gateway_api_crds_url
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      ${local.kubectl_creds}
+      kubectl apply -f ${var.gateway_api_crds_url} || exit 1
+    EOT
+  }
+}
+
+# cert-manager supports upgrades one minor version at a time. Helm itself would
+# jump straight from an old release to cert_manager_version, so stop the apply
+# before it when the installed release is more than one minor behind, and point
+# at the stepwise upgrade. A cluster with no cert-manager passes.
+resource "null_resource" "cert_manager_upgrade_guard" {
+  count = var.install_cert_manager ? 1 : 0
+
+  triggers = {
+    target_version = var.cert_manager_version
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      ${local.kubectl_creds}
+      current=$(kubectl get deployment cert-manager -n cert-manager \
+        -o jsonpath='{.metadata.labels.app\.kubernetes\.io/version}' 2>/dev/null || true)
+      if [ -z "$current" ]; then
+        echo "cert-manager is not installed yet. Installing ${var.cert_manager_version}."
+        exit 0
+      fi
+      current_minor=$(echo "$current" | sed -E 's/^v?1\.([0-9]+)\..*$/\1/')
+      case "$current_minor" in
+        ''|*[!0-9]*)
+          echo "ERROR: cannot read the installed cert-manager version ('$current')." >&2
+          exit 1 ;;
+      esac
+      if [ "$current_minor" -lt ${local.cert_manager_minor - 1} ]; then
+        echo "ERROR: cert-manager $current is installed. cert-manager supports upgrades one" >&2
+        echo "       minor version at a time, and this apply targets ${var.cert_manager_version}." >&2
+        echo "       Run 'make cert-manager-upgrade' from modules/gcp first, then apply again." >&2
+        exit 1
+      fi
+      echo "cert-manager $current -> ${var.cert_manager_version}: within one minor version."
+    EOT
+  }
+}
+
 resource "helm_release" "cert_manager" {
   count = var.install_cert_manager ? 1 : 0
 
   name             = "cert-manager"
-  repository       = "https://charts.jetstack.io"
+  repository       = "oci://quay.io/jetstack/charts"
   chart            = "cert-manager"
-  version          = "v1.14.4"
+  version          = var.cert_manager_version
   namespace        = "cert-manager"
   create_namespace = true
 
-  set {
-    name  = "installCRDs"
-    value = "true"
-  }
-
   values = [
-    yamlencode({
-      resources = {
-        requests = {
-          cpu    = "50m"
-          memory = "64Mi"
+    yamlencode(merge(
+      {
+        # crds.keep leaves the CRDs, and with them every Certificate and Issuer,
+        # in place if the release is ever uninstalled.
+        crds = {
+          enabled = true
+          keep    = true
         }
-        limits = {
-          cpu    = "200m"
-          memory = "256Mi"
-        }
-      }
-      webhook = {
         resources = {
           requests = {
             cpu    = "50m"
@@ -486,31 +553,54 @@ resource "helm_release" "cert_manager" {
             memory = "256Mi"
           }
         }
-      }
-      cainjector = {
-        resources = {
-          requests = {
-            cpu    = "50m"
-            memory = "64Mi"
-          }
-          limits = {
-            cpu    = "200m"
-            memory = "256Mi"
+        webhook = {
+          resources = {
+            requests = {
+              cpu    = "50m"
+              memory = "64Mi"
+            }
+            limits = {
+              cpu    = "200m"
+              memory = "256Mi"
+            }
           }
         }
-      }
-    })
+        cainjector = {
+          resources = {
+            requests = {
+              cpu    = "50m"
+              memory = "64Mi"
+            }
+            limits = {
+              cpu    = "200m"
+              memory = "256Mi"
+            }
+          }
+        }
+      },
+      # The Let's Encrypt HTTP-01 solver creates an HTTPRoute on the Gateway,
+      # which cert-manager only does with Gateway API support on.
+      var.cert_manager_enable_gateway_api ? {
+        config = {
+          apiVersion       = "controller.config.cert-manager.io/v1alpha1"
+          kind             = "ControllerConfiguration"
+          enableGatewayAPI = true
+        }
+      } : {},
+    ))
   ]
 
   wait    = true
   timeout = 600
+
+  depends_on = [null_resource.cert_manager_upgrade_guard, null_resource.gateway_api_crds_for_cert_manager]
 }
 
 #------------------------------------------------------------------------------
-# Let's Encrypt ClusterIssuer
+# Let's Encrypt ClusterIssuer (tls_certificate_source = "letsencrypt")
 #------------------------------------------------------------------------------
 locals {
-  letsencrypt_issuer_yaml = var.install_cert_manager && var.letsencrypt_email != "" ? yamlencode({
+  letsencrypt_issuer_yaml = local.letsencrypt_enabled ? yamlencode({
     apiVersion = "cert-manager.io/v1"
     kind       = "ClusterIssuer"
     metadata = {
@@ -529,8 +619,9 @@ locals {
               gatewayHTTPRoute = {
                 parentRefs = [
                   {
-                    name      = var.gateway_name
-                    namespace = "envoy-gateway-system"
+                    name        = var.gateway_name
+                    namespace   = "envoy-gateway-system"
+                    sectionName = "http"
                   }
                 ]
               }
@@ -543,21 +634,16 @@ locals {
 }
 
 resource "local_file" "letsencrypt_issuer" {
-  count = var.install_cert_manager && var.letsencrypt_email != "" ? 1 : 0
+  count = local.letsencrypt_enabled ? 1 : 0
 
   filename = "${path.module}/letsencrypt-issuer.yaml"
   content  = local.letsencrypt_issuer_yaml
 }
 
-resource "time_sleep" "wait_for_cert_manager" {
-  count = var.install_cert_manager && var.letsencrypt_email != "" ? 1 : 0
-
-  depends_on      = [helm_release.cert_manager]
-  create_duration = "30s"
-}
-
+# A failed apply fails terraform apply. It used to continue silently, which left
+# an install with no issuer and no certificate and nothing in the apply output.
 resource "null_resource" "apply_letsencrypt_issuer" {
-  count = var.install_cert_manager && var.letsencrypt_email != "" ? 1 : 0
+  count = local.letsencrypt_enabled ? 1 : 0
 
   triggers = {
     issuer_content     = local_file.letsencrypt_issuer[0].content
@@ -565,41 +651,34 @@ resource "null_resource" "apply_letsencrypt_issuer" {
   }
 
   provisioner "local-exec" {
-    command    = <<-EOT
+    command = <<-EOT
       ${local.kubectl_creds}
-      # Wait for cert-manager CRDs to be available
-      for i in {1..30}; do
-        if kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
-          break
-        fi
-        echo "Waiting for cert-manager CRDs... ($i/30)"
-        sleep 2
-      done
-      
-      # Apply the ClusterIssuer with retry
-      for i in {1..5}; do
+      # helm waits for the deployments, but the webhook can take a few more
+      # seconds to serve, so retry the apply rather than sleep a fixed time.
+      for i in $(seq 1 20); do
         if kubectl apply -f ${local_file.letsencrypt_issuer[0].filename}; then
-          echo "ClusterIssuer applied successfully"
+          echo "ClusterIssuer applied"
           exit 0
         fi
-        echo "Retrying ClusterIssuer apply... ($i/5)"
-        sleep 3
+        echo "Retrying ClusterIssuer apply... ($i/20)"
+        sleep 6
       done
-      
-      echo "ERROR: Failed to apply ClusterIssuer after 5 attempts"
+      echo "ERROR: could not apply the Let's Encrypt ClusterIssuer." >&2
       exit 1
     EOT
-    on_failure = continue
   }
 
-  depends_on = [time_sleep.wait_for_cert_manager, local_file.letsencrypt_issuer, helm_release.cert_manager]
+  depends_on = [local_file.letsencrypt_issuer, helm_release.cert_manager]
 }
 
 #------------------------------------------------------------------------------
-# Let's Encrypt Certificate
+# Certificate (tls_certificate_source = "letsencrypt" or "cert-manager")
+# cert-manager writes the key pair to tls_secret_name in the LangSmith namespace,
+# where the Gateway HTTPS listener reads it. With "cert-manager", the issuer is
+# yours: Terraform names it and does not create it.
 #------------------------------------------------------------------------------
 locals {
-  certificate_yaml = var.tls_certificate_source == "letsencrypt" && var.langsmith_domain != "" && var.tls_secret_name != "" ? yamlencode({
+  certificate_yaml = local.certificate_enabled ? yamlencode({
     apiVersion = "cert-manager.io/v1"
     kind       = "Certificate"
     metadata = {
@@ -608,10 +687,7 @@ locals {
     }
     spec = {
       secretName = var.tls_secret_name
-      issuerRef = {
-        name = "letsencrypt-prod"
-        kind = "ClusterIssuer"
-      }
+      issuerRef  = local.certificate_issuer_ref
       dnsNames = [
         var.langsmith_domain
       ]
@@ -620,54 +696,36 @@ locals {
 }
 
 resource "local_file" "certificate" {
-  count = var.tls_certificate_source == "letsencrypt" && var.langsmith_domain != "" && var.tls_secret_name != "" ? 1 : 0
+  count = local.certificate_enabled ? 1 : 0
 
   filename = "${path.module}/certificate.yaml"
   content  = local.certificate_yaml
 }
 
-resource "time_sleep" "wait_for_cluster_issuer" {
-  count = var.tls_certificate_source == "letsencrypt" && var.langsmith_domain != "" && var.tls_secret_name != "" ? 1 : 0
-
-  depends_on      = [null_resource.apply_letsencrypt_issuer]
-  create_duration = "10s"
-}
-
 resource "null_resource" "apply_certificate" {
-  count = var.tls_certificate_source == "letsencrypt" && var.langsmith_domain != "" && var.tls_secret_name != "" ? 1 : 0
+  count = local.certificate_enabled ? 1 : 0
 
   triggers = {
-    certificate_content  = local_file.certificate[0].content
-    cluster_issuer_ready = null_resource.apply_letsencrypt_issuer[0].id
+    certificate_content = local_file.certificate[0].content
+    cert_manager_ready  = helm_release.cert_manager[0].status
+    issuer_ready        = local.letsencrypt_enabled ? null_resource.apply_letsencrypt_issuer[0].id : ""
   }
 
   provisioner "local-exec" {
-    command    = <<-EOT
+    command = <<-EOT
       ${local.kubectl_creds}
-      # Wait for Certificate CRD to be available
-      for i in {1..30}; do
-        if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then
-          break
-        fi
-        echo "Waiting for Certificate CRD... ($i/30)"
-        sleep 2
-      done
-      
-      # Apply the Certificate with retry
-      for i in {1..5}; do
+      for i in $(seq 1 20); do
         if kubectl apply -f ${local_file.certificate[0].filename}; then
-          echo "Certificate applied successfully"
+          echo "Certificate applied"
           exit 0
         fi
-        echo "Retrying Certificate apply... ($i/5)"
-        sleep 3
+        echo "Retrying Certificate apply... ($i/20)"
+        sleep 6
       done
-      
-      echo "ERROR: Failed to apply Certificate after 5 attempts"
+      echo "ERROR: could not apply the Certificate ${var.tls_secret_name}." >&2
       exit 1
     EOT
-    on_failure = continue
   }
 
-  depends_on = [time_sleep.wait_for_cluster_issuer, local_file.certificate, null_resource.apply_letsencrypt_issuer]
+  depends_on = [local_file.certificate, helm_release.cert_manager, null_resource.apply_letsencrypt_issuer]
 }

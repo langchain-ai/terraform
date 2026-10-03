@@ -4,9 +4,6 @@
 # Gateway API CRDs
 #------------------------------------------------------------------------------
 locals {
-  # Use standard-install.yaml (v1.4.1) for production stability
-  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
-
   # Every kubectl provisioner in this module starts with this. Without it kubectl
   # uses whatever context the operator's kubeconfig happens to have selected,
   # which may be an unrelated cluster in another cloud, or nothing at all on a
@@ -40,7 +37,7 @@ resource "null_resource" "install_gateway_api_crds" {
       done
       
       # Install Gateway API CRDs
-      kubectl apply -f ${local.gateway_api_crds_url}
+      kubectl apply -f ${var.gateway_api_crds_url}
     EOT
   }
 
@@ -133,32 +130,44 @@ locals {
   # when there is a domain to put in it.
   gateway_listener_hostname = var.langsmith_domain != "" ? { hostname = var.langsmith_domain } : {}
 
-  # Port 80 carries the ACME challenge for Let's Encrypt, and is the only
-  # entrypoint when no certificate source is configured.
-  gateway_http_listener_enabled = var.tls_certificate_source != "existing"
+  tls_enabled        = var.tls_certificate_source != "none"
+  tls_google_managed = var.tls_certificate_source == "google-managed"
 
-  # The HTTPS listener references var.tls_secret_name, which nothing creates when
-  # tls_certificate_source = "none". Declaring it anyway leaves a listener that
-  # can never be programmed, so omit it instead.
-  gateway_https_listener_enabled = var.tls_certificate_source != "none"
+  # Every TLS source except google-managed terminates in the Gateway from the
+  # Secret named by tls_secret_name, in the LangSmith namespace. A
+  # Google-managed certificate stays on the load balancer, which reads it from
+  # the certificate map in the Gateway annotation.
+  tls_from_secret = local.tls_enabled && !local.tls_google_managed
 
-  # Listeners shared by the Envoy and GKE Gateways. Both attach routes from any
-  # namespace and, for HTTPS, terminate with the secret named by tls_secret_name.
-  gateway_listeners = concat(
-    local.gateway_http_listener_enabled ? [merge({
-      name     = "http"
-      protocol = "HTTP"
-      port     = 80
+  # The HTTP listener is always there. With no TLS it serves LangSmith. With TLS
+  # it only redirects to HTTPS (https_redirect below), and for Let's Encrypt it
+  # also carries the HTTP-01 challenge, whose exact-path route takes precedence
+  # over the redirect's prefix match.
+  gateway_http_listener = merge({
+    name     = "http"
+    protocol = "HTTP"
+    port     = 80
+    allowedRoutes = {
+      namespaces = {
+        from = "All"
+      }
+    }
+  }, local.gateway_listener_hostname)
+
+  # With no TLS there is nothing to terminate with, so the HTTPS listener is
+  # omitted rather than declared unprogrammable.
+  gateway_https_listener = merge(
+    {
+      name     = "https"
+      protocol = "HTTPS"
+      port     = 443
       allowedRoutes = {
         namespaces = {
           from = "All"
         }
       }
-    }, local.gateway_listener_hostname)] : [],
-    local.gateway_https_listener_enabled ? [merge({
-      name     = "https"
-      protocol = "HTTPS"
-      port     = 443
+    },
+    local.tls_from_secret ? {
       tls = {
         mode = "Terminate"
         certificateRefs = [{
@@ -167,23 +176,26 @@ locals {
           namespace = var.langsmith_namespace
         }]
       }
-      allowedRoutes = {
-        namespaces = {
-          from = "All"
-        }
-      }
-    }, local.gateway_listener_hostname)] : []
+    } : {},
+    local.gateway_listener_hostname,
+  )
+
+  # Listeners shared by the Envoy and GKE Gateways. Both attach routes from any
+  # namespace.
+  gateway_listeners = concat(
+    [local.gateway_http_listener],
+    local.tls_enabled ? [local.gateway_https_listener] : [],
   )
 
   gateway_yaml = var.ingress_type == "envoy" ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "Gateway"
+    # No cert-manager.io/cluster-issuer annotation: k8s-bootstrap creates the
+    # Certificate explicitly, in the LangSmith namespace. The annotation would
+    # have cert-manager's gateway-shim manage a second one for the same Secret.
     metadata = {
       name      = var.gateway_name
       namespace = "envoy-gateway-system"
-      annotations = var.tls_certificate_source == "letsencrypt" ? {
-        "cert-manager.io/cluster-issuer" = "letsencrypt-prod"
-      } : {}
     }
     spec = {
       gatewayClassName = "envoy-gateway-class"
@@ -196,6 +208,13 @@ resource "local_file" "gateway" {
   count    = var.ingress_type == "envoy" ? 1 : 0
   filename = "${path.module}/gateway.yaml"
   content  = local.gateway_yaml
+
+  lifecycle {
+    precondition {
+      condition     = !local.tls_google_managed
+      error_message = "tls_certificate_source = \"google-managed\" requires ingress_type = \"gke\". Envoy Gateway terminates TLS in the cluster from a Secret: use \"existing\" or \"cert-manager\"."
+    }
+  }
 }
 
 resource "null_resource" "apply_gateway" {
@@ -297,8 +316,13 @@ resource "null_resource" "delete_gateway_on_destroy" {
 #------------------------------------------------------------------------------
 # ReferenceGrant for cross-namespace secret access
 #------------------------------------------------------------------------------
+# The Envoy Gateway sits in envoy-gateway-system and its certificate Secret in the
+# LangSmith namespace, so every Secret-based source needs this grant, not only
+# Let's Encrypt. Without it the HTTPS listener reports RefNotPermitted.
 locals {
-  reference_grant_yaml = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? yamlencode({
+  reference_grant_enabled = var.ingress_type == "envoy" && local.tls_from_secret
+
+  reference_grant_yaml = local.reference_grant_enabled ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1beta1"
     kind       = "ReferenceGrant"
     metadata = {
@@ -321,13 +345,13 @@ locals {
 }
 
 resource "local_file" "reference_grant" {
-  count    = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? 1 : 0
+  count    = local.reference_grant_enabled ? 1 : 0
   filename = "${path.module}/reference-grant.yaml"
   content  = local.reference_grant_yaml
 }
 
 resource "null_resource" "apply_reference_grant" {
-  count = var.ingress_type == "envoy" && var.tls_certificate_source == "letsencrypt" ? 1 : 0
+  count = local.reference_grant_enabled ? 1 : 0
 
   triggers = {
     reference_grant_content = local_file.reference_grant[0].content
@@ -409,13 +433,22 @@ locals {
   gke_gateway_global_ip    = local.gke_gateway_enabled && startswith(var.gke_gateway_class, "gke-l7-global")
   gke_gateway_address_name = "${var.gateway_name}-ip"
 
+  # A Google-managed certificate is attached through its certificate map. GKE
+  # rejects a Gateway that sets this annotation and listener certificateRefs
+  # together, so the HTTPS listener carries no tls block in that case.
+  gke_gateway_annotations = local.tls_google_managed ? {
+    "networking.gke.io/certmap" = var.tls_certificate_map_name
+  } : {}
+
   gke_gateway_yaml = local.gke_gateway_enabled ? yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
     kind       = "Gateway"
-    metadata = {
+    metadata = merge({
       name      = var.gateway_name
       namespace = var.langsmith_namespace
-    }
+      }, length(local.gke_gateway_annotations) > 0 ? {
+      annotations = local.gke_gateway_annotations
+    } : {})
     spec = merge({
       gatewayClassName = var.gke_gateway_class
       listeners        = local.gateway_listeners
@@ -443,7 +476,13 @@ resource "local_file" "gke_gateway" {
   lifecycle {
     precondition {
       condition     = var.tls_certificate_source != "letsencrypt"
-      error_message = "ingress_type = \"gke\" supports tls_certificate_source = \"none\" or \"existing\". The cert-manager HTTP01 solver is wired to Envoy Gateway only."
+      error_message = "ingress_type = \"gke\" supports tls_certificate_source = \"none\", \"google-managed\", \"existing\", or \"cert-manager\". The Let's Encrypt HTTP-01 solver is wired to Envoy Gateway only."
+    }
+    # Regional classes take regional Certificate Manager certificates, which
+    # this module does not create yet.
+    precondition {
+      condition     = !local.tls_google_managed || (local.gke_gateway_global_ip && var.tls_certificate_map_name != "")
+      error_message = "tls_certificate_source = \"google-managed\" requires a global gke_gateway_class (gke-l7-global-*) and a certificate map."
     }
   }
 }
@@ -513,6 +552,76 @@ resource "null_resource" "delete_gke_gateway_on_destroy" {
   }
 
   depends_on = [null_resource.apply_gke_gateway, google_compute_global_address.gke_gateway]
+}
+
+#------------------------------------------------------------------------------
+# HTTP to HTTPS redirect (any TLS source, either ingress_type)
+#------------------------------------------------------------------------------
+# With TLS on, the LangSmith HTTPRoute attaches only to the https listener
+# (init-values.sh sets gateway.sectionName), and this route answers every
+# request on the http listener with a 301 to the same URL over HTTPS. It lives
+# beside the Gateway, so it needs no ReferenceGrant.
+locals {
+  https_redirect_enabled = local.tls_enabled && contains(["envoy", "gke"], var.ingress_type)
+  gateway_namespace      = var.ingress_type == "gke" ? var.langsmith_namespace : "envoy-gateway-system"
+
+  https_redirect_yaml = local.https_redirect_enabled ? yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "${var.gateway_name}-https-redirect"
+      namespace = local.gateway_namespace
+    }
+    spec = merge({
+      parentRefs = [{
+        name        = var.gateway_name
+        namespace   = local.gateway_namespace
+        sectionName = "http"
+      }]
+      rules = [{
+        filters = [{
+          type = "RequestRedirect"
+          requestRedirect = {
+            scheme     = "https"
+            statusCode = 301
+          }
+        }]
+      }]
+      }, var.langsmith_domain != "" ? {
+      hostnames = [var.langsmith_domain]
+    } : {})
+  }) : ""
+}
+
+resource "local_file" "https_redirect" {
+  count    = local.https_redirect_enabled ? 1 : 0
+  filename = "${path.module}/https-redirect.yaml"
+  content  = local.https_redirect_yaml
+}
+
+resource "null_resource" "apply_https_redirect" {
+  count = local.https_redirect_enabled ? 1 : 0
+
+  triggers = {
+    route_content = local_file.https_redirect[0].content
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      ${local.kubectl_creds}
+      for i in {1..60}; do
+        if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+          break
+        fi
+        echo "Waiting for HTTPRoute CRD... ($i/60)"
+        sleep 5
+      done
+
+      kubectl apply -f ${local_file.https_redirect[0].filename}
+    EOT
+  }
+
+  depends_on = [null_resource.apply_gateway, null_resource.apply_gke_gateway, local_file.https_redirect]
 }
 
 #------------------------------------------------------------------------------

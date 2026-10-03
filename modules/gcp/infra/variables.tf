@@ -592,7 +592,7 @@ variable "enable_secret_manager_module" {
 }
 
 variable "enable_dns_module" {
-  description = "Enable Cloud DNS + managed certificate module wiring."
+  description = "Enable the Cloud DNS module. With tls_certificate_source = 'google-managed', Terraform also writes the certificate's DNS authorization record into this zone."
   type        = bool
   default     = false
 }
@@ -610,16 +610,16 @@ variable "dns_existing_zone_name" {
 }
 
 variable "dns_create_certificate" {
-  description = "Create a Google-managed SSL certificate when enable_dns_module is true."
+  description = "Deprecated, no effect. The DNS module no longer creates a classic Google-managed SSL certificate; use tls_certificate_source = 'google-managed' with ingress_type = 'gke'. Kept so existing tfvars files still plan."
   type        = bool
-  default     = true
+  default     = null
 }
 
 #------------------------------------------------------------------------------
 # Ingress Configuration
 #------------------------------------------------------------------------------
 variable "install_ingress" {
-  description = "Whether to install ingress through Terraform. For the Envoy Gateway path, tls_certificate_source = 'none' (the default) creates an HTTP-only listener, 'letsencrypt' creates HTTP and HTTPS listeners, and 'existing' creates an HTTPS-only listener."
+  description = "Whether to install ingress through Terraform. With tls_certificate_source = 'none' (the default) the Gateway has one HTTP listener. With any other source it has an HTTPS listener, and its HTTP listener redirects to HTTPS."
   type        = bool
   default     = true
 }
@@ -720,20 +720,72 @@ variable "enable_langsmith_deployment" {
 # TLS / Certificate Configuration
 #------------------------------------------------------------------------------
 variable "tls_certificate_source" {
-  description = "Source of TLS certificates: 'none' (no TLS), 'letsencrypt' (auto via cert-manager), 'existing' (provide your own certs)"
+  description = <<-EOT
+    Source of the Gateway TLS certificate:
+      'none'           - HTTP only.
+      'google-managed' - Certificate Manager certificate on the GKE Gateway load balancer. Requires ingress_type = 'gke' with a global class. Recommended for production on GKE Gateway.
+      'existing'       - your own certificate in a Kubernetes TLS Secret. Recommended for production on Envoy Gateway; see tls_existing_secret_name.
+      'cert-manager'   - cert-manager issues the certificate from your own Issuer or ClusterIssuer (cert_manager_issuer_name).
+      'letsencrypt'    - cert-manager with a public Let's Encrypt HTTP-01 issuer. Envoy Gateway only. For evaluation: it needs the domain reachable from the internet on port 80.
+  EOT
   type        = string
   default     = "none"
 
   validation {
-    condition     = contains(["none", "letsencrypt", "existing"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be one of: none, letsencrypt, existing"
+    condition     = contains(["none", "google-managed", "existing", "cert-manager", "letsencrypt"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager, letsencrypt."
+  }
+}
+
+variable "tls_google_managed_include_wildcard" {
+  description = "With tls_certificate_source = 'google-managed', also cover *.<langsmith_domain>."
+  type        = bool
+  default     = false
+}
+
+variable "tls_google_managed_issuance_config" {
+  description = "With tls_certificate_source = 'google-managed', the Certificate Manager issuance config that issues the certificate from your Certificate Authority Service pool (projects/<p>/locations/global/certificateIssuanceConfigs/<name>). Empty uses a publicly trusted certificate with a DNS authorization."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.tls_google_managed_issuance_config == "" || can(regex("^projects/[^/]+/locations/global/certificateIssuanceConfigs/[^/]+$", var.tls_google_managed_issuance_config))
+    error_message = "tls_google_managed_issuance_config must be empty or projects/<project>/locations/global/certificateIssuanceConfigs/<name>."
   }
 }
 
 variable "install_cert_manager" {
-  description = "Install cert-manager for automatic TLS certificates with Let's Encrypt"
+  description = "Install cert-manager even when tls_certificate_source does not need it. 'letsencrypt' and 'cert-manager' install it regardless."
   type        = bool
   default     = false
+}
+
+variable "cert_manager_version" {
+  description = "cert-manager Helm chart version. Upgrade one minor version at a time: make cert-manager-upgrade steps an existing install up to this version."
+  type        = string
+  default     = "v1.21.2"
+
+  validation {
+    condition     = can(regex("^v1\\.[0-9]+\\.[0-9]+$", var.cert_manager_version))
+    error_message = "cert_manager_version must look like v1.21.2."
+  }
+}
+
+variable "cert_manager_issuer_name" {
+  description = "With tls_certificate_source = 'cert-manager', the name of your Issuer or ClusterIssuer (for example Vault, Venafi, Google CAS, or a private ACME server). Terraform does not create it."
+  type        = string
+  default     = ""
+}
+
+variable "cert_manager_issuer_kind" {
+  description = "Kind of cert_manager_issuer_name: 'ClusterIssuer', or 'Issuer' in the LangSmith namespace."
+  type        = string
+  default     = "ClusterIssuer"
+
+  validation {
+    condition     = contains(["ClusterIssuer", "Issuer"], var.cert_manager_issuer_kind)
+    error_message = "cert_manager_issuer_kind must be ClusterIssuer or Issuer."
+  }
 }
 
 variable "letsencrypt_email" {
@@ -742,22 +794,28 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+variable "tls_existing_secret_name" {
+  description = "With tls_certificate_source = 'existing', the name of a kubernetes.io/tls Secret that you create in the LangSmith namespace (by hand, with External Secrets, or similar). Terraform only references it, so the private key never enters Terraform state. Recommended over tls_certificate_crt and tls_certificate_key."
+  type        = string
+  default     = ""
+}
+
 variable "tls_certificate_crt" {
-  description = "TLS certificate in PEM format (required if tls_certificate_source is 'existing'). Use file() to load from a file."
+  description = "Deprecated: use tls_existing_secret_name. TLS certificate in PEM format for tls_certificate_source = 'existing'. Terraform writes it to a Secret, and it is stored in Terraform state."
   type        = string
   default     = ""
   sensitive   = true
 }
 
 variable "tls_certificate_key" {
-  description = "TLS private key in PEM format (required if tls_certificate_source is 'existing'). Use file() to load from a file."
+  description = "Deprecated: use tls_existing_secret_name. TLS private key in PEM format for tls_certificate_source = 'existing'. Terraform writes it to a Secret, and it is stored in Terraform state."
   type        = string
   default     = ""
   sensitive   = true
 }
 
 variable "tls_secret_name" {
-  description = "Name for the TLS secret in Kubernetes"
+  description = "Name of the TLS Secret that Terraform or cert-manager creates in the LangSmith namespace. Not used with tls_existing_secret_name or 'google-managed'."
   type        = string
   default     = "langsmith-tls"
 }

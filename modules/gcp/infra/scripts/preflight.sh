@@ -263,8 +263,15 @@ fi
 if [[ "$ENABLE_DNS" == "true" ]]; then
   CONDITIONAL_PERMISSIONS+=("dns.managedZones.create" "dns.resourceRecordSets.create")
 fi
-if [[ "$TLS_SOURCE" == "letsencrypt" ]]; then
-  CONDITIONAL_PERMISSIONS+=("certificatemanager.certs.create")
+# Let's Encrypt and cert-manager issue in the cluster and need no Google Cloud
+# permission. A Google-managed certificate is four Certificate Manager objects.
+if [[ "$TLS_SOURCE" == "google-managed" ]]; then
+  CONDITIONAL_PERMISSIONS+=(
+    "certificatemanager.certs.create"
+    "certificatemanager.certmaps.create"
+    "certificatemanager.certmapentries.create"
+    "certificatemanager.dnsauthorizations.create"
+  )
 fi
 # The SmithDB metastore is its own Cloud SQL instance, so these are needed even
 # when postgres_source is not "external" and the block above did not add them.

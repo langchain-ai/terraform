@@ -156,7 +156,43 @@ kubectl describe challenge -n langsmith
 dig +short <your-langsmith-domain>
 ```
 
-The DNS A record must resolve to the Gateway IP before the certificate can be issued. cert-manager's HTTP01 solver needs port 80 to be accessible from the internet.
+The DNS A record must resolve to the Gateway IP before the certificate can be issued. cert-manager's HTTP01 solver needs port 80 to be accessible from the internet. If that is not possible on your network, Let's Encrypt is the wrong source: use `google-managed`, `existing`, or `cert-manager` with your own issuer ([TLS.md](TLS.md)).
+
+`kubectl get challenges` showing nothing at all, with the Certificate stuck, usually means cert-manager's Gateway API support is off. Terraform turns it on for `letsencrypt`; check `kubectl logs -n cert-manager deploy/cert-manager | grep -i gateway`.
+
+---
+
+### Issue #6b — Google-managed certificate stays PROVISIONING
+
+**Symptom:** `make status` shows the TLS certificate as `PROVISIONING` or `FAILED`, and HTTPS on the GKE Gateway fails the handshake.
+
+**Cause:** The DNS authorization CNAME is missing or wrong, or a CAA record does not allow `pki.goog`.
+
+**Fix:**
+
+```bash
+terraform -chdir=infra output tls_dns_authorization_record           # the record to add
+terraform -chdir=infra output tls_dns_authorization_record_managed   # true when Terraform wrote it
+dig +short CNAME _acme-challenge.<your-langsmith-domain>
+dig +short CAA <your-langsmith-domain>
+gcloud certificate-manager certificates describe \
+  "$(terraform -chdir=infra output -raw managed_certificate_name)" --project <project>
+```
+
+The `authorizationAttemptInfo` field of the describe output names the failing domain and the reason.
+
+---
+
+### Issue #6c — terraform apply stops at the cert-manager version check
+
+**Symptom:** `null_resource.cert_manager_upgrade_guard` fails with `cert-manager vX.Y.Z is installed. cert-manager supports upgrades one minor version at a time`.
+
+**Fix:** step the release up first, then apply again:
+
+```bash
+make cert-manager-upgrade
+make apply
+```
 
 ---
 

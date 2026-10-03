@@ -128,7 +128,8 @@ gcp/
 │       ├── k8s-bootstrap/  ← Namespaces, K8s secrets, cert-manager, KEDA
 │       ├── ingress/        ← Envoy Gateway (default) or GKE Gateway (Gateway API), GatewayClass, HTTPRoute
 │       ├── iam/            ← Workload Identity service accounts and bindings (wired by default)
-│       ├── dns/            ← Cloud DNS managed zone + managed cert (optional via flags)
+│       ├── dns/            ← Cloud DNS managed zone (optional via flags)
+│       ├── certificate-manager/ ← Google-managed TLS certificate for the GKE Gateway (optional)
 │       ├── secrets/        ← Secret Manager secrets for credentials (optional via flags)
 │       ├── smithdb/        ← SmithDB metastore, object-store bucket, Workload Identity SA (optional)
 │       └── smithdb-nodes/  ← SmithDB Local SSD + compute GKE node pools (optional)
@@ -139,6 +140,7 @@ gcp/
 │       ├── setup-env.sh        ← Exports TF_VAR_* secrets from Secret Manager (source it)
 │       ├── status.sh           ← Deployment health check — tells you what to run next
 │       ├── manage-secrets.sh   ← Secret Manager CRUD (list/get/set/validate/delete)
+│       ├── cert-manager-upgrade.sh ← Steps cert-manager up one minor version at a time
 │       └── tf-run.sh           ← Terraform wrapper that auto-sources setup-env.sh
 └── helm/
     ├── scripts/
@@ -188,9 +190,10 @@ redis_source = "external"
 # ClickHouse (in-cluster is default)
 clickhouse_source = "in-cluster"
 
-# TLS
-tls_certificate_source = "letsencrypt"
-letsencrypt_email      = "<ops@your-domain>"
+# TLS: your own certificate in a Secret you create (see TLS.md for every option,
+# including a Google-managed certificate on the GKE Gateway)
+tls_certificate_source   = "existing"
+tls_existing_secret_name = "langsmith-tls"
 
 # LangSmith Deployments (Pass 3)
 enable_langsmith_deployment = true
@@ -317,7 +320,7 @@ Set `ingress_type = "gke"` to use GKE's built-in Gateway controller instead of E
 
 ```hcl
 ingress_type           = "gke"
-tls_certificate_source = "none"   # or "existing"; "letsencrypt" is not supported with gke
+tls_certificate_source = "google-managed"   # or "existing", "cert-manager", "none"; not "letsencrypt"
 ```
 
 What changes:
@@ -336,7 +339,8 @@ What changes:
 Things to know:
 
 - The listener is bound to `langsmith_domain`. A request with any other `Host`, such as the bare IP, gets a 404 with the body `fault filter abort`. Use the hostname.
-- With `tls_certificate_source = "none"` the Gateway serves HTTP only, so use `http://`.
+- With `tls_certificate_source = "none"` the Gateway serves HTTP only, so use `http://`. With any other source, HTTP redirects to HTTPS.
+- `tls_certificate_source = "google-managed"` attaches a Certificate Manager certificate to the load balancer, with no key in the cluster and no cert-manager. Add the DNS authorization record from `terraform output tls_dns_authorization_record` unless `enable_dns_module` manages your zone. See [TLS.md](TLS.md).
 
 ---
 
@@ -416,9 +420,16 @@ helm upgrade langsmith langchain/langsmith \
 | `install_ingress` | `true` | no | Install the Gateway via Terraform (Envoy Gateway by default, or the GKE Gateway) |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy` (default), `gke`, `istio`, or `other` |
 | `gke_gateway_class` | `gke-l7-global-external-managed` | no | GatewayClass when `ingress_type = "gke"`. Global classes reserve a static IP |
-| `tls_certificate_source` | `none` | no | `none`, `letsencrypt`, or `existing`. `letsencrypt` works with `envoy` only |
+| `tls_certificate_source` | `none` | no | `none`, `google-managed` (GKE Gateway), `existing`, `cert-manager`, or `letsencrypt` (Envoy, evaluation). See [TLS.md](TLS.md) |
+| `tls_existing_secret_name` | `""` | with `existing` | A `kubernetes.io/tls` Secret you create; keeps the key out of Terraform state |
+| `tls_google_managed_include_wildcard` | `false` | no | With `google-managed`, also cover `*.<langsmith_domain>` |
+| `tls_google_managed_issuance_config` | `""` | no | With `google-managed`, issue from your Certificate Authority Service pool |
+| `cert_manager_issuer_name` | `""` | with `cert-manager` | Your Issuer or ClusterIssuer |
+| `cert_manager_issuer_kind` | `ClusterIssuer` | no | `ClusterIssuer` or `Issuer` |
+| `cert_manager_version` | `v1.21.2` | no | cert-manager chart version. `make cert-manager-upgrade` steps an existing install up |
 | `letsencrypt_email` | `""` | when letsencrypt | Email for Let's Encrypt notifications |
-| `tls_secret_name` | `langsmith-tls` | no | Name for the TLS secret in Kubernetes |
+| `tls_certificate_crt` / `tls_certificate_key` | `""` | no | Deprecated: PEM for `existing`, stored in Terraform state. Use `tls_existing_secret_name` |
+| `tls_secret_name` | `langsmith-tls` | no | Secret that Terraform or cert-manager creates |
 | `enable_langsmith_deployment` | `true` | no | Enable LangSmith Deployments — installs KEDA |
 | `enable_deployments` | `false` | no | Enable LangGraph Platform (host-backend, listener, operator) |
 | `enable_fleet` | `false` | no | Enable Fleet standalone (chart v0.15+) — replaces `enable_agent_builder`; does not require `enable_deployments` |
@@ -437,10 +448,10 @@ helm upgrade langsmith langchain/langsmith \
 |---|---|---|
 | `enable_gcp_iam_module` | `true` | Wires `modules/iam` for Workload Identity + bucket IAM binding |
 | `enable_secret_manager_module` | `false` | Wires `modules/secrets` for Secret Manager bootstrap secret |
-| `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS + managed cert |
+| `enable_dns_module` | `false` | Wires `modules/dns` for Cloud DNS. With `google-managed`, also writes the certificate's DNS authorization record |
 | `dns_create_zone` | `true` | Create a DNS zone when DNS module is enabled |
 | `dns_existing_zone_name` | `""` | Existing zone to use when `dns_create_zone = false` |
-| `dns_create_certificate` | `true` | Create a Google-managed cert when DNS module is enabled |
+| `dns_create_certificate` | `null` | Deprecated, no effect. See [TLS.md](TLS.md#upgrading-from-an-earlier-module-version) |
 | `enable_smithdb` | `false` | Wires `modules/smithdb` + `modules/smithdb-nodes` — see [SmithDB](#smithdb-chart-016) and [SMITHDB.md](SMITHDB.md) |
 
 ---
