@@ -9,7 +9,7 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### `langsmith-frontend`
 - **What**: React SPA — the LangSmith web UI
-- **Exposes**: Port 3000, served via NGINX ingress
+- **Exposes**: Port 3000, served via the ingress controller (Envoy Gateway by default)
 - **Depends on**: `backend`, `platform-backend`
 - **HPA**: 1–10 replicas (CPU ≥ 50%, Mem ≥ 80%)
 
@@ -161,10 +161,15 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Deployed by**: Terraform k8s-bootstrap module
 - **Required for**: Pass 3+ (LangGraph Platform prerequisite)
 
+### envoy-gateway (default)
+- **What**: Envoy Gateway v1.2.0 in `envoy-gateway-system`. It runs an Envoy proxy for the `langsmith-gateway` Gateway, and the chart's HTTPRoutes send external traffic to frontend and backend
+- **Type**: LoadBalancer (Azure Load Balancer assigned public IP), Service `envoy-<namespace>-langsmith-gateway-<hash>`
+- **Deployed by**: Terraform k8s-cluster module. `deploy.sh` creates the EnvoyProxy, GatewayClass, and Gateway
+
 ### ingress-nginx
-- **What**: NGINX Ingress Controller — routes external HTTPS traffic to frontend and backend
+- **What**: NGINX Ingress Controller, installed with `ingress_controller = "nginx"`. It routes external HTTPS traffic to frontend and backend
 - **Type**: LoadBalancer (Azure Load Balancer assigned public IP)
-- **Deployed by**: Terraform k8s-bootstrap module
+- **Deployed by**: Terraform k8s-cluster module
 
 ---
 

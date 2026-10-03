@@ -12,7 +12,7 @@ Grant one of these combinations to the deploying identity at subscription scope:
 | `Contributor` + `Role Based Access Control Administrator` | `b24988ac-6180-42a0-ab88-20f7382dd24c`, `f58310d9-a9f6-439a-9e8d-f62e7b41a168` | Preferred least-privilege pairing |
 | `Contributor` + `User Access Administrator` | `b24988ac-6180-42a0-ab88-20f7382dd24c`, `18d7d88d-d35e-4fb5-a5c3-7773c20a72d9` | Equivalent, broader than the pairing above |
 
-Resource group scope is enough only if the resource group already exists and you set it in `terraform.tfvars`. The deployment creates its own resource group by default, which requires subscription scope.
+The deployment creates its own resource group by default, which requires subscription scope. To work with rights on one resource group only, have the group created for you and set `create_resource_group = false` and `existing_resource_group_name` in `terraform.tfvars` ([deploying into an existing resource group](README.md#deploying-into-an-existing-resource-group)). Grant the same roles on that group instead.
 
 `Role Based Access Control Administrator` is the narrower of the two role-assignment roles. It grants `Microsoft.Authorization/roleAssignments/write` without the broader access-management rights that `User Access Administrator` carries.
 
@@ -165,6 +165,6 @@ Work through these causes in order:
 1. **The identity holds Contributor only.** Add `Role Based Access Control Administrator` at subscription scope. This is the common case.
 2. **A condition restricts which roles the identity may assign.** Suspect this when one assignment succeeds and another on the same scope fails, because the two differ only by role definition. Run the `checkAccess` probe and read the `condition` field.
 3. **A deny assignment blocks the write.** Deny assignments override role assignments and appear in the `denyAssignment` field of the probe output. Azure Blueprints and managed application lock-downs both create them.
-4. **The grant has not propagated.** Role assignments take one to three minutes to take effect. If access was granted in the last few minutes, run `az account get-access-token --query expiresOn` to confirm the token predates the grant, then re-authenticate with `az login`.
+4. **The grant has not reached your session.** Role assignments take one to three minutes to take effect. If the grant arrived through a group, the token you are holding predates it and no wait fixes that: `checkAccess` reports `Allowed` while the apply still fails with 403. Sign in again (`az logout && az login`, or restart Cloud Shell) and re-run `terraform apply`.
 
 After granting the missing role, re-run `terraform apply`. The run is resumable, and resources created before the failure stay in state.

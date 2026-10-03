@@ -22,7 +22,7 @@ source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name ───────────────────────────────────────────────────
 # Priority: terraform output → derived from terraform.tfvars
-if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
+if KV_NAME=$(_tf_out keyvault_name); then
   : # got it from terraform output
 else
   KV_NAME=$(_require_kv_name) || exit 1

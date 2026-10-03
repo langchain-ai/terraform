@@ -436,6 +436,110 @@ run "wi_subjects_release_name_without_langsmith" {
   }
 }
 
+# ── Resource group ───────────────────────────────────────────────────────────
+# Attaching reads the group instead of creating it, and every resource placed
+# in it takes the attached name.
+
+run "the_resource_group_is_created_by_default" {
+  command = plan
+
+  variables {
+    create_resource_group = true
+    resource_group_name   = "langsmith-rg-wiring"
+  }
+
+  assert {
+    condition     = length(azurerm_resource_group.resource_group) == 1 && length(data.azurerm_resource_group.existing) == 0
+    error_message = "create_resource_group = true did not plan exactly the resource group resource"
+  }
+  assert {
+    condition     = output.resource_group_name == "langsmith-rg-wiring"
+    error_message = "the resource_group_name output is not the created group's name"
+  }
+}
+
+run "an_existing_resource_group_is_read_not_created" {
+  command = plan
+
+  variables {
+    create_resource_group            = false
+    existing_resource_group_name     = "platform-langsmith-rg"
+    storage_private_endpoint_enabled = true
+    storage_private_dns_zone_id      = ""
+  }
+
+  # azapi parses the group's ID as Redis's parent, and the generated mock is a
+  # random string.
+  override_data {
+    target = data.azurerm_resource_group.existing
+    values = {
+      name = "platform-langsmith-rg"
+      id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-langsmith-rg"
+    }
+  }
+
+  assert {
+    condition     = length(azurerm_resource_group.resource_group) == 0 && length(data.azurerm_resource_group.existing) == 1
+    error_message = "create_resource_group = false still planned a resource group, or did not read the existing one"
+  }
+  assert {
+    condition     = output.resource_group_name == "platform-langsmith-rg"
+    error_message = "the resource_group_name output is not the attached group's name"
+  }
+  assert {
+    condition     = azurerm_private_dns_zone.blob[0].resource_group_name == "platform-langsmith-rg"
+    error_message = "resources are not placed in the attached resource group"
+  }
+}
+
+# ── Subnet NSGs ──────────────────────────────────────────────────────────────
+
+run "subnet_nsgs_are_absent_by_default" {
+  command = plan
+
+  variables {
+    enable_subnet_nsgs = false
+  }
+
+  assert {
+    condition     = alltrue([for rules in values(module.vnet.subnet_nsg_rules) : rules == null])
+    error_message = "enable_subnet_nsgs = false still planned a subnet NSG"
+  }
+}
+
+run "subnet_nsgs_admit_only_the_aks_subnet" {
+  command = plan
+
+  variables {
+    enable_subnet_nsgs        = true
+    aks_subnet_address_prefix = ["10.0.0.0/19"]
+  }
+
+  assert {
+    condition     = alltrue([for rules in values(module.vnet.subnet_nsg_rules) : rules != null])
+    error_message = "enable_subnet_nsgs = true did not plan an NSG on every created subnet"
+  }
+  assert {
+    condition     = one([for r in module.vnet.subnet_nsg_rules.postgres : r.source_address_prefixes if r.name == "allow-aks-postgres"]) == toset(["10.0.0.0/19"])
+    error_message = "the Postgres NSG does not admit exactly the AKS subnet"
+  }
+  assert {
+    condition     = one([for r in module.vnet.subnet_nsg_rules.redis : r.source_address_prefixes if r.name == "allow-aks-redis"]) == toset(["10.0.0.0/19"])
+    error_message = "the Redis NSG does not admit exactly the AKS subnet"
+  }
+  assert {
+    condition     = one([for r in module.vnet.subnet_nsg_rules.redis : r.access if r.name == "deny-vnet-inbound"]) == "Deny"
+    error_message = "the Redis NSG does not deny the rest of the VNet"
+  }
+  assert {
+    condition = alltrue([
+      for nsg in ["postgres", "redis"] :
+      one([for r in module.vnet.subnet_nsg_rules[nsg] : r.priority if r.source_address_prefix == "AzureLoadBalancer" && r.access == "Allow"]) < one([for r in module.vnet.subnet_nsg_rules[nsg] : r.priority if r.name == "deny-vnet-inbound"])
+    ])
+    error_message = "a data-tier NSG denies Azure's platform probes ahead of admitting them"
+  }
+}
+
 # ── Cluster components, both directions ──────────────────────────────────────
 # The two helm_releases are count-gated inside k8s-bootstrap, so the module's
 # namespace outputs are the observable: a name when this module installed the
@@ -457,6 +561,64 @@ run "cluster_components_installed_when_flags_are_true" {
   assert {
     condition     = module.k8s_bootstrap.keda_namespace == "keda"
     error_message = "install_keda = true did not plan the KEDA release"
+  }
+}
+
+# Envoy Gateway ships the Gateway API CRDs, and cert-manager serves Gateways
+# only with its feature gate on, so the two travel together.
+run "envoy_gateway_turns_on_cert_manager_gateway_api" {
+  command = plan
+
+  variables {
+    ingress_controller   = "envoy-gateway"
+    install_cert_manager = true
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_version != ""
+    error_message = "ingress_controller = \"envoy-gateway\" did not plan the Envoy Gateway release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_feature_gates == "ExperimentalGatewayAPISupport=true"
+    error_message = "ingress_controller = \"envoy-gateway\" left cert-manager without Gateway API support: \"${module.k8s_bootstrap.cert_manager_feature_gates}\""
+  }
+}
+
+run "nginx_leaves_cert_manager_gateway_api_off" {
+  command = plan
+
+  variables {
+    ingress_controller   = "nginx"
+    install_cert_manager = true
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_version == ""
+    error_message = "ingress_controller = \"nginx\" still planned the Envoy Gateway release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_feature_gates == ""
+    error_message = "ingress_controller = \"nginx\" still set cert-manager featureGates: \"${module.k8s_bootstrap.cert_manager_feature_gates}\""
+  }
+}
+
+run "omitted_ingress_controller_defaults_to_envoy_gateway" {
+  command = plan
+
+  variables {
+    install_cert_manager = true
+  }
+
+  assert {
+    condition     = module.aks.envoy_gateway_version != ""
+    error_message = "Omitting ingress_controller did not plan the Envoy Gateway release"
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_feature_gates == "ExperimentalGatewayAPISupport=true"
+    error_message = "Omitting ingress_controller left cert-manager without Gateway API support: \"${module.k8s_bootstrap.cert_manager_feature_gates}\""
   }
 }
 

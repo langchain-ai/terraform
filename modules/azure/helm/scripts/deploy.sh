@@ -71,12 +71,47 @@ if ! grep -q '^insights:' "$OVERRIDES_FILE" || ! grep -q '^polly:' "$OVERRIDES_F
   action "make init-values  (regenerates it; re-apply any hand edits afterward)"
 fi
 
+# ── Reject a values-overrides.yaml generated from different tfvars ─────────
+# init-values.sh bakes tfvars values into that file and `make deploy` never
+# regenerates it, so a tfvars edit afterward leaves Terraform and Helm deploying
+# different configurations.
+if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
+  warn "terraform.tfvars not found — values-overrides.yaml not checked against it"
+  echo ""
+else
+  _stale=""
+  _stamped="false"
+  for _key in $_VALUES_INPUT_KEYS; do
+    _was=$(_read_values_stamp "$OVERRIDES_FILE" "$_key") || continue
+    _stamped="true"
+    _now=$(_parse_tfvar "$_key") || _now=""
+    [[ "$_was" == "$_now" ]] && continue
+    _stale="${_stale}${_key}: generated with '${_was}', terraform.tfvars now says '${_now}'
+"
+  done
+
+  if [[ "$_stamped" != "true" ]]; then
+    warn "values-overrides.yaml carries no terraform.tfvars stamp (written by an older init-values.sh)"
+    action "make init-values  (adds the stamp, so this check can run)"
+    echo ""
+  elif [[ -n "$_stale" ]]; then
+    fail "values-overrides.yaml was generated from different terraform.tfvars values:"
+    printf '%s' "$_stale" | while IFS= read -r _line; do
+      [[ -n "$_line" ]] && info "$_line"
+    done
+    echo ""
+    info "terraform apply used the current terraform.tfvars; this file still describes the old one."
+    action "make init-values  (regenerate it, then re-run make deploy)"
+    exit 1
+  fi
+fi
+
 # ── Point kubeconfig at the right cluster ─────────────────────────────────
-_cluster_name=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
+_cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
   exit 1
 }
-_rg_name=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || _rg_name=""
+_rg_name=$(_tf_out resource_group_name) || _rg_name=""
 
 info "Cluster: ${_cluster_name}"
 az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
@@ -88,11 +123,12 @@ echo ""
 # Azure assigns <dns_label>.<region>.cloudapp.azure.com (cloudapp.usgovcloudapi.net
 # in Azure Government) to the public IP only when
 # the annotation service.beta.kubernetes.io/azure-dns-label-name is on the LB service.
-# Works for ALL ingress controllers — nginx, istio, istio-addon, envoy-gateway.
+# Covers nginx, istio and istio-addon. Envoy Gateway creates its Service per Gateway,
+# so the EnvoyProxy in the Envoy Gateway block below carries the label instead.
 # cert-manager's HTTP-01 challenge requires DNS to resolve before cert issuance.
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
 _location=$(_parse_tfvar "location") || _location="eastus"
-_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
 _cloudapp_suffix=$(_azure_cloudapp_suffix)
 if [[ -n "$_dns_label" ]]; then
   case "$_ingress_controller" in
@@ -107,12 +143,6 @@ if [[ -n "$_dns_label" ]]; then
     istio)
       _lb_svc="istio-ingressgateway"
       _lb_ns="istio-system"
-      ;;
-    envoy-gateway)
-      # Envoy Gateway service name follows pattern: envoy-<namespace>-<gateway-name>
-      # Default gateway name in our setup is "langsmith"
-      _lb_svc="envoy-langsmith-langsmith-gateway"
-      _lb_ns="langsmith"
       ;;
     *)
       _lb_svc=""
@@ -133,6 +163,15 @@ fi
 # kubernetes_manifest in Terraform can't create these on fresh deploy (no cluster
 # exists during plan). Applied here instead — idempotent, safe to re-run.
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
+
+# With Envoy Gateway, both cert-manager TLS paths issue through its Gateway shim,
+# which Terraform switches on only for the cert-manager it installs.
+if [[ "$_ingress_controller" == "envoy-gateway" ]] && [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
+  _install_cert_manager=$(_parse_tfvar "install_cert_manager") || _install_cert_manager=true
+  if [[ "$_install_cert_manager" == "false" ]]; then
+    warn "install_cert_manager = false: the cluster's own cert-manager must run with Gateway API support enabled, or no certificate is issued for the Envoy Gateway listener."
+  fi
+fi
 if [[ "$_tls_source" == "letsencrypt" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
   _le_namespace="$NAMESPACE"
@@ -141,18 +180,9 @@ if [[ "$_tls_source" == "letsencrypt" ]]; then
   [[ -n "$_le_domain" ]] && _le_hostname="$_le_domain"
 
   if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-    # Envoy Gateway uses Gateway API — cert-manager gatewayHTTPRoute solver
-    # requires ExperimentalGatewayAPISupport feature gate on cert-manager controller.
-    # deploy.sh enables this gate automatically (kubectl patch), but only on the
-    # cert-manager Terraform installed: one the cluster already ran is owned by
-    # something else, which would revert the patch.
-    _install_cert_manager=$(_parse_tfvar "install_cert_manager") || _install_cert_manager=true
-    if [[ "$_install_cert_manager" == "false" ]]; then
-      warn "install_cert_manager = false: the cluster's own cert-manager must run with Gateway API support enabled, or the HTTP-01 challenge through Envoy Gateway never completes."
-    else
-      kubectl patch deployment cert-manager -n cert-manager --type='json' \
-        -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExperimentalGatewayAPISupport=true"}]' &>/dev/null || true
-    fi
+    # Envoy Gateway uses Gateway API: the gatewayHTTPRoute solver below needs
+    # cert-manager's Gateway API support, which Terraform enables on the
+    # cert-manager it installs (k8s-bootstrap).
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -208,9 +238,9 @@ if [[ "$_tls_source" == "dns01" ]]; then
   _le_email=$(_parse_tfvar "letsencrypt_email") || _le_email=""
   _le_domain=$(_parse_tfvar "langsmith_domain") || _le_domain=""
   _dns_zone="$_le_domain"                          # zone name = domain name
-  _dns_rg=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || _dns_rg=""
+  _dns_rg=$(_tf_out resource_group_name) || _dns_rg=""
   _subscription_id=$(_parse_tfvar "subscription_id") || _subscription_id=""
-  _cert_manager_client_id=$(terraform -chdir="$INFRA_DIR" output -raw cert_manager_identity_client_id 2>/dev/null) || _cert_manager_client_id=""
+  _cert_manager_client_id=$(_tf_out cert_manager_identity_client_id) || _cert_manager_client_id=""
 
   if [[ -z "$_le_domain" ]]; then
     warn "dns01 requires langsmith_domain to be set in terraform.tfvars — ClusterIssuer skipped"
@@ -577,28 +607,63 @@ elif [[ "$_release_status" == "failed" ]]; then
   echo ""
 fi
 
-# ── Pre-deploy: Envoy Gateway GatewayClass + Gateway ─────────────────────
+# ── Pre-deploy: Envoy Gateway EnvoyProxy + GatewayClass + Gateway ────────
 # Must exist before helm install so the chart's gateway.enabled: true passes
 # chart validation (validate.yaml requires ingress, gateway, or istioGateway).
 # HTTPRoutes are created by the chart (gateway.enabled: true) — not by deploy.sh.
+# Envoy Gateway creates the proxy LoadBalancer Service from the Gateway, with
+# the annotations the GatewayClass's EnvoyProxy lists, so the DNS label is on
+# the Service from the start and the HTTP-01 challenge can resolve it.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   _eg_namespace="$NAMESPACE"
   _eg_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
   _eg_domain=$(_parse_tfvar "langsmith_domain") || _eg_domain=""
   [[ -n "$_eg_domain" ]] && _eg_hostname="$_eg_domain"
+  if [[ "$_tls_source" != "none" && -z "$_dns_label" && -z "$_eg_domain" ]]; then
+    fail "tls_certificate_source = \"${_tls_source}\" needs a hostname for the HTTPS listener: set dns_label or langsmith_domain in terraform.tfvars."
+    exit 1
+  fi
 
-  kubectl apply -f - &>/dev/null <<EOF
+  _eg_service_annotations="{}"
+  [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
+
+  kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: langsmith-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        annotations: ${_eg_service_annotations}
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: langsmith-eg
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: langsmith-proxy
+    namespace: envoy-gateway-system
 EOF
 
   # Build Gateway listeners — always include HTTP; add HTTPS only when TLS is enabled.
+  # cert-manager issues langsmith-tls from the Gateway's annotation for letsencrypt
+  # and dns01; with existing, the operator supplies that Secret.
+  _eg_gateway_annotations=""
+  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
+    _eg_gateway_annotations='
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"'
+  fi
   if [[ "$_tls_source" == "none" ]]; then
-    kubectl apply -f - &>/dev/null <<EOF
+    kubectl apply -f - >/dev/null <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -615,14 +680,12 @@ spec:
         from: Same
 EOF
   else
-    kubectl apply -f - &>/dev/null <<EOF
+    kubectl apply -f - >/dev/null <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: langsmith-gateway
-  namespace: ${_eg_namespace}
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  namespace: ${_eg_namespace}${_eg_gateway_annotations}
 spec:
   gatewayClassName: langsmith-eg
   listeners:
@@ -645,7 +708,7 @@ spec:
         from: Same
 EOF
   fi
-  pass "Envoy Gateway GatewayClass + Gateway created (tls: ${_tls_source})"
+  pass "Envoy Gateway EnvoyProxy + GatewayClass + Gateway created (tls: ${_tls_source})"
 fi
 
 # ── Deploy ────────────────────────────────────────────────────────────────
@@ -727,29 +790,52 @@ else
 fi
 echo ""
 
-# ── Post-deploy Envoy Gateway: DNS label annotation ───────────────────────
-# GatewayClass + Gateway were created before helm install (pre-deploy block above).
-# The chart creates HTTPRoutes via gateway.enabled: true.
-# Here we wait for the Envoy LB service and annotate it with the Azure DNS label.
+# ── Post-deploy Envoy Gateway: LoadBalancer IP ────────────────────────────
+# The EnvoyProxy (pre-deploy block above) put the DNS label on the proxy Service;
+# this only reports the address Azure gave it.
 if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
-  _eg_namespace="$NAMESPACE"
-
   info "Waiting for Envoy Gateway LoadBalancer IP..."
-  _eg_svc_name=""
+  _eg_ip=""
   for _ in $(seq 1 30); do
-    _eg_svc_name=$(kubectl get svc -n "envoy-gateway-system" \
-      -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-    [[ -n "$_eg_svc_name" ]] && break
+    _eg_ip=$(kubectl get svc -n "envoy-gateway-system" \
+      -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway,gateway.envoyproxy.io/owning-gateway-namespace=${NAMESPACE}" \
+      -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)
+    [[ -n "$_eg_ip" ]] && break
     sleep 5
   done
 
-  if [[ -n "$_eg_svc_name" && -n "$_dns_label" ]]; then
-    kubectl annotate svc "$_eg_svc_name" -n "envoy-gateway-system" \
-      "service.beta.kubernetes.io/azure-dns-label-name=${_dns_label}" --overwrite &>/dev/null
-    pass "DNS label '${_dns_label}' set on envoy-gateway-system/${_eg_svc_name}"
+  if [[ -n "$_eg_ip" ]]; then
+    pass "Envoy Gateway LoadBalancer IP: ${_eg_ip}${_dns_label:+ (${_dns_label}.${_location}.${_cloudapp_suffix})}"
   else
-    warn "Could not find Envoy Gateway LB service — DNS label not set. Re-run: make deploy"
+    warn "Envoy Gateway LoadBalancer has no IP yet. Check: kubectl get gateway langsmith-gateway -n ${NAMESPACE}"
+  fi
+
+  # A deployment moved off ingress-nginx still has the langsmith-tls Certificate
+  # its Ingress owned, and cert-manager's gateway-shim refuses to take it over.
+  # The helm upgrade above removed that Ingress, so garbage collection deletes
+  # the Certificate, and the shim does not retry on its own: the Secret keeps
+  # serving until it expires, and nothing renews it. Touching the Gateway makes
+  # the shim re-sync and create a Certificate the Gateway owns.
+  if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
+    _eg_cert_owner=""
+    for _ in $(seq 1 24); do
+      _eg_cert_owner=$(kubectl get certificate langsmith-tls -n "$NAMESPACE" \
+        -o jsonpath='{.metadata.ownerReferences[0].kind}' 2>/dev/null || echo "none")
+      [[ "$_eg_cert_owner" == "Ingress" ]] || break
+      sleep 5
+    done
+    case "$_eg_cert_owner" in
+      Gateway) ;;
+      Ingress)
+        warn "Certificate langsmith-tls is still owned by the old Ingress, so it will not renew."
+        action "Re-run make deploy once kubectl get ingress -n ${NAMESPACE} shows no langsmith Ingress"
+        ;;
+      *)
+        kubectl annotate gateway langsmith-gateway -n "$NAMESPACE" --overwrite \
+          "langsmith.com/cert-resync=$(date +%s)" >/dev/null
+        pass "Asked cert-manager to re-create Certificate langsmith-tls for the Gateway"
+        ;;
+    esac
   fi
 fi
 
@@ -823,7 +909,7 @@ fi
 # ── Ensure langsmith-ksa carries the WI annotation ───────────────────────
 # langsmith-ksa is used by operator-spawned agent deployment pods.
 # It is created by the operator on first use (not part of Helm release).
-_wi_client_id=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_managed_identity_client_id 2>/dev/null || true)
+_wi_client_id=$(_tf_out storage_account_k8s_managed_identity_client_id || true)
 if [[ -n "$_wi_client_id" ]]; then
   kubectl create serviceaccount langsmith-ksa -n "$NAMESPACE" \
     --dry-run=client -o yaml | kubectl apply -f - &>/dev/null
@@ -835,8 +921,8 @@ fi
 # ── Post-deploy access info ───────────────────────────────────────────────
 _hostname=$(grep -E '^\s*hostname:' "$OVERRIDES_FILE" 2>/dev/null \
   | sed 's/.*:[[:space:]]*"\(.*\)".*/\1/' | tr -d '[:space:]') || _hostname=""
-_kv_name=$(terraform -chdir="$INFRA_DIR" output -raw keyvault_name 2>/dev/null || true)
-_admin_email=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null || true)
+_kv_name=$(_tf_out keyvault_name || true)
+_admin_email=$(_tf_out langsmith_admin_email || true)
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _url_protocol="http"
 [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]] && _url_protocol="https"

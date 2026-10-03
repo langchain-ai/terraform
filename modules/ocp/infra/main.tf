@@ -57,11 +57,15 @@ module "scc" {
   source = "./modules/scc"
 }
 
+# Writes langsmith-postgres / langsmith-redis, the two secrets the chart reads via
+# postgres.external.existingSecretName and redis.external.existingSecretName. Both
+# are skipped when their URL is empty; helm/scripts/generate-secrets.sh can create
+# them instead, and always owns the application-level langsmith-secrets.
 module "secrets" {
   source = "./modules/secrets"
 
-  postgres_password = module.postgres.password
-  redis_password    = module.redis.password
+  postgres_connection_url = var.postgres_connection_url
+  redis_connection_url    = var.redis_connection_url
 }
 
 module "dns" {

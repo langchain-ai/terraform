@@ -58,6 +58,7 @@ Terraform enables these automatically on first apply. To enable manually:
 ```bash
 gcloud services enable \
   container.googleapis.com \
+  compute.googleapis.com \
   sqladmin.googleapis.com \
   redis.googleapis.com \
   storage.googleapis.com \
@@ -66,21 +67,14 @@ gcloud services enable \
   certificatemanager.googleapis.com \
   servicenetworking.googleapis.com \
   cloudresourcemanager.googleapis.com \
+  logging.googleapis.com \
+  monitoring.googleapis.com \
   --project <your-project-id>
 ```
 
 ### Required IAM roles
 
-| Role | Purpose |
-|------|---------|
-| `roles/container.admin` | Create and manage GKE clusters |
-| `roles/compute.networkAdmin` | Create VPC, subnets, firewall rules |
-| `roles/iam.serviceAccountAdmin` | Create service accounts for Workload Identity |
-| `roles/cloudsql.admin` | Create and manage Cloud SQL instances |
-| `roles/redis.admin` | Create and manage Memorystore Redis |
-| `roles/storage.admin` | Create GCS buckets and lifecycle policies |
-| `roles/resourcemanager.projectIamAdmin` | Grant IAM bindings during provisioning |
-| `roles/servicenetworking.networksAdmin` | Create private service connections (required for Cloud SQL + Redis) |
+The identity running Terraform needs `roles/owner`, or a set of predefined roles that includes `roles/resourcemanager.projectIamAdmin`. `roles/editor` alone fails at the first IAM binding. For the full role list, the IAM the deployment creates, and how to test access before the first apply, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
 ### Required outbound access
 

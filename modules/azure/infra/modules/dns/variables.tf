@@ -10,7 +10,7 @@ variable "resource_group_name" {
 
 variable "ingress_ip" {
   type        = string
-  description = "Public IP address of the NGINX ingress Load Balancer to point the A record at"
+  description = "Public IP address of the ingress controller's Load Balancer to point the A record at"
 }
 
 variable "cert_manager_principal_id" {
