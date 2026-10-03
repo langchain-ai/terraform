@@ -16,16 +16,28 @@ locals {
     KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
     export KUBECONFIG
     trap 'rm -f "$KUBECONFIG"' EXIT
-    gcloud container clusters get-credentials ${var.cluster_name} \
-      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+    gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+      --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet || exit 1
   EOT
+
+  # Input values reach these scripts only through the environment, never as
+  # script text, so the shell cannot run a value as a command. Each provisioner
+  # that uses kubectl_creds sets environment = local.kubectl_env, and each
+  # destroy provisioner builds the same names from self.triggers.
+  kubectl_env = {
+    LS_CLUSTER_NAME = var.cluster_name
+    LS_REGION       = var.region
+    LS_PROJECT_ID   = var.project_id
+    LS_GATEWAY_NAME = var.gateway_name
+  }
 }
 
 resource "null_resource" "install_gateway_api_crds" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = merge(local.kubectl_env, { LS_GATEWAY_API_CRDS_URL = var.gateway_api_crds_url })
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for API server to be accessible
       for i in {1..30}; do
@@ -37,7 +49,7 @@ resource "null_resource" "install_gateway_api_crds" {
       done
       
       # Install Gateway API CRDs
-      kubectl apply -f ${var.gateway_api_crds_url}
+      kubectl apply -f "$LS_GATEWAY_API_CRDS_URL"
     EOT
   }
 
@@ -102,7 +114,8 @@ resource "null_resource" "apply_gateway_class" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for Gateway API CRDs to be available
       for i in {1..30}; do
@@ -114,7 +127,7 @@ resource "null_resource" "apply_gateway_class" {
       done
       
       # Apply the GatewayClass
-      kubectl apply -f ${local_file.gateway_class[0].filename}
+      kubectl apply -f "${local_file.gateway_class[0].filename}"
     EOT
   }
 
@@ -226,7 +239,8 @@ resource "null_resource" "apply_gateway" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for Gateway CRD to be available
       for i in {1..30}; do
@@ -238,7 +252,7 @@ resource "null_resource" "apply_gateway" {
       done
       
       # Apply the Gateway
-      kubectl apply -f ${local_file.gateway[0].filename}
+      kubectl apply -f "${local_file.gateway[0].filename}"
     EOT
   }
 
@@ -278,23 +292,29 @@ resource "null_resource" "delete_gateway_on_destroy" {
   provisioner "local-exec" {
     when       = destroy
     on_failure = continue
-    command    = <<-EOT
+    environment = {
+      LS_CLUSTER_NAME = self.triggers.cluster_name
+      LS_REGION       = self.triggers.region
+      LS_PROJECT_ID   = self.triggers.project_id
+      LS_GATEWAY_NAME = self.triggers.gateway_name
+    }
+    command = <<-EOT
       KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
       export KUBECONFIG
       trap 'rm -f "$KUBECONFIG"' EXIT
-      if ! gcloud container clusters get-credentials ${self.triggers.cluster_name} \
-        --region ${self.triggers.region} --project ${self.triggers.project_id} --quiet; then
-        echo "Cluster ${self.triggers.cluster_name} is not reachable. Skipping the Gateway delete."
+      if ! gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+        --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet; then
+        echo "Cluster $LS_CLUSTER_NAME is not reachable. Skipping the Gateway delete."
         exit 0
       fi
-      kubectl delete gateway ${self.triggers.gateway_name} -n envoy-gateway-system \
+      kubectl delete gateway "$LS_GATEWAY_NAME" -n envoy-gateway-system \
         --ignore-not-found --timeout=120s || true
       # Envoy Gateway deletes the proxy Service. GKE removes the Service only
       # after it deletes the load balancer.
       i=0
       while [ "$i" -lt 60 ]; do
         if ! SVC=$(kubectl get svc -n envoy-gateway-system \
-          -l gateway.envoyproxy.io/owning-gateway-name=${self.triggers.gateway_name} \
+          -l "gateway.envoyproxy.io/owning-gateway-name=$LS_GATEWAY_NAME" \
           -o name 2>/dev/null); then
           echo "WARNING: cannot list the Gateway Services. See TEARDOWN.md."
           exit 0
@@ -358,7 +378,8 @@ resource "null_resource" "apply_reference_grant" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for ReferenceGrant CRD to be available
       for i in {1..30}; do
@@ -370,7 +391,7 @@ resource "null_resource" "apply_reference_grant" {
       done
       
       # Apply the ReferenceGrant
-      kubectl apply -f ${local_file.reference_grant[0].filename}
+      kubectl apply -f "${local_file.reference_grant[0].filename}"
     EOT
   }
 
@@ -388,23 +409,24 @@ resource "null_resource" "get_external_ip" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # Wait for Envoy proxy service to have external IP
       # The Envoy proxy service is created by Envoy Gateway for each Gateway resource
       for i in {1..60}; do
         # Find the Envoy proxy service using label selector
         IP=$(kubectl get svc -n envoy-gateway-system \
-          -l gateway.envoyproxy.io/owning-gateway-name=${var.gateway_name},app.kubernetes.io/component=proxy \
+          -l "gateway.envoyproxy.io/owning-gateway-name=$LS_GATEWAY_NAME,app.kubernetes.io/component=proxy" \
           -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
         if [ -n "$IP" ] && [ "$IP" != "null" ]; then
-          echo "$IP" > ${path.module}/external-ip.txt
+          echo "$IP" > "${path.module}/external-ip.txt"
           exit 0
         fi
         echo "Waiting for external IP... ($i/60)"
         sleep 5
       done
-      echo "WARNING: External IP not available yet" > ${path.module}/external-ip.txt
+      echo "WARNING: External IP not available yet" > "${path.module}/external-ip.txt"
     EOT
   }
 
@@ -495,7 +517,8 @@ resource "null_resource" "apply_gke_gateway" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # GKE installs the Gateway API CRDs after the cluster update that enables
       # the controller, which can take a few minutes.
@@ -508,7 +531,7 @@ resource "null_resource" "apply_gke_gateway" {
       done
 
       # Apply the Gateway
-      kubectl apply -f ${local_file.gke_gateway[0].filename}
+      kubectl apply -f "${local_file.gke_gateway[0].filename}"
     EOT
   }
 
@@ -535,16 +558,23 @@ resource "null_resource" "delete_gke_gateway_on_destroy" {
   provisioner "local-exec" {
     when       = destroy
     on_failure = continue
-    command    = <<-EOT
+    environment = {
+      LS_CLUSTER_NAME = self.triggers.cluster_name
+      LS_REGION       = self.triggers.region
+      LS_PROJECT_ID   = self.triggers.project_id
+      LS_GATEWAY_NAME = self.triggers.gateway_name
+      LS_NAMESPACE    = self.triggers.namespace
+    }
+    command = <<-EOT
       KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
       export KUBECONFIG
       trap 'rm -f "$KUBECONFIG"' EXIT
-      if ! gcloud container clusters get-credentials ${self.triggers.cluster_name} \
-        --region ${self.triggers.region} --project ${self.triggers.project_id} --quiet; then
-        echo "Cluster ${self.triggers.cluster_name} is not reachable. Skipping the Gateway delete."
+      if ! gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+        --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet; then
+        echo "Cluster $LS_CLUSTER_NAME is not reachable. Skipping the Gateway delete."
         exit 0
       fi
-      if ! kubectl delete gateway ${self.triggers.gateway_name} -n ${self.triggers.namespace} \
+      if ! kubectl delete gateway "$LS_GATEWAY_NAME" -n "$LS_NAMESPACE" \
         --ignore-not-found --timeout=300s; then
         echo "WARNING: the Gateway is still present. See TEARDOWN.md."
       fi
@@ -607,7 +637,8 @@ resource "null_resource" "apply_https_redirect" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       for i in {1..60}; do
         if kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
@@ -617,7 +648,7 @@ resource "null_resource" "apply_https_redirect" {
         sleep 5
       done
 
-      kubectl apply -f ${local_file.https_redirect[0].filename}
+      kubectl apply -f "${local_file.https_redirect[0].filename}"
     EOT
   }
 

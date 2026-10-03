@@ -128,12 +128,14 @@ resource "terraform_data" "validate_inputs" {
     # The certificate lives on the Google Cloud load balancer, which only the GKE
     # Gateway creates. Envoy Gateway terminates TLS in the cluster from a Secret.
     # Regional classes take regional certificates, which this module does not
-    # create yet.
+    # create yet. The default langsmith_domain is an example, and a certificate
+    # for it can never be authorized.
     precondition {
       condition = var.tls_certificate_source != "google-managed" || (
-        var.install_ingress && var.ingress_type == "gke" && local.gke_gateway_global_class && var.langsmith_domain != ""
+        var.install_ingress && var.ingress_type == "gke" && local.gke_gateway_global_class &&
+        var.langsmith_domain != "" && var.langsmith_domain != "langsmith.example.com"
       )
-      error_message = "tls_certificate_source = 'google-managed' requires install_ingress = true, ingress_type = 'gke', a global gke_gateway_class (gke-l7-global-external-managed or another gke-l7-global-* class), and langsmith_domain. For Envoy Gateway, use 'existing' or 'cert-manager'."
+      error_message = "tls_certificate_source = 'google-managed' requires install_ingress = true, ingress_type = 'gke', a global gke_gateway_class (gke-l7-global-external-managed or another gke-l7-global-* class), and langsmith_domain set to your own domain, not the example langsmith.example.com. For Envoy Gateway, use 'existing' or 'cert-manager'."
     }
 
     precondition {

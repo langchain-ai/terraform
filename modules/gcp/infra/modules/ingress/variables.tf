@@ -5,16 +5,31 @@
 variable "project_id" {
   description = "GCP project ID hosting the cluster. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.project_id))
+    error_message = "project_id must be a GCP project ID: 6 to 30 lowercase letters, digits, or hyphens, starting with a letter."
+  }
 }
 
 variable "region" {
   description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]$", var.region))
+    error_message = "region must be a GCP region, for example us-central1."
+  }
 }
 
 variable "cluster_name" {
   description = "Name of the GKE cluster the ingress resources are applied to. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$", var.cluster_name))
+    error_message = "cluster_name must be a GKE cluster name: up to 40 lowercase letters, digits, or hyphens, starting with a letter and ending with a letter or digit."
+  }
 }
 
 variable "ingress_type" {
@@ -43,12 +58,24 @@ variable "langsmith_namespace" {
   description = "Kubernetes namespace for LangSmith"
   type        = string
   default     = "langsmith"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.langsmith_namespace))
+    error_message = "langsmith_namespace must be a Kubernetes namespace name: up to 63 lowercase letters, digits, or hyphens, starting and ending with a letter or digit."
+  }
 }
 
 variable "gateway_name" {
   description = "Name for the Gateway resource (Envoy Gateway)"
   type        = string
   default     = "langsmith-gateway"
+
+  # The GKE Gateway static IP is named <gateway_name>-ip, and a Compute Engine
+  # name has at most 63 characters.
+  validation {
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,58}[a-z0-9])?$", var.gateway_name))
+    error_message = "gateway_name must be up to 60 lowercase letters, digits, or hyphens, starting with a letter and ending with a letter or digit."
+  }
 }
 
 variable "tls_certificate_source" {
@@ -78,4 +105,9 @@ variable "gateway_api_crds_url" {
   description = "Gateway API CRD bundle that Envoy Gateway needs. k8s-bootstrap applies the same file ahead of cert-manager when Let's Encrypt is on, so the root passes one URL to both."
   type        = string
   default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+
+  validation {
+    condition     = startswith(var.gateway_api_crds_url, "https://")
+    error_message = "gateway_api_crds_url must be an https:// URL."
+  }
 }

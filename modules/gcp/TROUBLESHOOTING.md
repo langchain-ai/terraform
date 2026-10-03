@@ -183,6 +183,25 @@ The `authorizationAttemptInfo` field of the describe output names the failing do
 
 ---
 
+### Issue #6d — GKE Gateway returns 404 `fault filter abort` or 502 after a deploy
+
+**Symptom:** The certificate is `ACTIVE` and the TLS handshake succeeds, but HTTPS returns `404` with the body `fault filter abort`, or `502`.
+
+**Cause:** `404` with `fault filter abort` comes from the Google load balancer when no route matches yet. Right after the Gateway or the LangSmith HTTPRoute changes, the new URL map needs a few minutes to reach every Google edge location. `502` means that the route matches, but no backend passes its health check yet.
+
+**Fix:** Wait a few minutes, then check the route and the backends:
+
+```bash
+kubectl get httproute -n langsmith        # the LangSmith route must be Accepted on the https listener
+kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.listeners[?(@.name=="https")].attachedRoutes}'
+gcloud compute backend-services list --global --project <project> --filter='name~langsmith-frontend' --format='value(name)'
+gcloud compute backend-services get-health <backend-service> --global --project <project>
+```
+
+If a backend stays `UNHEALTHY`, check that the `langsmith-default` NetworkPolicy allows `130.211.0.0/22` and `35.191.0.0/16`. Terraform adds them when `ingress_type = "gke"`.
+
+---
+
 ### Issue #6c — terraform apply stops at the cert-manager version check
 
 **Symptom:** `null_resource.cert_manager_upgrade_guard` fails with `cert-manager vX.Y.Z is installed. cert-manager supports upgrades one minor version at a time`.
@@ -469,6 +488,11 @@ kubectl get certificate -n langsmith
 kubectl describe certificate <cert-name> -n langsmith
 kubectl get challenges -n langsmith
 kubectl get clusterissuer
+
+# google-managed (GKE Gateway): the certificate is in Certificate Manager
+gcloud certificate-manager certificates describe \
+  "$(terraform -chdir=infra output -raw managed_certificate_name)" \
+  --project <project> --format='value(managed.state)'
 ```
 
 ### Gateway and load balancer
@@ -478,6 +502,10 @@ kubectl get gateway -n envoy-gateway-system
 kubectl get httproute -n langsmith
 kubectl get svc -n envoy-gateway-system -o wide
 kubectl get pods -n envoy-gateway-system
+
+# ingress_type = "gke": the Gateway is in the LangSmith namespace
+kubectl get gateway -n langsmith
+kubectl describe gateway -n langsmith
 ```
 
 ### Helm

@@ -17,7 +17,7 @@ mock_provider "google" {
     defaults = {
       id = "projects/langsmith-plan-tests/locations/global/dnsAuthorizations/ls-prod-langsmith-tls-dnsauth"
       dns_resource_record = [{
-        name = "_acme-challenge.langsmith.example.com."
+        name = "_acme-challenge.langsmith.acme.test."
         type = "CNAME"
         data = "0123456789abcdef.1.authorize.certificatemanager.goog."
       }]
@@ -58,7 +58,7 @@ run "google_managed_on_gke_plans_the_certificate_and_its_dns_record" {
     install_ingress        = true
     ingress_type           = "gke"
     tls_certificate_source = "google-managed"
-    langsmith_domain       = "langsmith.example.com"
+    langsmith_domain       = "langsmith.acme.test"
     enable_dns_module      = true
   }
 
@@ -88,13 +88,14 @@ run "google_managed_without_the_dns_module_outputs_the_record_to_add" {
     install_ingress        = true
     ingress_type           = "gke"
     tls_certificate_source = "google-managed"
+    langsmith_domain       = "langsmith.acme.test"
     enable_dns_module      = false
   }
 
   assert {
     condition = (
       !output.tls_dns_authorization_record_managed &&
-      output.tls_dns_authorization_record.name == "_acme-challenge.langsmith.example.com."
+      output.tls_dns_authorization_record.name == "_acme-challenge.langsmith.acme.test."
     )
     error_message = "Without the DNS module, the record should be an output for the operator, not a resource"
   }
@@ -119,6 +120,21 @@ run "google_managed_without_the_gke_gateway_is_rejected" {
   variables {
     install_ingress        = false
     tls_certificate_source = "google-managed"
+    langsmith_domain       = "langsmith.acme.test"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# The default langsmith_domain is an example. A certificate for it can never be
+# authorized, so the plan stops instead of creating one.
+run "google_managed_with_the_example_domain_is_rejected" {
+  command = plan
+
+  variables {
+    install_ingress        = true
+    ingress_type           = "gke"
+    tls_certificate_source = "google-managed"
   }
 
   expect_failures = [terraform_data.validate_inputs]
@@ -132,6 +148,7 @@ run "google_managed_on_a_regional_class_is_rejected" {
     ingress_type           = "gke"
     gke_gateway_class      = "gke-l7-rilb"
     tls_certificate_source = "google-managed"
+    langsmith_domain       = "langsmith.acme.test"
   }
 
   expect_failures = [terraform_data.validate_inputs]

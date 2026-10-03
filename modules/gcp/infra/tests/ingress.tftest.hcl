@@ -317,3 +317,67 @@ run "gke_rejects_letsencrypt" {
 
   expect_failures = [local_file.gke_gateway]
 }
+
+# ── Input validation ─────────────────────────────────────────────────────────
+# The provisioners pass these values to the shell only through the environment,
+# and the module also validates them, so a value with shell syntax stops the
+# plan even when this module is called without the root module.
+run "cluster_name_with_shell_syntax_is_rejected" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    cluster_name = "gke$(id)"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+# The GKE Gateway static IP is <gateway_name>-ip, so the name stops at 60.
+run "gateway_name_too_long_for_the_static_ip_is_rejected" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    ingress_type = "gke"
+    gateway_name = "langsmith-gateway-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxa"
+  }
+
+  expect_failures = [var.gateway_name]
+}
+
+run "namespace_region_and_project_with_shell_syntax_are_rejected" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    langsmith_namespace = "langsmith;id"
+    region              = "us-central1 && id"
+    project_id          = "proj`id`"
+  }
+
+  expect_failures = [var.langsmith_namespace, var.region, var.project_id]
+}
+
+run "gateway_api_crds_url_must_be_https" {
+  command = plan
+
+  module {
+    source = "./modules/ingress"
+  }
+
+  variables {
+    gateway_api_crds_url = "http://example.com/standard-install.yaml"
+  }
+
+  expect_failures = [var.gateway_api_crds_url]
+}

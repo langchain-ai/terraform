@@ -68,6 +68,28 @@ gcloud certificate-manager certificates describe "$(terraform -chdir=infra outpu
 `PROVISIONING` usually turns `ACTIVE` within minutes to an hour of the record
 resolving. If the domain has CAA records, they must allow `pki.goog`.
 
+### After the first deploy
+
+- When the Gateway first reports `Programmed`, the global load balancer still
+  needs a few minutes to reach every Google edge location. Until then, an HTTPS
+  request can reset, or return `404` with the body `fault filter abort`. Until
+  the LangSmith backends pass their health checks, it returns `502`. See
+  TROUBLESHOOTING.md, Issue #6d.
+- To test before DNS points at the Gateway, send the domain to the Gateway
+  address:
+
+  ```bash
+  IP=$(terraform -chdir=infra output -raw ingress_ip)
+  curl --resolve "langsmith.example.com:443:$IP" https://langsmith.example.com/api/v1/ok
+  ```
+
+- GKE writes the redirect `Location` header with the port, for example
+  `https://langsmith.example.com:443/`. Browsers treat it as the same URL.
+- A change of `langsmith_domain` or `tls_google_managed_include_wildcard`
+  replaces the certificate, and HTTPS fails until the new certificate is
+  `ACTIVE`. A new domain also gets a new DNS authorization record. Add that
+  record as soon as `terraform apply` shows it.
+
 ### Private CA
 
 Set `tls_google_managed_issuance_config` to a Certificate Manager issuance

@@ -136,6 +136,9 @@ ENABLE_SECRET_MANAGER=$(_tfvar "enable_secret_manager_module")
 ENABLE_DNS=$(_tfvar "enable_dns_module")
 TLS_SOURCE=$(_tfvar "tls_certificate_source")
 ENABLE_SANDBOXES=$(_tfvar "enable_sandboxes")
+INSTALL_INGRESS=$(_tfvar "install_ingress")
+INGRESS_TYPE=$(_tfvar "ingress_type")
+GKE_GATEWAY_CLASS=$(_tfvar "gke_gateway_class")
 ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
 SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")
 SMITHDB_METASTORE_SOURCE="${SMITHDB_METASTORE_SOURCE:-create}"
@@ -269,6 +272,15 @@ if [[ "$TLS_SOURCE" == "google-managed" ]]; then
     "certificatemanager.certmapentries.create"
     "certificatemanager.dnsauthorizations.create"
   )
+fi
+# A global GKE Gateway class gets a global static IP, so DNS can point at the
+# Gateway before its load balancer exists. install_ingress defaults to true.
+if [[ "$INSTALL_INGRESS" != "false" && "$INGRESS_TYPE" == "gke" &&
+  ( -z "$GKE_GATEWAY_CLASS" || "$GKE_GATEWAY_CLASS" == gke-l7-global* ) ]]; then
+  case " ${CONDITIONAL_PERMISSIONS[*]-} " in
+    *" compute.globalAddresses.create "*) ;;
+    *) CONDITIONAL_PERMISSIONS+=("compute.globalAddresses.create") ;;
+  esac
 fi
 # The SmithDB metastore is its own Cloud SQL instance, so these are needed even
 # when postgres_source is not "external" and the block above did not add them.
