@@ -32,10 +32,11 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | postgres | `modules/postgres/` | Cloud SQL PostgreSQL instance, HA standby replica, private IP, deletion protection |
 | redis | `modules/redis/` | Memorystore Redis Standard HA tier, private IP within VPC |
 | storage | `modules/storage/` | GCS bucket with lifecycle rules for `ttl_s/` (14 days) and `ttl_l/` (400 days) prefixes |
-| k8s-bootstrap | `modules/k8s-bootstrap/` | `langsmith` namespace, K8s secrets for Postgres and Redis URLs, cert-manager Helm release, KEDA Helm release |
-| ingress | `modules/ingress/` | Envoy Gateway Helm release, GatewayClass, HTTPRoute, optional HTTPS Gateway listener |
+| k8s-bootstrap | `modules/k8s-bootstrap/` | `langsmith` namespace, K8s secrets for Postgres and Redis URLs, cert-manager Helm release and Certificate (when a TLS source needs it), KEDA Helm release |
+| ingress | `modules/ingress/` | Envoy Gateway Helm release or GKE Gateway, GatewayClass, HTTPS listener and HTTP-to-HTTPS redirect when TLS is on |
 | iam | `modules/iam/` | GCP service accounts and Workload Identity IAM bindings for GCS access (wired by default) |
-| dns | `modules/dns/` | Cloud DNS managed zone and managed cert (optional via `enable_dns_module`) |
+| dns | `modules/dns/` | Cloud DNS managed zone (optional via `enable_dns_module`) |
+| certificate-manager | `modules/certificate-manager/` | Google-managed certificate, certificate map, and DNS authorization for the GKE Gateway (`tls_certificate_source = "google-managed"`) |
 | secrets | `modules/secrets/` | Secret Manager secret bundle (optional via `enable_secret_manager_module`) |
 
 ---
@@ -175,7 +176,9 @@ LangSmith itself is **not** deployed by Terraform — it is deployed in Pass 2 v
 Internet (HTTPS :443)
   ↓
 Envoy Gateway  (envoy-gateway-system namespace, external LoadBalancer IP)
-  │  TLS terminated — cert-manager + Let's Encrypt or existing certificate
+  │  TLS terminated from a Secret (existing, cert-manager, or Let's Encrypt);
+  │  with ingress_type = "gke", at the Google Cloud load balancer instead,
+  │  optionally with a Google-managed certificate. HTTP :80 redirects to HTTPS.
   │
   ├── /                     → frontend:80
   ├── /api/*                → backend:1984

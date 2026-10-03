@@ -3,6 +3,11 @@
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.project_id))
+    error_message = "project_id must be a GCP project ID: 6 to 30 lowercase letters, digits, or hyphens, starting with a letter."
+  }
 }
 
 # Needed so the kubectl provisioners can fetch credentials for this specific
@@ -10,11 +15,21 @@ variable "project_id" {
 variable "region" {
   description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]+$", var.region))
+    error_message = "region must be a GCP region, for example us-central1."
+  }
 }
 
 variable "cluster_name" {
   description = "Name of the GKE cluster being bootstrapped. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$", var.cluster_name))
+    error_message = "cluster_name must be a GKE cluster name: up to 40 lowercase letters, digits, or hyphens, starting with a letter and ending with a letter or digit."
+  }
 }
 
 variable "environment" {
@@ -168,20 +183,65 @@ variable "install_keda" {
 # TLS / Certificate Configuration
 #------------------------------------------------------------------------------
 variable "tls_certificate_source" {
-  description = "Source of TLS certificates: 'none' (no TLS), 'letsencrypt' (auto via cert-manager), 'existing' (provide your own)"
+  description = "Source of TLS certificates: 'none', 'google-managed', 'existing', 'cert-manager', or 'letsencrypt'. This module handles the Secret-based sources; 'google-managed' lives on the load balancer."
   type        = string
   default     = "none"
 
   validation {
-    condition     = contains(["none", "letsencrypt", "existing"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be one of: none, letsencrypt, existing"
+    condition     = contains(["none", "google-managed", "existing", "cert-manager", "letsencrypt"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be one of: none, google-managed, existing, cert-manager, letsencrypt."
   }
 }
 
 variable "install_cert_manager" {
-  description = "Install cert-manager for automatic TLS certificate management with Let's Encrypt"
+  description = "Install cert-manager"
   type        = bool
   default     = false
+}
+
+variable "cert_manager_version" {
+  description = "cert-manager Helm chart version (OCI chart oci://quay.io/jetstack/charts/cert-manager)"
+  type        = string
+  default     = "v1.21.2"
+
+  validation {
+    condition     = can(regex("^v1\\.[0-9]+\\.[0-9]+$", var.cert_manager_version))
+    error_message = "cert_manager_version must look like v1.21.2."
+  }
+}
+
+variable "cert_manager_enable_gateway_api" {
+  description = "Turn on cert-manager's Gateway API support, which the Let's Encrypt HTTP-01 solver needs. Applies the Gateway API CRDs from gateway_api_crds_url before cert-manager starts."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_api_crds_url" {
+  description = "Gateway API CRD bundle applied ahead of cert-manager when cert_manager_enable_gateway_api is true. Must match the ingress module's bundle."
+  type        = string
+  default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+
+  validation {
+    condition     = startswith(var.gateway_api_crds_url, "https://")
+    error_message = "gateway_api_crds_url must be an https:// URL."
+  }
+}
+
+variable "cert_manager_issuer_name" {
+  description = "Issuer or ClusterIssuer for tls_certificate_source = 'cert-manager'. Created by the operator, not by this module."
+  type        = string
+  default     = ""
+}
+
+variable "cert_manager_issuer_kind" {
+  description = "Kind of cert_manager_issuer_name: 'ClusterIssuer', or 'Issuer' in the LangSmith namespace."
+  type        = string
+  default     = "ClusterIssuer"
+
+  validation {
+    condition     = contains(["ClusterIssuer", "Issuer"], var.cert_manager_issuer_kind)
+    error_message = "cert_manager_issuer_kind must be ClusterIssuer or Issuer."
+  }
 }
 
 variable "letsencrypt_email" {
@@ -214,9 +274,17 @@ variable "tls_certificate_key" {
 }
 
 variable "tls_secret_name" {
-  description = "Name for the TLS secret in Kubernetes"
+  description = "Name of the TLS Secret the Gateway HTTPS listener reads, in the LangSmith namespace. Created here for 'existing' with PEM inputs, by cert-manager for 'letsencrypt' and 'cert-manager', or by the operator with tls_existing_secret_name. Empty when no Secret is used."
   type        = string
   default     = "langsmith-tls"
+
+  validation {
+    condition = var.tls_secret_name == "" || (
+      length(var.tls_secret_name) <= 253 &&
+      can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", var.tls_secret_name))
+    )
+    error_message = "tls_secret_name must be empty or a Kubernetes Secret name: up to 253 lowercase letters, digits, hyphens, or dots, starting and ending with a letter or digit."
+  }
 }
 
 variable "langsmith_domain" {
@@ -282,6 +350,12 @@ variable "clickhouse_ca_cert" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+variable "allow_gke_gateway_traffic" {
+  description = "Admit Google Cloud load balancer and health-check traffic (130.211.0.0/22, 35.191.0.0/16) to LangSmith pods. Needed for ingress_type = \"gke\", where the load balancer reaches pods directly through container-native NEGs."
+  type        = bool
+  default     = false
 }
 
 #------------------------------------------------------------------------------

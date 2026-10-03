@@ -252,61 +252,80 @@ langsmith_helm_chart_version = ""
 #------------------------------------------------------------------------------
 # Optional: TLS / HTTPS Configuration
 #------------------------------------------------------------------------------
-# ── Staged-deploy walkthrough ──────────────────────────────────────────────
+# Every option, and how to move between them: ../TLS.md
 #
-# If you don't have a certificate yet, deploy in two passes:
+#   "none"           - HTTP only.
+#   "google-managed" - Certificate Manager certificate on the GKE Gateway load
+#                      balancer (ingress_type = "gke"). Recommended for
+#                      production on GKE Gateway: no key in the cluster, no
+#                      cert-manager, no inbound port 80.
+#   "existing"       - your own certificate in a Kubernetes TLS Secret.
+#                      Recommended for production on Envoy Gateway.
+#   "cert-manager"   - cert-manager issues from your own Issuer or ClusterIssuer
+#                      (Vault, Venafi, Google CAS, private ACME).
+#   "letsencrypt"    - public Let's Encrypt via cert-manager, Envoy only. For
+#                      evaluation: the domain must be reachable from the
+#                      internet on port 80.
 #
-# Pass 1 — HTTP only (get the Gateway IP):
-#   tls_certificate_source = "none"
-#   terraform apply
-#   # Note the gateway IP from terraform output or: kubectl get gateway -n envoy-gateway-system
-#   # Point your DNS A record to the gateway IP, then wait for DNS to propagate.
-#
-# Pass 2 — Enable TLS:
-#   tls_certificate_source = "letsencrypt"
-#   letsencrypt_email       = "you@example.com"
-#   terraform apply
-#   # cert-manager will provision the certificate automatically.
-#
-# ⚠  Warning: Do not delete and recreate the Gateway resource after you have DNS
-#    pointing to it — GKE will issue a new external IP and your DNS record will
-#    break. Use terraform apply (update-in-place) to change TLS configuration.
+# With any source other than "none", HTTP redirects to HTTPS.
+tls_certificate_source = "none"
 
-# Choose TLS certificate source:
-#   "none"        — No TLS (HTTP only) — use for initial DNS setup (see above)
-#   "letsencrypt" — Automatic via Let's Encrypt + cert-manager (recommended)
-#   "existing"    — Provide your own TLS certificate and key
-tls_certificate_source = "letsencrypt"
+# --- google-managed (set ingress_type = "gke" below) ---
+# The certificate is issued once a DNS authorization CNAME resolves, before the
+# domain points at the Gateway. With enable_dns_module = true Terraform writes
+# the record; otherwise add it from: terraform output tls_dns_authorization_record
+# tls_google_managed_include_wildcard = false
+# Issue from your own Certificate Authority Service pool instead of a public CA:
+# tls_google_managed_issuance_config = "projects/<project>/locations/global/certificateIssuanceConfigs/<name>"
 
-# --- Option 1: Let's Encrypt (automatic) ---
-letsencrypt_email = "your-email@example.com"
-
-# --- Option 2: Existing Certificates ---
-# Set tls_certificate_source = "existing" and provide cert/key:
-# Option A: Inline PEM content
+# --- existing ---
+# Create the Secret yourself, so the private key never enters Terraform state:
+#   kubectl create secret tls langsmith-tls -n langsmith --cert=tls.crt --key=tls.key
+# tls_existing_secret_name = "langsmith-tls"
+#
+# Deprecated: inline PEM that Terraform writes to tls_secret_name. The key is
+# stored in Terraform state, and the plan warns. Set this or the Secret, not both.
 # tls_certificate_crt = <<-EOT
 #   -----BEGIN CERTIFICATE-----
-#   ... your certificate ...
+#   ...
 #   -----END CERTIFICATE-----
 # EOT
 # tls_certificate_key = <<-EOT
 #   -----BEGIN PRIVATE KEY-----
-#   ... your private key ...
+#   ...
 #   -----END PRIVATE KEY-----
 # EOT
 
-# Option B: Load from files (recommended)
-# tls_certificate_crt = file("${path.module}/certs/langsmith.crt")
-# tls_certificate_key = file("${path.module}/certs/langsmith.key")
+# --- cert-manager with your own issuer ---
+# cert_manager_issuer_name = "corp-pki"
+# cert_manager_issuer_kind = "ClusterIssuer"   # or "Issuer" in the LangSmith namespace
 
-# Name for the TLS secret in Kubernetes
+# --- letsencrypt (evaluation) ---
+# letsencrypt_email = "you@example.com"
+
+# cert-manager chart version, when a source installs it. An existing install
+# steps up one minor at a time: make cert-manager-upgrade, then make apply.
+# cert_manager_version = "v1.21.2"
+
+# Secret that Terraform (PEM inputs) or cert-manager creates.
 tls_secret_name = "langsmith-tls"
 
 #------------------------------------------------------------------------------
 # Optional: Ingress Configuration
 #------------------------------------------------------------------------------
 install_ingress = true
-ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved)
+ingress_type    = "envoy"  # "envoy" (default), "gke" (GKE Gateway), "istio" or "other" (reserved)
+
+# ingress_type = "gke" uses the GKE Gateway controller instead of Envoy Gateway.
+#   - tls_certificate_source can be "none", "google-managed", "existing", or
+#     "cert-manager". "letsencrypt" is Envoy-only. "google-managed" needs a
+#     global class.
+#   - The default class reserves a global static IP (<name>-gateway-ip) for DNS.
+#     The Envoy Gateway's IP is not reserved: do not delete and recreate its
+#     Gateway once DNS points at it, or the IP changes.
+#     Regional classes such as "gke-l7-rilb" need a proxy-only subnet that this
+#     stack does not create, and get an ephemeral IP.
+# gke_gateway_class = "gke-l7-global-external-managed"
 
 #------------------------------------------------------------------------------
 # Optional: AWS-parity module wiring
@@ -319,11 +338,11 @@ enable_gcp_iam_module = true
 # Use setup-env.sh to manage secrets — it reads/writes Secret Manager automatically.
 enable_secret_manager_module = false
 
-# Enable Cloud DNS + managed cert module wiring.
+# Enable the Cloud DNS module. With tls_certificate_source = "google-managed" it
+# also holds the certificate's DNS authorization record.
 enable_dns_module      = false
 dns_create_zone        = true
 dns_existing_zone_name = ""
-dns_create_certificate = true
 
 #------------------------------------------------------------------------------
 # Optional: LangSmith Deployment (Deploy agents from UI)

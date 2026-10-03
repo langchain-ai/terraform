@@ -34,6 +34,34 @@ locals {
     "roles/stackdriver.resourceMetadata.writer",
   ])
 
+  #----------------------------------------------------------------------------
+  # Ingress TLS
+  #----------------------------------------------------------------------------
+  tls_enabled        = var.tls_certificate_source != "none"
+  tls_google_managed = var.tls_certificate_source == "google-managed"
+
+  # cert-manager writes the TLS Secret for these sources.
+  tls_cert_manager_issued = contains(["letsencrypt", "cert-manager"], var.tls_certificate_source)
+
+  # 'existing' with a Secret the operator creates. Terraform only references it,
+  # so the key stays out of state.
+  tls_external_secret = var.tls_certificate_source == "existing" && var.tls_existing_secret_name != ""
+
+  # The Secret the HTTPS listener references. Empty with no TLS, and with a
+  # Google-managed certificate, which the load balancer holds instead.
+  tls_listener_secret_name = (
+    !local.tls_enabled || local.tls_google_managed ? "" :
+    local.tls_external_secret ? var.tls_existing_secret_name : var.tls_secret_name
+  )
+
+  # Only global GKE Gateway classes read a certificate map.
+  gke_gateway_global_class = startswith(var.gke_gateway_class, "gke-l7-global")
+
+  # Gateway API CRDs for Envoy Gateway. cert-manager with Gateway API support on
+  # (Let's Encrypt HTTP-01) needs them before it starts, so k8s-bootstrap applies
+  # the same file ahead of cert-manager. Keep one URL for both.
+  gateway_api_crds_url = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+
   # Cloud SQL
   postgres_instance_name = "${local.base_name}-pg${local.suffix}"
   postgres_database_name = "langsmith"

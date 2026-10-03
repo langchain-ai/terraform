@@ -183,24 +183,27 @@ terraform -chdir=infra output secret_manager_secret_id
 
 ---
 
-### DNS + Managed Certificate
+### DNS + Google-managed certificate (GKE Gateway)
 
 ```hcl
 # terraform.tfvars
-enable_dns_module    = true
-langsmith_domain     = "langsmith.example.com"
-dns_create_zone      = true
-dns_create_certificate = true
+enable_dns_module      = true
+langsmith_domain       = "langsmith.example.com"
+dns_create_zone        = true
+ingress_type           = "gke"
+tls_certificate_source = "google-managed"
 ```
 
-**Expected plan**: `google_dns_managed_zone.*`, `google_certificate_manager_certificate.*`.
+**Expected plan**: `google_dns_managed_zone.*`, and in `module.certificate_manager`: a DNS authorization, its CNAME `google_dns_record_set`, the certificate, a certificate map, and a `PRIMARY` map entry. The GKE Gateway manifest carries `networking.gke.io/certmap`, and `https-redirect.yaml` is applied.
 
 **Verify**:
 ```bash
 terraform -chdir=infra output dns_name_servers
 terraform -chdir=infra output managed_certificate_name
+make status                     # shows the certificate state
+curl -sI http://langsmith.example.com | head -1   # expect 301
 ```
-Delegate the domain to the returned name servers, then wait for the certificate to provision (can take 10–60 min after DNS propagates).
+Delegate the domain to the returned name servers. The certificate turns `ACTIVE` once the authorization record resolves, usually within an hour.
 
 ---
 
@@ -213,7 +216,7 @@ letsencrypt_email      = "ops@example.com"
 langsmith_domain       = "langsmith.example.com"
 ```
 
-**Expected plan**: cert-manager Helm release, `ClusterIssuer` resources.
+**Expected plan**: the Gateway API CRDs applied ahead of cert-manager, the upgrade guard, the cert-manager v1.21.2 Helm release with `config.enableGatewayAPI`, the `letsencrypt-prod` ClusterIssuer, the Certificate, the ReferenceGrant, and the HTTP-to-HTTPS redirect route.
 
 **Verify**:
 ```bash
