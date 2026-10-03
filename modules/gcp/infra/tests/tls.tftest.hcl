@@ -515,3 +515,58 @@ run "existing_with_an_operator_secret_creates_nothing" {
     error_message = "An operator-owned Secret must not be created or overwritten by Terraform"
   }
 }
+
+# ── modules/k8s-bootstrap: input validation ──────────────────────────────────
+# As in modules/ingress, the provisioners pass these values to the shell only
+# through the environment, and the module also validates them, so a value with
+# shell syntax stops the plan even when this module is called without the root.
+run "k8s_bootstrap_cluster_name_with_shell_syntax_is_rejected" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-bootstrap"
+  }
+
+  variables {
+    region       = "us-central1"
+    cluster_name = "gke$(id)"
+    environment  = "dev"
+  }
+
+  expect_failures = [var.cluster_name]
+}
+
+run "k8s_bootstrap_region_project_and_secret_name_with_shell_syntax_are_rejected" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-bootstrap"
+  }
+
+  variables {
+    region          = "us-central1 && id"
+    project_id      = "proj`id`"
+    cluster_name    = "langsmith-plan-tests-gke"
+    environment     = "dev"
+    tls_secret_name = "langsmith-tls;id"
+  }
+
+  expect_failures = [var.region, var.project_id, var.tls_secret_name]
+}
+
+run "k8s_bootstrap_gateway_api_crds_url_must_be_https" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-bootstrap"
+  }
+
+  variables {
+    region               = "us-central1"
+    cluster_name         = "langsmith-plan-tests-gke"
+    environment          = "dev"
+    gateway_api_crds_url = "http://example.com/standard-install.yaml"
+  }
+
+  expect_failures = [var.gateway_api_crds_url]
+}

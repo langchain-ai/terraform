@@ -3,6 +3,11 @@
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.project_id))
+    error_message = "project_id must be a GCP project ID: 6 to 30 lowercase letters, digits, or hyphens, starting with a letter."
+  }
 }
 
 # Needed so the kubectl provisioners can fetch credentials for this specific
@@ -10,11 +15,21 @@ variable "project_id" {
 variable "region" {
   description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]$", var.region))
+    error_message = "region must be a GCP region, for example us-central1."
+  }
 }
 
 variable "cluster_name" {
   description = "Name of the GKE cluster being bootstrapped. Used to fetch cluster credentials for the kubectl provisioners."
   type        = string
+
+  validation {
+    condition     = can(regex("^[a-z]([a-z0-9-]{0,38}[a-z0-9])?$", var.cluster_name))
+    error_message = "cluster_name must be a GKE cluster name: up to 40 lowercase letters, digits, or hyphens, starting with a letter and ending with a letter or digit."
+  }
 }
 
 variable "environment" {
@@ -205,6 +220,11 @@ variable "gateway_api_crds_url" {
   description = "Gateway API CRD bundle applied ahead of cert-manager when cert_manager_enable_gateway_api is true. Must match the ingress module's bundle."
   type        = string
   default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+
+  validation {
+    condition     = startswith(var.gateway_api_crds_url, "https://")
+    error_message = "gateway_api_crds_url must be an https:// URL."
+  }
 }
 
 variable "cert_manager_issuer_name" {
@@ -257,6 +277,14 @@ variable "tls_secret_name" {
   description = "Name of the TLS Secret the Gateway HTTPS listener reads, in the LangSmith namespace. Created here for 'existing' with PEM inputs, by cert-manager for 'letsencrypt' and 'cert-manager', or by the operator with tls_existing_secret_name. Empty when no Secret is used."
   type        = string
   default     = "langsmith-tls"
+
+  validation {
+    condition = var.tls_secret_name == "" || (
+      length(var.tls_secret_name) <= 253 &&
+      can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$", var.tls_secret_name))
+    )
+    error_message = "tls_secret_name must be empty or a Kubernetes Secret name: up to 253 lowercase letters, digits, hyphens, or dots, starting and ending with a letter or digit."
+  }
 }
 
 variable "langsmith_domain" {

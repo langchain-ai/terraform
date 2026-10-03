@@ -11,9 +11,19 @@ locals {
     KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
     export KUBECONFIG
     trap 'rm -f "$KUBECONFIG"' EXIT
-    gcloud container clusters get-credentials ${var.cluster_name} \
-      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+    gcloud container clusters get-credentials "$LS_CLUSTER_NAME" \
+      --region "$LS_REGION" --project "$LS_PROJECT_ID" --quiet || exit 1
   EOT
+
+  # Input values reach these scripts only through the environment, never as
+  # script text, so the shell cannot run a value as a command. Each provisioner
+  # that uses kubectl_creds sets environment = local.kubectl_env, merged with
+  # any values of its own.
+  kubectl_env = {
+    LS_CLUSTER_NAME = var.cluster_name
+    LS_REGION       = var.region
+    LS_PROJECT_ID   = var.project_id
+  }
 }
 
 #------------------------------------------------------------------------------
@@ -480,9 +490,10 @@ resource "null_resource" "gateway_api_crds_for_cert_manager" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = merge(local.kubectl_env, { LS_GATEWAY_API_CRDS_URL = var.gateway_api_crds_url })
+    command     = <<-EOT
       ${local.kubectl_creds}
-      kubectl apply -f ${var.gateway_api_crds_url} || exit 1
+      kubectl apply -f "$LS_GATEWAY_API_CRDS_URL" || exit 1
     EOT
   }
 }
@@ -499,12 +510,16 @@ resource "null_resource" "cert_manager_upgrade_guard" {
   }
 
   provisioner "local-exec" {
+    environment = merge(local.kubectl_env, {
+      LS_CERT_MANAGER_VERSION   = var.cert_manager_version
+      LS_CERT_MANAGER_MIN_MINOR = tostring(local.cert_manager_minor - 1)
+    })
     command = <<-EOT
       ${local.kubectl_creds}
       current=$(kubectl get deployment cert-manager -n cert-manager \
         -o jsonpath='{.metadata.labels.app\.kubernetes\.io/version}' 2>/dev/null || true)
       if [ -z "$current" ]; then
-        echo "cert-manager is not installed yet. Installing ${var.cert_manager_version}."
+        echo "cert-manager is not installed yet. Installing $LS_CERT_MANAGER_VERSION."
         exit 0
       fi
       current_minor=$(echo "$current" | sed -E 's/^v?1\.([0-9]+)\..*$/\1/')
@@ -513,13 +528,13 @@ resource "null_resource" "cert_manager_upgrade_guard" {
           echo "ERROR: cannot read the installed cert-manager version ('$current')." >&2
           exit 1 ;;
       esac
-      if [ "$current_minor" -lt ${local.cert_manager_minor - 1} ]; then
+      if [ "$current_minor" -lt "$LS_CERT_MANAGER_MIN_MINOR" ]; then
         echo "ERROR: cert-manager $current is installed. cert-manager supports upgrades one" >&2
-        echo "       minor version at a time, and this apply targets ${var.cert_manager_version}." >&2
+        echo "       minor version at a time, and this apply targets $LS_CERT_MANAGER_VERSION." >&2
         echo "       Run 'make cert-manager-upgrade' from modules/gcp first, then apply again." >&2
         exit 1
       fi
-      echo "cert-manager $current -> ${var.cert_manager_version}: within one minor version."
+      echo "cert-manager $current -> $LS_CERT_MANAGER_VERSION: within one minor version."
     EOT
   }
 }
@@ -651,12 +666,13 @@ resource "null_resource" "apply_letsencrypt_issuer" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = local.kubectl_env
+    command     = <<-EOT
       ${local.kubectl_creds}
       # helm waits for the deployments, but the webhook can take a few more
       # seconds to serve, so retry the apply rather than sleep a fixed time.
       for i in $(seq 1 20); do
-        if kubectl apply -f ${local_file.letsencrypt_issuer[0].filename}; then
+        if kubectl apply -f "${local_file.letsencrypt_issuer[0].filename}"; then
           echo "ClusterIssuer applied"
           exit 0
         fi
@@ -712,17 +728,18 @@ resource "null_resource" "apply_certificate" {
   }
 
   provisioner "local-exec" {
-    command = <<-EOT
+    environment = merge(local.kubectl_env, { LS_TLS_SECRET_NAME = var.tls_secret_name })
+    command     = <<-EOT
       ${local.kubectl_creds}
       for i in $(seq 1 20); do
-        if kubectl apply -f ${local_file.certificate[0].filename}; then
+        if kubectl apply -f "${local_file.certificate[0].filename}"; then
           echo "Certificate applied"
           exit 0
         fi
         echo "Retrying Certificate apply... ($i/20)"
         sleep 6
       done
-      echo "ERROR: could not apply the Certificate ${var.tls_secret_name}." >&2
+      echo "ERROR: could not apply the Certificate $LS_TLS_SECRET_NAME." >&2
       exit 1
     EOT
   }
