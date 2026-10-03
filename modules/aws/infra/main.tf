@@ -324,8 +324,6 @@ module "postgres" {
   backup_retention_period             = var.postgres_backup_retention_period
 
   existing_security_group_id = var.postgres_existing_security_group_id
-
-  depends_on = [module.eks]
 }
 
 resource "aws_iam_role_policy" "langsmith_s3" {
@@ -462,8 +460,6 @@ module "cert_manager" {
   oidc_provider_arn = module.eks.oidc_provider_arn
   hosted_zone_id    = var.cert_manager_hosted_zone_id
   tags              = local.common_tags
-
-  depends_on = [module.eks]
 }
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
@@ -627,7 +623,7 @@ module "bastion" {
   vpc_id              = local.vpc_id
   subnet_id           = var.bastion_enable_ssh ? local.public_subnets[0] : local.private_subnets[0]
   associate_public_ip = var.bastion_enable_ssh
-  cluster_name        = local.cluster_name
+  cluster_name        = module.eks.cluster_name
   region              = var.region
   instance_type       = var.bastion_instance_type
   key_name            = var.bastion_key_name
@@ -638,7 +634,7 @@ module "bastion" {
 
   existing_security_group_id = var.bastion_existing_security_group_id
 
-  depends_on = [module.vpc, module.eks]
+  depends_on = [module.vpc]
 }
 
 # The ALB controller (installed by EKS blueprints) registers a mutating webhook
@@ -998,8 +994,6 @@ module "smithdb" {
 
   existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
   manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
-
-  depends_on = [module.eks]
 }
 
 # Metastore connection secret consumed by smithdb.config.existingSecretName.
