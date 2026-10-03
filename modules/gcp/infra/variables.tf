@@ -19,7 +19,7 @@ variable "region" {
   default     = "us-west2"
 
   validation {
-    condition     = can(regex("^[a-z]+-[a-z]+[0-9]$", var.region))
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]+$", var.region))
     error_message = "Region must be a valid GCP region (e.g., us-west2, europe-west1)."
   }
 }
@@ -30,7 +30,7 @@ variable "zone" {
   default     = "us-west2-a"
 
   validation {
-    condition     = can(regex("^[a-z]+-[a-z]+[0-9]-[a-z]$", var.zone))
+    condition     = can(regex("^[a-z]+-[a-z]+[0-9]+-[a-z]$", var.zone))
     error_message = "Zone must be a valid GCP zone (e.g., us-west2-a)."
   }
 }

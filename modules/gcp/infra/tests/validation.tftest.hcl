@@ -207,3 +207,21 @@ run "postgres_password_rejects_a_short_value" {
 
   expect_failures = [var.postgres_password]
 }
+
+# The region and zone rules must also accept the regions whose number has two
+# digits. The ingress module is on, so its own region rule sees the value too,
+# and k8s-bootstrap checks the same value.
+run "two_digit_regions_and_zones_are_accepted" {
+  command = plan
+
+  variables {
+    region          = "europe-west10"
+    zone            = "europe-west10-a"
+    install_ingress = true
+  }
+
+  assert {
+    condition     = length(module.ingress) == 1
+    error_message = "install_ingress = true did not plan the ingress module"
+  }
+}
