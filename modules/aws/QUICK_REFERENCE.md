@@ -77,6 +77,9 @@ make init-values
 # Re-sync ESO secrets without redeploying
 make apply-eso
 
+# Turn on SSO login after a working password install (one-way)
+make sso
+
 # Check SSM secrets status + TF_VAR_* export status (read-only)
 make secrets
 
