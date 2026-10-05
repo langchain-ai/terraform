@@ -1058,17 +1058,11 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 #
 # With envoy_gateway_image_registry, the controller (and its certgen job) pull
 # from the mirror through the chart's global image value, and the proxy image is
-# exported for deploy.sh, which sets it on the EnvoyProxy. The controller picks
-# the proxy image itself, so its default for each chart version is listed here.
-# The root variable envoy_gateway_image_registry refuses a version missing from
-# this map; keep its list in step.
+# exported for deploy.sh, which sets it on the EnvoyProxy.
 locals {
-  envoy_proxy_default_images = {
-    "v1.2.0" = "envoyproxy/envoy:distroless-v1.32.1"
-  }
   envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
   envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
-  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
 }
 
 resource "helm_release" "envoy_gateway" {

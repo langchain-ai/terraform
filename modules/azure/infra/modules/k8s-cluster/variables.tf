@@ -333,6 +333,12 @@ variable "envoy_gateway_image_registry" {
   default     = ""
 }
 
+variable "envoy_proxy_default_image" {
+  type        = string
+  description = "Envoy proxy image the controller uses by default for envoy_gateway_version, without a registry (e.g. 'envoyproxy/envoy:distroless-v1.32.1'). Mirrored with envoy_gateway_image_registry."
+  default     = ""
+}
+
 variable "envoy_gateway_image_pull_secret_name" {
   type        = string
   description = "Pull Secret in envoy-gateway-system for the controller and proxy pods. Empty pulls without credentials."

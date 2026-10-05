@@ -718,6 +718,11 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   # so that output is read and checked here.
   _eg_proxy_image=$(terraform -chdir="$INFRA_DIR" output -raw envoy_gateway_proxy_image 2>/dev/null) || _eg_proxy_image=""
   [[ "$_eg_proxy_image" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]] || _eg_proxy_image=""
+  _eg_registry=$(_parse_tfvar "envoy_gateway_image_registry") || _eg_registry=""
+  if [[ -n "$_eg_registry" && -z "$_eg_proxy_image" ]]; then
+    fail "envoy_gateway_image_registry is set, but the envoy_gateway_proxy_image output is empty or not an image reference, so the proxy pods would pull from docker.io. Run terraform apply in ${INFRA_DIR}, then rerun."
+    exit 1
+  fi
   _eg_pull_secret=$(_tf_out envoy_gateway_image_pull_secret_name) || _eg_pull_secret=""
   _eg_deployment=""
   if [[ -n "$_eg_proxy_image" ]]; then

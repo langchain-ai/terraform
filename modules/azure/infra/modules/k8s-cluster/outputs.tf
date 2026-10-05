@@ -177,8 +177,8 @@ output "envoy_gateway_version" {
 }
 
 output "envoy_gateway_image" {
-  description = "Envoy Gateway controller image from envoy_gateway_image_registry, empty without a mirror or without Envoy Gateway."
-  value       = var.ingress_controller == "envoy-gateway" ? local.envoy_gateway_image : ""
+  description = "Envoy Gateway controller image the Helm release sets, empty without a mirror or without Envoy Gateway."
+  value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.image, "")])
 }
 
 output "envoy_gateway_proxy_image" {
@@ -187,8 +187,8 @@ output "envoy_gateway_proxy_image" {
 }
 
 output "envoy_gateway_image_pull_secret_name" {
-  description = "Pull Secret for the Envoy proxy pods, empty without one. deploy.sh sets it on the EnvoyProxy."
-  value       = var.ingress_controller == "envoy-gateway" ? var.envoy_gateway_image_pull_secret_name : ""
+  description = "Pull Secret the Helm release sets on the controller, empty without one. deploy.sh sets it on the EnvoyProxy too."
+  value       = join("", [for r in helm_release.envoy_gateway : try(yamldecode(r.values[0]).global.images.envoyGateway.pullSecrets[0].name, "")])
 }
 
 output "node_subnet_ids" {

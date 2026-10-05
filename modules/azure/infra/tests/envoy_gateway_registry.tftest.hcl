@@ -121,6 +121,16 @@ run "refuses_a_trailing_slash" {
   expect_failures = [var.envoy_gateway_image_registry]
 }
 
+run "refuses_an_uppercase_path" {
+  command = plan
+
+  variables {
+    envoy_gateway_image_registry = "nexus.example.com/Mirror"
+  }
+
+  expect_failures = [var.envoy_gateway_image_registry]
+}
+
 run "refuses_a_pull_secret_without_a_mirror" {
   command = plan
 

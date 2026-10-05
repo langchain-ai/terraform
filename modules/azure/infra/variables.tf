@@ -1662,16 +1662,14 @@ variable "envoy_gateway_image_registry" {
   default     = ""
 
   validation {
-    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[A-Za-z0-9._-]+)*$", var.envoy_gateway_image_registry))
-    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and a lowercase path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
   }
 
-  # The controller picks the proxy image itself, so the module names the default
-  # for each chart version (local.envoy_proxy_default_images in
-  # modules/k8s-cluster/main.tf). Keep this list in step with that map: a version
-  # missing from it would leave the proxy pulling from docker.io.
+  # A version missing from local.envoy_proxy_default_images would leave the
+  # proxy pulling from docker.io.
   validation {
-    condition     = var.envoy_gateway_image_registry == "" || contains(["v1.2.0"], var.envoy_gateway_version)
+    condition     = var.envoy_gateway_image_registry == "" || contains(keys(local.envoy_proxy_default_images), var.envoy_gateway_version)
     error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
   }
 }
