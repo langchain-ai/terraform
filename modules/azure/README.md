@@ -509,6 +509,8 @@ dns_label              = "langsmith-prod"
 tls_certificate_source = "none"
 ```
 
+**A private address instead of a public one:** `ingress_load_balancer = "internal"` puts the ingress controller on a private IP in the cluster's VNet, with no public frontend. It can't be combined with `dns_label` or with `tls_certificate_source = "letsencrypt"`. See [INGRESS_CONTROLLERS.md, "Private ingress"](INGRESS_CONTROLLERS.md#private-ingress).
+
 **Add HTTPS with Let's Encrypt (`envoy-gateway`, `nginx`, or self-managed `istio`):**
 ```hcl
 dns_label              = "langsmith-prod"
@@ -803,6 +805,7 @@ The main deploy command. Handles everything from pre-checks to post-deploy verif
 - Validates `values-overrides.yaml` exists (fails fast with `make init-values` hint if missing)
 - Refreshes kubeconfig via `az aks get-credentials`
 - Annotates the correct LoadBalancer service with `service.beta.kubernetes.io/azure-dns-label-name` (read from `dns_label` in tfvars) for `nginx`, `istio-addon`, and `istio`
+- With `ingress_load_balancer = "internal"`, writes the internal load-balancer annotations into the Envoy Gateway EnvoyProxy, binds the Istio add-on Gateway to the add-on's internal gateway, and puts the subnet and IP annotations on it
 - For `envoy-gateway`, creates the EnvoyProxy `langsmith-proxy`, the GatewayClass `langsmith-eg`, and the Gateway `langsmith-gateway` before helm install. The EnvoyProxy puts the DNS label on the proxy LB service when Envoy Gateway creates it. The Gateway has an HTTP listener, plus an HTTPS listener on `langsmith-tls` when TLS is on
 - Creates the `letsencrypt-prod` cert-manager `ClusterIssuer` if `tls_certificate_source = "letsencrypt"` (idempotent — skipped if it already exists)
 - Runs `preflight-check.sh`: confirms kubectl, helm, az, terraform are on PATH; tests cluster connectivity; updates the `langchain` Helm repo
