@@ -90,7 +90,7 @@ output "redis_security_group_id" {
 }
 
 output "sandbox_juicefs_csi_config_secret_name" {
-  description = "Kubernetes Secret name for JuiceFS CSI config when sandboxes are enabled"
+  description = "Kubernetes Secret name for the sandbox JuiceFS config when sandboxes are enabled"
   value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
 }
 

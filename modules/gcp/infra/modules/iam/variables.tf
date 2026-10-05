@@ -49,3 +49,9 @@ variable "gcs_bucket_name" {
   description = "Name of the GCS bucket for LangSmith blob storage"
   type        = string
 }
+
+variable "grant_project_secret_accessor" {
+  description = "Grant roles/secretmanager.secretAccessor on the whole project to the LangSmith service account."
+  type        = bool
+  default     = false
+}

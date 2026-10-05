@@ -26,6 +26,7 @@
 #   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
 #   - values/langsmith-values-agent-*.yaml      (based on product tier)
 #   - values/langsmith-values-insights.yaml     (if Insights tier chosen)
+#   - values/langsmith-values-smithdb-sizing.yaml    (if enable_smithdb; from terraform output)
 #   - values/langsmith-values-smithdb.yaml           (if enable_smithdb)
 #   - values/langsmith-values-smithdb-overrides.yaml (if enable_smithdb)
 #
@@ -188,22 +189,26 @@ echo "  ingress_ip                    = ${INGRESS_IP:-(pending — deploy Helm f
 SMITHDB_BUCKET=""
 SMITHDB_GSA=""
 SMITHDB_METASTORE_PORT="5432"
-SMITHDB_METASTORE_USE_SSL="true"
+SMITHDB_METASTORE_USE_SSL=""
 SMITHDB_SECRET_NAME="smithdb-metastore"
 SMITHDB_TASKDB_SECRET_NAME="smithdb-taskdb"
-SMITHDB_USE_AUTH_PROXY="false"
+SMITHDB_USE_AUTH_PROXY=""
 SMITHDB_CONNECTION_NAME=""
 SMITHDB_AUTH_PROXY_IMAGE=""
+SMITHDB_HELM_VALUES=""
 if [[ "$_enable_smithdb" == "true" ]]; then
   SMITHDB_BUCKET=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_object_store_bucket 2>/dev/null) || SMITHDB_BUCKET=""
   SMITHDB_GSA=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_gsa_email 2>/dev/null) || SMITHDB_GSA=""
   SMITHDB_METASTORE_PORT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_port 2>/dev/null) || SMITHDB_METASTORE_PORT="5432"
-  SMITHDB_METASTORE_USE_SSL=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null) || SMITHDB_METASTORE_USE_SSL="true"
+  # Terraform resolves the TLS mode from smithdb_metastore_source when the tfvars
+  # leave it unset. No fixed fallback here, because it could be the wrong mode.
+  SMITHDB_METASTORE_USE_SSL=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_ssl 2>/dev/null) || SMITHDB_METASTORE_USE_SSL=""
   SMITHDB_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_secret_name 2>/dev/null) || SMITHDB_SECRET_NAME="smithdb-metastore"
   SMITHDB_TASKDB_SECRET_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_taskdb_secret_name 2>/dev/null) || SMITHDB_TASKDB_SECRET_NAME="smithdb-taskdb"
-  SMITHDB_USE_AUTH_PROXY=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_auth_proxy 2>/dev/null) || SMITHDB_USE_AUTH_PROXY="false"
+  SMITHDB_USE_AUTH_PROXY=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_use_auth_proxy 2>/dev/null) || SMITHDB_USE_AUTH_PROXY=""
   SMITHDB_CONNECTION_NAME=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_metastore_connection_name 2>/dev/null) || SMITHDB_CONNECTION_NAME=""
   SMITHDB_AUTH_PROXY_IMAGE=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_auth_proxy_image 2>/dev/null) || SMITHDB_AUTH_PROXY_IMAGE=""
+  SMITHDB_HELM_VALUES=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_helm_values 2>/dev/null) || SMITHDB_HELM_VALUES=""
 
   echo "  smithdb_object_store_bucket   = ${SMITHDB_BUCKET:-(not available)}"
   echo "  smithdb_gsa_email             = ${SMITHDB_GSA:-(not available)}"
@@ -214,6 +219,12 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   if [[ -z "$SMITHDB_BUCKET" || -z "$SMITHDB_GSA" ]]; then
     echo "ERROR: enable_smithdb = true but the SmithDB Terraform outputs are missing." >&2
     echo "       Run 'terraform apply' in infra/ before init-values.sh." >&2
+    exit 1
+  fi
+
+  if [[ -z "$SMITHDB_HELM_VALUES" || -z "$SMITHDB_USE_AUTH_PROXY" || -z "$SMITHDB_METASTORE_USE_SSL" ]]; then
+    echo "ERROR: enable_smithdb = true but smithdb_helm_values or the resolved metastore TLS" >&2
+    echo "       outputs are missing. The state is older than this module. Run 'make apply'." >&2
     exit 1
   fi
 
@@ -397,6 +408,7 @@ _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
 _enable_sandboxes=false
+_enable_sso_oidc=false
 _tfvars_drive_addons=false
 
 # Resolve encryption keys up front so the standalone copy+inject blocks below
@@ -415,6 +427,8 @@ _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;             
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
+
 # An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
 # addon keys falls back to the interactive prompt or the files already on disk.
 for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
@@ -423,14 +437,9 @@ for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
   if [[ -n "$(_parse_tfvar "$_k")" ]]; then _tfvars_drive_addons=true; fi
 done
 
-_sandbox_host_image_tag=$(_parse_tfvar "sandbox_host_image_tag") || _sandbox_host_image_tag=""
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
 SANDBOX_CALLBACK_SIGNING_JWK="${TF_VAR_sandbox_callback_signing_jwk:-$EXISTING_SANDBOX_CALLBACK_SIGNING_JWK}"
 if [[ "$_enable_sandboxes" == "true" ]]; then
-  if [[ -z "$_sandbox_host_image_tag" ]]; then
-    echo "ERROR: sandbox_host_image_tag is required when enable_sandboxes = true." >&2
-    exit 1
-  fi
   if [[ -z "$SANDBOX_CALLBACK_SIGNING_JWK" ]]; then
     echo "ERROR: TF_VAR_sandbox_callback_signing_jwk is required when enable_sandboxes = true." >&2
     echo "       Run: source infra/scripts/setup-env.sh" >&2
@@ -541,7 +550,7 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
   fi
 
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -605,7 +614,7 @@ fi
 
 if [[ "$_tfvars_drive_addons" != "true" ]]; then
   if [[ "$_enable_sandboxes" == "true" ]]; then
-    echo "  ✔ Sandboxes (sandbox-host; JuiceFS CSI config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
+    echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
     echo "  ✗ Sandboxes (enable_sandboxes = false)"
   fi
@@ -698,15 +707,25 @@ if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
 fi
 echo ""
 
-# ── SmithDB (chart 0.16+) ─────────────────────────────────────────────────────
-# Two files: the overlay (copied once from examples/, safe to hand-edit for
-# scheduling and sizing) and the overrides file (regenerated every run from
-# Terraform outputs). deploy.sh loads them in that order, so the overrides win.
+# ── SmithDB (chart 0.17) ──────────────────────────────────────────────────────
+# Three files, in the order deploy.sh loads them: the sizing file (written every
+# run from terraform output smithdb_helm_values), the overlay (copied once from
+# examples/, safe to hand-edit), and the overrides file (written every run from
+# the other Terraform outputs). A later file wins.
+_smithdb_sizing_file="$VALUES_DIR/langsmith-values-smithdb-sizing.yaml"
 _smithdb_file="$VALUES_DIR/langsmith-values-smithdb.yaml"
 _smithdb_overrides_file="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
 
 if [[ "$_enable_smithdb" == "true" ]]; then
   echo "SmithDB (enable_smithdb = true):"
+
+  {
+    echo "# Auto-generated by init-values.sh from terraform output smithdb_helm_values."
+    echo "# Do not edit. To change the size or cache: make smithdb-configure."
+    echo ""
+    printf '%s\n' "$SMITHDB_HELM_VALUES"
+  } > "$_smithdb_sizing_file"
+  echo "  ✔ Written langsmith-values-smithdb-sizing.yaml"
 
   if [[ ! -f "$_smithdb_file" ]]; then
     cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_file"
@@ -722,7 +741,8 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   # to connect through. restartPolicy: Always makes it a native sidecar, so the
   # kubelet stops it once the Job's main container exits and the hook can
   # actually complete - a plain init container would never return, and a plain
-  # sidecar in a Job would hold it Running forever.
+  # sidecar in a Job would hold it Running forever. Keep its resources in step
+  # with local.smithdb_quota_inputs.auth_proxy in infra/locals.tf.
   _smithdb_proxy_block=""
   if [[ "$SMITHDB_USE_AUTH_PROXY" == "true" ]]; then
     _smithdb_proxy_block=$(cat << PROXYYAML
@@ -798,9 +818,8 @@ PROXYYAML
 #
 # Loaded after langsmith-values-smithdb.yaml, so anything here wins.
 #
-# The integration gates below come from infra/terraform.tfvars. Advance them one
-# stage at a time (ingestion, then any historical migration, then query), and
-# keep ClickHouse enabled throughout.
+# The integration gates below come from infra/terraform.tfvars. Change them
+# with make smithdb-phase, and keep ClickHouse enabled throughout.
 
 smithdb:
   serviceAccount:
@@ -829,19 +848,16 @@ ${_smithdb_proxy_block}
   # env from the shared smithdb.serviceEnv helper, which reads
   # config.metastore.useSsl for METASTORE__USE_SSL on every component, the Job
   # included, so no separate metastoreMigration.useSsl leaf is needed - the chart
-  # does not read one. Earlier prereleases did, which is why this file used to set
-  # it; it is redundant on 0.16.6+.
+  # does not read one.
 
   # The chart refuses to render with the migration gate on unless taskdb has a
   # credential, so always point it at the Terraform-created secret.
   #
   # The backfill's *source* blob store - the traces bucket holding the run
-  # payloads LangSmith offloaded out of ClickHouse - needs nothing here. From
-  # chart 0.16.6 the migration Job follows config.blobStorage.engine, so a GCS
-  # engine renders the native GCS provider, which takes no credential fields and
-  # authenticates as the Pod's Workload Identity principal. deploy.sh refuses to
-  # deploy an older patch with this gate on, because chart 0.16.5 and earlier
-  # asked for s3 regardless of engine and failed every read on GCP.
+  # payloads LangSmith offloaded out of ClickHouse - needs nothing here. The
+  # migration Job follows config.blobStorage.engine, so a GCS engine renders the
+  # native GCS provider. That provider takes no credential fields and
+  # authenticates as the Pod's Workload Identity principal.
   #
   # What the source store does need is the read grant, and that is Terraform's
   # side: modules/smithdb holds roles/storage.objectViewer on the traces bucket
@@ -893,32 +909,51 @@ redis:
 fi
 
 _sandbox_config_block=""
-_sandbox_top_level_block=""
 if [[ "$_enable_sandboxes" == "true" ]]; then
   _sandbox_service_url_block=""
   if [[ -n "$_sandbox_service_url_base_url" ]]; then
     _sandbox_service_url_block="
   serviceUrlBaseUrl: \"${_sandbox_service_url_base_url}\""
   fi
+  # The chart's JuiceFS format Job runs under the sandbox-host ServiceAccount, so
+  # the Workload Identity annotation goes on sandboxHost. infra binds
+  # langsmith-sandbox-host to the LangSmith GSA. sandbox-host itself runs on the
+  # host network, gets the node service account instead, and mounts JuiceFS
+  # through the bucket grant that infra gives that account.
+  # images.sandboxHostImage.tag is not written here: deploy.sh sets it from the
+  # appVersion of the chart it resolves, so it cannot lag a chart upgrade.
+  # safe-to-evict=false stops the cluster autoscaler from removing a node that
+  # runs sandbox-host (and its sandbox VMs) to consolidate the pool.
+  # The format Job needs no KVM and no host path, and its deadline is 300 s. The
+  # sandbox-host pool can be at 0 nodes. So the Job prefers a sandbox node, but
+  # it can also run on any Linux node and does not wait for a new node to boot.
   _sandbox_config_block="
 sandboxes:
   enabled: true${_sandbox_service_url_block}
   callbackSigningJwk: '${SANDBOX_CALLBACK_SIGNING_JWK}'
   juicefs:
-    csi:
-      existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
-      node:
-        serviceAccount:
-          annotations:
-            iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+    existingSecretName: \"${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME}\"
   sandboxHost:
     deployment:
       nodeSelector:
-        sandbox.langsmith.com/host: \"true\""
-  _sandbox_top_level_block="
-images:
-  sandboxHostImage:
-    tag: \"${_sandbox_host_image_tag}\""
+        sandbox.langsmith.com/host: \"true\"
+      podAnnotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: \"false\"
+    serviceAccount:
+      annotations:
+        iam.gke.io/gcp-service-account: \"${WI_ANNOTATION}\"
+  juicefsFormatJob:
+    nodeSelector:
+      kubernetes.io/os: linux
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: sandbox.langsmith.com/host
+                  operator: In
+                  values: [\"true\"]"
 fi
 
 # ── Optional addon encryption keys (from setup-env.sh) ───────────────────────
@@ -977,6 +1012,31 @@ polly:
 insights:
   encryptionKey: \"${_insights_key}\""
   fi
+fi
+
+# ── SSO/OIDC login (optional) ─────────────────────────────────────────────────
+# WARNING: enable only after the initial install has completed with basic auth
+# and you've confirmed org-admin access — flipping this on before an admin
+# account exists locks you out of the UI.
+_oauth_block=""
+_basic_auth_enabled_block=""
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _oauth_client_id="${TF_VAR_langsmith_oauth_client_id:-}"
+  _oauth_client_secret="${TF_VAR_langsmith_oauth_client_secret:-}"
+  _oauth_issuer_url="${TF_VAR_langsmith_oauth_issuer_url:-}"
+  if [[ -z "$_oauth_client_id" || -z "$_oauth_client_secret" || -z "$_oauth_issuer_url" ]]; then
+    echo "ERROR: enable_sso_oidc = true but OIDC credentials are not set." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  _basic_auth_enabled_block="
+    enabled: false"
+  _oauth_block="
+  oauth:
+    enabled: true
+    oauthClientId: \"${_oauth_client_id}\"
+    oauthClientSecret: \"${_oauth_client_secret}\"
+    oauthIssuerUrl: \"${_oauth_issuer_url}\""
 fi
 
 # ── Agent defaults ────────────────────────────────────────────────────────────
@@ -1061,9 +1121,9 @@ config:
   langsmithLicenseKey: "${LANGSMITH_LICENSE_KEY}"
   apiKeySalt: "${API_KEY_SALT}"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
-  basicAuth:
+  basicAuth:${_basic_auth_enabled_block}
     jwtSecret: "${JWT_SECRET}"
-    initialOrgAdminPassword: "${ADMIN_PASSWORD}"
+    initialOrgAdminPassword: "${ADMIN_PASSWORD}"${_oauth_block}
 ${_addon_keys_block}
   deployment:
     # URL used by the operator to build agent deployment endpoints.
@@ -1089,7 +1149,6 @@ ${_external_services_block}
 ${_fleet_key_block}
 ${_standalone_polly_key_block}
 ${_standalone_insights_key_block}
-${_sandbox_top_level_block}
 ${_agent_defaults_block}
 YAML
 

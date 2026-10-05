@@ -97,8 +97,39 @@ The deployment creates the following assignments. Each one requires `Microsoft.A
 | `Contributor` | `b24988ac-6180-42a0-ab88-20f7382dd24c` | Application Gateway | AGIC identity | `ingress_controller = "agic"` |
 | `Network Contributor` | `4d97b98b-1d4f-4787-a291-c67834d212e7` | Virtual network | AGIC identity | `ingress_controller = "agic"` |
 | `Virtual Machine Administrator Login` | `1c0163c0-47e6-4577-8991-ea5c82e286e4` | Bastion VM | Operators | Bastion module is enabled |
+| `Network Contributor` | `4d97b98b-1d4f-4787-a291-c67834d212e7` | AKS subnet, or the virtual network with a zone ID in `aks_private_dns_zone_id` | AKS control-plane identity | `aks_control_plane_identity = "user"`, with grants managed |
+| `Private DNS Zone Contributor` | `b12aa53e-6015-4669-85d0-8515ebb3ae7f` | API server private DNS zone | AKS control-plane identity | As above, with a zone ID in `aks_private_dns_zone_id` |
 
 The Key Vault assignment to the deploying identity is self-granting: Terraform gives itself `Key Vault Secrets Officer` so that it can then write `postgres-admin-password` and `langsmith-license-key` through the Key Vault data plane. The vault runs in RBAC mode, so no access policy path exists as a fallback. Set `keyvault_manage_secrets = false` to drop both writes, and `keyvault_manage_terraform_admin_assignment = false` alongside it to drop the grant they exist for, as below.
+
+## Control-plane identity grants
+
+With `aks_control_plane_identity = "user"`, the AKS control plane runs as a user-assigned identity: `<cluster_name>-control-plane`, which Terraform creates in the deployment's resource group, or the one in `aks_control_plane_identity_id`. AKS uses its roles while it creates the cluster, so they must exist first:
+
+| Role | Scope | Needed when |
+|------|-------|-------------|
+| `Network Contributor` | The AKS subnet | Always |
+| `Network Contributor` | The subnet's route table | The subnet has one. Terraform does not make this grant |
+| `Network Contributor` | The cluster's VNet | The API server is private and registers in a zone you supply that is not yet linked to the VNet, because AKS then links it |
+| `Private DNS Zone Contributor` | The zone in `aks_private_dns_zone_id` | The API server is private and registers in a zone you supply |
+
+Who makes the grants follows `aks_control_plane_identity_manage_grants`, which defaults to `create_vnet`:
+
+- **`true`.** Terraform makes the grants, waits 300 seconds for Azure to apply them, then creates the cluster. With a zone you supply, it grants on the VNet in place of the subnet, whether or not the zone is linked already. The deploying identity needs `roleAssignments/write` at each scope. This is the default when Terraform built the VNet.
+- **`false`.** Terraform makes no grants, and the network's owner makes them. This is the default on a supplied VNet. The identity must already exist and be set in `aks_control_plane_identity_id`. The plan reads its assignments and fails if a scope has none. The error names the principal ID and gives the `az role assignment create` command for each missing grant.
+
+The check covers the subnet, its route table when it has one, and the zone. It does not check the VNet, which needs a grant only when the zone is not linked yet. It accepts any role at the scope or above it, so a custom role passes, and so does a grant on the VNet's resource group or subscription. A grant at management-group scope is reported missing, because a management group's path is not a prefix of the subscription's: grant at the subnet, the route table, and the zone as well. Azure decides whether the role carries enough permissions when it creates the cluster, and fails the create if it does not.
+
+To deploy with `false`:
+
+1. Create the identity, and give its principal ID to the network's owner:
+
+   ```bash
+   az identity create --resource-group <rg> --name <cluster_name>-control-plane --query principalId --output tsv
+   ```
+
+2. The network's owner grants the roles in the table above to that principal.
+3. Set `aks_control_plane_identity_id` to the identity's resource ID, and run `make apply`. If AKS fails the create on the network's permissions, the grants have not taken effect yet: wait a few minutes and run `make apply` again.
 
 ## Deploy without Key Vault access
 
@@ -115,7 +146,7 @@ This does not remove the deployment's need for `roleAssignments/write` altogethe
 
 ### Turning it off on a deployment that already applied
 
-Leaving `keyvault_manage_secrets` at its default needs no migration. Setting it to false afterwards does, because Terraform reads `count = 0` as "delete these two secrets from the vault". Nothing breaks at the moment of the delete, since no runtime path reads the vault — the failure surfaces later, when `make k8s-secrets` cannot read `langsmith-license-key` to build `langsmith-config-secret`. Soft delete keeps both recoverable for the vault's retention window.
+Leaving `keyvault_manage_secrets` at its default needs no migration. Setting it to false afterwards does, because Terraform reads `count = 0` as "delete these two secrets from the vault". Nothing breaks at the moment of the delete, since no runtime path reads the vault: the failure surfaces later, when `make k8s-secrets` cannot read `langsmith-license-key` to build `langsmith-config-secret`. Soft delete keeps both recoverable for the vault's retention window.
 
 Drop them from state first, which leaves the vault untouched. Read the addresses out of state rather than typing them: `postgres_admin_password` is un-indexed on deployments that last applied before this flag existed and `[0]` after, while `langsmith_license_key` carried a `count` already and is `[0]` either way:
 
@@ -144,6 +175,32 @@ terraform -chdir=infra import 'module.keyvault.azurerm_key_vault_secret.langsmit
 ```
 
 Then set the flag and confirm `terraform plan` shows both secrets unchanged. A `secrets.auto.tfvars` value that differs from the seeded one plans an update, which is the rotation you would expect from the flag.
+
+## Private DNS zones you own
+
+In a hub-and-spoke network the `privatelink` zones usually live in a central subscription and resource group, linked to the hub's DNS. Three inputs point the module at those zones instead of creating its own: `storage_private_dns_zone_id` (blob), `keyvault_private_dns_zone_id` (Key Vault), and `postgres_private_dns_zone_id` (PostgreSQL Flexible Server, for both LangSmith's server and the SmithDB metastore). With a zone supplied, Terraform creates no zone and no virtual network link. Linking the zone to the networks that must resolve these names stays with whoever owns it.
+
+The module creates no role assignments for any of this. The zone's owner and the network's owner grant these to the identity that runs `terraform apply`, before the first apply:
+
+| Grant | Scope | Role (or the one action, in a custom role) | Needed for |
+|-------|-------|------------------------------------------|-----------|
+| Join a supplied zone | The zone's resource group | `Private DNS Zone Contributor` (`b12aa53e-6015-4669-85d0-8515ebb3ae7f`), or `Microsoft.Network/privateDnsZones/join/action` | A private endpoint's DNS zone group (blob, Key Vault) adding its record to the zone. A Flexible Server created against a supplied zone registers its record there too; whether Azure checks the same action for it has not been tested, so grant it before the first apply either way. |
+| Join the private-endpoint subnet | The subnet that holds the endpoints (`storage_private_endpoint_subnet_id`, `keyvault_private_endpoint_subnet_id`, or the AKS subnet when both are empty) | `Network Contributor` (`4d97b98b-1d4f-4787-a291-c67834d212e7`), or `Microsoft.Network/virtualNetworks/subnets/join/action` | Placing a private endpoint's network interface in a subnet the module did not create. |
+
+Nothing in these paths calls `Microsoft.Authorization/roleAssignments/write`. The role assignments the module does make elsewhere are listed under [Role assignments created during deployment](#role-assignments-created-during-deployment). On the Key Vault path, the two that matter are the deployer's `Key Vault Secrets Officer` grant and the pods' `Key Vault Secrets User` grant; both can be turned off and made by the vault's owner instead ([Deploy without Key Vault access](#deploy-without-key-vault-access)).
+
+- **Grant the zone join at the zone's resource group.** In testing, `join/action` granted at that scope worked.
+- **Expect a delay before it takes effect.** In testing, it took between 12 and 40 minutes after the grant before the join succeeded. Until then, Azure fails the endpoint with `LinkedAuthorizationFailed`, even though `checkAccess` already reports the action as allowed. Wait and re-run `terraform apply`; the run is resumable.
+- **A zone in another subscription.** That subscription must have the `Microsoft.DBforPostgreSQL` resource provider registered, or a Flexible Server that uses the zone does not finish creating (Microsoft Learn, "Network with private access (virtual network integration)", updated 2026-09-06).
+
+### Key Vault with the private endpoint on
+
+`keyvault_private_endpoint_enabled = true` turns the vault's public network access off. Every data-plane call then has to come from a network that resolves the vault's `privatelink.vaultcore` record:
+
+- **`terraform plan` and `apply`.** Terraform reads and writes `postgres-admin-password` and `langsmith-license-key` in the vault on every run. Run them from a jump host or self-hosted runner in the VNet or a peered network. Alternatively, set `keyvault_manage_secrets = false`, so Terraform manages no secrets: the vault resource itself still plans from outside, because azurerm ignores its failed certificate-contacts read when public network access is off (`key_vault_resource.go`, v4.65.0 and v4.81.0).
+- **`make seed-secrets` and `make k8s-secrets`.** Both read or write the vault, so they need the same network path.
+
+The setting applies only to a vault the module creates (`create_keyvault = true`). A vault you supply keeps the network settings its owner gave it.
 
 ## Restrict which roles the deployer can assign
 
