@@ -833,6 +833,84 @@ variable "storage_private_dns_zone_id" {
   }
 }
 
+# ── Central private DNS zones: PostgreSQL ─────────────────────────────────────
+# In hub-and-spoke networks the network team owns every privatelink zone and
+# links it to the hub's resolvers. A second zone of the same name in the
+# deployment group either fails its VNet link or splits resolution, so a
+# supplied zone replaces the one the module would create, and its VNet links
+# stay the zone owner's.
+
+variable "postgres_private_dns_zone_id" {
+  type        = string
+  description = "Existing private DNS zone for the PostgreSQL Flexible Servers (LangSmith's and, with enable_smithdb, the SmithDB metastore): typically privatelink.postgres.database.azure.com, or privatelink.postgres.database.usgovcloudapi.net in Azure Government. Empty creates one in the deployment resource group and links it to the VNet. When set, Terraform creates no zone and no VNet link: the zone's owner links it to the networks that must resolve the servers. A zone in another subscription needs the Microsoft.DBforPostgreSQL resource provider registered in that subscription, or the server create does not complete."
+  default     = ""
+
+  validation {
+    condition     = var.postgres_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/[^/]+\\.postgres\\.database\\.${var.azure_environment == "usgovernment" ? "usgovcloudapi\\.net" : "azure\\.com"}$", var.postgres_private_dns_zone_id))
+    error_message = "postgres_private_dns_zone_id must be the full resource ID of a private DNS zone whose name ends in .postgres.database.azure.com (public) or .postgres.database.usgovcloudapi.net (usgovernment), for example /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com. Flexible Server in VNet-integration mode accepts only zones with that suffix."
+  }
+
+  validation {
+    condition     = var.postgres_private_dns_zone_id == "" || var.postgres_source == "external" || var.enable_smithdb
+    error_message = "postgres_private_dns_zone_id is set, but nothing would use it: the module creates a PostgreSQL Flexible Server only with postgres_source = \"external\" or enable_smithdb = true. Clear it, or enable one of those."
+  }
+}
+
+# ── Key Vault Private Endpoint ────────────────────────────────────────────────
+# The vault's data plane otherwise stays on a public endpoint, filtered by the
+# firewall to the AKS subnet and keyvault_allowed_ips. With the endpoint, public
+# network access is off and the vault is reachable only from networks that
+# resolve its privatelink zone — which includes whatever runs terraform apply
+# and `make seed-secrets`.
+
+variable "keyvault_private_endpoint_enabled" {
+  type        = bool
+  description = "Reach the Key Vault the module creates over a Private Endpoint and turn off its public network access. Terraform writes two secrets into the vault on every apply and reads them on every plan, and `make seed-secrets` writes the rest, so with this on all three must run from a machine that reaches the endpoint (a jump host or self-hosted runner in the VNet or a peered network). The endpoint bills hourly and uses one address in its subnet. Requires create_keyvault = true: a vault you supply keeps the network settings its owner gave it."
+  default     = false
+
+  validation {
+    condition     = !var.keyvault_private_endpoint_enabled || var.create_keyvault
+    error_message = "keyvault_private_endpoint_enabled = true requires create_keyvault = true. The module never changes the network settings of a Key Vault you supply (create_keyvault = false); give that vault its private endpoint where it is managed."
+  }
+
+  validation {
+    condition     = !var.keyvault_private_endpoint_enabled || length(var.keyvault_allowed_ips) == 0
+    error_message = "keyvault_allowed_ips cannot be combined with keyvault_private_endpoint_enabled = true: the vault has no public endpoint for those rules to apply to. Clear keyvault_allowed_ips and reach the vault from inside the network, or leave the private endpoint off."
+  }
+}
+
+variable "keyvault_private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet that holds the Key Vault Private Endpoint. Empty uses the blob endpoints' subnet (storage_private_endpoint_subnet_id, itself defaulting to the AKS subnet)."
+  default     = ""
+
+  validation {
+    condition     = var.keyvault_private_endpoint_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.keyvault_private_endpoint_subnet_id))
+    error_message = "keyvault_private_endpoint_subnet_id must be a full subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+  }
+
+  validation {
+    condition     = var.keyvault_private_endpoint_subnet_id == "" || var.keyvault_private_endpoint_enabled
+    error_message = "keyvault_private_endpoint_subnet_id applies only with keyvault_private_endpoint_enabled = true."
+  }
+}
+
+variable "keyvault_private_dns_zone_id" {
+  type        = string
+  description = "Existing Key Vault private DNS zone for the endpoint: privatelink.vaultcore.azure.net, or privatelink.vaultcore.usgovcloudapi.net in Azure Government. Empty creates one in the deployment resource group and links it to the VNet. When set, Terraform creates no zone and no VNet link; the endpoint registers its record in the supplied zone, which needs Microsoft.Network/privateDnsZones/join/action on that zone (see PERMISSIONS.md)."
+  default     = ""
+
+  validation {
+    condition     = var.keyvault_private_dns_zone_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.vaultcore\\.${var.azure_environment == "usgovernment" ? "usgovcloudapi\\.net" : "azure\\.net"}$", var.keyvault_private_dns_zone_id))
+    error_message = "keyvault_private_dns_zone_id must be the full resource ID of the Key Vault private DNS zone for azure_environment: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net (public) or .../privatelink.vaultcore.usgovcloudapi.net (usgovernment). A private endpoint registers its record automatically only in a zone with exactly that name."
+  }
+
+  validation {
+    condition     = var.keyvault_private_dns_zone_id == "" || var.keyvault_private_endpoint_enabled
+    error_message = "keyvault_private_dns_zone_id applies only with keyvault_private_endpoint_enabled = true."
+  }
+}
+
 # ── AKS node pool sizing guidance ─────────────────────────────────────────────
 # Pass 2 (core LangSmith): ~13 vCPU / 24 GiB scheduled across default pool nodes.
 #   backend×3 (3 vCPU/6Gi) + platformBackend (1 vCPU/2Gi) + queue×3 (3 vCPU/6Gi)

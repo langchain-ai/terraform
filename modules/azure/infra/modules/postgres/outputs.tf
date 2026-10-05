@@ -10,8 +10,8 @@ output "postgres_id" {
 }
 
 output "private_dns_zone_id" {
-  description = "Resource ID of the private PostgreSQL DNS zone."
-  value       = azurerm_private_dns_zone.db_dns_zone.id
+  description = "Resource ID of the private PostgreSQL DNS zone: the one this module created, or the one supplied."
+  value       = local.private_dns_zone_id
 }
 
 output "connection_url" {
@@ -31,5 +31,15 @@ output "fleet_connection_url" {
 
 output "private_dns_zone_name" {
   description = "Name of the private PostgreSQL DNS zone."
-  value       = azurerm_private_dns_zone.db_dns_zone.name
+  value       = local.private_dns_zone_name
+}
+
+output "private_dns_zone_created" {
+  description = "Whether this module created the server's private DNS zone and its VNet link (false when a central zone was supplied)."
+  value       = local.create_private_dns_zone
+}
+
+output "server_private_dns_zone_id" {
+  description = "The private DNS zone ID the Flexible Server is configured with."
+  value       = azurerm_postgresql_flexible_server.db.private_dns_zone_id
 }

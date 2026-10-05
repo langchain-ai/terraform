@@ -170,6 +170,32 @@ Both default to `true`. Something still has to provide the component: KEDA is wh
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
 
+
+### Private endpoints and central private DNS zones
+
+For networks that require private endpoints and keep their `privatelink` zones in a central hub:
+
+```hcl
+# Blob: both storage accounts, public endpoint off.
+storage_private_endpoint_enabled = true
+storage_private_dns_zone_id      = "/subscriptions/<hub-sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+
+# Key Vault: the vault this module creates, public network access off.
+keyvault_private_endpoint_enabled = true
+keyvault_private_dns_zone_id      = "/subscriptions/<hub-sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+
+# PostgreSQL Flexible Server (VNet integration): register in the central zone.
+postgres_private_dns_zone_id = "/subscriptions/<hub-sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
+```
+
+- **A supplied zone replaces the module's own.** For each `*_private_dns_zone_id` you set, Terraform creates no zone and no virtual network link. Linking the zone to every network that must resolve these names stays with the zone's owner.
+- **An empty zone ID** creates the zone in the deployment resource group and links it to the VNet, as before.
+- **Supplied zones fit a VNet the zone's owner already links** (`create_vnet = false`). With `create_vnet = true` the VNet exists only once the apply has created it, so nothing in it resolves the zone's records until the owner adds the link, and a Key Vault secret write from inside that VNet fails until then.
+- **PostgreSQL** stays in VNet-integration mode (a delegated subnet); the zone input only changes where its record lives. The SmithDB metastore uses the same zone.
+- **Moving an existing server to a supplied zone** is an in-place update in azurerm (`private_dns_zone_id` is not ForceNew in v4.65.0 or v4.81.0), and the zone and link the module created are then deleted. Azure refuses the change while high availability is on (Microsoft Learn, "Network with private access (virtual network integration)", updated 2026-09-06), so turn `postgres_high_availability` off for that apply, or set the zone before the first one.
+- **Key Vault with the endpoint on** is reachable only from networks that resolve its `privatelink.vaultcore` record, and that includes the machine running `terraform plan`, `apply` and `make seed-secrets`. It applies only with `create_keyvault = true`.
+- **Permissions:** registering in a zone you don't own needs `Microsoft.Network/privateDnsZones/join/action` on it, and the grant can take tens of minutes to take effect. See [PERMISSIONS.md](PERMISSIONS.md#private-dns-zones-you-own).
+
 ### Deploying into an existing resource group
 
 Set `create_resource_group = false` to deploy into a resource group someone else created, typically one a platform team hands out with the deployer's rights granted on that group alone. Terraform reads the group and changes nothing about it: its tags, locks, and policy assignments stay as its owner configured them, and `terraform destroy` removes the LangSmith resources and leaves the group in place.
@@ -210,6 +236,7 @@ az login
 |---|---|---|
 | PostgreSQL private DNS zone | `privatelink.postgres.database.azure.com` | `privatelink.postgres.database.usgovcloudapi.net` |
 | Blob private DNS zone | `privatelink.blob.core.windows.net` | `privatelink.blob.core.usgovcloudapi.net` |
+| Key Vault private DNS zone (with `keyvault_private_endpoint_enabled`) | `privatelink.vaultcore.azure.net` | `privatelink.vaultcore.usgovcloudapi.net` |
 | Public IP DNS label | `<label>.<region>.cloudapp.azure.com` | `<label>.<region>.cloudapp.usgovcloudapi.net` |
 | Blob endpoint in Helm values | chart default | `azureStorageServiceUrlOverride` from the `storage_blob_endpoint` output |
 | cert-manager `azureDNS` environment | `AzurePublicCloud` | `AzureUSGovernmentCloud` |
@@ -1365,7 +1392,7 @@ built with, and plan refuses a non-default value there.
 
 | Subnet | Requirement |
 |--------|-------------|
-| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. With `keyvault_private_endpoint_enabled = true` the vault's firewall no longer allowlists the subnet, so only `Microsoft.Storage` is required. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
 | Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
 | Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
 | AGIC | The subnet to itself. Application Gateway v2 shares with nothing, and Azure recommends a `/24`. Only needed when `ingress_controller = "agic"` |

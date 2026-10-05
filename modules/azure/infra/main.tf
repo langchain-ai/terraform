@@ -124,11 +124,13 @@ locals {
     public = {
       postgres_private_dns_zone = "privatelink.postgres.database.azure.com"
       blob_private_dns_zone     = "privatelink.blob.core.windows.net"
+      keyvault_private_dns_zone = "privatelink.vaultcore.azure.net"
       cloudapp_suffix           = "cloudapp.azure.com"
     }
     usgovernment = {
       postgres_private_dns_zone = "privatelink.postgres.database.usgovcloudapi.net"
       blob_private_dns_zone     = "privatelink.blob.core.usgovcloudapi.net"
+      keyvault_private_dns_zone = "privatelink.vaultcore.usgovcloudapi.net"
       cloudapp_suffix           = "cloudapp.usgovcloudapi.net"
     }
   }
@@ -139,6 +141,17 @@ locals {
   # module instead of letting both create their own.
   create_blob_private_dns_zone = var.storage_private_endpoint_enabled && var.storage_private_dns_zone_id == ""
   blob_private_dns_zone_id     = local.create_blob_private_dns_zone ? azurerm_private_dns_zone.blob[0].id : var.storage_private_dns_zone_id
+
+  # The Key Vault endpoint follows the blob endpoints into their subnet unless
+  # given its own, and its zone works the same way: supplied, or created and
+  # linked here.
+  keyvault_private_endpoint_subnet_id = var.keyvault_private_endpoint_subnet_id != "" ? var.keyvault_private_endpoint_subnet_id : local.storage_private_endpoint_subnet_id
+  create_keyvault_private_dns_zone    = var.keyvault_private_endpoint_enabled && var.keyvault_private_dns_zone_id == ""
+  keyvault_private_dns_zone_id        = local.create_keyvault_private_dns_zone ? azurerm_private_dns_zone.keyvault[0].id : var.keyvault_private_dns_zone_id
+
+  # A supplied PostgreSQL zone serves both Flexible Servers, LangSmith's and
+  # the SmithDB metastore, so neither module creates or links one.
+  postgres_private_dns_zone_supplied = var.postgres_private_dns_zone_id != ""
 
   # Bastion and AGIC are supply-only under bring-your-own: Terraform carves their
   # subnets out of a VNet it owns, and reuses a supplied one otherwise. There is
@@ -172,8 +185,12 @@ locals {
 
   # The endpoints the storage and Key Vault firewalls need on whichever subnet
   # AKS ends up in. Terraform puts both on a subnet it carves (see the
-  # networking module), so this only matters for one you supply.
-  required_aks_service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+  # networking module), so this only matters for one you supply. With the Key
+  # Vault private endpoint on, the vault's firewall no longer allowlists the
+  # subnet (public access is off), so Azure has no subnet rule to validate and
+  # Microsoft.KeyVault is not needed. Storage keeps its rule either way: both
+  # accounts stay default-deny so turning their endpoints off never opens them.
+  required_aks_service_endpoints = concat(["Microsoft.Storage"], var.keyvault_private_endpoint_enabled ? [] : ["Microsoft.KeyVault"])
 
   manage_aks_subnet_endpoints = local.byo_aks_subnet && var.manage_byo_subnet_service_endpoints
 
@@ -1011,10 +1028,11 @@ resource "terraform_data" "validate_network" {
       error_message = "The subnet given as postgres_subnet_id is not delegated to Microsoft.DBforPostgreSQL/flexibleServers. Add that delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) to the subnet, or clear postgres_subnet_id and let Terraform create a correctly delegated subnet."
     }
 
-    # The AKS subnet is allowlisted by ID on both the blob storage firewall
-    # (hardcoded default-deny) and the Key Vault firewall. Azure rejects a subnet
-    # rule whose subnet lacks the matching service endpoint, and azurerm exposes
-    # no way to skip that check, so both endpoints are required regardless of
+    # The AKS subnet is allowlisted by ID on the blob storage firewall
+    # (hardcoded default-deny) and, unless the vault is on a private endpoint,
+    # on the Key Vault firewall. Azure rejects a subnet rule whose subnet lacks
+    # the matching service endpoint, and azurerm exposes no way to skip that
+    # check, so each required endpoint is required regardless of
     # keyvault_default_action. Skipped when Terraform is the one adding them,
     # since checking first would fail the plan that would fix it.
     precondition {
@@ -1022,7 +1040,7 @@ resource "terraform_data" "validate_network" {
         for endpoint in local.required_aks_service_endpoints :
         contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
       ])
-      error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add them, or clear aks_subnet_id and let Terraform create a subnet."
+      error_message = "The subnet given as aks_subnet_id must carry the ${join(" and ", local.required_aks_service_endpoints)} service endpoint${length(local.required_aks_service_endpoints) > 1 ? "s" : ""}. Without ${length(local.required_aks_service_endpoints) > 1 ? "them" : "it"} the firewall${length(local.required_aks_service_endpoints) > 1 ? "s" : ""} in front of ${var.keyvault_private_endpoint_enabled ? "blob storage" : "blob storage and Key Vault"} cannot allowlist the subnet, and LangSmith pods lose access. Add ${length(local.required_aks_service_endpoints) > 1 ? "both endpoints" : "the endpoint"} to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add ${length(local.required_aks_service_endpoints) > 1 ? "them" : "it"}, or clear aks_subnet_id and let Terraform create a subnet."
     }
 
     # The Postgres and Redis NSGs admit aks_subnet_id alone, so pods on an
@@ -1605,6 +1623,8 @@ module "postgres" {
   subnet_id           = local.postgres_subnet_id
 
   private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
+  # A supplied central zone replaces the zone and VNet link the module creates.
+  private_dns_zone_id = local.postgres_private_dns_zone_supplied ? var.postgres_private_dns_zone_id : null
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
@@ -1655,11 +1675,16 @@ module "smithdb" {
   metastore_sku_name              = var.smithdb_metastore_sku_name
   metastore_storage_mb            = var.smithdb_metastore_storage_mb
   metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
-  # The flag is derived from a variable so the module's count can read it. The ID
+  # The flag is derived from variables so the module's count can read it. The ID
   # beside it is a resource attribute and is unknown until apply on the external
-  # path, which is why the two are passed separately.
-  create_private_dns_zone = var.postgres_source != "external"
-  private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  # path, which is why the two are passed separately. A supplied central zone
+  # serves the metastore too, so the module creates its own only when there is
+  # neither that nor LangSmith's server to share one with.
+  create_private_dns_zone = var.postgres_source != "external" && !local.postgres_private_dns_zone_supplied
+  private_dns_zone_id = (
+    local.postgres_private_dns_zone_supplied ? var.postgres_private_dns_zone_id :
+    var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  )
 
   storage_account_name = local.smithdb_storage_name
   replication_type     = var.smithdb_storage_replication_type
@@ -1714,6 +1739,28 @@ resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   name                  = "${local.name_base}-blob-dnslink"
   resource_group_name   = local.rg_name
   private_dns_zone_name = azurerm_private_dns_zone.blob[0].name
+  virtual_network_id    = local.vnet_id
+  registration_enabled  = false
+  tags                  = local.common_tags
+}
+
+# ── Key Vault private DNS ─────────────────────────────────────────────────────
+# Only with keyvault_private_endpoint_enabled and no central zone supplied. The
+# vault keeps its <name>.vault.<cloud suffix> hostname; this zone is what makes
+# it resolve to the endpoint's address inside the VNet.
+
+resource "azurerm_private_dns_zone" "keyvault" {
+  count               = local.create_keyvault_private_dns_zone ? 1 : 0
+  name                = local.azure_cloud.keyvault_private_dns_zone
+  resource_group_name = local.rg_name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "keyvault" {
+  count                 = local.create_keyvault_private_dns_zone ? 1 : 0
+  name                  = "${local.name_base}-keyvault-dnslink"
+  resource_group_name   = local.rg_name
+  private_dns_zone_name = azurerm_private_dns_zone.keyvault[0].name
   virtual_network_id    = local.vnet_id
   registration_enabled  = false
   tags                  = local.common_tags
@@ -1860,7 +1907,16 @@ module "keyvault" {
   # pods can read secrets via the Microsoft.KeyVault service endpoint.
   network_default_action = var.keyvault_default_action
   allowed_ips            = var.keyvault_allowed_ips
-  allowed_subnet_ids     = [local.aks_subnet_id]
+  # With the private endpoint the vault has no public listener, so the subnet
+  # rule would filter nothing, and dropping it is what lets the AKS subnet go
+  # without the Microsoft.KeyVault service endpoint.
+  allowed_subnet_ids = var.keyvault_private_endpoint_enabled ? [] : [local.aks_subnet_id]
+
+  # Private Endpoint: public network access off, the endpoint in its subnet, and
+  # its record in the supplied zone or the one created below.
+  private_endpoint_enabled   = var.keyvault_private_endpoint_enabled
+  private_endpoint_subnet_id = local.keyvault_private_endpoint_subnet_id
+  private_dns_zone_id        = local.keyvault_private_dns_zone_id
 
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Only the two Terraform already holds in state for another reason. The
@@ -1876,7 +1932,9 @@ module "keyvault" {
 
   tags = local.common_tags
 
-  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints]
+  # The zone's VNet link comes before the endpoint and the secret writes, so a
+  # runner inside the VNet resolves the vault's private address on first apply.
+  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints, azurerm_private_dns_zone_virtual_network_link.keyvault]
 }
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────

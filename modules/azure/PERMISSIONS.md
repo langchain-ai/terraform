@@ -176,6 +176,32 @@ terraform -chdir=infra import 'module.keyvault.azurerm_key_vault_secret.langsmit
 
 Then set the flag and confirm `terraform plan` shows both secrets unchanged. A `secrets.auto.tfvars` value that differs from the seeded one plans an update, which is the rotation you would expect from the flag.
 
+## Private DNS zones you own
+
+In a hub-and-spoke network the `privatelink` zones usually live in a central subscription and resource group, linked to the hub's DNS. Three inputs point the module at those zones instead of creating its own: `storage_private_dns_zone_id` (blob), `keyvault_private_dns_zone_id` (Key Vault), and `postgres_private_dns_zone_id` (PostgreSQL Flexible Server, for both LangSmith's server and the SmithDB metastore). With a zone supplied, Terraform creates no zone and no virtual network link. Linking the zone to the networks that must resolve these names stays with whoever owns it.
+
+The module creates no role assignments for any of this. The zone's owner and the network's owner grant these to the identity that runs `terraform apply`, before the first apply:
+
+| Grant | Scope | Role (or the one action, in a custom role) | Needed for |
+|-------|-------|------------------------------------------|-----------|
+| Join a supplied zone | The zone's resource group | `Private DNS Zone Contributor` (`b12aa53e-6015-4669-85d0-8515ebb3ae7f`), or `Microsoft.Network/privateDnsZones/join/action` | A private endpoint's DNS zone group (blob, Key Vault) adding its record to the zone. A Flexible Server created against a supplied zone registers its record there too; whether Azure checks the same action for it has not been tested, so grant it before the first apply either way. |
+| Join the private-endpoint subnet | The subnet that holds the endpoints (`storage_private_endpoint_subnet_id`, `keyvault_private_endpoint_subnet_id`, or the AKS subnet when both are empty) | `Network Contributor` (`4d97b98b-1d4f-4787-a291-c67834d212e7`), or `Microsoft.Network/virtualNetworks/subnets/join/action` | Placing a private endpoint's network interface in a subnet the module did not create. |
+
+Nothing in these paths calls `Microsoft.Authorization/roleAssignments/write`. The role assignments the module does make elsewhere are listed under [Role assignments created during deployment](#role-assignments-created-during-deployment). On the Key Vault path, the two that matter are the deployer's `Key Vault Secrets Officer` grant and the pods' `Key Vault Secrets User` grant; both can be turned off and made by the vault's owner instead ([Deploy without Key Vault access](#deploy-without-key-vault-access)).
+
+- **Grant the zone join at the zone's resource group.** In testing, `join/action` granted at that scope worked.
+- **Expect a delay before it takes effect.** In testing, it took between 12 and 40 minutes after the grant before the join succeeded. Until then, Azure fails the endpoint with `LinkedAuthorizationFailed`, even though `checkAccess` already reports the action as allowed. Wait and re-run `terraform apply`; the run is resumable.
+- **A zone in another subscription.** That subscription must have the `Microsoft.DBforPostgreSQL` resource provider registered, or a Flexible Server that uses the zone does not finish creating (Microsoft Learn, "Network with private access (virtual network integration)", updated 2026-09-06).
+
+### Key Vault with the private endpoint on
+
+`keyvault_private_endpoint_enabled = true` turns the vault's public network access off. Every data-plane call then has to come from a network that resolves the vault's `privatelink.vaultcore` record:
+
+- **`terraform plan` and `apply`.** Terraform reads and writes `postgres-admin-password` and `langsmith-license-key` in the vault on every run. Run them from a jump host or self-hosted runner in the VNet or a peered network. Alternatively, set `keyvault_manage_secrets = false`, so Terraform manages no secrets: the vault resource itself still plans from outside, because azurerm ignores its failed certificate-contacts read when public network access is off (`key_vault_resource.go`, v4.65.0 and v4.81.0).
+- **`make seed-secrets` and `make k8s-secrets`.** Both read or write the vault, so they need the same network path.
+
+The setting applies only to a vault the module creates (`create_keyvault = true`). A vault you supply keeps the network settings its owner gave it.
+
 ## Restrict which roles the deployer can assign
 
 Security teams that will not grant unconditional role-assignment rights can attach an ABAC condition to `Role Based Access Control Administrator` that allows only the role definition IDs in the preceding table. Include every ID that applies to your configuration. A condition that omits one produces a partial deployment: assignments for the allowed roles succeed, and the first disallowed role returns 403 while earlier resources remain created.
