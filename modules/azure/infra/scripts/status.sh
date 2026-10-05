@@ -414,11 +414,17 @@ else
 
   # Ingress LoadBalancer IP — check the right service per ingress_controller
   _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+  _ingress_lb=$(_read_tfvar ingress_load_balancer 2>/dev/null) || _ingress_lb="public"
+  _ingress_scope="public"
+  [[ "$_ingress_lb" == "internal" ]] && _ingress_scope="private"
   case "${_ingress_controller:-envoy-gateway}" in
     nginx)
       _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
-      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress" ;;
+      # The add-on runs one gateway per load-balancer type; internal is
+      # aks-istio-ingressgateway-internal.
+      _lb_svc="aks-istio-ingressgateway-external"; _lb_ns="aks-istio-ingress"
+      [[ "$_ingress_lb" == "internal" ]] && _lb_svc="aks-istio-ingressgateway-internal" ;;
     istio)
       _lb_svc="istio-ingressgateway"; _lb_ns="istio-system" ;;
     envoy-gateway)
@@ -436,7 +442,8 @@ else
     _ingress_ip=$(kubectl get svc "$_lb_svc" -n "$_lb_ns" \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null) || _ingress_ip=""
     if [[ -n "$_ingress_ip" ]]; then
-      pass "Ingress IP (${_ingress_controller}): ${_ingress_ip}"
+      pass "Ingress IP (${_ingress_controller}, ${_ingress_scope}): ${_ingress_ip}"
+      [[ "$_ingress_scope" == "private" ]] && info "(A private address: reachable only from the VNet and networks peered or connected to it)"
       if [[ -n "${_hostname:-}" && "$_hostname" != "$_ingress_ip" ]]; then
         info "(Point your DNS A record for ${_hostname} to ${_ingress_ip})"
       fi

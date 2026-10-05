@@ -1644,6 +1644,86 @@ variable "dns_label" {
   default     = ""
 }
 
+variable "ingress_load_balancer" {
+  type        = string
+  description = "Whether the ingress controller's Azure load balancer is 'public' (the default: a public IP) or 'internal' (a private IP in the cluster's VNet, on the AKS-managed kubernetes-internal load balancer, with no public frontend). Applies to envoy-gateway, nginx, istio and istio-addon. 'internal' cannot be combined with dns_label, which needs a public IP; put the hostname in your own DNS or a private DNS zone instead. See INGRESS_CONTROLLERS.md, \"Private ingress\"."
+  default     = "public"
+
+  validation {
+    condition     = contains(["public", "internal"], var.ingress_load_balancer)
+    error_message = "ingress_load_balancer must be 'public' or 'internal'."
+  }
+
+  validation {
+    # AGIC's frontend belongs to the Application Gateway, and with 'none' the
+    # module installs no controller, so neither has a Service to annotate.
+    # Refused rather than ignored, so a set value is never silently dropped.
+    condition     = var.ingress_load_balancer == "public" || !contains(["agic", "none"], var.ingress_controller)
+    error_message = "ingress_load_balancer = \"internal\" applies to envoy-gateway, nginx, istio and istio-addon. With agic, give the Application Gateway a private frontend instead; with none, configure your own controller's Service."
+  }
+
+  validation {
+    # HTTP-01 has Let's Encrypt fetch a token from the load balancer over the
+    # internet, which a private address never answers. DNS-01, your own
+    # certificate and HTTP-only all work behind an internal load balancer.
+    condition     = var.ingress_load_balancer == "public" || var.tls_certificate_source != "letsencrypt"
+    error_message = "ingress_load_balancer = \"internal\" cannot use tls_certificate_source = \"letsencrypt\": the HTTP-01 challenge reaches the load balancer from the internet, and a private address never answers it. Use \"dns01\" (with langsmith_domain and an Azure DNS zone), \"existing\" (your own certificate) or \"none\"."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer == "public" || var.dns_label == ""
+    error_message = "ingress_load_balancer = \"internal\" cannot be combined with dns_label: a cloudapp DNS label needs a public IP. Leave dns_label empty and resolve the hostname through your own DNS or a private DNS zone."
+  }
+}
+
+variable "ingress_load_balancer_subnet_id" {
+  type        = string
+  description = "With ingress_load_balancer = \"internal\": the resource ID of a subnet in the cluster's VNet to take the load balancer's private IP from. Empty uses the AKS node subnet. A subnet other than the node subnet needs subnets/join/action and subnets/read for the cluster identity; see ingress_load_balancer_manage_subnet_assignment."
+  default     = ""
+
+  validation {
+    condition     = var.ingress_load_balancer_subnet_id == "" || can(regex("(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.ingress_load_balancer_subnet_id))
+    error_message = "ingress_load_balancer_subnet_id must be a subnet resource ID: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer_subnet_id == "" || var.ingress_load_balancer == "internal"
+    error_message = "ingress_load_balancer_subnet_id is only used with ingress_load_balancer = \"internal\"."
+  }
+
+  validation {
+    # Microsoft: "The subnet specified must be in the same virtual network as
+    # your AKS cluster." Checkable whenever the VNet is supplied; a VNet the
+    # module creates has no ID until apply.
+    condition     = var.ingress_load_balancer_subnet_id == "" || var.create_vnet || var.vnet_id == "" || startswith(lower(var.ingress_load_balancer_subnet_id), "${lower(var.vnet_id)}/subnets/")
+    error_message = "ingress_load_balancer_subnet_id must be a subnet of vnet_id: Azure places an internal load balancer only in a subnet of the cluster's own virtual network."
+  }
+
+}
+
+variable "ingress_load_balancer_ip" {
+  type        = string
+  description = "With ingress_load_balancer = \"internal\": a static private IPv4 address for the load balancer, free in its subnet (ingress_load_balancer_subnet_id, or the node subnet). Not an Azure-reserved address or one in the Kubernetes service CIDR. Empty lets Azure pick one."
+  default     = ""
+
+  validation {
+    # cidrnetmask, unlike cidrhost, refuses IPv6.
+    condition     = var.ingress_load_balancer_ip == "" || can(cidrnetmask("${var.ingress_load_balancer_ip}/32"))
+    error_message = "ingress_load_balancer_ip must be an IPv4 address, for example 10.0.2.10."
+  }
+
+  validation {
+    condition     = var.ingress_load_balancer_ip == "" || var.ingress_load_balancer == "internal"
+    error_message = "ingress_load_balancer_ip is only used with ingress_load_balancer = \"internal\"."
+  }
+}
+
+variable "ingress_load_balancer_manage_subnet_assignment" {
+  type        = bool
+  description = "With ingress_load_balancer_subnet_id set to a subnet other than the node subnet: whether Terraform grants the cluster identity Network Contributor on that subnet, which carries the subnets/join/action and subnets/read the internal load balancer needs. Set false when the network owner makes that grant; the ingress_load_balancer_subnet_grant output names the role, scope and principal."
+  default     = true
+}
+
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
 
 variable "agic_subnet_address_prefix" {
