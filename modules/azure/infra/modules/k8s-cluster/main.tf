@@ -1061,6 +1061,16 @@ resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
 # EnvoyProxy (which carries the DNS label onto the proxy Service), GatewayClass
 # and Gateway, and the LangSmith chart renders the HTTPRoutes.
 
+#
+# With envoy_gateway_image_registry, the controller (and its certgen job) pull
+# from the mirror through the chart's global image value, and the proxy image is
+# exported for deploy.sh, which sets it on the EnvoyProxy.
+locals {
+  envoy_gateway_mirror = var.envoy_gateway_image_registry != ""
+  envoy_gateway_image  = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/envoyproxy/gateway:${var.envoy_gateway_version}" : ""
+  envoy_proxy_image    = local.envoy_gateway_mirror ? "${var.envoy_gateway_image_registry}/docker.io/${var.envoy_proxy_default_image}" : ""
+}
+
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0
   name      = "envoy-gateway"
@@ -1071,17 +1081,29 @@ resource "helm_release" "envoy_gateway" {
   create_namespace = true
 
   values = [
-    yamlencode({
-      deployment = {
-        envoyGateway = {
-          resources = {
-            requests = {
-              cpu    = "100m"
-              memory = "256Mi"
+    yamlencode(merge(
+      {
+        deployment = {
+          envoyGateway = {
+            resources = {
+              requests = {
+                cpu    = "100m"
+                memory = "256Mi"
+              }
             }
           }
         }
-      }
-    })
+      },
+      local.envoy_gateway_mirror ? {
+        global = {
+          images = {
+            envoyGateway = merge(
+              { image = local.envoy_gateway_image },
+              var.envoy_gateway_image_pull_secret_name != "" ? { pullSecrets = [{ name = var.envoy_gateway_image_pull_secret_name }] } : {}
+            )
+          }
+        }
+      } : {}
+    ))
   ]
 }

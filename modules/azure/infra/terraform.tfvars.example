@@ -165,6 +165,13 @@ smithdb_query_enabled     = false
 # "none"          — skip (bring your own)
 ingress_controller = "envoy-gateway"
 
+# Envoy Gateway's controller and proxy images from a registry that mirrors Docker
+# Hub with docker.io as the first path segment (<registry>/docker.io/envoyproxy/...),
+# the same layout LangSmith's images.registry uses. The pull Secret goes in the
+# envoy-gateway-system namespace, created before the apply that installs Envoy Gateway.
+# envoy_gateway_image_registry         = "nexus.example.com"
+# envoy_gateway_image_pull_secret_name = "nexus-pull"
+
 # Istio addon revision — only used when ingress_controller = "istio-addon"
 # Run: az aks mesh get-upgrades -g <rg> -n <cluster>  to list available revisions
 # istio_addon_revision = "asm-1-27"

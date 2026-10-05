@@ -699,6 +699,32 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
 
+  # With envoy_gateway_image_registry, the proxy pods pull from the mirror as
+  # the controller does. _tf_out refuses the "/" and ":" of an image reference,
+  # so that output is read and checked here.
+  _eg_proxy_image=$(terraform -chdir="$INFRA_DIR" output -raw envoy_gateway_proxy_image 2>/dev/null) || _eg_proxy_image=""
+  [[ "$_eg_proxy_image" =~ ^[A-Za-z0-9][A-Za-z0-9._:/@-]*$ ]] || _eg_proxy_image=""
+  _eg_registry=$(_parse_tfvar "envoy_gateway_image_registry") || _eg_registry=""
+  if [[ -n "$_eg_registry" && -z "$_eg_proxy_image" ]]; then
+    fail "envoy_gateway_image_registry is set, but the envoy_gateway_proxy_image output is empty or not an image reference, so the proxy pods would pull from docker.io. Run terraform apply in ${INFRA_DIR}, then rerun."
+    exit 1
+  fi
+  _eg_pull_secret=$(_tf_out envoy_gateway_image_pull_secret_name) || _eg_pull_secret=""
+  _eg_deployment=""
+  if [[ -n "$_eg_proxy_image" ]]; then
+    info "Envoy proxy image: ${_eg_proxy_image}"
+    _eg_deployment="
+      envoyDeployment:
+        container:
+          image: \"${_eg_proxy_image}\""
+    if [[ -n "$_eg_pull_secret" ]]; then
+      _eg_deployment+="
+        pod:
+          imagePullSecrets:
+          - name: \"${_eg_pull_secret}\""
+    fi
+  fi
+
   kubectl apply -f - >/dev/null <<EOF
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyProxy
@@ -710,7 +736,7 @@ spec:
     type: Kubernetes
     kubernetes:
       envoyService:
-        annotations: ${_eg_service_annotations}
+        annotations: ${_eg_service_annotations}${_eg_deployment}
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass

@@ -1195,6 +1195,15 @@ check "agic_with_overlay_unverified" {
   }
 }
 
+# The Envoy Gateway controller picks the proxy image itself, so mirroring it
+# needs that default for each chart version. envoy_gateway_image_registry
+# refuses a version missing from this map.
+locals {
+  envoy_proxy_default_images = {
+    "v1.2.0" = "envoyproxy/envoy:distroless-v1.32.1"
+  }
+}
+
 # ── Kubernetes Cluster ────────────────────────────────────────────────────────
 # AKS cluster with OIDC + Workload Identity enabled, ingress controller installed.
 # The OIDC issuer URL output is consumed by module.blob for federated credentials.
@@ -1272,7 +1281,10 @@ module "aks" {
   agic_network_contributor_scope = var.agic_network_contributor_scope
 
   # Envoy Gateway
-  envoy_gateway_version = var.envoy_gateway_version
+  envoy_gateway_version                = var.envoy_gateway_version
+  envoy_gateway_image_registry         = var.envoy_gateway_image_registry
+  envoy_proxy_default_image            = lookup(local.envoy_proxy_default_images, var.envoy_gateway_version, "")
+  envoy_gateway_image_pull_secret_name = var.envoy_gateway_image_pull_secret_name
 
   langsmith_namespace = var.langsmith_namespace
   # The chart names its service accounts after its fullname, which is the release
