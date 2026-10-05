@@ -189,6 +189,16 @@ output "langsmith_namespace" {
   value       = module.k8s_bootstrap.langsmith_namespace
 }
 
+output "envoy_gateway_proxy_image" {
+  description = "Envoy proxy image from envoy_gateway_image_registry, empty without a mirror. helm/scripts/deploy.sh sets it on the EnvoyProxy."
+  value       = module.aks.envoy_gateway_proxy_image
+}
+
+output "envoy_gateway_image_pull_secret_name" {
+  description = "Pull Secret for the Envoy proxy pods, empty without one. helm/scripts/deploy.sh sets it on the EnvoyProxy."
+  value       = module.aks.envoy_gateway_image_pull_secret_name
+}
+
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
   value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing"
