@@ -404,6 +404,18 @@ sizing_profile = "production"
 # storage_private_dns_zone_id        = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
 # storage_private_endpoint_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/private-endpoints"
 
+# Key Vault Private Endpoint, on the vault this module creates. Public network
+# access goes off, so terraform plan/apply and `make seed-secrets` must run from
+# a machine that resolves the vault's privatelink.vaultcore record (a jump host
+# or self-hosted runner in the VNet). keyvault_allowed_ips stops applying.
+# keyvault_private_endpoint_enabled   = true
+# keyvault_private_dns_zone_id        = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+# keyvault_private_endpoint_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/private-endpoints"
+
+# Central PostgreSQL zone for the Flexible Server(s). Terraform then creates no
+# zone and no VNet link; the zone's owner links it.
+# postgres_private_dns_zone_id = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
+
 # ── Constrained role-assignment delegation (optional) ─────────────────────────
 # Set only if `terraform apply` fails with a 403 AuthorizationFailed on
 # Microsoft.Authorization/roleAssignments/write. Some subscriptions delegate
