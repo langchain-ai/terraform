@@ -176,6 +176,21 @@ output "envoy_gateway_version" {
   value       = join("", helm_release.envoy_gateway[*].version)
 }
 
+output "envoy_gateway_image" {
+  description = "Envoy Gateway controller image from envoy_gateway_image_registry, empty without a mirror or without Envoy Gateway."
+  value       = var.ingress_controller == "envoy-gateway" ? local.envoy_gateway_image : ""
+}
+
+output "envoy_gateway_proxy_image" {
+  description = "Envoy proxy image from the mirror, empty without envoy_gateway_image_registry or without Envoy Gateway. deploy.sh sets it on the EnvoyProxy."
+  value       = var.ingress_controller == "envoy-gateway" ? local.envoy_proxy_image : ""
+}
+
+output "envoy_gateway_image_pull_secret_name" {
+  description = "Pull Secret for the Envoy proxy pods, empty without one. deploy.sh sets it on the EnvoyProxy."
+  value       = var.ingress_controller == "envoy-gateway" ? var.envoy_gateway_image_pull_secret_name : ""
+}
+
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])

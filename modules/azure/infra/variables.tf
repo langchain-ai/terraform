@@ -1655,3 +1655,34 @@ variable "envoy_gateway_version" {
   description = "Envoy Gateway Helm chart version. Only used when ingress_controller = 'envoy-gateway'."
   default     = "v1.2.0"
 }
+
+variable "envoy_gateway_image_registry" {
+  type        = string
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's images, as a host with an optional port and path and no scheme (e.g. 'nexus.example.com'). The controller is pulled as <registry>/docker.io/envoyproxy/gateway:<envoy_gateway_version> and the proxy as <registry>/docker.io/envoyproxy/envoy:<tag>, so the mirror keeps the source host as the first path segment, the layout LangSmith's images.registry expects. Empty (default) pulls from docker.io. The Helm chart itself still comes from oci://docker.io/envoyproxy/gateway-helm, on the machine that runs Terraform."
+  default     = ""
+
+  validation {
+    condition     = var.envoy_gateway_image_registry == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?(/[A-Za-z0-9._-]+)*$", var.envoy_gateway_image_registry))
+    error_message = "envoy_gateway_image_registry must be a registry host with an optional port and path, with no scheme and no trailing slash (e.g. 'nexus.example.com' or 'nexus.example.com:8443/mirror')."
+  }
+
+  # The controller picks the proxy image itself, so the module names the default
+  # for each chart version (local.envoy_proxy_default_images in
+  # modules/k8s-cluster/main.tf). Keep this list in step with that map: a version
+  # missing from it would leave the proxy pulling from docker.io.
+  validation {
+    condition     = var.envoy_gateway_image_registry == "" || contains(["v1.2.0"], var.envoy_gateway_version)
+    error_message = "envoy_gateway_image_registry needs the Envoy proxy image that Envoy Gateway uses by default, and the module knows it only for envoy_gateway_version v1.2.0. Set envoy_gateway_version = \"v1.2.0\", or leave envoy_gateway_image_registry empty."
+  }
+}
+
+variable "envoy_gateway_image_pull_secret_name" {
+  type        = string
+  description = "Name of a kubernetes.io/dockerconfigjson Secret in the envoy-gateway-system namespace that the Envoy Gateway controller and proxy pods pull with. Create the namespace and the Secret before the apply that installs Envoy Gateway. Empty (default) pulls without credentials. Requires envoy_gateway_image_registry."
+  default     = ""
+
+  validation {
+    condition     = var.envoy_gateway_image_pull_secret_name == "" || var.envoy_gateway_image_registry != ""
+    error_message = "envoy_gateway_image_pull_secret_name only applies with a mirror. Set envoy_gateway_image_registry, or leave envoy_gateway_image_pull_secret_name empty."
+  }
+}
