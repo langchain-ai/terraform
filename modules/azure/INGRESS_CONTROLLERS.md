@@ -419,7 +419,7 @@ The mechanism is three Service annotations, from Microsoft's [Create an internal
 
 | Controller | Where the annotations go |
 |---|---|
-| `envoy-gateway` (default) | `make deploy` writes them into the `langsmith-proxy` EnvoyProxy, which Envoy Gateway copies onto the proxy Service it creates for `langsmith-gateway` |
+| `envoy-gateway` (default) | `make deploy` writes them, from the `ingress_internal_annotations` output, into the `langsmith-proxy` EnvoyProxy, which Envoy Gateway copies onto the proxy Service it creates for `langsmith-gateway` |
 | `nginx` | Terraform passes them to the chart's `controller.service.annotations` |
 | `istio` (self-managed) | Terraform passes them to the `gateway` chart's `service.annotations` |
 | `istio-addon` | Terraform enables the add-on's internal gateway and turns its external one off; `make deploy` binds `langsmith-gateway` to `istio: aks-istio-ingressgateway-internal` and puts the subnet and IP annotations on `aks-istio-ingressgateway-internal`, which Microsoft lists as supported ([external or internal ingresses for the Istio add-on](https://learn.microsoft.com/azure/aks/istio-deploy-ingress), updated 2026-09-08) |
@@ -432,13 +432,13 @@ The mechanism is three Service annotations, from Microsoft's [Create an internal
 
 **A hostname.** With no `dns_label`, LangSmith's hostname comes from `langsmith_domain`, the name your DNS resolves to the private address. Plan warns when it's empty: `make init-values` then has no hostname to write, and with `istio-addon`, `make deploy` creates no Gateway.
 
-`create_dns_zone = true` with `internal` is a warning, not a refusal: the public zone's A record would publish a private address. Usually the record belongs in your own DNS or an Azure Private DNS zone linked to the VNet.
+`create_dns_zone = true` with `internal` is what `dns01` needs, and on its own publishes nothing. Setting `ingress_ip` as well adds an A record that publishes the private address in the public zone, which plan warns about. Usually that record belongs in your own DNS or an Azure Private DNS zone linked to the VNet.
 
 **A separate load-balancer subnet.** With `ingress_load_balancer_subnet_id` set to a subnet other than the node subnet, the cluster identity needs `Microsoft.Network/virtualNetworks/subnets/join/action` and `subnets/read` there (same Microsoft page). Terraform grants it Network Contributor on that subnet. Where the network owner keeps role assignments to itself, set `ingress_load_balancer_manage_subnet_assignment = false` and have the owner make the grant: `terraform output ingress_load_balancer_subnet_grant` names the role, actions, scope and principal. See [PERMISSIONS.md](PERMISSIONS.md).
 
 **Network security groups.** If the node subnet or the load balancer's subnet carries an NSG, it must allow 80 and 443 from the client ranges to the load balancer's address.
 
-**Egress.** An internal load balancer is the usual partner of egress through your own network (`aks_outbound_type = "userDefinedRouting"`, from #365): a public load balancer answers from the internet while the route table sends the replies elsewhere, an asymmetric path. With an internal one, both directions stay inside your network.
+**Egress.** An internal load balancer is the usual partner of egress through your own network (`aks_outbound_type = "userDefinedRouting"`): a public load balancer answers from the internet while the route table sends the replies elsewhere, an asymmetric path. With an internal one, both directions stay inside your network.
 
 **Changing it on a running deployment** moves the controller's Service between a public and a private frontend, so its address changes. Plan it like a cutover, and update DNS afterwards. `make status` reports the address and whether it is private.
 

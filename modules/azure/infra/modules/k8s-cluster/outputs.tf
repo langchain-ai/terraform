@@ -215,6 +215,11 @@ output "nginx_service_annotations" {
   value       = local.nginx_service_annotations
 }
 
+output "istio_gateway_values" {
+  description = "Values passed to the self-managed Istio gateway chart, or null when it is not installed."
+  value       = one(helm_release.istio_gateway[*].values)
+}
+
 output "istio_addon_gateways" {
   description = "Which Istio add-on ingress gateways service_mesh_profile enables."
   value = {

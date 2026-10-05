@@ -70,10 +70,24 @@ locals {
   istio_addon_internal_gateway = var.istio_internal_gateway_enabled || local.ingress_internal
 
   # A user-assigned control-plane identity leaves identity[0].principal_id
-  # empty on the cluster, so the grant goes to that identity's principal.
+  # empty on the cluster, so the grant goes to that identity's principal. An
+  # attached cluster's is read from the identity it names.
   cluster_identity_principal_id = local.control_plane_user ? local.control_plane_principal_id : (
-    var.create_cluster ? try(azurerm_kubernetes_cluster.main[0].identity[0].principal_id, null) : try(data.azurerm_kubernetes_cluster.existing[0].identity[0].principal_id, null)
+    var.create_cluster ? try(azurerm_kubernetes_cluster.main[0].identity[0].principal_id, null) : (
+      length(data.azurerm_user_assigned_identity.existing_control_plane) > 0
+      ? data.azurerm_user_assigned_identity.existing_control_plane[0].principal_id
+      : try(data.azurerm_kubernetes_cluster.existing[0].identity[0].principal_id, null)
+    )
   )
+}
+
+# An attached cluster with a user-assigned control-plane identity, read for the
+# principal the load-balancer subnet grant goes to. The ID comes from Azure, so
+# the name and group are positions 8 and 4.
+data "azurerm_user_assigned_identity" "existing_control_plane" {
+  count               = !var.create_cluster && local.ingress_lb_other_subnet && try(data.azurerm_kubernetes_cluster.existing[0].identity[0].type, "") == "UserAssigned" ? 1 : 0
+  name                = split("/", data.azurerm_kubernetes_cluster.existing[0].identity[0].identity_ids[0])[8]
+  resource_group_name = split("/", data.azurerm_kubernetes_cluster.existing[0].identity[0].identity_ids[0])[4]
 }
 
 locals {

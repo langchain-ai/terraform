@@ -1681,7 +1681,8 @@ variable "ingress_load_balancer_ip" {
   default     = ""
 
   validation {
-    condition     = var.ingress_load_balancer_ip == "" || can(cidrhost("${var.ingress_load_balancer_ip}/32", 0))
+    # cidrnetmask, unlike cidrhost, refuses IPv6.
+    condition     = var.ingress_load_balancer_ip == "" || can(cidrnetmask("${var.ingress_load_balancer_ip}/32"))
     error_message = "ingress_load_balancer_ip must be an IPv4 address, for example 10.0.2.10."
   }
 

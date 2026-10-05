@@ -745,13 +745,15 @@ if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
 
   _eg_service_annotations="{}"
   [[ -n "$_dns_label" ]] && _eg_service_annotations="{service.beta.kubernetes.io/azure-dns-label-name: \"${_dns_label}\"}"
-  # Internal: the same annotations Terraform puts on the nginx and Istio
-  # Services. dns_label is refused with "internal", so the two never combine.
+  # Internal: the annotations Terraform puts on the nginx and Istio Services,
+  # from its output. It prints a one-line JSON object, which is YAML flow
+  # syntax. dns_label is refused with "internal", so the two never combine.
   if [[ "$_ingress_lb" == "internal" ]]; then
-    _eg_service_annotations="{service.beta.kubernetes.io/azure-load-balancer-internal: \"true\""
-    [[ -n "$_ingress_lb_subnet" ]] && _eg_service_annotations+=", service.beta.kubernetes.io/azure-load-balancer-internal-subnet: \"${_ingress_lb_subnet}\""
-    [[ -n "$_ingress_lb_ip" ]] && _eg_service_annotations+=", service.beta.kubernetes.io/azure-load-balancer-ipv4: \"${_ingress_lb_ip}\""
-    _eg_service_annotations+="}"
+    _eg_service_annotations=$(terraform -chdir="$INFRA_DIR" output -json ingress_internal_annotations 2>/dev/null) || _eg_service_annotations=""
+    if [[ "$_eg_service_annotations" != "{"*"azure-load-balancer-internal"*"}" ]]; then
+      fail "ingress_load_balancer = \"internal\" but the ingress_internal_annotations output does not carry it. Run make apply first."
+      exit 1
+    fi
   fi
 
   kubectl apply -f - >/dev/null <<EOF

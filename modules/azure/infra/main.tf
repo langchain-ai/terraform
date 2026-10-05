@@ -1260,11 +1260,16 @@ module "aks" {
   ingress_load_balancer_ip                       = var.ingress_load_balancer_ip
   ingress_load_balancer_manage_subnet_assignment = var.ingress_load_balancer_manage_subnet_assignment
   # A ternary rather than &&, which below Terraform 1.14 evaluates both sides.
-  # Compared with the supplied node subnet only: a carved one has no ID before
-  # apply, and a load-balancer subnet supplied by ID cannot be it.
-  ingress_load_balancer_needs_subnet_grant = var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? lower(var.ingress_load_balancer_subnet_id) != lower(var.aks_subnet_id) : false
-  istio_version                            = var.istio_version
-  istio_addon_revision                     = var.istio_addon_revision
+  # A supplied node subnet is compared by ID. A carved one has no ID before
+  # apply, so it is compared by name: the load-balancer subnet is in the
+  # cluster's VNet, where the name alone identifies it.
+  ingress_load_balancer_needs_subnet_grant = var.ingress_load_balancer == "internal" && var.ingress_load_balancer_subnet_id != "" ? (
+    local.byo_aks_subnet
+    ? lower(var.ingress_load_balancer_subnet_id) != lower(var.aks_subnet_id)
+    : lower(element(split("/", var.ingress_load_balancer_subnet_id), length(split("/", var.ingress_load_balancer_subnet_id)) - 1)) != lower("${local.vnet_name}-subnet-0")
+  ) : false
+  istio_version        = var.istio_version
+  istio_addon_revision = var.istio_addon_revision
 
   # AGIC — wired from vnet module output
   subscription_id = var.subscription_id
@@ -2120,8 +2125,9 @@ module "bastion" {
 
 # A public Azure DNS zone answers on the internet, so with an internal load
 # balancer its A record would publish a private address that resolves for
-# everyone and connects for no one outside the network. A warning rather than
-# a refusal: a split-horizon setup can want exactly that record.
+# everyone and connects for no one outside the network. The record exists only
+# when ingress_ip is set; the zone alone is what DNS-01 needs. A warning rather
+# than a refusal: a split-horizon setup can want exactly that record.
 # Behind an internal load balancer there is no cloudapp label, so the hostname
 # can only come from langsmith_domain. Without one, init-values.sh has nothing
 # to write, and deploy.sh creates no Istio add-on Gateway. A warning, because
@@ -2135,8 +2141,8 @@ check "internal_ingress_hostname" {
 
 check "dns_zone_with_internal_ingress" {
   assert {
-    condition     = !(var.create_dns_zone && var.ingress_load_balancer == "internal")
-    error_message = "create_dns_zone = true with ingress_load_balancer = \"internal\": the public zone's A record would carry the load balancer's private address. Put the record in your own DNS or an Azure Private DNS zone linked to the VNet instead, unless you mean to publish it."
+    condition     = !(var.create_dns_zone && var.ingress_load_balancer == "internal" && var.ingress_ip != "")
+    error_message = "create_dns_zone = true and ingress_ip set with ingress_load_balancer = \"internal\": the public zone's A record would carry the load balancer's private address. Leave ingress_ip empty so the zone serves only the DNS-01 challenge, and put the record in your own DNS or an Azure Private DNS zone linked to the VNet, unless you mean to publish it."
   }
 }
 
