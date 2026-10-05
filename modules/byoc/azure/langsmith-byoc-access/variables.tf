@@ -14,7 +14,7 @@ variable "external_id" {
 }
 
 variable "data_planes" {
-  description = "Map of data planes. The key is the data plane name. Each data plane gets a dedicated resource group (langsmith-byoc-<key>) with only a Key Vault in it. Do not add other resources to that resource group: LangSmith deletes the whole resource group when you delete the data plane."
+  description = "Map of data planes. The key is the data plane name. Each data plane gets a dedicated resource group (langsmith-byoc-<key>) with only the resources of this module in it. Do not add other resources to that resource group: LangSmith deletes the whole resource group when you delete the data plane."
   type = map(object({
     location = string
     tags     = optional(map(string), {})
@@ -39,8 +39,14 @@ variable "key_vault_purge_protection_enabled" {
   default     = true
 }
 
+variable "byo_iam" {
+  description = "Bring your own IAM for every data plane of this module. The module then creates the workload identities, the custom blob role, and their role assignments, and LangSmith gets no User Access Administrator. Set it before you create the data planes in LangSmith."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
-  description = "Tags for all resource groups and Key Vaults that this module creates."
+  description = "Tags for all resource groups, Key Vaults, and managed identities that this module creates."
   type        = map(string)
   default     = {}
 }
