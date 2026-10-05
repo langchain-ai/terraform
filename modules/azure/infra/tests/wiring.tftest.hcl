@@ -456,6 +456,10 @@ run "the_resource_group_is_created_by_default" {
     condition     = output.resource_group_name == "langsmith-rg-wiring"
     error_message = "the resource_group_name output is not the created group's name"
   }
+  assert {
+    condition     = output.aks_resource_group_name == "langsmith-rg-wiring"
+    error_message = "the aks_resource_group_name output is not the created group's name on a created cluster"
+  }
 }
 
 run "an_existing_resource_group_is_read_not_created" {
@@ -641,5 +645,23 @@ run "cluster_components_absent_when_flags_are_false" {
   assert {
     condition     = module.k8s_bootstrap.keda_namespace == null
     error_message = "install_keda = false still planned the KEDA release"
+  }
+}
+
+# The root accepts "existing" and passes it to k8s-bootstrap unchanged, so the
+# child's own validation must accept it too, or the documented setup fails at
+# plan. Nothing in k8s-bootstrap reacts to it: the dns01 wiring stays off.
+run "tls_existing_plans_through_k8s_bootstrap" {
+  command = plan
+
+  variables {
+    tls_certificate_source = "existing"
+    langsmith_domain       = "langsmith.example.com"
+    install_cert_manager   = true
+  }
+
+  assert {
+    condition     = module.k8s_bootstrap.cert_manager_namespace != null
+    error_message = "tls_certificate_source = \"existing\" dropped the cert-manager release, which install_cert_manager still asks for"
   }
 }

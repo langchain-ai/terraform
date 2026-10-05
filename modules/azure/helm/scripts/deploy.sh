@@ -113,11 +113,19 @@ _cluster_name=$(_tf_out aks_cluster_name) || {
   fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
   exit 1
 }
-_rg_name=$(_tf_out resource_group_name) || _rg_name=""
+_rg_name=$(_tf_out aks_resource_group_name) || {
+  fail "Could not read aks_resource_group_name. Run 'make apply' to record it."
+  exit 1
+}
 
 info "Cluster: ${_cluster_name}"
 az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
-  --overwrite-existing &>/dev/null
+  --overwrite-existing >/dev/null || {
+  fail "Could not fetch credentials for cluster '${_cluster_name}'."
+  action "make kubeconfig  (to retry once the error above is fixed)"
+  exit 1
+}
+_aks_kubelogin_convert "$_cluster_name" "$_rg_name"
 info "Active context: $(kubectl config current-context)"
 echo ""
 
@@ -166,6 +174,48 @@ fi
 # exists during plan). Applied here instead — idempotent, safe to re-run.
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source=""
 
+# ── Ingress class for ingress_controller = "none" ─────────────────────────
+# No class is set for none, so the chart's Ingress and the HTTP-01 solver's go
+# to the cluster's default IngressClass, unless values-overrides.yaml (or
+# values.yaml) names one. With neither, no controller serves them. Kubernetes
+# also refuses a classless Ingress when more than one class claims the default.
+_byo_ingress_class=""
+if [[ "$_ingress_controller" == "none" ]]; then
+  for _vf in "$OVERRIDES_FILE" "$BASE_VALUES_FILE"; do
+    [[ -f "$_vf" ]] || continue
+    _byo_ingress_class=$(_values_ingress_class "$_vf")
+    [[ -n "$_byo_ingress_class" ]] && { _byo_class_file=$(basename "$_vf"); break; }
+  done
+
+  if [[ -n "$_byo_ingress_class" ]]; then
+    if ! [[ "$_byo_ingress_class" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]]; then
+      fail "ingress.ingressClassName '${_byo_ingress_class}' in ${_byo_class_file} is not a valid IngressClass name."
+      exit 1
+    fi
+    pass "ingress_controller = none: Ingress uses class '${_byo_ingress_class}' from ${_byo_class_file}"
+  elif ! _default_classes=$(kubectl get ingressclass -o jsonpath='{range .items[?(@.metadata.annotations.ingressclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{" "}{end}' 2>/dev/null); then
+    warn "ingress_controller = none: could not list IngressClasses, so the default class is unverified."
+  else
+    read -r -a _default_class_list <<<"$_default_classes"
+    case "${#_default_class_list[@]}" in
+      1)
+        pass "ingress_controller = none: Ingress uses the cluster's default IngressClass '${_default_class_list[0]}'"
+        ;;
+      0)
+        if [[ "$_tls_source" == "letsencrypt" ]]; then
+          fail "ingress_controller = none: the cluster has no default IngressClass, so no controller would serve the Ingress or the Let's Encrypt HTTP-01 challenge. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default."
+          exit 1
+        fi
+        warn "ingress_controller = none: the cluster has no default IngressClass, so no controller will serve the LangSmith Ingress. Set ingress.ingressClassName in values-overrides.yaml to your controller's class, or mark that IngressClass as the default. Port-forwarding to langsmith-frontend works regardless."
+        ;;
+      *)
+        fail "ingress_controller = none: IngressClasses ${_default_classes% } all claim the default, and Kubernetes rejects an Ingress with no class in that case. Set ingress.ingressClassName in values-overrides.yaml, or leave one default."
+        exit 1
+        ;;
+    esac
+  fi
+fi
+
 # With Envoy Gateway, both cert-manager TLS paths issue through its Gateway shim,
 # which Terraform switches on only for the cert-manager it installs.
 if [[ "$_ingress_controller" == "envoy-gateway" ]] && [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" ]]; then
@@ -206,12 +256,13 @@ spec:
 EOF
     pass "ClusterIssuer letsencrypt-prod configured (solver: gatewayHTTPRoute)"
   else
-    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers
+    # Map ingress controller to the class cert-manager uses for HTTP-01 solvers.
+    # For none, an empty class leaves the solver's Ingress to the default class.
     case "$_ingress_controller" in
       istio|istio-addon) _acme_ingress_class="istio" ;;
       nginx)             _acme_ingress_class="nginx" ;;
       agic)              _acme_ingress_class="azure-application-gateway" ;;
-      *)                 _acme_ingress_class="nginx" ;;
+      *)                 _acme_ingress_class="$_byo_ingress_class" ;;
     esac
     kubectl apply -f - &>/dev/null <<EOF
 apiVersion: cert-manager.io/v1
@@ -226,10 +277,9 @@ spec:
       name: letsencrypt-prod-account-key
     solvers:
     - http01:
-        ingress:
-          ingressClassName: ${_acme_ingress_class}
+        ingress: {${_acme_ingress_class:+ingressClassName: ${_acme_ingress_class}}}
 EOF
-    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class})"
+    pass "ClusterIssuer letsencrypt-prod configured (solver class: ${_acme_ingress_class:-cluster default})"
   fi
 fi
 
@@ -293,9 +343,12 @@ fi
 # With AKS managed Istio, ingressClassName: istio targets label istio: ingressgateway
 # but the AKS external gateway has label istio: aks-istio-ingressgateway-external.
 # We create explicit Gateway + VirtualService to route port 80/443 correctly.
-if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+# Runs with either hostname source: langsmith_domain alone is the usual setup for
+# dns01 and existing, and without this Gateway the chart's VirtualServices bind to
+# nothing.
+_langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
+if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_langsmith_domain" ) ]]; then
   _istio_hostname="${_dns_label}.${_location}.${_cloudapp_suffix}"
-  _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
   [[ -n "$_langsmith_domain" ]] && _istio_hostname="$_langsmith_domain"
   _namespace="$NAMESPACE"
 
@@ -326,6 +379,39 @@ spec:
     - "${_istio_hostname}"
 EOF
   pass "Istio Gateway created: ${_istio_hostname} (ports 80 + 443)"
+fi
+
+# ── Your own certificate and CA bundle ─────────────────────────────────────
+# With tls_certificate_source = "existing" nothing issues langsmith-tls, so a
+# missing Secret would leave the site serving the controller's default
+# certificate. Every controller path reads it from the release namespace (both
+# Istio paths copy it to their gateway namespace after the Helm upgrade).
+if [[ "$_tls_source" == "existing" ]]; then
+  _tls_type=$(kubectl get secret langsmith-tls -n "$NAMESPACE" -o jsonpath='{.type}' 2>/dev/null) || _tls_type=""
+  if [[ -z "$_tls_type" ]]; then
+    fail "tls_certificate_source = \"existing\" but Secret langsmith-tls is missing in namespace ${NAMESPACE}. Create it from your certificate (leaf first, then the intermediates) and its key:"
+    echo "      kubectl -n ${NAMESPACE} create secret tls langsmith-tls --cert=fullchain.pem --key=privkey.pem"
+    exit 1
+  elif [[ "$_tls_type" != "kubernetes.io/tls" ]]; then
+    fail "Secret langsmith-tls in ${NAMESPACE} is of type ${_tls_type}, not kubernetes.io/tls. Re-create it with kubectl create secret tls."
+    exit 1
+  fi
+  pass "Secret langsmith-tls (kubernetes.io/tls) found in ${NAMESPACE}"
+fi
+
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+if [[ -n "$_custom_ca_secret" ]]; then
+  _custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+  _ca_keys=$(kubectl get secret "$_custom_ca_secret" -n "$NAMESPACE" -o go-template='{{range $k, $v := .data}}{{$k}} {{end}}' 2>/dev/null) || _ca_keys=""
+  if [[ -z "$_ca_keys" ]]; then
+    fail "langsmith_custom_ca_secret_name = \"${_custom_ca_secret}\" but that Secret is missing in namespace ${NAMESPACE}. Create it from your root and intermediate certificates:"
+    echo "      kubectl -n ${NAMESPACE} create secret generic ${_custom_ca_secret} --from-file=${_custom_ca_key}=ca-bundle.pem"
+    exit 1
+  elif [[ " ${_ca_keys} " != *" ${_custom_ca_key} "* ]]; then
+    fail "Secret ${_custom_ca_secret} has no key ${_custom_ca_key} (it has: ${_ca_keys% }). Set langsmith_custom_ca_secret_key, or re-create the Secret."
+    exit 1
+  fi
+  pass "CA bundle ${_custom_ca_secret}/${_custom_ca_key} found in ${NAMESPACE}"
 fi
 
 # ── Preflight checks ──────────────────────────────────────────────────────
@@ -830,7 +916,8 @@ fi
 # For self-managed Istio, the secret must exist in istio-system namespace
 # (the gateway pod namespace) — istiod serves it to the gateway via ADS/SDS.
 # Without this sync, the gateway returns "no peer certificate available".
-if [[ "$_ingress_controller" == "istio" && "$_tls_source" == "letsencrypt" ]]; then
+# Every TLS source but "none" leaves langsmith-tls in the release namespace.
+if [[ "$_ingress_controller" == "istio" && "$_tls_source" != "none" ]]; then
   _istio_ns="$NAMESPACE"
   info "Waiting for TLS certificate langsmith-tls in ${_istio_ns}..."
   _cert_ready=false
@@ -861,7 +948,8 @@ fi
 # After cert-manager issues the TLS cert, copy it to aks-istio-ingress namespace
 # so the Gateway can load it via SDS (credentialName lookup uses gateway pod namespace).
 # The VirtualService is managed by the Helm chart (istioGateway.enabled: true in values).
-if [[ "$_ingress_controller" == "istio-addon" && -n "$_dns_label" ]]; then
+# Same hostname gate as the Gateway above; skipped for "none", which has no Secret.
+if [[ "$_ingress_controller" == "istio-addon" && ( -n "$_dns_label" || -n "$_langsmith_domain" ) && "$_tls_source" != "none" ]]; then
   _namespace="$NAMESPACE"
 
   info "Waiting for TLS certificate langsmith-tls..."
