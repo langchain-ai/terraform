@@ -388,7 +388,7 @@ locals {
   control_plane_network_scope = local.control_plane_dns_zone ? var.vnet_id : var.subnet_id
 
   control_plane_grant = local.control_plane_user && var.control_plane_identity_manage_grants
-  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants
+  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants && var.control_plane_grant_check
 }
 
 resource "azurerm_user_assigned_identity" "control_plane" {

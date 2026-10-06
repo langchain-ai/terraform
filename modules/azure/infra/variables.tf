@@ -398,6 +398,12 @@ variable "aks_control_plane_identity_manage_grants" {
   }
 }
 
+variable "aks_network_owner_checks" {
+  type        = bool
+  description = "Whether plan reads two things on a network you supply, to catch at plan what Azure would otherwise refuse at cluster create: the node subnet's route table (with aks_outbound_type = \"userDefinedRouting\", to check its 0.0.0.0/0 next hop; needs read on the route table), and, with aks_control_plane_identity_manage_grants = false, the control-plane identity's direct role assignments on the subnet, route table and private DNS zone. Set false where the deploying identity cannot read the route table, or where the network owner grants the control-plane identity its roles through group membership, which the direct-assignment check cannot see. Azure still checks both when it creates the cluster."
+  default     = true
+}
+
 variable "location" {
   type        = string
   description = "The location of the LangSmith deployment"

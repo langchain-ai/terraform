@@ -268,6 +268,36 @@ run "a_supplied_network_without_the_grants_is_refused" {
   expect_failures = [azurerm_kubernetes_cluster.main]
 }
 
+# The same network with no direct grants passes when the check is off: an
+# owner who grants through group membership, which the check cannot see.
+run "a_supplied_network_without_the_grants_passes_with_the_check_off" {
+  command = plan
+
+  module {
+    source = "./modules/k8s-cluster"
+  }
+
+  override_data {
+    target = data.azurerm_role_assignments.control_plane
+    values = { role_assignments = [] }
+  }
+
+  variables {
+    location                             = "eastus"
+    subnet_id                            = "${var.fixture_vnet_id}/subnets/aks"
+    vnet_id                              = var.fixture_vnet_id
+    control_plane_identity               = "user"
+    control_plane_identity_id            = var.fixture_identity_id
+    control_plane_identity_manage_grants = false
+    control_plane_grant_check            = false
+  }
+
+  assert {
+    condition     = length(data.azurerm_role_assignments.control_plane) == 0
+    error_message = "control_plane_grant_check = false still read the identity's role assignments"
+  }
+}
+
 # A grant on the node subnet covers the network, but not the zone.
 run "a_supplied_zone_without_its_grant_is_refused" {
   command = plan
