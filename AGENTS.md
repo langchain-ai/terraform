@@ -48,8 +48,8 @@ before the PR does, not a separate standard.
 - **Work in small units**: one resource or module, run the checks below, then
   continue. Don't write 300 lines and hand back a correction cycle.
 - **Machine-graded before handing back**, and fix what it reports:
-  - HCL edit → `bash agents/check.sh <dir>`: `terraform fmt -recursive -check`
-    over the directory you name, then `terraform validate` plus `tflint` with
+  - HCL edit → `bash agents/check.sh <dir>`: `terraform fmt -check` over the
+    HCL files git would commit under the directory you name, then `terraform validate` plus `tflint` with
     the provider's pinned ruleset from `modules/<provider>/.tflint.hcl`, for
     every root at or beneath it. Gitignored files (`*.tfvars`,
     `*_override.tf`) are left out of the fmt check, since CI never sees them.

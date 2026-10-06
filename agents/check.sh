@@ -46,14 +46,22 @@ lint_scripts() {
 
 # terraform fmt -check over repo-relative dirs. Unlike validate it needs no root,
 # so --fmt reaches HCL that has none (modules/ocp), which is how CI covers it.
-# fmt skips hidden dirs, so .terraform/ and .claude/ drop out on their own, but
-# it does read gitignored files: a generated terraform.tfvars or a local
-# backend_override.tf never reaches CI, so a finding in one is dropped here
-# instead of failing a run that CI would pass.
+# fmt is handed the files git would commit (tracked, plus untracked ones not
+# ignored) rather than the dirs, so a gitignored terraform.tfvars or
+# backend_override.tf never reaches it: not as unformatted, and not as a parse
+# error mid-edit, which would fail a run that CI passes. The extensions are the
+# ones fmt -recursive picks up.
 fmt_check() {
-  local out rc file bad=0
+  local out rc file files=()
   echo "== terraform fmt -check $*"
-  out=$(cd "$REPO_ROOT" && terraform fmt -recursive -check -no-color "$@")
+  while IFS= read -r -d '' file; do
+    [ -f "$REPO_ROOT/$file" ] || continue  # tracked but deleted locally
+    case "$file" in
+      *.tf | *.tfvars | *.tftest.hcl | *.tfmock.hcl) files+=("$file") ;;
+    esac
+  done < <(git -C "$REPO_ROOT" ls-files -z -co --exclude-standard -- "$@")
+  [ "${#files[@]}" -gt 0 ] || return 0
+  out=$(cd "$REPO_ROOT" && terraform fmt -check -no-color "${files[@]}")
   rc=$?
   case "$rc" in
     0) return 0 ;;
@@ -61,17 +69,12 @@ fmt_check() {
     *) return 1 ;;  # parse error, reported on stderr
   esac
   while IFS= read -r file; do
-    [ -n "$file" ] || continue
-    git -C "$REPO_ROOT" check-ignore -q -- "$file" && continue
-    echo "   not formatted: $file"
-    bad=1
+    [ -n "$file" ] && echo "   not formatted: $file"
   done <<EOF
 $out
 EOF
-  if [ "$bad" -eq 1 ]; then
-    echo "   fix with: terraform fmt -recursive <dir>"
-    return 1
-  fi
+  echo "   fix with: terraform fmt -recursive <dir>"
+  return 1
 }
 
 # Print the terraform roots at or beneath one repo-relative directory. Roots are
