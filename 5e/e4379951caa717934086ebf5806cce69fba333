@@ -1,0 +1,19 @@
+modules/byoc/aws/langsmith-byoc-role/README.md
+  s_42cb0eb3491982::t_e91a7a577751b3 17,153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ee4379951caa717934086ebf5806cce69fba333",
+  "prompts": {},
+  "sessions": {
+    "s_42cb0eb3491982": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "215c7007-0330-44c8-b15d-a12be4da844e",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Ashwin Amardeep <ashwin.amardeep@langchain.dev>"
+    }
+  }
+}
