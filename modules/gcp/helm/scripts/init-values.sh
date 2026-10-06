@@ -81,10 +81,12 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
 fi
 
 _project_id=$(_parse_tfvar "project_id")
+# Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+# variables.tf default. Keep identical across the GCP scripts.
 _name_prefix=$(_parse_tfvar "name_prefix")
-_name_prefix="${_name_prefix:-ls}"
+_name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
 _environment=$(_parse_tfvar "environment")
-_environment="${_environment:-prod}"
+_environment="${_environment:-${TF_VAR_environment:-prod}}"
 _region=$(_parse_tfvar "region")
 _region="${_region:-us-west2}"
 _tls_source=$(_parse_tfvar "tls_certificate_source")

@@ -64,8 +64,12 @@ _tfvar_is_true() {
 }
 
 _project_id=$(_parse_tfvar "project_id")
+# Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+# variables.tf default. Keep identical across the GCP scripts.
 _name_prefix=$(_parse_tfvar "name_prefix")
+_name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
 _environment=$(_parse_tfvar "environment")
+_environment="${_environment:-${TF_VAR_environment:-prod}}"
 _region=$(_parse_tfvar "region")
 _enable_sandboxes=false
 if _tfvar_is_true "enable_sandboxes"; then
@@ -78,14 +82,9 @@ if [[ -z "$_project_id" ]]; then
   return 1
 fi
 
-if [[ -z "$_name_prefix" ]]; then
-  echo "ERROR: name_prefix is not set in terraform.tfvars. Set it before sourcing setup-env.sh." >&2
-  return 1
-fi
-
 export TF_VAR_project_id="$_project_id"
 export TF_VAR_name_prefix="$_name_prefix"
-export TF_VAR_environment="${_environment:-dev}"
+export TF_VAR_environment="$_environment"
 export TF_VAR_region="$_region"
 export TF_VAR_owner="${LANGSMITH_OWNER:-}"
 export TF_VAR_cost_center="${LANGSMITH_COST_CENTER:-}"
