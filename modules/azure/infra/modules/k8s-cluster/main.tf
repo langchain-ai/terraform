@@ -580,6 +580,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   # root module refuses to flip them on a cluster that already exists.
   private_cluster_enabled = var.private_cluster_enabled
   private_dns_zone_id     = var.private_cluster_enabled ? (var.private_dns_zone_id == "" ? "System" : var.private_dns_zone_id) : null
+  # Except with no private zone ("None"): then the API server resolves only
+  # through its public FQDN, an A record to the private IP. Microsoft does not
+  # support None with the public FQDN off, and the provider defaults it to off.
+  private_cluster_public_fqdn_enabled = var.private_cluster_enabled && var.private_dns_zone_id == "None"
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply
