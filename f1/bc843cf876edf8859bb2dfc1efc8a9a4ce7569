@@ -1,0 +1,14 @@
+.github/workflows/release.yml
+  h_9819cd2715e362 16,151-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f1bc843cf876edf8859bb2dfc1efc8a9a4ce7569",
+  "prompts": {},
+  "humans": {
+    "h_9819cd2715e362": {
+      "author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

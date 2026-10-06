@@ -1,0 +1,70 @@
+modules/azure/TROUBLESHOOTING.md
+  s_93545c27c05a39::t_9582e365e19d4f 722,725
+modules/aws/README.md
+  s_93545c27c05a39::t_817e9b5c845b04 5
+  s_93545c27c05a39::t_1b2376e8b17c3a 1062
+modules/aws/infra/scripts/quickstart.sh
+  s_93545c27c05a39::t_dc1e07e4f68556 1607
+modules/gcp/README.md
+  s_93545c27c05a39::t_4ee0f4e9c049aa 5
+  s_93545c27c05a39::t_37c6f10f92a311 371
+  s_93545c27c05a39::t_3fad37f4ee3b75 444,447
+modules/azure/SMITHDB.md
+  s_93545c27c05a39::t_6ea881eb392247 11,17-27
+CHANGELOG.md
+  s_93545c27c05a39::t_e3a8862dc3d726 15-16,18-19,21
+  s_93545c27c05a39::t_0121f7f5480675 29,37-38
+modules/gcp/SMITHDB.md
+  s_93545c27c05a39::t_550787d212b027 204,206,209-211
+  s_93545c27c05a39::t_85c1eed1baf506 322-323
+  s_93545c27c05a39::t_d1a2c04093f519 305-306
+MIGRATION-0.16-to-0.17.md
+  s_93545c27c05a39::t_d65291dd6a840a 1-65,70-130
+  s_93545c27c05a39::t_6f3ada2804b8d5 66-69
+modules/gcp/infra/terraform.tfvars.example
+  s_93545c27c05a39::t_7b563f0799f497 369-371
+modules/aws/infra/terraform.tfvars.example
+  s_93545c27c05a39::t_78096ea322e190 523-524,527,531
+  s_93545c27c05a39::t_87949b6aa0c522 788-789
+README.md
+  s_93545c27c05a39::t_2363690ae0fa39 64-65,67,71,77,79
+  s_93545c27c05a39::t_fcb3bf98c587b5 87-88
+  s_93545c27c05a39::t_52bc168b11f1a8 120-121,124-125,129
+  s_93545c27c05a39::t_44876564cd2903 92,94-100,103,106-109
+modules/aws/infra/variables.tf
+  s_93545c27c05a39::t_7342ed85286afc 941
+modules/azure/README.md
+  s_93545c27c05a39::t_ae40fe11c15f10 5
+.github/workflows/release.yml
+  s_93545c27c05a39::t_6bfcb78851acbd 9
+modules/aws/SMITHDB.md
+  s_93545c27c05a39::t_59cb01679de7ca 42
+modules/azure/SERVICES.md
+  s_93545c27c05a39::t_2b7411c29ea819 170
+modules/gcp/infra/variables.tf
+  s_93545c27c05a39::t_cecbdc2b22091a 964
+modules/gcp/ARCHITECTURE.md
+  s_93545c27c05a39::t_743ad8422558c6 128
+modules/gcp/infra/scripts/quickstart.sh
+  s_93545c27c05a39::t_7e3d325b6c3d23 620
+modules/ocp/README.md
+  s_93545c27c05a39::t_46bdbe5caa715b 7
+modules/gcp/TEST_CYCLE.md
+  s_93545c27c05a39::t_9e84642824af39 300
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a3d95b277a3a29e5d6fa16c340e6760954d52f1d",
+  "prompts": {},
+  "sessions": {
+    "s_93545c27c05a39": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "1cb8d8c1-f68f-4c3c-b4e7-a58eb3f9c2b5",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}

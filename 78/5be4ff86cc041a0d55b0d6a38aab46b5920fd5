@@ -1,0 +1,34 @@
+modules/azure/infra/terraform.tfvars.example
+  s_2926a993332809::t_3c0678389e2813 231-251
+modules/azure/infra/variables.tf
+  s_2926a993332809::t_bfc0b589eac809 970-976
+modules/azure/helm/scripts/init-values.sh
+  s_2926a993332809::t_d39c9c54e85944 312-359
+  s_2926a993332809::t_d2009a94d9a518 408,413
+  s_2926a993332809::t_5d9e3bc8296056 473
+  s_2926a993332809::t_d3f02c905f5194 395-407,409-412,414-416
+  s_2926a993332809::t_ede6f305868b69 268,278
+modules/azure/infra/scripts/create-k8s-secrets.sh
+  s_2926a993332809::t_43dffdc4588dd5 116
+  s_2926a993332809::t_360092004e31af 59-62,72-87
+  s_2926a993332809::t_1134514268a790 88
+modules/azure/infra/scripts/manage-keyvault.sh
+  s_2926a993332809::t_7d6456e78cfa55 46-48
+  s_2926a993332809::t_7ea87e3a37d437 67-69,80-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "785be4ff86cc041a0d55b0d6a38aab46b5920fd5",
+  "prompts": {},
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}

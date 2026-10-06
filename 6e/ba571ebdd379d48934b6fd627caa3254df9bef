@@ -1,0 +1,21 @@
+modules/aws/infra/main.tf
+  s_2926a993332809::t_1e1baa238d7c23 1166-1215
+modules/aws/infra/modules/k8s-bootstrap/main.tf
+  s_2926a993332809::t_cd0a089e6f219e 642
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "6eba571ebdd379d48934b6fd627caa3254df9bef",
+  "prompts": {},
+  "sessions": {
+    "s_2926a993332809": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "74e8dd08-a25c-416c-af69-16376d4459c4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Dzmitry Dubarau <dzmitry.dubarau@langchain.dev>"
+    }
+  }
+}
