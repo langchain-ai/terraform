@@ -98,6 +98,10 @@ run "a_private_cluster_defaults_to_the_system_dns_zone" {
     condition     = module.aks.access_profile.public_fqdn_enabled == false
     error_message = "A private cluster with the System zone was planned with a public FQDN"
   }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == false && !strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "A private cluster with the System zone was told to fetch credentials with --public-fqdn"
+  }
 }
 
 run "a_private_cluster_takes_a_zone_it_does_not_own" {
@@ -117,6 +121,12 @@ run "a_private_cluster_takes_a_zone_it_does_not_own" {
     # provider defaults it to off, so the module has to turn it on.
     condition     = module.aks.access_profile.public_fqdn_enabled == true
     error_message = "aks_private_dns_zone_id = \"None\" was planned without the public FQDN, which Azure refuses"
+  }
+  assert {
+    # With no private zone only the public FQDN resolves, so the scripts' az aks
+    # get-credentials calls need --public-fqdn.
+    condition     = output.aks_kubeconfig_public_fqdn == true && strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "aks_private_dns_zone_id = \"None\" did not tell the scripts to fetch credentials with --public-fqdn"
   }
 }
 

@@ -14,8 +14,8 @@ output "oidc_issuer_url" {
 }
 
 output "host" {
-  description = "The Kubernetes API server endpoint"
-  value       = local.cluster_kube_config[0].host
+  description = "The Kubernetes API server endpoint: the public FQDN on a private cluster with no private DNS zone, the kubeconfig's server otherwise"
+  value       = local.cluster_host
   sensitive   = true
 }
 
@@ -242,4 +242,9 @@ output "istio_addon_gateways" {
     external = local.istio_addon_external_gateway
     internal = local.istio_addon_internal_gateway
   }
+}
+
+output "api_server_public_fqdn" {
+  description = "True when clients reach the API server through its public FQDN (a private cluster with private_dns_zone_id = \"None\"), so az aks get-credentials needs --public-fqdn."
+  value       = local.api_server_public_fqdn
 }
