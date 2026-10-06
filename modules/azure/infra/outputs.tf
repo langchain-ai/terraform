@@ -74,6 +74,11 @@ output "aks_cluster_name" {
   value       = module.aks.cluster_name
 }
 
+output "aks_resource_group_name" {
+  description = "Resource group containing the AKS cluster: the module's group, or existing_cluster_resource_group_name when create_cluster = false"
+  value       = local.aks_rg_name
+}
+
 output "aks_cluster_id" {
   description = "Resource ID of the AKS cluster"
   value       = module.aks.cluster_id
@@ -82,6 +87,11 @@ output "aks_cluster_id" {
 output "aks_oidc_issuer_url" {
   description = "OIDC issuer URL of the AKS cluster (used for Workload Identity federation)"
   value       = module.aks.oidc_issuer_url
+}
+
+output "aks_control_plane_principal_id" {
+  description = "Principal ID of the user-assigned AKS control-plane identity, for the network owner's grants when aks_control_plane_identity_manage_grants = false. null with a system-assigned identity."
+  value       = module.aks.control_plane_principal_id
 }
 
 # ── SmithDB ──────────────────────────────────────────────────────────────────
@@ -181,11 +191,7 @@ output "langsmith_namespace" {
 
 output "get_credentials_command" {
   description = "Run this command to configure kubectl for this cluster"
-  # A pre-existing cluster lives in its own resource group, not the one this module
-  # creates for Key Vault and Storage, so the created group would name a resource
-  # group that does not contain the cluster. existing_cluster_resource_group_name is
-  # required when create_cluster = false, so this branch is never blank.
-  value = "az aks get-credentials --resource-group ${var.create_cluster ? local.rg_name : var.existing_cluster_resource_group_name} --name ${module.aks.cluster_name} --overwrite-existing"
+  value       = "az aks get-credentials --resource-group ${local.aks_rg_name} --name ${module.aks.cluster_name} --overwrite-existing"
 }
 
 # ── Key Vault ─────────────────────────────────────────────────────────────────
@@ -202,7 +208,7 @@ output "keyvault_uri" {
 
 # ── WAF ───────────────────────────────────────────────────────────────────────
 output "waf_policy_id" {
-  description = "WAF policy resource ID (attach to App Gateway or Front Door)"
+  description = "WAF policy resource ID (attach to an Application Gateway; Front Door cannot use this policy type)"
   value       = var.create_waf ? module.waf[0].waf_policy_id : ""
 }
 
@@ -252,15 +258,21 @@ output "dns_nameservers" {
 }
 
 output "aks_network" {
-  description = "Effective AKS network mode, pod range, data plane, policy engine and tier, as planned or created. null for an attached cluster."
+  description = "Effective AKS network mode, pod range, data plane, policy engine, outbound type and tier, as planned or created. null for an attached cluster."
   value = module.aks.network_profile == null ? null : {
     mode         = coalesce(module.aks.network_profile.network_plugin_mode, "node-subnet")
     pod_cidr     = module.aks.network_profile.pod_cidr
     data_plane   = module.aks.network_profile.network_data_plane
     policy       = module.aks.network_profile.network_policy
+    outbound     = try(module.aks.network_profile.outbound_type, null)
     sku_tier     = module.aks.sku_tier
     support_plan = module.aks.support_plan
   }
+}
+
+output "aks_nat_gateway_public_ip" {
+  description = "Public IP of the NAT gateway Terraform created on the AKS subnet (aks_nat_gateway = \"create\"): the source address of traffic that leaves through it, for firewall rules and aks_authorized_ip_ranges. null otherwise."
+  value       = one(azurerm_public_ip.aks_nat[*].ip_address)
 }
 
 # The chart builds https://<account>.blob.core.windows.net/ when no override is

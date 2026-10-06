@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`), so an unpinned deploy never crosses a breaking minor on its own. SmithDB is the one exception and needs the chart line selected explicitly — see [SMITHDB.md](SMITHDB.md#version-requirements). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`), so an unpinned deploy never crosses a breaking minor on its own. SmithDB is part of that line — see [SMITHDB.md](SMITHDB.md#version-requirements). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -65,13 +65,13 @@ Cluster prerequisites — verify before applying:
 
 ```bash
 az aks show --name <cluster> --resource-group <rg> \
-  --query "{oidc:oidcIssuerProfile.enabled, wi:securityProfile.workloadIdentity.enabled, localAccounts:disableLocalAccounts}"
+  --query "{oidc:oidcIssuerProfile.enabled, wi:securityProfile.workloadIdentity.enabled, entra:aadProfile.managed}"
 ```
 
 | Requirement | Why | Fix |
 |---|---|---|
 | OIDC issuer + Workload Identity enabled | Federated credentials trust the cluster's OIDC issuer; without it pods can't reach Blob or Key Vault | `az aks update -n <cluster> -g <rg> --enable-oidc-issuer --enable-workload-identity` (in-place, no recreate) |
-| Local accounts **not** disabled | The Helm/Kubernetes providers authenticate with the cluster's `kube_config`, which Azure returns empty on AAD-only clusters | Re-enable, or deploy Pass 2+ out-of-band with a `kubelogin` kubeconfig |
+| On an Entra ID cluster: `kubelogin` on the PATH, and cluster-admin rights in Kubernetes for whoever runs the apply | azurerm returns no client certificate for any Entra-integrated cluster (local accounts on or off), so the Kubernetes and Helm providers sign in through `kubelogin` with your `az` session (`aks_kube_auth = "auto"`, the default). Pass 1 installs cluster-scoped resources (cert-manager and KEDA CRDs), so namespace rights are not enough | `az aks install-cli`, then grant the rights the way the cluster authorizes. **Azure RBAC** (`azure_rbac_enabled = true` on the cluster's Entra profile): an Azure role such as Azure Kubernetes Service RBAC Cluster Admin. **Kubernetes RBAC** (`azure_rbac_enabled = false`): Azure roles grant nothing inside the cluster; add the identity to one of the cluster's `admin_group_object_ids`, or bind it to `cluster-admin` with a ClusterRoleBinding. After a group change, `az login` again so the token carries the new membership |
 | API server reachable from the apply host | Pass 1 installs cert-manager and KEDA into the cluster | Add the apply host's egress CIDR to the cluster's authorized IP ranges |
 
 `aks_subnet_id` must be a subnet the existing cluster already runs nodes in. It's what the Blob and Key Vault firewalls allowlist and the only subnet an added node pool can join, so a mismatch leaves pods unable to read secrets or write traces. Terraform checks it against the cluster's agent pools and fails the plan with the list of subnets it accepts.
@@ -97,6 +97,7 @@ These variables shape the cluster itself, so Terraform reads and ignores them on
 - `aks_network_mode`, `aks_pod_cidr`, `aks_network_dataplane`, `aks_sku_tier`, `aks_support_plan`
 - `aks_service_cidr`, `aks_dns_service_ip`
 - `aks_authorized_ip_ranges`
+- `aks_private_cluster_enabled`, `aks_private_dns_zone_id`, `aks_entra_only`, `aks_entra_admin_group_object_ids`, `aks_control_plane_identity`, `aks_control_plane_identity_id`, `aks_control_plane_identity_manage_grants`. Terraform makes no control-plane grants on an attached cluster, and detects Entra on the cluster itself and switches to `kubelogin` without `aks_entra_only`
 - `availability_zones`, for the cluster only — PostgreSQL still uses it
 
 `istio-addon` requires `create_cluster = true`. Azure Service Mesh is configured through `service_mesh_profile` on the cluster resource, so Terraform cannot enable it on a cluster it only reads. Use `istio` for the self-managed Helm install instead.
@@ -169,6 +170,32 @@ Both default to `true`. Something still has to provide the component: KEDA is wh
 
 `install_cert_manager = false` rules out `tls_certificate_source = "dns01"`, and Terraform rejects that pair at plan. The DNS-01 solver reaches the Azure DNS API as a Managed Identity, bound to the pod by a workload-identity annotation Terraform adds to the service account of the release it installs; a cert-manager it did not install has no such annotation, so every ACME challenge would fail on an Azure auth error. Use `letsencrypt` (HTTP-01 needs no Azure credential and works through any cert-manager), or `none` with your own ClusterIssuer.
 
+
+### Private endpoints and central private DNS zones
+
+For networks that require private endpoints and keep their `privatelink` zones in a central hub:
+
+```hcl
+# Blob: both storage accounts, public endpoint off.
+storage_private_endpoint_enabled = true
+storage_private_dns_zone_id      = "/subscriptions/<hub-sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+
+# Key Vault: the vault this module creates, public network access off.
+keyvault_private_endpoint_enabled = true
+keyvault_private_dns_zone_id      = "/subscriptions/<hub-sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+
+# PostgreSQL Flexible Server (VNet integration): register in the central zone.
+postgres_private_dns_zone_id = "/subscriptions/<hub-sub>/resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
+```
+
+- **A supplied zone replaces the module's own.** For each `*_private_dns_zone_id` you set, Terraform creates no zone and no virtual network link. Linking the zone to every network that must resolve these names stays with the zone's owner.
+- **An empty zone ID** creates the zone in the deployment resource group and links it to the VNet, as before.
+- **Supplied zones fit a VNet the zone's owner already links** (`create_vnet = false`). With `create_vnet = true` the VNet exists only once the apply has created it, so nothing in it resolves the zone's records until the owner adds the link, and a Key Vault secret write from inside that VNet fails until then.
+- **PostgreSQL** stays in VNet-integration mode (a delegated subnet); the zone input only changes where its record lives. The SmithDB metastore uses the same zone.
+- **Moving an existing server to a supplied zone** is an in-place update in azurerm (`private_dns_zone_id` is not ForceNew in v4.65.0 or v4.81.0), and the zone and link the module created are then deleted. Azure refuses the change while high availability is on (Microsoft Learn, "Network with private access (virtual network integration)", updated 2026-09-06), so turn `postgres_high_availability` off for that apply, or set the zone before the first one.
+- **Key Vault with the endpoint on** is reachable only from networks that resolve its `privatelink.vaultcore` record, and that includes the machine running `terraform plan`, `apply` and `make seed-secrets`. It applies only with `create_keyvault = true`.
+- **Permissions:** registering in a zone you don't own needs `Microsoft.Network/privateDnsZones/join/action` on it, and the grant can take tens of minutes to take effect. See [PERMISSIONS.md](PERMISSIONS.md#private-dns-zones-you-own).
+
 ### Deploying into an existing resource group
 
 Set `create_resource_group = false` to deploy into a resource group someone else created, typically one a platform team hands out with the deployer's rights granted on that group alone. Terraform reads the group and changes nothing about it: its tags, locks, and policy assignments stay as its owner configured them, and `terraform destroy` removes the LangSmith resources and leaves the group in place.
@@ -209,6 +236,7 @@ az login
 |---|---|---|
 | PostgreSQL private DNS zone | `privatelink.postgres.database.azure.com` | `privatelink.postgres.database.usgovcloudapi.net` |
 | Blob private DNS zone | `privatelink.blob.core.windows.net` | `privatelink.blob.core.usgovcloudapi.net` |
+| Key Vault private DNS zone (with `keyvault_private_endpoint_enabled`) | `privatelink.vaultcore.azure.net` | `privatelink.vaultcore.usgovcloudapi.net` |
 | Public IP DNS label | `<label>.<region>.cloudapp.azure.com` | `<label>.<region>.cloudapp.usgovcloudapi.net` |
 | Blob endpoint in Helm values | chart default | `azureStorageServiceUrlOverride` from the `storage_blob_endpoint` output |
 | cert-manager `azureDNS` environment | `AzurePublicCloud` | `AzureUSGovernmentCloud` |
@@ -225,6 +253,46 @@ Limits in Azure Government:
 
 The scripts (`make init-values`, `make deploy`, the quickstart wizard) read the cloud from the `azure_environment` output once the infrastructure is applied, then from `terraform.tfvars`, then from `TF_VAR_azure_environment`. The wizard keeps Redis in-cluster in Government.
 
+
+### Private API server and Entra-only access
+
+Some landing zones' Azure Policy requires a private API server, Entra ID with Azure RBAC, local accounts disabled, or a control-plane identity the network team grants in advance. Each setting is off by default and independent of the others:
+
+```hcl
+aks_private_cluster_enabled = true
+aks_private_dns_zone_id     = "/subscriptions/.../resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.<region>.azmk8s.io"
+
+aks_entra_only                   = true
+aks_entra_admin_group_object_ids = ["<entra-group-object-id>"]
+
+aks_control_plane_identity = "user"
+```
+
+| Variable | Effect |
+|---|---|
+| `aks_private_cluster_enabled` | The API server gets a private endpoint in the cluster VNet and no public address. Refused alongside `aks_authorized_ip_ranges`, which filters the public endpoint |
+| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and resolving the API server is left to your DNS. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity = "user"` |
+| `aks_entra_only` | Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled |
+| `aks_entra_admin_group_object_ids` | Entra groups granted cluster-admin. Requires `aks_entra_only` |
+| `aks_control_plane_identity` | `system` (default): AKS creates a system-assigned control-plane identity. `user`: the control plane runs as a user-assigned identity, `<cluster_name>-control-plane` in the deployment's resource group |
+| `aks_control_plane_identity_id` | An existing user-assigned identity to use instead of the one Terraform creates. Requires `aks_control_plane_identity = "user"`, and is required when `aks_control_plane_identity_manage_grants` is false |
+| `aks_control_plane_identity_manage_grants` | Whether Terraform grants the user-assigned identity its roles. Defaults to `create_vnet`: Terraform grants on a VNet it built, and leaves a supplied VNet's grants to its owner |
+
+In Azure Government, confirm the private zone's name before you create your own. Microsoft's private-endpoint DNS table gives `privatelink.<region>.azmk8s.io`, but Government API servers use the `cx.aks.containerservice.azure.us` suffix. With `aks_private_dns_zone_id = "System"`, AKS creates the zone in the node resource group, and that zone's name is the one to copy.
+
+AKS uses the user-assigned identity's roles while it creates the cluster. [PERMISSIONS.md](PERMISSIONS.md#control-plane-identity-grants) lists them and the steps for a VNet whose owner grants them.
+
+The apply host needs three things on top of the [prerequisites](#prerequisites):
+
+- **A network path to the private endpoint.** On a private cluster, run Terraform and `make deploy` from a host in the cluster VNet or a peered one, or over a VPN, with DNS that resolves the private zone
+- **`kubelogin` on `PATH`, for an Entra cluster.** The cluster issues no client certificate, so the providers and the `make` scripts fetch an Entra token through `kubelogin` as the identity `az` is signed in as
+- **Cluster-admin for that identity, for an Entra cluster.** Put it in a group in `aks_entra_admin_group_object_ids`, or assign it `Azure Kubernetes Service RBAC Cluster Admin` on the cluster
+
+Set the private settings before the first apply. Azure cannot make an existing API server private or public, or move it to another zone, so the provider would replace the cluster and everything installed on it. Terraform compares the request with the cluster at plan time and refuses either change.
+
+Azure turns Entra integration on in place and cannot turn it off, so Terraform refuses `aks_entra_only = false` on a cluster that has it. To turn it on for an existing cluster, make that change in an apply of its own, with nothing else changing. That apply still authenticates with the certificate, which stops working once the cluster update disables local accounts, so a Helm or Kubernetes change in the same apply fails with a 401. The next plan switches to `kubelogin`.
+
+Set the control-plane identity before the first apply too. Azure moves a control plane to another identity in place, but the roles the old identity holds do not move with it, so Terraform refuses a change to `aks_control_plane_identity` or `aks_control_plane_identity_id` on an existing cluster.
 
 ## Prerequisites
 
@@ -246,6 +314,10 @@ kubectl version --client
 # Helm (>= 3.12)
 brew install helm
 helm version
+
+# kubelogin, only for an Entra cluster (aks_entra_only, or an attached cluster with Entra ID)
+brew install Azure/kubelogin/kubelogin
+kubelogin --version
 ```
 
 ### Required Azure RBAC
@@ -267,7 +339,7 @@ Some subscriptions delegate `Microsoft.Authorization/roleAssignments/write` thro
 
 ### Required outbound access
 
-LangSmith needs HTTPS egress from the cluster to **`beacon.langchain.com`** for license verification and usage reporting, unless it runs in [offline mode](https://docs.langchain.com/langsmith/self-host-egress). This module does not arrange that egress: it leaves AKS on its default `outboundType` of `loadBalancer`, so nodes reach the internet through the cluster load balancer's outbound rules. A stock deployment therefore works. What breaks it is a user-defined route that sends the AKS subnet's egress to a firewall or network virtual appliance. Turning off default outbound access on the subnet does not break it on its own, because `loadBalancer` outbound is an explicit method that keeps working on a private subnet. Permit `beacon.langchain.com:443` on that firewall before the first deploy.
+LangSmith needs HTTPS egress from the cluster to **`beacon.langchain.com`** for license verification and usage reporting, unless it runs in [offline mode](https://docs.langchain.com/langsmith/self-host-egress). With the default `aks_outbound_type = "loadBalancer"`, nodes reach the internet through the cluster load balancer's outbound rules, so a stock deployment works. What breaks it is a firewall or network virtual appliance in the path: a user-defined route on the AKS subnet, or `aks_outbound_type = "userDefinedRouting"` (see [Egress through your network](#egress-through-your-network)). Turning off default outbound access on the subnet does not break it on its own, because `loadBalancer` outbound is an explicit method that keeps working on a private subnet. Permit `beacon.langchain.com:443` on that firewall before the first deploy.
 
 Beacon is not the only destination such a firewall has to allow. The cluster also pulls images: LangSmith's from `docker.io`, and the add-ons Terraform installs from their own registries. It reaches Let's Encrypt when `tls_certificate_source = "letsencrypt"`. AKS itself needs the destinations in Microsoft's [required outbound network rules](https://learn.microsoft.com/azure/aks/outbound-rules-control-egress).
 
@@ -465,9 +537,34 @@ create_dns_zone        = true
 > That requires Azure DNS to be authoritative for the subdomain — NS delegation grants that authority.
 > A CNAME only aliases traffic and does not transfer DNS authority; the DNS-01 challenge will fail.
 
+**Your own certificate (`existing`, all controllers):** for a certificate from your organization's CA, or anywhere Let's Encrypt is not an option.
+```hcl
+langsmith_domain                = "langsmith.mycompany.com"
+tls_certificate_source          = "existing"
+langsmith_custom_ca_secret_name = "langsmith-ca"   # only for a private CA, see below
+```
+
+1. Put the certificate in a `kubernetes.io/tls` Secret named `langsmith-tls` in the LangSmith namespace. The PEM file holds the leaf first, then the intermediates; its SANs must include `langsmith_domain`.
+   ```bash
+   kubectl -n langsmith create secret tls langsmith-tls --cert=fullchain.pem --key=privkey.pem
+   ```
+2. `make init-values` writes the Ingress `tls:` entry for that Secret, with no cert-manager annotation. The Envoy Gateway Gateway references the same Secret, and `make deploy` copies it to the Istio gateway's namespace for `istio` and `istio-addon`. `langsmith_domain` alone is enough for every controller; `dns_label` is not needed.
+3. `make deploy` checks the Secret exists and is `kubernetes.io/tls` before it runs Helm, and stops with the command above if not.
+4. **Renewal is yours:** replace the Secret with the new certificate. NGINX and Envoy Gateway pick it up without a restart; with `istio` or `istio-addon`, re-run `make deploy` so the gateway's copy is refreshed.
+
+**A private CA needs one more Secret** if LangSmith's pods call anything that CA signed, such as an OIDC provider or a Postgres or ClickHouse server. Browsers trust your CA through your organization's devices; the pods do not. Give them the CA bundle (root and intermediates, PEM) as `langsmith_custom_ca_secret_name`. `init-values.sh` sets the chart's `config.customCa` from it, and `deploy.sh` checks it before Helm runs:
+```bash
+kubectl -n langsmith create secret generic langsmith-ca --from-file=ca.crt=ca-bundle.pem
+```
+The key defaults to `ca.crt` (`langsmith_custom_ca_secret_key`).
+
+- **Which pods get it:** the chart mounts the bundle and sets `SSL_CERT_FILE` in backend, platform-backend, host-backend, queue, ingest-queue, listener and playground; in the Insights, Polly and Fleet workloads, agent-gateway, presidio-analyzer and the sandbox host when those are enabled; and in the migration and bootstrap Jobs.
+- **Which pods do not:** the frontend, the operator, and the agent deployments the operator creates. If those must trust the CA, they need wiring this module does not yet do.
+- **It replaces the default trust store** for those pods, so include a public CA as well if they also reach public endpoints, such as Beacon for an online license.
+
 > ⚠️ **`letsencrypt` (HTTP-01) only works with `nginx`, `istio` (self-managed), and `envoy-gateway`.**
 > `istio-addon` and `agic` do not create an IngressClass, so the ACME solver cannot receive traffic.
-> For those controllers, use `dns01` with a custom domain, or `none` for HTTP-only.
+> For those controllers, use `dns01` with a custom domain, `existing` with your own certificate, or `none` for HTTP-only.
 >
 > See [INGRESS_CONTROLLERS.md](INGRESS_CONTROLLERS.md) for the full compatibility matrix and validated paths.
 
@@ -662,8 +759,8 @@ Same as `make clean` but skips the interactive confirmation — useful in non-in
 ### `make kubeconfig` — Fetch cluster credentials
 **Script:** `helm/scripts/get-kubeconfig.sh`
 
-- Reads `aks_cluster_name` and `resource_group_name` from `terraform output`
-- Runs `az aks get-credentials --overwrite-existing`
+- Reads `aks_cluster_name` and `aks_resource_group_name` from `terraform output`
+- Runs `az aks get-credentials --overwrite-existing`, and on an Entra cluster converts the context to the `az` CLI login with `kubelogin convert-kubeconfig`
 - Merges the AKS context into `~/.kube/config` and sets it as the active context
 - Prints `kubectl get nodes` so you can confirm connectivity immediately
 
@@ -768,11 +865,48 @@ enable_fleet         = true           # Pass 4 — Fleet, standalone (chart v0.1
 enable_agent_builder = false          # Pass 4 — Agent Builder UI, LEGACY (superseded by enable_fleet; mutually exclusive)
 enable_insights      = true           # Pass 5 — Insights (ClickHouse-backed analytics)
 enable_polly         = true           # Pass 5 — Polly AI evaluation (requires enable_deployments)
+enable_llm_gateway   = false          # LLM Gateway, private beta (chart 0.17)
+enable_gateway_pii_redaction = false  # Presidio PII redaction for gateway traffic (requires enable_llm_gateway)
 ```
 
 **Pass 3** requires a node pool scale-up before deploying — operator-spawned pods need headroom. Set `default_node_pool_min_count = 5` and run `make apply` first, then `make init-values && make deploy`.
 
 **Passes 4–5** only need `make init-values && make deploy` — no `terraform apply` required.
+
+#### LLM Gateway
+
+`enable_llm_gateway = true` deploys the chart's `agentGateway`, the
+[LLM Gateway](https://docs.langchain.com/langsmith/llm-gateway) (beta; on self-hosted, chart 0.17 only). It lets one
+LangSmith API key call models across the providers an organization configures, traces every call, and applies spend and
+rate policies centrally. It adds one Deployment and a `/gateway/` path on the LangSmith hostname:
+
+| Client format | Base URL |
+|---|---|
+| OpenAI Chat Completions, Responses | `https://<langsmith host>/gateway/v1` |
+| Anthropic Messages | `https://<langsmith host>/gateway` |
+
+After `make init-values && make deploy`, an organization admin still turns the gateway on for workspaces, adds provider
+secrets and grants access, as in [Admin setup](https://docs.langchain.com/langsmith/llm-gateway-admin-setup).
+
+- **Workload Identity.** The gateway pod carries the blob storage settings, so `init-values.sh` gives it the identity
+  label and service account annotation, and Terraform federates `<release>-agent-gateway` (and
+  `<release>-presidio-analyzer`) with the LangSmith identity. Those two credentials exist whether or not the flag is set,
+  so turning the gateway on needs no `make apply` on a cluster applied from this version. On an older cluster, run
+  `make apply` once first.
+- **Timeouts.** The chart's frontend allows 900 s on `/gateway/` for long model calls, but ingress-nginx cuts requests
+  at 60 s and Application Gateway at 30 s. `make deploy` gives `/gateway/` an Ingress of its own,
+  `<release>-llm-gateway`, copied from the chart's (same class, host, TLS and backend) and carrying a 900 s timeout: the
+  NGINX read and send timeouts with `ingress_controller = "nginx"`, Application Gateway's request timeout with `agic`.
+  Every other path keeps the controller's default, so a slow request elsewhere is not held for fifteen minutes. Istio sets
+  no request timeout by default. With `envoy-gateway` or `none`, `init-values.sh` warns, and the timeout has to be raised
+  there. `make uninstall` removes the extra Ingress.
+- **Private registries.** The gateway runs from the LangSmith images already in use. PII redaction adds
+  `mcr.microsoft.com/presidio-analyzer` (tag in the chart's `images.presidioAnalyzerImage`), which is on Microsoft's
+  registry, not Docker Hub. A cluster that pulls through a mirror needs it mirrored too; with `images.registry` set,
+  the chart prepends that registry to the full repository, so keep the `mcr.microsoft.com/presidio-analyzer` path in the
+  mirror.
+- **PII redaction.** `enable_gateway_pii_redaction = true` adds the Presidio analyzer and turns redaction on for new
+  organizations. It requires `enable_llm_gateway = true`; plan and `init-values.sh` both refuse it alone.
 
 ---
 
@@ -1109,8 +1243,10 @@ value outside the range — worth knowing if you set both by hand, because
 changing the range strands an address written against the old one.
 
 A VNet your network team manages is also where egress tends to be locked down,
-with a route table sending `0.0.0.0/0` to a firewall. The cluster must still reach
-`beacon.langchain.com:443`; see [Required outbound access](#required-outbound-access).
+with a route table sending `0.0.0.0/0` to a firewall. Set `aks_outbound_type` to
+match ([Egress through your network](#egress-through-your-network)); the cluster
+must still reach `beacon.langchain.com:443`, see
+[Required outbound access](#required-outbound-access).
 
 ### Network mode, data plane and tier
 
@@ -1168,11 +1304,132 @@ place, so an existing cluster moves tiers on its next apply. `Free` has no SLA
 and suits a throwaway cluster; `Premium` adds long-term Kubernetes support,
 selected with `aks_support_plan = "AKSLongTermSupport"`.
 
+### Egress through your network
+
+`aks_outbound_type` sets how the cluster's nodes reach the internet. It takes
+effect when the cluster is created; see the end of this section for changing it.
+
+| `aks_outbound_type` | Egress path | The AKS subnet you supply must have |
+|---------------------|-------------|-------------------------------------|
+| `loadBalancer` (default) | An outbound public IP that AKS creates on the cluster's Standard Load Balancer | Nothing extra |
+| `userDefinedRouting` | The subnet's route table, to a firewall, a network virtual appliance or on-premises. AKS creates no outbound public IP | A route table. A `0.0.0.0/0` route in it must have next hop `VirtualAppliance` or `VirtualNetworkGateway`: AKS refuses any other next hop, `None` included, with `RouteTableInvalidNextHop` |
+| `userAssignedNATGateway` | The NAT gateway on the subnet | A NAT gateway: one already attached (`aks_nat_gateway = "existing"`), or one Terraform creates (`"create"`) |
+
+Both of the last two need `create_vnet = false` and a supplied `aks_subnet_id`.
+The route table or NAT gateway belongs to whoever owns the network, and plan
+refuses either type on a subnet Terraform creates or carves. Plan also reads the
+supplied subnet: `userDefinedRouting` without a route table and
+`userAssignedNATGateway` without a NAT gateway both fail with the
+`az network vnet subnet update` command that fixes them, rather than failing
+when AKS creates the cluster. With `userDefinedRouting`, plan also reads the
+route table. A `0.0.0.0/0` route to any next hop but `VirtualAppliance` or
+`VirtualNetworkGateway` fails the plan, since AKS would refuse it at create
+with `RouteTableInvalidNextHop`. No `0.0.0.0/0` route at all is only a
+warning, because a default route learned over BGP from ExpressRoute or VPN
+never appears in the route table.
+
+**A NAT gateway on the subnet** (`aks_nat_gateway`) is for
+`userAssignedNATGateway`, which requires one, and for `userDefinedRouting`,
+where it carries the routes whose next hop is `Internet`. Azure prefers a
+route to a virtual appliance or gateway over a NAT gateway, and a NAT gateway
+over the system default route, so a default route to your firewall still wins
+([What is Azure NAT Gateway?](https://learn.microsoft.com/azure/nat-gateway/nat-overview)).
+
+| `aks_nat_gateway` | What Terraform does |
+|-------------------|---------------------|
+| `none` (default) | Nothing. Refused with `userAssignedNATGateway` |
+| `existing` | Checks at plan that the subnet already has a NAT gateway |
+| `create` | Creates a Standard NAT gateway and its static public IP in this module's resource group and associates it with `aks_subnet_id`, before the cluster is created |
+
+With `create`, the association is the only change Terraform makes to your
+subnet. Route tables stay yours, and plan refuses `create` when the subnet
+already has a NAT gateway other than the one this module made, because
+associating a new one would replace it. A Standard NAT gateway runs in one
+zone, so it and its public IP are pinned only when `availability_zones` names
+exactly one zone; otherwise Azure places them. The zones are set once, at
+creation: a later `availability_zones` edit leaves the NAT gateway and its
+public IP where they are, and plan warns about the drift. Changing them would
+replace both, changing the egress address and cutting the cluster's egress until
+the new one is attached. The cluster's node pool treats a zone edit the same way.
+`aks_nat_gateway_idle_timeout_minutes` (4 to 120, default 4) sets its TCP idle
+timeout. Traffic that leaves through the NAT gateway comes from its public IP,
+which is the address to allow in the firewall rules and
+`aks_authorized_ip_ranges` below.
+
+AKS's other outbound types are not offered. `managedNATGateway` is for a VNet
+that AKS creates itself, and this module always places the cluster in a VNet.
+`none` and `block` are for network-isolated clusters. All of this is from
+Microsoft's
+[Customize cluster egress with outbound types](https://learn.microsoft.com/azure/aks/egress-outboundtype),
+[Customize cluster egress with a user-defined routing table](https://learn.microsoft.com/azure/aks/egress-udr)
+and [Create a managed or user-assigned NAT gateway for your AKS cluster](https://learn.microsoft.com/azure/aks/nat-gateway).
+
+**What the egress path must allow.** With `userDefinedRouting` the firewall
+decides what the cluster can reach, and nothing works until it allows:
+
+- **AKS itself:** the destinations in Microsoft's
+  [Outbound network and FQDN rules for Azure Kubernetes Service (AKS) clusters](https://learn.microsoft.com/azure/aks/outbound-rules-control-egress)
+  (updated 2026-09-16), in the section for your cloud. Azure Government has
+  its own section: its API server endpoint is
+  `*.hcp.<location>.cx.aks.containerservice.azure.us`, and it signs in at
+  `login.microsoftonline.us` and manages through
+  `management.usgovcloudapi.net`. Two features this module turns on have rows
+  of their own on that page: workload identity (the Entra sign-in endpoint)
+  and the Key Vault Secrets Store CSI driver (the Key Vault endpoint for your
+  cloud).
+
+  These need a path out whatever carries the rest of the traffic, and a route
+  that sends only the `AzureCloud` service tag to `Internet` does not cover
+  them: `packages.microsoft.com`, `mcr.microsoft.com`,
+  `packages.aks.azure.com` and `acs-mirror.azureedge.net` are among the
+  destinations that resolve outside `AzureCloud`. Without a path to them, AKS
+  accepts the create and node bootstrap then fails with CSE exit status 99.
+  Plan warns when the only routes in the table that go straight to `Internet`
+  name service tags. It is a warning because a firewall or proxy behind the
+  default route that does reach them is invisible to the plan.
+- **LangSmith:** `beacon.langchain.com:443`, unless the license is offline; see
+  [Required outbound access](#required-outbound-access).
+- **Images**, from wherever the cluster pulls them: LangSmith's from
+  `docker.io`, and the add-ons from their upstream registries, or your mirror
+  for all of them.
+- **Let's Encrypt** (`acme-v02.api.letsencrypt.org`) when
+  `tls_certificate_source` is `letsencrypt` or `dns01`.
+
+On a cluster with a public API server and `aks_authorized_ip_ranges`, add the
+egress address (the firewall's, or the NAT gateway's public IP) to the list.
+Microsoft's
+[API server authorized IP ranges](https://learn.microsoft.com/azure/aks/api-server-authorized-ip-ranges)
+recommends it, and AKS adds the cluster's outbound IP by itself only for the
+load balancer.
+
+The Helm charts are not on this list when Terraform and `make deploy` run
+outside the VNet: the runner fetches them, not the cluster. From a jump host
+inside the VNet, its route has to reach `charts.jetstack.io`,
+`kedacore.github.io`, `langchain-ai.github.io`, `docker.io` (the Envoy Gateway
+chart), and the NGINX or Istio chart repository for the controller you choose.
+
+**A public ingress and user-defined routes.** With `userDefinedRouting`, a
+public load balancer for the ingress controller receives traffic on its public
+IP, but the replies leave by the route table. Microsoft's
+[Limit network traffic with Azure Firewall in AKS](https://learn.microsoft.com/azure/aks/limit-egress-traffic)
+says Azure Firewall, being stateful, drops those replies, which breaks ingress
+through a public load balancer unless the firewall also handles the inbound
+path with a DNAT rule. The usual pairing is a private ingress, reached from
+inside the network.
+
+**Changing it on an existing cluster** is refused at plan unless
+`aks_allow_outbound_type_change = true`. Azure applies a change between these
+three types in place on a cluster in a supplied VNet. But it moves the cluster's
+egress IP and drops existing connections, so firewall rules and
+`aks_authorized_ip_ranges` that name the old IP have to change first. An
+attached cluster (`create_cluster = false`) keeps the outbound type it was
+built with, and plan refuses a non-default value there.
+
 ### What a subnet you supply must already have
 
 | Subnet | Requirement |
 |--------|-------------|
-| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
+| AKS | Both the `Microsoft.Storage` and `Microsoft.KeyVault` service endpoints, unless you let Terraform add them (below). The blob storage firewall is hardcoded to default-deny and allowlists this subnet by ID, and Azure rejects a subnet rule when the matching endpoint is missing. Required whatever `keyvault_default_action` is set to. With `keyvault_private_endpoint_enabled = true` the vault's firewall no longer allowlists the subnet, so only `Microsoft.Storage` is required. Must also be large enough for the configured node pools, since Azure CNI draws both node and pod IPs from it: `(max_count + 1) × (max_pods + 1)` addresses per pool, which is 764 at the defaults and needs a `/22` or larger |
 | Postgres | Delegation to `Microsoft.DBforPostgreSQL/flexibleServers`, with the `Microsoft.Network/virtualNetworks/subnets/join/action` action, and no other resources in the subnet. Azure's floor for a delegated subnet is `/28` |
 | Redis | No delegation, since it holds a private endpoint and Azure allows no other resource type in a delegated subnet |
 | AGIC | The subnet to itself. Application Gateway v2 shares with nothing, and Azure recommends a `/24`. Only needed when `ingress_controller = "agic"` |
@@ -1308,7 +1565,7 @@ OS: every component runs in its own container image. The accepted values are
 `Ubuntu` (the default), `AzureLinux`, and the version-pinned `AzureLinux3` and
 `Ubuntu2204`. Windows SKUs are refused, because every pool here is Linux.
 `Ubuntu2404` is not accepted yet: the azurerm provider added it in 4.67.0, and
-this module still allows versions back to 4.59.0.
+this module still allows versions back to 4.65.0.
 
 On an existing cluster, a change between any two accepted values is an in-place
 update of the pool, for the default pool and additional pools alike. The provider

@@ -112,6 +112,7 @@ aks_sku_tier                = "Standard"       # uptime SLA; Free has none, Prem
 # aks_network_dataplane    = "cilium"          # empty picks cilium in overlay mode, azure in node-subnet mode
 # aks_support_plan         = "KubernetesOfficial" # AKSLongTermSupport requires aks_sku_tier = "Premium"
 # aks_os_sku               = "Ubuntu"          # or AzureLinux; additional pools follow unless they set os_sku. README "Node OS"
+# aks_outbound_type        = "loadBalancer"    # or userDefinedRouting / userAssignedNATGateway on your own subnet. README "Egress through your network"
 
 # Large pool: for ClickHouse isolation + LangGraph agent deployment pods (Pass 3+)
 # ClickHouse production sizing requests 2 vCPU / 8 GiB — fits on the default pool.
@@ -256,6 +257,33 @@ sizing_profile = "production"
 # Pass 5 — Polly (AI eval / monitoring agent)
 # enable_polly = true
 
+# SSO login via any standard OIDC provider — Entra ID (Azure AD), Okta,
+# Auth0, Google Workspace, etc. all work through the same generic
+# client_id/secret/issuer_url. Default is off (basic auth). When enabled,
+# disables config.basicAuth and requires the client ID/secret/issuer URL to
+# already be populated in Key Vault before the first deploy — see
+# infra/scripts/manage-keyvault.sh — under:
+#   langsmith-oauth-client-id
+#   langsmith-oauth-client-secret
+#   langsmith-oauth-issuer-url
+# (for Entra ID, issuer URL is https://login.microsoftonline.com/<tenant-id>/v2.0
+# — the /v2.0 suffix is required, not the tenant-specific /common/ endpoint;
+# other providers publish their own issuer URL in their OIDC discovery doc).
+#
+# WARNING: leave this false for the initial install. Deploy first with
+# basic auth and confirm you can log in as the org admin, then flip this to
+# true and redeploy. Turning it on before an admin account exists locks you
+# out of the UI, since basicAuth is disabled the moment oauth is enabled.
+# Set up SCIM (if you're using it) after this, not before — SCIM's user
+# matching depends on the OIDC provider this creates.
+# enable_sso_oidc = false
+
+# LLM Gateway (private beta, chart 0.17): one LangSmith API key calls models across
+# configured providers at https://<host>/gateway, traced, with spend and rate policies.
+# An org admin enables providers and access in the UI afterwards. README "LLM Gateway".
+# enable_llm_gateway           = false
+# enable_gateway_pii_redaction = false  # Presidio PII redaction; requires enable_llm_gateway
+
 # ── Optional modules ──────────────────────────────────────────────────────────
 # Each is independently toggleable — safe to add after initial deploy.
 # create_waf         = true   # Azure WAF policy (OWASP 3.2 + bot protection)
@@ -375,6 +403,18 @@ sizing_profile = "production"
 # linking it to the same VNet fails.
 # storage_private_dns_zone_id        = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
 # storage_private_endpoint_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/private-endpoints"
+
+# Key Vault Private Endpoint, on the vault this module creates. Public network
+# access goes off, so terraform plan/apply and `make seed-secrets` must run from
+# a machine that resolves the vault's privatelink.vaultcore record (a jump host
+# or self-hosted runner in the VNet). keyvault_allowed_ips stops applying.
+# keyvault_private_endpoint_enabled   = true
+# keyvault_private_dns_zone_id        = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+# keyvault_private_endpoint_subnet_id = "/subscriptions/.../virtualNetworks/my-vnet/subnets/private-endpoints"
+
+# Central PostgreSQL zone for the Flexible Server(s). Terraform then creates no
+# zone and no VNet link; the zone's owner links it.
+# postgres_private_dns_zone_id = "/subscriptions/.../providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com"
 
 # ── Constrained role-assignment delegation (optional) ─────────────────────────
 # Set only if `terraform apply` fails with a 403 AuthorizationFailed on

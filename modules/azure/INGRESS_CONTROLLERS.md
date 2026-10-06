@@ -29,6 +29,8 @@ Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `ma
 | **istio** (self-managed) | ✅ Validated | ✅ Requires custom domain | ✅ Validated |
 | **agic** | ❌ AGW rewrites ACME challenge path | ✅ Requires custom domain | ✅ Validated (Standard_v2) |
 
+`existing` (your own certificate in the `langsmith-tls` Secret) needs no ACME challenge, so the HTTP-01 limits above do not apply to it. It is not yet validated on a live cluster for any controller; see "Your own certificate" in the [README](README.md).
+
 ### Why istio-addon + letsencrypt fails
 
 The AKS managed Istio addon does **not** create a Kubernetes `IngressClass` resource.

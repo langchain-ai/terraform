@@ -124,11 +124,13 @@ locals {
     public = {
       postgres_private_dns_zone = "privatelink.postgres.database.azure.com"
       blob_private_dns_zone     = "privatelink.blob.core.windows.net"
+      keyvault_private_dns_zone = "privatelink.vaultcore.azure.net"
       cloudapp_suffix           = "cloudapp.azure.com"
     }
     usgovernment = {
       postgres_private_dns_zone = "privatelink.postgres.database.usgovcloudapi.net"
       blob_private_dns_zone     = "privatelink.blob.core.usgovcloudapi.net"
+      keyvault_private_dns_zone = "privatelink.vaultcore.usgovcloudapi.net"
       cloudapp_suffix           = "cloudapp.usgovcloudapi.net"
     }
   }
@@ -139,6 +141,17 @@ locals {
   # module instead of letting both create their own.
   create_blob_private_dns_zone = var.storage_private_endpoint_enabled && var.storage_private_dns_zone_id == ""
   blob_private_dns_zone_id     = local.create_blob_private_dns_zone ? azurerm_private_dns_zone.blob[0].id : var.storage_private_dns_zone_id
+
+  # The Key Vault endpoint follows the blob endpoints into their subnet unless
+  # given its own, and its zone works the same way: supplied, or created and
+  # linked here.
+  keyvault_private_endpoint_subnet_id = var.keyvault_private_endpoint_subnet_id != "" ? var.keyvault_private_endpoint_subnet_id : local.storage_private_endpoint_subnet_id
+  create_keyvault_private_dns_zone    = var.keyvault_private_endpoint_enabled && var.keyvault_private_dns_zone_id == ""
+  keyvault_private_dns_zone_id        = local.create_keyvault_private_dns_zone ? azurerm_private_dns_zone.keyvault[0].id : var.keyvault_private_dns_zone_id
+
+  # A supplied PostgreSQL zone serves both Flexible Servers, LangSmith's and
+  # the SmithDB metastore, so neither module creates or links one.
+  postgres_private_dns_zone_supplied = var.postgres_private_dns_zone_id != ""
 
   # Bastion and AGIC are supply-only under bring-your-own: Terraform carves their
   # subnets out of a VNet it owns, and reuses a supplied one otherwise. There is
@@ -172,8 +185,12 @@ locals {
 
   # The endpoints the storage and Key Vault firewalls need on whichever subnet
   # AKS ends up in. Terraform puts both on a subnet it carves (see the
-  # networking module), so this only matters for one you supply.
-  required_aks_service_endpoints = ["Microsoft.Storage", "Microsoft.KeyVault"]
+  # networking module), so this only matters for one you supply. With the Key
+  # Vault private endpoint on, the vault's firewall no longer allowlists the
+  # subnet (public access is off), so Azure has no subnet rule to validate and
+  # Microsoft.KeyVault is not needed. Storage keeps its rule either way: both
+  # accounts stay default-deny so turning their endpoints off never opens them.
+  required_aks_service_endpoints = concat(["Microsoft.Storage"], var.keyvault_private_endpoint_enabled ? [] : ["Microsoft.KeyVault"])
 
   manage_aks_subnet_endpoints = local.byo_aks_subnet && var.manage_byo_subnet_service_endpoints
 
@@ -217,29 +234,37 @@ locals {
   aks_default_pool_max_pods = 30
 
   # Held per pool rather than as a single total, so the number and the error
-  # message that has to justify it are built from the same place.
+  # message that has to justify it are built from the same place. Only the pools
+  # Terraform creates: an attached cluster's own pools are already in the subnet,
+  # and Terraform cannot see their sizes.
   aks_pool_sizing = merge(
-    {
+    var.create_cluster ? {
       default = {
         nodes              = var.default_node_pool_max_count + 1
         addresses_per_node = local.aks_overlay ? 1 : var.default_node_pool_max_pods + 1
       }
-    },
+    } : {},
     {
-      for name, pool in local.effective_node_pools : name => {
+      for name, pool in local.aks_managed_node_pools : name => {
         nodes              = pool.max_count + 1
         addresses_per_node = local.aks_overlay ? 1 : local.aks_default_pool_max_pods + 1
       }
     }
   )
-  aks_required_ips = sum([for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node])
+  # concat([0], ...) keeps sum() off an empty list, which an attached cluster
+  # with no pools to add produces.
+  aks_required_ips = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes * pool.addresses_per_node]))
 
   # Overlay hands every node a /24 of the pod range, so the range's capacity is
   # counted in nodes, surge included, across every pool.
-  aks_node_total             = sum([for pool in local.aks_pool_sizing : pool.nodes])
+  aks_node_total             = sum(concat([0], [for pool in local.aks_pool_sizing : pool.nodes]))
   aks_pod_cidr_node_capacity = local.aks_overlay ? pow(2, 24 - tonumber(split("/", var.aks_pod_cidr)[1])) : 0
 
   effective_node_pools = var.additional_node_pools
+
+  # On a pre-existing cluster whose node pools the customer owns, an empty map, so
+  # Terraform doesn't attach pools to a cluster it doesn't manage.
+  aks_managed_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
 
   # One row per pool, so an operator can see which pool dominates the total
   # instead of being handed a number and two variable names.
@@ -467,6 +492,11 @@ locals {
   # so that everything placed in the group waits for it on a first apply.
   rg_name = var.create_resource_group ? azurerm_resource_group.resource_group[0].name : data.azurerm_resource_group.existing[0].name
   rg_id   = var.create_resource_group ? azurerm_resource_group.resource_group[0].id : data.azurerm_resource_group.existing[0].id
+
+  # A pre-existing cluster lives in its own resource group, not the one this
+  # module uses for Key Vault and Storage. existing_cluster_resource_group_name
+  # is required when create_cluster = false, so this is never blank.
+  aks_rg_name = var.create_cluster ? local.rg_name : var.existing_cluster_resource_group_name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
@@ -575,6 +605,272 @@ data "azapi_resource" "byo_agic_subnet_delegations" {
   type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
   resource_id            = var.agic_subnet_id
   response_export_values = ["properties.delegations"]
+}
+
+# ── Cluster egress (aks_outbound_type) ───────────────────────────────────────
+# userDefinedRouting sends node egress by the supplied subnet's route table and
+# userAssignedNATGateway by the NAT gateway on it, and AKS needs either in place
+# when it creates the cluster, by which time the identities, Key Vault and
+# storage already exist. Both are therefore read here, at plan: the route table ID from the
+# subnet read above, and the NAT gateway in its own block below. The route
+# table's own routes are read too. AKS accepts a 0.0.0.0/0 route there only
+# with next hop VirtualAppliance or VirtualNetworkGateway, and refuses any
+# other (None, Internet, VnetLocal) with RouteTableInvalidNextHop (seen live
+# for None, on a test cluster in eastus2), so such a route is refused here.
+# No 0.0.0.0/0 route at all is only a warning: a default route learned over
+# BGP from ExpressRoute or VPN never appears in the table.
+locals {
+  aks_outbound_custom   = var.aks_outbound_type != "loadBalancer"
+  aks_subnet_route_tbl  = try(one(data.azurerm_subnet.byo_aks_subnet[*].route_table_id), null)
+  aks_subnet_has_routes = local.aks_subnet_route_tbl != null && local.aks_subnet_route_tbl != ""
+  # Resource group and name of the route table, null when the ID has another
+  # shape, so a mocked read reaches the precondition rather than a bad index.
+  aks_route_tbl_parts = local.aks_subnet_has_routes ? try(regex("(?i)^/subscriptions/[^/]+/resourceGroups/([^/]+)/providers/Microsoft\\.Network/routeTables/([^/]+)$", local.aks_subnet_route_tbl), null) : null
+
+  # The table's 0.0.0.0/0 routes, empty when it was not read, and the ones AKS
+  # would refuse. A for over the zero-or-one tables, not an index: Terraform
+  # 1.11 evaluates both sides of || and &&, so [0] would fail with no table.
+  aks_udr_next_hops_allowed = ["virtualappliance", "virtualnetworkgateway"]
+  aks_udr_default_routes = flatten([
+    for t in data.azurerm_route_table.byo_aks_subnet : [for r in t.route : r if r.address_prefix == "0.0.0.0/0"]
+  ])
+  aks_udr_bad_default_routes = [
+    for r in local.aks_udr_default_routes : r if !contains(local.aks_udr_next_hops_allowed, lower(coalesce(r.next_hop_type, "")))
+  ]
+
+  # Routes straight to the internet. When every one of them names a service tag
+  # (AzureCloud, say) rather than an address range, the routes send only Azure's
+  # own ranges out directly, and the AKS required FQDNs, several of which
+  # resolve outside AzureCloud, depend on whatever sits behind the default route.
+  aks_udr_internet_routes = flatten([
+    for t in data.azurerm_route_table.byo_aks_subnet : [for r in t.route : r if lower(coalesce(r.next_hop_type, "")) == "internet"]
+  ])
+  aks_udr_service_tag_only_egress = length(local.aks_udr_internet_routes) > 0 && alltrue([
+    for r in local.aks_udr_internet_routes : !can(cidrnetmask(r.address_prefix))
+  ])
+
+  # The live outbound type, null until the cluster exists or when the read
+  # carries none; null never counts as a change.
+  aks_outbound_live     = try(local.aks_live.outbound, null)
+  aks_outbound_changing = local.aks_outbound_live != null && try(lower(local.aks_outbound_live), "") != lower(var.aks_outbound_type)
+}
+
+data "azurerm_route_table" "byo_aks_subnet" {
+  count               = var.create_cluster && var.aks_outbound_type == "userDefinedRouting" && local.aks_route_tbl_parts != null ? 1 : 0
+  name                = local.aks_route_tbl_parts[1]
+  resource_group_name = local.aks_route_tbl_parts[0]
+}
+
+resource "terraform_data" "aks_outbound_guard" {
+  input = var.aks_outbound_type
+
+  lifecycle {
+    # An attached cluster's egress belongs to whoever built it.
+    precondition {
+      condition     = var.create_cluster || !local.aks_outbound_custom
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" has no effect with create_cluster = false: an attached cluster keeps the outbound type it was built with. Remove the setting, or leave it at \"loadBalancer\"."
+    }
+
+    # The route table or NAT gateway belongs to the network's owner, on a subnet
+    # they supply.
+    precondition {
+      condition     = !var.create_cluster || !local.aks_outbound_custom || local.byo_aks_subnet
+      error_message = "aks_outbound_type = \"${var.aks_outbound_type}\" needs create_vnet = false and aks_subnet_id set to a subnet that already carries your ${var.aks_outbound_type == "userDefinedRouting" ? "route table" : "NAT gateway"}. A subnet this module creates or carves has none."
+    }
+
+    precondition {
+      condition     = !var.create_cluster || var.aks_outbound_type != "userDefinedRouting" || !local.byo_aks_subnet || local.aks_subnet_has_routes
+      error_message = "aks_outbound_type = \"userDefinedRouting\" but aks_subnet_id has no route table, which AKS requires on the subnet for this outbound type. Associate the route table that carries your egress route with the subnet: az network vnet subnet update --ids ${var.aks_subnet_id} --route-table <route-table-id>."
+    }
+
+    precondition {
+      condition     = length(local.aks_udr_bad_default_routes) == 0
+      error_message = "aks_outbound_type = \"userDefinedRouting\", and the route table on aks_subnet_id sends 0.0.0.0/0 to next hop ${join(", ", distinct([for r in local.aks_udr_bad_default_routes : coalesce(r.next_hop_type, "unset")]))}. AKS accepts a default route only to VirtualAppliance or VirtualNetworkGateway and refuses any other at create with RouteTableInvalidNextHop. Point the route at your firewall or appliance (VirtualAppliance with its private IP) or at the VPN or ExpressRoute gateway (VirtualNetworkGateway)."
+    }
+
+    # A change moves the egress IP and drops connections, so it is never a
+    # side effect of a tfvars edit.
+    precondition {
+      condition     = !local.aks_outbound_changing || var.aks_allow_outbound_type_change
+      error_message = "Changing aks_outbound_type from ${coalesce(local.aks_outbound_live, "unknown")} to ${var.aks_outbound_type} on a cluster that already exists. Azure applies it in place, but it moves the cluster's egress IP and drops existing connections. Revert the change to keep the cluster as it is, or set aks_allow_outbound_type_change = true once firewall rules and aks_authorized_ip_ranges allow the new egress IP."
+    }
+  }
+}
+
+# ── NAT gateway on the AKS subnet (aks_nat_gateway) ───────────────────────────
+# Kept apart from the outbound guard above so either mode can change or go on
+# its own. existing: the network owner attached a NAT gateway, and plan checks
+# it is there. create: Terraform makes a Standard NAT gateway and public IP in
+# the deployment group and associates them with the supplied subnet, which is
+# the only change it makes to that subnet; route tables stay the owner's. A
+# NAT gateway serves the routes whose next hop is Internet: Azure prefers a
+# route to a virtual appliance or gateway over it, and it over the system
+# default route (Microsoft, "What is Azure NAT Gateway?").
+locals {
+  aks_nat_wanted = var.aks_nat_gateway != "none"
+  aks_nat_create = var.create_cluster && local.byo_aks_subnet && var.aks_nat_gateway == "create"
+
+  # The NAT gateway the subnet carries now, null when none; read for both modes.
+  aks_subnet_nat_id = try(data.azapi_resource.byo_aks_subnet_nat[0].output.properties.natGateway.id, null)
+
+  aks_nat_gateway_name = "${local.name_base}-nat${local.name_suffix}"
+  # A Standard NAT gateway lives in one zone or none. Pin it, and its public IP,
+  # only when availability_zones names exactly one zone; otherwise Azure places
+  # it (Microsoft: "By default, a Standard NAT gateway is placed in No zone").
+  aks_nat_zones = length(var.availability_zones) == 1 ? var.availability_zones : null
+
+  # True when the subnet's NAT gateway is the one this module creates. Compared
+  # by resource group and name, both known at plan, so a first apply (no NAT
+  # gateway yet) and later ones (ours) both pass.
+  aks_subnet_nat_is_ours = local.aks_subnet_nat_id == null ? true : (
+    lower(try(split("/", local.aks_subnet_nat_id)[4], "")) == lower(local.resource_group_name) &&
+    lower(try(split("/", local.aks_subnet_nat_id)[8], "")) == lower(local.aks_nat_gateway_name)
+  )
+}
+
+# azurerm_subnet does not expose the NAT gateway, so this goes through azapi.
+data "azapi_resource" "byo_aks_subnet_nat" {
+  count                  = var.create_cluster && local.byo_aks_subnet && local.aks_nat_wanted ? 1 : 0
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2023-11-01"
+  resource_id            = var.aks_subnet_id
+  response_export_values = ["properties.natGateway"]
+}
+
+resource "terraform_data" "aks_nat_gateway_guard" {
+  input = var.aks_nat_gateway
+
+  lifecycle {
+    precondition {
+      condition     = !local.aks_nat_wanted || var.create_cluster
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" has no effect with create_cluster = false: an attached cluster keeps the egress it was built with. Leave it at \"none\"."
+    }
+
+    precondition {
+      condition     = !local.aks_nat_wanted || !var.create_cluster || local.byo_aks_subnet
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" needs create_vnet = false and aks_subnet_id set: the NAT gateway goes on a subnet you supply."
+    }
+
+    precondition {
+      condition     = !local.aks_nat_wanted || contains(["userDefinedRouting", "userAssignedNATGateway"], var.aks_outbound_type)
+      error_message = "aks_nat_gateway = \"${var.aks_nat_gateway}\" needs aks_outbound_type = \"userAssignedNATGateway\" or \"userDefinedRouting\". With \"loadBalancer\", the cluster's own outbound IP is the egress path."
+    }
+
+    precondition {
+      condition     = var.aks_outbound_type != "userAssignedNATGateway" || local.aks_nat_wanted
+      error_message = "aks_outbound_type = \"userAssignedNATGateway\" needs a NAT gateway on aks_subnet_id: set aks_nat_gateway = \"existing\" for one already attached, or \"create\" to have Terraform create and attach it."
+    }
+
+    precondition {
+      condition     = var.aks_nat_gateway != "existing" || !var.create_cluster || !local.byo_aks_subnet || try(local.aks_subnet_nat_id != null && local.aks_subnet_nat_id != "", false)
+      error_message = "aks_nat_gateway = \"existing\" but aks_subnet_id has no NAT gateway. Attach one first (az network vnet subnet update --ids ${var.aks_subnet_id} --nat-gateway <nat-gateway-id>), or set aks_nat_gateway = \"create\"."
+    }
+
+    precondition {
+      condition     = var.aks_nat_gateway != "create" || local.aks_subnet_nat_is_ours
+      error_message = "aks_nat_gateway = \"create\" but aks_subnet_id already has a NAT gateway (${coalesce(local.aks_subnet_nat_id, "unknown")}), and associating a new one would replace it. Set aks_nat_gateway = \"existing\" to use it."
+    }
+  }
+}
+
+resource "azurerm_public_ip" "aks_nat" {
+  count               = local.aks_nat_create ? 1 : 0
+  name                = "${local.aks_nat_gateway_name}-pip"
+  location            = var.location
+  resource_group_name = local.rg_name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  zones               = local.aks_nat_zones
+  tags                = local.common_tags
+
+  # Zones are creation-time on a public IP, so a change would replace it and
+  # move the egress address. See check.aks_nat_gateway_zone_drift.
+  lifecycle {
+    ignore_changes = [zones]
+  }
+}
+
+resource "azurerm_nat_gateway" "aks" {
+  count                   = local.aks_nat_create ? 1 : 0
+  name                    = local.aks_nat_gateway_name
+  location                = var.location
+  resource_group_name     = local.rg_name
+  sku_name                = "Standard"
+  idle_timeout_in_minutes = var.aks_nat_gateway_idle_timeout_minutes
+  zones                   = local.aks_nat_zones
+  tags                    = local.common_tags
+
+  # Zones are creation-time on a NAT gateway, and local.aks_nat_zones follows
+  # availability_zones: ["1"] pins it, ["1","2","3"] leaves it unpinned. Without
+  # this, widening availability_zones on a running deployment replaces the NAT
+  # gateway and its public IP, which changes the egress address and cuts a
+  # userAssignedNATGateway cluster's egress during the replace. The cluster
+  # ignores the same edit to its node pool zones (modules/k8s-cluster), so the
+  # NAT gateway does the same, and the check below reports the drift.
+  lifecycle {
+    ignore_changes = [zones]
+  }
+
+  depends_on = [terraform_data.aks_nat_gateway_guard]
+}
+
+# ignore_changes on zones makes an availability_zones edit a no-op for the NAT
+# gateway and its public IP. Warn on every plan when the live zones differ from
+# what availability_zones now asks for, so the discarded change isn't mistaken
+# for an applied one. A check block, not a postcondition, for the same reason as
+# check.aks_node_pool_zone_drift: report the drift, don't block unrelated work.
+check "aks_nat_gateway_zone_drift" {
+  assert {
+    condition = length(azurerm_nat_gateway.aks) == 0 ? true : (
+      toset(azurerm_nat_gateway.aks[0].zones == null ? [] : azurerm_nat_gateway.aks[0].zones) ==
+      toset(local.aks_nat_zones == null ? [] : local.aks_nat_zones)
+    )
+    error_message = join("", [
+      "The NAT gateway on the AKS subnet is in zones [",
+      join(",", sort(tolist(length(azurerm_nat_gateway.aks) == 0 ? [] : (azurerm_nat_gateway.aks[0].zones == null ? [] : azurerm_nat_gateway.aks[0].zones)))),
+      "] but availability_zones now asks for [",
+      join(",", sort(local.aks_nat_zones == null ? [] : local.aks_nat_zones)),
+      "] (a NAT gateway is pinned only when availability_zones names exactly one zone). ",
+      "This module ignores zone changes on an existing NAT gateway and its public IP, because ",
+      "changing them replaces both: the egress address changes, and the cluster loses egress ",
+      "until the new one is attached. To make it take effect, revert availability_zones, or ",
+      "drop zones from ignore_changes on azurerm_nat_gateway.aks and azurerm_public_ip.aks_nat ",
+      "in main.tf and apply in a maintenance window, then update any firewall rule that names ",
+      "the old address (output aks_nat_gateway_public_ip).",
+    ])
+  }
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "aks" {
+  count                = local.aks_nat_create ? 1 : 0
+  nat_gateway_id       = azurerm_nat_gateway.aks[0].id
+  public_ip_address_id = azurerm_public_ip.aks_nat[0].id
+}
+
+# The one write to the supplied subnet. A standalone association rather than an
+# azapi patch so destroy detaches the NAT gateway before deleting it. After the
+# service-endpoint patch, so the two never write the subnet at once.
+resource "azurerm_subnet_nat_gateway_association" "aks" {
+  count          = local.aks_nat_create ? 1 : 0
+  subnet_id      = var.aks_subnet_id
+  nat_gateway_id = azurerm_nat_gateway.aks[0].id
+
+  depends_on = [azapi_update_resource.byo_aks_subnet_endpoints, azurerm_nat_gateway_public_ip_association.aks]
+}
+
+# Only a warning, for the same reason as the default-route check: a firewall
+# or proxy behind the gateway that does reach those FQDNs is invisible here.
+check "aks_route_table_service_tag_egress" {
+  assert {
+    condition     = !local.aks_udr_service_tag_only_egress
+    error_message = "aks_outbound_type = \"userDefinedRouting\", and the only routes on aks_subnet_id's route table that go straight to Internet name service tags (${join(", ", distinct([for r in local.aks_udr_internet_routes : r.address_prefix]))}). Several destinations AKS needs to bootstrap nodes resolve outside AzureCloud, among them packages.microsoft.com, mcr.microsoft.com, packages.aks.azure.com and acs-mirror.azureedge.net. If nothing behind the default route reaches them, AKS accepts the create and node bootstrap then fails with CSE exit status 99. See Microsoft's outbound network and FQDN rules for AKS."
+  }
+}
+
+check "aks_route_table_default_route" {
+  assert {
+    condition     = length(data.azurerm_route_table.byo_aks_subnet) == 0 || length(local.aks_udr_default_routes) > 0
+    error_message = "aks_outbound_type = \"userDefinedRouting\", and the route table on aks_subnet_id has no 0.0.0.0/0 route. That is expected when the default route is learned over BGP from ExpressRoute or VPN. Otherwise add one with next hop VirtualAppliance or VirtualNetworkGateway, which Microsoft's UDR page requires."
+  }
 }
 
 # ── Service endpoints on a supplied AKS subnet ────────────────────────────────
@@ -691,6 +987,18 @@ resource "terraform_data" "validate_network" {
       error_message = "Every supplied subnet ID must be a subnet of vnet_id. Private DNS zones and AKS routing are wired to vnet_id, so a subnet in another VNet would be unreachable."
     }
 
+    # AKS nodes, the delegated Postgres server, and the private endpoints all have
+    # to sit in the VNet's region, and Azure refuses each one partway through the
+    # apply, after the resources before it exist. The ternary guards the index,
+    # since || does not short-circuit before Terraform 1.14. Azure accepts both
+    # "East US" and "eastus" for the same region.
+    precondition {
+      condition = length(data.azurerm_virtual_network.byo_vnet) == 0 ? true : (
+        lower(replace(data.azurerm_virtual_network.byo_vnet[0].location, " ", "")) == lower(replace(var.location, " ", ""))
+      )
+      error_message = "vnet_id is in ${try(data.azurerm_virtual_network.byo_vnet[0].location, "another region")}, and location is ${var.location}. The cluster, Postgres, and the private endpoints have to be in the VNet's region, so set location to ${try(data.azurerm_virtual_network.byo_vnet[0].location, "the VNet's region")}."
+    }
+
     # Both subnets are carved only out of a VNet Terraform owns, so under
     # bring-your-own the operator has to name one that already exists.
     precondition {
@@ -720,10 +1028,11 @@ resource "terraform_data" "validate_network" {
       error_message = "The subnet given as postgres_subnet_id is not delegated to Microsoft.DBforPostgreSQL/flexibleServers. Add that delegation (action Microsoft.Network/virtualNetworks/subnets/join/action) to the subnet, or clear postgres_subnet_id and let Terraform create a correctly delegated subnet."
     }
 
-    # The AKS subnet is allowlisted by ID on both the blob storage firewall
-    # (hardcoded default-deny) and the Key Vault firewall. Azure rejects a subnet
-    # rule whose subnet lacks the matching service endpoint, and azurerm exposes
-    # no way to skip that check, so both endpoints are required regardless of
+    # The AKS subnet is allowlisted by ID on the blob storage firewall
+    # (hardcoded default-deny) and, unless the vault is on a private endpoint,
+    # on the Key Vault firewall. Azure rejects a subnet rule whose subnet lacks
+    # the matching service endpoint, and azurerm exposes no way to skip that
+    # check, so each required endpoint is required regardless of
     # keyvault_default_action. Skipped when Terraform is the one adding them,
     # since checking first would fail the plan that would fix it.
     precondition {
@@ -731,7 +1040,7 @@ resource "terraform_data" "validate_network" {
         for endpoint in local.required_aks_service_endpoints :
         contains(data.azurerm_subnet.byo_aks_subnet[0].service_endpoints, endpoint)
       ])
-      error_message = "The subnet given as aks_subnet_id must carry both the Microsoft.Storage and Microsoft.KeyVault service endpoints. Without them the storage and Key Vault firewalls cannot allowlist the subnet and LangSmith pods lose access to blobs and secrets. Add both endpoints to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add them, or clear aks_subnet_id and let Terraform create a subnet."
+      error_message = "The subnet given as aks_subnet_id must carry the ${join(" and ", local.required_aks_service_endpoints)} service endpoint${length(local.required_aks_service_endpoints) > 1 ? "s" : ""}. Without ${length(local.required_aks_service_endpoints) > 1 ? "them" : "it"} the firewall${length(local.required_aks_service_endpoints) > 1 ? "s" : ""} in front of ${var.keyvault_private_endpoint_enabled ? "blob storage" : "blob storage and Key Vault"} cannot allowlist the subnet, and LangSmith pods lose access. Add ${length(local.required_aks_service_endpoints) > 1 ? "both endpoints" : "the endpoint"} to the subnet, set manage_byo_subnet_service_endpoints = true to have Terraform add ${length(local.required_aks_service_endpoints) > 1 ? "them" : "it"}, or clear aks_subnet_id and let Terraform create a subnet."
     }
 
     # The Postgres and Redis NSGs admit aks_subnet_id alone, so pods on an
@@ -763,7 +1072,7 @@ resource "terraform_data" "validate_network" {
         local.aks_demand_rows,
         [
           "",
-          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}.",
+          local.aks_overlay ? "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves, or lower a pool's max_count. max_pods does not size the subnet in overlay mode." : "Undersized, the cluster still starts and the autoscaler stalls short of max_count later, once the subnet runs dry. Widen the subnet to a /${local.aks_smallest_prefix} or larger, the smallest prefix that holds ${local.aks_required_ips} plus the 5 addresses Azure reserves. ${var.create_cluster ? "Or lower the default pool: one off default_node_pool_max_count frees ${var.default_node_pool_max_pods + 1} addresses, and one off default_node_pool_max_pods frees ${var.default_node_pool_max_count + 1}." : "Or lower a pool's max_count in additional_node_pools."}",
         ]
       ))
     }
@@ -903,6 +1212,7 @@ module "aks" {
   # Bring-your-own cluster: read an existing AKS cluster instead of creating one.
   create_cluster = var.create_cluster
   create_vnet    = var.create_vnet
+  kube_auth      = var.aks_kube_auth
 
   # Both of these are passed straight from variables, never derived from another
   # resource. azurerm_resource_group.resource_group[0] is pending creation on a first
@@ -932,13 +1242,14 @@ module "aks" {
   pod_cidr            = local.aks_pod_cidr
   network_data_plane  = local.aks_network_dataplane
   network_policy      = local.aks_network_policy
+  outbound_type       = var.aks_outbound_type
+  # A NAT gateway Terraform creates is on the subnet before the cluster is.
+  egress_dependencies = azurerm_subnet_nat_gateway_association.aks[*].id
   sku_tier            = var.aks_sku_tier
   support_plan        = var.aks_support_plan
 
   # Additional pools (e.g. "large" for ClickHouse / memory-heavy workloads).
-  # On a pre-existing cluster whose node pools the customer owns, pass an empty
-  # map so Terraform doesn't attach pools to a cluster it doesn't manage.
-  additional_node_pools = var.create_cluster || var.existing_cluster_node_pools_managed ? local.effective_node_pools : {}
+  additional_node_pools = local.aks_managed_node_pools
 
   # Ingress controller: 'envoy-gateway' (Helm, default), 'nginx' (Helm), 'istio' (Helm), 'istio-addon' (Azure managed), 'agic', 'none'
   ingress_controller   = var.ingress_controller
@@ -980,6 +1291,19 @@ module "aks" {
   # in terraform.tfvars to restrict to operator/CI CIDRs.
   authorized_ip_ranges = var.aks_authorized_ip_ranges
 
+  # Private API server, Entra-only access, and the control-plane identity, all
+  # off by default.
+  private_cluster_enabled      = var.aks_private_cluster_enabled
+  private_dns_zone_id          = var.aks_private_dns_zone_id
+  entra_only                   = var.aks_entra_only
+  entra_admin_group_object_ids = var.aks_entra_admin_group_object_ids
+  control_plane_identity       = var.aks_control_plane_identity
+  control_plane_identity_id    = var.aks_control_plane_identity_id
+
+  control_plane_identity_manage_grants = local.aks_control_plane_manage_grants
+  vnet_id                              = local.vnet_id
+  subnet_route_table_id                = local.aks_subnet_has_routes ? local.aks_subnet_route_tbl : ""
+
   tags = local.common_tags
 }
 
@@ -1003,8 +1327,8 @@ module "aks" {
 # ForceNewIfChange (main, read 2026-09-25): network_policy changes in place from
 # none and from azure or calico to cilium; network_data_plane from azure to
 # cilium; network_plugin_mode only towards overlay. Those in-place paths exist
-# from azurerm 4.58.0 (to cilium) and 4.59.0 (calico to cilium), which is why
-# versions.tf floors the provider at 4.59.0.
+# from azurerm 4.58.0 (to cilium) and 4.59.0 (calico to cilium), both below the
+# 4.65.0 floor in versions.tf.
 locals {
   aks_live = var.create_cluster ? module.aks.live_network_profile : null
 
@@ -1082,6 +1406,128 @@ resource "terraform_data" "aks_network_guard" {
       error_message = join(" ", [
         "aks_pod_cidr is changing from ${coalesce(try(local.aks_live.pod_cidr, null), "unknown")} to ${var.aks_pod_cidr} on a cluster that already runs overlay mode.",
         "Azure does not change a cluster's pod range, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_pod_cidr, or build a new cluster with the range you want.",
+      ])
+    }
+  }
+}
+
+# ── AKS access guard ──────────────────────────────────────────────────────────
+# Whether the API server is private, and its private DNS zone, are fixed when a
+# cluster is created: the provider applies a change to either by replacing the
+# cluster and everything installed on it. Entra integration goes one way: Azure
+# turns it on in place and refuses to turn it off. Each follows from a one-line
+# tfvars edit, so the requested access is compared with what Azure reports for
+# the cluster (module.aks reads it at plan time; null until the cluster exists)
+# and a change is refused with no override. The control-plane identity is
+# refused the same way, though Azure swaps it in place: the grants the old
+# identity holds on the network do not follow the control plane to the new one.
+# The read depends on variables alone, so a failure stops the plan before
+# anything is applied. Who owns that identity and its grants is not something
+# Azure reports, so terraform_data.aks_grants_pin keeps the setting the cluster
+# was created with, and a change to it is refused until it is made on purpose.
+locals {
+  aks_live_access = var.create_cluster ? module.aks.live_access_profile : null
+
+  # Azure reports the zone as "system", "none", or the zone ID; compare the
+  # requested one in that form.
+  aks_private_dns_zone = var.aks_private_dns_zone_id == "" ? "system" : lower(var.aks_private_dns_zone_id)
+
+  aks_private_changing  = local.aks_live_access != null && try(local.aks_live_access.private, null) != var.aks_private_cluster_enabled
+  aks_dns_zone_changing = local.aks_live_access != null && try(local.aks_live_access.private, null) == true && var.aks_private_cluster_enabled && lower(coalesce(try(local.aks_live_access.private_dns_zone, null), "system")) != local.aks_private_dns_zone
+  aks_entra_removing    = local.aks_live_access != null && try(local.aks_live_access.entra, null) == true && !var.aks_entra_only
+
+  # Azure reports the identity type and the user-assigned IDs; a cluster that
+  # reports no identity is skipped. ?: rather than && and ||, which evaluate
+  # both sides before Terraform 1.14 and would lower() a system identity's null
+  # ID.
+  aks_identity          = var.create_cluster ? module.aks.control_plane_identity : null
+  aks_live_identity     = try(local.aks_live_access.identity, null)
+  aks_identity_changing = local.aks_live_identity == null || local.aks_identity == null ? false : local.aks_live_identity != local.aks_identity.type ? true : local.aks_identity.type == "user" ? !contains(try(local.aks_live_access.identity_ids, []), lower(local.aks_identity.id)) : false
+
+  # A network the module built is the module's to grant on; a supplied one is
+  # its owner's, unless asked otherwise.
+  aks_control_plane_manage_grants = coalesce(var.aks_control_plane_identity_manage_grants, var.create_vnet)
+
+  # Whether the module creates the user-assigned identity and makes its grants.
+  # Changing either on a live cluster deletes, with a clean plan, the identity or
+  # the grants the cluster still runs on, or creates grants the owner already
+  # made. Skipped while the identity itself is changing, which the identity
+  # check already refuses.
+  aks_grants_mode = var.create_cluster && var.aks_control_plane_identity == "user" ? {
+    create_identity = var.aks_control_plane_identity_id == ""
+    manage_grants   = local.aks_control_plane_manage_grants
+  } : null
+  aks_grants_pinned   = try(one(terraform_data.aks_grants_pin[*].output).mode, local.aks_grants_mode)
+  aks_grants_changing = local.aks_live_access == null || local.aks_identity_changing ? false : local.aks_grants_pinned != local.aks_grants_mode
+}
+
+# The setting the cluster was created with. The cluster's ID holds the write
+# back until the cluster exists, so a failed first apply does not pin a setting
+# no cluster has; ignore_changes keeps it after that, and -replace records a new
+# one.
+resource "terraform_data" "aks_grants_pin" {
+  count = var.create_cluster ? 1 : 0
+  input = {
+    cluster_id = module.aks.cluster_id
+    mode       = local.aks_grants_mode
+  }
+
+  lifecycle {
+    ignore_changes = [input]
+  }
+}
+
+resource "terraform_data" "aks_access_guard" {
+  input = {
+    private          = var.aks_private_cluster_enabled
+    private_dns_zone = local.aks_private_dns_zone
+    entra_only       = var.aks_entra_only
+    identity         = local.aks_identity
+  }
+
+  lifecycle {
+    precondition {
+      condition = !local.aks_private_changing
+      error_message = join(" ", [
+        "aks_private_cluster_enabled is changing to ${var.aks_private_cluster_enabled} on a cluster that already exists.",
+        "Azure does not change whether an API server is private, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_private_cluster_enabled, or build a new cluster with the access you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_dns_zone_changing
+      error_message = join(" ", [
+        "aks_private_dns_zone_id is changing from ${coalesce(try(local.aks_live_access.private_dns_zone, null), "system")} to ${local.aks_private_dns_zone} on a cluster that already exists.",
+        "Azure does not move a private API server to another zone, so the provider would replace the cluster, and everything installed on it, on apply. Revert aks_private_dns_zone_id, or build a new cluster with the zone you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_entra_removing
+      error_message = join(" ", [
+        "aks_entra_only is false, but the cluster already has Entra integration, and Azure cannot turn it off.",
+        "Set aks_entra_only = true to keep the cluster as it is.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_identity_changing
+      error_message = join(" ", [
+        "The control-plane identity is changing on a cluster that already exists: Azure reports ${coalesce(local.aks_live_identity, "unknown")}${length(try(local.aks_live_access.identity_ids, [])) > 0 ? " (${join(", ", local.aks_live_access.identity_ids)})" : ""}, and the configuration asks for ${try(local.aks_identity.type, "unknown")}${try(local.aks_identity.id, null) != null ? " (${local.aks_identity.id})" : ""}.",
+        "The grants the current identity holds on the network and the private DNS zone do not follow the control plane to a new one. Revert aks_control_plane_identity and aks_control_plane_identity_id, or build a new cluster with the identity you want.",
+      ])
+    }
+
+    precondition {
+      condition = !local.aks_grants_changing
+      error_message = join(" ", [
+        "The cluster was created with ${try(local.aks_grants_pinned.create_identity, false) ? "an identity the module created" : "a supplied identity"} and ${try(local.aks_grants_pinned.manage_grants, false) ? "grants the module made" : "grants left to the network's owner"}.",
+        "The configuration now asks for ${try(local.aks_grants_mode.create_identity, false) ? "an identity the module creates" : "a supplied identity"} and ${try(local.aks_grants_mode.manage_grants, false) ? "grants the module makes" : "grants left to the network's owner"}.",
+        "On apply, Terraform would delete the identity or the grants the cluster runs on, or create grants that already exist.",
+        "Revert aks_control_plane_identity_id and aks_control_plane_identity_manage_grants. To hand them over on purpose, first move them in state.",
+        "To leave them to the owner, run terraform state rm on module.aks.azurerm_role_assignment.control_plane_network_contributor[0] and module.aks.azurerm_role_assignment.control_plane_dns_zone_contributor[0], and on module.aks.azurerm_user_assigned_identity.control_plane[0] when supplying the identity the module created.",
+        "To take them over, run terraform import on the owner's assignments at the same addresses.",
+        "Then apply with -replace='terraform_data.aks_grants_pin[0]' to record the new setting.",
       ])
     }
   }
@@ -1177,6 +1623,8 @@ module "postgres" {
   subnet_id           = local.postgres_subnet_id
 
   private_dns_zone_name = local.azure_cloud.postgres_private_dns_zone
+  # A supplied central zone replaces the zone and VNet link the module creates.
+  private_dns_zone_id = local.postgres_private_dns_zone_supplied ? var.postgres_private_dns_zone_id : null
 
   admin_username = var.postgres_admin_username
   admin_password = var.postgres_admin_password
@@ -1227,11 +1675,16 @@ module "smithdb" {
   metastore_sku_name              = var.smithdb_metastore_sku_name
   metastore_storage_mb            = var.smithdb_metastore_storage_mb
   metastore_backup_retention_days = var.smithdb_metastore_backup_retention_days
-  # The flag is derived from a variable so the module's count can read it. The ID
+  # The flag is derived from variables so the module's count can read it. The ID
   # beside it is a resource attribute and is unknown until apply on the external
-  # path, which is why the two are passed separately.
-  create_private_dns_zone = var.postgres_source != "external"
-  private_dns_zone_id     = var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  # path, which is why the two are passed separately. A supplied central zone
+  # serves the metastore too, so the module creates its own only when there is
+  # neither that nor LangSmith's server to share one with.
+  create_private_dns_zone = var.postgres_source != "external" && !local.postgres_private_dns_zone_supplied
+  private_dns_zone_id = (
+    local.postgres_private_dns_zone_supplied ? var.postgres_private_dns_zone_id :
+    var.postgres_source == "external" ? module.postgres[0].private_dns_zone_id : null
+  )
 
   storage_account_name = local.smithdb_storage_name
   replication_type     = var.smithdb_storage_replication_type
@@ -1286,6 +1739,28 @@ resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   name                  = "${local.name_base}-blob-dnslink"
   resource_group_name   = local.rg_name
   private_dns_zone_name = azurerm_private_dns_zone.blob[0].name
+  virtual_network_id    = local.vnet_id
+  registration_enabled  = false
+  tags                  = local.common_tags
+}
+
+# ── Key Vault private DNS ─────────────────────────────────────────────────────
+# Only with keyvault_private_endpoint_enabled and no central zone supplied. The
+# vault keeps its <name>.vault.<cloud suffix> hostname; this zone is what makes
+# it resolve to the endpoint's address inside the VNet.
+
+resource "azurerm_private_dns_zone" "keyvault" {
+  count               = local.create_keyvault_private_dns_zone ? 1 : 0
+  name                = local.azure_cloud.keyvault_private_dns_zone
+  resource_group_name = local.rg_name
+  tags                = local.common_tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "keyvault" {
+  count                 = local.create_keyvault_private_dns_zone ? 1 : 0
+  name                  = "${local.name_base}-keyvault-dnslink"
+  resource_group_name   = local.rg_name
+  private_dns_zone_name = azurerm_private_dns_zone.keyvault[0].name
   virtual_network_id    = local.vnet_id
   registration_enabled  = false
   tags                  = local.common_tags
@@ -1432,7 +1907,16 @@ module "keyvault" {
   # pods can read secrets via the Microsoft.KeyVault service endpoint.
   network_default_action = var.keyvault_default_action
   allowed_ips            = var.keyvault_allowed_ips
-  allowed_subnet_ids     = [local.aks_subnet_id]
+  # With the private endpoint the vault has no public listener, so the subnet
+  # rule would filter nothing, and dropping it is what lets the AKS subnet go
+  # without the Microsoft.KeyVault service endpoint.
+  allowed_subnet_ids = var.keyvault_private_endpoint_enabled ? [] : [local.aks_subnet_id]
+
+  # Private Endpoint: public network access off, the endpoint in its subnet, and
+  # its record in the supplied zone or the one created below.
+  private_endpoint_enabled   = var.keyvault_private_endpoint_enabled
+  private_endpoint_subnet_id = local.keyvault_private_endpoint_subnet_id
+  private_dns_zone_id        = local.keyvault_private_dns_zone_id
 
   # ── Secrets ─────────────────────────────────────────────────────────────────
   # Only the two Terraform already holds in state for another reason. The
@@ -1448,7 +1932,9 @@ module "keyvault" {
 
   tags = local.common_tags
 
-  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints]
+  # The zone's VNet link comes before the endpoint and the secret writes, so a
+  # runner inside the VNet resolves the vault's private address on first apply.
+  depends_on = [module.blob, azapi_update_resource.byo_aks_subnet_endpoints, azurerm_private_dns_zone_virtual_network_link.keyvault]
 }
 
 # ── Kubernetes Bootstrap ───────────────────────────────────────────────────────
@@ -1476,6 +1962,7 @@ module "k8s_bootstrap" {
   client_certificate     = module.aks.client_certificate
   client_key             = module.aks.client_key
   cluster_ca_certificate = module.aks.cluster_ca_certificate
+  kube_auth              = module.aks.kube_auth
 
   # K8s namespace for LangSmith workloads
   langsmith_namespace = var.langsmith_namespace
@@ -1558,7 +2045,8 @@ removed {
 
 # ── WAF (optional) ────────────────────────────────────────────────────────────
 # Deploy Azure WAF policy with OWASP 3.2 + bot protection.
-# Attach to Application Gateway or Azure Front Door after creation.
+# Attached to the Application Gateway when ingress_controller = "agic".
+# Front Door needs its own policy type (azurerm_cdn_frontdoor_firewall_policy).
 # Enable with: create_waf = true in terraform.tfvars
 
 module "waf" {

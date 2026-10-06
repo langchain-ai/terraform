@@ -222,6 +222,29 @@ USAGE_DEFAULT = [
     ("standardDDSv4Family", 0, 10),
 ]
 
+# An attached cluster, and nodes in the shape `kubectl get nodes -o json` returns.
+# The D4 figures are a real Standard_D4s_v3's allocatable, not its VM size.
+ATTACHED = "\n".join([
+    "create_cluster                       = false",
+    'existing_cluster_name                = "platform-aks"',
+    'existing_cluster_resource_group_name = "platform-rg"',
+])
+
+
+def node(cpu, memory, ready=True, unschedulable=False):
+    return {
+        "spec": {"unschedulable": True} if unschedulable else {},
+        "status": {
+            "allocatable": {"cpu": cpu, "memory": memory},
+            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+        },
+    }
+
+
+D2_NODE = node("1900m", "5160636Ki")
+D4_NODE = node("3860m", "14995576Ki")
+D16_NODE = node("15820m", "59Gi")
+
 CASES = [
     {
         "name": "Postgres capabilities validate the configured version and SKU",
@@ -1095,6 +1118,70 @@ CASES = [
         "expect": ["[✓] Custom domain ls.example.com — no public IP DNS label to check"],
         "reject": ["dns_label not set"],
     },
+    {
+        # With no sizing_profile the chart default (3500m / 12Gi) applies, and a
+        # D4's allocatable clears it on both axes.
+        "name": "an attached cluster with a node big enough for ClickHouse passes",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE, D4_NODE],
+        "expect": ["[✓] ClickHouse (chart default: 3500m / 12288Mi) fits — the largest node allocates 3860m / 14644Mi"],
+    },
+    {
+        "name": "an attached cluster with no node big enough for ClickHouse fails",
+        "tfvars_extra": ATTACHED + '\nsizing_profile = "production-large"',
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks-admin",
+        "nodes": [D2_NODE, D4_NODE],
+        "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 3860m / 14644Mi, and the production-large sizing requests 4000m / 16384Mi"],
+        "exit_code": 1,
+    },
+    {
+        # A node that could hold the pod but is cordoned or NotReady is no
+        # evidence it ever will, so it is not the one measured.
+        "name": "a cordoned or NotReady large node does not count toward ClickHouse capacity",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE, node("15820m", "59Gi", ready=False),
+                  node("15820m", "59Gi", unschedulable=True)],
+        "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 1900m / 5039Mi"],
+    },
+    {
+        "name": "a kubectl context on another cluster skips the ClickHouse capacity check",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "some-other-aks",
+        "nodes": [D16_NODE],
+        "expect": ["[!] kubectl context is 'some-other-aks', not 'platform-aks', so ClickHouse capacity is unchecked"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    {
+        "name": "unreachable nodes leave ClickHouse capacity unchecked",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "expect": ["[!] Could not read nodes from 'platform-aks', so ClickHouse capacity is unchecked"],
+    },
+    {
+        "name": "managed pools on an attached cluster skip the ClickHouse capacity check",
+        "tfvars_extra": ATTACHED + "\nexisting_cluster_node_pools_managed = true",
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE],
+        "expect": ["[✓] existing_cluster_node_pools_managed = true — Terraform adds the large pool"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    {
+        "name": "external ClickHouse skips the capacity check",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE],
+        "expect": ["[✓] clickhouse_source = external — no ClickHouse pod to schedule"],
+        "reject_calls": ["kubectl get nodes"],
+    },
 ]
 
 
@@ -1153,7 +1240,10 @@ def build_case(case, index):
         )
     if "amr_regions" in case:
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
-    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment"):
+    if "nodes" in case:
+        (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
+                "kube_ctx"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 

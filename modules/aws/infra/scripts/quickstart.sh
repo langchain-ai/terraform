@@ -1604,7 +1604,7 @@ fi
 
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB uses the repository's pinned 0.16.x chart line.${RESET}\n"
+  printf "  ${DIM}SmithDB uses the repository's pinned 0.17.x chart line.${RESET}\n"
 fi
 
 echo ""

@@ -98,6 +98,33 @@ run "names_and_ids_reject_a_malformed_value" {
   ]
 }
 
+# The chart version regex moves with every chart line cut, so it is also checked
+# from the other side: the previous line must fail and the pinned line must pass.
+run "chart_version_rejects_the_previous_line" {
+  command = plan
+
+  variables {
+    langsmith_helm_chart_version = "0.16.11"
+  }
+
+  expect_failures = [
+    var.langsmith_helm_chart_version,
+  ]
+}
+
+run "chart_version_accepts_the_pinned_line" {
+  command = plan
+
+  variables {
+    langsmith_helm_chart_version = "0.17.0"
+  }
+
+  assert {
+    condition     = var.langsmith_helm_chart_version == "0.17.0"
+    error_message = "a 0.17.x langsmith_helm_chart_version failed validation"
+  }
+}
+
 run "cidrs_reject_a_non_cidr" {
   command = plan
 
