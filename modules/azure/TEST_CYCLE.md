@@ -312,11 +312,11 @@ regions.
 create_waf = true
 ```
 
-**Expected plan**: `+1` resource — `azurerm_cdn_frontdoor_firewall_policy.waf`.
+**Expected plan**: `+1` resource — `azurerm_web_application_firewall_policy.waf`.
 
 **Verify**:
 ```bash
-az network front-door waf-policy list -g <resource-group> --query '[].name'
+az network application-gateway waf-policy list -g <resource-group> --query '[].name'
 ```
 
 ---

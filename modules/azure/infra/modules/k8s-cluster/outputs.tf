@@ -85,18 +85,48 @@ output "agw_id" {
   value       = one(azurerm_application_gateway.agw[*].id)
 }
 
+output "workload_identity_service_accounts" {
+  description = "Service accounts federated with the LangSmith workload identity."
+  value       = local.service_accounts_for_workload_identity
+}
+
 output "live_network_profile" {
-  description = "The network profile Azure reports for the cluster at plan time: mode (node-subnet or overlay), data plane, policy engine (none when no engine is installed) and pod range (null in node-subnet mode). null until the cluster exists, and when create_cluster = false."
+  description = "The network profile Azure reports for the cluster at plan time: mode (node-subnet or overlay), data plane, policy engine (none when no engine is installed), pod range (null in node-subnet mode) and outbound type (null when the read does not carry one). null until the cluster exists, and when create_cluster = false."
   value = local.live_cluster == null ? null : {
     mode      = coalesce(try(local.live_cluster.mode, null), "node-subnet")
     dataplane = coalesce(try(local.live_cluster.dataplane, null), "azure")
     policy    = coalesce(try(local.live_cluster.policy, null), "none")
     pod_cidr  = try(local.live_cluster.pod_cidr, null)
+    outbound  = try(local.live_cluster.outbound, null)
   }
 }
 
+output "live_access_profile" {
+  description = "API server access Azure reports for the cluster at plan time: whether it is private, its private DNS zone (\"system\", \"none\", a zone ID, or null on a public cluster), whether Entra integration is on, and the control-plane identity (\"system\" or \"user\", null when Azure reports none) with its lowercased user-assigned identity IDs. null until the cluster exists, and when create_cluster = false."
+  value = local.live_cluster == null ? null : {
+    private          = try(local.live_cluster.private, null) == true
+    private_dns_zone = try(local.live_cluster.private_dns_zone, null)
+    entra            = try(local.live_cluster.entra, null) == true
+    identity         = lookup({ systemassigned = "system", userassigned = "user" }, lower(coalesce(try(local.live_cluster.identity, null), "none")), null)
+    identity_ids     = [for id in keys(coalesce(try(local.live_cluster.identity_ids, null), {})) : lower(id)]
+  }
+}
+
+output "control_plane_identity" {
+  description = "The control-plane identity requested: \"system\" or \"user\", with the user-assigned identity's resource ID (built from its name when the module creates it, so known at plan). null when create_cluster = false."
+  value = !var.create_cluster ? null : {
+    type = local.control_plane_user ? "user" : "system"
+    id   = local.control_plane_identity_id
+  }
+}
+
+output "control_plane_principal_id" {
+  description = "Principal ID of the user-assigned control-plane identity, for the network owner's grants. null with a system-assigned identity, and when create_cluster = false."
+  value       = local.control_plane_principal_id
+}
+
 output "network_profile" {
-  description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane and policy engine. null when create_cluster = false."
+  description = "The network profile the cluster is planned or created with: plugin mode (null is node-subnet), pod_cidr, data plane, policy engine and outbound type. null when create_cluster = false."
   # Keyed off the flag rather than the resource object: a comparison against the
   # whole object would carry its sensitive kube-config marks into this output.
   value = !var.create_cluster ? null : {
@@ -104,6 +134,20 @@ output "network_profile" {
     pod_cidr            = one(azurerm_kubernetes_cluster.main[*].network_profile[0].pod_cidr)
     network_data_plane  = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_data_plane)
     network_policy      = one(azurerm_kubernetes_cluster.main[*].network_profile[0].network_policy)
+    outbound_type       = one(azurerm_kubernetes_cluster.main[*].network_profile[0].outbound_type)
+  }
+}
+
+output "access_profile" {
+  description = "API server access and identity the cluster is planned or created with: private endpoint and DNS zone (null on a public cluster), local accounts, Entra with Azure RBAC, and the control-plane identity. null when create_cluster = false."
+  value = !var.create_cluster ? null : {
+    private_cluster_enabled = one(azurerm_kubernetes_cluster.main[*].private_cluster_enabled)
+    private_dns_zone_id     = var.private_cluster_enabled ? one(azurerm_kubernetes_cluster.main[*].private_dns_zone_id) : null
+    local_account_disabled  = one(azurerm_kubernetes_cluster.main[*].local_account_disabled)
+    azure_rbac_enabled      = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].azure_rbac_enabled, false)
+    admin_group_object_ids  = try(one(azurerm_kubernetes_cluster.main[*].azure_active_directory_role_based_access_control)[0].admin_group_object_ids, [])
+    identity_type           = one(azurerm_kubernetes_cluster.main[*].identity[0].type)
+    identity_ids            = one(azurerm_kubernetes_cluster.main[*].identity[0].identity_ids)
   }
 }
 
@@ -127,11 +171,6 @@ output "support_plan" {
   value       = one(azurerm_kubernetes_cluster.main[*].support_plan)
 }
 
-output "workload_identity_service_accounts" {
-  description = "Service accounts federated with the LangSmith workload identity."
-  value       = local.service_accounts_for_workload_identity
-}
-
 output "envoy_gateway_version" {
   description = "Version of the Envoy Gateway release, empty when ingress_controller is not 'envoy-gateway'. k8s-bootstrap reads it to install cert-manager after the Gateway API CRDs this release ships."
   value       = join("", helm_release.envoy_gateway[*].version)
@@ -140,4 +179,17 @@ output "envoy_gateway_version" {
 output "node_subnet_ids" {
   description = "Distinct subnets the cluster's node pools run in, lowercased. A created cluster runs in subnet_id alone."
   value       = var.create_cluster ? [var.subnet_id] : distinct([for id in compact(data.azurerm_kubernetes_cluster.existing[0].agent_pool_profile[*].vnet_subnet_id) : lower(id)])
+}
+
+output "control_plane_grants" {
+  description = "The role assignments the module makes for the user-assigned control-plane identity, as role and scope. Empty with a system-assigned identity, and when the grants are left to the network's owner."
+  value = [
+    for r in concat(azurerm_role_assignment.control_plane_network_contributor, azurerm_role_assignment.control_plane_dns_zone_contributor) :
+    { role = r.role_definition_name, scope = r.scope }
+  ]
+}
+
+output "kube_auth" {
+  description = "How the module's Kubernetes and Helm providers sign in to the cluster: 'entra' (kubelogin with the caller's az session) or 'certificate' (kube_config client certificate)."
+  value       = local.kube_auth
 }

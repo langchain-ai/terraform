@@ -18,6 +18,17 @@ variable "client_key" {
   sensitive   = true
 }
 
+variable "kube_auth" {
+  type        = string
+  description = "'entra' signs the providers in through kubelogin with the caller's az session; 'certificate' uses client_certificate and client_key. Set from the k8s-cluster module's kube_auth output."
+  default     = "certificate"
+
+  validation {
+    condition     = contains(["entra", "certificate"], var.kube_auth)
+    error_message = "kube_auth must be 'entra' or 'certificate'."
+  }
+}
+
 variable "cluster_ca_certificate" {
   type        = string
   description = "Base64-encoded cluster CA certificate from AKS kube_config"
@@ -217,12 +228,12 @@ variable "agic_subnet_cidrs" {
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via Azure DNS + Workload Identity. 'none' = skip. Both ClusterIssuers are created by helm/scripts/deploy.sh; this module only sets up cert-manager to support them."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via Azure DNS + Workload Identity. 'existing' = your own certificate in the langsmith-tls Secret; nothing here. 'none' = skip. Both ClusterIssuers are created by helm/scripts/deploy.sh; this module only sets up cert-manager to support them."
   default     = "letsencrypt"
 
   validation {
-    condition     = contains(["letsencrypt", "dns01", "none"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', or 'none'."
+    condition     = contains(["letsencrypt", "dns01", "existing", "none"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', 'existing', or 'none'."
   }
 }
 
