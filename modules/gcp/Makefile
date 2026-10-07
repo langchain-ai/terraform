@@ -5,14 +5,14 @@
 # Pass 2 (helm):        make init-values → make deploy
 # Full deploy:          make deploy-all
 # Where am I?           make status
-# SmithDB:              make smithdb-status / smithdb-phase / smithdb-configure
+# SmithDB migration:    make smithdb-migration-job-start / smithdb-migration-job-end, then make deploy-all
 # Terraform flags:      make plan ARGS="-target=module.gke_cluster"   (see make help)
 
 .PHONY: help quickstart status status-quick setup-env secrets init plan apply destroy tf \
         preflight kubeconfig \
         init-values deploy uninstall deploy-all \
         patch-lgp \
-        smithdb-configure smithdb-phase smithdb-status
+        smithdb-migration-job-start smithdb-migration-job-end
 
 INFRA_DIR := infra
 HELM_DIR  := helm
@@ -105,17 +105,12 @@ patch-lgp: ## Patch LGP CRs for minimum/dev profiles (right-sizes redis sidecars
 	$(HELM_DIR)/scripts/patch-lgp-resources.sh
 
 # ── SmithDB ───────────────────────────────────────────────────────────────────
-# configure and phase only edit infra/terraform.tfvars; run make deploy-all after.
-# make exports SIZING, CACHE, PHASE, START_TIME, and FORCE to the script.
 
-smithdb-configure: ## SmithDB size + cache: SIZING=<minimal|small|medium|large> [CACHE=<local-ssd|network-disk>]
-	$(INFRA_DIR)/scripts/smithdb.sh configure
+smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
 
-smithdb-phase: ## SmithDB gates: PHASE=<off|dual-write|backfill|cutover> [START_TIME=<RFC 3339>] [FORCE=true]
-	$(INFRA_DIR)/scripts/smithdb.sh phase
-
-smithdb-status: ## SmithDB gates, sizing, pods, Jobs, and backfill progress (read-only)
-	$(INFRA_DIR)/scripts/smithdb.sh status
+smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

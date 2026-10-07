@@ -461,6 +461,62 @@ run "smithdb_minimal_backfill_keeps_the_chart_taskdb" {
   }
 }
 
+# Each further migration pod adds its 8 / 32Gi plus the Auth Proxy sidecar, and
+# one pod. Requests decide both: CPU 53.15 rounds to 54, memory 153.4 GiB to 154.
+run "smithdb_backfill_quota_follows_the_migration_parallelism" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    sizing_profile                = "dev"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = true
+    smithdb_migration_parallelism = 3
+  }
+
+  assert {
+    condition     = output.smithdb_sizing == "small" && output.smithdb_quota_extra == { cpu = 54, memory_gi = 154, pods = 22 }
+    error_message = "SmithDB small with 3 migration pods did not give quota 54 CPU / 154 GiB / 22 pods"
+  }
+}
+
+# The largest pod count on the largest size stays inside the k8s-bootstrap
+# limits (1024 CPU, 2048 GiB, 400 pods), so the plan does not fail there.
+run "smithdb_large_backfill_at_the_parallelism_cap_fits_the_quota_limits" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    sizing_profile                = "production-large"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = true
+    smithdb_migration_parallelism = 30
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra.cpu <= 1024 && output.smithdb_quota_extra.memory_gi <= 2048 && output.smithdb_quota_extra.pods <= 400
+    error_message = "SmithDB large with 30 migration pods goes over a k8s-bootstrap quota limit"
+  }
+}
+
+# Without the backfill, the migration pod count does not change the quota.
+run "smithdb_migration_parallelism_needs_the_backfill" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    sizing_profile                = "dev"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = false
+    smithdb_migration_parallelism = 3
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
+    error_message = "smithdb_migration_parallelism changed the quota while smithdb_migration_enabled = false"
+  }
+}
+
 run "smithdb_minimal_with_local_ssd_is_rejected" {
   command = plan
 

@@ -609,6 +609,39 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo "  ✔ langsmith-values-smithdb-sizing.yaml"
   echo "  ✔ langsmith-values-smithdb.yaml"
   echo "  ✔ langsmith-values-smithdb-overrides.yaml"
+
+  # init-values.sh writes the migration gate into the overrides. A run of
+  # make smithdb-migration-job-end without make init-values leaves it on, and the
+  # chart then fails on the TaskDB password with no hint of the cause.
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides_file")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    echo "ERROR: langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration," >&2
+    echo "       but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled." >&2
+    echo "Run: make init-values, then make deploy" >&2
+    exit 1
+  fi
+
+  # Written by make smithdb-migration-job-start: TaskDB source and migration pod count.
+  _smithdb_migration_file="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
+  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+    if [[ ! -f "$_smithdb_migration_file" ]]; then
+      echo "ERROR: langsmith-values-smithdb-migration.yaml not found, and smithdb_migration_enabled = true." >&2
+      echo "Run: make smithdb-migration-job-start" >&2
+      exit 1
+    fi
+    # The last make apply sized the namespace quota for this pod count. A larger
+    # count in the file leaves the extra pods refused by the quota.
+    _file_parallelism=$(awk '/^[[:space:]]*parallelism:/ { print $2; exit }' "$_smithdb_migration_file")
+    _tf_parallelism=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_migration_parallelism 2>/dev/null) || _tf_parallelism=""
+    if [[ "${_file_parallelism:-1}" != "$_tf_parallelism" ]]; then
+      echo "ERROR: langsmith-values-smithdb-migration.yaml has parallelism ${_file_parallelism:-1}," >&2
+      echo "       but the last make apply sized the namespace quota for ${_tf_parallelism:-an unknown count of} migration pods." >&2
+      echo "       Run make apply (smithdb_migration_parallelism in terraform.tfvars must match the file), then make deploy." >&2
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration_file")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
+  fi
 elif [[ -f "$VALUES_DIR/langsmith-values-smithdb.yaml" ]]; then
   echo "  ○ langsmith-values-smithdb.yaml (file exists but enable_smithdb=false — skipped)"
 fi
@@ -1034,7 +1067,10 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
   echo "SmithDB services are deployed. LangSmith integration advances in stages,"
   echo "driven by infra/terraform.tfvars; ClickHouse stays enabled throughout."
   echo "  ingestion: $_smithdb_ingestion_enabled   migration: $_smithdb_migration_enabled   query: $_smithdb_query_enabled"
-  echo "  Status and backfill progress: make smithdb-status"
+  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+    echo "  Watch the migration Job; run make smithdb-migration-job-end once it is Complete:"
+    echo "    kubectl get job ${RELEASE_NAME}-smithdb-migration -n $NAMESPACE"
+  fi
   echo ""
   echo "  Verify the cache mount (Local SSD for local-ssd, a PVC for network-disk):"
   echo "    kubectl exec -n $NAMESPACE deploy/${RELEASE_NAME}-smithdb-query -- df -h /data"
@@ -1046,6 +1082,6 @@ if [[ "$_smithdb_enabled" == "true" ]]; then
     echo "  Confirm segments are landing in the bucket:"
     echo "    gcloud storage ls gs://\$(terraform -chdir=$INFRA_DIR output -raw smithdb_object_store_bucket)/**"
   else
-    echo "  Advance to the next stage with: make smithdb-phase PHASE=dual-write && make deploy-all"
+    echo "  Next stage: set smithdb_ingestion_enabled = true in infra/terraform.tfvars, then make deploy-all"
   fi
 fi

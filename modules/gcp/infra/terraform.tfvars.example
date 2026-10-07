@@ -411,15 +411,16 @@ enable_smithdb = false
 #   minimum -> minimal, dev and default -> small, production -> medium,
 #   production-large -> large (12 SmithDB pods, about 350 vCPU).
 # small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
-# size resolves to: modules/gcp/SMITHDB.md#sizing. Set both with
-#   make smithdb-configure SIZING=<size> CACHE=<mode>
+# size resolves to: modules/gcp/SMITHDB.md#sizing.
 # smithdb_sizing        = "small"
 # smithdb_cache_storage = "local-ssd"
 
 # --- Staged rollout ---------------------------------------------------------
 # Migration and query both require ingestion, and Terraform enforces that.
-# ClickHouse stays enabled throughout. make smithdb-phase writes the three gates
-# for one phase: off, dual-write, backfill, or cutover (SMITHDB.md#staged-rollout).
+# ClickHouse stays enabled throughout (SMITHDB.md#staged-rollout).
+# For the backfill, make smithdb-migration-job-start sets
+# smithdb_migration_enabled = true and smithdb_migration_parallelism, and
+# make smithdb-migration-job-end sets smithdb_migration_enabled = false.
 # The default stays false, so an existing install does not start dual write on
 # upgrade; make quickstart writes true for a new install.
 # smithdb_ingestion_enabled = true
@@ -427,6 +428,8 @@ enable_smithdb = false
 # smithdb_query_enabled     = false
 # Backfill start time, RFC 3339. Empty keeps the chart default window.
 # smithdb_migration_start_time = "2026-01-01T00:00:00Z"
+# Migration pods that run at once; sizes the namespace quota.
+# smithdb_migration_parallelism = 1
 
 # Must match the Helm release name used in Pass 2. Chart-created service account
 # names derive from it, and the Workload Identity binding is scoped to that exact

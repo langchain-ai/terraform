@@ -576,8 +576,8 @@ enable_insights      = ${ENABLE_INSIGHTS}
 #------------------------------------------------------------------------------
 # SmithDB
 # The three gates below are a staged rollout, and a new install starts with
-# ingestion (dual write). Move on with make smithdb-phase PHASE=backfill, then
-# PHASE=cutover. ClickHouse stays enabled throughout.
+# ingestion (dual write). For the backfill, run make smithdb-migration-job-start;
+# for cutover, set smithdb_query_enabled = true. ClickHouse stays enabled throughout.
 #------------------------------------------------------------------------------
 enable_smithdb            = ${ENABLE_SMITHDB}
 smithdb_ingestion_enabled = ${ENABLE_SMITHDB}
@@ -634,7 +634,7 @@ printf "  4. Deploy LangSmith:\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"
 if [[ "$ENABLE_SMITHDB" == "true" ]]; then
   echo ""
-  printf "  ${DIM}SmithDB phase, pods, and backfill progress:${RESET}\n"
-  printf "     ${CYAN}make smithdb-status${RESET}\n"
+  printf "  ${DIM}SmithDB historical migration (backfill), after the deploy:${RESET}\n"
+  printf "     ${CYAN}make smithdb-migration-job-start${RESET}\n"
 fi
 echo ""
