@@ -280,6 +280,8 @@ later file wins:
 4. `langsmith-values-smithdb-migration.yaml`: written by
    `make smithdb-migration-job-start` with the TaskDB source and the migration
    pod count. `deploy.sh` loads it only while `smithdb_migration_enabled = true`.
+   `helm/values/examples/langsmith-values-smithdb-migration.yaml` shows the
+   layout.
 
 `deploy.sh` stops before Helm in these cases:
 
