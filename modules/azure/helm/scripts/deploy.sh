@@ -119,8 +119,11 @@ _rg_name=$(_tf_out aks_resource_group_name) || {
 }
 
 info "Cluster: ${_cluster_name}"
+# With no private DNS zone, only the public FQDN resolves (to the private IP).
+_gc_flags=()
+[[ "$(_tf_out aks_kubeconfig_public_fqdn || true)" == "true" ]] && _gc_flags=(--public-fqdn)
 az aks get-credentials --name "$_cluster_name" --resource-group "$_rg_name" \
-  --overwrite-existing >/dev/null || {
+  --overwrite-existing ${_gc_flags[@]+"${_gc_flags[@]}"} >/dev/null || {
   fail "Could not fetch credentials for cluster '${_cluster_name}'."
   action "make kubeconfig  (to retry once the error above is fixed)"
   exit 1

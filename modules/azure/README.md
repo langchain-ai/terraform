@@ -271,7 +271,7 @@ aks_control_plane_identity = "user"
 | Variable | Effect |
 |---|---|
 | `aks_private_cluster_enabled` | The API server gets a private endpoint in the cluster VNet and no public address. Refused alongside `aks_authorized_ip_ranges`, which filters the public endpoint |
-| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and resolving the API server is left to your DNS. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity = "user"` |
+| `aks_private_dns_zone_id` | Empty or `System`: AKS creates the private zone in the node resource group. `None`: AKS creates no zone, and the module turns on the public FQDN, which Azure requires with `None`: the API server's name resolves through public DNS to its private IP, so the nodes' and operators' DNS must resolve public names. A zone ID: AKS registers the API server in your zone, which requires `aks_control_plane_identity = "user"` |
 | `aks_entra_only` | Entra ID integration with Azure RBAC for Kubernetes authorization, and local accounts disabled |
 | `aks_entra_admin_group_object_ids` | Entra groups granted cluster-admin. Requires `aks_entra_only` |
 | `aks_control_plane_identity` | `system` (default): AKS creates a system-assigned control-plane identity. `user`: the control plane runs as a user-assigned identity, `<cluster_name>-control-plane` in the deployment's resource group |

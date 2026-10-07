@@ -92,6 +92,15 @@ locals {
   cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
   cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
 
+  # A private cluster with no private DNS zone ("None") is reached through its
+  # public FQDN, whose A record points at the private IP: the credentials Azure
+  # returns name the private FQDN, which no zone resolves. Terraform's providers
+  # use the public FQDN instead, and the scripts pass --public-fqdn to
+  # az aks get-credentials (output api_server_public_fqdn).
+  api_server_public_fqdn = var.private_cluster_enabled == true && var.private_dns_zone_id == "None"
+  cluster_fqdn           = var.create_cluster ? azurerm_kubernetes_cluster.main[0].fqdn : data.azurerm_kubernetes_cluster.existing[0].fqdn
+  cluster_host           = local.api_server_public_fqdn ? "https://${local.cluster_fqdn}:443" : local.cluster_kube_config[0].host
+
   # On a cluster with Entra ID integration, azurerm returns kube_config with an
   # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
   # whether or not local accounts are disabled, so certificate sign-in cannot work
@@ -243,7 +252,7 @@ check "existing_cluster_location" {
 # every cloud.
 provider "helm" {
   kubernetes {
-    host                   = local.cluster_kube_config[0].host
+    host                   = local.cluster_host
     client_certificate     = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_certificate)
     client_key             = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_key)
     cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
@@ -524,6 +533,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   # root module refuses to flip them on a cluster that already exists.
   private_cluster_enabled = var.private_cluster_enabled
   private_dns_zone_id     = var.private_cluster_enabled ? (var.private_dns_zone_id == "" ? "System" : var.private_dns_zone_id) : null
+  # Except with no private zone ("None"): then the API server resolves only
+  # through its public FQDN, an A record to the private IP. Microsoft does not
+  # support None with the public FQDN off, and the provider defaults it to off.
+  private_cluster_public_fqdn_enabled = var.private_cluster_enabled && var.private_dns_zone_id == "None"
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply

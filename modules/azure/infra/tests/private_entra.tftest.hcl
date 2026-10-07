@@ -62,6 +62,10 @@ run "defaults_plan_a_public_cluster_with_local_accounts_and_a_system_identity" {
     error_message = "With every flag off, the cluster was planned with a private API server"
   }
   assert {
+    condition     = module.aks.access_profile.public_fqdn_enabled == false
+    error_message = "A public cluster was planned with private_cluster_public_fqdn_enabled on"
+  }
+  assert {
     condition     = module.aks.access_profile.local_account_disabled == null && module.aks.access_profile.azure_rbac_enabled == false
     error_message = "With aks_entra_only off, the cluster was planned with Entra integration or local accounts disabled"
   }
@@ -90,6 +94,14 @@ run "a_private_cluster_defaults_to_the_system_dns_zone" {
     condition     = module.aks.access_profile.private_dns_zone_id == "System"
     error_message = "A private cluster with aks_private_dns_zone_id empty was not planned with the System zone"
   }
+  assert {
+    condition     = module.aks.access_profile.public_fqdn_enabled == false
+    error_message = "A private cluster with the System zone was planned with a public FQDN"
+  }
+  assert {
+    condition     = output.aks_kubeconfig_public_fqdn == false && !strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "A private cluster with the System zone was told to fetch credentials with --public-fqdn"
+  }
 }
 
 run "a_private_cluster_takes_a_zone_it_does_not_own" {
@@ -103,6 +115,18 @@ run "a_private_cluster_takes_a_zone_it_does_not_own" {
   assert {
     condition     = module.aks.access_profile.private_dns_zone_id == "None"
     error_message = "aks_private_dns_zone_id = \"None\" did not reach the cluster"
+  }
+  assert {
+    # Microsoft does not support None with the public FQDN off, and the
+    # provider defaults it to off, so the module has to turn it on.
+    condition     = module.aks.access_profile.public_fqdn_enabled == true
+    error_message = "aks_private_dns_zone_id = \"None\" was planned without the public FQDN, which Azure refuses"
+  }
+  assert {
+    # With no private zone only the public FQDN resolves, so the scripts' az aks
+    # get-credentials calls need --public-fqdn.
+    condition     = output.aks_kubeconfig_public_fqdn == true && strcontains(output.get_credentials_command, "--public-fqdn")
+    error_message = "aks_private_dns_zone_id = \"None\" did not tell the scripts to fetch credentials with --public-fqdn"
   }
 }
 
