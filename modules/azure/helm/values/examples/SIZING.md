@@ -29,8 +29,8 @@ Totals from rendering chart 0.16.34 with each profile, at minimum replica counts
 
 | Profile | Scope | Pods | CPU Reserved | Memory Reserved | CPU Limit | Memory Limit |
 |---|---|---:|---:|---:|---:|---:|
-| Minimum | Core | 8 | 1.6 vCPU | 3.9Gi | 5.5 vCPU | 8.0Gi |
-| Minimum | + Deployments and Fleet | 16 | 3.2 vCPU | 7.3Gi | 11.5 vCPU | 17.4Gi |
+| Minimum | Core | 8 | 1.9 vCPU | 3.9Gi | 5.5 vCPU | 8.0Gi |
+| Minimum | + Deployments and Fleet | 16 | 4.4 vCPU | 7.3Gi | 11.5 vCPU | 17.4Gi |
 | Dev | Core | 8 | 4.0 vCPU | 12.2Gi | 10.0 vCPU | 24.5Gi |
 | Dev | + Deployments and Fleet | 16 | 5.8 vCPU | 15.8Gi | 14.0 vCPU | 31.5Gi |
 | Production | Core | 16 | 13.7 vCPU | 32.0Gi | 28.0 vCPU | 70.0Gi |

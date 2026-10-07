@@ -159,8 +159,10 @@ resource "kubernetes_limit_range_v1" "langsmith" {
         cpu    = "1"
         memory = "1Gi"
       }
+      # A request well under the 1-CPU default limit lets the scheduler pack
+      # unsized pods onto a node that cannot feed them all during startup.
       default_request = {
-        cpu    = "100m"
+        cpu    = "250m"
         memory = "256Mi"
       }
     }

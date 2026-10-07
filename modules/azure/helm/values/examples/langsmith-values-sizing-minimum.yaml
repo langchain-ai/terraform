@@ -17,7 +17,7 @@
 #
 # Requests start from those idle measurements, raised where a
 # component could not start at the measured idle figure.
-# With Deployments and Fleet on, the requests come to ~3.2 vCPU before system
+# With Deployments and Fleet on, the requests come to ~4.4 vCPU before system
 # pods, so plan on two D4s_v5 nodes rather than one.
 # ============================================================================
 
@@ -91,7 +91,7 @@ queue:
     replicas: 1
     resources:
       requests:
-        cpu: "250m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
@@ -126,7 +126,7 @@ hostBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "250m"
         # Idles at ~480Mi. Below that the HPA's 80% memory target reads every
         # replica as over and scales straight to its maximum.
         memory: "640Mi"
@@ -143,7 +143,7 @@ listener:
     replicas: 1
     resources:
       requests:
-        cpu: "250m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
@@ -187,13 +187,13 @@ fleetTriggerServer:
         memory: "384Mi"
 
 # The chart sets no resources on these two, so they otherwise get the namespace
-# LimitRange's 100m request while each uses ~500m starting up.
+# LimitRange default request while each uses ~500m starting up.
 fleet:
   apiServer:
     deployment:
       resources:
         requests:
-          cpu: "250m"
+          cpu: "500m"
           memory: "256Mi"
         limits:
           cpu: "1"
@@ -202,7 +202,7 @@ fleet:
     deployment:
       resources:
         requests:
-          cpu: "250m"
+          cpu: "500m"
           memory: "256Mi"
         limits:
           cpu: "1"
