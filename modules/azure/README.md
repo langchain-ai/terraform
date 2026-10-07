@@ -6,6 +6,61 @@ Self-hosted LangSmith on Azure Kubernetes Service (AKS), managed with Terraform.
 
 ---
 
+## Quick Start
+
+Install the [required tools](#required-tools) and [authenticate](#authenticate) first. The identity you deploy as needs the roles in [Required Azure RBAC](#required-azure-rbac).
+
+```bash
+cd terraform/modules/azure
+
+# 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
+make quickstart
+
+# Prefer editing manually? Copy the example instead:
+# cp infra/terraform.tfvars.example infra/terraform.tfvars
+# vi infra/terraform.tfvars
+
+# 2. Bootstrap Terraform inputs (Postgres password, license key, admin email)
+make setup-env
+
+# 3. Check prerequisites
+make preflight
+
+# 4. Deploy infrastructure (~15–20 min)
+# Note: make apply runs three targeted stages so the Kubernetes resources land
+# after the cluster they connect to.
+make init
+make apply
+
+# 5. Seed the LangSmith app secrets into Key Vault (prompts for the admin password)
+make seed-secrets
+
+# 6. Get cluster credentials + K8s secrets
+make kubeconfig
+make k8s-secrets
+
+# 7. Generate Helm values from Terraform outputs
+make init-values
+
+# 8. Deploy LangSmith (~10 min)
+make deploy
+
+# 9. Check status
+make status
+```
+
+Or run everything after `make apply` in one shot:
+
+```bash
+make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
+```
+
+For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
+
+Deploying onto an existing cluster, Key Vault, resource group, or VNet, or into Azure Government? Read the matching section under [Overview](#overview) before step 1.
+
+---
+
 ## Overview
 
 This directory contains the Terraform configuration to deploy LangSmith on Azure. Deployment is split into five passes:
@@ -387,56 +442,7 @@ Run `make apply` before `make deploy` after this change. `init-values.sh` now re
 
 ---
 
-## Quick Start
-
-```bash
-cd terraform/azure
-
-# 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
-make quickstart
-
-# Prefer editing manually? Copy the example instead:
-# cp infra/terraform.tfvars.example infra/terraform.tfvars
-# vi infra/terraform.tfvars
-
-# 2. Bootstrap Terraform inputs (Postgres password, license key, admin email)
-make setup-env
-
-# 3. Check prerequisites
-make preflight
-
-# 4. Deploy infrastructure (~15–20 min)
-# Note: make apply runs three targeted stages so the Kubernetes resources land
-# after the cluster they connect to.
-make init
-make apply
-
-# 5. Seed the LangSmith app secrets into Key Vault (prompts for the admin password)
-make seed-secrets
-
-# 6. Get cluster credentials + K8s secrets
-make kubeconfig
-make k8s-secrets
-
-# 7. Generate Helm values from Terraform outputs
-make init-values
-
-# 8. Deploy LangSmith (~10 min)
-make deploy
-
-# 9. Check status
-make status
-```
-
-Or run everything after `make apply` in one shot:
-
-```bash
-make deploy-all   # seed-secrets → kubeconfig → k8s-secrets → init-values → deploy
-```
-
-For the full copy-paste guide with expected outputs and gotchas, see [QUICK_REFERENCE.md](QUICK_REFERENCE.md).
-
-### Naming your deployment
+## Naming your deployment
 
 One variable names the deployment. `name_prefix` is appended to every resource
 name and doubles as the `environment` tag, so `name_prefix = "prod"` gives
