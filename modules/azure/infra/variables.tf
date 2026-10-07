@@ -1201,8 +1201,20 @@ variable "smithdb_ingestion_enabled" {
 
 variable "smithdb_migration_enabled" {
   type        = bool
-  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled."
+  description = "Enable the ClickHouse-to-SmithDB migration job. Requires smithdb_ingestion_enabled. make smithdb-migration-job-start sets it to true, and make smithdb-migration-job-end sets it to false."
   default     = false
+}
+
+variable "smithdb_migration_parallelism" {
+  type        = number
+  description = "Migration pods that run at once (smithdb.migration.job.parallelism). make smithdb-migration-job-start writes it with the same value as helm/values/langsmith-values-smithdb-migration.yaml. Sizes the namespace quota while smithdb_migration_enabled is true."
+  default     = 1
+  nullable    = false
+
+  validation {
+    condition     = var.smithdb_migration_parallelism >= 1 && var.smithdb_migration_parallelism <= 30 && floor(var.smithdb_migration_parallelism) == var.smithdb_migration_parallelism
+    error_message = "smithdb_migration_parallelism must be a whole number from 1 to 30. Above 30, the namespace quota for large goes over its 2048 GiB limit. Above about 20 pods, raise the TaskDB resources instead of adding pods."
+  }
 }
 
 variable "smithdb_query_enabled" {

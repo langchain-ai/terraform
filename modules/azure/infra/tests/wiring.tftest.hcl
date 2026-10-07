@@ -551,6 +551,69 @@ run "smithdb_large_with_backfill_sets_replicas_and_quota" {
   }
 }
 
+# Each further migration pod adds its 8 / 32Gi and one pod. Requests decide
+# both: two more pods than the single-pod backfill.
+run "smithdb_backfill_quota_follows_the_migration_parallelism" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    availability_zones            = ["1", "2", "3"]
+    smithdb_sizing                = "small"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = true
+    smithdb_migration_parallelism = 3
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 53, memory_gi = 153, pods = 22 }
+    error_message = "small with 3 migration pods did not give quota 53 CPU / 153 GiB / 22 pods"
+  }
+}
+
+# The largest pod count on the largest size stays inside the k8s-bootstrap
+# limits (1024 CPU, 2048 GiB, 400 pods), so the plan does not fail there.
+run "smithdb_large_backfill_at_the_parallelism_cap_fits_the_quota_limits" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    availability_zones            = ["1", "2", "3"]
+    smithdb_sizing                = "large"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = true
+    smithdb_migration_parallelism = 30
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 644, memory_gi = 1832, pods = 63 }
+    error_message = "large with 30 migration pods did not give quota 644 CPU / 1832 GiB / 63 pods"
+  }
+  assert {
+    condition     = output.smithdb_quota_extra.cpu <= 1024 && output.smithdb_quota_extra.memory_gi <= 2048 && output.smithdb_quota_extra.pods <= 400
+    error_message = "large with 30 migration pods goes over a k8s-bootstrap quota limit"
+  }
+}
+
+# Without the backfill, the migration pod count does not change the quota.
+run "smithdb_migration_parallelism_needs_the_backfill" {
+  command = plan
+
+  variables {
+    enable_smithdb                = true
+    availability_zones            = ["1", "2", "3"]
+    smithdb_sizing                = "small"
+    smithdb_ingestion_enabled     = true
+    smithdb_migration_enabled     = false
+    smithdb_migration_parallelism = 3
+  }
+
+  assert {
+    condition     = output.smithdb_quota_extra == { cpu = 27, memory_gi = 53, pods = 12 }
+    error_message = "smithdb_migration_parallelism changed the quota while smithdb_migration_enabled = false"
+  }
+}
+
 run "smithdb_explicit_metastore_sku_wins" {
   command = plan
 

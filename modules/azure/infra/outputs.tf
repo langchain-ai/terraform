@@ -166,6 +166,11 @@ output "smithdb_helm_values" {
   value       = local.smithdb_helm_values
 }
 
+output "smithdb_migration_parallelism" {
+  description = "Migration pods that the namespace quota covers while the migration is enabled. deploy.sh compares it with the migration values file."
+  value       = var.smithdb_migration_parallelism
+}
+
 output "smithdb_quota_extra" {
   description = "Headroom SmithDB adds to the LangSmith namespace ResourceQuota: cpu and memory_gi go once to requests and twice to limits."
   value = {

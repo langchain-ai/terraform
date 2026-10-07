@@ -1771,9 +1771,10 @@ locals {
 
   # SmithDB namespace quota headroom, from the resolved resources. It covers the
   # tier replicas of each component, one surge copy of the largest pod (a
-  # rolling update starts the new pod first), and, with the backfill, the
-  # migration Job and the taskdb. HPA scale-out above the tier replicas has only
-  # the surge room. CPU is in millicores and memory in MiB, so the sums are exact.
+  # rolling update starts the new pod first), and, with the backfill, each
+  # migration pod (smithdb_migration_parallelism) and the taskdb. HPA scale-out
+  # above the tier replicas has only the surge room. CPU is in millicores and
+  # memory in MiB, so the sums are exact.
   smithdb_quota_inputs = merge(
     {
       for c, t in local.smithdb_tier : c => local.smithdb_minimal ? local.smithdb_minimal_resources[c] : {
@@ -1808,7 +1809,7 @@ locals {
     for k in ["requests_cpu_m", "limits_cpu_m", "requests_memory_mi", "limits_memory_mi"] : k => (
       sum([for c in keys(local.smithdb_tier) : local.smithdb_replicas[c] * local.smithdb_quota_numbers[c][k]]) +
       max([for c in keys(local.smithdb_tier) : local.smithdb_quota_numbers[c][k]]...) +
-      (var.smithdb_migration_enabled ? local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
+      (var.smithdb_migration_enabled ? var.smithdb_migration_parallelism * local.smithdb_quota_numbers.migration_job[k] + local.smithdb_quota_numbers.taskdb[k] : 0)
     )
   }
 
@@ -1822,10 +1823,10 @@ locals {
   ) : 0
 
   # The SmithDB pods at the tier replicas plus the metastore migration hook,
-  # doubled for rolling-update surge. The backfill adds 8 for the migration Job
-  # and its taskdb StatefulSet.
+  # doubled for rolling-update surge. The backfill adds 8 for one migration pod
+  # and its taskdb StatefulSet, plus 1 for each further migration pod.
   smithdb_quota_extra_pods = var.enable_smithdb ? (
-    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 8 : 0)
+    2 * (sum(values(local.smithdb_replicas)) + 1) + (var.smithdb_migration_enabled ? 7 + var.smithdb_migration_parallelism : 0)
   ) : 0
 
   # SmithDB Helm values (output smithdb_helm_values). init-values.sh writes them

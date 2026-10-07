@@ -20,6 +20,7 @@
 #   9. langsmith-values-smithdb-sizing.yaml      — SmithDB tier and replicas, from terraform output (if enable_smithdb = true)
 #  10. langsmith-values-smithdb.yaml             — SmithDB overlay, hand-edited (if enable_smithdb = true)
 #  11. langsmith-values-smithdb-overrides.yaml   — SmithDB storage, identity, metastore, gates (if enable_smithdb = true)
+#  12. langsmith-values-smithdb-migration.yaml   — TaskDB and migration pod count, from make smithdb-migration-job-start (if smithdb_migration_enabled = true)
 #
 # Generate values files first: make init-values (or: ./helm/scripts/init-values.sh)
 # Templates live in helm/values/examples/ — init-values.sh copies them based on your choices.
@@ -459,20 +460,42 @@ else
   skip "langsmith-clickhouse secret not required (clickhouse_source = in-cluster)"
 fi
 
-# ── Ensure smithdb-taskdb secret exists (SmithDB backfill only) ───────────
-# The taskdb StatefulSet and the migration Job read postgres_password through
-# secretKeyRef, so a missing secret strands both in CreateContainerConfigError.
+# ── Ensure the TaskDB secret exists (SmithDB backfill only) ───────────────
+# make smithdb-migration-job-start writes the migration values file, which names
+# the TaskDB secret: smithdb-taskdb (from Key Vault) for the chart-managed
+# TaskDB, or smithdb-taskdb-external for an external one. The TaskDB and the
+# migration Job read it through secretKeyRef, so a missing secret or key strands
+# both in CreateContainerConfigError.
+_smithdb_migration_file="$VALUES_DIR/langsmith-values-smithdb-migration.yaml"
 if _tfvar_is_true "enable_smithdb" && _tfvar_is_true "smithdb_migration_enabled"; then
-  info "Verifying smithdb-taskdb secret..."
-  # go-template over key names only — secret values never leave the API server.
-  _taskdb_keys=$(kubectl get secret smithdb-taskdb -n "$NAMESPACE" \
-    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _taskdb_keys=""
-  if ! grep -qx postgres_password <<< "$_taskdb_keys"; then
-    fail "smithdb_migration_enabled = true but secret smithdb-taskdb (key postgres_password) is missing in namespace $NAMESPACE."
-    action "Run: make seed-secrets && make k8s-secrets"
+  if [[ ! -f "$_smithdb_migration_file" ]]; then
+    fail "smithdb_migration_enabled = true but langsmith-values-smithdb-migration.yaml is missing."
+    action "Run: make smithdb-migration-job-start"
     exit 1
   fi
-  pass "smithdb-taskdb secret exists"
+  if grep -qE '^[[:space:]]+external:' "$_smithdb_migration_file"; then
+    _taskdb_secret="smithdb-taskdb-external"
+    _taskdb_required="smithdb_taskdb_host smithdb_taskdb_database smithdb_taskdb_username smithdb_taskdb_password"
+    _taskdb_fix="Run: make smithdb-migration-job-start"
+  else
+    _taskdb_secret="smithdb-taskdb"
+    _taskdb_required="postgres_password"
+    _taskdb_fix="Run: make seed-secrets && make k8s-secrets"
+  fi
+  info "Verifying $_taskdb_secret secret..."
+  # go-template over key names only — secret values never leave the API server.
+  _taskdb_keys=$(kubectl get secret "$_taskdb_secret" -n "$NAMESPACE" \
+    -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null) || _taskdb_keys=""
+  _taskdb_missing=""
+  for _taskdb_key in $_taskdb_required; do
+    grep -qx "$_taskdb_key" <<< "$_taskdb_keys" || _taskdb_missing="${_taskdb_missing} ${_taskdb_key}"
+  done
+  if [[ -n "$_taskdb_missing" ]]; then
+    fail "smithdb_migration_enabled = true but secret $_taskdb_secret in namespace $NAMESPACE is missing, or lacks keys:${_taskdb_missing}"
+    action "$_taskdb_fix"
+    exit 1
+  fi
+  pass "$_taskdb_secret secret exists"
 fi
 
 # ── Pre-deploy hostname check ─────────────────────────────────────────────
@@ -604,6 +627,36 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   fi
   VALUES_ARGS+=(-f "$_smithdb_sizing" -f "$_smithdb_base" -f "$_smithdb_overrides")
   echo "  ✔ langsmith-values-smithdb-sizing.yaml + langsmith-values-smithdb.yaml + langsmith-values-smithdb-overrides.yaml"
+
+  # init-values.sh writes the migration gate into the overrides. A run of
+  # make smithdb-migration-job-end without make init-values leaves it on, and the
+  # chart then fails on the TaskDB password with no hint of the cause.
+  _smithdb_migration_enabled=false
+  _tfvar_is_true "smithdb_migration_enabled" && _smithdb_migration_enabled=true || true
+  _overrides_migration=$(awk '/^    migration:$/ { m = 1; next } m && /enabled:/ { print $2; exit }' "$_smithdb_overrides")
+  if [[ -n "$_overrides_migration" && "$_overrides_migration" != "$_smithdb_migration_enabled" ]]; then
+    fail "langsmith-values-smithdb-overrides.yaml has the migration gate $_overrides_migration, but terraform.tfvars has smithdb_migration_enabled = $_smithdb_migration_enabled."
+    action "Run: make init-values, then make deploy"
+    exit 1
+  fi
+
+  # Written by make smithdb-migration-job-start; its presence was checked with
+  # the TaskDB secret above. Loaded only while the migration is on.
+  if [[ "$_smithdb_migration_enabled" == "true" ]]; then
+    # The last apply sized the namespace quota for this pod count. A larger
+    # count in the file leaves the extra pods refused by the quota.
+    _file_parallelism=$(awk '/^[[:space:]]*parallelism:/ { print $2; exit }' "$_smithdb_migration_file")
+    _tf_parallelism=$(_tf_out smithdb_migration_parallelism) || _tf_parallelism=""
+    if [[ "${_file_parallelism:-1}" != "$_tf_parallelism" ]]; then
+      fail "langsmith-values-smithdb-migration.yaml has parallelism ${_file_parallelism:-1}, but the last apply sized the namespace quota for ${_tf_parallelism:-an unknown count of} migration pods."
+      action "Set smithdb_migration_parallelism = ${_file_parallelism:-1} in terraform.tfvars, run make apply, then make deploy"
+      exit 1
+    fi
+    VALUES_ARGS+=(-f "$_smithdb_migration_file")
+    echo "  ✔ langsmith-values-smithdb-migration.yaml"
+  elif [[ -f "$_smithdb_migration_file" ]]; then
+    echo "  ○ langsmith-values-smithdb-migration.yaml (file exists but smithdb_migration_enabled = false — skipped)"
+  fi
 fi
 echo ""
 

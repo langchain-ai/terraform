@@ -7,13 +7,14 @@
 # Full deploy (helm):      make deploy-all
 # Manage secrets:          make keyvault
 # Where am I?              make status
+# SmithDB migration:       make smithdb-migration-job-start / smithdb-migration-job-end, then apply, init-values, deploy
 # Terraform flags:         make plan ARGS="-target=module.aks"   (see make help)
 
 .PHONY: help quickstart test-quickstart test-license-key setup-env preflight keyvault status status-quick \
         init plan apply destroy destroy-force tf \
         seed-secrets kubeconfig k8s-secrets \
         init-values deploy uninstall deploy-all \
-        smithdb-configure smithdb-phase smithdb-status \
+        smithdb-migration-job-start smithdb-migration-job-end \
         clean clean-force
 
 INFRA_DIR := infra
@@ -151,17 +152,12 @@ uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh
 
 # ── SmithDB ───────────────────────────────────────────────────────────────────
-# configure and phase only edit terraform.tfvars; run make deploy-all after.
-# make exports SIZING, PHASE, and FORCE to the script.
 
-smithdb-configure: ## SmithDB size: SIZING=<minimal|small|medium|large>
-	$(INFRA_DIR)/scripts/smithdb.sh configure
+smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
 
-smithdb-phase: ## SmithDB gates: PHASE=<off|dual-write|backfill|cutover> [FORCE=true]
-	$(INFRA_DIR)/scripts/smithdb.sh phase
-
-smithdb-status: ## SmithDB gates, sizing, pods, Jobs, and backfill progress (read-only)
-	$(INFRA_DIR)/scripts/smithdb.sh status
+smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
 
 # ── Combo Targets ─────────────────────────────────────────────────────────────
 

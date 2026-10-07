@@ -141,14 +141,15 @@ additional_node_pools = {
 enable_smithdb = false
 
 # Roll out one stage at a time after the infrastructure-only deployment is
-# healthy: make smithdb-phase PHASE=<off|dual-write|backfill|cutover>.
+# healthy. make smithdb-migration-job-start and make smithdb-migration-job-end
+# set smithdb_migration_enabled and smithdb_migration_parallelism; set the other
+# two here. See SMITHDB.md, "Staged rollout".
 smithdb_ingestion_enabled = false
 smithdb_migration_enabled = false
 smithdb_query_enabled     = false
 
-# minimal, small, medium, or large: make smithdb-configure SIZING=<size>. Unset
-# follows sizing_profile. Also sets the default metastore SKU. See SMITHDB.md,
-# "Sizing".
+# minimal, small, medium, or large. Unset follows sizing_profile. Also sets the
+# default metastore SKU. See SMITHDB.md, "Sizing".
 # smithdb_sizing = "small"
 
 # smithdb_metastore_sku_name       = "MO_Standard_E2ds_v5" # unset takes the default for smithdb_sizing
