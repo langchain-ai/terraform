@@ -1,0 +1,24 @@
+modules/aws/infra/scripts/migrate-ssm.sh
+  s_b1487d7356bcac::t_ff5d02a8ca73be 94-95
+  s_b1487d7356bcac::t_8172654860ceb1 144
+  s_b1487d7356bcac::t_f4d6ff3c13228b 155
+  s_b1487d7356bcac::t_42c7b47c15d15c 110,116,122,126-127,133,135
+modules/aws/TROUBLESHOOTING.md
+  s_b1487d7356bcac::t_1e266413998f49 547,555,557-559
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38754bd1fe44ba98c3865c7178c469fd1487a493",
+  "prompts": {},
+  "sessions": {
+    "s_b1487d7356bcac": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7fc49cf0-0096-4929-9080-e50739690ff9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Denis Karabanov <denis@langchain.dev>"
+    }
+  }
+}
