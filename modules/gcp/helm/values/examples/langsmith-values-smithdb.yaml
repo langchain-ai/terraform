@@ -1,0 +1,40 @@
+# SmithDB overlay for LangSmith self-hosted on GCP (chart 0.17).
+#
+# SmithDB is the in-chart columnar store/query engine that runs alongside
+# ClickHouse. It shares the LangSmith namespace and release; it cannot run in a
+# separate namespace or cluster.
+#
+# init-values.sh copies this to ../langsmith-values-smithdb.yaml once, when
+# enable_smithdb = true. deploy.sh loads three SmithDB files, and a later file
+# wins:
+#   1. langsmith-values-smithdb-sizing.yaml     generated from terraform output
+#      smithdb_helm_values: tier, resources, HPA minimum replicas, cache
+#      volumes, node placement
+#   2. langsmith-values-smithdb.yaml            your copy of this file
+#   3. langsmith-values-smithdb-overrides.yaml  generated: bucket, Workload
+#      Identity, metastore mapping, Auth Proxy, and rollout gates
+#
+# Do not set SmithDB sizing or placement here. Use make smithdb-configure, so
+# Terraform sizes the node pools and the namespace quota for the same values.
+# Helm merges maps but replaces lists, so a volumes or tolerations list here
+# replaces the generated list.
+
+smithdb:
+  enabled: true
+
+  config:
+    # Metastore credentials come from the Terraform-created Kubernetes secret.
+    # The per-field key mapping and the object-store bucket are injected by
+    # langsmith-values-smithdb-overrides.yaml (generated from infra outputs).
+    existingSecretName: "smithdb-metastore"
+    objectStore:
+      # GCS access is via Workload Identity only. The chart's GCS path renders
+      # just __OBJECT_STORE__GCS__BUCKET and __ROOT_FOLDER — there are no
+      # credential fields, so no HMAC keys are needed or possible here.
+      type: "gcs"
+
+  # smithdb.metastoreMigration is a transient Helm pre-install hook. It is not
+  # pinned to a SmithDB pool, because it runs before any SmithDB pod exists. The
+  # autoscaler then has no pending pod to scale a pool up from zero. The general
+  # pool always has running nodes. Chart 0.17 sets its requests and limits,
+  # which the namespace ResourceQuota requires.

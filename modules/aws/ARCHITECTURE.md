@@ -351,6 +351,15 @@ kubectl apply -f helm/values/dataplane-rbac.yaml
 # Edit namespace: field if using a namespace other than langsmith-agents
 ```
 
+### Optional SmithDB path
+
+SmithDB remains disabled by default. When enabled, Pass 1 adds a dedicated
+PostgreSQL 18 metastore, a dedicated S3 object store, SmithDB IRSA, and
+Karpenter-managed local-NVMe/compute pools. S3 data traffic uses the shared
+Gateway VPC endpoint. Pass 2 requires an explicit compatible v16 chart and
+starts with ingestion, migration, and query integration disabled. See
+[SMITHDB.md](SMITHDB.md).
+
 ---
 
 ## Verification Commands

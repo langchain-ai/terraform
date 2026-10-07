@@ -18,9 +18,9 @@ All commands run from `modules/gcp/`. Run `make help` to see all targets.
 | **1** | VPC + GKE + Cloud SQL + Memorystore + GCS + IAM + cert-manager + KEDA + Envoy Gateway | `make apply` |
 | **1.5** | Cluster credentials | `make kubeconfig` |
 | **2** | LangSmith base — frontend, backend, ingest, queue, clickhouse | `make init-values && make deploy` |
-| **3** | LangSmith Deployments — host-backend, listener, operator | `make apply && make init-values && make deploy` |
-| **4** | Agent Builder — tool-server, trigger-server + deep-agent LGP | `make init-values && make deploy` |
-| **5** | Insights + Polly — Clio analytics, Polly eval agent | `make init-values && make deploy` |
+| **3** | LangSmith Deployments — host-backend, listener, operator (optional LGP) | `make apply && make init-values && make deploy` |
+| **4** | Fleet standalone — api-server, queue, tool-server, trigger-server (chart v0.15+, no LGP required) | `make apply && make init-values && make deploy` |
+| **5** | Standalone Polly + Insights — dedicated api-server + queue each (chart v0.15+, no LGP required) | `make apply && make init-values && make deploy` |
 
 Each pass builds on the previous. Verify pods are healthy before enabling the next pass.
 
@@ -83,22 +83,28 @@ Set the feature flags in `terraform.tfvars`, then `make init-values && make depl
 
 ```hcl
 # terraform.tfvars
-enable_deployments   = true
-enable_agent_builder = true   # requires enable_deployments = true
-enable_insights      = true
-enable_polly         = true   # requires enable_deployments = true + Polly license entitlement
+
+# LangGraph Platform (optional — not required for Fleet, Polly, or Insights in v0.15+)
+enable_deployments = true
+
+# Chart v0.15+ standalone addons (do NOT require enable_deployments)
+enable_fleet               = true   # standalone Agent Builder (replaces enable_agent_builder)
+enable_standalone_polly    = true   # standalone Polly        (replaces enable_polly)
+enable_standalone_insights = true   # standalone Insights     (replaces enable_insights)
 
 # Usage telemetry (optional)
 enable_usage_telemetry = true
 ```
 
+> **Chart 0.16:** `config.polly.*` and `config.insights.*` are rejected outright — the chart fails the release if either key is present at all. `config.agentBuilder.*` still gates the Agent Builder UI and its tool/trigger servers, but no longer deploys an agent runtime. Use the standalone flags above.
+
 To add an addon after initial install without re-running `init-values.sh`, copy manually from `examples/`:
 
 ```bash
-cp helm/values/examples/langsmith-values-agent-deploys.yaml helm/values/
-cp helm/values/examples/langsmith-values-agent-builder.yaml helm/values/
-cp helm/values/examples/langsmith-values-insights.yaml      helm/values/
-cp helm/values/examples/langsmith-values-polly.yaml         helm/values/
+cp helm/values/examples/langsmith-values-agent-deploys.yaml    helm/values/
+cp helm/values/examples/langsmith-values-fleet.yaml            helm/values/
+cp helm/values/examples/langsmith-values-standalone-polly.yaml helm/values/
+cp helm/values/examples/langsmith-values-standalone-insights.yaml helm/values/
 
 make deploy
 ```
@@ -119,7 +125,9 @@ sizing_profile = "production"   # default | minimum | dev | production | product
 | `production` | Multi-replica with HPA — recommended for real workloads |
 | `production-large` | High-memory / high-CPU — 50+ users or 1000+ traces/sec |
 
-After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`.
+After changing `sizing_profile`, re-run `make init-values` to copy the sizing overlay, then `make deploy`. With SmithDB enabled and `smithdb_sizing` unset, the profile also sets the SmithDB size, so run `make deploy-all` ([SMITHDB.md](SMITHDB.md#sizing)).
+
+`make init-values` copies the example only when `helm/values/langsmith-values-sizing-<profile>.yaml` is missing. It does not update a copy that exists. To get a newer example, rename that file (for example, add `.bak` to the name), then run `make init-values`. Copy your own edits from the `.bak` file into the new file, then run `make deploy`. On chart 0.17, an existing install with `sizing_profile = "minimum"` must do this. The older `minimum` example lets the queue HPA scale out until the nodes have no free CPU. Backend, host-backend, and playground then fail their startup probes.
 
 > **Minimum profile + LGP?** Run `make patch-lgp` after deploy to right-size LangGraph Platform CRs. The operator overwrites Deployment patches, so the CRs must be targeted directly.
 
@@ -176,7 +184,7 @@ helm status langsmith -n langsmith
 kubectl get pods -n langsmith
 
 # Get Gateway IP for DNS
-kubectl get gateway -n langsmith \
+kubectl get gateway -n envoy-gateway-system \
   -o jsonpath='{.items[0].status.addresses[0].value}'
 ```
 
@@ -217,72 +225,68 @@ kubectl get pods -n keda          # KEDA running
 
 ---
 
-## Pass 4 — Agent Builder
+## Pass 4 — Fleet (v0.15+ Standalone Agent Builder)
 
-**Prerequisite:** Pass 3 healthy — `listener` and `operator` pods Running.
+**Prerequisite:** Pass 2 healthy. Does **not** require Pass 3 (LangSmith Deployments).
 
-Adds `agent-builder-tool-server`, `agent-builder-trigger-server`, and an `agentBootstrap` Job that registers the Polly agent URL.
+Fleet is the standalone replacement for the bundled Agent Builder (removed in chart v0.15). It runs as its own microservice with dedicated Cloud SQL and Memorystore provisioned by Terraform.
+
+> **Chart v0.15+.** `config.agentBuilder.*` is deprecated — use the top-level `fleet.*` block via `enable_fleet` instead.
 
 **Step 1 — enable flag in `infra/terraform.tfvars`:**
 
 ```hcl
-enable_agent_builder = true
+enable_fleet = true   # replaces enable_agent_builder (deprecated in chart v0.15+)
 ```
 
-**Step 2 — deploy:**
+**Step 2 — apply and deploy:**
 
 ```bash
-make init-values    # picks up enable_agent_builder = true
-make deploy
+make apply          # provisions fleet Cloud SQL DB + K8s secrets
+make init-values    # copies langsmith-values-fleet.yaml; injects encryptionKey
+make deploy         # rolls out fleet api-server, queue, tool-server, trigger-server
 ```
 
 **Verify:**
 
 ```bash
-kubectl get pods -n langsmith | grep -E "tool-server|trigger-server|bootstrap"
-# Expected: tool-server Running, trigger-server Running, agentBootstrap Completed
+kubectl get pods -n langsmith | grep -E "fleet|tool-server|trigger-server"
+# Expected: fleet api-server, queue, tool-server, trigger-server Running
 ```
-
-**Roll frontend** after `agentBootstrap` completes (picks up the `langsmith-polly-config` ConfigMap):
-
-```bash
-kubectl rollout restart deployment langsmith-frontend -n langsmith
-```
-
-> **Watchout:** If you skip the frontend restart, Polly shows "Unable to connect to LangGraph server".
 
 ---
 
-## Pass 5 — Insights + Polly
+## Pass 5 — Standalone Polly + Insights (v0.15+)
 
-**Prerequisite:** Pass 4 healthy — Agent Builder pods Running, `agentBootstrap` Completed.
+**Prerequisite:** Pass 2 healthy. Does **not** require Pass 3 or Pass 4.
 
-Insights enables ClickHouse-backed trace analytics. Polly is the AI eval/monitoring agent. Enable both together.
+In chart 0.15+, Polly and Insights run as standalone microservices with dedicated Cloud SQL and Memorystore provisioned by Terraform. The bundled `config.polly.*` and `config.insights.*` paths were removed; the top-level `polly` and `insights` blocks are the only supported path.
+
+> **Chart 0.16.** `config.polly.*` and `config.insights.*` are rejected — use the top-level `polly.*` and `insights.*` blocks via the standalone flags below instead.
 
 **Step 1 — enable flags in `infra/terraform.tfvars`:**
 
 ```hcl
-enable_insights = true
-enable_polly    = true   # requires Polly license entitlement
+enable_standalone_polly    = true   # replaces enable_polly    (deprecated in chart v0.15+)
+enable_standalone_insights = true   # replaces enable_insights (deprecated in chart v0.15+)
 ```
 
-**Step 2 — deploy:**
+**Step 2 — apply and deploy:**
 
 ```bash
-make init-values    # picks up both flags
+make apply          # provisions polly + insights Cloud SQL DBs + K8s secrets
+make init-values    # copies langsmith-values-standalone-polly.yaml + langsmith-values-standalone-insights.yaml
 make deploy
 ```
 
 **Verify:**
 
 ```bash
-kubectl get pods -n langsmith | grep -E "clio|polly"
-# Expected: clio Running, smith-polly Running (operator-spawned)
-
-kubectl get pods -n langsmith -w   # watch until all new pods stabilize
+kubectl get pods -n langsmith | grep -E "polly|insights"
+# Expected: standalone-polly api-server + queue Running, standalone-insights api-server + queue Running
 ```
 
-> **Watchout:** `insights_encryption_key` and `polly_encryption_key` **must never change** after first enable — rotating either key permanently breaks existing encrypted data.
+> **Encryption keys must never change after first enable.** `polly_encryption_key` and `insights_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
 
 ---
 
@@ -311,21 +315,22 @@ langsmith-listener-xxx             1/1  Running    0
 langsmith-operator-xxx             1/1  Running    0
 ```
 
-**Pass 4 adds:**
+**Pass 4 adds (Fleet standalone, chart v0.15+):**
 
 ```
-langsmith-agent-builder-tool-server-xxx      1/1  Running    0
-langsmith-agent-builder-trigger-server-xxx   1/1  Running    0
-langsmith-agent-builder-bootstrap-xxx        0/1  Completed  0
-agent-builder-<hash>-xxx                     1/1  Running    0   # operator-spawned
+langsmith-fleet-api-server-xxx         1/1  Running    0
+langsmith-fleet-queue-xxx              1/1  Running    0
+langsmith-fleet-tool-server-xxx        1/1  Running    0
+langsmith-fleet-trigger-server-xxx     1/1  Running    0
 ```
 
-**Pass 5 adds:**
+**Pass 5 adds (Standalone Polly + Insights, chart v0.15+):**
 
 ```
-clio-<hash>-xxx                    1/1  Running    0   # Insights analytics
-smith-polly-<hash>-xxx             1/1  Running    0   # Polly eval agent
-lg-<hash>-0                        1/1  Running    0   # LangGraph StatefulSet
+langsmith-standalone-polly-api-server-xxx      1/1  Running    0
+langsmith-standalone-polly-queue-xxx           1/1  Running    0
+langsmith-standalone-insights-api-server-xxx   1/1  Running    0
+langsmith-standalone-insights-queue-xxx        1/1  Running    0
 ```
 
 ---
@@ -338,9 +343,9 @@ lg-<hash>-0                        1/1  Running    0   # LangGraph StatefulSet
 
 > **`config.deployment.enabled: true` is required for Pass 3.** Setting only the URL without `enabled: true` causes the chart to silently skip `listener` and `operator`.
 
-> **Encryption keys must never change after first enable.** `insights_encryption_key` and `polly_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
+> **Encryption keys must never change after first enable.** `polly_encryption_key` and `insights_encryption_key` are write-once — rotating either permanently breaks existing encrypted data.
 
-> **Roll frontend after first Polly enable.** `agentBootstrap` creates the `langsmith-polly-config` ConfigMap after registering. Frontend pods started before bootstrap completed won't pick it up automatically.
+> **Chart 0.16 schema change.** `config.polly.*` and `config.insights.*` are rejected, and `config.agentBuilder.*` no longer deploys an agent runtime now that the bundled bootstrap Job is gone. Use the top-level `fleet.*`, `polly.*`, and `insights.*` standalone blocks instead — enabled via `enable_fleet`, `enable_standalone_polly`, and `enable_standalone_insights`.
 
 > **Envoy Gateway IP changes on teardown.** GCP releases the external IP when the Gateway is deleted. After `terraform destroy` + re-apply, a new IP is issued — update your DNS A record.
 
@@ -370,7 +375,7 @@ kubectl logs <pod-name> -n langsmith --previous --tail=50
 kubectl logs -n langsmith deploy/langsmith-backend --tail=100 -f
 
 # Gateway / HTTPRoute
-kubectl get gateway -n langsmith
+kubectl get gateway -n envoy-gateway-system
 kubectl get httproute -n langsmith
 kubectl get svc -n envoy-gateway-system
 
@@ -441,33 +446,32 @@ gcloud secrets versions access latest --secret=<secret-id> --project <project-id
 
 ## Terraform Commands
 
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
+
 ```bash
-# Initialize
-terraform init
+cd modules/gcp
 
-# Plan
-terraform plan -var-file=terraform.tfvars
-
-# Apply
-terraform apply -var-file=terraform.tfvars
-
-# Target a specific module
-terraform apply -var-file=terraform.tfvars -target=module.networking
-
-# Show all outputs
-terraform output
-
-# Show a specific output
-terraform output -raw cluster_name
-terraform output -raw storage_bucket_name
-
-# Show resource state
-terraform state list
-terraform state show module.gke_cluster
-
-# Refresh state
-terraform refresh -var-file=terraform.tfvars
+make init    ARGS="-upgrade"                     # re-resolve provider versions
+make plan    ARGS="-target=module.gke_cluster"   # plan one module
+make plan    ARGS="-out=tfplan"                  # save a plan file
+make apply   ARGS="tfplan"                       # apply that saved plan
+make apply   ARGS="-auto-approve"                # skip the approval prompt
+make destroy ARGS="-target=module.redis"         # destroy one module
 ```
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output -raw cluster_name"
+make tf ARGS="output -raw storage_bucket_name"
+make tf ARGS="state list"
+make tf ARGS="state list module.gke_cluster"   # filter state to one module
+make tf ARGS="validate"
+make tf ARGS="refresh"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/gcp/infra` if you prefer.
 
 ---
 

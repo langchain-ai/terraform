@@ -20,7 +20,6 @@
     "Sid": "EKSClusterManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeleteCluster",
       "eks:UpdateClusterConfig",
       "eks:UpdateClusterVersion",
       "eks:AccessKubernetesApi",
@@ -49,7 +48,6 @@
     "Sid": "EKSNodegroupManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeleteNodegroup",
       "eks:UpdateNodegroupConfig",
       "eks:UpdateNodegroupVersion",
       "eks:TagResource",
@@ -76,12 +74,7 @@
   {
     "Sid": "EKSAddonManage",
     "Effect": "Allow",
-    "Action": [
-      "eks:DeleteAddon",
-      "eks:UpdateAddon",
-      "eks:TagResource",
-      "eks:UntagResource"
-    ],
+    "Action": ["eks:UpdateAddon", "eks:TagResource", "eks:UntagResource"],
     "Resource": "arn:aws:eks:*:${account_id}:addon/*-smith-eks/*/*",
     "Condition": {
       "StringEquals": {
@@ -104,7 +97,6 @@
     "Sid": "EKSAccessEntryManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeleteAccessEntry",
       "eks:AssociateAccessPolicy",
       "eks:DisassociateAccessPolicy",
       "eks:TagResource",
@@ -132,7 +124,6 @@
     "Sid": "EKSPodIdentityManage",
     "Effect": "Allow",
     "Action": [
-      "eks:DeletePodIdentityAssociation",
       "eks:UpdatePodIdentityAssociation",
       "eks:TagResource",
       "eks:UntagResource"
@@ -141,6 +132,109 @@
     "Condition": {
       "StringEquals": {
         "aws:ResourceTag/managed_by": "langsmith"
+      }
+    }
+  },
+  {
+    "Sid": "SystemTemplateCreate",
+    "Effect": "Allow",
+    "Action": "ec2:CreateLaunchTemplate",
+    "Resource": "arn:aws:ec2:*:${account_id}:launch-template/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "aws:RequestTag/type": "system-node"
+      }
+    }
+  },
+  {
+    "Sid": "SystemTemplateTagOnCreate",
+    "Effect": "Allow",
+    "Action": "ec2:CreateTags",
+    "Resource": "arn:aws:ec2:*:${account_id}:launch-template/*",
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "CreateLaunchTemplate",
+        "aws:RequestTag/managed_by": "langsmith",
+        "aws:RequestTag/type": "system-node"
+      }
+    }
+  },
+  {
+    "Sid": "SystemTemplateUse",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateLaunchTemplateVersion", "ec2:RunInstances"],
+    "Resource": "arn:aws:ec2:*:${account_id}:launch-template/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith",
+        "aws:ResourceTag/type": "system-node"
+      }
+    }
+  },
+  {
+    "Sid": "SystemTemplateTags",
+    "Effect": "Allow",
+    "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
+    "Resource": "arn:aws:ec2:*:${account_id}:launch-template/*",
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed_by": "langsmith",
+        "aws:ResourceTag/type": "system-node"
+      },
+      "ForAllValues:StringNotEquals": {
+        "aws:TagKeys": ["managed_by", "type"]
+      }
+    }
+  },
+  {
+    "Sid": "SystemNodeLaunchInputs",
+    "Effect": "Allow",
+    "Action": "ec2:RunInstances",
+    "Resource": [
+      "arn:aws:ec2:*::image/*",
+      "arn:aws:ec2:*::snapshot/*",
+      "arn:aws:ec2:*:${account_id}:subnet/*",
+      "arn:aws:ec2:*:${account_id}:security-group/*",
+      "arn:aws:ec2:*:${account_id}:network-interface/*"
+    ],
+    "Condition": {
+      "ArnLike": {
+        "ec2:LaunchTemplate": "arn:aws:ec2:*:${account_id}:launch-template/*"
+      }
+    }
+  },
+  {
+    "Sid": "SystemNodeLaunch",
+    "Effect": "Allow",
+    "Action": "ec2:RunInstances",
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:instance/*",
+      "arn:aws:ec2:*:${account_id}:volume/*"
+    ],
+    "Condition": {
+      "ArnLike": {
+        "ec2:LaunchTemplate": "arn:aws:ec2:*:${account_id}:launch-template/*"
+      },
+      "StringEquals": {
+        "aws:RequestTag/managed_by": "langsmith",
+        "aws:RequestTag/type": "system-node"
+      }
+    }
+  },
+  {
+    "Sid": "SystemNodeTagsOnLaunch",
+    "Effect": "Allow",
+    "Action": "ec2:CreateTags",
+    "Resource": [
+      "arn:aws:ec2:*:${account_id}:instance/*",
+      "arn:aws:ec2:*:${account_id}:volume/*"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "ec2:CreateAction": "RunInstances",
+        "aws:RequestTag/managed_by": "langsmith",
+        "aws:RequestTag/type": "system-node"
       }
     }
   }

@@ -90,6 +90,14 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 - **Enabled by**: `enable_secret_manager_module = true` in terraform.tfvars (default: false)
 - **Note**: Core secrets (postgres/redis) are always stored in K8s Secrets by k8s-bootstrap regardless of this module. Secret Manager provides an additional durable store for secrets that must survive cluster recreation.
 
+### SmithDB (optional)
+- **What**: In-chart trace ingestion and query services used alongside ClickHouse on LangSmith chart 0.17
+- **Enabled by**: `enable_smithdb = true` (default: false). Requires GKE Standard
+- **Cloud dependencies**: Dedicated Cloud SQL PostgreSQL 18 metastore on a private IP, a dedicated GCS bucket, and a SmithDB-specific Workload Identity service account
+- **Scheduling**: A cache pool for the cache-heavy workloads (query, ingestion, compactionWorker) and a compute pool for the rest (compaction, clusterManager). Both autoscale from zero. The cache is on node Local SSD or on Hyperdisk volumes, and `smithdb_sizing = "minimal"` creates no pools - see [SMITHDB.md](SMITHDB.md#sizing)
+- **Network**: Object-store traffic uses the subnet's Private Google Access; the metastore is reachable only over the VPC private service connection
+- **Rollout**: Ingestion, migration, and query integration default off and are enabled in separate validated stages - see [SMITHDB.md](SMITHDB.md)
+
 ---
 
 ## Pass 3 — LangGraph Platform (Deployments)
@@ -135,8 +143,9 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 
 ### External Secrets Operator (ESO)
 - **What**: Can sync Secret Manager secrets into Kubernetes secrets
-- **Deployed by**: Terraform `k8s-bootstrap` module
-- **Note**: Core LangSmith secrets (postgres/redis) are written directly to K8s Secrets by the `k8s-bootstrap` Terraform module — ESO is available for custom secret workflows but is not required for a base deployment.
+- **Deployed by**: Not deployed by this module. Install it yourself for custom secret workflows.
+- **Note**: Core LangSmith secrets (postgres/redis) are written directly to K8s Secrets by the `k8s-bootstrap` Terraform module — ESO is not required for a base deployment.
+- **Identity**: The LangSmith service account has no Secret Manager role (`grant_project_secret_accessor = false`). Give ESO its own GCP service account, with `roles/secretmanager.secretAccessor` on the secrets it syncs.
 
 ---
 
@@ -151,6 +160,9 @@ Secret Manager for optional secret storage (no SSM/ESO required for core secrets
 | `langsmith-host-backend` | Same | GCS `storage.objectAdmin` |
 | `langsmith-listener` | Same | GCS `storage.objectAdmin` |
 | `langsmith-ksa` (operator pods) | Same | GCS `storage.objectAdmin` |
+| `langsmith-smithdb` (optional) | `iam.gke.io/gcp-service-account: <smithdb gsa>` | GCS `storage.objectAdmin` on the SmithDB bucket only |
 
 GSA is defined by the `iam` module and output as `workload_identity_annotation`.
 `init-values.sh` writes these annotations into `values-overrides.yaml` automatically.
+SmithDB uses a second, separate GSA from the `smithdb` module so its bucket access
+stays isolated from the LangSmith application identity.

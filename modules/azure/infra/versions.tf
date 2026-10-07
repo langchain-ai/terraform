@@ -1,10 +1,18 @@
 terraform {
-  required_version = ">= 1.5"
+  required_version = ">= 1.11.0"
 
   required_providers {
+    # 4.65.0 renamed azurerm_federated_identity_credential's parent_id to
+    # user_assigned_identity_id, the argument k8s-cluster uses, so nothing older
+    # validates. It also covers the guard's need: 4.58.0 made network_data_plane
+    # and network_policy updatable to cilium and 4.59.0 added calico to cilium,
+    # so on those releases aks_allow_network_upgrade = true updates in place
+    # rather than replacing the cluster. (4.59.0 was the previous floor, and 4.27
+    # before it: the release that accepts Microsoft.Network/applicationGateways
+    # as a subnet delegation.)
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = ">= 4.65.0, < 5.0.0"
     }
     # Azure Managed Redis (Microsoft.Cache/redisEnterprise) Balanced SKUs aren't
     # reliably exposed by azurerm yet — the redis module provisions AMR via azapi.
@@ -14,11 +22,11 @@ terraform {
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
+      version = ">= 2.37.1, < 3.0"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.0"
+      version = "~> 2.16"
     }
     null = {
       source  = "hashicorp/null"
@@ -34,5 +42,14 @@ terraform {
 
 provider "azurerm" {
   subscription_id = var.subscription_id
+  environment     = var.azure_environment
   features {}
+}
+
+# Configured explicitly so both providers target the same cloud and the same
+# subscription. Left implicit, azapi read ARM_ENVIRONMENT and the CLI's default
+# subscription, which need not match what azurerm was given.
+provider "azapi" {
+  subscription_id = var.subscription_id
+  environment     = var.azure_environment
 }

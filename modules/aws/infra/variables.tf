@@ -51,6 +51,23 @@ variable "vpc_public_subnets" {
   default     = []
 }
 
+variable "dns_create_zone" {
+  type        = bool
+  description = "Create a dedicated public Route 53 hosted zone for langsmith_domain. Set to false to write DNS validation and ALB alias records into dns_existing_zone_id instead."
+  default     = true
+}
+
+variable "dns_existing_zone_id" {
+  type        = string
+  description = "ID of an existing public Route 53 hosted zone for langsmith_domain or one of its parent domains. Used when dns_create_zone is false."
+  default     = ""
+
+  validation {
+    condition     = var.dns_existing_zone_id == "" || can(regex("^Z[A-Z0-9]{1,31}$", var.dns_existing_zone_id))
+    error_message = "dns_existing_zone_id must be a valid Route 53 hosted zone ID (starts with Z, e.g., Z1ABCDEF123456)."
+  }
+}
+
 variable "dns_include_wildcard_san" {
   type        = bool
   description = "Include a wildcard SAN (*.<langsmith_domain>) on the ACM certificate created by module.dns. Needed for HTTPS on subdomains like mission-control.langsmith.example.com."
@@ -88,11 +105,11 @@ variable "eks_public_access_cidrs" {
 variable "eks_cluster_version" {
   type        = string
   description = "The EKS version of the kubernetes cluster"
-  default     = "1.33"
+  default     = "1.34"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+$", var.eks_cluster_version))
-    error_message = "EKS cluster version must be in format X.Y (e.g., 1.31)."
+    error_message = "EKS cluster version must be in format X.Y (e.g., 1.34)."
   }
 }
 
@@ -112,11 +129,19 @@ variable "eks_managed_node_group_defaults" {
 
 variable "eks_managed_node_groups" {
   type = map(object({
-    name           = string
-    instance_types = list(string)
-    min_size       = optional(number, 1)
-    desired_size   = optional(number, null)
-    max_size       = optional(number, 10)
+    name                         = string
+    instance_types               = list(string)
+    min_size                     = optional(number, 1)
+    desired_size                 = optional(number, null)
+    max_size                     = optional(number, 10)
+    labels                       = optional(map(string), {})
+    taints                       = optional(any, {})
+    block_device_mappings        = optional(any, {})
+    update_config                = optional(any, {})
+    cloudinit_pre_nodeadm        = optional(any, [])
+    iam_role_name                = optional(string, null)
+    iam_role_use_name_prefix     = optional(bool, null)
+    iam_role_additional_policies = optional(map(string), {})
   }))
   description = "EKS managed node groups. desired_size defaults to min_size when omitted."
   default = {
@@ -189,17 +214,20 @@ variable "postgres_password" {
     Password for the postgres database. Required when postgres_source = 'external'.
     Set via TF_VAR_postgres_password env var.
 
-    When using setup-env.sh: auto-generated on first run and stored in SSM Parameter Store
-    (/langsmith/{base_name}/postgres-password). On subsequent runs, the value is read from SSM —
-    local .pg_password files are only used as a bootstrap fallback when SSM is unreachable.
-    To rotate, update SSM directly and run terraform apply -target=module.postgres.
+    When using setup-env.sh: auto-generated on first run (openssl rand -hex 32) and stored
+    in SSM Parameter Store (/langsmith/{base_name}/postgres-password). On subsequent runs,
+    the value is read from SSM. Local .pg_password files are only a bootstrap fallback when
+    SSM is unreachable. To rotate, update SSM and run terraform apply -target=module.postgres.
+
+    RDS forbids '/', '@', double quote, single quote, and space. Connection URLs percent-encode
+    the password so other reserved URI characters still parse.
   EOT
   default     = ""
   sensitive   = true
 
   validation {
-    condition     = var.postgres_password == "" || can(regex("^[^/@\"' ]+$", var.postgres_password))
-    error_message = "RDS master password must not contain '/', '@', '\"', single quotes, or spaces."
+    condition     = var.postgres_password == "" || can(regex("^[^/@\"' ]{8,128}$", var.postgres_password))
+    error_message = "RDS master password must be 8-128 characters and must not contain '/', '@', '\"', single quotes, or spaces."
   }
 }
 
@@ -221,10 +249,22 @@ variable "postgres_deletion_protection" {
   default     = true
 }
 
+variable "postgres_skip_final_snapshot" {
+  type        = bool
+  description = "Skip the final snapshot when the LangSmith postgres instance is destroyed. Set true for dev/test environments that are rebuilt under the same name."
+  default     = false
+}
+
 variable "postgres_backup_retention_period" {
   type        = number
   description = "Days to retain automated RDS backups. 7 is the recommended baseline. 0 disables backups entirely."
   default     = 7
+}
+
+variable "postgres_existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the RDS instance instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/5432 from within the VPC CIDR."
+  default     = null
 }
 
 #------------------------------------------------------------------------------
@@ -254,6 +294,103 @@ variable "redis_auth_token" {
   sensitive   = true
 }
 
+variable "redis_existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the ElastiCache replication group instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow inbound tcp/6379 from within the VPC CIDR."
+  default     = null
+}
+
+#------------------------------------------------------------------------------
+# Sandboxes
+#------------------------------------------------------------------------------
+variable "enable_sandboxes" {
+  type        = bool
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires external Redis and dedicated sandbox-host nodes with usable Linux KVM (/dev/kvm). On AWS, use x86_64 EC2 bare metal instance types."
+  default     = false
+}
+
+variable "sandbox_host_node_count" {
+  type        = number
+  description = "Fixed number of sandbox-host nodes to provision when enable_sandboxes = true."
+  default     = 1
+
+  validation {
+    condition     = var.sandbox_host_node_count >= 1
+    error_message = "sandbox_host_node_count must be at least 1."
+  }
+}
+
+variable "sandbox_host_instance_types" {
+  type        = list(string)
+  description = "EC2 instance types for the sandbox-host node group. Must expose usable Linux KVM (/dev/kvm). Defaults to bare-metal m5d.metal; other bare-metal examples include m6id.metal, m7i.metal-24xl, c6i.metal, c7i.metal-24xl, r6i.metal, and i4i.metal. Virtual instances also work where EC2 supports nested virtualization (m7i, c7i, r7i, m8i, c8i, r8i and their d variants), which is cheaper than renting a whole host; set sandbox_host_local_nvme_bootstrap_enabled = false on families without instance store, and note that the EKS vpc-cni addon must be v1.21 or newer because v1.20 crashes on 8th-generation Intel instances."
+  default     = ["m5d.metal"]
+}
+
+variable "sandbox_host_local_nvme_bootstrap_enabled" {
+  type        = bool
+  description = "Bootstrap local NVMe devices for sandbox-host swap and JuiceFS cache. Disable when using an instance type without local NVMe instance store."
+  default     = true
+}
+
+variable "sandbox_host_local_nvme_expected_device_count" {
+  type        = number
+  description = "Number of local NVMe instance-store devices expected on each sandbox-host node when sandbox_host_local_nvme_bootstrap_enabled = true. The first device is used for swap and the remaining devices are mounted as JuiceFS cache directories. This does not attach disks; it must match the selected EC2 instance type."
+  default     = 4
+
+  validation {
+    condition     = var.sandbox_host_local_nvme_expected_device_count >= 1
+    error_message = "sandbox_host_local_nvme_expected_device_count must be at least 1."
+  }
+}
+
+variable "sandbox_host_node_group_overrides" {
+  type        = any
+  description = "Advanced overrides merged into the generated sandbox-host EKS managed node group."
+  default     = {}
+}
+
+variable "sandbox_juicefs_name" {
+  type        = string
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state."
+  default     = "sandbox-juicefs"
+}
+
+variable "sandbox_juicefs_redis_instance_type" {
+  type        = string
+  description = "ElastiCache node type for the dedicated JuiceFS metadata Redis created when enable_sandboxes = true. The default is small production sizing; use cache.r7g.xlarge or larger for SaaS-like production scale."
+  default     = "cache.m6g.large"
+}
+
+variable "sandbox_juicefs_redis_auth_token" {
+  type        = string
+  description = "Auth token for the dedicated JuiceFS metadata Redis. Auto-generated by setup-env.sh and stored in SSM. Required when enable_sandboxes = true."
+  default     = ""
+  sensitive   = true
+}
+
+variable "sandbox_juicefs_redis_snapshot_retention_limit" {
+  type        = number
+  description = "Number of days to retain automated snapshots for the dedicated JuiceFS metadata Redis."
+  default     = 7
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_snapshot_retention_limit >= 0 && var.sandbox_juicefs_redis_snapshot_retention_limit <= 35
+    error_message = "sandbox_juicefs_redis_snapshot_retention_limit must be between 0 and 35."
+  }
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  type        = string
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  type        = number
+  description = "Revision for the write-only sandbox JuiceFS config Secret. Increment to intentionally rewrite the secret. The chart does not restart sandbox-host for an in-place rewrite, so restart it after the apply."
+  default     = 1
+}
+
 #------------------------------------------------------------------------------
 # ALB Configuration
 #------------------------------------------------------------------------------
@@ -278,6 +415,12 @@ variable "alb_access_logs_enabled" {
   type        = bool
   description = "Enable ALB access logging to a dedicated S3 bucket. Useful for traffic analysis and compliance."
   default     = false
+}
+
+variable "alb_existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the ALB instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow inbound HTTP/HTTPS per alb_allowed_cidr_blocks."
+  default     = null
 }
 
 #------------------------------------------------------------------------------
@@ -369,6 +512,12 @@ variable "bastion_root_volume_size_gb" {
   default     = 20
 }
 
+variable "bastion_existing_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the bastion instead of letting Terraform create one. Terraform does not manage rules on a supplied group; it must already allow the access this bastion needs. bastion_enable_ssh still controls subnet placement and public IP assignment, but no longer causes Terraform to add an SSH ingress rule to the supplied group."
+  default     = null
+}
+
 variable "create_waf" {
   type        = bool
   description = "Attach a WAFv2 Web ACL to the ALB. Includes AWS managed rules for OWASP Top 10, IP reputation, and known bad inputs. Cost: ~$8-10/mo base."
@@ -413,6 +562,12 @@ variable "create_langsmith_irsa_role" {
   type        = bool
   description = "Whether to create an IRSA role for LangSmith pods"
   default     = true
+}
+
+variable "enable_bedrock_access" {
+  type        = bool
+  description = "Attach a Bedrock InvokeModel policy to the shared LangSmith IRSA role (module.eks.langsmith_irsa_role_name), so backend/platformBackend/queue/etc. pods can call Bedrock models directly via workload identity instead of static AWS keys. Requires create_langsmith_irsa_role = true."
+  default     = false
 }
 
 variable "eks_cluster_enabled_log_types" {
@@ -497,9 +652,20 @@ variable "letsencrypt_email" {
   default     = ""
 }
 
+variable "langsmith_helm_chart_version" {
+  type        = string
+  description = "Pin the LangSmith Helm chart to an exact patch, e.g. \"0.17.0\". Empty deploys the latest patch on the pinned 0.17 line. Read by helm/scripts/deploy.sh; the CHART_VERSION environment variable still takes precedence."
+  default     = ""
+
+  validation {
+    condition     = var.langsmith_helm_chart_version == "" || can(regex("^0\\.17\\.", var.langsmith_helm_chart_version))
+    error_message = "langsmith_helm_chart_version must be empty or a 0.17.x version — deploy.sh refuses anything off the pinned chart line."
+  }
+}
+
 variable "langsmith_domain" {
   type        = string
-  description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set (and acm_certificate_arn is empty), activates the dns module to auto-provision a Route 53 hosted zone, ACM certificate, and alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
+  description = "Custom domain for LangSmith (e.g. langsmith.example.com). When set and acm_certificate_arn is empty, activates the DNS module to create or reuse a Route 53 hosted zone, request an ACM certificate, and create an ALB alias record. Leave empty to skip DNS/ACM and access LangSmith via the ALB hostname directly."
   default     = ""
 }
 
@@ -524,9 +690,16 @@ variable "tags" {
 #------------------------------------------------------------------------------
 # ClickHouse Configuration
 #------------------------------------------------------------------------------
+# No Terraform resource reads this — where ClickHouse runs is a Helm-values
+# decision, and helm/scripts/init-values.sh parses it out of terraform.tfvars.
+# The declaration earns its place through the validation block: init-values.sh
+# tests only for "in-cluster" and treats everything else as external, so without
+# a plan-time check a typo would silently start prompting for the connection
+# details of an external ClickHouse the operator never meant to use.
+# tflint-ignore: terraform_unused_declarations
 variable "clickhouse_source" {
   type        = string
-  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a pod via Helm (dev/POC only). 'external' for LangChain Managed ClickHouse (recommended for production) — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
+  description = "ClickHouse deployment type. 'in-cluster' deploys ClickHouse as a StatefulSet via Helm and is recommended for production during the transition to SmithDB. 'external' uses LangChain Managed ClickHouse — see https://docs.langchain.com/langsmith/langsmith-managed-clickhouse"
   default     = "in-cluster"
 
   validation {
@@ -536,10 +709,14 @@ variable "clickhouse_source" {
 }
 
 #------------------------------------------------------------------------------
-# ESO-managed secrets — declared so TF_VAR_* exports from setup-env.sh don't
-# produce "unknown variable" warnings. Terraform doesn't use these values
-# directly — they're stored in SSM by setup-env.sh and synced to K8s by ESO.
+# ESO-managed secrets. Terraform doesn't use these values: setup-env.sh exports
+# them as TF_VAR_* and writes them to SSM, and ESO syncs SSM into the namespace.
+# They stay declared so the module states the full set of inputs an operator has
+# to supply, and so setting one in terraform.tfvars is legal rather than a
+# "value for undeclared variable" warning on every plan. (A TF_VAR_* export for
+# an undeclared variable is silent, so that is not what the declaration buys.)
 #------------------------------------------------------------------------------
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_api_key_salt" {
   type        = string
   description = "API key salt for LangSmith. Auto-generated by setup-env.sh and stored in SSM. Must never change after first deployment."
@@ -547,6 +724,15 @@ variable "langsmith_api_key_salt" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_callback_signing_jwk" {
+  type        = string
+  description = "Sandbox callback signing private JWK. Declared so setup-env.sh can export TF_VAR_sandbox_callback_signing_jwk without Terraform warnings; app secret sync reads it from SSM."
+  sensitive   = true
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_jwt_secret" {
   type        = string
   description = "JWT signing secret for LangSmith. Auto-generated by setup-env.sh and stored in SSM. Must never change after first deployment."
@@ -555,14 +741,15 @@ variable "langsmith_jwt_secret" {
 }
 
 #------------------------------------------------------------------------------
-# LangGraph Platform Features
+# LangSmith Features
 # Boolean flags that control which product addons are enabled in Helm (Pass 2).
 # deploy.sh reads these to decide which values overlay files to include.
 # Addons require the corresponding entitlement in your LangSmith license key.
 #------------------------------------------------------------------------------
+# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), or 'default' (chart defaults, no sizing file)."
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
   default     = "default"
 
   validation {
@@ -573,73 +760,118 @@ variable "sizing_profile" {
 
 variable "enable_deployments" {
   type        = bool
-  description = "Enable LangGraph Platform Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
+  description = "Enable LangSmith Deployments (listener, operator, host-backend). Requires Deployments entitlement in license."
   default     = false
 }
 
 variable "enable_agent_builder" {
   type        = bool
-  description = "Enable Agent Builder (visual agent building UI). Requires enable_deployments = true and Agent Builder entitlement in license."
+  description = "Deprecated compatibility input accepted for existing tfvars files. Ignored because chart v0.16 supports Fleet instead."
   default     = false
+
+  validation {
+    condition     = var.enable_agent_builder == false
+    error_message = "enable_agent_builder was removed in chart v0.16. Use enable_fleet instead; setting enable_agent_builder has no effect."
+  }
 }
 
 variable "enable_insights" {
   type        = bool
-  description = "Enable Insights (ClickHouse-backed analytics). Requires Insights entitlement in license."
+  description = "Enable Insights for AI-powered trace analysis. Requires the Insights entitlement."
   default     = false
+}
+
+variable "insights_storage" {
+  type        = string
+  description = "Insights storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.insights_storage)
+    error_message = "insights_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_polly" {
   type        = bool
-  description = "Enable Polly (AI-powered evaluation and monitoring). Requires enable_deployments = true and Polly entitlement in license."
+  description = "Enable LangSmith Chat (formerly Polly) using the chart's top-level polly services. Does not require enable_deployments. Requires the LangSmith Chat entitlement in the license."
   default     = false
+}
+
+variable "polly_storage" {
+  type        = string
+  description = "LangSmith Chat storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "in-cluster"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.polly_storage)
+    error_message = "polly_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_fleet" {
   type        = bool
-  description = "Enable Fleet standalone deployment (chart v0.15+). Requires enable_deployments = true (the Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed with Deployments). Reuses langsmith_agent_builder_encryption_key when migrating from enable_agent_builder. Requires postgres_source = redis_source = external."
+  description = "Enable Fleet and the host-backend it requires. Full LangSmith Deployments is optional."
   default     = false
+}
+
+variable "fleet_storage" {
+  type        = string
+  description = "Fleet storage location: 'external' uses dedicated databases on the shared RDS and ElastiCache services; 'in-cluster' uses the PostgreSQL and Redis StatefulSets included in the Helm chart."
+  default     = "external"
+
+  validation {
+    condition     = contains(["external", "in-cluster"], var.fleet_storage)
+    error_message = "fleet_storage must be one of: external, in-cluster."
+  }
 }
 
 variable "enable_standalone_polly" {
   type        = bool
-  description = "Enable Polly standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_polly_encryption_key. Requires postgres_source = redis_source = external."
+  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for LangSmith Chat (formerly Polly). Also enables Chat when enable_polly is false for backward compatibility. Requires postgres_source = redis_source = external."
   default     = false
 }
 
 variable "enable_standalone_insights" {
   type        = bool
-  description = "Enable Insights standalone deployment (chart v0.15+). Does NOT require enable_deployments. Reuses langsmith_insights_encryption_key. ClickHouse is still required via the existing insights flow. Requires postgres_source = redis_source = external."
+  description = "Use dedicated databases on the shared external PostgreSQL and Redis services for Insights. Also enables Insights when enable_insights is false for backward compatibility. ClickHouse is still required. Requires postgres_source = redis_source = external."
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "enable_usage_telemetry" {
   type        = bool
-  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED). Parsed by init-values.sh and the app module."
+  description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED). Parsed by init-values.sh."
   default     = false
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "enable_sso_oidc" {
+  type        = bool
+  description = "Enable SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID, Okta, Auth0, Google Workspace, etc. all work through the same generic client_id/secret/issuer_url. Client ID/secret/issuer URL are read by apply-eso.sh from SSM (oauth-client-id, oauth-client-secret, oauth-issuer-url), not from this variable. Parsed by init-values.sh. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
+  default     = false
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL used by init-values.sh to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  default     = ""
 }
 
 variable "enable_envoy_gateway" {
   type        = bool
-  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources."
-  default     = false
+  description = "Install Envoy Gateway for in-cluster routing via Kubernetes Gateway API HTTPRoutes. When enabled, the LangSmith Helm chart creates HTTPRoutes instead of Ingress resources. This is the default ingress mode: leave it unset and Envoy Gateway is enabled unless enable_istio_gateway or enable_nginx_ingress is true. Set it to false to use a standard ALB-backed Kubernetes Ingress instead."
+  # Unset (null) means "derive" — see local.enable_envoy_gateway in locals.tf.
+  # An explicit true or false in terraform.tfvars always wins over the derivation,
+  # so existing Istio/NGINX deployments keep working without a tfvars edit.
+  default = null
 }
 
 variable "enable_istio_gateway" {
   type        = bool
   description = "Open port 15017 on the node SG for the istiod sidecar-injector webhook. Required when running Istio on EKS — the upstream EKS module does not include this port by default."
   default     = false
-}
-
-variable "istio_nlb_scheme" {
-  type        = string
-  description = "Scheme for the Istio ingress gateway NLB: 'internet-facing' (public) or 'internal' (VPC-only). Passed to the Istio Helm values as the service.annotations load balancer scheme."
-  default     = "internet-facing"
-
-  validation {
-    condition     = contains(["internet-facing", "internal"], var.istio_nlb_scheme)
-    error_message = "istio_nlb_scheme must be 'internet-facing' or 'internal'."
-  }
 }
 
 variable "enable_nginx_ingress" {
@@ -674,6 +906,7 @@ variable "cert_manager_hosted_zone_id" {
 # Set via setup-env.sh (TF_VAR_*) — stored in SSM Parameter Store.
 # Required only when enabling the corresponding feature overlay in Helm.
 #------------------------------------------------------------------------------
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_deployments_encryption_key" {
   type        = string
   description = "Fernet key for LangSmith Deployments. Generate once: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'. Store in SSM: /langsmith/{base_name}/deployments-encryption-key."
@@ -681,13 +914,15 @@ variable "langsmith_deployments_encryption_key" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_agent_builder_encryption_key" {
   type        = string
-  description = "Fernet key for Agent Builder. Generate once and keep stable. Store in SSM: /langsmith/{base_name}/agent-builder-encryption-key."
+  description = "Fernet key for Fleet. The historical variable and SSM parameter names are retained for compatibility. Generate once and keep stable. Store in SSM: /langsmith/{base_name}/agent-builder-encryption-key."
   sensitive   = true
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_insights_encryption_key" {
   type        = string
   description = "Fernet key for Insights. Generate once — changing breaks existing insights data. Store in SSM: /langsmith/{base_name}/insights-encryption-key."
@@ -695,10 +930,262 @@ variable "langsmith_insights_encryption_key" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_polly_encryption_key" {
   type        = string
-  description = "Fernet key for Polly. Generate once — changing breaks existing Polly encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
+  description = "Fernet key for LangSmith Chat (formerly Polly). Generate once — changing it breaks existing encrypted secrets. Store in SSM: /langsmith/{base_name}/polly-encryption-key."
   sensitive   = true
   default     = ""
 }
 
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.16+)
+#
+# SmithDB is the columnar store/query engine shipped in-chart with LangSmith.
+# It shares the LangSmith namespace and release (it cannot run in a separate
+# namespace or cluster). Enabling it provisions a dedicated metastore Postgres,
+# a dedicated object-store S3 bucket, an IRSA role for the SmithDB service
+# account, and instance-store + compute node groups (SmithDB requires local
+# NVMe SSD instances). The Helm side is enabled in Pass 2 (helm/ or app/).
+#
+#------------------------------------------------------------------------------
+variable "enable_smithdb" {
+  type        = bool
+  description = "Provision the SmithDB cloud dependencies (metastore RDS, object-store S3, IRSA role, instance-store + compute node groups). Pass 2 uses the repository's compatible 0.17.x chart pin. SmithDB needs local NVMe instances; both amd64 and arm64 are supported (amd64 is the default here)."
+  default     = false
+}
+
+variable "smithdb_ingestion_enabled" {
+  type        = bool
+  description = "Route new LangSmith writes to SmithDB after service validation."
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  type        = bool
+  description = "Enable historical ClickHouse-to-SmithDB migration integration."
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  type        = bool
+  description = "Serve LangSmith queries from SmithDB after ingestion and migration validation."
+  default     = false
+}
+
+variable "langsmith_release_name" {
+  type        = string
+  description = "Helm release name for LangSmith (Pass 2). Used to scope the SmithDB IRSA trust to the <release>-langsmith-smithdb service account. Must match RELEASE_NAME / release_name used in helm/ or app/."
+  default     = "langsmith"
+}
+
+# ── Metastore (dedicated RDS Postgres) ────────────────────────────────────────
+variable "smithdb_metastore_source" {
+  type        = string
+  description = "SmithDB metastore Postgres: 'create' (dedicated RDS, default) or 'external' (bring-your-own). SmithDB requires a dedicated Postgres instance, separate from the LangSmith application database."
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "external"], var.smithdb_metastore_source)
+    error_message = "smithdb_metastore_source must be 'create' or 'external'."
+  }
+}
+
+variable "smithdb_metastore_instance_class" {
+  type        = string
+  description = "RDS instance class for the SmithDB metastore."
+  default     = "db.m6g.large"
+}
+
+variable "smithdb_metastore_engine_version" {
+  type        = string
+  description = "PostgreSQL engine version for the SmithDB metastore."
+  default     = "18"
+}
+
+variable "smithdb_metastore_allocated_storage" {
+  type        = number
+  description = "Allocated storage (GB) for the SmithDB metastore."
+  default     = 50
+}
+
+variable "smithdb_metastore_multi_az" {
+  type        = bool
+  description = "Run the SmithDB metastore RDS instance Multi-AZ."
+  default     = false
+}
+
+variable "smithdb_metastore_deletion_protection" {
+  type        = bool
+  description = "Prevent accidental deletion of the SmithDB metastore RDS instance."
+  default     = true
+}
+
+variable "smithdb_metastore_backup_retention_period" {
+  type        = number
+  description = "Days to retain automated backups of the SmithDB metastore. 0 disables backups."
+  default     = 7
+}
+
+variable "smithdb_metastore_skip_final_snapshot" {
+  type        = bool
+  description = "Skip the final snapshot when the SmithDB metastore is destroyed. Set true for dev/test environments that are rebuilt under the same name."
+  default     = false
+}
+
+variable "smithdb_metastore_use_ssl" {
+  type        = bool
+  description = "Connect to the SmithDB metastore over SSL. Written into the SmithDB Helm values."
+  default     = true
+}
+
+variable "smithdb_metastore_master_username" {
+  type        = string
+  description = "Master username for the SmithDB metastore."
+  default     = "smithdb"
+}
+
+# External metastore fields (used when smithdb_metastore_source = external).
+variable "smithdb_external_metastore_host" {
+  type        = string
+  description = "Hostname of an existing Postgres instance for the SmithDB metastore."
+  default     = null
+}
+
+variable "smithdb_external_metastore_port" {
+  type        = number
+  description = "Port of the existing SmithDB metastore Postgres instance."
+  default     = 5432
+}
+
+variable "smithdb_external_metastore_database" {
+  type        = string
+  description = "Database name on the existing SmithDB metastore Postgres instance."
+  default     = "smithdb"
+}
+
+variable "smithdb_external_metastore_username" {
+  type        = string
+  description = "Username for the existing SmithDB metastore Postgres instance."
+  default     = null
+}
+
+variable "smithdb_external_metastore_password" {
+  type        = string
+  description = "Password for the existing SmithDB metastore Postgres instance. Set via TF_VAR_smithdb_external_metastore_password."
+  default     = null
+  sensitive   = true
+}
+
+variable "smithdb_existing_metastore_security_group_id" {
+  type        = string
+  description = "ID of an existing security group to attach to the metastore RDS instance instead of letting Terraform create one. Only applies when smithdb_metastore_source = 'create'. By default Terraform does not write rules onto it; see smithdb_manage_byo_security_group_rules."
+  default     = null
+}
+
+variable "smithdb_manage_byo_security_group_rules" {
+  type        = bool
+  description = "When smithdb_existing_metastore_security_group_id is set, allow Terraform to write the tcp/5432-from-EKS-nodes ingress rule onto that supplied security group. Default false (attach-only). This helps on a new deployment because the EKS node security group ID is created in the same apply."
+  default     = false
+}
+
+# ── Object store (S3) ─────────────────────────────────────────────────────────
+variable "smithdb_bucket_name" {
+  type        = string
+  description = "Name of the SmithDB object-store bucket. Empty auto-generates {name_prefix}-{environment}-smithdb-{suffix}."
+  default     = ""
+}
+
+variable "smithdb_s3_versioning_enabled" {
+  type        = bool
+  description = "Enable versioning on the SmithDB object-store bucket."
+  default     = false
+}
+
+variable "smithdb_s3_force_destroy" {
+  type        = bool
+  description = "Allow Terraform to delete a non-empty SmithDB object-store bucket on destroy. Set true only for test stacks."
+  default     = false
+}
+
+# ── Karpenter node provisioning (SmithDB requires local NVMe SSD instances) ───
+# Karpenter (installed by the eks module when enable_smithdb = true) provisions
+# the SmithDB pools on demand. The instance-store pool uses instanceStorePolicy
+# RAID0, so no launch-template userdata is needed. Both amd64 and arm64 work;
+# amd64 is the default to match core LangSmith and avoid multi-arch job issues.
+variable "smithdb_karpenter_chart_version" {
+  type        = string
+  description = "Karpenter Helm chart version. MUST match eks_cluster_version per the Karpenter compatibility matrix (https://karpenter.sh/docs/upgrading/compatibility/): K8s 1.34 -> >= 1.6, 1.35 -> >= 1.9, 1.36 -> 1.13."
+  default     = "1.6.3"
+}
+
+variable "smithdb_karpenter_ami_alias" {
+  type        = string
+  description = "EC2NodeClass AMI alias for SmithDB nodes. 'al2023@latest' resolves to the arch selected by the NodePool requirement."
+  default     = "al2023@latest"
+}
+
+variable "smithdb_node_arch" {
+  type        = string
+  description = "CPU architecture for SmithDB nodes: 'amd64' (default, matches core LangSmith) or 'arm64' (Graviton)."
+  default     = "amd64"
+
+  validation {
+    condition     = contains(["amd64", "arm64"], var.smithdb_node_arch)
+    error_message = "smithdb_node_arch must be 'amd64' or 'arm64'."
+  }
+}
+
+variable "smithdb_capacity_type" {
+  type        = list(string)
+  description = "Karpenter capacity types for SmithDB nodes: [\"on-demand\"], [\"spot\"], or both. SmithDB holds local caches, so on-demand is recommended."
+  default     = ["on-demand"]
+}
+
+variable "smithdb_instance_store_sizes" {
+  type        = list(string)
+  description = "Allowed instance sizes for the SmithDB instance-store pool (karpenter.k8s.aws/instance-size). Combined with the local-NVMe requirement, this selects families like m6id/m5d/r6id at these sizes."
+  default     = ["4xlarge", "8xlarge", "16xlarge"]
+}
+
+variable "smithdb_instance_store_min_local_nvme_gib" {
+  type        = number
+  description = "Minimum local NVMe per SmithDB instance-store node (GiB). Karpenter only selects instances with at least this much local NVMe."
+  default     = 800
+}
+
+variable "smithdb_instance_store_limits" {
+  type = object({
+    cpu    = number
+    memory = string
+  })
+  description = "Aggregate limits for the SmithDB instance-store NodePool (caps total provisioned capacity)."
+  default = {
+    cpu    = 512
+    memory = "4096Gi"
+  }
+}
+
+variable "smithdb_compute_sizes" {
+  type        = list(string)
+  description = "Allowed instance sizes for the SmithDB compute pool (compaction, cluster-manager, metastore-migration job)."
+  default     = ["2xlarge", "4xlarge", "8xlarge"]
+}
+
+variable "smithdb_compute_limits" {
+  type = object({
+    cpu    = number
+    memory = string
+  })
+  description = "Aggregate limits for the SmithDB compute NodePool."
+  default = {
+    cpu    = 256
+    memory = "1024Gi"
+  }
+}
+
+variable "smithdb_node_root_volume_size_gb" {
+  type        = number
+  description = "Root EBS volume size (GB) for SmithDB nodes. Ephemeral caches live on the RAID0 local NVMe, so this only needs headroom for the OS and images."
+  default     = 100
+}

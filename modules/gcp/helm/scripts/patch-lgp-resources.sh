@@ -6,7 +6,7 @@
 
 # patch-lgp-resources.sh — Right-size operator-managed LGP resources.
 #
-# The LangSmith operator deploys agent pods (agent-builder, clio, polly) with
+# The LangSmith operator deploys LangGraph Platform (lgp) pods with
 # hardcoded resource requests that assume production scale: 1 CPU / 2Gi for
 # each redis sidecar, 1 CPU / 3.8Gi for each database, and maxReplicas 5-10
 # for KEDA ScaledObjects. On a dev/test cluster this eats 12+ CPU and 24+ Gi
@@ -23,6 +23,16 @@
 #   ./patch-lgp-resources.sh [--profile minimum]
 #
 # Called automatically by deploy.sh when sizing_profile is minimum.
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,6 +1,23 @@
 # Local .terraform directories
 **/.terraform/*
 
+# Local environment and credential files
+.env
+.env.*
+*.pem
+*.key
+*.crt
+credentials.json
+token.json
+
+# Local development caches
+node_modules/
+__pycache__/
+.venv/
+
+# OS/editor transient files
+.DS_Store
+
 # .tfstate files
 *.tfstate
 *.tfstate.*
@@ -15,6 +32,7 @@ crash.*.log
 # to change depending on the environment.
 *.tfvars
 *.tfvars.json
+terraform.tfvars.*
 
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
@@ -29,9 +47,12 @@ override.tf.json
 # Include override files you do wish to add to version control using negated pattern
 # !example_override.tf
 
-# Include tfplan files to ignore the plan output of command: terraform plan -out=tfplan
-# example: *tfplan*
+# Terraform plan output
+*tfplan*
 
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
+
+# Ignore the quickstart wizard's resume checkpoint
+.quickstart-state

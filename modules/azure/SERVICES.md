@@ -9,7 +9,7 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### `langsmith-frontend`
 - **What**: React SPA — the LangSmith web UI
-- **Exposes**: Port 3000, served via NGINX ingress
+- **Exposes**: Port 3000, served via the ingress controller (Envoy Gateway by default)
 - **Depends on**: `backend`, `platform-backend`
 - **HPA**: 1–10 replicas (CPU ≥ 50%, Mem ≥ 80%)
 
@@ -35,13 +35,13 @@ All passes verified during production deploy (external Postgres + Redis).
 ### `langsmith-queue`
 - **What**: Trace ingestion worker — dequeues from Redis, writes to ClickHouse + Blob Storage
 - **Depends on**: Redis, ClickHouse, Blob Storage
-- **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **WI**
+- **HPA**: 3–10 replicas in the `production` profile, 6–24 in `production-large`; `dev` and `minimum` run one fixed replica · **WI**
 
 ### `langsmith-ingest-queue`
 - **What**: Dedicated high-throughput ingestion worker — parallel to `queue`, handles burst traffic
 - **Depends on**: Redis, Blob Storage
-- **HPA**: 3–10 replicas + KEDA (Redis queue depth) · **WI**
-- **Enabled**: Pass 2+ with external Redis. Disabled in demo/light mode.
+- **HPA**: 3–10 replicas in the `production` profile, 6–24 in `production-large`; `dev` and `minimum` run one fixed replica · **WI**
+- **Enabled**: always, from Pass 2, whether Redis is external or in-cluster. The `dev` and `minimum` sizing profiles run it as one replica rather than turning it off, so count it when sizing nodes.
 
 ### `langsmith-ace-backend`
 - **What**: Async compute engine — dataset runs, evaluations, background jobs
@@ -50,7 +50,7 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ### `langsmith-clickhouse`
 - **What**: Columnar database — trace spans, run metadata, eval results
-- **Type**: StatefulSet · 500Gi PVC · large node pool (requires 15Gi RAM)
+- **Type**: StatefulSet · large node pool · CPU/RAM scale by sizing profile (see [SIZING.md](helm/values/examples/SIZING.md))
 - **Notes**: In-cluster is for dev/POC only (single pod, no replication, no backups). For production, use [LangChain Managed ClickHouse](https://docs.langchain.com/langsmith/langsmith-managed-clickhouse).
 
 ### One-time Jobs (Pass 2)
@@ -67,16 +67,17 @@ All passes verified during production deploy (external Postgres + Redis).
 ### Azure DB for PostgreSQL Flexible Server
 - **What**: Relational DB — orgs, users, projects, API keys, settings
 - **Version**: PostgreSQL ≥ 14 required (Azure Flexible Server defaults to 16)
-- **Extensions**: `btree_gin`, `btree_gist`, `pgcrypto`, `citext`, `ltree`, `pg_trgm` — enabled automatically by the postgres module
+- **Extensions**: `pgcrypto`, `btree_gin`, `pg_trgm`, `btree_gist`, `citext`, `ltree` — enabled automatically by the postgres module
 - **Access**: Private VNet only (subnet-postgres) · SSL port 5432
 - **Secret**: `langsmith-postgres-secret` — created by Terraform k8s-bootstrap module
 
-### Azure Cache for Redis Premium
+### Azure Managed Redis (AMR)
 - **What**: Queue + cache — trace ingestion queue, pub/sub, short-lived cache
-- **Version**: Redis ≥ 5 required (Azure Cache for Redis Premium defaults to Redis 6)
+- **Version**: Redis ≥ 5 required (Azure Managed Redis runs the Redis Enterprise engine)
 - **Dedicated instance**: Each LangSmith installation must use its own dedicated Redis — shared instances cause deployment tasks to route incorrectly
-- **Access**: Private VNet only (subnet-redis) · TLS port 6380
-- **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module
+- **Access**: Private endpoint only (subnet-redis, private DNS zone) · TLS port 10000
+- **Client mode**: Follows `clustering_policy` — OSSCluster (default) uses the cluster client, EnterpriseCluster the standalone client with `clusterSafeMode`. `init-values.sh` renders the matching Helm block from the terraform outputs.
+- **Secret**: `langsmith-redis-secret` — created by Terraform k8s-bootstrap module. Keys `connection_url`, `redis_cluster_node_uris`, `redis_cluster_password`; all three always written, the chart reads the pair its mode needs.
 
 ### Azure Blob Storage
 - **What**: Object store for trace payloads — large inputs/outputs, attachments
@@ -115,11 +116,6 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ## Pass 4 — Agent Builder
 
-### `langsmith-agent-bootstrap` (Job)
-- **What**: One-time Job that registers the bundled Agent Builder agent via the operator on first enable
-- **Runs**: Once on `helm upgrade` when `backend.agentBootstrap.enabled: true` — then Completed
-- **Effect**: Triggers operator to create the `agent-builder-<hash>` dynamic deployment (4 pods)
-
 ### `langsmith-agent-builder-tool-server`
 - **What**: MCP (Model Context Protocol) tool server — executes tools called by the Agent Builder agent
 - **Depends on**: `backend`, Blob Storage
@@ -130,7 +126,7 @@ All passes verified during production deploy (external Postgres + Redis).
 - **Depends on**: `backend`, Redis
 - **WI**: Yes
 
-### Dynamic Agent Builder pods (operator-managed, created by `agentBootstrap` Job)
+### Dynamic Agent Builder pods (operator-managed)
 | Pod | What |
 |-----|------|
 | `agent-builder-<hash>` | Main Agent Builder agent — handles agent generation and assistants |
@@ -144,9 +140,9 @@ All passes verified during production deploy (external Postgres + Redis).
 
 ## Pass 5 — Insights
 
-### Insights / Clio (dynamic)
+### Insights
 - **What**: AI-powered analytics — auto-summarizes traces, detects patterns, surfaces anomalies
-- **Deployment**: No static pods — Clio deploys lazily as a dynamic LangGraph deployment via the operator on first UI invocation
+- **Deployment**: Static pods on chart 0.16 — `standalone-insights-api-server` and `standalone-insights-queue`, running the combined `langsmith-insights-engine` image. This replaces the Clio deployment the operator used to spawn lazily on first UI invocation; chart 0.16 rejects the `langsmith-clio` image outright.
 - **Depends on**: ClickHouse (read-heavy), `backend`, Postgres
 - **Encryption key**: Read from `langsmith-config-secret` (`insights_encryption_key`)
 - **Warning**: Never change `insights_encryption_key` after first enable — permanently breaks existing insights data
@@ -161,15 +157,20 @@ All passes verified during production deploy (external Postgres + Redis).
 - **ClusterIssuers**: `letsencrypt-staging`, `letsencrypt-prod`
 
 ### KEDA
-- **What**: Kubernetes Event-driven Autoscaling — scales `queue` and `ingest-queue` based on Redis queue depth
+- **What**: Kubernetes Event-driven Autoscaling. The chart can scale `queue` and `ingest-queue` on Redis queue depth through KEDA, but ships that off, and this module does not turn it on. Both scale on their HPA under the `production` sizing profiles, and run fixed replicas under `dev` and `minimum`
 - **Deployed by**: Terraform k8s-bootstrap module
 - **Required for**: Pass 3+ (LangGraph Platform prerequisite)
 
+### envoy-gateway (default)
+- **What**: Envoy Gateway v1.2.0 in `envoy-gateway-system`. It runs an Envoy proxy for the `langsmith-gateway` Gateway, and the chart's HTTPRoutes send external traffic to frontend and backend
+- **Type**: LoadBalancer (Azure Load Balancer assigned public IP), Service `envoy-<namespace>-langsmith-gateway-<hash>`
+- **Deployed by**: Terraform k8s-cluster module. `deploy.sh` creates the EnvoyProxy, GatewayClass, and Gateway
+
 ### ingress-nginx
-- **What**: NGINX Ingress Controller — routes external HTTPS traffic to frontend and backend
+- **What**: NGINX Ingress Controller, installed with `ingress_controller = "nginx"`. It routes external HTTPS traffic to frontend and backend
 - **Type**: LoadBalancer (Azure Load Balancer assigned public IP)
-- **Deployed by**: Terraform k8s-bootstrap module
+- **Deployed by**: Terraform k8s-cluster module
 
 ---
 
-*Updated after full production deploy: Passes 2–5 verified on chart v0.13.28 (appVersion 0.13.31).*
+*Passes 2–5 were verified on chart v0.13.28 (appVersion 0.13.31). deploy.sh now requires the chart 0.17 line (see [SMITHDB.md](SMITHDB.md#version-requirements)). Pass 2 has been re-verified on chart 0.16.3 (appVersion 0.16.36); Passes 3–5 have not.*

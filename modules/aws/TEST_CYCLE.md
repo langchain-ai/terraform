@@ -16,14 +16,7 @@ checklist below.
 - `kubectl`
 - `helm` v3+
 
-**IAM permissions required** (run preflight to verify):
-- EKS: create/describe/delete cluster, node groups, OIDC provider
-- EC2: VPC, subnets, security groups, NAT gateway, ELB
-- IAM: create/attach roles and policies
-- RDS: create/delete DB instance
-- ElastiCache: create/delete replication group
-- S3: create/delete bucket, bucket policies
-- SSM: GetParameter, PutParameter (for `source ./infra/scripts/setup-env.sh`)
+**IAM permissions required**: see [PERMISSIONS.md](PERMISSIONS.md). Verify with `make preflight`.
 
 ---
 
@@ -34,6 +27,11 @@ checklist below.
 ```hcl
 tls_certificate_source       = "none"   # HTTP:80 only — no ACM/cert-manager needed
 postgres_deletion_protection = false    # Required for clean terraform destroy after test
+postgres_skip_final_snapshot = true     # Avoid fixed-name snapshots between test cycles
+
+# Required when testing a Terraform-created SmithDB metastore
+smithdb_metastore_deletion_protection = false
+smithdb_metastore_skip_final_snapshot = true
 ```
 
 All other defaults are fine for testing. The current dev config uses:
@@ -287,8 +285,8 @@ Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tf
 | Issue | Symptom | Fix |
 |-------|---------|-----|
 | `langsmith-ksa` SA missing after reinstall | `agent-bootstrap` job hangs indefinitely; `helm --wait` times out after 20 min even though all other pods are Running. Root cause: `langsmith-ksa` is created by the operator on first agent deploy and is NOT part of the Helm release — it does not survive namespace teardown or fresh cluster rebuilds. New agent pod revisions reference the missing SA and cannot be scheduled. | **Fixed in `deploy.sh`** — idempotently creates and annotates `langsmith-ksa` after every deploy. Manual fix: `kubectl create serviceaccount langsmith-ksa -n langsmith && kubectl annotate serviceaccount langsmith-ksa -n langsmith eks.amazonaws.com/role-arn=<irsa_arn> --overwrite` |
-| Agent builder encryption key dropped on redeploy | Agent builder pods stay up but fail silently after an uninstall + reinstall cycle. Root cause: `deploy.sh` was gating the `agent_builder_encryption_key` ExternalSecret entry on the presence of `langsmith-values-agent-builder.yaml`. After reinstall the file is absent, the key is dropped, and pods can no longer decrypt. | **Fixed in `deploy.sh`** — both `agent_builder_encryption_key` and `insights_encryption_key` are now gated on SSM parameter existence rather than local file presence. |
-| Insights example file enables external ClickHouse | Following the example verbatim sets `clickhouse.external.enabled: true`, replacing the in-cluster ClickHouse — wrong for internal deployments. | For internal ClickHouse, only set `config.insights.enabled: true`. Do not copy the `clickhouse.external.*` block from the example. Insights uses the same ClickHouse as the rest of the app. |
+| Fleet encryption key dropped on redeploy | Fleet pods stay up but fail silently after an uninstall + reinstall cycle. Root cause: `deploy.sh` was gating the historical `agent_builder_encryption_key` ExternalSecret entry on the presence of `langsmith-values-agent-builder.yaml`. After reinstall the file is absent, the key is dropped, and pods can no longer decrypt. | **Fixed in `deploy.sh`** — both `agent_builder_encryption_key` and `insights_encryption_key` are now gated on SSM parameter existence rather than local file presence. |
+| Insights example file enables external ClickHouse | Following the example verbatim sets `clickhouse.external.enabled: true`, replacing the in-cluster ClickHouse — wrong for internal deployments. | For internal ClickHouse, only set `insights.enabled: true`. Do not copy the `clickhouse.external.*` block from the example. Insights uses the same ClickHouse as the rest of the app. |
 
 ---
 
@@ -311,6 +309,21 @@ Both targets gate on secrets being loaded (`TF_VAR_*` present) and `terraform.tf
 | Node group `minSize > desiredSize` | `InvalidParameterException: minSize can't be greater than desiredSize` | **Fixed**: `desired_size` now defaults to `min_size` when omitted from `eks_managed_node_groups`. If using an older version, add `desired_size` to your tfvars node group config. |
 | `setup-env.sh` hangs in non-interactive shell | Script blocks on `read` when stdin is not a terminal (CI, piped, redirected) | **Fixed**: script now detects non-interactive shell via `[[ -t 0 ]]` and fails fast with instructions to pre-export env vars or populate SSM directly |
 
+### SmithDB checks
+
+Test `enable_smithdb = false`, managed RDS/S3, and BYO PostgreSQL plans.
+For an applied environment, verify:
+
+```bash
+terraform -chdir=infra output smithdb_s3_vpc_endpoint_id
+kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
+kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+```
+
+Render the v16 chart with all integration gates disabled first. Confirm the
+metastore migration succeeds and SmithDB can write to S3 through the endpoint
+before testing ingestion, historical migration, or query cutover.
+
 ---
 
 ## Teardown
@@ -323,10 +336,15 @@ helm uninstall cert-manager -n cert-manager 2>/dev/null || true
 
 # 2. Destroy all infrastructure
 terraform -chdir=infra destroy
+
+# 3. After destroy succeeds, remove cloud secrets, then local files.
+make purge-secrets
+make clean
 ```
 
 **Before destroy, verify:**
-- `postgres_deletion_protection = false` is set in `terraform.tfvars`
+- `postgres_deletion_protection = false` and `postgres_skip_final_snapshot = true`
+- For a Terraform-created SmithDB metastore, protection is `false` and snapshot skipping is `true`
 - No custom DNS records pointing at the ALB (they will break permanently — a new hostname is
   issued on the next deploy)
 
@@ -342,7 +360,7 @@ Secrets stored at `/langsmith/myco-dev/`:
 
 | Parameter | Auto-generated | Rotatable |
 |-----------|---------------|-----------|
-| `postgres-password` | No (prompted) | Yes, with app restart |
+| `postgres-password` | Yes (hex-32) | Yes, with app restart |
 | `redis-auth-token` | Yes (hex-32) | Yes, with app restart |
 | `langsmith-api-key-salt` | Yes (base64-32) | **Never** — invalidates all API keys |
 | `langsmith-jwt-secret` | Yes (base64-32) | **Never** — invalidates all sessions |

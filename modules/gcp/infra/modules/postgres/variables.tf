@@ -101,7 +101,7 @@ variable "high_availability" {
 }
 
 variable "deletion_protection" {
-  description = "Enable deletion protection"
+  description = "Prevent deletion of the Cloud SQL instance, both from Terraform and from the Cloud SQL API. Set false for dev/test environments that are destroyed and rebuilt; a destroy fails while it is true."
   type        = bool
   default     = true
 }
@@ -131,6 +131,14 @@ variable "database_flags" {
     {
       name  = "log_disconnections"
       value = "on"
+    },
+    {
+      name  = "log_lock_waits"
+      value = "on"
+    },
+    {
+      name  = "log_temp_files"
+      value = "0"
     }
   ]
 }

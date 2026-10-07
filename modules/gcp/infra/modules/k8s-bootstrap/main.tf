@@ -1,5 +1,21 @@
 # K8s Bootstrap Module - Namespaces, Service Accounts, Secrets, and KEDA
 
+locals {
+  # The kubectl provisioners further down fetch their own cluster credentials
+  # instead of trusting the operator's current context, which may point at an
+  # unrelated cluster or be empty on a first run. The credentials land in a temp
+  # file that dies with the provisioner's shell, leaving ~/.kube/config alone.
+  # Deliberately no `set -e`: those scripts tolerate non-zero exits in their retry
+  # loops, so only the credential fetch is fail-fast.
+  kubectl_creds = <<-EOT
+    KUBECONFIG="$(mktemp -t ls-kubeconfig.XXXXXX)"
+    export KUBECONFIG
+    trap 'rm -f "$KUBECONFIG"' EXIT
+    gcloud container clusters get-credentials ${var.cluster_name} \
+      --region ${var.region} --project ${var.project_id} --quiet || exit 1
+  EOT
+}
+
 #------------------------------------------------------------------------------
 # LangSmith Namespace
 #------------------------------------------------------------------------------
@@ -176,6 +192,40 @@ resource "kubernetes_secret" "tls_certificate" {
 #------------------------------------------------------------------------------
 # Resource Quotas
 #------------------------------------------------------------------------------
+locals {
+  # Base figures sized for LangSmith itself. Optional features that add large
+  # pods contribute through the resource_quota_extra_* variables rather than by
+  # editing these, so a plain install keeps the exact same quota it always had.
+  langsmith_resource_quota_base_cpu       = 50
+  langsmith_resource_quota_base_memory_gi = 120
+  langsmith_resource_quota_base_pods      = 100
+
+  # The limits side is not simply twice the requests side, so carry it as its own
+  # pair of figures rather than deriving it.
+  langsmith_resource_quota_base_limit_cpu       = 100
+  langsmith_resource_quota_base_limit_memory_gi = 200
+
+  langsmith_resource_quota_requests = {
+    "requests.cpu"    = tostring(local.langsmith_resource_quota_base_cpu + var.resource_quota_extra_cpu)
+    "requests.memory" = "${local.langsmith_resource_quota_base_memory_gi + var.resource_quota_extra_memory_gi}Gi"
+    "pods"            = tostring(local.langsmith_resource_quota_base_pods + var.resource_quota_extra_pods)
+  }
+
+  # The headroom is doubled on the limits side, so a feature admitted on
+  # requests is not then rejected on limits. Doubling also keeps the same 2x
+  # requests-to-limits ratio the base figures use. The root sizes the SmithDB
+  # extra for both sides, because some SmithDB pods have limits above requests.
+  langsmith_resource_quota_limits = {
+    "limits.cpu"    = tostring(local.langsmith_resource_quota_base_limit_cpu + (var.resource_quota_extra_cpu * 2))
+    "limits.memory" = "${local.langsmith_resource_quota_base_limit_memory_gi + (var.resource_quota_extra_memory_gi * 2)}Gi"
+  }
+
+  langsmith_resource_quota_hard = merge(
+    local.langsmith_resource_quota_requests,
+    var.resource_quota_include_limits ? local.langsmith_resource_quota_limits : {},
+  )
+}
+
 resource "kubernetes_resource_quota" "langsmith" {
   metadata {
     name      = "langsmith-quota"
@@ -183,19 +233,109 @@ resource "kubernetes_resource_quota" "langsmith" {
   }
 
   spec {
+    hard = local.langsmith_resource_quota_hard
+  }
+}
+
+# GKE configures the apiserver's ResourceQuota admission plugin with
+# limitedResources over the PriorityClass scope, so a pod requesting
+# system-node-critical or system-cluster-critical is admitted only where a
+# quota with a matching scopeSelector already exists — which is how GKE keeps
+# those classes inside kube-system (see its own gcp-critical-pods quota).
+#
+# The chart 0.16 JuiceFS CSI driver for sandboxes uses both: the
+# juicefs-csi-node DaemonSet is system-node-critical and the
+# juicefs-csi-controller StatefulSet is system-cluster-critical. Without this
+# quota neither is ever created — the DaemonSet reports desired N, current 0
+# with the rejection recorded only on the controller object, csi.juicefs.com
+# never registers on any node, and sandbox-host sits in ContainerCreating on a
+# FailedMount that names a missing CSI driver rather than a quota. Chart 0.17
+# has no CSI driver; the quota stays for the upgrade from chart 0.16.
+#
+# The pod ceiling matches GKE's own quota for these classes: this object exists
+# to grant the capability, not to cap it. The unscoped langsmith-quota above
+# still counts these pods against the namespace CPU and memory budget.
+resource "kubernetes_resource_quota_v1" "langsmith_critical_pods" {
+  count = var.allow_critical_priority_pods ? 1 : 0
+
+  metadata {
+    name      = "langsmith-critical-pods"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
     hard = {
-      "requests.cpu"    = "50"
-      "requests.memory" = "120Gi"
-      "limits.cpu"      = "100"
-      "limits.memory"   = "200Gi"
-      "pods"            = "100"
+      pods = "1G"
     }
+
+    scope_selector {
+      match_expression {
+        scope_name = "PriorityClass"
+        operator   = "In"
+        values     = ["system-node-critical", "system-cluster-critical"]
+      }
+    }
+  }
+}
+
+# ResourceQuota request tracking requires every admitted container to declare
+# requests. Supply conservative defaults for third-party sandbox containers that
+# omit them, but deliberately do not inject limits: sandbox-host creates per-VM
+# child cgroups beneath its pod cgroup and needs access to dedicated node capacity.
+resource "kubernetes_limit_range_v1" "langsmith_default_requests" {
+  count = length(var.default_container_requests) > 0 ? 1 : 0
+
+  metadata {
+    name      = "langsmith-default-requests"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    limit {
+      type            = "Container"
+      default_request = var.default_container_requests
+    }
+  }
+}
+
+#------------------------------------------------------------------------------
+# SmithDB cache StorageClass (network-disk mode)
+# The chart gives each SmithDB cache pod a PVC from smithdb.cache.storageClassName.
+# Hyperdisk Balanced sets IOPS and throughput apart from capacity, so each volume
+# gets 7000 IOPS and 1000 MiB/s. WaitForFirstConsumer puts each disk in the zone
+# of its pod.
+#------------------------------------------------------------------------------
+resource "kubernetes_storage_class_v1" "smithdb_cache" {
+  count = var.create_smithdb_cache_storage_class ? 1 : 0
+
+  metadata {
+    name   = var.smithdb_cache_storage_class_name
+    labels = merge(var.labels, { "component" = "smithdb-cache" })
+  }
+
+  storage_provisioner    = "pd.csi.storage.gke.io"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    type                             = "hyperdisk-balanced"
+    provisioned-iops-on-create       = "7000"
+    provisioned-throughput-on-create = "1000Mi"
   }
 }
 
 #------------------------------------------------------------------------------
 # Network Policy (restrict traffic)
 #------------------------------------------------------------------------------
+# Default-deny-style ingress: only the langsmith and envoy-gateway namespaces may
+# reach LangSmith pods. Always created. When default_deny_excluded_component is set
+# (GKE Dataplane V2 + sandboxes), that one component (platform-backend) is excluded
+# from the selector so the host-networked, node-sourced sandbox-host can reach it —
+# a standard NetworkPolicy can't authorize node traffic on Cilium (an ipBlock does
+# not match it and the CiliumNetworkPolicy CRD is not exposed). Every other pod
+# keeps the default-deny. CALICO instead keeps the full default-deny and admits the
+# node subnet via kubernetes_network_policy.sandbox_host_ingress.
 resource "kubernetes_network_policy" "langsmith_default" {
   metadata {
     name      = "langsmith-default"
@@ -203,7 +343,16 @@ resource "kubernetes_network_policy" "langsmith_default" {
   }
 
   spec {
-    pod_selector {}
+    pod_selector {
+      dynamic "match_expressions" {
+        for_each = var.default_deny_excluded_component != "" ? [1] : []
+        content {
+          key      = "app.kubernetes.io/component"
+          operator = "NotIn"
+          values   = [var.default_deny_excluded_component]
+        }
+      }
+    }
 
     ingress {
       from {
@@ -223,6 +372,38 @@ resource "kubernetes_network_policy" "langsmith_default" {
     }
 
     egress {}
+
+    policy_types = ["Ingress"]
+  }
+}
+
+# CALICO only: admit the node subnet so the host-networked sandbox-host (source =
+# node IP) can reach platform-backend (default-blueprint-ensure,
+# host-observations/report). Calico's ipBlock matches node IPs. On Dataplane V2 an
+# ipBlock does NOT match node-sourced traffic, so there the root leaves
+# sandbox_host_ingress_cidrs empty and scopes langsmith-default to exclude
+# platform-backend instead. Created only when the list is non-empty (CALICO + sandboxes).
+resource "kubernetes_network_policy" "sandbox_host_ingress" {
+  count = length(var.sandbox_host_ingress_cidrs) > 0 ? 1 : 0
+
+  metadata {
+    name      = "langsmith-allow-sandbox-host"
+    namespace = kubernetes_namespace.langsmith.metadata[0].name
+  }
+
+  spec {
+    pod_selector {}
+
+    ingress {
+      dynamic "from" {
+        for_each = var.sandbox_host_ingress_cidrs
+        content {
+          ip_block {
+            cidr = from.value
+          }
+        }
+      }
+    }
 
     policy_types = ["Ingress"]
   }
@@ -403,6 +584,7 @@ resource "null_resource" "apply_letsencrypt_issuer" {
 
   provisioner "local-exec" {
     command    = <<-EOT
+      ${local.kubectl_creds}
       # Wait for cert-manager CRDs to be available
       for i in {1..30}; do
         if kubectl get crd clusterissuers.cert-manager.io >/dev/null 2>&1; then
@@ -479,6 +661,7 @@ resource "null_resource" "apply_certificate" {
 
   provisioner "local-exec" {
     command    = <<-EOT
+      ${local.kubectl_creds}
       # Wait for Certificate CRD to be available
       for i in {1..30}; do
         if kubectl get crd certificates.cert-manager.io >/dev/null 2>&1; then

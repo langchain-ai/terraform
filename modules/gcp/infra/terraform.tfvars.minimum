@@ -45,6 +45,12 @@ postgres_tier                = "db-custom-1-3840"   # 1 vCPU, 3.75 GB — bare m
 postgres_disk_size           = 20
 postgres_deletion_protection = false                 # required for clean terraform destroy
 
+# Same for the SmithDB metastore and its bucket, so a test stack can be torn
+# down and rebuilt without manual gcloud steps. Only applies when
+# enable_smithdb = true and smithdb_metastore_source = "create".
+smithdb_metastore_deletion_protection = false
+smithdb_bucket_force_destroy          = true
+
 redis_source        = "external"
 redis_memory_size   = 1
 

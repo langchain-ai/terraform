@@ -18,8 +18,8 @@ LangSmith is deployed in three passes. Each pass adds a capability layer on top 
 | 1 | GCP Infrastructure | VPC, GKE, Cloud SQL, Memorystore, GCS, K8s bootstrap, cert-manager, KEDA, Envoy Gateway |
 | 2 | LangSmith Base | frontend, backend, platform-backend, queue, ace-backend, clickhouse, playground |
 | 3 | LangSmith Deployments | host-backend, listener, operator + per-deployment pods |
-| 4 | Agent Builder | agent-builder-tool-server, agent-builder-trigger-server + deep-agent LGP |
-| 5 | Insights + Polly | Clio analytics (ClickHouse-backed), Polly eval agent |
+| 4 | Agent Builder | fleet-tool-server, fleet-trigger-server (agent-builder-tool-server/trigger-server on chart < 0.15) + deep-agent LGP |
+| 5 | Insights + Polly | standalone-insights (ClickHouse-backed analytics), standalone-polly eval agent |
 
 ---
 
@@ -101,7 +101,7 @@ GCS Bucket  (Workload Identity — no static HMAC keys for GCS SA auth)
 | Services | `10.8.0.0/20` | GKE ClusterIP services (secondary range) |
 | Private service connection | `/16` allocated by Google | Cloud SQL, Memorystore private IPs |
 
-Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"` or `redis_source = "external"`.
+Cloud SQL and Memorystore are accessed exclusively via private IP. No public endpoints are created for database or cache resources. A **private service connection** (VPC peering to Google's managed network) is established by the networking module whenever `postgres_source = "external"`, `redis_source = "external"`, or `enable_sandboxes = true` for the dedicated JuiceFS metadata Redis.
 
 ---
 
@@ -118,6 +118,21 @@ GKE pod
 ```
 
 For GCS access using HMAC keys (S3-compatible API), create a service account key in GCP Console under Storage > Settings > Interoperability and pass the access key and secret to the Helm command via `config.blobStorage.accessKey` and `config.blobStorage.accessKeySecret`.
+
+---
+
+## Optional SmithDB path
+
+SmithDB stays disabled by default. When enabled, Pass 1 adds:
+
+- a dedicated PostgreSQL 18 Cloud SQL metastore on a private IP;
+- a dedicated GCS object store;
+- a SmithDB service account with its own Workload Identity binding, scoped to that one bucket;
+- two GKE Standard node pools: a cache pool (node Local SSD, or Hyperdisk volumes in `network-disk` mode) and a compute pool. `smithdb_sizing = "minimal"` creates no pools.
+
+Object-store traffic uses the subnet's Private Google Access rather than Cloud NAT.
+
+Pass 2 deploys the services on the pinned 0.17 chart line. The Terraform gates for ingestion, migration, and query default to disabled; `make quickstart` starts a new install with ingestion. See [SMITHDB.md](SMITHDB.md).
 
 ---
 

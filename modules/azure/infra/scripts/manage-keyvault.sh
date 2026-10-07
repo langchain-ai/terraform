@@ -14,19 +14,18 @@
 #   ./infra/scripts/manage-keyvault.sh diff
 #   ./infra/scripts/manage-keyvault.sh delete <key>
 #
-# Reads identifier and location from terraform.tfvars to derive the Key Vault name.
+# Reads name_prefix and location from terraform.tfvars to derive the Key Vault name.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name ───────────────────────────────────────────────────
-# Priority: terraform output → derived from identifier in terraform.tfvars
-if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
+# Priority: terraform output → derived from terraform.tfvars
+if KV_NAME=$(_tf_out keyvault_name); then
   : # got it from terraform output
 else
-  _identifier=$(_parse_tfvar "identifier") || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+  KV_NAME=$(_require_kv_name) || exit 1
 fi
 
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -44,6 +43,9 @@ OPTIONAL_SECRETS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-oauth-client-id"
+  "langsmith-oauth-client-secret"
+  "langsmith-oauth-issuer-url"
 )
 
 # Stable secrets — changing them breaks active sessions/API keys
@@ -62,6 +64,9 @@ DIFF_KV_KEYS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-oauth-client-id"
+  "langsmith-oauth-client-secret"
+  "langsmith-oauth-issuer-url"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -72,6 +77,9 @@ DIFF_K8S_KEYS=(
   "agent_builder_encryption_key"
   "insights_encryption_key"
   "polly_encryption_key"
+  "oauth_client_id"
+  "oauth_client_secret"
+  "oauth_issuer_url"
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -180,11 +188,22 @@ cmd_set() {
     [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
   fi
 
-  # Validate admin password format
+  # Validate admin password format (shared rules — see _common.sh)
   if [[ "$key" == "langsmith-admin-password" ]]; then
-    if ! printf '%s' "$val" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-      _red "ERROR"; echo ": Admin password must contain a symbol: !#\$%()+,-./:?@[\\]^_{~}"
-      echo "  The Helm chart will reject a password without one."
+    if ! _pw_err=$(_validate_admin_password "$val"); then
+      _red "ERROR"; echo ": $_pw_err"
+      echo "  The Helm chart will reject it."
+      exit 1
+    fi
+  fi
+
+  # Validate license key shape (shared rules — see _common.sh). This is the
+  # documented way to correct a bad key (#250, #251), so it must not accept the
+  # same paste the prompt now refuses.
+  if [[ "$key" == "langsmith-license-key" ]]; then
+    if ! _lk_err=$(_validate_license_key "$val"); then
+      _red "ERROR"; echo ": $_lk_err"
+      echo "  platform-backend would fail at startup with a base64 error."
       exit 1
     fi
   fi
@@ -260,8 +279,8 @@ cmd_validate() {
         warnings=$((warnings + 1))
       else
         if [[ "$key" == "langsmith-admin-password" ]]; then
-          if ! printf '%s' "$val" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
-            printf "  %-48s  %s\n" "$key" "$(_red "INVALID — missing required symbol")"
+          if ! _pw_err=$(_validate_admin_password "$val"); then
+            printf "  %-48s  %s\n" "$key" "$(_red "INVALID — ${_pw_err#Admin password is invalid — }")"
             warnings=$((warnings + 1))
             continue
           fi
@@ -405,7 +424,8 @@ _interactive_set() {
   if _secret_exists "$PICKED_KEY"; then
     local current
     current=$(_get_secret "$PICKED_KEY")
-    local masked="${current:0:4}$(printf '%*s' $(( ${#current} - 4 )) '' | tr ' ' '*')"
+    local masked
+    masked="${current:0:4}$(printf '%*s' $(( ${#current} - 4 )) '' | tr ' ' '*')"
     [[ ${#current} -le 4 ]] && masked="****"
     echo "  Current value: $masked"
   else

@@ -19,13 +19,15 @@ For LangSmith fundamentals and architecture, see the [Self-Hosted documentation]
 | GCP | [`modules/gcp/`](modules/gcp/README.md) | GKE | GA |
 | OpenShift | [`modules/ocp/`](modules/ocp/README.md) | OCP / ROSA | Preview |
 
-Each provider directory is a self-contained deployment with a `Makefile`, a two-pass Terraform layout (`infra/` + `app/`), Helm values, and operator scripts. The shared module structure is described in [`modules/README.md`](modules/README.md).
+The AWS, Azure, and GCP directories are self-contained deployments with a `Makefile`, an `infra/` Terraform layout, Helm values, and provider-specific operator scripts. The OpenShift preview follows its own layout. See [`modules/README.md`](modules/README.md) for the differences between providers.
+
+For LangSmith **Bring Your Own Cloud (BYOC)**, see [`modules/byoc/`](modules/byoc/README.md) for the customer-side IAM role and AWS VPC reference modules.
 
 ## What you get
 
-- **Two-pass deploy.** `infra/` provisions the cloud foundation; `app/` (or the Helm scripts) installs the LangSmith chart.
-- **Secrets via your cloud's native store** (AWS SSM, Azure Key Vault, GCP Secret Manager), synced into Kubernetes by [External Secrets Operator](https://external-secrets.io/) — no secrets in git, no secrets in `tfvars`.
-- **Sizing profiles:** `dev`, `production`, `production-large` — selected with a single variable.
+- **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.
+- **Provider-specific secret handling.** AWS application secrets flow from SSM Parameter Store through [External Secrets Operator](https://external-secrets.io/); Azure application secrets flow from Key Vault through `infra/scripts/create-k8s-secrets.sh`; GCP application secrets flow from Secret Manager into generated Helm values. Terraform also creates Kubernetes Secrets containing infrastructure credentials on all three clouds, so those values remain in Terraform state — protect the state backend. See the [secret flow and state table](modules/README.md#secret-flow-and-state).
+- **Sizing profiles:** `minimum`, `dev`, `production`, and `production-large` — selected with a single variable. Setting `sizing_profile = "default"` skips the sizing overlay; the provider's base values and other overrides still apply.
 - **Enterprise feature toggles:**
   - LangGraph Platform / Deployments
   - Agent Builder
@@ -49,32 +51,92 @@ Each provider directory is a self-contained deployment with a `Makefile`, a two-
 
 1. **Check out the latest release tag, not `main`** — see [Versioning and releases](#versioning-and-releases) for the one-line command. `main` is the development branch and may move under you.
 2. Pick the provider folder above and read its `README.md`.
-3. Install the prerequisites it lists (Terraform ≥ 1.5, `kubectl`, `helm`, and your cloud CLI).
-4. Run the interactive wizard (`make quickstart` on AWS; equivalent setup on Azure / GCP).
+3. Install the prerequisites it lists (Terraform ≥ 1.11.0, `kubectl`, `helm`, and your cloud CLI).
+4. Run the interactive wizard (`make quickstart` on AWS, Azure, or GCP).
 5. `make apply` → `make deploy`.
 
 A typical first deployment takes 20–30 minutes end-to-end.
 
 ## Versioning and releases
 
-This repository is released as **global tags** `vMAJOR.MINOR.PATCH`. Always deploy from a tag — never from `main`.
+This repository is released as **global tags** `vMAJOR.MINOR.PATCH`. Always deploy from a tag — never from a branch.
 
-- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.15.1`, meaning the latest `0.15.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.16`). You always get the newest patch within the line.
-- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.15.4` does not mean chart `0.15.4`.
+- **`MAJOR.MINOR` is the supported LangSmith Helm chart line.** The deploy scripts pin the chart to that line (for example `~0.17.0`, meaning the latest `0.17.x`), so a deployment never silently jumps across a breaking minor (e.g. to `0.18`). You always get the newest patch within the line.
+- **`PATCH` is the module revision.** It increments on any change to this repository, regardless of provider, and is **not** the chart version — `v0.17.4` does not mean chart `0.17.4`.
 
-Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.15.x` are not valid):
+Check out the latest tag on the line (don't hardcode a patch — `git checkout` needs a real tag, and ranges like `v0.17.x` are not valid):
 
 ```bash
 git fetch --tags
-git checkout "$(git tag -l 'v0.15.*' --sort=-v:refname | head -1)"
+git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"
 ```
+
+If you would rather download than clone, every release has a source archive — one URL per release, covering all providers:
+
+```bash
+TAG=v0.17.0     # latest v0.17.* — see GitHub Releases below
+curl -sL "https://github.com/langchain-ai/terraform/archive/refs/tags/${TAG}.zip" -o "${TAG}.zip"
+unzip "${TAG}.zip"     # extracts terraform-0.17.0/
+```
+
+GitHub generates these archives on request, so don't pin a checksum of one; clone and check out the tag if you need bit-for-bit reproducibility.
 
 What this means for you:
 
 - Pin to a tag for reproducible infrastructure; re-run the command above to move to a newer patch within the line as fixes land.
-- Moving to a new chart line (e.g. `0.16` / SmithDB) is an explicit switch to a `v0.16.*` tag (`git tag -l 'v0.16.*'`).
+- Moving to a new chart line is an explicit switch to the matching tag series (`git tag -l 'v0.18.*'`).
+- **Staying on the previous line is supported.** `0.16` is maintained on the `release/0.16` branch and still receives `v0.16.*` tags, so you can take fixes without moving to `0.17`. See [Maintenance branches](#maintenance-branches).
 - Browse all releases in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 - Advanced override: set the `CHART_VERSION` environment variable to pin an exact chart patch.
+
+### The 0.17 chart line
+
+These modules carry the chart 0.17 values schema. It keeps the 0.16 layout
+(`engineInsightsAgent`, the top-level `insights` / `polly` blocks, and no
+`backend.agentBootstrap`) and moves sandboxes off the removed JuiceFS CSI driver onto
+JuiceFS mounts owned by `sandbox-host`. Chart 0.16 has no keys for those mounts, and
+chart 0.18 has not been validated against these values. Each `deploy.sh` therefore
+refuses anything outside the 0.17 line rather than deploying a half-configured release,
+and `CHART_VERSION` can only narrow the pin to a 0.17 patch:
+
+```bash
+cd modules/aws && make apply && make init-values && CHART_VERSION="0.17.0" make deploy
+```
+
+Read [MIGRATION-0.16-to-0.17.md](MIGRATION-0.16-to-0.17.md) before upgrading an existing
+install. An install still on chart 0.15 also needs
+[MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md), because those schema changes
+carry over to 0.17.
+
+### Maintenance branches
+
+The current chart line is developed on `main`. When the pinned line moves, the outgoing
+line moves to a `release/<line>` branch and keeps releasing from there — the release
+workflow scopes its patch lookup to the line it finds pinned, so both branches cut tags on
+their own series without colliding.
+
+| Chart line | Releases from | Tag series | Status |
+| --- | --- | --- | --- |
+| 0.17 | `main` | `v0.17.*` | current |
+| 0.16 | `release/0.16` | `v0.16.*` | maintenance |
+| 0.15 | `release/0.15` | `v0.15.*` | maintenance |
+
+Deploying or upgrading within a maintenance line works exactly as before — check out its
+latest tag, not the branch:
+
+```bash
+git fetch --tags
+git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"
+```
+
+Report an issue against the line you are running. Fixes land on `main` first and are
+backported to a maintenance branch where they apply cleanly; values-schema changes tied to
+the newer chart are not backported, because the older chart ignores the affected keys rather
+than rejecting them and would deploy a half-configured release.
+
+Only `release/<line>` releases. The next line is staged on a `cutover/<line>` branch, which
+releases nothing until it merges to `main` — keeping the two prefixes distinct is what stops
+a line still under test from cutting tags.
 
 The per-release history is published in [GitHub Releases](https://github.com/langchain-ai/terraform/releases).
 

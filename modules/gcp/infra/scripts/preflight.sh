@@ -9,11 +9,21 @@
 # Run this BEFORE 'terraform apply' to verify that your GCP credentials
 # have the permissions needed to provision all LangSmith infrastructure.
 #
-# Usage (from terraform/gcp/):
-#   make preflight                              # read-only checks
-#   make preflight -- --domain langsmith.example.com  # + Cloud DNS zone check
-#   make preflight -- --create-test-resources  # + create/destroy a real GCS bucket
-#   make preflight -- -y                       # non-interactive
+# Usage (from modules/gcp/):
+#   make preflight                                        # read-only checks
+#   make preflight ARGS="--domain langsmith.example.com"  # + Cloud DNS zone check
+#   make preflight ARGS="--create-test-resources"         # + create/destroy a real GCS bucket
+#   make preflight ARGS="-y"                              # non-interactive
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -100,8 +110,21 @@ fi
 success "terraform.tfvars found"
 
 # ── Parse key values from tfvars ──────────────────────────────────────────────
+# Inline comments are legal in tfvars and the examples use them heavily, so the
+# value has to be cut at the closing quote (quoted values, which may contain a
+# literal #) or at the # (bare booleans and numbers). Splitting on = and keeping
+# the rest of the line would silently yield "external#CloudSQL,privateIP" and
+# every comparison against it would fail. Keep this function identical to the
+# copies in infra/scripts/_common.sh and helm/scripts/*.sh.
 _tfvar() {
-  awk -F= "/^[[:space:]]*${1}[[:space:]]*=/{gsub(/[ \"']/, \"\", \$2); print \$2; exit}" "$TFVARS" 2>/dev/null || true
+  awk -v key="$1" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub(/^[^=]*=[[:space:]]*/, "")
+      if (substr($0, 1, 1) == "\"") { sub(/^"/, ""); sub(/".*$/, "") }
+      else { sub(/#.*$/, ""); gsub(/[[:space:]]+$/, "") }
+      print; exit
+    }
+  ' "$TFVARS" 2>/dev/null || true
 }
 
 PROJECT_ID=$(_tfvar "project_id")
@@ -111,7 +134,11 @@ POSTGRES_SOURCE=$(_tfvar "postgres_source")
 REDIS_SOURCE=$(_tfvar "redis_source")
 ENABLE_SECRET_MANAGER=$(_tfvar "enable_secret_manager_module")
 ENABLE_DNS=$(_tfvar "enable_dns_module")
-TLS_SOURCE=$(_tfvar "tls_certificate_source")
+DNS_CREATE_CERT=$(_tfvar "dns_create_certificate")
+ENABLE_SANDBOXES=$(_tfvar "enable_sandboxes")
+ENABLE_SMITHDB=$(_tfvar "enable_smithdb")
+SMITHDB_METASTORE_SOURCE=$(_tfvar "smithdb_metastore_source")
+SMITHDB_METASTORE_SOURCE="${SMITHDB_METASTORE_SOURCE:-create}"
 
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "your-gcp-project-id" ]]; then
   error "project_id not set in terraform.tfvars — edit it before running preflight."
@@ -196,19 +223,24 @@ fi
 # ── IAM permission checks ─────────────────────────────────────────────────────
 printf "\n"
 info "Checking IAM permissions..."
-info "(Uses gcloud projects test-iam-permissions — may not reflect organization policy constraints)"
+info "(Uses Cloud Resource Manager testIamPermissions REST API — may not reflect org policy constraints)"
 
-# Core permissions always required
+# Core permissions always required.
+# Note: bucket-level permissions (e.g. storage.buckets.setIamPolicy) are
+# intentionally omitted — testIamPermissions applies to the project resource,
+# not to individual buckets, so those permissions always appear absent here
+# even when the caller holds roles/storage.admin. storage.buckets.create is
+# testable at the project level and is sufficient as a proxy for storage access.
 CORE_PERMISSIONS=(
   "container.clusters.create"
   "container.clusters.delete"
   "compute.networks.create"
   "compute.subnetworks.create"
   "compute.routers.create"
+  "compute.firewalls.create"
   "iam.serviceAccounts.create"
   "iam.serviceAccounts.setIamPolicy"
   "storage.buckets.create"
-  "storage.buckets.setIamPolicy"
   "resourcemanager.projects.getIamPolicy"
   "resourcemanager.projects.setIamPolicy"
   "serviceusage.services.enable"
@@ -217,12 +249,7 @@ CORE_PERMISSIONS=(
 # Conditional permissions based on tfvars
 CONDITIONAL_PERMISSIONS=()
 if [[ "$POSTGRES_SOURCE" == "external" ]]; then
-  CONDITIONAL_PERMISSIONS+=(
-    "cloudsql.instances.create"
-    "cloudsql.databases.create"
-    "servicenetworking.services.addPeering"
-    "compute.globalAddresses.create"
-  )
+  CONDITIONAL_PERMISSIONS+=("cloudsql.instances.create" "cloudsql.databases.create")
 fi
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   CONDITIONAL_PERMISSIONS+=("redis.instances.create")
@@ -233,69 +260,251 @@ fi
 if [[ "$ENABLE_DNS" == "true" ]]; then
   CONDITIONAL_PERMISSIONS+=("dns.managedZones.create" "dns.resourceRecordSets.create")
 fi
-if [[ "$TLS_SOURCE" == "letsencrypt" ]]; then
-  CONDITIONAL_PERMISSIONS+=("certificatemanager.certs.create")
+# The DNS module creates a Google-managed SSL certificate unless
+# dns_create_certificate is set to false.
+if [[ "$ENABLE_DNS" == "true" && "$DNS_CREATE_CERT" != "false" ]]; then
+  CONDITIONAL_PERMISSIONS+=("compute.sslCertificates.create")
+fi
+# The SmithDB metastore is its own Cloud SQL instance, so these are needed even
+# when postgres_source is not "external" and the block above did not add them.
+if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ]]; then
+  for _p in "cloudsql.instances.create" "cloudsql.databases.create"; do
+    case " ${CONDITIONAL_PERMISSIONS[*]-} " in *" $_p "*) ;; *) CONDITIONAL_PERMISSIONS+=("$_p") ;; esac
+  done
+fi
+# The private service connection (VPC peering). Same condition as
+# enable_private_service_connection in main.tf.
+if [[ "$POSTGRES_SOURCE" == "external" || "$REDIS_SOURCE" == "external" || "$ENABLE_SANDBOXES" == "true" ||
+  ( "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" ) ]]; then
+  CONDITIONAL_PERMISSIONS+=("servicenetworking.services.addPeering" "compute.globalAddresses.create")
+fi
+# Granting roles/cloudsql.client to the SmithDB service account is a
+# project-level IAM policy write, which setIamPolicy covers. The apply fails at
+# that binding, well after the instance exists, without it. The proxy is the
+# default for a created metastore, and Terraform rejects it for an external one.
+if [[ "$ENABLE_SMITHDB" == "true" && "$SMITHDB_METASTORE_SOURCE" == "create" \
+  && "$(_tfvar "smithdb_metastore_use_auth_proxy")" != "false" ]]; then
+  case " ${CONDITIONAL_PERMISSIONS[*]-} " in
+    *" resourcemanager.projects.setIamPolicy "*) ;;
+    *) CONDITIONAL_PERMISSIONS+=("resourcemanager.projects.setIamPolicy") ;;
+  esac
 fi
 
-ALL_PERMISSIONS=("${CORE_PERMISSIONS[@]}" "${CONDITIONAL_PERMISSIONS[@]}")
-
-# Test permissions in batches of 20 (API limit)
+# The ${arr[@]+...} guard is required: bash 3.2, which is what macOS ships as
+# /bin/bash, treats expansion of an empty array as an unbound variable under
+# `set -u` and aborts. CONDITIONAL_PERMISSIONS is empty whenever every optional
+# module is off.
 DENIED=()
-i=0
-while [[ $i -lt ${#ALL_PERMISSIONS[@]} ]]; do
-  batch=("${ALL_PERMISSIONS[@]:$i:20}")
-  batch_args=$(printf '"%s" ' "${batch[@]}")
+ALL_PERMISSIONS=("${CORE_PERMISSIONS[@]}" ${CONDITIONAL_PERMISSIONS[@]+"${CONDITIONAL_PERMISSIONS[@]}"})
 
-  result=$(gcloud projects test-iam-permissions "$PROJECT_ID" \
-    --permissions="${batch_args// /,}" \
-    --format="value(permissions)" 2>/dev/null || true)
+# Obtain a bearer token — requires active gcloud auth (already verified above).
+_ACCESS_TOKEN=$(gcloud auth print-access-token 2>/dev/null || true)
 
-  for perm in "${batch[@]}"; do
-    if ! echo "$result" | grep -qF "$perm"; then
-      DENIED+=("$perm")
-    fi
-  done
-
-  i=$((i + 20))
-done
-
-if [[ ${#DENIED[@]} -eq 0 ]]; then
-  success "IAM permissions: all required permissions granted"
+if [[ -z "$_ACCESS_TOKEN" ]]; then
+  warning "Could not obtain an access token — skipping IAM permission check."
+  warning "Run: gcloud auth application-default login"
 else
-  error "Missing IAM permissions (${#DENIED[@]} total):"
-  for perm in "${DENIED[@]}"; do
-    error "  ✗ $perm"
+  # Test permissions in batches of 20 (API limit).
+  # Uses the Cloud Resource Manager v1 testIamPermissions REST endpoint directly
+  # rather than 'gcloud projects test-iam-permissions', which has a quoting bug
+  # when permissions are passed via shell variable expansion and requires the
+  # caller to already hold resourcemanager.projects.testIamPermissions.
+  i=0
+  while [[ $i -lt ${#ALL_PERMISSIONS[@]} ]]; do
+    batch=("${ALL_PERMISSIONS[@]:$i:20}")
+
+    # Build a JSON array of permission strings: ["perm1","perm2",...]
+    json_perms=$(printf '"%s",' "${batch[@]}")
+    json_perms="[${json_perms%,}]"
+
+    result=$(curl -s -X POST \
+      "https://cloudresourcemanager.googleapis.com/v1/projects/${PROJECT_ID}:testIamPermissions" \
+      -H "Authorization: Bearer $_ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"permissions\": ${json_perms}}" 2>/dev/null \
+      | python3 -c "
+import sys, json
+try:
+    granted = set(json.load(sys.stdin).get('permissions', []))
+    print('\n'.join(granted))
+except Exception:
+    pass
+" 2>/dev/null || true)
+
+    for perm in "${batch[@]}"; do
+      if ! echo "$result" | grep -qF "$perm"; then
+        DENIED+=("$perm")
+      fi
+    done
+
+    i=$((i + 20))
   done
-  info ""
-  info "Your account needs these permissions added via IAM before running terraform apply."
-  info "Common roles that grant them:"
-  info "  roles/owner                  — full access (not recommended for production)"
-  info "  roles/editor + roles/iam.serviceAccountAdmin + roles/iam.securityAdmin"
-  info "  Custom role with the specific permissions above"
+
+  if [[ ${#DENIED[@]} -eq 0 ]]; then
+    success "IAM permissions: all required permissions granted"
+  else
+    error "Missing IAM permissions (${#DENIED[@]} total):"
+    for perm in "${DENIED[@]}"; do
+      error "  ✗ $perm"
+    done
+    info ""
+    info "Your account needs these permissions added via IAM before running terraform apply."
+    info "Common roles that grant them:"
+    info "  roles/owner                  — full access (not recommended for production)"
+    info "  roles/editor + roles/iam.serviceAccountAdmin + roles/iam.securityAdmin"
+    info "  Custom role with the specific permissions above"
+  fi
 fi
 
-warning "test-iam-permissions does not check Organization Policy constraints (deny policies)."
+warning "testIamPermissions does not check Organization Policy constraints (deny policies)."
 warning "If terraform apply fails with 'constraint violated', check your org policies."
 
 # ── Quota check ───────────────────────────────────────────────────────────────
 printf "\n"
 info "Checking key service quotas in region '$REGION'..."
 
-# CPUs in region (need at least 4 per e2-standard-4 node)
-CPU_QUOTA=$(gcloud compute regions describe "$REGION" --project "$PROJECT_ID" \
-  --format="value(quotas[name=CPUS].limit)" 2>/dev/null | head -1 || echo "")
-CPU_USED=$(gcloud compute regions describe "$REGION" --project "$PROJECT_ID" \
-  --format="value(quotas[name=CPUS].usage)" 2>/dev/null | head -1 || echo "")
+# A projection like --format="value(quotas[name=CPUS].limit)" does not filter:
+# gcloud returns the entire quotas array, the value never parses as a number, and
+# this check used to warn unconditionally. `describe` also rejects --filter, being
+# a single-resource command, so flatten the list and select the row here. One
+# describe call is cached and reused because every metric comes from it.
+_QUOTAS_RAW=""
+_quota_avail() {
+  if [[ -z "$_QUOTAS_RAW" ]]; then
+    _QUOTAS_RAW=$(gcloud compute regions describe "$REGION" --project "$PROJECT_ID" \
+      --flatten="quotas[]" --format="value(quotas.metric,quotas.limit,quotas.usage)" \
+      2>/dev/null || true)
+  fi
+  awk -v m="$1" '$1 == m { print $2, $3; exit }' <<< "$_QUOTAS_RAW"
+}
 
-if [[ -n "$CPU_QUOTA" && -n "$CPU_USED" ]]; then
-  CPU_AVAILABLE=$(echo "$CPU_QUOTA - $CPU_USED" | bc 2>/dev/null || echo "?")
-  if [[ "$CPU_AVAILABLE" =~ ^[0-9]+$ && "$CPU_AVAILABLE" -lt 8 ]]; then
-    warning "Low CPU quota in $REGION: ${CPU_AVAILABLE} available (need at least 8 for a 2-node e2-standard-4 cluster)"
+# Compares in awk rather than bash: limits arrive as floats ("3000.0") and the
+# unmetered ones as ~9.2e18, which overflows bash integer arithmetic.
+_check_quota() {
+  local metric="$1" needed="$2" label="$3" line limit usage avail
+  line="$(_quota_avail "$metric")"
+  if [[ -z "$line" ]]; then
+    warning "Could not read $metric quota — verify manually in: Console → IAM → Quotas"
+    return 0
+  fi
+  limit="$(awk '{print $1}' <<< "$line")"
+  usage="$(awk '{print $2}' <<< "$line")"
+  if awk -v l="$limit" 'BEGIN{exit !(l > 1e12)}'; then
+    success "$metric: unmetered in $REGION (need ~${needed} for ${label})"
+    return 0
+  fi
+  avail="$(awk -v l="$limit" -v u="$usage" 'BEGIN{printf "%d", l - u}')"
+  if awk -v a="$avail" -v n="$needed" 'BEGIN{exit !(a < n)}'; then
+    warning "Low $metric in $REGION: ${avail} available, need ~${needed} for ${label}"
   else
-    success "CPU quota: ${CPU_AVAILABLE:-?} available in $REGION"
+    success "$metric: ${avail} available in $REGION (need ~${needed} for ${label})"
+  fi
+}
+
+# vCPU count is the last numeric segment of the machine type, not the trailing one:
+# the bundled-Local-SSD types this module documents for the cache pool carry a
+# suffix after it (c3-standard-8-lssd, z3-highmem-88-standardlssd), and reading
+# only the trailing segment drops exactly those out of the CPU estimate. The
+# family prefix maps to the per-family quota metric. Both are best-effort — a type
+# with no numeric segment at all still drops out rather than inventing a number.
+_vcpu_of()   { awk -v t="$1" 'BEGIN{ n=split(t, a, "-"); for (i=n; i>=1; i--) if (a[i] ~ /^[0-9]+$/) { print a[i]; exit } print 0 }'; }
+_family_of() { awk -v t="$1" 'BEGIN{ sub(/-.*$/, "", t); print toupper(t) }'; }
+
+_check_quota "CPUS" 8 "any 2-node cluster"
+
+# SmithDB adds two autoscaling pools. max_nodes is per zone, so the worst case is
+# max_nodes x zones x vCPU per pool — that is the number that has to fit under the
+# per-family quota, which is far tighter than the aggregate CPUS quota.
+#
+# An unset pool variable takes the default for the SmithDB size and cache mode.
+# terraform output shows the last apply, not a pending tfvars change, so this
+# repeats local.smithdb_sizing_by_profile and local.smithdb_pool_defaults from
+# infra/locals.tf. Keep them in step.
+_tfvar_or() { local v; v=$(_tfvar "$1"); [[ -z "$v" || "$v" == "null" ]] && v="$2"; printf '%s' "$v"; }
+_sdb_default_sizing=small
+case "$(_tfvar "sizing_profile")" in
+  minimum)          _sdb_default_sizing=minimal ;;
+  production)       _sdb_default_sizing=medium ;;
+  production-large) _sdb_default_sizing=large ;;
+esac
+_sdb_sizing=$(_tfvar_or "smithdb_sizing" "$_sdb_default_sizing")
+_sdb_cache=$(_tfvar_or "smithdb_cache_storage" "$([[ "$_sdb_sizing" == "minimal" ]] && echo network-disk || echo local-ssd)")
+case "$_sdb_sizing/$_sdb_cache" in
+  small/local-ssd)     _sdb_pools="n2-standard-16 2 n2-standard-8" ;;
+  medium/local-ssd)    _sdb_pools="n2-standard-32 4 n2-standard-8" ;;
+  large/local-ssd)     _sdb_pools="n2-standard-64 8 n2-standard-16" ;;
+  small/network-disk)  _sdb_pools="c3-standard-22 0 n2-standard-8" ;;
+  medium/network-disk) _sdb_pools="c3-standard-44 0 n2-standard-8" ;;
+  large/network-disk)  _sdb_pools="c3-standard-88 0 n2-standard-16" ;;
+  *)                   _sdb_pools="" ;;  # minimal: no SmithDB node pools
+esac
+
+if [[ "$ENABLE_SMITHDB" == "true" && -z "$_sdb_pools" ]]; then
+  printf "\n"
+  info "SmithDB is enabled with smithdb_sizing = ${_sdb_sizing}: no SmithDB node pools, so no pool quota checks."
+elif [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  read -r _def_is_type _def_ssd_count _def_cm_type <<< "$_sdb_pools"
+  _is_type=$(_tfvar_or "smithdb_instance_store_machine_type" "$_def_is_type")
+  _cm_type=$(_tfvar_or "smithdb_compute_machine_type" "$_def_cm_type")
+  _is_max=$(_tfvar "smithdb_instance_store_max_nodes");      _is_max="${_is_max:-3}"
+  _cm_max=$(_tfvar "smithdb_compute_max_nodes");             _cm_max="${_cm_max:-3}"
+  _ssd_count=$(_tfvar_or "smithdb_instance_store_local_ssd_count" "$_def_ssd_count")
+
+  # Counts entries in the smithdb_node_locations list; unset means the pools span
+  # every zone the region has, which is 3 for all current regions.
+  _zones=$(_tfvar "smithdb_node_locations")
+  if [[ -n "$_zones" ]]; then
+    _zones=$(awk -v s="$_zones" 'BEGIN{ n=gsub(/"[^"]*"/, "", s); print (n > 0) ? n : 3 }')
+  else
+    _zones=3
+  fi
+
+  printf "\n"
+  info "SmithDB is enabled (${_sdb_sizing}, ${_sdb_cache}) — checking node pool quota at full autoscale (${_zones} zone(s))"
+
+  # Tally the pools per machine family before checking anything. Both pools
+  # default to N2, and a per-family quota is consumed by their sum, so checking
+  # each pool on its own passes wherever either fits alone — 48 and 24 both clear
+  # a 60 vCPU allowance that 72 does not. bash 3.2 has no associative arrays, so
+  # the tally is a plain "FAMILY need detail" list folded together by awk.
+  _fam_needs=""
+  for _pool in "instance-store:$_is_type:$_is_max" "compute:$_cm_type:$_cm_max"; do
+    _name="${_pool%%:*}"; _rest="${_pool#*:}"; _type="${_rest%%:*}"; _max="${_rest##*:}"
+    _vcpu=$(_vcpu_of "$_type")
+    if [[ "$_vcpu" == "0" ]]; then
+      info "  Skipping $_name pool ($_type) — cannot infer vCPU count from the machine type"
+      continue
+    fi
+    _fam_needs="${_fam_needs}$(_family_of "$_type") $(( _vcpu * _max * _zones )) ${_name}=${_max}x${_zones}z-${_type}
+"
+  done
+
+  if [[ -n "$_fam_needs" ]]; then
+    while read -r _fam _need _detail; do
+      [[ -n "$_fam" ]] || continue
+      _check_quota "${_fam}_CPUS" "$_need" "SmithDB pools at max ($_detail)"
+    done <<< "$(awk '
+      NF {
+        if (!($1 in need)) { order[++n] = $1 }
+        need[$1] += $2
+        detail[$1] = (detail[$1] == "" ? $3 : detail[$1] " + " $3)
+      }
+      END { for (i = 1; i <= n; i++) { f = order[i]; print f, need[f], detail[f] } }
+    ' <<< "$_fam_needs")"
+  fi
+
+  if [[ "$_ssd_count" != "0" ]]; then
+    _ssd_need=$(( _ssd_count * 375 * _is_max * _zones ))
+    _check_quota "LOCAL_SSD_TOTAL_GB" "$_ssd_need" "${_ssd_count} x 375GB per node on the instance-store pool"
   fi
 else
-  warning "Could not read CPU quota — verify manually in: Console → IAM → Quotas"
+  # Without this the run ends on "Preflight complete!" having silently skipped
+  # every SmithDB check, which reads as approval for something never examined.
+  # The aggregate CPUS check above says nothing about the per-family quota the
+  # SmithDB pools actually draw on.
+  printf "\n"
+  info "SmithDB is disabled — skipped its quota checks (N2_CPUS, LOCAL_SSD_TOTAL_GB)."
+  info "  Set enable_smithdb = true in terraform.tfvars and re-run to check them."
 fi
 
 # ── Cloud DNS zone check ──────────────────────────────────────────────────────
@@ -321,6 +530,10 @@ fi
 
 # ── Read-only checks complete ─────────────────────────────────────────────────
 printf "\n"
+if [[ ${#DENIED[@]} -gt 0 ]]; then
+  error "Preflight failed: ${#DENIED[@]} required IAM permission(s) missing. See the list above."
+  exit 1
+fi
 if [[ "$CREATE_TEST_RESOURCES" == "false" ]]; then
   info "Read-only checks passed. Run with --create-test-resources to also validate resource creation."
   success "Preflight complete!"

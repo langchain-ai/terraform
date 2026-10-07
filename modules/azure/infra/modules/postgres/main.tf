@@ -31,22 +31,29 @@ resource "azurerm_postgresql_flexible_server" "db" {
   storage_tier = var.storage_tier # P4 = premium SSD, consistent IOPS
   sku_name     = var.sku_name
 
+  backup_retention_days = var.backup_retention_days
+
   administrator_login    = var.admin_username
   administrator_password = var.admin_password
 
   # Private-only: no public endpoint. Access via private DNS + VNet only.
   public_network_access_enabled = false
   delegated_subnet_id           = var.subnet_id
-  private_dns_zone_id           = azurerm_private_dns_zone.db_dns_zone.id
+  private_dns_zone_id           = local.private_dns_zone_id
 
-  zone                         = var.availability_zone
+  zone                         = var.availability_zone != "" ? var.availability_zone : null
   geo_redundant_backup_enabled = var.geo_redundant_backup_enabled
 
+  # standby_availability_zone is optional on the provider's high_availability
+  # block: with mode set and no zone named, Azure picks a standby in a zone
+  # other than the primary's. Naming one is a pin, not the switch. A non-empty
+  # zone still enables HA by itself so that configurations predating
+  # var.high_availability keep the standby they already have.
   dynamic "high_availability" {
-    for_each = var.standby_availability_zone != "" ? [1] : []
+    for_each = var.high_availability || var.standby_availability_zone != "" ? [1] : []
     content {
       mode                      = "ZoneRedundant"
-      standby_availability_zone = var.standby_availability_zone
+      standby_availability_zone = var.standby_availability_zone != "" ? var.standby_availability_zone : null
     }
   }
 
@@ -55,7 +62,16 @@ resource "azurerm_postgresql_flexible_server" "db" {
   lifecycle {
     # Azure may move the server to a different availability zone during
     # maintenance. Ignore zone drift to prevent unnecessary plan noise.
-    ignore_changes = [zone]
+    #
+    # The standby zone is ignored for a second reason: leaving
+    # standby_availability_zone unset is the supported way to let Azure place
+    # the standby, and Azure then reports the zone it picked. Without this the
+    # config's null reads as a request to unset a zone the server genuinely
+    # has, so every later plan on an HA deployment offers to change it and
+    # every apply pushes an update at a healthy HA pair. The cost is that
+    # editing an explicit pin is ignored too, which is how zone above already
+    # behaves.
+    ignore_changes = [zone, high_availability[0].standby_availability_zone]
   }
 }
 
@@ -71,11 +87,34 @@ resource "azurerm_postgresql_flexible_server_database" "langsmith" {
   collation = "en_US.utf8"
 }
 
+# Standalone Fleet database (chart v0.15+). Fleet deploys as its own service with
+# a separate Postgres database rather than sharing the LangSmith application DB.
+# Created only when enable_fleet = true; the connection URL is exposed via the
+# fleet_connection_url output and wired into the langsmith-fleet-postgres secret.
+resource "azurerm_postgresql_flexible_server_database" "fleet" {
+  count     = var.enable_fleet ? 1 : 0
+  name      = "langsmith_fleet"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  charset   = "UTF8"
+  collation = "en_US.utf8"
+}
+
 # Private DNS zone for PostgreSQL name resolution within the VNet.
-# Resolves: <server-name>.postgres.database.azure.com → private IP.
+# Resolves: <server-name>.postgres.database.<cloud suffix> → private IP.
 # Without this zone, AKS pods cannot resolve the database hostname.
+#
+# Skipped when the caller supplies a central zone (var.private_dns_zone_id):
+# the server registers its record there, and that zone's VNet links belong to
+# whoever owns it.
+locals {
+  create_private_dns_zone = var.private_dns_zone_id == null
+  private_dns_zone_id     = local.create_private_dns_zone ? azurerm_private_dns_zone.db_dns_zone[0].id : var.private_dns_zone_id
+  private_dns_zone_name   = local.create_private_dns_zone ? azurerm_private_dns_zone.db_dns_zone[0].name : reverse(split("/", var.private_dns_zone_id))[0]
+}
+
 resource "azurerm_private_dns_zone" "db_dns_zone" {
-  name                = "privatelink.postgres.database.azure.com"
+  count               = local.create_private_dns_zone ? 1 : 0
+  name                = var.private_dns_zone_name
   resource_group_name = var.resource_group_name
   tags                = merge(var.tags, { module = "postgres" })
 }
@@ -84,12 +123,25 @@ resource "azurerm_private_dns_zone" "db_dns_zone" {
 # (including AKS pods) can resolve the PostgreSQL private hostname.
 # registration_enabled = false: we don't want auto-registration of VM names.
 resource "azurerm_private_dns_zone_virtual_network_link" "dns_zone_vnet_link" {
+  count                 = local.create_private_dns_zone ? 1 : 0
   name                  = "${var.name}-link"
   resource_group_name   = var.resource_group_name
-  private_dns_zone_name = azurerm_private_dns_zone.db_dns_zone.name
+  private_dns_zone_name = azurerm_private_dns_zone.db_dns_zone[0].name
   virtual_network_id    = var.vnet_id
   registration_enabled  = false
   tags                  = merge(var.tags, { module = "postgres" })
+}
+
+# Deployments applied before private_dns_zone_id existed hold the zone and its
+# link at the unindexed addresses.
+moved {
+  from = azurerm_private_dns_zone.db_dns_zone
+  to   = azurerm_private_dns_zone.db_dns_zone[0]
+}
+
+moved {
+  from = azurerm_private_dns_zone_virtual_network_link.dns_zone_vnet_link
+  to   = azurerm_private_dns_zone_virtual_network_link.dns_zone_vnet_link[0]
 }
 
 # Allow-list PostgreSQL extensions that LangSmith requires.
@@ -100,10 +152,12 @@ resource "azurerm_private_dns_zone_virtual_network_link" "dns_zone_vnet_link" {
 #   PG_TRGM    — trigram-based fuzzy text search (run/trace name search)
 #   BTREE_GIST — GiST indexes for range queries
 #   CITEXT     — case-insensitive text type (email lookups)
+#   LTREE      — hierarchical label tree type (Fleet apiServer runs the full,
+#                non-lite LangGraph migration set, which requires ltree)
 resource "azurerm_postgresql_flexible_server_configuration" "extensions" {
   name      = "azure.extensions"
   server_id = azurerm_postgresql_flexible_server.db.id
-  value     = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT"
+  value     = "PGCRYPTO,BTREE_GIN,PG_TRGM,BTREE_GIST,CITEXT,LTREE"
 }
 
 # Increase max_connections from the default (which scales with RAM).
@@ -113,4 +167,27 @@ resource "azurerm_postgresql_flexible_server_configuration" "max_connections" {
   name      = "max_connections"
   server_id = azurerm_postgresql_flexible_server.db.id
   value     = var.max_connections
+}
+
+# Security/audit logging recommended by Trivy and Azure PostgreSQL guidance.
+resource "azurerm_postgresql_flexible_server_configuration" "log_connections" {
+  name      = "log_connections"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  value     = "on"
+}
+
+resource "azurerm_postgresql_flexible_server_configuration" "log_checkpoints" {
+  name      = "log_checkpoints"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  value     = "on"
+}
+
+# Throttle repeated failed logins from the same host (brute-force mitigation).
+# The parameter is named connection_throttling on the retired Single Server; on
+# Flexible Server it is connection_throttle.enable, and the old name is rejected
+# with ParameterNotExists.
+resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle" {
+  name      = "connection_throttle.enable"
+  server_id = azurerm_postgresql_flexible_server.db.id
+  value     = "on"
 }

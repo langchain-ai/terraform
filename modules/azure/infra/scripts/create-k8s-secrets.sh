@@ -23,26 +23,25 @@ set -euo pipefail
 #
 # The other two required secrets are created by Terraform (Pass 1):
 #   langsmith-postgres-secret — connection_url
-#   langsmith-redis-secret    — connection_url
+#   langsmith-redis-secret    — connection_url, redis_cluster_node_uris,
+#                               redis_cluster_password
 #
 # Safe to re-run — uses --dry-run=client | kubectl apply so it updates in place.
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name from terraform output ───────────────────────────────
-if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null); then
-  # fallback: read identifier from terraform.tfvars
-  _identifier=$(grep -E '^\s*identifier\s*=' "$INFRA_DIR/terraform.tfvars" \
-    | sed 's/.*=[[:space:]]*"\([^"]*\)".*/\1/' | tr -d '[:space:]') || _identifier=""
-  KV_NAME="langsmith-kv${_identifier}"
+if ! KV_NAME=$(_tf_out keyvault_name); then
+  KV_NAME=$(_require_kv_name) || exit 1
   echo "  (terraform output unavailable — using derived KV name: $KV_NAME)"
 fi
 
 # ── Resolve namespace ──────────────────────────────────────────────────────────
-NAMESPACE=$(cd "$INFRA_DIR" && terraform output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
+NAMESPACE=$(_tf_out langsmith_namespace) || NAMESPACE="langsmith"
 
 echo ""
 echo "LangSmith — create K8s config secret"
@@ -57,6 +56,10 @@ _kv() {
   az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query value -o tsv
 }
 
+_kv_exists() {
+  az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query name -o tsv >/dev/null 2>&1
+}
+
 API_KEY_SALT=$(_kv "langsmith-api-key-salt")
 JWT_SECRET=$(_kv "langsmith-jwt-secret")
 LICENSE_KEY=$(_kv "langsmith-license-key")
@@ -65,6 +68,34 @@ DEPLOY_KEY=$(_kv "langsmith-deployments-encryption-key")
 AGENT_KEY=$(_kv "langsmith-agent-builder-encryption-key")
 INSIGHTS_KEY=$(_kv "langsmith-insights-encryption-key")
 POLLY_KEY=$(_kv "langsmith-polly-encryption-key")
+
+# SSO/OIDC — optional, only present when enable_sso_oidc = true (see
+# manage-keyvault.sh). Fetched here unconditionally so this script stays the
+# single source of truth for langsmith-config-secret; the --from-literal args
+# below are built conditionally so a deployment that never sets these up is
+# unaffected.
+_OAUTH_ARGS=()
+if _kv_exists "langsmith-oauth-client-id"; then
+  OAUTH_CLIENT_ID=$(_kv "langsmith-oauth-client-id")
+  OAUTH_CLIENT_SECRET=$(_kv "langsmith-oauth-client-secret")
+  OAUTH_ISSUER_URL=$(_kv "langsmith-oauth-issuer-url")
+  _OAUTH_ARGS=(
+    "--from-literal=oauth_client_id=$OAUTH_CLIENT_ID"
+    "--from-literal=oauth_client_secret=$OAUTH_CLIENT_SECRET"
+    "--from-literal=oauth_issuer_url=$OAUTH_ISSUER_URL"
+  )
+fi
+
+# The license key is the one value here that nothing has checked since the
+# setup-env prompt (#250). Written as it stands, an empty or malformed value
+# surfaces inside platform-backend at startup as a base64 error that names
+# neither licensing nor this script. Stop here instead, naming the secret.
+if ! _license_err=$(_validate_license_key "$LICENSE_KEY"); then
+  echo "  ERROR: langsmith-license-key in Key Vault '$KV_NAME' failed validation: ${_license_err}" >&2
+  echo "         Fix the vault first, then re-run this script:" >&2
+  echo "           ./scripts/manage-keyvault.sh set langsmith-license-key '<key>'" >&2
+  exit 1
+fi
 
 echo "  All secrets retrieved."
 echo ""
@@ -82,6 +113,7 @@ kubectl create secret generic langsmith-config-secret \
   --from-literal=agent_builder_encryption_key="$AGENT_KEY" \
   --from-literal=insights_encryption_key="$INSIGHTS_KEY" \
   --from-literal=polly_encryption_key="$POLLY_KEY" \
+  "${_OAUTH_ARGS[@]:+"${_OAUTH_ARGS[@]}"}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo ""
@@ -123,8 +155,8 @@ else
 fi
 # Note: langsmith-clickhouse secret is NOT needed for in-cluster ClickHouse
 # (clickhouse_source = "in-cluster"). The chart manages the connection internally.
-# For external ClickHouse, create the secret manually and set
-# clickhouse.external.existingSecretName in langsmith-values-insights.yaml.
+# For external ClickHouse, init-values.sh prompts for the connection and creates
+# that secret, and writes clickhouse.external into values-overrides.yaml.
 
 echo ""
 echo "Next: fill values-overrides.yaml and run helm upgrade --install"

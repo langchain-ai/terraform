@@ -13,27 +13,20 @@ config:
     enabled: true
     # encryptionKey is read from langsmith-config-secret (agent_builder_encryption_key).
     # Do NOT set encryptionKey inline — it's already in the secret via existingSecretName.
-    #
-    # Agent worker pod resources (applied to operator-managed agent deployments).
-    # Chart defaults are 4096/8192 MiB — oversized for dev/POC.
-    # These control the server container in each LGP pod (agent-builder, clio, polly).
-    agent:
-      resources:
-        cpu: 1
-        cpuLimit: 2
-        memoryMb: 512
-        memoryLimitMb: 1024
 
-backend:
-  agentBootstrap:
-    # Runs a post-upgrade Job that creates the langsmith-agent-builder-config ConfigMap
-    # and registers Agent Builder as an LGP deployment. Required for the Agent Builder
-    # nav item to appear in the UI. The job is idempotent — safe to run on every upgrade.
-    enabled: true
+# config.agentBuilder.agent.resources used to size the operator-managed agent pods,
+# via the agent-bootstrap Job that registered them. Chart 0.16 removed that Job. The
+# key survives in the chart's own defaults but no template reads it, so setting it
+# here sizes nothing. Agent sizing now belongs to the standalone agent that owns the
+# workload — see langsmith-values-fleet.yaml.
+#
+# For the same reason config.agentBuilder on its own gives you the UI nav item and
+# the tool/trigger servers below with no agent runtime behind them. Fleet is the
+# supported path: set enable_fleet = true instead of enable_agent_builder.
 
 # Renamed in chart 0.15.0 (was agentBuilderToolServer / agentBuilderTriggerServer).
-# config.agentBuilder + backend.agentBootstrap above remain the (deprecated-but-functional)
-# enablement path in 0.15.x; the tool/trigger server component keys are now fleet*.
+# config.agentBuilder above remains the enablement path; the tool/trigger server
+# component keys are now fleet*.
 fleetToolServer:
   enabled: true
 

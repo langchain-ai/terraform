@@ -10,7 +10,7 @@
 #
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
-#   _resolve_infra_dir        — Set INFRA_DIR relative to this script
+#   _read_gateway_flag <key>  — Resolve an applied gateway flag from Terraform outputs
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -32,11 +32,11 @@ _parse_tfvar() {
   # Quoted string: key = "value"
   val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
   if [[ -z "$val" ]]; then
-    # Unquoted value: key = true / key = 42 / key = {}
+    # Unquoted value: key = true / key = 42 / key = {} / key = ["m5.2xlarge"]
     # Strip any trailing `# comment` BEFORE collapsing whitespace, otherwise
     # `enable_fleet = true # note` parses to `true#note` and breaks _tfvar_is_true
     # (migration issue #1).
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"')
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//; s/#.*//' | tr -d '[:space:]"[]')
   fi
   [[ -n "$val" ]] || return 1
   echo "$val"
@@ -47,6 +47,23 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# Resolve a gateway controller flag (enable_envoy_gateway / enable_istio_gateway /
+# enable_nginx_ingress) for post-apply scripts.
+#
+# enable_envoy_gateway is derived in Terraform — unset means "on unless Istio or
+# NGINX was chosen" — so terraform.tfvars text alone cannot tell you which mode was
+# applied. Read the Terraform output instead, and fall back to tfvars only when no
+# state exists yet (pre-apply callers such as preflight).
+_read_gateway_flag() {
+  local key="$1" val
+  val=$(terraform -chdir="$INFRA_DIR" output -raw "$key" 2>/dev/null) || val=""
+  if [[ "$val" != "true" && "$val" != "false" ]]; then
+    val=false
+    _tfvar_is_true "$key" && val=true
+  fi
+  echo "$val"
 }
 
 # ── AWS credential helpers ───────────────────────────────────────────────────

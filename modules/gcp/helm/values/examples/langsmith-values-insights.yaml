@@ -8,14 +8,17 @@
 #   - ClickHouse instance reachable from the GKE cluster
 #   - clickhouse_source = "langsmith-managed" or "external" in terraform.tfvars
 
-config:
-  insights:
-    enabled: true
-    # encryptionKey must be set in values-overrides.yaml or via --set on each deploy.
-    # Generate a Fernet key:
-    #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-    # Rotating this key requires re-encrypting all existing Insights data.
-    # encryptionKey: "YOUR_INSIGHTS_FERNET_KEY"
+# Chart 0.15.1 removed the bundled config.insights path and its validator hard-fails
+# on the mere presence of the key (hasKey), even when set to false. The top-level
+# insights block is the only supported path. Workload settings (scaling, databases,
+# resources) live in engineInsightsAgent — see langsmith-values-standalone-insights.yaml.
+insights:
+  enabled: true
+  # encryptionKey must be set in values-overrides.yaml or via --set on each deploy.
+  # Generate a Fernet key:
+  #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  # Rotating this key requires re-encrypting all existing Insights data.
+  # encryptionKey: "YOUR_INSIGHTS_FERNET_KEY"
 
 clickhouse:
   external:

@@ -17,6 +17,17 @@
 #
 # Reads project_id, name_prefix, and environment from terraform.tfvars.
 # All secrets are stored as: {project}/secrets/langsmith-{prefix}-{env}-{key}
+
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,6 +58,7 @@ OPTIONAL_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-callback-signing-jwk
 )
 
 # Encryption keys that must NEVER change after first deploy.
@@ -56,6 +68,7 @@ STABLE_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-callback-signing-jwk
 )
 
 # SM key → TF_VAR name (for diff subcommand)
@@ -66,6 +79,7 @@ DIFF_SM_KEYS=(
   agent-builder-encryption-key
   insights-encryption-key
   polly-encryption-key
+  sandbox-callback-signing-jwk
 )
 DIFF_TF_VARS=(
   TF_VAR_postgres_password
@@ -74,6 +88,7 @@ DIFF_TF_VARS=(
   TF_VAR_langsmith_agent_builder_encryption_key
   TF_VAR_langsmith_insights_encryption_key
   TF_VAR_langsmith_polly_encryption_key
+  TF_VAR_sandbox_callback_signing_jwk
 )
 
 ALL_KEYS=("${REQUIRED_KEYS[@]}" "${OPTIONAL_KEYS[@]}")
@@ -425,7 +440,8 @@ _interactive_set() {
     local len="${#current}"
     local visible=4
     [[ $len -le 4 ]] && visible=0
-    local masked="${current:0:$visible}$(printf '%*s' $(( len - visible )) '' | tr ' ' '*')"
+    local masked
+    masked="${current:0:$visible}$(printf '%*s' $(( len - visible )) '' | tr ' ' '*')"
     echo "  Current value: $masked  ($len chars)"
   else
     echo "  Current value: $(_yellow "(not set)")"

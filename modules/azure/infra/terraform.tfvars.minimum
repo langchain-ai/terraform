@@ -3,7 +3,7 @@
 # =============================================================================
 # ABSOLUTE MINIMUM — NOT FOR ANY REAL WORKLOAD.
 #
-# Smallest possible footprint: Standard_D4s_v3 nodes, in-cluster Postgres and
+# Smallest possible footprint: Standard_D4s_v5 nodes, in-cluster Postgres and
 # Redis, minimum Helm sizing. Exists to keep LangSmith alive at the lowest
 # possible cost for demos, CI smoke tests, or single-user POCs.
 #
@@ -26,9 +26,14 @@ subscription_id = "your-azure-subscription-id"   # az account show --query id -o
 #------------------------------------------------------------------------------
 # Naming
 #------------------------------------------------------------------------------
-identifier  = "-demo"      # suffix appended to every resource name
-environment = "dev"
+name_prefix = "demo"       # appended to every resource name; no leading hyphen
 location    = "eastus"
+
+# Give the globally-unique names (Postgres, Redis, Storage, Key Vault) a
+# per-subscription hash so they cannot collide with another LangSmith deployment.
+# On an EXISTING deployment leave this false — flipping it renames every resource,
+# which Terraform executes as destroy-and-recreate.
+unique_resource_names = true
 
 #------------------------------------------------------------------------------
 # Sources — in-cluster for minimum footprint
@@ -38,13 +43,14 @@ redis_source      = "in-cluster"
 clickhouse_source = "in-cluster"
 
 #------------------------------------------------------------------------------
-# AKS — single Standard_D4s_v3 node (4 vCPU / 16 GiB), scales to 3
+# AKS — single Standard_D4s_v5 node (4 vCPU / 16 GiB), scales to 3
 #------------------------------------------------------------------------------
-default_node_pool_vm_size   = "Standard_D4s_v3"   # 4 vCPU, 16 GiB — absolute floor
+default_node_pool_vm_size   = "Standard_D4s_v5"   # 4 vCPU, 16 GiB — absolute floor
 default_node_pool_min_count = 1
 default_node_pool_max_count = 3
 default_node_pool_max_pods  = 60
-aks_deletion_protection     = false
+aks_network_mode            = "overlay"         # Azure CNI Overlay with Cilium: pods from aks_pod_cidr, the subnet holds nodes only
+aks_sku_tier                = "Free"           # no SLA; this profile is a throwaway cluster
 
 # No large pool needed — in-cluster ClickHouse runs on the default pool
 additional_node_pools = {}
@@ -52,7 +58,7 @@ additional_node_pools = {}
 #------------------------------------------------------------------------------
 # Ingress
 #------------------------------------------------------------------------------
-ingress_controller = "nginx"
+ingress_controller = "envoy-gateway"
 
 #------------------------------------------------------------------------------
 # DNS + TLS — Public IP DNS label + Let's Encrypt HTTP-01

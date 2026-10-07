@@ -61,7 +61,6 @@ ALB_DNS=$(terraform -chdir="$INFRA_DIR" output -raw alb_dns_name 2>/dev/null) ||
 echo "  alb_dns_name = $ALB_DNS"
 
 # Get the ALB's canonical hosted zone ID (needed for Route53 alias target).
-ALB_NAME=$(echo "$ALB_DNS" | cut -d. -f1 | sed 's/-[0-9]*$//')
 ALB_HZ=$(aws elbv2 describe-load-balancers \
   --region "$_region" \
   --query "LoadBalancers[?DNSName=='${ALB_DNS}'].CanonicalHostedZoneId | [0]" \

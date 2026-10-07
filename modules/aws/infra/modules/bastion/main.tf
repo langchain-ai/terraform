@@ -67,8 +67,25 @@ resource "aws_iam_instance_profile" "bastion" {
 }
 
 # --- Security group ---
+# Skipped when var.existing_security_group_id is set. Terraform never writes
+# rules, including SSH ingress, onto a customer-supplied security group.
+
+locals {
+  byo_security_group = var.existing_security_group_id != null && var.existing_security_group_id != ""
+  security_group_id  = local.byo_security_group ? var.existing_security_group_id : aws_security_group.bastion[0].id
+}
+
+# Preserves state: without this, existing deployments would see their bastion
+# security group destroyed and recreated just from the count above changing
+# its address from aws_security_group.bastion to aws_security_group.bastion[0].
+moved {
+  from = aws_security_group.bastion
+  to   = aws_security_group.bastion[0]
+}
 
 resource "aws_security_group" "bastion" {
+  count = local.byo_security_group ? 0 : 1
+
   name_prefix = "${var.name}-bastion-"
   description = "Bastion host - SSM + optional SSH ingress"
   vpc_id      = var.vpc_id
@@ -89,7 +106,7 @@ resource "aws_security_group" "bastion" {
 }
 
 resource "aws_security_group_rule" "ssh_ingress" {
-  count = var.enable_ssh ? 1 : 0
+  count = !local.byo_security_group && var.enable_ssh ? 1 : 0
 
   type              = "ingress"
   from_port         = 22
@@ -97,7 +114,7 @@ resource "aws_security_group_rule" "ssh_ingress" {
   protocol          = "tcp"
   cidr_blocks       = var.ssh_allowed_cidrs
   description       = "SSH access from allowed CIDRs"
-  security_group_id = aws_security_group.bastion.id
+  security_group_id = aws_security_group.bastion[0].id
 }
 
 # --- EC2 instance ---
@@ -106,7 +123,7 @@ resource "aws_instance" "bastion" {
   ami                    = var.ami_id != "" ? var.ami_id : data.aws_ami.al2023.id
   instance_type          = var.instance_type
   subnet_id              = var.subnet_id
-  vpc_security_group_ids = [aws_security_group.bastion.id]
+  vpc_security_group_ids = [local.security_group_id]
   iam_instance_profile   = aws_iam_instance_profile.bastion.name
   key_name               = var.key_name
 

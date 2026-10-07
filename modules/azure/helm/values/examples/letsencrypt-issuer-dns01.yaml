@@ -55,7 +55,7 @@ spec:
           subscriptionID: <subscription_id>         # from terraform.tfvars
           resourceGroupName: <dns_resource_group>   # RG containing the Azure DNS zone
           hostedZoneName: <domain>                  # e.g. langsmith.example.com
-          environment: AzurePublicCloud
+          environment: AzurePublicCloud             # AzureUSGovernmentCloud when azure_environment = "usgovernment"
           managedIdentity:
             clientID: <cert_manager_managed_identity_client_id>
 
@@ -92,7 +92,7 @@ spec:
 #           subscriptionID: <subscription_id>
 #           resourceGroupName: <dns_resource_group>
 #           hostedZoneName: <domain>
-#           environment: AzurePublicCloud
+#           environment: AzurePublicCloud    # AzureUSGovernmentCloud in Azure Government
 #           clientID: <service_principal_client_id>
 #           tenantID: <tenant_id>
 #           clientSecretSecretRef:

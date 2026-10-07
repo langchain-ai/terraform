@@ -18,6 +18,17 @@ variable "client_key" {
   sensitive   = true
 }
 
+variable "kube_auth" {
+  type        = string
+  description = "'entra' signs the providers in through kubelogin with the caller's az session; 'certificate' uses client_certificate and client_key. Set from the k8s-cluster module's kube_auth output."
+  default     = "certificate"
+
+  validation {
+    condition     = contains(["entra", "certificate"], var.kube_auth)
+    error_message = "kube_auth must be 'entra' or 'certificate'."
+  }
+}
+
 variable "cluster_ca_certificate" {
   type        = string
   description = "Base64-encoded cluster CA certificate from AKS kube_config"
@@ -54,6 +65,19 @@ variable "postgres_admin_password" {
   default     = ""
 }
 
+variable "enable_fleet" {
+  type        = bool
+  description = "Create the langsmith-fleet-postgres secret for standalone Fleet (chart v0.15+)."
+  default     = false
+}
+
+variable "fleet_postgres_connection_url" {
+  type        = string
+  description = "Connection URL for the dedicated Fleet Postgres database (langsmith_fleet). Required when enable_fleet = true and use_external_postgres = true."
+  sensitive   = true
+  default     = ""
+}
+
 variable "use_external_redis" {
   type        = bool
   description = "Create a Kubernetes secret for the external Redis connection URL"
@@ -62,9 +86,55 @@ variable "use_external_redis" {
 
 variable "redis_connection_url" {
   type        = string
-  description = "Redis connection URL (rediss://:key@host:6380). Required when use_external_redis = true"
+  description = "Redis connection URL (rediss://:key@host:10000). Required when use_external_redis = true"
   sensitive   = true
   default     = ""
+}
+
+variable "redis_cluster_node_uris" {
+  type        = string
+  description = "JSON array of Redis node URIs. Read when redis.external.cluster.enabled is true."
+  sensitive   = true
+  default     = ""
+}
+
+variable "redis_cluster_password" {
+  type        = string
+  description = "Redis access key, not URL-encoded. Read when redis.external.cluster.enabled is true."
+  sensitive   = true
+  default     = ""
+}
+
+variable "enable_smithdb" {
+  type        = bool
+  description = "Create the SmithDB PostgreSQL metastore connection Secret."
+  default     = false
+}
+
+variable "smithdb_metastore_host" {
+  type        = string
+  description = "Private hostname of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_database" {
+  type        = string
+  description = "Database name of the SmithDB PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_username" {
+  type        = string
+  description = "Username SmithDB uses to connect to its PostgreSQL metastore."
+  default     = ""
+}
+
+variable "smithdb_metastore_password" {
+  type        = string
+  description = "Optional SmithDB metastore password; null when Entra authentication is used."
+  sensitive   = true
+  default     = null
+  nullable    = true
 }
 
 # ── Blob storage (Azure Workload Identity) ────────────────────────────────────
@@ -72,6 +142,41 @@ variable "redis_connection_url" {
 variable "blob_managed_identity_client_id" {
   type        = string
   description = "Client ID of the User-Assigned Managed Identity used by LangSmith pods to access blob storage (Workload Identity)"
+}
+
+variable "backend_service_account_name" {
+  type        = string
+  description = "Pre-created backend ServiceAccount used by Helm pre-install hooks."
+}
+
+variable "smithdb_service_account_name" {
+  type        = string
+  description = "Pre-created SmithDB ServiceAccount used by Helm pre-install hooks."
+  default     = ""
+}
+
+variable "smithdb_managed_identity_client_id" {
+  type        = string
+  description = "Client ID of the SmithDB managed identity."
+  default     = ""
+}
+
+variable "smithdb_cache_storage_class_name" {
+  type        = string
+  description = "Name of the StorageClass created for SmithDB cache volumes."
+  default     = "smithdb-cache-premium-v2"
+}
+
+variable "smithdb_cache_disk_iops" {
+  type        = number
+  description = "Provisioned IOPS for each SmithDB Premium SSD v2 cache volume."
+  default     = 7000
+}
+
+variable "smithdb_cache_disk_throughput" {
+  type        = number
+  description = "Provisioned throughput in MB/s for each SmithDB Premium SSD v2 cache volume."
+  default     = 1000
 }
 
 # ── Application secrets ───────────────────────────────────────────────────────
@@ -88,6 +193,15 @@ variable "langsmith_license_key" {
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
 
+# Defaults true, unlike the GCP module's matching flag: this module installed
+# cert-manager unconditionally before the flag existed, so false as a default
+# would stop renewing certificates for anyone already deployed.
+variable "install_cert_manager" {
+  type        = bool
+  description = "Install cert-manager. Set false when attaching to a cluster that already runs it. Helm cannot adopt a release it does not own, so a second install fails on the existing CRDs."
+  default     = true
+}
+
 variable "cert_manager_version" {
   type        = string
   description = "cert-manager Helm chart version"
@@ -96,25 +210,31 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress)."
-  default     = "nginx"
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (envoy-gateway → envoy-gateway-system, nginx → ingress-nginx, istio → istio-system, istio-addon → aks-istio-ingress), and whether cert-manager runs with Gateway API support (envoy-gateway only). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
+  default     = "envoy-gateway"
+}
+
+variable "envoy_gateway_version" {
+  type        = string
+  description = "Version of the Envoy Gateway release, empty without one. Read only to install cert-manager after the Gateway API CRDs that release ships: cert-manager checks for them once, at startup."
+  default     = ""
+}
+
+variable "agic_subnet_cidrs" {
+  type        = list(string)
+  description = "Address prefixes of the Application Gateway subnet, allowed through the NetworkPolicy by IP range. Only used when ingress_controller = 'agic'."
+  default     = []
 }
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager (ClusterIssuer created by apply-cluster-issuers.sh). 'dns01' = DNS-01 via Azure DNS + Workload Identity (ClusterIssuer created by Terraform). 'none' = skip."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via Azure DNS + Workload Identity. 'existing' = your own certificate in the langsmith-tls Secret; nothing here. 'none' = skip. Both ClusterIssuers are created by helm/scripts/deploy.sh; this module only sets up cert-manager to support them."
   default     = "letsencrypt"
 
   validation {
-    condition     = contains(["letsencrypt", "dns01", "none"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', or 'none'."
+    condition     = contains(["letsencrypt", "dns01", "existing", "none"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', 'existing', or 'none'."
   }
-}
-
-variable "letsencrypt_email" {
-  type        = string
-  description = "Email for Let's Encrypt certificate notifications. Required when tls_certificate_source = 'dns01'."
-  default     = ""
 }
 
 variable "cert_manager_identity_client_id" {
@@ -123,25 +243,14 @@ variable "cert_manager_identity_client_id" {
   default     = ""
 }
 
-variable "dns_zone_name" {
-  type        = string
-  description = "Azure DNS zone name (e.g. langsmith.mycompany.com). Required when tls_certificate_source = 'dns01'."
-  default     = ""
-}
-
-variable "dns_resource_group_name" {
-  type        = string
-  description = "Resource group containing the Azure DNS zone. Required when tls_certificate_source = 'dns01'."
-  default     = ""
-}
-
-variable "subscription_id" {
-  type        = string
-  description = "Azure subscription ID. Required when tls_certificate_source = 'dns01' for the ClusterIssuer azureDNS config."
-  default     = ""
-}
-
 # ── KEDA ──────────────────────────────────────────────────────────────────────
+
+# Defaults true for the same reason install_cert_manager does.
+variable "install_keda" {
+  type        = bool
+  description = "Install KEDA, which scales the LangSmith queue workers on Redis queue depth. Set false when attaching to a cluster that already runs it."
+  default     = true
+}
 
 variable "keda_version" {
   type        = string

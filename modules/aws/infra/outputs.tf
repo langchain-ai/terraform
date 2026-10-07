@@ -65,6 +65,11 @@ output "postgres_iam_connection_url" {
   value       = var.postgres_source == "external" ? module.postgres[0].iam_connection_url : null
 }
 
+output "postgres_security_group_id" {
+  description = "Security group ID attached to the RDS instance (null if using in-cluster PostgreSQL)"
+  value       = var.postgres_source == "external" ? module.postgres[0].security_group_id : null
+}
+
 #------------------------------------------------------------------------------
 # Redis (ElastiCache)
 #------------------------------------------------------------------------------
@@ -77,6 +82,31 @@ output "redis_connection_url" {
   description = "Redis connection URL (null if using in-cluster Redis)"
   value       = var.redis_source == "external" ? module.redis[0].connection_url : null
   sensitive   = true
+}
+
+output "redis_security_group_id" {
+  description = "Security group ID attached to ElastiCache (null if using in-cluster Redis)"
+  value       = var.redis_source == "external" ? module.redis[0].security_group_id : null
+}
+
+output "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name for the sandbox JuiceFS config when sandboxes are enabled"
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_redis_name" {
+  description = "Dedicated ElastiCache Redis name for sandbox JuiceFS metadata"
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_redis_name : null
+}
+
+output "sandbox_juicefs_bucket_url" {
+  description = "S3 endpoint URL passed to JuiceFS for sandbox object storage"
+  value       = var.enable_sandboxes ? local.sandbox_juicefs_bucket_url : null
+}
+
+output "sandbox_juicefs_host_cache_dirs" {
+  description = "Host paths mounted from sandbox-host instance-store devices for JuiceFS cache when configured"
+  value       = var.enable_sandboxes ? local.sandbox_host_cache_dirs : []
 }
 
 #------------------------------------------------------------------------------
@@ -137,6 +167,49 @@ output "langsmith_irsa_role_arn" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB (populated only when enable_smithdb = true)
+#------------------------------------------------------------------------------
+output "enable_smithdb" {
+  description = "Whether SmithDB cloud dependencies were provisioned"
+  value       = var.enable_smithdb
+}
+
+output "smithdb_object_store_bucket" {
+  description = "SmithDB object-store S3 bucket name (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
+}
+
+output "smithdb_s3_vpc_endpoint_id" {
+  description = "S3 Gateway VPC endpoint used by SmithDB object-store traffic"
+  value       = var.enable_smithdb ? module.storage.s3_vpc_endpoint_id : null
+}
+
+output "smithdb_irsa_role_arn" {
+  description = "IAM role ARN for the SmithDB service account, IRSA (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].irsa_role_arn : null
+}
+
+output "smithdb_metastore_host" {
+  description = "SmithDB metastore Postgres hostname (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_host : null
+}
+
+output "smithdb_metastore_port" {
+  description = "SmithDB metastore Postgres port (null when enable_smithdb = false)"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_port : null
+}
+
+output "smithdb_metastore_use_ssl" {
+  description = "Whether the SmithDB metastore connection uses SSL"
+  value       = var.smithdb_metastore_use_ssl
+}
+
+output "smithdb_metastore_security_group_id" {
+  description = "Security group ID attached to the metastore RDS instance (null when enable_smithdb = false or smithdb_metastore_source = 'external')"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_security_group_id : null
+}
+
+#------------------------------------------------------------------------------
 # ALB
 #------------------------------------------------------------------------------
 output "alb_arn" {
@@ -152,6 +225,11 @@ output "alb_scheme" {
 output "alb_dns_name" {
   description = "ALB DNS hostname — use as config.hostname in Helm values"
   value       = module.alb.alb_dns_name
+}
+
+output "alb_security_group_id" {
+  description = "Security group ID attached to the ALB"
+  value       = module.alb.security_group_id
 }
 
 output "langsmith_url" {
@@ -177,6 +255,11 @@ output "bastion_ssm_command" {
   value       = var.create_bastion ? module.bastion[0].ssm_start_session_command : null
 }
 
+output "bastion_security_group_id" {
+  description = "Security group ID attached to the bastion (null if bastion not created)"
+  value       = var.create_bastion ? module.bastion[0].security_group_id : null
+}
+
 #------------------------------------------------------------------------------
 # Configuration
 #------------------------------------------------------------------------------
@@ -196,10 +279,10 @@ output "langsmith_domain" {
 }
 
 #------------------------------------------------------------------------------
-# DNS / ACM (auto-provisioned)
+# DNS / ACM
 #------------------------------------------------------------------------------
 output "dns_name_servers" {
-  description = "Route 53 NS records — delegate these from your registrar to enable your custom domain and ACM certificate validation"
+  description = "Route 53 NS records for a newly created zone; empty when an existing zone is reused or the DNS module is disabled"
   value       = local.dns_enabled ? module.dns[0].name_servers : []
 }
 
@@ -225,28 +308,53 @@ output "cert_manager_irsa_role_arn" {
 # Product Features
 #------------------------------------------------------------------------------
 output "enable_deployments" {
-  description = "Whether LangGraph Platform Deployments addon is enabled"
+  description = "Whether LangSmith Deployments is enabled"
   value       = var.enable_deployments
 }
 
-output "enable_agent_builder" {
-  description = "Whether Agent Builder addon is enabled"
-  value       = var.enable_agent_builder
+output "enable_fleet" {
+  description = "Whether Fleet is enabled"
+  value       = var.enable_fleet
+}
+
+output "fleet_storage" {
+  description = "Fleet storage location"
+  value       = var.fleet_storage
 }
 
 output "enable_insights" {
-  description = "Whether Insights addon is enabled"
-  value       = var.enable_insights
+  description = "Whether Insights is enabled by either the product or external-storage switch"
+  value       = local.insights_enabled
+}
+
+output "insights_storage" {
+  description = "Insights storage location"
+  value       = local.insights_external_storage ? "external" : var.insights_storage
 }
 
 output "enable_polly" {
-  description = "Whether Polly addon is enabled"
-  value       = var.enable_polly
+  description = "Whether LangSmith Chat (formerly Polly) is enabled by either the product or external-storage switch"
+  value       = local.polly_enabled
+}
+
+output "polly_storage" {
+  description = "LangSmith Chat storage location"
+  value       = local.polly_external_storage ? "external" : var.polly_storage
 }
 
 output "enable_envoy_gateway" {
-  description = "Whether Envoy Gateway is installed for Kubernetes Gateway API routing"
-  value       = var.enable_envoy_gateway
+  description = "Whether Envoy Gateway is installed for Kubernetes Gateway API routing. Reflects the derived value, so the deploy scripts can read the mode that was actually applied rather than re-deriving it from terraform.tfvars."
+  value       = local.enable_envoy_gateway
+}
+
+output "enable_istio_gateway" {
+  description = "Whether the Istio ingress gateway path is enabled"
+  value       = var.enable_istio_gateway
+}
+
+output "enable_nginx_ingress" {
+  description = "Whether the NGINX ingress controller path is enabled"
+  value       = var.enable_nginx_ingress
 }
 
 output "gateway_target_group_arn" {
@@ -260,21 +368,25 @@ output "gateway_target_group_arn" {
 output "resource_summary" {
   description = "Summary of provisioned resources"
   value = {
-    cluster            = module.eks.cluster_name
-    postgres_source    = var.postgres_source
-    postgres           = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
-    redis_source       = var.redis_source
-    redis              = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
-    storage_bucket     = local.bucket_name
-    namespace          = var.langsmith_namespace
-    tls                = var.tls_certificate_source
-    alb                = module.alb.alb_dns_name
-    bastion            = var.create_bastion ? module.bastion[0].instance_id : "not created"
-    firewall           = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
-    deployments        = var.enable_deployments
-    agent_builder      = var.enable_agent_builder
-    insights           = var.enable_insights
-    polly              = var.enable_polly
+    cluster          = module.eks.cluster_name
+    postgres_source  = var.postgres_source
+    postgres         = var.postgres_source == "external" ? "external (RDS)" : "in-cluster (Helm)"
+    redis_source     = var.redis_source
+    redis            = var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"
+    storage_bucket   = local.bucket_name
+    namespace        = var.langsmith_namespace
+    tls              = var.tls_certificate_source
+    alb              = module.alb.alb_dns_name
+    bastion          = var.create_bastion ? module.bastion[0].instance_id : "not created"
+    firewall         = var.create_firewall ? "enabled (allowed: ${join(", ", var.firewall_allowed_fqdns)})" : "not created"
+    deployments      = var.enable_deployments
+    fleet            = var.enable_fleet
+    fleet_storage    = var.enable_fleet ? var.fleet_storage : "not enabled"
+    insights         = local.insights_enabled
+    insights_storage = local.insights_enabled ? (local.insights_external_storage ? "external" : var.insights_storage) : "not enabled"
+    polly            = local.polly_enabled
+    polly_storage    = local.polly_enabled ? (local.polly_external_storage ? "external" : var.polly_storage) : "not enabled"
+    smithdb          = var.enable_smithdb ? "enabled (metastore + object store ${module.smithdb[0].object_store_bucket_name})" : "not enabled"
   }
 }
 
@@ -283,7 +395,7 @@ output "resource_summary" {
 #------------------------------------------------------------------------------
 output "next_steps" {
   description = "Next steps after terraform apply"
-  value       = <<-EOT
+  value = <<-EOT
 
     ============================================
     LangSmith Infrastructure Provisioned (AWS)
@@ -297,16 +409,16 @@ output "next_steps" {
     - Redis:        ${var.redis_source == "external" ? "external (ElastiCache)" : "in-cluster (Helm)"}
     - S3 Bucket:    ${local.bucket_name}
     - ALB:          ${module.alb.alb_dns_name}
-    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (Route 53 + ACM auto-provisioned)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
+    - TLS:          ${var.tls_certificate_source}${local.dns_enabled ? "\n    - Domain:       ${var.langsmith_domain} (${var.dns_create_zone ? "new" : "existing"} Route 53 zone + ACM)" : ""}${var.create_bastion ? "\n    - Bastion:      ${module.bastion[0].instance_id} (SSM: aws ssm start-session --target ${module.bastion[0].instance_id} --region ${var.region})" : ""}
 
     Next Steps:
 
     1. Update kubeconfig:
        aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.region}
-${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
+${local.dns_enabled && var.tls_certificate_source != "acm" && var.dns_create_zone ? <<-NEWDNS
 
     2. DELEGATE DNS — required before enabling HTTPS
-       Terraform created a Route 53 hosted zone for ${var.langsmith_domain}.
+       Terraform created a Route 53 hosted zone exactly matching ${var.langsmith_domain}.
        Add NS records at your registrar (or parent zone) pointing to:
 
          terraform output dns_name_servers
@@ -326,28 +438,42 @@ ${local.dns_enabled && var.tls_certificate_source != "acm" ? <<-DNS
     5. Access LangSmith:
        http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
 
-DNS
-: local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
+NEWDNS
+  : local.dns_enabled && var.tls_certificate_source != "acm" ? <<-EXISTINGDNS
 
-    2. Deploy LangSmith (pick one):
+    2. WAIT FOR ACM VALIDATION
+       Terraform wrote the validation CNAME and ALB alias records into the
+       existing Route 53 hosted zone ${var.dns_existing_zone_id}.
 
-       Option A — Helm scripts (recommended):
-         cd terraform/aws
-         make init-values
-         make deploy
+       No new NS delegation is needed if that public zone is already authoritative
+       for ${var.langsmith_domain}. Otherwise, correct its delegation first.
+       Wait for the ACM certificate status to become ISSUED (~5-30 min).
 
-       Option B — Terraform app module:
-         cd terraform/aws
-         make init-app
-         cp app/terraform.tfvars.example app/terraform.tfvars
-         make plan-app
-         make apply-app
+    3. ENABLE HTTPS — after the certificate is issued
+       In terraform.tfvars, change:
+         tls_certificate_source = "acm"
+       Then run: terraform apply
+       This adds the HTTPS listener to the ALB and redirects HTTP → HTTPS.
+
+    4. Run the Helm deployment:
+       cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh
+
+    5. Access LangSmith:
+       http://${module.alb.alb_dns_name}  (HTTP — until you complete step 3)
+
+EXISTINGDNS
+  : local.dns_enabled && var.tls_certificate_source == "acm" ? <<-ACMDONE
+
+    2. Deploy LangSmith:
+       cd terraform/aws
+       make init-values
+       make deploy
 
     3. Access LangSmith:
        https://${var.langsmith_domain}
 
 ACMDONE
-: <<-NODNS
+  : <<-NODNS
 
     2. Run the Helm deployment:
        cd ../helm && source ../infra/setup-env.sh --deploy && ./scripts/deploy.sh

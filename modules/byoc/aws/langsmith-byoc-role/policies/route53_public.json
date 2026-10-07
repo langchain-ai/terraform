@@ -20,8 +20,7 @@
         "route53:ChangeResourceRecordSetsRecordTypes": ["CNAME"],
         "route53:ChangeResourceRecordSetsActions": [
           "CREATE",
-          "UPSERT",
-          "DELETE"
+          "UPSERT"
         ]
       },
       "ForAllValues:StringLike": {

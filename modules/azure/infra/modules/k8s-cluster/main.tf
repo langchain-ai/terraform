@@ -3,23 +3,41 @@
 # Purpose: Azure Kubernetes Service cluster for running LangSmith workloads.
 #
 # Key design decisions:
-#   • Azure CNI network plugin: pods get IPs directly from the subnet, enabling
-#     full VNet connectivity (pods can reach PostgreSQL/Redis by private IP).
-#     Tradeoff: uses more IPs than kubenet, but required for private DB access.
+#   • Azure CNI network plugin, in one of two IPAM modes. Overlay (Microsoft's
+#     recommendation) gives pods addresses from a private pod_cidr and keeps
+#     the subnet for nodes; node-subnet mode gives pods VNet addresses and
+#     needs a subnet sized for nodes x pods. Either way pods reach
+#     PostgreSQL/Redis over the VNet (overlay traffic leaves the node SNATed).
+#   • Data plane: Cilium (eBPF, Microsoft's recommendation, needs overlay) or
+#     Azure Network Policy Manager, whose Linux support ends 2028-09-30.
 #   • OIDC issuer + Workload Identity: allows Kubernetes service accounts to
 #     federate with Azure AD and assume Managed Identities — used by LangSmith
 #     pods to authenticate to Azure Blob Storage without static keys.
-#   • System-assigned Managed Identity: AKS manages its own identity for
-#     pulling images, accessing node resource group, and VMSS operations.
-#   • Default node pool: Standard_DS3_v2 (4 vCPU, 14 GB RAM) — DSv2 family
-#     has broad quota availability across subscriptions.
-#   • Additional "large" pool: Standard_DS4_v2 (8 vCPU, 28 GB) for ClickHouse
+#   • Control-plane Managed Identity: system-assigned by default, or a
+#     user-assigned identity the caller pre-grants, for pulling images,
+#     accessing the node resource group, and VMSS operations.
+#   • Optional private API server and Entra-only access (Azure RBAC, local
+#     accounts disabled); providers then authenticate through kubelogin.
+#   • Default node pool: Standard_D8s_v5 (8 vCPU, 32 GB RAM) — Dsv5 family,
+#     the production baseline (matches the root module default). Dsv3
+#     (D8s_v3 / D16s_v3) is the documented fallback when Dsv5 quota is short.
+#   • Additional "large" pool: Standard_D16s_v5 (16 vCPU, 64 GB) for ClickHouse
 #     and other stateful/memory-intensive workloads.
-#   • NGINX ingress: deployed via Helm, exposes a single Azure Load Balancer
-#     IP that routes to all LangSmith services by path/host.
+#   • Ingress controller (Envoy Gateway by default): deployed via Helm,
+#     exposes a single Azure Load Balancer IP that routes to all LangSmith
+#     services by path/host.
 # ══════════════════════════════════════════════════════════════════════════════
 
 locals {
+  # azurerm reports an unzoned default node pool as null, not [], so the drift
+  # check below has to normalize before toset() and sort() ever see it. one()
+  # also folds away the count, returning null when create_cluster = false.
+  live_node_pool_zones = (
+    one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones) == null
+    ? toset([])
+    : toset(one(azurerm_kubernetes_cluster.main[*].default_node_pool[0].zones))
+  )
+
   service_accounts_for_workload_identity = [
     "${var.langsmith_release_name}-backend",
     "${var.langsmith_release_name}-platform-backend",
@@ -27,18 +45,26 @@ locals {
     "${var.langsmith_release_name}-ingest-queue",
     "${var.langsmith_release_name}-host-backend",
     "${var.langsmith_release_name}-listener",
-    "${var.langsmith_release_name}-agent-builder-tool-server",
-    "${var.langsmith_release_name}-agent-builder-trigger-server",
+    "${var.langsmith_release_name}-fleet-tool-server",
+    "${var.langsmith_release_name}-fleet-trigger-server",
+    # LLM Gateway (chart agentGateway) and its optional Presidio PII analyzer. Both
+    # carry langsmith.commonEnv, so both get the blob identity. Federated whether or
+    # not enable_llm_gateway is set: a credential for an absent service account is
+    # inert, and keeping the list fixed means turning the gateway on needs no apply.
+    "${var.langsmith_release_name}-agent-gateway",
+    "${var.langsmith_release_name}-presidio-analyzer",
   ]
 
   # AGIC add-on identity — extracted from the cluster resource after apply.
   # Azure creates this identity automatically in the MC_ node resource group.
   # The identity needs 3 role assignments (see below).
-  agic_addon_principal_id = (
-    var.ingress_controller == "agic" &&
-    length(azurerm_kubernetes_cluster.main.ingress_application_gateway) > 0 &&
-    length(azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity) > 0
-  ) ? azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id : null
+  # var.create_cluster is checked first so that with create_cluster = false the
+  # count = 0 resource is never indexed here — otherwise an "Invalid index" error
+  # would fire alongside (and obscure) the data source's precondition message.
+  agic_addon_principal_id = var.create_cluster && var.ingress_controller == "agic" ? try(
+    azurerm_kubernetes_cluster.main[0].ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id,
+    null
+  ) : null
 
   # Derive VNet resource ID from the AGIC subnet ID by stripping the /subnets/... suffix.
   # e.g. /subscriptions/.../virtualNetworks/langsmith-vnet-dz/subnets/langsmith-vnet-dz-subnet-agic
@@ -46,30 +72,378 @@ locals {
   agic_vnet_id = var.ingress_controller == "agic" && var.agic_subnet_id != "" ? (
     join("/subnets/", slice(split("/subnets/", var.agic_subnet_id), 0, 1))
   ) : ""
+
+  # Whether this module builds the AGIC stack (gateway, public IP, add-on identity
+  # role grants) or only consumes one that already exists. Enabling the add-on is an
+  # argument on the cluster resource, so on an attached cluster Terraform cannot turn
+  # it on and the customer enables it themselves against their own gateway. That makes
+  # the gateway and its RBAC grants theirs too: re-creating the grants here would
+  # collide with the ones az aks enable-addons already made (RoleAssignmentExists),
+  # and the gateway is not ours to manage. The postcondition below is what catches an
+  # attached cluster that never had the add-on turned on.
+  agic_managed = var.ingress_controller == "agic" && var.create_cluster
+
+  # Unified accessors so the rest of this module doesn't care whether the cluster
+  # was created here or already existed — resolves to the resource when
+  # create_cluster = true, or the read-only data source when false.
+  cluster_id              = var.create_cluster ? azurerm_kubernetes_cluster.main[0].id : data.azurerm_kubernetes_cluster.existing[0].id
+  cluster_name_actual     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].name : data.azurerm_kubernetes_cluster.existing[0].name
+  cluster_oidc_issuer_url = var.create_cluster ? azurerm_kubernetes_cluster.main[0].oidc_issuer_url : data.azurerm_kubernetes_cluster.existing[0].oidc_issuer_url
+  cluster_kube_config     = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config : data.azurerm_kubernetes_cluster.existing[0].kube_config
+  cluster_kube_config_raw = var.create_cluster ? azurerm_kubernetes_cluster.main[0].kube_config_raw : data.azurerm_kubernetes_cluster.existing[0].kube_config_raw
+
+  # On a cluster with Entra ID integration, azurerm returns kube_config with an
+  # empty client certificate and key (flattenKubernetesClusterDataSourceKubeConfigAAD),
+  # whether or not local accounts are disabled, so certificate sign-in cannot work
+  # there. Such clusters are signed in to through Entra ID with kubelogin, reusing
+  # the caller's az session; the server ID is the AKS-managed Entra server
+  # application, the same in every Azure cloud (kubelogin docs/book concepts/aks.md).
+  # A cluster still on the legacy, customer-registered server app needs that
+  # app's ID instead, which this module does not take.
+  # On the create path the live cluster wins over the planned block, so a plan
+  # that turns Entra on for an existing cluster still refreshes with the
+  # certificate the cluster accepts today.
+  cluster_entra_profile = var.create_cluster ? azurerm_kubernetes_cluster.main[0].azure_active_directory_role_based_access_control : data.azurerm_kubernetes_cluster.existing[0].azure_active_directory_role_based_access_control
+  cluster_entra         = var.create_cluster && local.live_cluster != null ? try(local.live_cluster.entra, null) == true : try(length(local.cluster_entra_profile) > 0, false)
+  kube_auth             = var.kube_auth == "auto" ? (local.cluster_entra ? "entra" : "certificate") : var.kube_auth
+
+  # var.location for a cluster created here, so the location check below is
+  # trivially satisfied and only has something to say under create_cluster = false.
+  cluster_location = var.create_cluster ? var.location : data.azurerm_kubernetes_cluster.existing[0].location
+}
+
+# Read-only lookup of a pre-existing AKS cluster (BYOC). Never creates, modifies,
+# or deletes the customer's cluster — Terraform only reads its attributes so the
+# Managed Identities/federated credentials/node pools below can attach to it.
+data "azurerm_kubernetes_cluster" "existing" {
+  count               = var.create_cluster ? 0 : 1
+  name                = var.cluster_name
+  resource_group_name = var.existing_cluster_resource_group_name
+
+  lifecycle {
+    precondition {
+      # Without this the lookup falls back to the derived "langsmith-aks<id>"
+      # name and Azure reports a missing cluster, which reads like a permissions
+      # or region problem rather than an unset variable.
+      condition     = var.cluster_name != ""
+      error_message = "create_cluster = false requires existing_cluster_name to be set to the name of the AKS cluster to attach to."
+    }
+
+    precondition {
+      # Not derived from resource_group_name. That is the resource group this
+      # module creates for Key Vault and Storage, which is not where a cluster
+      # the customer's platform team owns lives, so guessing it produces a
+      # "cluster not found" naming a resource group the operator never mentioned.
+      condition     = var.existing_cluster_resource_group_name != ""
+      error_message = "create_cluster = false requires existing_cluster_resource_group_name to be set to the resource group holding cluster '${var.cluster_name}'. Find it with: az aks list --query \"[?name=='${var.cluster_name}'].resourceGroup\" -o tsv"
+    }
+
+    precondition {
+      # 'istio-addon' (Azure Service Mesh) is configured through service_mesh_profile,
+      # an argument on the azurerm_kubernetes_cluster *resource* block. With
+      # create_cluster = false that resource doesn't exist in this module's state, so
+      # the mesh would silently never get configured rather than erroring. 'agic' is
+      # no longer rejected here: it needs the same resource-only argument to be turned
+      # on, but unlike the mesh it is usable on an attached cluster when the customer
+      # has already enabled the add-on, which the postcondition below checks for.
+      condition     = var.ingress_controller != "istio-addon"
+      error_message = "ingress_controller = 'istio-addon' requires create_cluster = true — Azure Service Mesh is configured through service_mesh_profile on a Terraform-owned cluster resource, and this module cannot enable it on a cluster it only reads. Use 'istio' for the self-managed Helm install, or 'nginx', 'agic', or 'envoy-gateway'."
+    }
+
+    precondition {
+      # A subnet Terraform is about to carve can never be one the cluster's nodes
+      # already run in, so the postcondition below could never pass. Catching the
+      # combination here names the real problem; left to the postcondition it
+      # reads as a subnet mismatch instead of an impossible configuration.
+      condition     = !var.create_vnet
+      error_message = "create_cluster = false requires create_vnet = false. An attached cluster's nodes already run in an existing subnet, and Terraform cannot carve a new one they belong to. Set create_vnet = false and supply vnet_id plus the subnet ids."
+    }
+
+    precondition {
+      # Under create_cluster = false there is nothing to derive this from, and the
+      # postcondition that would catch a blank value compares it against the
+      # cluster's agent pools — a comparison that reports a mismatch rather than
+      # an unset variable.
+      condition     = var.existing_cluster_subnet_id != ""
+      error_message = "create_cluster = false requires aks_subnet_id to be set to a subnet cluster '${var.cluster_name}' already runs nodes in. It also drives the Blob and Key Vault firewall allowlists, so it cannot be left for Terraform to derive."
+    }
+
+    postcondition {
+      # Federated credentials below use the cluster's OIDC issuer URL as their
+      # trust anchor. Without the issuer the URL is empty and every credential is
+      # created pointing at nothing — pods then fail to authenticate to Blob
+      # Storage/Key Vault at runtime, long after a "successful" apply.
+      condition     = self.oidc_issuer_enabled
+      error_message = "Existing cluster '${var.cluster_name}' does not have the OIDC issuer enabled, which Workload Identity federation requires. Enable both on the cluster first: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+    }
+
+    postcondition {
+      # The root module feeds this same subnet to the default-deny Blob firewall
+      # and the Key Vault network ACLs, so it has to be a subnet the cluster's
+      # nodes actually run in. Point it anywhere else and apply succeeds, pods
+      # schedule, and every Blob write and Key Vault read 403s at runtime. It's
+      # also the only subnet an added node pool can join, since a node pool can
+      # only live in its cluster's VNet.
+      condition     = contains(compact(self.agent_pool_profile[*].vnet_subnet_id), var.existing_cluster_subnet_id)
+      error_message = "aks_subnet_id must be one of the subnets cluster '${var.cluster_name}' already runs nodes in, because it also drives the Blob and Key Vault firewall allowlists. Set aks_subnet_id to one of: [${join(", ", compact(self.agent_pool_profile[*].vnet_subnet_id))}]"
+    }
+
+    postcondition {
+      # Enabling ingress-appgw is an argument on the cluster resource, so on an
+      # attached cluster the add-on has to already be on. Without this the apply
+      # succeeds having created no gateway and no IngressClass, and the failure
+      # surfaces later as LangSmith Ingress objects that no controller ever picks up.
+      # This only proves the add-on exists. It cannot prove the add-on identity holds
+      # the three role assignments AGIC needs, because ARM has no way to list
+      # assignments by principal from Terraform — an under-permissioned identity still
+      # 403s at runtime, so the README documents how to verify the grants.
+      condition     = var.ingress_controller != "agic" || length(self.ingress_application_gateway) > 0
+      error_message = "ingress_controller = 'agic' on an attached cluster requires the ingress-appgw add-on to already be enabled on cluster '${var.cluster_name}', because Terraform can only enable it on a cluster it creates. Enable it against your Application Gateway first: az aks enable-addons --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --addons ingress-appgw --appgw-id <application-gateway-resource-id>"
+    }
+  }
+}
+
+# Workload Identity has to be enabled on top of the OIDC issuer — they're
+# separate AKS flags, so "issuer on, Workload Identity off" is a reachable state
+# that passes the check above, applies cleanly, and then leaves pods without a
+# projected service account token. The azurerm data source doesn't expose the
+# flag, so read the cluster's ARM properties directly. Read-only GET, no writes.
+data "azapi_resource" "existing_security_profile" {
+  count                  = var.create_cluster ? 0 : 1
+  type                   = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  resource_id            = data.azurerm_kubernetes_cluster.existing[0].id
+  response_export_values = ["properties.securityProfile.workloadIdentity.enabled"]
+
+  lifecycle {
+    postcondition {
+      condition     = try(self.output.properties.securityProfile.workloadIdentity.enabled, false)
+      error_message = "Existing cluster '${var.cluster_name}' has the OIDC issuer enabled but not Workload Identity, so the federated credentials this module creates would never mint a token. Enable it: az aks update --name ${var.cluster_name} --resource-group ${var.existing_cluster_resource_group_name} --enable-oidc-issuer --enable-workload-identity"
+    }
+  }
+}
+
+# Key Vault, Blob, PostgreSQL, and Redis are all created in var.location, which
+# nothing ties to the region the existing cluster runs in. A mismatch works, at
+# the cost of cross-region latency and egress on every trace write, so warn
+# rather than fail — a deliberate split-region deployment stays possible.
+check "existing_cluster_location" {
+  assert {
+    # Azure accepts both "East US" and "eastus" for the same region.
+    condition     = lower(replace(local.cluster_location, " ", "")) == lower(replace(var.location, " ", ""))
+    error_message = "Cluster '${var.cluster_name}' runs in ${local.cluster_location} but location is set to ${var.location}. Key Vault, Blob, PostgreSQL, and Redis will be created in ${var.location}, so pod traffic to them crosses regions."
+  }
 }
 
 # Helm provider uses the AKS cluster credentials to deploy charts
-# (NGINX ingress, and later cert-manager/KEDA via k8s-bootstrap).
-# Credentials come from the AKS resource itself — no external kubeconfig needed.
+# (the ingress controller, and later cert-manager/KEDA via k8s-bootstrap).
+# Credentials come from the AKS cluster (created here or pre-existing) —
+# no external kubeconfig needed. On an Entra cluster the client certificate is
+# empty, so the provider runs kubelogin for a token as the az CLI identity
+# instead. The server ID is the AKS Entra server application, the same in
+# every cloud.
 provider "helm" {
   kubernetes {
-    host                   = azurerm_kubernetes_cluster.main.kube_config[0].host
-    client_certificate     = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].client_certificate)
-    client_key             = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].client_key)
-    cluster_ca_certificate = base64decode(azurerm_kubernetes_cluster.main.kube_config[0].cluster_ca_certificate)
+    host                   = local.cluster_kube_config[0].host
+    client_certificate     = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_certificate)
+    client_key             = local.kube_auth == "entra" ? null : base64decode(local.cluster_kube_config[0].client_key)
+    cluster_ca_certificate = base64decode(local.cluster_kube_config[0].cluster_ca_certificate)
+
+    dynamic "exec" {
+      for_each = local.kube_auth == "entra" ? [1] : []
+      content {
+        api_version = "client.authentication.k8s.io/v1beta1"
+        command     = "kubelogin"
+        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
+      }
+    }
   }
 }
 
 # The AKS cluster — the Kubernetes control plane + node pools.
 # All LangSmith application pods, supporting tools (cert-manager, KEDA),
 # and the ingress controller run here.
+# count = 0 when attaching to a pre-existing cluster (create_cluster = false);
+# see data.azurerm_kubernetes_cluster.existing above for that path.
+# Reads the network profile the cluster runs today, so the root module can
+# refuse a tfvars edit that Azure would apply as a one-way migration, or that
+# the provider would apply by replacing the cluster. It is a list at
+# subscription scope rather than a GET by ID because a GET on a cluster that
+# does not exist yet fails the plan, while a list that finds nothing is the
+# "no cluster yet" answer a first apply needs. Its inputs are variables only,
+# so the read happens during plan and never defers to apply, where the cluster
+# update it exists to stop could already be under way. The query keeps only the
+# cluster with this name, so state holds one entry and not every cluster the
+# caller can read; the resource group is matched in Terraform below, since a
+# name can repeat across groups. The comparison lives in the root module
+# (terraform_data.aks_network_mode_guard), where a failing precondition is
+# reachable by the test suite. The same read feeds the access guard
+# (terraform_data.aks_access_guard), with the control-plane identity it runs
+# as, and tells the providers whether the cluster already takes Entra tokens.
+# Read-only GET, no writes.
+data "azapi_resource_list" "clusters" {
+  count     = var.create_cluster ? 1 : 0
+  type      = "Microsoft.ContainerService/managedClusters@2024-09-01"
+  parent_id = "/subscriptions/${var.subscription_id}"
+  response_export_values = {
+    clusters = "value[?name=='${var.cluster_name}'].{id: id, name: name, mode: properties.networkProfile.networkPluginMode, dataplane: properties.networkProfile.networkDataplane, policy: properties.networkProfile.networkPolicy, pod_cidr: properties.networkProfile.podCidr, outbound: properties.networkProfile.outboundType, private: properties.apiServerAccessProfile.enablePrivateCluster, private_dns_zone: properties.apiServerAccessProfile.privateDNSZone, entra: properties.aadProfile.managed, identity: identity.type, identity_ids: identity.userAssignedIdentities}"
+  }
+}
+
+locals {
+  # The cluster this module manages, if Azure already has it. Azure treats
+  # resource group and cluster names case-insensitively, so this does too.
+  # try() covers a mocked provider, whose output has no such shape.
+  live_cluster = one([
+    for c in try(data.azapi_resource_list.clusters[0].output.clusters, []) : c
+    if lower(c.name) == lower(var.cluster_name) && lower(split("/", c.id)[4]) == lower(var.resource_group_name)
+  ])
+}
+
+# ── Control-plane identity ────────────────────────────────────────────────────
+# A system-assigned identity exists only once the cluster does, so its grants on
+# a supplied VNet can only be made at or after creation. A user-assigned one is
+# created, or supplied, and granted first, which is Microsoft's recommendation
+# for a cluster in a VNet, route table, or private DNS zone the caller owns.
+locals {
+  control_plane_user   = var.create_cluster && var.control_plane_identity == "user"
+  control_plane_create = local.control_plane_user && var.control_plane_identity_id == ""
+
+  # The identity's ID as the access guard compares it, known at plan for both
+  # sources: the created identity's ID is built from its name.
+  control_plane_identity_id = !local.control_plane_user ? null : (
+    local.control_plane_create
+    ? "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${var.cluster_name}-control-plane"
+    : var.control_plane_identity_id
+  )
+  control_plane_principal_id = !local.control_plane_user ? null : (
+    local.control_plane_create
+    ? one(azurerm_user_assigned_identity.control_plane[*].principal_id)
+    : one(data.azurerm_user_assigned_identity.control_plane[*].principal_id)
+  )
+
+  # AKS registers a private API server in a zone the caller supplies as the
+  # control-plane identity; System and None need no grant.
+  control_plane_dns_zone = var.private_cluster_enabled && !contains(["", "System", "None"], var.private_dns_zone_id)
+
+  # AKS links a supplied zone to the cluster's VNet unless the zone's owner
+  # already has, which takes Network Contributor on the VNet. Terraform cannot
+  # tell which, so the grants it makes cover the VNet. Without a zone, Microsoft
+  # documents the node subnet as enough.
+  control_plane_network_scope = local.control_plane_dns_zone ? var.vnet_id : var.subnet_id
+
+  control_plane_grant = local.control_plane_user && var.control_plane_identity_manage_grants
+  control_plane_check = local.control_plane_user && !var.control_plane_identity_manage_grants
+}
+
+resource "azurerm_user_assigned_identity" "control_plane" {
+  count               = local.control_plane_create ? 1 : 0
+  name                = "${var.cluster_name}-control-plane"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+# A supplied identity is read for its principal ID, which the grants and the
+# check below are keyed on. Its resource ID passed validation, so the name and
+# group are positions 8 and 4.
+data "azurerm_user_assigned_identity" "control_plane" {
+  count               = local.control_plane_user && !local.control_plane_create ? 1 : 0
+  name                = split("/", var.control_plane_identity_id)[8]
+  resource_group_name = split("/", var.control_plane_identity_id)[4]
+}
+
+# principal_type spares a just-created identity the directory lookup Azure
+# otherwise makes before the identity has replicated.
+resource "azurerm_role_assignment" "control_plane_network_contributor" {
+  count                = local.control_plane_grant ? 1 : 0
+  scope                = local.control_plane_network_scope
+  role_definition_name = "Network Contributor"
+  principal_id         = local.control_plane_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "control_plane_dns_zone_contributor" {
+  count                = local.control_plane_grant && local.control_plane_dns_zone ? 1 : 0
+  scope                = var.private_dns_zone_id
+  role_definition_name = "Private DNS Zone Contributor"
+  principal_id         = local.control_plane_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# AKS documents up to 60 minutes for a grant to its identity to take effect,
+# and a cluster created before then fails on the network it cannot yet join.
+# Hold the cluster back once, when the grants are made. 300s covers the common
+# case, as time_sleep.agic_identity_propagation below does for the AGIC grants.
+resource "time_sleep" "control_plane_grant_propagation" {
+  count           = local.control_plane_grant ? 1 : 0
+  create_duration = "300s"
+  depends_on = [
+    azurerm_role_assignment.control_plane_network_contributor,
+    azurerm_role_assignment.control_plane_dns_zone_contributor,
+  ]
+}
+
+# With grants left to the network's owner, the cluster's preconditions check
+# that the identity holds a role at each scope. Any role counts: Microsoft's
+# minimum for a custom role differs between its pages, so Azure, not this
+# check, decides whether the role is enough when the cluster is created.
+# Azure lists a principal's assignments at, above, and below the scope it is
+# asked about, so each check keeps the ones at or above it. The network check
+# stays on the node subnet with a supplied zone: an owner who linked the zone to
+# the VNet first leaves AKS nothing to do on the VNet, and the check cannot tell
+# a linked zone from one AKS would link. The root requires a supplied identity
+# here, so its principal, and the check, resolve at plan. A route table on the
+# subnet is checked too: Microsoft lists it among the identity's scopes.
+data "azurerm_role_assignments" "control_plane" {
+  for_each = local.control_plane_check ? merge(
+    { network = var.subnet_id },
+    var.subnet_route_table_id != "" ? { route_table = var.subnet_route_table_id } : {},
+    local.control_plane_dns_zone ? { dns_zone = var.private_dns_zone_id } : {},
+  ) : {}
+  scope        = each.value
+  principal_id = local.control_plane_principal_id
+}
+
+locals {
+  control_plane_missing_grants = [
+    for g in [
+      { key = "network", role = "Network Contributor", scope = var.subnet_id },
+      { key = "route_table", role = "Network Contributor", scope = var.subnet_route_table_id },
+      { key = "dns_zone", role = "Private DNS Zone Contributor", scope = var.private_dns_zone_id },
+    ] : g
+    # ?: rather than &&, which evaluates both sides and would index a check
+    # that does not exist.
+    if contains(keys(data.azurerm_role_assignments.control_plane), g.key) ? !anytrue([
+      for a in data.azurerm_role_assignments.control_plane[g.key].role_assignments :
+      startswith("${lower(g.scope)}/", "${lower(trimsuffix(a.role_assignment_scope, "/"))}/")
+    ]) : false
+  ]
+}
+
+# Orders the cluster after anything its egress needs that the root module
+# creates (a NAT gateway's association with the node subnet). A module-level
+# depends_on would also defer this module's plan-time reads to apply, so the
+# dependency is carried by this resource alone.
+resource "terraform_data" "egress_ready" {
+  count = var.create_cluster ? 1 : 0
+  input = var.egress_dependencies
+}
+
 resource "azurerm_kubernetes_cluster" "main" {
+  count               = var.create_cluster ? 1 : 0
   name                = var.cluster_name
   location            = var.location
   resource_group_name = var.resource_group_name
   dns_prefix          = var.cluster_name
   kubernetes_version  = var.kubernetes_version
   tags                = merge(var.tags, { module = "aks" })
+
+  # Free has no SLA. Standard carries the financially backed uptime SLA (99.95%
+  # when the control plane spans availability zones) and is where a production
+  # cluster starts; Premium adds long-term support. The provider updates the tier
+  # in place, so an existing cluster moves tiers without a rebuild.
+  sku_tier     = var.sku_tier
+  support_plan = var.support_plan
 
   role_based_access_control_enabled = true
 
@@ -81,12 +455,12 @@ resource "azurerm_kubernetes_cluster" "main" {
   # token into pods annotated with azure.workload.identity/use: "true".
   workload_identity_enabled = true
 
-  # Default system node pool — runs kube-system, cert-manager, KEDA, NGINX,
+  # Default system node pool — runs kube-system, cert-manager, KEDA, ingress,
   # and LangSmith services that don't require extra resources.
   default_node_pool {
     name = "default"
 
-    # Standard_DS3_v2: 4 vCPU, 14 GB RAM — DSv2 family has broad quota availability.
+    # Default Standard_D8s_v5: 8 vCPU, 32 GB RAM — Dsv5 family, the production baseline.
     # LangSmith backend requests 100m CPU / 500Mi; all pods use lightweight mode.
     vm_size = var.default_node_pool_vm_size
 
@@ -100,7 +474,13 @@ resource "azurerm_kubernetes_cluster" "main" {
     # Setting to 60 fits all passes on 1 node, avoiding autoscaler scale-out and vCPU quota pressure.
     max_pods = var.default_node_pool_max_pods
 
-    # Nodes live in the main subnet; Azure CNI assigns pod IPs from this range.
+    # The provider updates os_sku in place when the old and new values both start
+    # with Ubuntu or AzureLinux, which covers every value the root accepts; only a
+    # value outside those would cycle the pool through temporary_name_for_rotation.
+    os_sku = var.default_node_pool_os_sku
+
+    # Nodes live in the main subnet. In node-subnet mode pods take their IPs
+    # from it too; in overlay mode they come from pod_cidr instead.
     vnet_subnet_id = var.subnet_id
 
     # Temporary node pool name used during node pool upgrades/rotations.
@@ -114,11 +494,36 @@ resource "azurerm_kubernetes_cluster" "main" {
     zones = var.availability_zones
   }
 
-  # System-assigned Managed Identity: AKS uses this to manage node VMs,
-  # pull from ACR (if configured), and interact with the node resource group.
+  # Control-plane identity: AKS uses it to manage node VMs, pull from ACR (if
+  # configured), and interact with the node resource group. System-assigned,
+  # or the user-assigned identity above, granted before the cluster exists.
+  # The provider updates a change of identity in place, but grants held by the
+  # old identity do not follow it, so the root module refuses the change.
   identity {
-    type = "SystemAssigned"
+    type         = local.control_plane_user ? "UserAssigned" : "SystemAssigned"
+    identity_ids = local.control_plane_user ? [local.control_plane_create ? azurerm_user_assigned_identity.control_plane[0].id : var.control_plane_identity_id] : null
   }
+
+  # Entra-only access: Kubernetes authorization through Azure RBAC, and no
+  # local admin account, so kube_config carries no client certificate and the
+  # providers authenticate through kubelogin (see the exec blocks). Azure
+  # refuses to turn Entra integration off once it is on; the root module
+  # refuses the edit before Azure gets the chance.
+  local_account_disabled = var.entra_only ? true : null
+
+  dynamic "azure_active_directory_role_based_access_control" {
+    for_each = var.entra_only ? [1] : []
+    content {
+      azure_rbac_enabled     = true
+      admin_group_object_ids = var.entra_admin_group_object_ids
+    }
+  }
+
+  # Private API server: the endpoint lives in the cluster's VNet and the
+  # public FQDN goes away. Both settings force a new cluster, which is why the
+  # root module refuses to flip them on a cluster that already exists.
+  private_cluster_enabled = var.private_cluster_enabled
+  private_dns_zone_id     = var.private_cluster_enabled ? (var.private_dns_zone_id == "" ? "System" : var.private_dns_zone_id) : null
 
   # API server authorized IP ranges. Empty list (default) omits the block so
   # the master endpoint stays publicly reachable — required for the apply
@@ -132,17 +537,32 @@ resource "azurerm_kubernetes_cluster" "main" {
     }
   }
 
-  # Azure CNI: pods get IPs directly from the VNet subnet, giving them full
-  # network reachability to PostgreSQL/Redis without any NAT.
+  # Azure CNI in the mode the root module selected. network_plugin_mode = null
+  # is node-subnet mode: pods get VNet addresses and reach PostgreSQL/Redis
+  # without NAT. "overlay" gives pods addresses from pod_cidr, a range private
+  # to the cluster; pod traffic to the VNet leaves the node with the node's
+  # address, which is what the Blob firewall and Key Vault ACLs allowlist.
   # service_cidr must NOT overlap with the VNet or any peered network.
-  # network_policy = "azure" enables the Azure NetworkPolicy engine so
-  # NetworkPolicy resources actually deny traffic — without it, NetworkPolicy
-  # objects are accepted by the API but never enforced.
+  # A network_policy engine is what makes NetworkPolicy resources deny traffic;
+  # without one they are accepted by the API and never enforced. With the
+  # Cilium data plane the engine has to be Cilium as well.
   network_profile {
-    network_plugin = "azure"
-    network_policy = "azure"
-    service_cidr   = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
-    dns_service_ip = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+    network_plugin      = "azure"
+    network_plugin_mode = var.network_plugin_mode
+    pod_cidr            = var.pod_cidr
+    network_data_plane  = var.network_data_plane
+    network_policy      = var.network_policy
+    service_cidr        = var.service_cidr   # default: 10.0.64.0/20 (K8s ClusterIP range)
+    dns_service_ip      = var.dns_service_ip # default: 10.0.64.10  (CoreDNS ClusterIP)
+
+    # Egress. loadBalancer (the provider's default) gives the cluster an
+    # AKS-managed outbound public IP. userDefinedRouting sends it by the node
+    # subnet's route table, to a firewall or on-premises, and AKS creates no
+    # outbound IP; userAssignedNATGateway leaves through the NAT gateway on the
+    # subnet. The provider updates a change in place, and Azure supports each
+    # change between these three on a cluster in a supplied VNet, but it moves
+    # the egress IP and drops connections, so the root refuses one unasked.
+    outbound_type = var.outbound_type
   }
 
   # Key Vault CSI Secrets Store driver — enables pods to mount secrets from
@@ -182,36 +602,101 @@ resource "azurerm_kubernetes_cluster" "main" {
   lifecycle {
     # upgrade_settings change during rolling node upgrades; ignore to prevent
     # drift between Terraform state and live cluster configuration.
-    # zones: AKS does not support changing zones on an existing node pool —
-    # it is only applied at creation time. Ignoring prevents forced recreation
-    # when availability_zones is set on an existing cluster.
+    #
+    # zones: azurerm ~> 4.0 does support re-zoning an existing default node
+    # pool. It is one of the cycleNodePoolProperties, so a change is applied by
+    # cycling the system node pool through temporary_name_for_rotation (set to
+    # "defaulttmp" above) rather than by recreating the cluster. We suppress it
+    # deliberately: the provider's cycle does not cordon and drain, so it hard-
+    # disrupts every pod on the system pool. Editing one tfvars line should not
+    # do that unannounced. The check block below reports the resulting drift.
     ignore_changes = [
       default_node_pool[0].upgrade_settings,
       default_node_pool[0].zones,
     ]
+
+    precondition {
+      condition = length(local.control_plane_missing_grants) == 0
+      error_message = join(" ", concat(
+        [
+          "The control-plane identity (principal ${coalesce(local.control_plane_principal_id, "unknown")}) holds no role on ${join(" or ", [for g in local.control_plane_missing_grants : g.scope])}.",
+          "aks_control_plane_identity_manage_grants = false leaves these grants to the network's owner, and AKS needs them before the cluster is created.",
+          "A grant counts at that scope or above it, in the built-in role below or a custom role with the same permissions. Run, then apply again:",
+        ],
+        [for g in local.control_plane_missing_grants : "az role assignment create --assignee-object-id ${coalesce(local.control_plane_principal_id, "unknown")} --assignee-principal-type ServicePrincipal --role \"${g.role}\" --scope ${g.scope};"],
+      ))
+    }
+  }
+
+  depends_on = [time_sleep.control_plane_grant_propagation, terraform_data.egress_ready]
+}
+
+# ignore_changes on default_node_pool[0].zones makes an availability_zones edit
+# a silent no-op: the plan comes back clean and the node pool stays put. Surface
+# that as a warning on every plan so a requested zone change is never mistaken
+# for an applied one.
+#
+# A check block rather than a postcondition on purpose. A failing postcondition
+# aborts planning even when the cluster has no planned changes, so a deployment
+# already sitting in this state cannot apply anything at all until it is
+# resolved. The drift is worth reporting, not worth blocking unrelated work.
+#
+# An empty availability_zones is exempt. [] is the default and asks Azure to
+# place the pool, so whatever zones a pool already reports are not drift from a
+# request nobody made. Without the exemption every cluster created under the
+# earlier ["1"] default would warn on every plan.
+#
+# create_cluster = false is exempt too. local.live_node_pool_zones folds the
+# count away to an empty set there, which would otherwise read as drift against
+# any requested zones on a cluster this module does not manage.
+check "aks_node_pool_zone_drift" {
+  assert {
+    condition = length(var.availability_zones) == 0 || length(azurerm_kubernetes_cluster.main) == 0 ? true : local.live_node_pool_zones == toset(var.availability_zones)
+    error_message = join("", [
+      "AKS node pool zones are [",
+      join(",", sort(tolist(local.live_node_pool_zones))),
+      "] but availability_zones requests [",
+      join(",", sort(var.availability_zones)),
+      "]. This module ignores zone changes on an existing node pool, so the ",
+      "request was discarded and the live zones above are what you have. To ",
+      "make it take effect, either revert availability_zones to the live value, ",
+      "or drop default_node_pool[0].zones from the ignore_changes block in ",
+      "modules/k8s-cluster/main.tf and apply during a maintenance window. That ",
+      "cycles the system node pool, which does not cordon and drain and will ",
+      "disrupt every pod running on it.",
+    ])
   }
 }
 
 # Additional node pools for workloads that need different compute profiles.
-# Default: one "large" pool (Standard_DS4_v2, 8 vCPU / 28 GB) for ClickHouse
+# Default: one "large" pool (Standard_D16s_v5, 16 vCPU / 64 GB) for ClickHouse
 # and other memory-intensive services. Scales 0→2 (scales to zero when idle).
 resource "azurerm_kubernetes_cluster_node_pool" "node_pool" {
   for_each = var.additional_node_pools
 
   name                  = each.key
-  kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
+  kubernetes_cluster_id = local.cluster_id
   vm_size               = each.value.vm_size
   auto_scaling_enabled  = true
   vnet_subnet_id        = var.subnet_id
   min_count             = each.value.min_count
   max_count             = each.value.max_count
+  node_labels           = each.value.node_labels
+  node_taints           = each.value.node_taints
+  kubelet_disk_type     = each.value.kubelet_disk_type
   tags                  = merge(var.tags, { module = "aks", pool = each.key })
+
+  # Follows the default pool unless the pool sets its own. In place between any
+  # two Ubuntu* or AzureLinux* values; the provider replaces the pool otherwise.
+  os_sku = coalesce(each.value.os_sku, var.default_node_pool_os_sku)
 
   # "User" mode: these pools run application workloads.
   # "System" mode pools are reserved for system pods (kube-system).
   mode = "User"
 
-  temporary_name_for_rotation = "${each.key}tmp"
+  # AKS limits rotation names to 12 lowercase alphanumeric characters. Include
+  # a stable hash fragment so truncating long pool names cannot collide.
+  temporary_name_for_rotation = "${substr(each.key, 0, 7)}${substr(sha1(each.key), 0, 2)}tmp"
 
   lifecycle {
     ignore_changes = [upgrade_settings]
@@ -245,11 +730,11 @@ resource "azurerm_user_assigned_identity" "cert_manager" {
 # Allows cert-manager pod to exchange its K8s OIDC token for an Azure AD token
 # so it can call the Azure DNS API without a static service principal secret.
 resource "azurerm_federated_identity_credential" "cert_manager" {
-  name      = "${var.cluster_name}-cert-manager-federated"
+  name                      = "${var.cluster_name}-cert-manager-federated"
   user_assigned_identity_id = azurerm_user_assigned_identity.cert_manager.id
 
   audience = ["api://AzureADTokenExchange"]
-  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  issuer   = local.cluster_oidc_issuer_url
   subject  = "system:serviceaccount:cert-manager:cert-manager"
 }
 
@@ -258,11 +743,11 @@ resource "azurerm_federated_identity_credential" "cert_manager" {
 resource "azurerm_federated_identity_credential" "k8s_app" {
   for_each = toset(local.service_accounts_for_workload_identity)
 
-  name      = "langsmith-federated-${each.value}"
+  name                      = "langsmith-federated-${each.value}"
   user_assigned_identity_id = azurerm_user_assigned_identity.k8s_app.id
 
   audience = ["api://AzureADTokenExchange"]
-  issuer   = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  issuer   = local.cluster_oidc_issuer_url
   subject  = "system:serviceaccount:${var.langsmith_namespace}:${each.value}"
 }
 
@@ -379,8 +864,8 @@ resource "helm_release" "istio_gateway" {
 }
 
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
-# Provisions an Azure Application Gateway v2 and installs the AGIC Helm chart.
-# AGIC watches Kubernetes Ingress resources with ingressClassName: azure/application-gateway
+# Provisions an Azure Application Gateway v2 and enables the AKS ingress-appgw add-on.
+# AGIC watches Kubernetes Ingress resources with ingressClassName: azure-application-gateway
 # and programs AGW routing rules dynamically. Auth uses Workload Identity (ARM auth).
 #
 # Prerequisites: agic_subnet_id must point to a dedicated /24+ subnet in the same VNet.
@@ -391,7 +876,7 @@ resource "helm_release" "istio_gateway" {
 # dns_label sets a DNS name: <dns_label>.<region>.cloudapp.azure.com on the AGW public IP.
 # For AGIC, the DNS label is set directly on the Azure public IP resource (not via K8s annotation).
 resource "azurerm_public_ip" "agw" {
-  count               = var.ingress_controller == "agic" ? 1 : 0
+  count               = local.agic_managed ? 1 : 0
   name                = "${var.cluster_name}-agw-pip"
   resource_group_name = var.resource_group_name
   location            = var.location
@@ -405,11 +890,17 @@ resource "azurerm_public_ip" "agw" {
 # The placeholder backend/listener/rule below satisfies the required AGW schema;
 # AGIC replaces them with actual LangSmith routing on first reconcile.
 resource "azurerm_application_gateway" "agw" {
-  count               = var.ingress_controller == "agic" ? 1 : 0
+  count               = local.agic_managed ? 1 : 0
   name                = "${var.cluster_name}-agw"
   resource_group_name = var.resource_group_name
   location            = var.location
   tags                = merge(var.tags, { module = "aks", component = "agic" })
+
+  # Attached only when the caller passes a policy, which it does with the
+  # WAF_v2 tier. Azure supports policy associations on no other tier, and the
+  # provider does not check the pair, so a Standard_v2 gateway with a policy
+  # plans clean and fails at apply.
+  firewall_policy_id = var.firewall_policy_id
 
   sku {
     name     = var.agw_sku_tier
@@ -467,6 +958,16 @@ resource "azurerm_application_gateway" "agw" {
   }
 
   lifecycle {
+    # Azure rejects a WAF_v2 gateway that has no policy attached, with
+    # ApplicationGatewayFirewallNotConfiguredForSelectedSku. There is no mode
+    # where the tier runs without one, so catch the pair here rather than 15
+    # minutes into an apply. Deliberately not a silent downgrade to Standard_v2:
+    # an operator who asked for WAF should not end up with no firewall.
+    precondition {
+      condition     = var.agw_sku_tier != "WAF_v2" || var.firewall_policy_id != null
+      error_message = "agw_sku_tier is WAF_v2 but no WAF policy was supplied. Set create_waf = true, which creates the policy and selects the WAF_v2 tier for you, or set agw_sku_tier = \"Standard_v2\"."
+    }
+
     # AGIC manages these resources after initial creation.
     # Ignoring prevents Terraform from overwriting AGIC-programmed routing rules
     # on every subsequent apply.
@@ -494,7 +995,8 @@ resource "azurerm_application_gateway" "agw" {
 # assigned explicitly. Three permissions are required:
 #   1. Reader on the resource group (discover AGW and related resources)
 #   2. Contributor on the Application Gateway (update routing rules)
-#   3. Network Contributor on the VNet (subnet join action for AGW subnet)
+#   3. Network Contributor for the subnet join action on the AGW subnet, at VNet
+#      scope by default and narrowed by agic_network_contributor_scope
 #
 # The add-on identity object_id is exposed via:
 #   azurerm_kubernetes_cluster.main.ingress_application_gateway[0]
@@ -506,40 +1008,58 @@ resource "azurerm_application_gateway" "agw" {
 # persistent 403 errors from the AGIC controller even though the assignments exist in ARM.
 # A 5-minute wait after cluster creation allows Azure AD to fully register the identity.
 resource "time_sleep" "agic_identity_propagation" {
-  count           = var.ingress_controller == "agic" ? 1 : 0
+  count           = local.agic_managed ? 1 : 0
   create_duration = "300s"
   depends_on      = [azurerm_kubernetes_cluster.main]
 }
 
+# principal_type is set explicitly on each AGIC assignment: subscriptions that
+# delegate roleAssignments/write with an ABAC condition on principalType return 403
+# when the request omits it.
 resource "azurerm_role_assignment" "agic_rg_reader" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
+  count                = local.agic_managed ? 1 : 0
   scope                = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
   role_definition_name = "Reader"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
 
 resource "azurerm_role_assignment" "agic_agw_contributor" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
+  count                = local.agic_managed ? 1 : 0
   scope                = azurerm_application_gateway.agw[0].id
   role_definition_name = "Contributor"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [azurerm_application_gateway.agw, time_sleep.agic_identity_propagation]
 }
 
+# Network Contributor is Microsoft.Network/* with no NotActions, so at VNet scope
+# this identity can write to every subnet in the VNet, including which NSG or
+# route table each one carries. AGIC needs subnets/join/action and subnets/read on
+# one subnet, and Azure documents those as assignable "on the virtual network or
+# subnet", so 'subnet' is sufficient and is what a VNet you do not own should get.
+#
+# The default stays 'vnet' because scope is ForceNew: narrowing it destroys and
+# recreates the assignment, which is a non-empty plan and a window of 403s for
+# every deployment already running. 'none' leaves the grant to an operator whose
+# network team will not delegate roleAssignments/write on their VNet.
 resource "azurerm_role_assignment" "agic_vnet_network_contributor" {
-  count                = var.ingress_controller == "agic" ? 1 : 0
-  scope                = local.agic_vnet_id
+  count                = local.agic_managed && var.agic_network_contributor_scope != "none" ? 1 : 0
+  scope                = var.agic_network_contributor_scope == "subnet" ? var.agic_subnet_id : local.agic_vnet_id
   role_definition_name = "Network Contributor"
-  principal_id         = azurerm_kubernetes_cluster.main.ingress_application_gateway[0].ingress_application_gateway_identity[0].object_id
+  principal_id         = local.agic_addon_principal_id
+  principal_type       = "ServicePrincipal"
   depends_on           = [time_sleep.agic_identity_propagation]
 }
 
 # ── Envoy Gateway ─────────────────────────────────────────────────────────────
-# CNCF Gateway API implementation. Uses Gateway/HTTPRoute resources (not classic Ingress).
-# Published via OCI registry — no separate Helm repository needed.
-# After install: create a GatewayClass + Gateway + HTTPRoute to expose LangSmith.
-# See: helm/values/examples/langsmith-values-ingress-envoy-gateway.yaml
+# CNCF Gateway API implementation and the default ingress_controller. Uses
+# Gateway/HTTPRoute resources (not classic Ingress). Published via OCI registry,
+# so no separate Helm repository is needed. The chart ships the Gateway API CRDs.
+# Terraform installs only the controller: helm/scripts/deploy.sh creates the
+# EnvoyProxy (which carries the DNS label onto the proxy Service), GatewayClass
+# and Gateway, and the LangSmith chart renders the HTTPRoutes.
 
 resource "helm_release" "envoy_gateway" {
   count     = var.ingress_controller == "envoy-gateway" ? 1 : 0

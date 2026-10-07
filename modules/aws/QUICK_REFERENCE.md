@@ -113,10 +113,13 @@ Addons are controlled by `enable_*` flags in `infra/terraform.tfvars`. Set the f
 
 ```hcl
 # infra/terraform.tfvars
-enable_deployments   = true    # LangGraph Platform (required for Agent Builder and Polly)
-enable_agent_builder = true    # Agent Builder UI
-enable_insights      = true    # ClickHouse-backed analytics
-enable_polly         = true    # Polly AI eval/monitoring
+enable_deployments   = true    # Optional full Deployments: listener + operator
+enable_fleet         = true    # No-code agents; enables its required host-backend
+fleet_storage        = "external" # Or "in-cluster"
+enable_insights      = true    # AI-powered trace analysis
+insights_storage     = "external" # Or "in-cluster"
+enable_polly         = true    # LangSmith Chat (formerly Polly)
+polly_storage        = "external" # Or "in-cluster"
 enable_usage_telemetry = false # Extended usage telemetry
 ```
 
@@ -213,20 +216,32 @@ aws iam get-role --role-name <irsa-role-name>
 
 ## Terraform Commands
 
-```bash
-cd modules/aws/infra
+Every terraform target accepts `ARGS`, which is appended to the terraform command:
 
-terraform init
-terraform plan
-terraform apply
-terraform apply -target=module.eks
-terraform output
-terraform output -raw cluster_name
-terraform output -raw alb_dns_name
-terraform output -raw langsmith_irsa_role_arn
-terraform output -raw bucket_name
-terraform state list
+```bash
+cd modules/aws
+
+make init    ARGS="-upgrade"               # re-resolve provider versions
+make plan    ARGS="-target=module.eks"     # plan one module
+make plan    ARGS="-out=tfplan"            # save a plan file
+make apply   ARGS="tfplan"                 # apply that saved plan
+make apply   ARGS="-auto-approve"          # skip the approval prompt
+make destroy ARGS="-target=module.redis"   # destroy one module
 ```
+
+For any other subcommand, `make tf` runs against `infra/`:
+
+```bash
+make tf ARGS="output"
+make tf ARGS="output -raw cluster_name"
+make tf ARGS="output -raw alb_dns_name"
+make tf ARGS="output -raw langsmith_irsa_role_arn"
+make tf ARGS="output -raw bucket_name"
+make tf ARGS="state list"
+make tf ARGS="validate"
+```
+
+`make tf ARGS="..."` is exactly `terraform -chdir=infra ...`, so you can also run terraform directly from `modules/aws/infra` if you prefer.
 
 ---
 
@@ -235,11 +250,7 @@ terraform state list
 ```bash
 cd modules/aws
 
-# Option A: script-driven deploy
 make uninstall
-
-# Option B: Terraform-managed deploy
-make destroy-app
 
 # Then destroy infrastructure:
 # 1. Set postgres_deletion_protection = false in infra/terraform.tfvars
@@ -247,4 +258,9 @@ make destroy-app
 cd infra
 terraform apply
 terraform destroy
+
+# After destroy succeeds, remove cloud secrets explicitly, then local files.
+cd ..
+make purge-secrets
+make clean
 ```

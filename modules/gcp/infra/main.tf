@@ -48,11 +48,6 @@ provider "helm" {
 #------------------------------------------------------------------------------
 data "google_client_config" "default" {}
 
-# Get project information
-data "google_project" "current" {
-  project_id = var.project_id
-}
-
 # Wait for GKE API server to be fully ready after cluster creation.
 # The google_container_cluster resource waits until RUNNING state, but the
 # API server needs a short additional window before accepting requests.
@@ -82,6 +77,13 @@ locals {
   # Must match modules/iam account_id format.
   workload_identity_gsa_account_id = "${var.name_prefix}-langsmith"
   workload_identity_gsa_email      = "${local.workload_identity_gsa_account_id}@${var.project_id}.iam.gserviceaccount.com"
+
+  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+
+  # DB 0 is reserved for the main LangSmith install.
+  redis_db_fleet    = 1
+  redis_db_polly    = 2
+  redis_db_insights = 3
 }
 
 #------------------------------------------------------------------------------
@@ -132,6 +134,102 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.enable_polly || var.enable_deployments
       error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
     }
+
+    precondition {
+      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null)
+      error_message = "smithdb_external_metastore_host and smithdb_external_metastore_username are required when smithdb_metastore_source = 'external'."
+    }
+
+    precondition {
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # The proxy takes the instance's connection name as its only positional
+    # argument, and that is knowable only for an instance this module created.
+    precondition {
+      condition     = !local.smithdb_metastore_use_auth_proxy || var.smithdb_metastore_source == "create"
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_source = 'create'. For an external instance, including AlloyDB, configure the proxy sidecar directly in the Helm values - see the metastore TLS section of SMITHDB.md."
+    }
+
+    # The hop the proxy terminates is the one to Cloud SQL. SmithDB's own hop is
+    # to 127.0.0.1 inside the Pod, where a TLS handshake has no server to meet
+    # and the connection fails outright rather than degrading.
+    precondition {
+      condition     = !local.smithdb_metastore_use_auth_proxy || !local.smithdb_metastore_use_ssl
+      error_message = "smithdb_metastore_use_auth_proxy requires smithdb_metastore_use_ssl = false. The proxy holds the TLS session to Cloud SQL; the SmithDB-to-proxy hop is Pod loopback and is plaintext by design. The proxy is the default for a created metastore, so remove smithdb_metastore_use_ssl = true."
+    }
+
+    # Without the proxy, a created metastore works only in mode 2. Direct TLS
+    # from SmithDB fails with UnknownIssuer, and ENCRYPTED_ONLY refuses plaintext.
+    precondition {
+      condition = !var.enable_smithdb || var.smithdb_metastore_source != "create" || local.smithdb_metastore_use_auth_proxy || (
+        !local.smithdb_metastore_use_ssl && var.smithdb_metastore_ssl_mode == "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+      )
+      error_message = "smithdb_metastore_use_auth_proxy = false on a created metastore requires smithdb_metastore_use_ssl = false and smithdb_metastore_ssl_mode = 'ALLOW_UNENCRYPTED_AND_ENCRYPTED' (mode 2, test and staging only). Direct TLS from SmithDB to Cloud SQL fails with UnknownIssuer. See the metastore TLS section of SMITHDB.md."
+    }
+
+    # minimal has no SmithDB node pools, so no node has Local SSD for the cache.
+    precondition {
+      condition     = !var.enable_smithdb || !local.smithdb_minimal || local.smithdb_network_disk
+      error_message = "smithdb_sizing = 'minimal' requires smithdb_cache_storage = 'network-disk'. Leave smithdb_cache_storage unset, or select a larger smithdb_sizing."
+    }
+
+    # network-disk cache volumes are Hyperdisk Balanced. E2, N1, N2, and N2D
+    # cannot attach them, and C4 and N4 need a Hyperdisk boot disk, which the
+    # SmithDB pools do not use. A C3 type without -lssd also rejects Local SSD.
+    precondition {
+      condition     = !local.smithdb_create_cache_storage_class || (can(regex("^c3d?-", local.smithdb_instance_store_machine_type)) && local.smithdb_instance_store_local_ssd_count == 0)
+      error_message = "smithdb_cache_storage = 'network-disk' requires a C3 or C3D cache machine type and smithdb_instance_store_local_ssd_count = 0. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
+    }
+
+    # In network-disk mode, the backfill Job takes its 100Gi of ephemeral
+    # storage from the cache pool boot disk.
+    precondition {
+      condition     = !local.smithdb_create_cache_storage_class || !var.smithdb_migration_enabled || local.smithdb_instance_store_disk_size >= 300
+      error_message = "smithdb_cache_storage = 'network-disk' with smithdb_migration_enabled = true requires smithdb_instance_store_disk_size >= 300 for the 100Gi backfill Job. The resolved boot disk is ${local.smithdb_instance_store_disk_size} GB."
+    }
+
+    # local-ssd puts each cache in an emptyDir, so the cache pool needs Local SSD
+    # ephemeral storage. That is an explicit count, or a type that bundles it.
+    precondition {
+      condition     = !local.smithdb_dedicated_pools || local.smithdb_network_disk || local.smithdb_instance_store_local_ssd_count > 0 || endswith(local.smithdb_instance_store_machine_type, "lssd")
+      error_message = "smithdb_cache_storage = 'local-ssd' requires Local SSD on the cache pool: smithdb_instance_store_local_ssd_count > 0, or a machine type that ends in lssd. The resolved pool is ${local.smithdb_instance_store_machine_type} with ${local.smithdb_instance_store_local_ssd_count} Local SSD. Remove the smithdb_instance_store_* shape variables from terraform.tfvars to use the defaults."
+    }
+
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # Autopilot manages node pools itself, so the dedicated SmithDB pools this
+    # module creates do not exist there and the sizing file's nodeSelector would
+    # never match — SmithDB pods would stay Pending indefinitely. Autopilot needs
+    # the cloud.google.com/gke-ephemeral-storage-local-ssd nodeSelector instead.
+    precondition {
+      condition     = !var.enable_smithdb || !var.gke_use_autopilot
+      error_message = "enable_smithdb is not supported with gke_use_autopilot = true. SmithDB needs the dedicated SmithDB node pools this module creates on GKE Standard. See the SmithDB section of README.md."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || !var.gke_use_autopilot
+      error_message = "enable_sandboxes requires Standard GKE because sandbox-host needs a dedicated nested-virtualization node pool."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.enable_gcp_iam_module
+      error_message = "enable_sandboxes requires enable_gcp_iam_module = true so the juicefs-format Job can reach the shared GCS bucket through the langsmith-sandbox-host Workload Identity binding."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_host_max_node_count >= var.sandbox_host_min_node_count
+      error_message = "sandbox_host_max_node_count must be greater than or equal to sandbox_host_min_node_count."
+    }
   }
 }
 
@@ -165,6 +263,56 @@ resource "google_project_service" "apis" {
 }
 
 #------------------------------------------------------------------------------
+# Sandbox-host Node Service Account
+#------------------------------------------------------------------------------
+resource "google_service_account" "sandbox_host_node" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  project      = var.project_id
+  account_id   = local.sandbox_host_node_sa_account_id
+  display_name = "LangSmith sandbox-host node service account"
+  description  = "Restricted GKE node identity for LangSmith sandbox-host nodes."
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "sandbox_host_node" {
+  for_each = var.enable_sandboxes ? local.sandbox_host_node_sa_project_roles : toset([])
+
+  project = var.project_id
+  role    = each.value
+  member  = google_service_account.sandbox_host_node[0].member
+}
+
+# sandbox-host runs with hostNetwork: true, and GKE does not give Workload
+# Identity to host-network pods. Their metadata requests reach the Compute
+# Engine metadata server and get this node service account. The JuiceFS mount
+# in sandbox-host therefore reads and writes the bucket as this identity, not
+# as langsmith-sandbox-host. The juicefs-format Job uses the pod network, so it
+# still needs the Workload Identity binding in module.iam.
+#
+# Sandbox nodes run untrusted code, and the bucket also holds trace data. The
+# condition limits this identity to the JuiceFS prefix: object access under
+# <sandbox_juicefs_name>/ and list calls with that prefix. The expression uses
+# local.bucket_name, the name module.storage creates, so the plan can show it.
+resource "google_storage_bucket_iam_member" "sandbox_host_node_juicefs" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  bucket = module.storage.bucket_name
+  role   = "roles/storage.objectAdmin"
+  member = google_service_account.sandbox_host_node[0].member
+
+  condition {
+    title       = "juicefs-prefix-only"
+    description = "Sandbox node access limited to the JuiceFS prefix."
+    expression = join(" || ", [
+      "resource.name.startsWith(\"projects/_/buckets/${local.bucket_name}/objects/${var.sandbox_juicefs_name}/\")",
+      "api.getAttribute(\"storage.googleapis.com/objectListPrefix\", \"\").startsWith(\"${var.sandbox_juicefs_name}/\")",
+    ])
+  }
+}
+
+#------------------------------------------------------------------------------
 # Networking Module
 #------------------------------------------------------------------------------
 module "networking" {
@@ -185,9 +333,11 @@ module "networking" {
   pods_cidr     = var.pods_cidr
   services_cidr = var.services_cidr
 
-  # Private service connection (requires servicenetworking.networksAdmin role)
-  # Always enable private service connection for external PostgreSQL and Redis
-  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external"
+  # Private service connection (requires servicenetworking.networksAdmin role).
+  # Needed by external PostgreSQL and Redis, by the SmithDB metastore, which is
+  # private-IP only, and by the Memorystore instance backing sandbox JuiceFS
+  # metadata.
+  enable_private_service_connection = var.postgres_source == "external" || var.redis_source == "external" || var.enable_sandboxes || (var.enable_smithdb && var.smithdb_metastore_source == "create")
 
   # Labels
   labels = local.common_labels
@@ -217,15 +367,29 @@ module "gke_cluster" {
   services_range_name = module.networking.services_range_name
 
   # Cluster configuration
-  use_autopilot           = var.gke_use_autopilot
-  node_count              = var.gke_node_count
-  min_node_count          = var.gke_min_nodes
-  max_node_count          = var.gke_max_nodes
-  machine_type            = var.gke_machine_type
-  disk_size_gb            = var.gke_disk_size
-  release_channel         = var.gke_release_channel
-  deletion_protection     = var.gke_deletion_protection
-  network_policy_provider = var.gke_network_policy_provider
+  use_autopilot              = var.gke_use_autopilot
+  node_count                 = var.gke_node_count
+  min_node_count             = var.gke_min_nodes
+  max_node_count             = var.gke_max_nodes
+  machine_type               = var.gke_machine_type
+  disk_size_gb               = var.gke_disk_size
+  node_service_account_email = var.gke_node_service_account_email
+  release_channel            = var.gke_release_channel
+  deletion_protection        = var.gke_deletion_protection
+  network_policy_provider    = var.gke_network_policy_provider
+
+  # Dedicated sandbox-host nodes. Sandboxes run Firecracker through nested
+  # virtualization and are isolated from the default LangSmith workload pool.
+  enable_sandbox_host_node_pool          = var.enable_sandboxes
+  sandbox_host_node_count                = var.sandbox_host_node_count
+  sandbox_host_min_node_count            = var.sandbox_host_min_node_count
+  sandbox_host_max_node_count            = var.sandbox_host_max_node_count
+  sandbox_host_machine_type              = local.sandbox_host_machine_type
+  sandbox_host_disk_size_gb              = var.sandbox_host_disk_size_gb
+  sandbox_host_ephemeral_local_ssd_count = var.sandbox_host_ephemeral_local_ssd_count
+  sandbox_host_node_service_account_email = (
+    var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+  )
 
   # Master authorized networks — empty list keeps the master publicly reachable
   # for Terraform-driven Helm/kubectl steps. Populate var.gke_master_authorized_cidrs
@@ -235,7 +399,10 @@ module "gke_cluster" {
   # Labels
   labels = local.common_labels
 
-  depends_on = [module.networking]
+  depends_on = [
+    module.networking,
+    google_project_iam_member.sandbox_host_node,
+  ]
 }
 
 #------------------------------------------------------------------------------
@@ -293,6 +460,7 @@ module "redis" {
   redis_version     = var.redis_version
   high_availability = var.redis_high_availability
   prevent_destroy   = var.redis_prevent_destroy
+  maxmemory_policy  = "allkeys-lru"
 
   # Network
   network_id = module.networking.vpc_id
@@ -301,6 +469,36 @@ module "redis" {
   labels = local.common_labels
 
   depends_on = [module.networking]
+}
+
+module "sandbox_juicefs_redis" {
+  source = "./modules/redis"
+  count  = var.enable_sandboxes ? 1 : 0
+
+  project_id  = var.project_id
+  region      = var.region
+  environment = var.environment
+
+  # Use centralized naming
+  instance_name = local.sandbox_juicefs_redis_instance_name
+
+  # Configuration
+  memory_size_gb      = var.sandbox_juicefs_redis_memory_size
+  redis_version       = var.redis_version
+  high_availability   = var.sandbox_juicefs_redis_high_availability
+  prevent_destroy     = var.sandbox_juicefs_redis_prevent_destroy
+  maxmemory_policy    = "noeviction"
+  rdb_snapshot_period = var.sandbox_juicefs_redis_rdb_snapshot_period
+
+  # Network
+  network_id = module.networking.vpc_id
+
+  # Labels
+  labels = merge(local.common_labels, {
+    "component" = "sandbox-juicefs-cache"
+  })
+
+  depends_on = [module.networking, module.redis]
 }
 
 #------------------------------------------------------------------------------
@@ -326,6 +524,101 @@ module "storage" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB Module (Optional, enable_smithdb)
+#
+# SmithDB is the in-chart columnar store/query engine (chart 0.17). It needs
+# three things from the cloud: a dedicated Postgres metastore, its own object
+# store, and cache capacity (node Local SSD or network disk). This module owns
+# the first two plus the Workload Identity binding; the node pools are in
+# module.smithdb_nodes, and the network-disk StorageClass is in k8s-bootstrap.
+#------------------------------------------------------------------------------
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name       = local.smithdb_name
+  project_id = var.project_id
+  region     = var.region
+  labels     = local.common_labels
+
+  namespace    = var.langsmith_namespace
+  release_name = var.langsmith_release_name
+
+  network_id                 = module.networking.vpc_id
+  private_network_connection = module.networking.private_service_connection
+
+  # Metastore — dedicated Cloud SQL instance, or bring your own (AlloyDB).
+  metastore_source            = var.smithdb_metastore_source
+  metastore_instance_name     = local.smithdb_metastore_instance_name
+  metastore_database_version  = var.smithdb_metastore_database_version
+  metastore_tier              = local.smithdb_metastore_tier
+  metastore_disk_size         = var.smithdb_metastore_disk_size
+  metastore_high_availability = var.smithdb_metastore_high_availability
+
+  metastore_deletion_protection = var.smithdb_metastore_deletion_protection
+  metastore_ssl_mode            = var.smithdb_metastore_ssl_mode
+  metastore_use_auth_proxy      = local.smithdb_metastore_use_auth_proxy
+  metastore_master_username     = var.smithdb_metastore_master_username
+  metastore_master_password     = var.smithdb_metastore_master_password
+
+  external_metastore_host     = var.smithdb_external_metastore_host
+  external_metastore_port     = var.smithdb_external_metastore_port
+  external_metastore_database = var.smithdb_external_metastore_database
+  external_metastore_username = var.smithdb_external_metastore_username
+  external_metastore_password = var.smithdb_external_metastore_password
+
+  # Object store
+  bucket_name               = local.smithdb_bucket_name
+  bucket_kms_key            = var.smithdb_bucket_kms_key
+  bucket_versioning_enabled = var.smithdb_bucket_versioning_enabled
+  bucket_force_destroy      = var.smithdb_bucket_force_destroy
+
+  # The backfill reads offloaded run payloads out of the traces bucket, so it
+  # needs a read grant there. Passed unconditionally; the module only creates the
+  # binding when the migration gate is on.
+  traces_bucket_name = module.storage.bucket_name
+  migration_enabled  = var.smithdb_migration_enabled
+
+  service_account_email = var.smithdb_service_account_email
+
+  depends_on = [module.networking, google_project_service.apis]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB Node Pools (Optional, enable_smithdb)
+# A cache pool (Local SSD, or none in network-disk mode) plus a compute pool.
+# Not created for smithdb_sizing = minimal, or on Autopilot, where Google
+# manages node pools; see the SmithDB section of README.md for that path.
+#------------------------------------------------------------------------------
+module "smithdb_nodes" {
+  source = "./modules/smithdb-nodes"
+  count  = local.smithdb_dedicated_pools ? 1 : 0
+
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
+  name_prefix  = local.base_name
+
+  node_service_account_email = var.gke_node_service_account_email
+  node_locations             = var.smithdb_node_locations
+
+  instance_store_machine_type    = local.smithdb_instance_store_machine_type
+  instance_store_local_ssd_count = local.smithdb_instance_store_local_ssd_count
+  instance_store_disk_size_gb    = local.smithdb_instance_store_disk_size
+  instance_store_min_nodes       = var.smithdb_instance_store_min_nodes
+  instance_store_max_nodes       = var.smithdb_instance_store_max_nodes
+
+  compute_machine_type = local.smithdb_compute_machine_type
+  compute_disk_size_gb = var.smithdb_compute_disk_size
+  compute_min_nodes    = var.smithdb_compute_min_nodes
+  compute_max_nodes    = var.smithdb_compute_max_nodes
+
+  labels = local.common_labels
+
+  depends_on = [module.gke_cluster]
+}
+
+#------------------------------------------------------------------------------
 # IAM Module (Optional)
 #------------------------------------------------------------------------------
 module "iam" {
@@ -346,8 +639,16 @@ module "iam" {
     "langsmith-queue",
     "langsmith-ingest-queue",
     "langsmith-listener",
+    # Chart 0.15 renamed these Deployments (agentBuilderToolServer/TriggerServer ->
+    # fleetToolServer/fleetTriggerServer), which also renamed the ServiceAccount the
+    # chart creates for them. Keep both old and new names — CHART_VERSION can still
+    # be pinned below 0.15 (see deploy.sh), where the chart creates the old-named SA
+    # instead. Harmless either way: WI binds only to whichever SA the chart actually
+    # creates for the pinned version.
     "langsmith-agent-builder-tool-server",
     "langsmith-agent-builder-trigger-server",
+    "langsmith-fleet-tool-server",
+    "langsmith-fleet-trigger-server",
     "langsmith-ace-backend",
     "langsmith-frontend",
     "langsmith-playground",
@@ -359,8 +660,17 @@ module "iam" {
     "langsmith-standalone-polly-queue",
     "langsmith-standalone-insights-api-server",
     "langsmith-standalone-insights-queue",
+    # The chart's juicefs-format Job runs as langsmith-sandbox-host on the pod
+    # network. sandbox-host itself runs on the host network and uses the node
+    # service account (see google_storage_bucket_iam_member.sandbox_host_node_juicefs).
+    "langsmith-sandbox-host",
+    # Chart 0.16 JuiceFS CSI node ServiceAccount. Keep it through the 0.16 to 0.17
+    # upgrade: terraform apply runs before helm upgrade removes the driver, and the
+    # old mount pods read the bucket until then.
+    "juicefs-csi-node-sa",
   ]
-  gcs_bucket_name = module.storage.bucket_name
+  gcs_bucket_name               = module.storage.bucket_name
+  grant_project_secret_accessor = var.grant_project_secret_accessor
 }
 
 #------------------------------------------------------------------------------
@@ -404,9 +714,50 @@ module "k8s_bootstrap" {
   project_id  = var.project_id
   environment = var.environment
 
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
+
   # Namespace configuration
   langsmith_namespace         = var.langsmith_namespace
   workload_identity_gsa_email = var.enable_gcp_iam_module ? local.workload_identity_gsa_email : ""
+
+  # sandbox-host manages Firecracker VMs in child cgroups and must not receive
+  # a namespace-injected parent limit. Keep request and pod-count governance,
+  # and inject requests only for third-party containers that omit them.
+  resource_quota_include_limits = !var.enable_sandboxes
+  default_container_requests = (
+    var.enable_sandboxes ? var.sandbox_default_container_requests : {}
+  )
+
+  # SmithDB does not fit inside the base namespace quota, and the failure mode is
+  # opaque: a ReplicaSet reports FailedCreate and the backfill Job reports Running
+  # with no pod, neither of which names SmithDB. Size the headroom here instead.
+  resource_quota_extra_cpu       = local.smithdb_quota_extra_cpu
+  resource_quota_extra_memory_gi = local.smithdb_quota_extra_memory_gi
+  resource_quota_extra_pods      = local.smithdb_quota_extra_pods
+
+  create_smithdb_cache_storage_class = local.smithdb_create_cache_storage_class
+  smithdb_cache_storage_class_name   = local.smithdb_cache_storage_class
+
+  # The chart 0.16 JuiceFS CSI driver runs at system-node-critical /
+  # system-cluster-critical, which GKE admits only into a namespace holding a
+  # PriorityClass-scoped quota. Chart 0.17 has no driver. Keep the quota through the
+  # upgrade so a driver pod rescheduled before helm upgrade removes it is admitted.
+  allow_critical_priority_pods = var.enable_sandboxes
+
+  # Host-networked sandbox-host must reach platform-backend, and the CNI dictates how:
+  #  - CALICO: an ipBlock for the node subnet matches node-sourced traffic, so keep
+  #    the full default-deny and admit the node subnet.
+  #  - DATA_PLANE_V2 (Cilium): node-sourced traffic can't be authorized by a standard
+  #    NetworkPolicy (ipBlock doesn't match it; the CiliumNetworkPolicy CRD isn't
+  #    exposed), so keep the default-deny but exclude platform-backend from it.
+  sandbox_host_ingress_cidrs = (
+    var.enable_sandboxes && var.gke_network_policy_provider == "CALICO" ? [var.subnet_cidr] : []
+  )
+  default_deny_excluded_component = (
+    var.enable_sandboxes && var.gke_network_policy_provider == "DATA_PLANE_V2" ? var.platform_backend_component_label : ""
+  )
 
   # PostgreSQL connection - only when using external PostgreSQL
   use_external_postgres   = var.postgres_source == "external"
@@ -414,7 +765,7 @@ module "k8s_bootstrap" {
 
   # Redis connection - only when using external Redis
   use_managed_redis    = var.redis_source == "external"
-  redis_connection_url = var.redis_source == "external" ? "redis://${module.redis[0].host}:${module.redis[0].port}" : ""
+  redis_connection_url = local.redis_connection_url
 
   # KEDA for LangSmith Deployment feature
   install_keda = var.enable_langsmith_deployment
@@ -453,6 +804,28 @@ module "k8s_bootstrap" {
   depends_on = [time_sleep.wait_for_cluster, module.cloudsql, module.iam]
 }
 
+resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = var.langsmith_namespace
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "redis://${module.sandbox_juicefs_redis[0].host}:${module.sandbox_juicefs_redis[0].port}/0"
+    storage = "gs"
+    bucket  = module.storage.bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
+
+  depends_on = [module.k8s_bootstrap]
+}
+
 #------------------------------------------------------------------------------
 # Standalone Agent Databases (chart v0.15+)
 # Each standalone agent gets its own logical database on the shared Cloud SQL
@@ -480,6 +853,8 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 # Memorystore Cluster mode does not support logical DB numbers — see MIGRATION_NOTES_v15.md.
+# For non-cluster Redis, DB 0 is reserved for the main LangSmith install,
+# DB 1 for Fleet, DB 2 for Polly, and DB 3 for Insights.
 resource "kubernetes_secret" "fleet_redis" {
   count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
   metadata {
@@ -487,7 +862,7 @@ resource "kubernetes_secret" "fleet_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/1"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_fleet}"
   }
   depends_on = [module.k8s_bootstrap]
 }
@@ -519,7 +894,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/2"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_polly}"
   }
   depends_on = [module.k8s_bootstrap]
 }
@@ -551,8 +926,54 @@ resource "kubernetes_secret" "standalone_insights_redis" {
     namespace = var.langsmith_namespace
   }
   data = {
-    redis_connection_url = "redis://${module.redis[0].host}:${module.redis[0].port}/3"
+    redis_connection_url = "${local.redis_connection_url}/${local.redis_db_insights}"
   }
+  depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB metastore Secret (chart 0.17)
+# Created here so it exists before Helm runs. The chart reads it through
+# smithdb.config.existingSecretName and the per-field *SecretKey mappings
+# generated into the SmithDB values overrides.
+#------------------------------------------------------------------------------
+resource "kubernetes_secret" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = var.langsmith_namespace
+  }
+
+  # With the Auth Proxy the SmithDB containers dial the sidecar on the Pod
+  # loopback, not the instance's private IP. Everything else is unchanged: the
+  # proxy authenticates the transport, the password still authenticates the
+  # database session.
+  data = {
+    smithdb_metastore_db_host     = local.smithdb_metastore_use_auth_proxy ? "127.0.0.1" : module.smithdb[0].metastore_host
+    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
+    smithdb_metastore_db_username = module.smithdb[0].metastore_username
+    smithdb_metastore_db_password = module.smithdb[0].metastore_password
+  }
+
+  depends_on = [module.k8s_bootstrap]
+}
+
+# Credential for the in-chart taskdb Postgres backing the historical
+# ClickHouse-to-SmithDB migration. Created unconditionally with SmithDB so that
+# smithdb_migration_enabled stays a values-only flip.
+resource "kubernetes_secret" "smithdb_taskdb" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-taskdb"
+    namespace = var.langsmith_namespace
+  }
+
+  data = {
+    postgres_password = module.smithdb[0].taskdb_password
+  }
+
   depends_on = [module.k8s_bootstrap]
 }
 
@@ -562,6 +983,11 @@ resource "kubernetes_secret" "standalone_insights_redis" {
 module "ingress" {
   source = "./modules/ingress"
   count  = var.install_ingress ? 1 : 0
+
+  # The module's kubectl steps fetch their own credentials for this cluster.
+  project_id   = var.project_id
+  region       = var.region
+  cluster_name = module.gke_cluster.cluster_name
 
   ingress_type        = var.ingress_type
   langsmith_domain    = var.langsmith_domain

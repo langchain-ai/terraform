@@ -16,7 +16,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
+# Normalize so the paths shown to the user are plain, not infra/scripts/../...
+INFRA_DIR="$(cd "$INFRA_DIR" && pwd)"
 OUTPUT="$INFRA_DIR/terraform.tfvars"
+
+# The cloud this wizard is writing for. On a fresh run there is no tfvars and no
+# Terraform output for _common.sh's _azure_environment to read, so the wizard
+# owns the value: taken from a resumed tfvars, else from the Azure CLI's active
+# cloud in section 2, and written to the tfvars. Inside the wizard,
+# _azure_environment returns it, so the DNS hints and the Redis rule use it.
+AZURE_ENVIRONMENT=""
+_azure_environment() { echo "${AZURE_ENVIRONMENT:-public}"; }
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -55,6 +65,11 @@ _ask_yn() {
 }
 
 _ask_choice() {
+  # Usage: _ask_choice [--default N] "prompt" "opt1" "opt2" ...
+  local default=""
+  if [[ "${1:-}" == "--default" ]]; then
+    default="$2"; shift 2
+  fi
   local prompt="$1"
   shift
   local options=("$@")
@@ -62,25 +77,64 @@ _ask_choice() {
   printf "  ${BOLD}%s${RESET}\n" "$prompt"
   local i=1
   for opt in "${options[@]}"; do
-    printf "    %d) %s\n" "$i" "$opt"
+    if [[ -n "$default" && "$i" == "$default" ]]; then
+      printf "    %d) %s ${DIM}(current)${RESET}\n" "$i" "$opt"
+    else
+      printf "    %d) %s\n" "$i" "$opt"
+    fi
     ((i++))
   done
-  printf "  Choice: "
-  read -r _CHOICE
-  if ! [[ "$_CHOICE" =~ ^[0-9]+$ ]] || (( _CHOICE < 1 || _CHOICE > ${#options[@]} )); then
-    _red "Invalid selection."; echo ""
-    exit 1
-  fi
-}
-
-_ask_int() {
-  local prompt="$1" default="${2:-}"
   while true; do
-    _ask "$prompt" "$default"
-    if [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
+    if [[ -n "$default" ]]; then
+      printf "  Choice ${DIM}[%s]${RESET}: " "$default"
+    else
+      printf "  Choice: "
+    fi
+    read -r _CHOICE
+    _CHOICE="${_CHOICE:-$default}"
+    if [[ "$_CHOICE" =~ ^[0-9]+$ ]] && (( _CHOICE >= 1 && _CHOICE <= ${#options[@]} )); then
       break
     fi
-    _red "  ERROR: must be a number. Try again."
+    _red "  ERROR: enter a number between 1 and ${#options[@]}. Try again."
+  done
+}
+
+# Echo the 1-based index of $1 among the remaining args (empty if absent).
+# Used to pre-select the current answer when a section is re-entered.
+_index_of() {
+  local needle="$1"; shift
+  local i=1 x
+  for x in "$@"; do
+    [[ "$x" == "$needle" ]] && { echo "$i"; return 0; }
+    i=$((i + 1))
+  done
+}
+
+# Echo "y" or "n" for use as an _ask_yn default.
+_yn_default() {
+  [[ "$1" == "true" ]] && echo "y" || echo "n"
+}
+
+# The optional third and fourth arguments are an inclusive floor and ceiling.
+# Without them a prompt accepts anything the regex allows, which is how the blob
+# TTL answers reached a tfvars that fails its own validation at plan.
+_ask_int() {
+  local prompt="$1" default="${2:-}" min="${3:-}" max="${4:-}"
+  while true; do
+    _ask "$prompt" "$default"
+    if ! [[ "$_REPLY" =~ ^[0-9]+$ ]]; then
+      _red "  ERROR: must be a number. Try again."
+      continue
+    fi
+    if [[ -n "$min" ]] && (( _REPLY < min )); then
+      _red "  ERROR: must be $min or greater."
+      continue
+    fi
+    if [[ -n "$max" ]] && (( _REPLY > max )); then
+      _red "  ERROR: must be $max or less."
+      continue
+    fi
+    break
   done
 }
 
@@ -94,16 +148,345 @@ _hint() {
   printf "  ${DIM}%s${RESET}\n" "$1"
 }
 
-# ── Guard ─────────────────────────────────────────────────────────────────────
-
-if [[ -f "$OUTPUT" ]]; then
-  echo ""
-  _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
-  if ! _ask_yn "Overwrite it?" "n"; then
-    echo "Aborted."
-    exit 0
+# Compose the names Terraform will derive, from answers already given. Mirror of
+# the naming locals in infra/main.tf — keep the two in step. The wizard knows
+# every input, so a name that busts an Azure ceiling is caught at the prompt
+# instead of at preflight or plan.
+_derive_names() {
+  local suffix="" uniq="" base hash
+  [[ -n "$NAME_PREFIX" ]] && suffix="-${NAME_PREFIX}"
+  if [[ "$UNIQUE_NAMES" == "true" ]]; then
+    base="ls"
+    # The salt is a hash input, so omitting it previews the names the deployment
+    # bumped the salt to escape.
+    if command -v shasum &>/dev/null; then
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}${NAME_SUFFIX_SALT}" | shasum -a 256 | cut -c1-6)
+    else
+      hash=$(printf '%s' "${SUBSCRIPTION_ID}${suffix}${NAME_SUFFIX_SALT}" | sha256sum | cut -c1-6)
+    fi
+    uniq="-${hash}"
+  else
+    base="langsmith"
   fi
-fi
+  # name_base replaces the default base; the hash still tracks
+  # unique_resource_names, since main.tf treats them as separate decisions.
+  [[ -n "$NAME_BASE" ]] && base="$NAME_BASE"
+  _RG_NAME="${base}-rg${suffix}"
+  _VNET_NAME="${base}-vnet${suffix}"
+  _AKS_NAME="${base}-aks${suffix}"
+  _KV_NAME="${base}-kv${suffix}${uniq}"
+  _PG_NAME="${base}-postgres${suffix}${uniq}"
+  _REDIS_NAME="${base}-redis${suffix}${uniq}"
+  _BLOB_NAME="${base}blob${suffix}${uniq}"
+  # A pinned name wins outright, as in main.tf. Last so it lands on the finished
+  # name.
+  [[ -n "$RESOURCE_GROUP_NAME" ]]  && _RG_NAME="$RESOURCE_GROUP_NAME"
+  [[ -n "$VNET_NAME" ]]            && _VNET_NAME="$VNET_NAME"
+  [[ -n "$CLUSTER_NAME" ]]         && _AKS_NAME="$CLUSTER_NAME"
+  [[ -n "$KEYVAULT_NAME" ]]        && _KV_NAME="$KEYVAULT_NAME"
+  [[ -n "$POSTGRES_NAME" ]]        && _PG_NAME="$POSTGRES_NAME"
+  [[ -n "$REDIS_NAME" ]]           && _REDIS_NAME="$REDIS_NAME"
+  [[ -n "$STORAGE_ACCOUNT_NAME" ]] && _BLOB_NAME="$STORAGE_ACCOUNT_NAME"
+  # The blob module strips hyphens, so the 24-char limit applies to the stripped
+  # form. Stripped after the override because main.tf feeds a pinned value
+  # through the same module: "my-blob" creates "myblob".
+  _BLOB_NAME="${_BLOB_NAME//-/}"
+  # Attach mode: the cluster and vault are the operator's, so nothing here
+  # derives them. Same branch order as local.aks_name and local.keyvault_name,
+  # and what lets the review screen say "attaches to".
+  [[ "$CREATE_CLUSTER" == "false" ]]  && _AKS_NAME="$EXISTING_CLUSTER_NAME"
+  [[ "$CREATE_KEYVAULT" == "false" ]] && _KV_NAME="$EXISTING_KEYVAULT_NAME"
+  [[ "$CREATE_RESOURCE_GROUP" == "false" ]] && _RG_NAME="$EXISTING_RESOURCE_GROUP_NAME"
+  # Not derived from name_base: renaming a Log Analytics workspace destroys the
+  # logs in it.
+  _LAW_NAME="langsmith-logs${suffix}"
+}
+
+# A name for the one-line summaries, marked when the deployment attaches rather
+# than creates. Attach mode with existing_* unset is a config plan rejects, so
+# say that here instead of printing nothing.
+_name_or_attached() {
+  local create="$1" name="$2"
+  if [[ "$create" == "false" ]]; then
+    printf '%s (existing)' "${name:-<unset>}"
+  else
+    printf '%s' "$name"
+  fi
+}
+
+# One line per derived name that busts its Azure ceiling, with the count, since
+# that is what says how much to cut.
+_name_length_errors() {
+  local spec label name max specs
+  specs="Storage account:${_BLOB_NAME}:24
+Postgres:${_PG_NAME}:63
+Redis:${_REDIS_NAME}:60"
+  # An attached cluster or vault already exists, so Azure accepted the length.
+  # Measuring it fails the operator on a name they cannot change from here.
+  [[ "$CREATE_KEYVAULT" == "false" ]] || specs="${specs}
+Key Vault:${_KV_NAME}:24"
+  [[ "$CREATE_CLUSTER" == "false" ]] || specs="${specs}
+AKS cluster:${_AKS_NAME}:63"
+  while IFS= read -r spec; do
+    label="${spec%%:*}"
+    name="${spec#*:}"
+    max="${name##*:}"
+    name="${name%:*}"
+    if (( ${#name} > max )); then
+      printf '%s name "%s" is %d chars; Azure allows at most %d.\n' \
+        "$label" "$name" "${#name}" "$max"
+    fi
+  done <<< "$specs"
+  return 0
+}
+
+# ── Resume state ──────────────────────────────────────────────────────────────
+# Answers are checkpointed after every completed section so an exit (Ctrl-C,
+# `q`, a dropped SSH session) never costs more than the section in progress.
+# Contains configuration only — secrets are handled by setup-env.sh.
+
+STATE_FILE="$INFRA_DIR/.quickstart-state"
+
+_STATE_KEYS="SECTION ANSWERED PROFILE SUBSCRIPTION_ID AZURE_ENVIRONMENT NAME_PREFIX NAME_BASE NAME_SUFFIX_SALT LOCATION OWNER
+STORAGE_ACCOUNT_NAME KEYVAULT_NAME POSTGRES_NAME REDIS_NAME CLUSTER_NAME
+RESOURCE_GROUP_NAME VNET_NAME CREATE_CLUSTER EXISTING_CLUSTER_NAME
+CREATE_KEYVAULT EXISTING_KEYVAULT_NAME CREATE_RESOURCE_GROUP EXISTING_RESOURCE_GROUP_NAME
+ENVIRONMENT COST_CENTER CREATE_VNET VNET_ID AKS_SUBNET_ID POSTGRES_SUBNET_ID REDIS_SUBNET_ID
+AKS_SUBNET_CIDR_LINE POSTGRES_SUBNET_CIDR_LINE REDIS_SUBNET_CIDR_LINE
+AKS_SERVICE_CIDR AGIC_SUBNET_ID BASTION_SUBNET_ID
+NODE_VM_SIZE NODE_MIN NODE_MAX NODE_MAX_PODS INGRESS_CONTROLLER
+ISTIO_ADDON_REVISION AGW_SKU_TIER TLS_SOURCE DNS_LABEL LANGSMITH_DOMAIN LE_EMAIL
+CREATE_DNS_ZONE PG_SOURCE REDIS_SOURCE CH_SOURCE PG_ADMIN_USER PG_DB_NAME
+AMR_SKU REDIS_HA KV_PURGE_PROTECTION SIZING_PROFILE UNIQUE_NAMES
+BLOB_TTL_ENABLED BLOB_TTL_SHORT_DAYS BLOB_TTL_LONG_DAYS
+NETWORK_MODE AKS_SKU_TIER
+CREATE_WAF CREATE_DIAGNOSTICS CREATE_BASTION
+ENABLE_DEPLOYMENTS ENABLE_AGENT_BUILDER ENABLE_INSIGHTS ENABLE_POLLY
+PRESERVE_UNKNOWN"
+
+# Sections the user has actually been through. Profile-driven defaults apply
+# only to sections still unanswered, so going back to switch dev→prod never
+# overwrites a value you chose yourself.
+ANSWERED=""
+_answered()      { [[ " $ANSWERED " == *" $1 "* ]]; }
+_mark_answered() { _answered "$1" || ANSWERED="${ANSWERED}${ANSWERED:+ }$1"; }
+
+_save_state() {
+  local k
+  ( umask 077; : > "$STATE_FILE" )
+  for k in $_STATE_KEYS; do
+    printf '%s=%s\n' "$k" "${!k-}"
+  done >> "$STATE_FILE"
+}
+
+# Read the state file back WITHOUT sourcing it: split each line on the first
+# '=', accept the key only if it is on the whitelist above, then assign the
+# value by reference. eval never parses the value — an assignment RHS is not
+# word-split, glob-expanded, or re-evaluated — so a hostile state file can at
+# worst set a whitelisted wizard variable to a literal string.
+_load_state() {
+  local line key val k found
+  while IFS= read -r line; do
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    # shellcheck disable=SC2034  # val is read by the eval below
+    val="${line#*=}"
+    found=false
+    for k in $_STATE_KEYS; do
+      [[ "$k" == "$key" ]] && { found=true; break; }
+    done
+    [[ "$found" == "true" ]] && eval "$key=\$val"
+  done < "$STATE_FILE"
+  # A checkpoint written before the network mode was a choice has no NETWORK_MODE
+  # line, and that deployment runs the module default of its day. Left alone, the
+  # resumed session would carry the top-level default of overlay into a
+  # node-subnet deployment's tfvars, the migration request _load_tfvars refuses
+  # to write.
+  grep -q '^NETWORK_MODE=' "$STATE_FILE" || NETWORK_MODE="node-subnet"
+}
+
+# Read one quoted scalar out of an existing terraform.tfvars, preserving spaces
+# inside the value (_common.sh's _parse_tfvar strips them). Trailing comments are
+# allowed: the writer puts one on amr_sku, which a re-run could not read back.
+_tfvar() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"\([^\"]*\)\"[[:space:]]*\(#.*\)\{0,1\}\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Read an unquoted tfvar value. _tfvar matches quoted values only, so the bare
+# booleans the wizard does not write come back empty from it however they are set.
+_tfvar_bare() {
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\([^\"#[:space:]]*\).*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Read a list-valued tfvar back as its whole assignment line, which is the form
+# the writer carries it in (aks_subnet_address_prefix = ["10.0.0.0/19"]).
+_tfvar_line() {
+  sed -n "s/^[[:space:]]*\($1[[:space:]]*=[[:space:]]*\[.*\]\)[[:space:]]*\$/\1/p" "$OUTPUT" 2>/dev/null | head -1
+}
+
+# Whether a key is assigned at all: _tfvar returns "" for both an absent key and
+# one assigned "".
+_tfvar_set() {
+  grep -qE "^[[:space:]]*$1[[:space:]]*=" "$OUTPUT" 2>/dev/null
+}
+
+# Seed the wizard from a terraform.tfvars written by an earlier run, so a
+# re-run edits the existing config instead of retyping it from scratch.
+_load_tfvars() {
+  local v _TF_VAL
+  # The profile is not a tfvar — it is stamped in the header comment. Without it
+  # everything derived from the profile (Key Vault purge protection, the
+  # security add-ons) silently resets to dev values on save.
+  _TF_VAL=$(sed -n 's/^# Profile:[[:space:]]*\([a-z]*\).*/\1/p' "$OUTPUT" | head -1)
+  [[ "$_TF_VAL" == "prod" || "$_TF_VAL" == "dev" ]] && PROFILE="$_TF_VAL"
+
+  # Every run since the mode became a choice writes aks_network_mode, so an
+  # absent key means a tfvars from before it, whose cluster runs the module
+  # default of that time. Seeding overlay here would ask for the one-way
+  # migration on the next apply; the guard would refuse it, but the wizard
+  # should not be the one asking.
+  NETWORK_MODE="node-subnet"
+
+  # Read on its own because "" is an answer here, the "none" choice, and _tfvar
+  # reports it like an absent key. Falling through to the "dev" initializer would
+  # regenerate a tfvars naming different resources, which Terraform executes as
+  # destroy-and-recreate. `identifier` is the retired spelling, checked second so
+  # the current key wins when a tfvars carries both.
+  for v in name_prefix identifier; do
+    if _tfvar_set "$v"; then
+      _TF_VAL=$(_tfvar "$v")
+      NAME_PREFIX="${_TF_VAL#-}"
+      break
+    fi
+  done
+
+  # Bare booleans, so _tfvar cannot see them. Only "false" is acted on, so a
+  # malformed value cannot silently turn a greenfield deployment into an attach.
+  for v in create_cluster create_keyvault create_resource_group; do
+    [[ "$(_tfvar_bare "$v")" == "false" ]] || continue
+    case "$v" in
+      create_cluster)        CREATE_CLUSTER="false" ;;
+      create_keyvault)       CREATE_KEYVAULT="false" ;;
+      create_resource_group) CREATE_RESOURCE_GROUP="false" ;;
+    esac
+  done
+
+  for v in subscription_id location owner environment cost_center \
+           default_node_pool_vm_size ingress_controller istio_addon_revision \
+           agw_sku_tier tls_certificate_source dns_label langsmith_domain \
+           letsencrypt_email postgres_source redis_source clickhouse_source \
+           sizing_profile postgres_admin_username postgres_database_name \
+           amr_sku name_base name_suffix_salt storage_account_name keyvault_name postgres_name \
+           redis_name cluster_name resource_group_name vnet_name \
+           existing_cluster_name existing_keyvault_name existing_resource_group_name aks_network_mode aks_sku_tier azure_environment; do
+    _TF_VAL=$(_tfvar "$v")
+    [[ -z "$_TF_VAL" ]] && continue
+    case "$v" in
+      subscription_id)           SUBSCRIPTION_ID="$_TF_VAL" ;;
+      azure_environment)         AZURE_ENVIRONMENT="$_TF_VAL" ;;
+      name_base)                 NAME_BASE="$_TF_VAL" ;;
+      name_suffix_salt)          NAME_SUFFIX_SALT="$_TF_VAL" ;;
+      storage_account_name)      STORAGE_ACCOUNT_NAME="$_TF_VAL" ;;
+      keyvault_name)             KEYVAULT_NAME="$_TF_VAL" ;;
+      postgres_name)             POSTGRES_NAME="$_TF_VAL" ;;
+      redis_name)                REDIS_NAME="$_TF_VAL" ;;
+      cluster_name)              CLUSTER_NAME="$_TF_VAL" ;;
+      resource_group_name)       RESOURCE_GROUP_NAME="$_TF_VAL" ;;
+      vnet_name)                 VNET_NAME="$_TF_VAL" ;;
+      existing_cluster_name)     EXISTING_CLUSTER_NAME="$_TF_VAL" ;;
+      existing_keyvault_name)    EXISTING_KEYVAULT_NAME="$_TF_VAL" ;;
+      existing_resource_group_name) EXISTING_RESOURCE_GROUP_NAME="$_TF_VAL" ;;
+      location)                  LOCATION="$_TF_VAL" ;;
+      owner)                     OWNER="$_TF_VAL" ;;
+      environment)               ENVIRONMENT="$_TF_VAL" ;;
+      cost_center)               COST_CENTER="$_TF_VAL" ;;
+      default_node_pool_vm_size) NODE_VM_SIZE="$_TF_VAL" ;;
+      ingress_controller)        INGRESS_CONTROLLER="$_TF_VAL" ;;
+      istio_addon_revision)      ISTIO_ADDON_REVISION="$_TF_VAL" ;;
+      agw_sku_tier)              AGW_SKU_TIER="$_TF_VAL" ;;
+      tls_certificate_source)    TLS_SOURCE="$_TF_VAL" ;;
+      dns_label)                 DNS_LABEL="$_TF_VAL" ;;
+      langsmith_domain)          LANGSMITH_DOMAIN="$_TF_VAL" ;;
+      letsencrypt_email)         LE_EMAIL="$_TF_VAL" ;;
+      postgres_source)           PG_SOURCE="$_TF_VAL" ;;
+      redis_source)              REDIS_SOURCE="$_TF_VAL" ;;
+      clickhouse_source)         CH_SOURCE="$_TF_VAL" ;;
+      sizing_profile)            SIZING_PROFILE="$_TF_VAL" ;;
+      postgres_admin_username)   PG_ADMIN_USER="$_TF_VAL" ;;
+      postgres_database_name)    PG_DB_NAME="$_TF_VAL" ;;
+      amr_sku)                   AMR_SKU="$_TF_VAL" ;;
+      aks_network_mode)          NETWORK_MODE="$_TF_VAL" ;;
+      aks_sku_tier)              AKS_SKU_TIER="$_TF_VAL" ;;
+    esac
+  done
+  # Numeric + boolean tfvars are unquoted, so _tfvar (quoted-only) misses them.
+  _TF_VAL=$(_parse_tfvar default_node_pool_min_count) && NODE_MIN="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar default_node_pool_max_count) && NODE_MAX="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar default_node_pool_max_pods)  && NODE_MAX_PODS="$_TF_VAL"
+  # The generated file tells operators to edit the feature flags by hand. Reading
+  # them back is what makes that work: the writer emits all four every time, so
+  # an unloaded flag is written false and turns off a deployed pass.
+  _TF_VAL=$(_parse_tfvar enable_deployments)   && ENABLE_DEPLOYMENTS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_agent_builder) && ENABLE_AGENT_BUILDER="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_insights)      && ENABLE_INSIGHTS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar enable_polly)         && ENABLE_POLLY="$_TF_VAL"
+  # Absent means an existing deployment predating the hash, or one that opted
+  # out. Either way it stays off — the writer must not turn it on underneath a
+  # deployment whose resources are already named.
+  UNIQUE_NAMES="false"
+  _TF_VAL=$(_parse_tfvar unique_resource_names)       && UNIQUE_NAMES="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_vnet)                 && CREATE_VNET="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar keyvault_purge_protection)   && KV_PURGE_PROTECTION="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_enabled)            && BLOB_TTL_ENABLED="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_short_days)         && BLOB_TTL_SHORT_DAYS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar blob_ttl_long_days)          && BLOB_TTL_LONG_DAYS="$_TF_VAL"
+  # Written only when redis_source = "external", so an absent key means either
+  # in-cluster Redis or a tfvars predating the variable. false is right for both.
+  _TF_VAL=$(_parse_tfvar redis_high_availability)     && REDIS_HA="$_TF_VAL"
+  # The add-ons are written only when true, so an absent key is genuinely false.
+  _TF_VAL=$(_parse_tfvar create_waf)                  && CREATE_WAF="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_diagnostics)          && CREATE_DIAGNOSTICS="$_TF_VAL"
+  _TF_VAL=$(_parse_tfvar create_bastion)              && CREATE_BASTION="$_TF_VAL"
+  # Also written only when true. Section 6 defaults its zone prompt to this, so
+  # without the read, Enter on a re-edit drops the zone and the next apply
+  # destroys it.
+  _TF_VAL=$(_parse_tfvar create_dns_zone)             && CREATE_DNS_ZONE="$_TF_VAL"
+  [[ "$CREATE_VNET" == "false" ]] && {
+    VNET_ID=$(_tfvar vnet_id)
+    AKS_SUBNET_ID=$(_tfvar aks_subnet_id)
+    POSTGRES_SUBNET_ID=$(_tfvar postgres_subnet_id)
+    REDIS_SUBNET_ID=$(_tfvar redis_subnet_id)
+    # A subnet with no ID was carved by Terraform, so its prefix has to come
+    # back too. Dropping it would silently re-default the CIDR and move the
+    # subnet on the next apply.
+    AKS_SUBNET_CIDR_LINE=$(_tfvar_line aks_subnet_address_prefix)
+    POSTGRES_SUBNET_CIDR_LINE=$(_tfvar_line postgres_subnet_address_prefix)
+    REDIS_SUBNET_CIDR_LINE=$(_tfvar_line redis_subnet_address_prefix)
+    # Required on this path, and the variable default is only safe against the
+    # VNet Terraform builds. Dropping it on a re-run would put back the
+    # 10.0.64.0/20 that can sit inside the operator's own address space.
+    AKS_SERVICE_CIDR=$(_tfvar aks_service_cidr)
+    # AGIC and the bastion have no carve path inside a VNet Terraform does not
+    # own, so their IDs are required rather than optional here. Dropping either
+    # on a re-run writes a tfvars that fails its own precondition at plan.
+    AGIC_SUBNET_ID=$(_tfvar agic_subnet_id)
+    BASTION_SUBNET_ID=$(_tfvar bastion_subnet_id)
+  }
+  return 0
+}
+
+# Any exit that still leaves a checkpoint behind — Ctrl-C, `q`, a closed
+# terminal, an aborted command — tells the user how to pick it back up. A
+# completed run deletes the checkpoint first, so this stays silent on success.
+_on_exit() {
+  [[ -f "$STATE_FILE" ]] || return 0
+  echo ""
+  printf "  Answers through the last completed section were saved to\n"
+  printf "  $(_bold "$STATE_FILE")\n"
+  printf "  Resume where you left off: ${CYAN}make quickstart${RESET}\n"
+  echo ""
+}
+trap _on_exit EXIT
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 
@@ -119,13 +502,88 @@ printf "${DIM}  Answer each question. Review and change any answer before writin
 # -- 1. Profile --------------------------------------------------------------
 PROFILE="dev"
 
+# The Azure CLI's active cloud, in azure_environment's terms.
+_cli_azure_environment() {
+  case "$(az cloud show --query name -o tsv 2>/dev/null || true)" in
+    AzureUSGovernment) echo "usgovernment" ;;
+    *)                 echo "public" ;;
+  esac
+}
+
+# Preflight requires the CLI and azure_environment to agree, so say which side
+# to change. Either can be the wrong one: the CLI left on the old cloud, or a
+# tfvars carried over from a deployment in the other cloud.
+_warn_cloud_mismatch() {
+  local _cli_cloud
+  _cli_cloud="$(_cli_azure_environment)"
+  [[ "$(_azure_environment)" == "$_cli_cloud" ]] && return 0
+  _yellow "  WARNING"; printf ": azure_environment is %s, but the Azure CLI is on the %s cloud. Preflight fails until they match:\n" \
+    "$(_azure_environment)" "$_cli_cloud"
+  printf "  change the Azure cloud in section 2, or run: az cloud set --name %s && az login\n" \
+    "$([[ "$(_azure_environment)" == "usgovernment" ]] && echo AzureUSGovernment || echo AzureCloud)"
+}
+
+# The cloud's default: a value already set (a resumed tfvars or checkpoint, or
+# kept through "start fresh") wins, then TF_VAR_azure_environment, then the
+# Azure CLI's active cloud. Run once at startup, after resume and start fresh,
+# so a checkpoint that skips section 2, or one saved before this key existed,
+# still gets a cloud. Section 2 asks with this as the default, so a value that
+# is set is never locked in.
+_resolve_azure_environment() {
+  local _cloud_src="the existing terraform.tfvars"
+  if [[ -z "$AZURE_ENVIRONMENT" ]]; then
+    case "${TF_VAR_azure_environment:-}" in
+      public|usgovernment) AZURE_ENVIRONMENT="$TF_VAR_azure_environment"; _cloud_src="TF_VAR_azure_environment" ;;
+      *)                   AZURE_ENVIRONMENT="$(_cli_azure_environment)"; _cloud_src="the Azure CLI" ;;
+    esac
+  fi
+  if [[ "$AZURE_ENVIRONMENT" == "usgovernment" ]]; then
+    _hint "Azure cloud: Azure Government (from ${_cloud_src}). Writing azure_environment = \"usgovernment\"."
+  fi
+  _warn_cloud_mismatch
+}
+
+# Section 2's cloud question. Moving an existing deployment between clouds is
+# a new deployment, but a tfvars copied from one is a normal starting point, so
+# the answer is always offered for change.
+_ask_azure_environment() {
+  _ask_choice --default "$(_index_of "$(_azure_environment)" public usgovernment)" \
+    "Which Azure cloud does this deployment run in?" \
+    "Azure (commercial)  — azure_environment = \"public\"" \
+    "Azure Government    — azure_environment = \"usgovernment\""
+  AZURE_ENVIRONMENT="public"
+  [[ "$_CHOICE" == "2" ]] && AZURE_ENVIRONMENT="usgovernment"
+  _warn_cloud_mismatch
+  # A jump to review from here skips section 7, which applies the same rule.
+  _gov_redis_in_cluster
+}
+
+# Azure Managed Redis is not offered in Azure Government, and redis_source =
+# "external" fails at plan there, so Redis runs in-cluster whatever was picked.
+# Postgres keeps the operator's choice. Called from section 7, and at startup
+# for a resumed checkpoint that will not pass through section 7 again, and
+# after the cloud question in section 2.
+_gov_redis_in_cluster() {
+  if [[ "$(_azure_environment)" == "usgovernment" && "$REDIS_SOURCE" == "external" ]]; then
+    REDIS_SOURCE="in-cluster"
+    echo ""
+    _hint "Azure Government: Azure Managed Redis is not offered there, so Redis runs in-cluster."
+  fi
+}
+
 _run_section_1() {
   _section "1. Deployment Profile"
   _hint "This sets defaults for node sizing, services, and security across later sections."
-  _hint "Dev/POC:    smaller nodes, in-cluster services OK, no deletion protection."
-  _hint "Production: D8s_v3 nodes, external Postgres + Redis, deletion protection on."
+  _hint "Dev/POC:    smaller nodes, in-cluster services OK, Key Vault stays purgeable."
+  _hint "Production: D8s_v5 nodes, external Postgres + Redis, Key Vault purge protection."
 
-  _ask_choice "What kind of deployment is this?" \
+  _hint "Changing this later leaves answers you have already given untouched —"
+  _hint "it only affects the defaults of sections you have not filled in yet."
+
+  local profile_choice=""
+  _answered 1 && profile_choice="$(_index_of "$PROFILE" dev prod)"
+  _ask_choice --default "$profile_choice" \
+    "What kind of deployment is this?" \
     "Dev / POC  — minimal resources, in-cluster services OK" \
     "Production — HA resources, external managed services"
 
@@ -137,55 +595,163 @@ _run_section_1() {
 
 # -- 2. Subscription & Naming ------------------------------------------------
 SUBSCRIPTION_ID=""
-IDENTIFIER="-dev"
-ENVIRONMENT="dev"
+NAME_PREFIX="dev"
 LOCATION="eastus"
-OWNER="platform-team"
+# True for a new deployment, so the globally-unique names carry the hash. An
+# existing tfvars overrides this on the way in: turning it on after the fact
+# renames Postgres, Redis, Storage and Key Vault, which Terraform executes as
+# destroy-and-recreate.
+UNIQUE_NAMES="true"
+# name_base is set by hand in tfvars, never asked for, but every name previewed
+# and length-checked below is built from it. Empty means the default base, as in
+# main.tf.
+NAME_BASE=""
+NAME_SUFFIX_SALT=""
+
+# Same reason, one resource each. A pinned name replaces the derived one, so a
+# length check that ignores these measures a string Terraform throws away, then
+# blocks a valid config at the deployment-name prompt.
+STORAGE_ACCOUNT_NAME=""
+KEYVAULT_NAME=""
+POSTGRES_NAME=""
+REDIS_NAME=""
+CLUSTER_NAME=""
+RESOURCE_GROUP_NAME=""
+VNET_NAME=""
+
+# Attach mode, same reason again: the review screen and the length check both
+# name the cluster, the vault, and the resource group, and those names are the
+# operator's here. An absent key reads as create, the module's default.
+CREATE_CLUSTER="true"
+EXISTING_CLUSTER_NAME=""
+CREATE_KEYVAULT="true"
+EXISTING_KEYVAULT_NAME=""
+CREATE_RESOURCE_GROUP="true"
+EXISTING_RESOURCE_GROUP_NAME=""
+# Blank on purpose: the module omits the tag when it is empty, and an unanswered
+# "platform-team" is worse than no tag.
+OWNER=""
+ENVIRONMENT=""
 COST_CENTER=""
 
 _run_section_2() {
   _section "2. Subscription & Naming"
-  _hint "The identifier is appended to every Azure resource name (RG, AKS, KV, blob...)."
-  _hint "Example: -prod → langsmith-rg-prod, langsmith-aks-prod, langsmith-kv-prod"
+  _ask_azure_environment
+  _hint "The deployment name is appended to every Azure resource name (RG, AKS, KV, blob...)"
+  _hint "and is the default 'environment' tag. Write it without a hyphen — we add the separator."
+  # Same base the derivation uses, so a tfvars carrying name_base gets an example
+  # matching the names below.
+  _EG_BASE="ls"
+  [[ "$UNIQUE_NAMES" == "true" ]] || _EG_BASE="langsmith"
+  [[ -n "$NAME_BASE" ]] && _EG_BASE="$NAME_BASE"
+  _hint "Example: prod → ${_EG_BASE}-rg-prod, ${_EG_BASE}-aks-prod, ${_EG_BASE}-kv-prod-<hash>"
+  _hint "Postgres, Redis, Storage and Key Vault names must be unique across all of Azure,"
+  _hint "so those four get a hash of your subscription appended. Keep it under ~12 chars."
   _hint "Changing it later creates entirely new resources — choose something stable."
 
-  AUTO_SUB=""
-  if command -v az &>/dev/null; then
+  # Defaults come from the current values, so a resumed or re-entered section
+  # prefills what you answered before. Profile-driven defaults apply only when
+  # the field is still untouched, so switching profiles never eats an edit.
+  AUTO_SUB="$SUBSCRIPTION_ID"
+  if [[ -z "$AUTO_SUB" ]] && command -v az &>/dev/null; then
     AUTO_SUB=$(az account show --query id --output tsv 2>/dev/null) || AUTO_SUB=""
   fi
 
-  if [[ -n "$AUTO_SUB" ]]; then
-    _ask "Azure subscription ID" "$AUTO_SUB"
-  else
-    _ask "Azure subscription ID (az account show --query id -o tsv)" ""
-  fi
-  SUBSCRIPTION_ID="$_REPLY"
-
   while true; do
-    _ask "Identifier suffix (lowercase, starts with hyphen, e.g. -prod, -staging, -myco)" "-dev"
-    IDENTIFIER="$_REPLY"
-    if [[ "$IDENTIFIER" =~ ^-[a-z][a-z0-9-]*$ ]]; then
+    if [[ -n "$AUTO_SUB" ]]; then
+      _ask "Azure subscription ID" "$AUTO_SUB"
+    else
+      _ask "Azure subscription ID (az account show --query id -o tsv)" ""
+    fi
+    SUBSCRIPTION_ID="$_REPLY"
+    if [[ "$SUBSCRIPTION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
       break
     fi
-    _red "  ERROR: must start with a hyphen followed by lowercase alphanumeric chars (e.g. -prod, -myco)."
+    _red "  ERROR: must be a GUID, not a subscription name or a row number from 'az account list -o table'."
   done
 
-  local env_default="dev"
-  [[ "$PROFILE" == "prod" ]] && env_default="prod"
-  _ask "Environment label (for tagging)" "$env_default"
-  ENVIRONMENT="$_REPLY"
+  # A resumed no-suffix deployment carries NAME_PREFIX="", and _ask substitutes
+  # the default on a blank reply, so an empty default would make Enter fail the
+  # regex below and re-prompt forever. Offer the sentinel back instead.
+  local name_default="${NAME_PREFIX:-none}"
+  local name_errors="" name_error_line
+  [[ "$PROFILE" == "prod" ]] && ! _answered 2 && name_default="prod"
+  while true; do
+    _ask "Deployment name, or \"none\" for no suffix (lowercase, e.g. prod, staging, myco)" "$name_default"
+    NAME_PREFIX="${_REPLY#-}" # tolerate a pasted leading hyphen from an older tfvars
+    # "none" is the only route to the empty name_prefix variables.tf allows,
+    # since _ask substitutes the default on a blank reply. It still falls through
+    # to the length gate below: an over-long name_base busts the ceiling on its
+    # own, and "none" is the first thing reached for once told to shorten.
+    if [[ "$NAME_PREFIX" == "none" ]]; then
+      NAME_PREFIX=""
+    # Same rule as the name_prefix validation in variables.tf: hyphens only
+    # between alphanumerics, since a trailing or doubled hyphen produces a
+    # Key Vault and AKS name Azure rejects at apply. A leading digit is fine,
+    # because the prefix always lands on the end of "ls-<resource>" and the
+    # composed name still starts with a letter.
+    elif ! [[ "$NAME_PREFIX" =~ ^[a-z0-9](-?[a-z0-9])*$ ]]; then
+      _red "  ERROR: must be lowercase alphanumerics separated by single hyphens (e.g. prod, dev-dz), or \"none\" for no suffix. No trailing or doubled hyphen."
+      continue
+    fi
+    # Storage and Key Vault cap at 24 including the resource word and the hash,
+    # so ~12 is the practical ceiling — said here with the actual name rather
+    # than a rule of thumb. The preconditions remain the backstop for a
+    # hand-written tfvars.
+    _derive_names
+    name_errors="$(_name_length_errors)"
+    [[ -z "$name_errors" ]] && break
+    while IFS= read -r name_error_line; do
+      _red "  ERROR: $name_error_line"
+    done <<< "$name_errors"
+    # Whether the deployment name is even the lever: a 16-char name_base eats
+    # the 24-char budget on its own, and then every answer fails. Re-deriving
+    # with no deployment name answers that, and without the escape below the
+    # prompt can be neither satisfied nor exited.
+    local _keep_prefix="$NAME_PREFIX"
+    NAME_PREFIX=""
+    _derive_names
+    local shortest_errors
+    shortest_errors="$(_name_length_errors)"
+    NAME_PREFIX="$_keep_prefix"
+    _derive_names
+    if [[ -z "$shortest_errors" ]]; then
+      _hint "Shorten the deployment name, or pin the name yourself with storage_account_name /"
+      _hint "keyvault_name in terraform.tfvars once this run has written it."
+      continue
+    fi
+    _hint "The deployment name is not what busts the ceiling — an empty one is over it too."
+    _hint "The leading segment is what to change: name_base, or storage_account_name /"
+    _hint "keyvault_name to pin the name outright. All three are set by hand in"
+    _hint "terraform.tfvars, which this run writes and re-reads, so you can finish here"
+    _hint "and edit the file. Terraform rejects the config at plan until you do."
+    if _ask_yn "Continue with this name and fix it in terraform.tfvars?" "n"; then
+      break
+    fi
+  done
 
-  _ask "Azure region" "eastus"
+  _ask "Azure region" "$LOCATION"
   LOCATION="$_REPLY"
 
-  _ask "Owner tag (team or person, for cost attribution)" "platform-team"
+  # Azure tags and nothing else: they name no resource and grant no access.
+  echo ""
+  _hint "The last three answers are Azure tags, used for cost reporting and policy."
+  _hint "None of them grants access or appears in a resource name. Blank omits the tag."
+  _hint "The environment tag defaults to the deployment name — set it only when the"
+  _hint "deployment name carries more (name \"prod-eastus\", environment tag \"prod\")."
+  _ask "Environment tag (blank = the deployment name)" "$ENVIRONMENT"
+  ENVIRONMENT="$_REPLY"
+
+  _ask "Owner tag (team or person, for cost attribution)" "$OWNER"
   OWNER="$_REPLY"
 
-  _ask "Cost center tag (leave blank to skip)" ""
+  _ask "Cost center tag (billing code)" "$COST_CENTER"
   COST_CENTER="$_REPLY"
 
   echo ""
-  printf "  Resources: langsmith-{resource}$(_cyan "$IDENTIFIER")  in  $(_cyan "$LOCATION")\n"
+  _derive_names
+  printf "  Resource group  $(_cyan "$(_name_or_attached "$CREATE_RESOURCE_GROUP" "$_RG_NAME")")  in  $(_cyan "$LOCATION")\n"
+  printf "  Cluster $(_cyan "$(_name_or_attached "$CREATE_CLUSTER" "$_AKS_NAME")") · Key Vault $(_cyan "$(_name_or_attached "$CREATE_KEYVAULT" "$_KV_NAME")") · Storage $(_cyan "$_BLOB_NAME")\n"
 }
 
 # -- 3. Networking -----------------------------------------------------------
@@ -194,6 +760,85 @@ VNET_ID=""
 AKS_SUBNET_ID=""
 POSTGRES_SUBNET_ID=""
 REDIS_SUBNET_ID=""
+AKS_SUBNET_CIDR_LINE=""
+POSTGRES_SUBNET_CIDR_LINE=""
+REDIS_SUBNET_CIDR_LINE=""
+AKS_SERVICE_CIDR=""
+
+# Ask for one subnet in bring-your-own-VNet mode. An empty answer means
+# "Terraform creates it", which then needs a CIDR to carve out of the VNet.
+# Sets _SUBNET_ID and _SUBNET_CIDR_LINE.
+_ask_subnet() {
+  local label="$1" cidr_var="$2" default_cidr="$3" note="$4"
+  _SUBNET_ID=""
+  _SUBNET_CIDR_LINE=""
+  echo ""
+  _hint "$note"
+  _ask "${label} subnet resource ID (Enter = let Terraform create it)" ""
+  _SUBNET_ID="$_REPLY"
+  if [[ -z "$_SUBNET_ID" ]]; then
+    _ask "CIDR for the new ${label} subnet" "$default_cidr"
+    # Padded so the three prefix lines line up with each other in the tfvars.
+    _SUBNET_CIDR_LINE="$(printf '%-30s = ["%s"]' "$cidr_var" "$_REPLY")"
+  fi
+}
+
+# A subnet that has to already exist. AGIC and the bastion have no carve path
+# inside a VNet Terraform does not own, so an ID is required rather than optional.
+# Lowercased before matching for the same reason as vnet_re below, and the
+# optional third argument enforces a name Azure demands.
+_ask_required_subnet() {
+  local label="$1" note="$2" want_name="$3" id_lc want_lc
+  local subnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$'
+  want_lc=$(printf '%s' "$want_name" | tr '[:upper:]' '[:lower:]')
+  echo ""
+  _hint "$note"
+  while true; do
+    _ask "${label} subnet resource ID" ""
+    _REQUIRED_SUBNET_ID="$_REPLY"
+    id_lc=$(printf '%s' "$_REQUIRED_SUBNET_ID" | tr '[:upper:]' '[:lower:]')
+    if [[ ! "$id_lc" =~ $subnet_re ]]; then
+      _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<name>"
+      echo ""
+      continue
+    fi
+    if [[ -n "$want_lc" && "${id_lc##*/}" != "$want_lc" ]]; then
+      _red "  ERROR: Azure requires this subnet be named ${want_name}."
+      echo ""
+      continue
+    fi
+    break
+  done
+}
+
+# One subnet's line on the review screen: the ID being reused, or the CIDR
+# Terraform will carve. Lets an operator catch a pasted ID before anything runs.
+_subnet_review() {
+  local id="$1" cidr_line="$2"
+  if [[ -n "$id" ]]; then
+    echo "reuse   $id"
+  else
+    echo "create  ${cidr_line#*= }"
+  fi
+}
+
+# A subnet resource ID, lowercased first because Azure returns the provider
+# namespace and the resourceGroups segment in mixed case depending on the API.
+_valid_subnet_id() {
+  local lc
+  lc=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  [[ "$lc" =~ ^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+/subnets/[^/]+$ ]]
+}
+
+# An IPv4 CIDR, the only form the three *_subnet_address_prefix variables are
+# ever written with. Shape only: an out-of-range octet still fails at plan, where
+# Terraform's own message is clear. Checked here for the reason the IDs are —
+# it lands in double-quoted HCL, and none of the three variables carries a
+# validation block, so an empty or typo'd answer otherwise surfaces as a cidr
+# function error several steps later.
+_valid_cidr() {
+  [[ "$1" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]
+}
 
 _run_section_3() {
   _section "3. Networking"
@@ -201,50 +846,124 @@ _run_section_3() {
   _hint "Choose 'existing VNet' only if you're integrating into a corporate network"
   _hint "where network teams manage VNets centrally."
 
-  CREATE_VNET="true"
-  VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
-
-  if _ask_yn "Create a new VNet? (recommended)" "y"; then
+  if _ask_yn "Create a new VNet? (recommended)" "$(_yn_default "$CREATE_VNET")"; then
     CREATE_VNET="true"
-  else
-    CREATE_VNET="false"
-    echo ""
-    _hint "Bring Your Own VNet — you must provide existing subnet resource IDs."
-    _hint "The PostgreSQL subnet must have Microsoft.DBforPostgreSQL/flexibleServers delegation."
-    echo ""
-    _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" ""
-    VNET_ID="$_REPLY"
-    _ask "AKS subnet resource ID (/subscriptions/.../subnets/...)" ""
-    AKS_SUBNET_ID="$_REPLY"
-    _ask "PostgreSQL subnet resource ID (must have flexibleServers delegation)" ""
-    POSTGRES_SUBNET_ID="$_REPLY"
-    _ask "Redis subnet resource ID" ""
-    REDIS_SUBNET_ID="$_REPLY"
+    # Clear any BYO IDs and carved CIDRs from a previous pass — meaningless here.
+    VNET_ID=""; AKS_SUBNET_ID=""; POSTGRES_SUBNET_ID=""; REDIS_SUBNET_ID=""
+    AKS_SUBNET_CIDR_LINE=""; POSTGRES_SUBNET_CIDR_LINE=""; REDIS_SUBNET_CIDR_LINE=""
+    AKS_SERVICE_CIDR=""
+    AGIC_SUBNET_ID=""; BASTION_SUBNET_ID=""
+    return
   fi
+
+  CREATE_VNET="false"
+
+  echo ""
+  _hint "Bring Your Own VNet — LangSmith deploys into a VNet you already own."
+  _hint "Each subnet below is optional. Paste a subnet resource ID to reuse an"
+  _hint "existing subnet, or press Enter and Terraform creates it inside your VNet"
+  _hint "with the settings that service needs."
+  _hint "The CIDRs offered as defaults below describe the VNet Terraform builds, not"
+  _hint "yours. Replace each with a free range inside your own address space."
+  echo ""
+
+  # Matched against the same shape the vnet_id variable validates, so a typo is
+  # caught here rather than at terraform plan. That validation is
+  # case-insensitive because Azure hands back "resourcegroups" in some contexts
+  # and "resourceGroups" in others, so lowercase a copy before comparing — bash
+  # 3.2 has no ${var,,}. Only the comparison is lowered; Terraform gets what was
+  # pasted.
+  local vnet_re='^/subscriptions/[^/]+/resourcegroups/[^/]+/providers/microsoft\.network/virtualnetworks/[^/]+$'
+  local vnet_lc
+  while true; do
+    _ask "VNet resource ID (/subscriptions/.../virtualNetworks/...)" "$VNET_ID"
+    VNET_ID="$_REPLY"
+    vnet_lc=$(printf '%s' "$VNET_ID" | tr '[:upper:]' '[:lower:]')
+    [[ "$vnet_lc" =~ $vnet_re ]] && break
+    _red "  ERROR: expected /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>"
+    echo ""
+  done
+
+  _ask_subnet "AKS" "aks_subnet_address_prefix" "10.0.0.0/19" \
+    "Holds the AKS nodes, and in node-subnet mode the pods too; a /24 is enough in overlay mode. An existing subnet needs the Microsoft.Storage and Microsoft.KeyVault service endpoints."
+  AKS_SUBNET_ID="$_SUBNET_ID"; AKS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
+
+  _ask_subnet "PostgreSQL" "postgres_subnet_address_prefix" "10.0.32.0/20" \
+    "An existing subnet must already be delegated to Microsoft.DBforPostgreSQL/flexibleServers and contain nothing else. A new one gets that delegation automatically."
+  POSTGRES_SUBNET_ID="$_SUBNET_ID"; POSTGRES_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
+
+  _ask_subnet "Redis" "redis_subnet_address_prefix" "10.0.48.0/20" \
+    "Holds the Azure Managed Redis private endpoint. This subnet must NOT be delegated — a delegated subnet would reject the endpoint."
+  REDIS_SUBNET_ID="$_SUBNET_ID"; REDIS_SUBNET_CIDR_LINE="$_SUBNET_CIDR_LINE"
+
+  # Kubernetes ClusterIPs are internal to the cluster, but AKS still requires the
+  # range to be unused by anything on or connected to the VNet. The default only
+  # dodges the VNet Terraform builds, so on this path the operator must name one.
+  echo ""
+  _hint "Kubernetes assigns ClusterIPs from a range that must not be used by anything"
+  _hint "in your VNet or any network peered to it. It is not carved from your VNet —"
+  _hint "pick a range that sits outside your VNet's address space entirely."
+  # Four subnet ID prompts run immediately above this one, and a resource ID
+  # pasted here reaches Terraform as a string the locals hand to cidrhost() —
+  # an invalid-CIDR error against a main.tf line the operator never wrote.
+  while true; do
+    _ask "Kubernetes service CIDR" "${AKS_SERVICE_CIDR:-10.0.64.0/20}"
+    if _valid_cidr "$_REPLY"; then break; fi
+    if _valid_subnet_id "$_REPLY"; then
+      _red "  ERROR: that is a subnet resource ID. No subnet is created for this range — Kubernetes allocates ClusterIPs from it, so it takes an address range like 10.0.64.0/20."
+    else
+      _red "  ERROR: expected an IPv4 CIDR, e.g. 10.0.64.0/20."
+    fi
+    echo ""
+  done
+  AKS_SERVICE_CIDR="$_REPLY"
+
+  # This section can be re-run from the review menu, after AGIC or a bastion has
+  # already been chosen. Neither is carved inside a VNet Terraform does not own,
+  # so collect the subnet each one needs. On a first pass through the wizard both
+  # are still at their defaults and the prompts below ask at the point of choice.
+  if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
+    _ask_required_subnet "Application Gateway" \
+      "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." ""
+    AGIC_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+  fi
+  if [[ "$CREATE_BASTION" == "true" ]]; then
+    _ask_required_subnet "Azure Bastion" \
+      "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet"
+    BASTION_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+  fi
+
+  echo ""
+  _hint "Any CIDR you entered must fit inside your VNet's address space, not overlap"
+  _hint "an existing subnet, and not overlap the Kubernetes service CIDR above."
 }
 
 # -- 4. AKS ------------------------------------------------------------------
-NODE_VM_SIZE="Standard_D4s_v3"
+NODE_VM_SIZE="Standard_D4s_v5"
 NODE_MIN=2
 NODE_MAX=5
-AKS_DELETION_PROTECTION="false"
+NODE_MAX_PODS=60
+NETWORK_MODE="overlay"
+AKS_SKU_TIER="Standard"
 
 _run_section_4() {
   _section "4. AKS Cluster"
   _hint "Node sizing determines how many LangSmith services fit per node."
-  _hint "Standard_D4s_v3 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
-  _hint "Standard_D8s_v3 (8 vCPU, 32 GiB) — required for production sizing profile."
-  _hint "Cost estimate (eastus, on-demand): D4s_v3 ~\$0.19/hr, D8s_v3 ~\$0.38/hr per node."
+  _hint "Standard_D4s_v5 (4 vCPU, 16 GiB) — OK for dev/POC with in-cluster services."
+  _hint "Standard_D8s_v5 (8 vCPU, 32 GiB) — required for production sizing profile."
+  _hint "Cost estimate (eastus, on-demand): D4s_v5 ~\$0.19/hr, D8s_v5 ~\$0.38/hr per node."
   _hint "The autoscaler handles bursts — min_count is the always-on floor."
 
-  local vm_default="Standard_D4s_v3"
-  local min_default=2
-  local max_default=5
+  local vm_default="$NODE_VM_SIZE"
+  local min_default="$NODE_MIN"
+  local max_default="$NODE_MAX"
   if [[ "$PROFILE" == "prod" ]]; then
-    vm_default="Standard_D8s_v3"
-    min_default=3
-    max_default=10
-    _hint "Production defaults: D8s_v3 ×3 min (fits Pass 2 at ~76% CPU utilization)."
+    if ! _answered 4; then
+      vm_default="Standard_D8s_v5"
+      min_default=3
+      max_default=10
+    fi
+    _hint "Production defaults: D8s_v5 ×3 min (fits Pass 2 at ~76% CPU utilization)."
   fi
 
   _ask "Node VM size" "$vm_default"
@@ -254,74 +973,140 @@ _run_section_4() {
   _ask_int "Node pool max count (autoscaler ceiling)" "$max_default"
   NODE_MAX="$_REPLY"
 
-  AKS_DELETION_PROTECTION="false"
-  if [[ "$PROFILE" == "prod" ]]; then
-    AKS_DELETION_PROTECTION="true"
-    _hint "Production: aks_deletion_protection = true (prevents accidental terraform destroy)."
+  # Overlay is Microsoft's recommendation and keeps the AKS subnet to nodes
+  # only. node-subnet is the flat network earlier deployments run in. Both are
+  # creation-time choices: moving a cluster between them is a one-way migration
+  # that reimages every node pool, so the wizard asks rather than assuming.
+  _hint "Network mode. overlay (recommended): pods take addresses from a private"
+  _hint "10.244.0.0/16 range, Cilium enforces NetworkPolicy, and the AKS subnet"
+  _hint "holds nodes only, so a /24 is plenty. node-subnet: pods take VNet"
+  _hint "addresses and the subnet must hold (max count + 1) x (max pods + 1)"
+  _hint "addresses per pool."
+  local mode_choice=""
+  _answered 4 && mode_choice="$(_index_of "$NETWORK_MODE" overlay node-subnet)"
+  _ask_choice --default "$mode_choice" \
+    "Which network mode?" \
+    "overlay      — Azure CNI Overlay with Cilium (recommended)" \
+    "node-subnet  — Azure CNI node subnet (flat network, legacy)"
+  case "$_CHOICE" in
+    1) NETWORK_MODE="overlay" ;;
+    2) NETWORK_MODE="node-subnet" ;;
+  esac
+
+  if [[ "$NETWORK_MODE" == "node-subnet" ]]; then
+    # Azure CNI draws pod IPs from the AKS subnet, so this multiplies the subnet
+    # size: the cluster needs (max_count + 1) x (max_pods + 1) addresses. It is
+    # one of the two knobs the capacity check tells operators to lower, so it
+    # needs to be reachable from here.
+    _hint "Max pods per node multiplies the AKS subnet requirement, at"
+    _hint "(max count + 1) x (max pods + 1) addresses. 60 suits most deployments;"
+    _hint "lower it if your subnet is fixed and tight."
+  else
+    _hint "Max pods per node. 60 suits most deployments; overlay allows up to 250"
+    _hint "and the value no longer sizes the AKS subnet."
   fi
+  _ask_int "Max pods per node" "$NODE_MAX_PODS"
+  NODE_MAX_PODS="$_REPLY"
+
+  # Free has no SLA. Standard is where a production cluster starts; the tier is
+  # updated in place, so this one is safe to change later.
+  _hint "Tier. Standard carries the financially backed uptime SLA (99.95% across"
+  _hint "availability zones) and is the production choice. Free has no SLA and"
+  _hint "suits a throwaway cluster. Premium adds long-term Kubernetes support."
+  local tier_choice=""
+  _answered 4 && tier_choice="$(_index_of "$AKS_SKU_TIER" Standard Free Premium)"
+  _ask_choice --default "$tier_choice" \
+    "Which AKS tier?" \
+    "Standard — uptime SLA (recommended)" \
+    "Free     — no SLA" \
+    "Premium  — Standard plus long-term support"
+  case "$_CHOICE" in
+    1) AKS_SKU_TIER="Standard" ;;
+    2) AKS_SKU_TIER="Free" ;;
+    3) AKS_SKU_TIER="Premium" ;;
+  esac
 }
 
 # -- 5. Ingress Controller ---------------------------------------------------
-INGRESS_CONTROLLER="nginx"
-ISTIO_ADDON_REVISION_LINE=""
-AGW_SKU_TIER_LINE=""
+INGRESS_CONTROLLER="envoy-gateway"
+ISTIO_ADDON_REVISION=""
+AGW_SKU_TIER=""
 
 _run_section_5() {
   _section "5. Ingress Controller"
   _hint "The ingress controller routes external HTTP/HTTPS traffic to LangSmith pods."
-  _hint "nginx       — standard K8s ingress, supported everywhere, easiest to debug."
-  _hint "istio-addon — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
-  _hint "istio       — self-managed Istio via Helm; more control, more operational overhead."
-  _hint "agic        — Azure Application Gateway; enterprise WAF built-in, but requires a"
-  _hint "              dedicated subnet at VNet creation time (cannot add to existing VNet)."
-  _hint "envoy-gateway — Gateway API native; useful if you're standardizing on Gateway API."
-  _hint "Start with nginx unless you have a specific reason to use another."
+  _hint "envoy-gateway — Gateway API native; the same controller on AWS and GCP."
+  _hint "nginx         — classic K8s Ingress; for clusters standardized on it."
+  _hint "istio-addon   — AKS managed Istio mesh; best for multi-dataplane + mTLS use cases."
+  _hint "istio         — self-managed Istio via Helm; more control, more operational overhead."
+  _hint "agic          — Azure Application Gateway; enterprise WAF built-in. Needs a"
+  _hint "                dedicated /24 subnet, carved for you or named with agic_subnet_id."
+  _hint "Start with envoy-gateway unless you have a specific reason to use another."
 
-  ISTIO_ADDON_REVISION_LINE=""
-  AGW_SKU_TIER_LINE=""
+  local ingress_choice=""
+  _answered 5 && ingress_choice="$(_index_of "$INGRESS_CONTROLLER" envoy-gateway nginx istio-addon istio agic none)"
 
-  _ask_choice "Which ingress controller?" \
-    "nginx         — NGINX via Helm (recommended default)" \
-    "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
-    "istio         — Istio via Helm (self-managed)" \
-    "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
-    "envoy-gateway — Envoy Gateway (Gateway API native)" \
-    "none          — skip (bring your own)"
+  while true; do
+    _ask_choice --default "$ingress_choice" \
+      "Which ingress controller?" \
+      "envoy-gateway — Envoy Gateway, Gateway API (recommended default)" \
+      "nginx         — NGINX via Helm (legacy Ingress compatibility)" \
+      "istio-addon   — Azure managed Istio, AKS service mesh add-on" \
+      "istio         — Istio via Helm (self-managed)" \
+      "agic          — Application Gateway Ingress Controller (enterprise, native WAF)" \
+      "none          — skip (bring your own)"
 
-  case "$_CHOICE" in
-    1) INGRESS_CONTROLLER="nginx" ;;
-    2) INGRESS_CONTROLLER="istio-addon" ;;
-    3) INGRESS_CONTROLLER="istio" ;;
-    4) INGRESS_CONTROLLER="agic" ;;
-    5) INGRESS_CONTROLLER="envoy-gateway" ;;
-    6) INGRESS_CONTROLLER="none" ;;
-  esac
+    case "$_CHOICE" in
+      1) INGRESS_CONTROLLER="envoy-gateway" ;;
+      2) INGRESS_CONTROLLER="nginx" ;;
+      3) INGRESS_CONTROLLER="istio-addon" ;;
+      4) INGRESS_CONTROLLER="istio" ;;
+      5) INGRESS_CONTROLLER="agic" ;;
+      6) INGRESS_CONTROLLER="none" ;;
+    esac
+
+    # Terraform will not carve an Application Gateway subnet inside a VNet it
+    # does not own, so on that path the operator names one that already exists.
+    if [[ "$INGRESS_CONTROLLER" == "agic" && "$CREATE_VNET" == "false" ]]; then
+      _ask_required_subnet "Application Gateway" \
+        "AGIC needs an existing subnet to itself, /24 recommended. Terraform will not create one inside a VNet you own." ""
+      AGIC_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+    fi
+    break
+  done
 
   echo ""
   printf "  Ingress: $(_cyan "$INGRESS_CONTROLLER")\n"
+
+  # Clear settings that belong to a controller no longer selected. The subnet ID
+  # goes with them: it is written whenever non-empty, so leaving it behind after
+  # a switch away from AGIC emits an agic_subnet_id for a gateway never created.
+  [[ "$INGRESS_CONTROLLER" != "istio-addon" ]] && ISTIO_ADDON_REVISION=""
+  [[ "$INGRESS_CONTROLLER" != "agic" ]]        && { AGW_SKU_TIER=""; AGIC_SUBNET_ID=""; }
 
   if [[ "$INGRESS_CONTROLLER" == "istio-addon" ]]; then
     echo ""
     _hint "The Istio addon revision must match what AKS supports in your region."
     _hint "Check available revisions after cluster creation:"
     _hint "  az aks mesh get-upgrades -g <rg> -n <cluster>"
-    _ask "Istio addon revision" "asm-1-22"
-    ISTIO_ADDON_REVISION_LINE="istio_addon_revision = \"$_REPLY\""
+    _ask "Istio addon revision" "${ISTIO_ADDON_REVISION:-asm-1-22}"
+    ISTIO_ADDON_REVISION="$_REPLY"
   fi
 
   if [[ "$INGRESS_CONTROLLER" == "agic" ]]; then
     echo ""
     _hint "AGIC provisions an Azure Application Gateway v2 with a dedicated /24 subnet."
-    _hint "WAF_v2 adds OWASP 3.2 rules + bot protection — no separate WAF module needed."
-    _hint "Note: AGIC requires a full cluster rebuild to enable (AGW subnet is provisioned"
-    _hint "at VNet creation time and cannot be added to an existing VNet)."
-    _ask_choice "Application Gateway SKU tier:" \
-      "Standard_v2 — standard routing (no WAF)" \
-      "WAF_v2      — with integrated WAF (OWASP 3.2 + bot protection)"
-    if [[ "$_CHOICE" == "2" ]]; then
-      AGW_SKU_TIER_LINE="agw_sku_tier = \"WAF_v2\""
-    else
-      AGW_SKU_TIER_LINE="agw_sku_tier = \"Standard_v2\""
+    _hint "The gateway runs Standard_v2. Answering yes to the WAF policy later attaches"
+    _hint "one and moves the gateway to WAF_v2, the only tier Azure allows it on."
+    _hint "Switching an existing deployment to AGIC updates the cluster in place — the"
+    _hint "add-on is an argument on the cluster resource, not a new cluster."
+    _hint "With a VNet you own, supply the Application Gateway subnet."
+    if [[ "$NETWORK_MODE" == "overlay" ]]; then
+      echo ""
+      _yellow "NOTE"; printf ": AGIC with the overlay network mode is not yet verified by this module.\n"
+      _hint "Microsoft supports the pairing (AGIC 1.9.1 or later, a delegated /24 subnet, as here)"
+      _hint "except in Azure Government and Azure China, where it is unsupported. Confirm ingress on"
+      _hint "the cluster before relying on it, or choose envoy-gateway, the default."
     fi
   fi
 }
@@ -333,35 +1118,49 @@ LANGSMITH_DOMAIN=""
 LE_EMAIL=""
 CREATE_DNS_ZONE="false"
 
+# Suggests langsmith-<name_prefix> but still asks, because the DNS label lives in
+# a namespace shared with every other Azure tenant in the region: the FQDN
+# <label>.<region>.cloudapp.azure.com must be unique region-wide, so a derived
+# name can be taken by someone else. Same class of collision as the Key Vault
+# name. Asking here means the operator picks a free one instead of hitting
+# DnsRecordCreateConflict at apply.
+_ask_dns_label() {
+  # Keep a label already in use; the suggestion is only for a deployment that has
+  # not claimed one. Reoffering the derived name moves a published FQDN.
+  _ask "DNS label — must be unique across the whole $LOCATION region (e.g. langsmith-prod)" \
+    "${DNS_LABEL:-langsmith${NAME_PREFIX:+-$NAME_PREFIX}}"
+  DNS_LABEL="$_REPLY"
+}
+
 _run_section_6() {
   _section "6. DNS + TLS"
   _hint "Determines how LangSmith is accessed and whether traffic is encrypted."
   _hint ""
   _hint "None          — HTTP only. Fastest setup, zero cert config. Good for dev/internal."
-  _hint "              URL: http://<label>.<region>.cloudapp.azure.com"
+  _hint "              URL: http://<label>.<region>.$(_azure_cloudapp_suffix)"
   _hint ""
-  _hint "Let's Encrypt — Free HTTPS via ACME HTTP-01 challenge. Requires a public DNS label."
+  _hint "Both HTTPS options are free certificates from Let's Encrypt. What differs is how"
+  _hint "Let's Encrypt proves you control the name, and both register an ACME account."
+  _hint ""
+  _hint "HTTP-01       — Let's Encrypt fetches a token over port 80. Needs a public DNS label."
   _hint "              Works with: nginx, istio (self-managed), envoy-gateway."
   _hint "              Does NOT work with istio-addon or agic (no IngressClass / path rewrite)."
   _hint ""
-  _hint "DNS-01        — HTTPS via ACME DNS-01 challenge. Works with ALL controllers."
+  _hint "DNS-01        — cert-manager writes a TXT record to Azure DNS. No HTTP port needed,"
+  _hint "              so it works with ALL controllers."
   _hint "              Requires a custom domain and an Azure DNS zone (NS delegation)."
-  _hint "              cert-manager writes TXT records to Azure DNS — no HTTP port needed."
   _hint "              Best for: private clusters, firewalled environments, istio-addon."
   _hint ""
   _hint "Existing      — Bring a pre-issued K8s TLS secret (manual cert management)."
 
-  TLS_SOURCE="none"
-  DNS_LABEL=""
-  LANGSMITH_DOMAIN=""
-  LE_EMAIL=""
-  CREATE_DNS_ZONE="false"
-
-  _ask_choice "TLS certificate source:" \
-    "None          — HTTP only (quickstart default, zero setup)" \
-    "Let's Encrypt — HTTPS via HTTP-01 (nginx, istio, envoy-gateway only)" \
-    "DNS-01        — HTTPS via DNS-01 (all controllers, requires custom domain)" \
-    "Existing      — bring your own K8s TLS secret"
+  local tls_choice=""
+  _answered 6 && tls_choice="$(_index_of "$TLS_SOURCE" none letsencrypt dns01 existing)"
+  _ask_choice --default "$tls_choice" \
+    "TLS certificate source:" \
+    "None                    — HTTP only (quickstart default, zero setup)" \
+    "Let's Encrypt (HTTP-01) — nginx, istio, envoy-gateway only" \
+    "Let's Encrypt (DNS-01)  — all controllers, requires a custom domain" \
+    "Existing                — bring your own K8s TLS secret"
 
   case "$_CHOICE" in
     1) TLS_SOURCE="none" ;;
@@ -409,38 +1208,58 @@ _run_section_6() {
   # DNS hostname setup
   if [[ "$TLS_SOURCE" != "none" && "$TLS_SOURCE" != "existing" ]]; then
     echo ""
-    _hint "How do you want to expose the LangSmith URL?"
-    _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
-    _hint "                    Azure assigns <label>.<region>.cloudapp.azure.com to the LB IP."
-    _hint "                    Only usable with Let's Encrypt (HTTP-01)."
-    _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
-    _hint "                    Required for DNS-01. Works with all controllers."
-    _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
-    echo ""
+    # DNS-01 has no DNS-label path: cert-manager writes a TXT record into the
+    # zone, and Azure owns cloudapp.azure.com. Offering it here left
+    # langsmith_domain empty and the cert unissuable.
+    local want_domain=false
+    [[ "$TLS_SOURCE" == "dns01" ]] && want_domain=true
 
-    _ask_choice "DNS approach:" \
-      "Azure public IP DNS label — simplest, free subdomain" \
-      "Custom domain — your own domain (required for DNS-01)"
+    if [[ "$want_domain" == "false" ]]; then
+      _hint "How do you want to expose the LangSmith URL?"
+      _hint "  Azure DNS label — free Azure subdomain, no domain purchase needed."
+      _hint "                    Azure assigns <label>.<region>.$(_azure_cloudapp_suffix) to the LB IP."
+      _hint "  Custom domain   — bring your own domain (e.g. langsmith.mycompany.com)."
+      _hint "                    You'll delegate a subdomain's NS records to Azure DNS."
+      echo ""
 
-    if [[ "$_CHOICE" == "1" ]]; then
-      _ask "DNS label (e.g. langsmith-prod)" "langsmith${IDENTIFIER}"
-      DNS_LABEL="$_REPLY"
-    else
-      _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
-      _ask "Custom domain" ""
-      LANGSMITH_DOMAIN="$_REPLY"
+      local dns_choice=""
+      _answered 6 && { [[ -n "$LANGSMITH_DOMAIN" ]] && dns_choice=2 || dns_choice=1; }
+      _ask_choice --default "$dns_choice" \
+        "DNS approach:" \
+        "Azure public IP DNS label — simplest, free subdomain" \
+        "Custom domain — your own domain"
+      [[ "$_CHOICE" == "2" ]] && want_domain=true
     fi
 
-    _hint "Let's Encrypt requires an email for your ACME account (cert expiry notifications)."
-    _ask "Email for Let's Encrypt / ACME registration" ""
+    if [[ "$want_domain" == "true" ]]; then
+      DNS_LABEL=""
+      echo ""
+      _hint "Example: langsmith.mycompany.com or azurelangsmith.mycompany.com"
+      while true; do
+        _ask "Custom domain" "$LANGSMITH_DOMAIN"
+        LANGSMITH_DOMAIN="$_REPLY"
+        [[ -n "$LANGSMITH_DOMAIN" ]] && break
+        _red "  ERROR: a domain is required here — the certificate is issued for this name."
+      done
+    else
+      LANGSMITH_DOMAIN=""
+      _ask_dns_label
+    fi
+
+    _hint "Both challenge types register an ACME account with Let's Encrypt, which needs"
+    _hint "an email. Used for expiry notices only."
+    _ask "Email for the ACME account" "$LE_EMAIL"
     LE_EMAIL="$_REPLY"
 
   elif [[ "$TLS_SOURCE" == "none" ]]; then
+    LANGSMITH_DOMAIN=""; LE_EMAIL=""
     echo ""
     _hint "Azure assigns a free DNS label to your load balancer public IP."
-    _hint "Format: <label>.<region>.cloudapp.azure.com"
-    _ask "DNS label (e.g. langsmith-prod)" "langsmith${IDENTIFIER}"
-    DNS_LABEL="$_REPLY"
+    _hint "Format: <label>.<region>.$(_azure_cloudapp_suffix)"
+    _ask_dns_label
+  else
+    # existing — no hostname prompts apply
+    DNS_LABEL=""; LANGSMITH_DOMAIN=""; LE_EMAIL=""
   fi
 
   if [[ "$TLS_SOURCE" == "dns01" ]]; then
@@ -450,6 +1269,24 @@ _run_section_6() {
     _hint "NS records at your registrar → cert-manager writes TXT records to Azure DNS →"
     _hint "Let's Encrypt validates ownership → cert is issued automatically."
     _hint "create_dns_zone = true will be set."
+  elif [[ -n "$LANGSMITH_DOMAIN" ]]; then
+    # HTTP-01 does not need the zone, but a custom domain still needs an A
+    # record somewhere. Forcing false here left users no wizard path to it.
+    echo ""
+    _hint "Terraform can host ${LANGSMITH_DOMAIN} in an Azure DNS zone. You delegate the"
+    _hint "zone's NS records at your registrar once. The A record comes after the deploy:"
+    _hint "make status shows the ingress IP; set it as ingress_ip in terraform.tfvars and"
+    _hint "run make apply again."
+    _hint "Answer no if you manage the A record in another DNS provider."
+    local zone_default="y"
+    _answered 6 && [[ "$CREATE_DNS_ZONE" != "true" ]] && zone_default="n"
+    if _ask_yn "Create an Azure DNS zone for ${LANGSMITH_DOMAIN}?" "$zone_default"; then
+      CREATE_DNS_ZONE="true"
+    else
+      CREATE_DNS_ZONE="false"
+    fi
+  else
+    CREATE_DNS_ZONE="false"
   fi
 }
 
@@ -459,8 +1296,13 @@ REDIS_SOURCE="in-cluster"
 CH_SOURCE="in-cluster"
 PG_ADMIN_USER="langsmith"
 PG_DB_NAME="langsmith"
-PG_DELETION_PROTECTION="false"
-REDIS_CAPACITY=1
+AMR_SKU="Balanced_B1"
+REDIS_HA="false"
+# Storage is not optional, but how long artifacts live is a policy choice, so
+# section 7 asks.
+BLOB_TTL_ENABLED="true"
+BLOB_TTL_SHORT_DAYS="14"
+BLOB_TTL_LONG_DAYS="400"
 
 _run_section_7() {
   _section "7. Backend Services"
@@ -469,51 +1311,87 @@ _run_section_7() {
   _hint "In-cluster  — runs as pods. Simple to deploy, but no backups, limited HA."
   _hint "              OK for dev/POC. Do NOT use for production workloads."
   _hint ""
-  _hint "External    — Azure managed services (Postgres Flexible Server, Cache for Redis)."
+  _hint "External    — Azure managed services (Postgres Flexible Server, Managed Redis)."
   _hint "              Automated backups, geo-redundancy, independent scaling."
   _hint "              Recommended for production and long-running POCs."
   _hint ""
-  _hint "ClickHouse  — always in-cluster for self-hosted (single StatefulSet, no backups)."
+  _hint "ClickHouse  — in-cluster is a single StatefulSet with no backups."
   _hint "              For production traces, use LangChain Managed ClickHouse instead."
-
-  PG_SOURCE="in-cluster"
-  REDIS_SOURCE="in-cluster"
-  CH_SOURCE="in-cluster"
-  PG_ADMIN_USER="langsmith"
-  PG_DB_NAME="langsmith"
-  PG_DELETION_PROTECTION="false"
-  REDIS_CAPACITY=1
 
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
     _hint "Production: external Postgres and Redis are strongly recommended."
-    if ! _ask_yn "Use external PostgreSQL (Azure DB for PostgreSQL Flexible Server)?" "y"; then
+    # Prod fresh-run default is external; on re-entry, whatever you picked.
+    local pg_yn="y" redis_yn="y"
+    if _answered 7; then
+      [[ "$PG_SOURCE"    == "in-cluster" ]] && pg_yn="n"
+      [[ "$REDIS_SOURCE" == "in-cluster" ]] && redis_yn="n"
+    fi
+    if ! _ask_yn "Use external PostgreSQL (Azure DB for PostgreSQL Flexible Server)?" "$pg_yn"; then
       PG_SOURCE="in-cluster"
     else
       PG_SOURCE="external"
     fi
-    if ! _ask_yn "Use external Redis (Azure Cache for Redis Premium P1 — 6 GB)?" "y"; then
+    if ! _ask_yn "Use external Redis (Azure Managed Redis Balanced_B3 — 3 GB, HA)?" "$redis_yn"; then
       REDIS_SOURCE="in-cluster"
     else
       REDIS_SOURCE="external"
+      # Fresh run only: a re-entry has already parsed the operator's SKU and HA
+      # choice out of tfvars, and resetting here would discard it.
+      if ! _answered 7; then
+        AMR_SKU="Balanced_B3"
+        REDIS_HA="true"
+      fi
     fi
   else
-    _ask_choice "Postgres + Redis:" \
+    # No default until the section has been answered once — a fresh run still
+    # forces an explicit choice rather than quietly picking one.
+    local pg_choice=""
+    _answered 7 && { [[ "$PG_SOURCE" == "external" ]] && pg_choice=1 || pg_choice=2; }
+    _ask_choice --default "$pg_choice" \
+      "Postgres + Redis:" \
       "External — Azure managed services (recommended even for dev — keeps data on destroy)" \
       "In-cluster — all services run as pods (fastest setup, data lost on destroy)"
     if [[ "$_CHOICE" == "1" ]]; then
       PG_SOURCE="external"
       REDIS_SOURCE="external"
+    else
+      PG_SOURCE="in-cluster"
+      REDIS_SOURCE="in-cluster"
     fi
   fi
 
-  if [[ "$PG_SOURCE" == "external" ]]; then
-    PG_DELETION_PROTECTION="false"
-    [[ "$PROFILE" == "prod" ]] && PG_DELETION_PROTECTION="true"
+  _gov_redis_in_cluster
+
+  # Without this prompt every quickstart deployment silently took the Balanced_B0
+  # module default, which some regions cannot allocate.
+  if [[ "$REDIS_SOURCE" == "external" ]]; then
+    echo ""
+    _hint "Azure Managed Redis SKU. Balanced_B0 is the smallest; bump to Balanced_B1/B3"
+    _hint "if the region reports AllocationFailed."
+    # Default to the SKU already chosen, never a literal: the prod branch above
+    # picks Balanced_B3 with HA on, and a hardcoded B0 default overwrites it into
+    # a pair the redis module rejects — so pressing Enter here failed plan.
+    while true; do
+      _ask "Azure Managed Redis SKU" "$AMR_SKU"
+      AMR_SKU="$_REPLY"
+      [[ "$AMR_SKU" == "Balanced_B0" && "$REDIS_HA" == "true" ]] || break
+      # amr_sku and redis_high_availability are written to tfvars independently,
+      # so the pair has to be checked at the prompt. Same two remedies the
+      # module's validation names, offered now instead of 20 lines into a plan.
+      echo ""
+      _yellow "NOTE"; printf ": Balanced_B0 cannot run zone-redundant HA.\n"
+      if _ask_yn "Turn Redis HA off and keep Balanced_B0?" "n"; then
+        REDIS_HA="false"
+        break
+      fi
+    done
   fi
 
   echo ""
-  _ask_choice "ClickHouse:" \
+  local ch_choice=""
+  _answered 7 && { [[ "$CH_SOURCE" == "external" ]] && ch_choice=2 || ch_choice=1; }
+  _ask_choice --default "$ch_choice" "ClickHouse:" \
     "In-cluster — single pod, dev/POC only (data lost on pod restart without PV backup)" \
     "External   — LangChain Managed ClickHouse (production-grade, contact LangChain)"
 
@@ -523,6 +1401,29 @@ _run_section_7() {
     echo ""
     _yellow "NOTE"; printf ": In-cluster ClickHouse is not recommended for production.\n"
     printf "  See: https://docs.langchain.com/langsmith/langsmith-managed-clickhouse\n"
+  fi
+
+  # The retention defaults used to be written into tfvars unasked. A customer
+  # with a data-retention policy has to see this as a choice.
+  echo ""
+  _hint "LangSmith stores run inputs, outputs and attachments in an Azure Storage account"
+  _hint "this module creates. Retention expires them on a schedule: short-lived covers the"
+  _hint "per-run payloads, long-lived covers datasets and exports."
+  local ttl_yn
+  ttl_yn="$(_yn_default "$BLOB_TTL_ENABLED")"
+  if _ask_yn "Expire stored artifacts on a schedule?" "$ttl_yn"; then
+    BLOB_TTL_ENABLED="true"
+    # Same floors and ordering rule as the blob_ttl_* validations in
+    # variables.tf: separate lifecycle rules on separate prefixes, so Azure
+    # accepts an inverted pair and deletes the long-lived artifacts first.
+    # Bounded here too, because the plan-time failure arrives after every prompt.
+    _ask_int "Days to keep short-lived artifacts" "$BLOB_TTL_SHORT_DAYS" 1
+    BLOB_TTL_SHORT_DAYS="$_REPLY"
+    _ask_int "Days to keep long-lived artifacts (at least the short-lived count)" "$BLOB_TTL_LONG_DAYS" "$BLOB_TTL_SHORT_DAYS"
+    BLOB_TTL_LONG_DAYS="$_REPLY"
+  else
+    BLOB_TTL_ENABLED="false"
+    _hint "Artifacts are kept until you delete them. Storage cost grows with trace volume."
   fi
 }
 
@@ -535,24 +1436,35 @@ _run_section_8() {
   _hint ""
   _hint "Purge protection = true  → KV is retained for 90 days after destroy (soft-delete)."
   _hint "                           Prevents data loss from accidental deletion. Production must."
-  _hint "                           Downside: cannot reuse the same identifier for 90 days."
+  _hint "                           Downside: cannot reuse the same deployment name for 90 days."
   _hint ""
   _hint "Purge protection = false → KV is immediately purged on destroy."
-  _hint "                           Good for dev/POC where you want to reuse the identifier."
+  _hint "                           Good for dev/POC where you want to reuse the deployment name."
 
-  KV_PURGE_PROTECTION="false"
   if [[ "$PROFILE" == "prod" ]]; then
     echo ""
-    if _ask_yn "Enable Key Vault purge protection? (recommended for production)" "y"; then
+    local kv_yn="y"
+    _answered 8 && kv_yn="$(_yn_default "$KV_PURGE_PROTECTION")"
+    if _ask_yn "Enable Key Vault purge protection? (recommended for production)" "$kv_yn"; then
       KV_PURGE_PROTECTION="true"
+    else
+      KV_PURGE_PROTECTION="false"
     fi
   else
-    _hint "Dev profile: keyvault_purge_protection = false (identifier reusable immediately after destroy)."
+    KV_PURGE_PROTECTION="false"
+    _hint "Dev profile: keyvault_purge_protection = false (name reusable immediately after destroy)."
   fi
 }
 
 # -- 9. Sizing Profile -------------------------------------------------------
 SIZING_PROFILE="dev"
+# Not prompted: a first deployment is Pass 1/2 only, and the later passes are
+# turned on by hand. Held as variables so a re-run writes back what is deployed
+# instead of a hardcoded false.
+ENABLE_DEPLOYMENTS="false"
+ENABLE_AGENT_BUILDER="false"
+ENABLE_INSIGHTS="false"
+ENABLE_POLLY="false"
 
 _run_section_9() {
   _section "9. Sizing Profile"
@@ -560,13 +1472,15 @@ _run_section_9() {
   _hint ""
   _hint "minimum        — bare minimum (demos, heavily constrained clusters, < 4 vCPU total)."
   _hint "dev            — single replica per service, minimal requests. Fast deploys."
-  _hint "                 Use with Standard_D4s_v3 × 2+ nodes."
+  _hint "                 Use with Standard_D4s_v5 × 2+ nodes."
   _hint "production     — multi-replica + HPA (backend×3, queue×3, etc.)."
-  _hint "                 Use with Standard_D8s_v3 × 3+ nodes. Required for real workloads."
+  _hint "                 Use with Standard_D8s_v5 × 3+ nodes. Required for real workloads."
   _hint "production-large — high-volume (~50 concurrent users, ~1000 traces/sec)."
-  _hint "                 Use with Standard_D8s_v3 × 5+ nodes."
+  _hint "                 Use with Standard_D8s_v5 × 5+ nodes."
 
-  _ask_choice "Sizing profile:" \
+  local sizing_choice=""
+  _answered 9 && sizing_choice="$(_index_of "$SIZING_PROFILE" minimum dev production production-large)"
+  _ask_choice --default "$sizing_choice" "Sizing profile:" \
     "minimum        — absolute minimum (demos, very constrained clusters)" \
     "dev            — single-replica, minimal resources (dev / CI / demos)" \
     "production     — multi-replica with HPA (recommended for all real workloads)" \
@@ -588,51 +1502,177 @@ CREATE_BASTION="false"
 _run_section_10() {
   _section "10. Optional Security Add-ons"
 
-  CREATE_WAF="false"
-  CREATE_DIAGNOSTICS="false"
-  CREATE_BASTION="false"
-
   if [[ "$PROFILE" == "prod" ]]; then
+    local waf_yn="n" diag_yn="y" bastion_yn="n"
+    if _answered 10; then
+      waf_yn="$(_yn_default "$CREATE_WAF")"
+      diag_yn="$(_yn_default "$CREATE_DIAGNOSTICS")"
+      bastion_yn="$(_yn_default "$CREATE_BASTION")"
+    fi
+
     echo ""
-    _hint "WAF policy      — Azure WAF with OWASP 3.2 rules + bot protection on the LB."
-    _hint "                  Only applies when ingress_controller = agic (WAF_v2 SKU)."
-    _hint "                  For nginx/istio, use Azure Front Door or DDoS Protection instead."
-    if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "n"; then
+    _hint "WAF policy      — Azure WAF with OWASP 3.2 rules + bot protection."
+    _hint "                  With ingress_controller = agic the policy is attached to the"
+    _hint "                  Application Gateway, which moves it to the WAF_v2 tier (~\$250/mo"
+    _hint "                  more). Starts in Detection mode — logs matches without blocking."
+    _hint "                  Say yes to diagnostics too, or nothing collects the firewall log and"
+    _hint "                  you cannot see what to exclude before switching to Prevention."
+    _hint "                  For envoy-gateway/nginx/istio the policy is created but nothing references it —"
+    _hint "                  use Azure Front Door or DDoS Protection instead."
+    if _ask_yn "Enable Azure WAF policy? (OWASP 3.2 + bot protection)" "$waf_yn"; then
       CREATE_WAF="true"
+    else
+      CREATE_WAF="false"
     fi
 
     echo ""
     _hint "Log Analytics   — sends AKS control plane logs + metrics to Log Analytics workspace."
     _hint "                  Required for audit trails, compliance, and live troubleshooting."
-    if _ask_yn "Enable Log Analytics + diagnostics? (recommended for production)" "y"; then
+    if _ask_yn "Enable Log Analytics + diagnostics? (recommended for production)" "$diag_yn"; then
       CREATE_DIAGNOSTICS="true"
+    else
+      CREATE_DIAGNOSTICS="false"
     fi
 
     echo ""
     _hint "Bastion host    — jump VM for direct SSH to AKS nodes (private cluster debugging)."
     _hint "                  Not needed for most deployments unless nodes are on a private subnet."
-    if _ask_yn "Create bastion host? (for node-level troubleshooting)" "n"; then
+    if _ask_yn "Create bastion host? (for node-level troubleshooting)" "$bastion_yn"; then
       CREATE_BASTION="true"
+      # Terraform carves the bastion subnet only out of a VNet it owns, so on the
+      # bring-your-own path the operator names an existing one.
+      if [[ "$CREATE_VNET" == "false" ]]; then
+        _ask_required_subnet "Azure Bastion" \
+          "Azure Bastion needs an existing subnet named AzureBastionSubnet, /26 or larger." "AzureBastionSubnet"
+        BASTION_SUBNET_ID="$_REQUIRED_SUBNET_ID"
+      fi
+    else
+      CREATE_BASTION="false"
+      BASTION_SUBNET_ID=""
     fi
   else
+    CREATE_WAF="false"
+    CREATE_DIAGNOSTICS="false"
+    CREATE_BASTION="false"
+    BASTION_SUBNET_ID=""
     _hint "Dev profile: security add-ons skipped. Edit terraform.tfvars to enable after deploy."
   fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Run all sections in order
+# Startup — resume an interrupted run, or seed from an existing tfvars
+# ═══════════════════════════════════════════════════════════════════════════
+# Runs here, after every section default has been initialized above, so loaded
+# answers are not overwritten by the initializers.
+
+TOTAL_SECTIONS=10
+SECTION=1
+# Whether settings the wizard cannot ask about survive the rewrite. Set before
+# the checkpoint is read so a resumed run keeps its answer, and true by default
+# so an older checkpoint does not delete them.
+PRESERVE_UNKNOWN="true"
+
+if [[ -f "$STATE_FILE" ]]; then
+  echo ""
+  _cyan "Found an unfinished run"; printf ": %s\n" "$STATE_FILE"
+  if _ask_yn "Resume it? (answering 'n' discards those answers)" "y"; then
+    # SECTION in the file is the last one completed; pick up at the next one.
+    # A run interrupted mid-section therefore replays only that section.
+    _load_state
+    # Arithmetic evaluation expands its operands recursively, so a truncated or
+    # hand-edited checkpoint must never reach it as anything but a number.
+    [[ "$SECTION" =~ ^[0-9]+$ ]] || SECTION=0
+    SECTION=$((SECTION + 1))
+    if (( SECTION > TOTAL_SECTIONS )); then
+      printf "  All sections answered — going straight to review.\n"
+    else
+      printf "  Resuming at section $(_bold "$SECTION") of ${TOTAL_SECTIONS}.\n"
+    fi
+  else
+    rm -f "$STATE_FILE"
+    ANSWERED=""
+    SECTION=1
+  fi
+fi
+
+if [[ -z "$ANSWERED" && -f "$OUTPUT" ]]; then
+  echo ""
+  _yellow "WARNING"; printf ": %s already exists.\n" "$OUTPUT"
+  _ask_choice "What would you like to do?" \
+    "Edit it     — load its values as answers, change what you need" \
+    "Start fresh — ignore it and answer every question again (discards hand-edits too)" \
+    "Quit        — leave it untouched"
+  case "$_CHOICE" in
+    1) _load_tfvars
+       ANSWERED="1 2 3 4 5 6 7 8 9 10"
+       printf "  Loaded existing values. Press Enter at a prompt to keep the current answer.\n" ;;
+    2) PRESERVE_UNKNOWN="false"
+       # The cloud is not an answer to start over: dropping it would quietly turn
+       # a Government file commercial, so keep it through the fresh start.
+       case "$(_tfvar azure_environment 2>/dev/null || true)" in
+         public|usgovernment) AZURE_ENVIRONMENT="$(_tfvar azure_environment)" ;;
+       esac
+       # create_cluster, create_keyvault, and create_resource_group ride through
+       # a re-run as preserved unknown keys, except on this branch, which drops
+       # them. That is not one more discarded hand-edit: it turns an attached
+       # deployment greenfield, and the next plan builds a second cluster, vault,
+       # or resource group beside the live ones.
+       _attached=""
+       if grep -qE '^[[:space:]]*create_cluster[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="an AKS cluster"
+       fi
+       if grep -qE '^[[:space:]]*create_keyvault[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="${_attached:+${_attached} and }a Key Vault"
+       fi
+       if grep -qE '^[[:space:]]*create_resource_group[[:space:]]*=[[:space:]]*false' "$OUTPUT"; then
+         _attached="${_attached:+${_attached} and }a resource group"
+       fi
+       if [[ -n "$_attached" ]]; then
+         echo ""
+         _yellow "NOTE"; printf ": that file attaches to %s you already own.\n" "$_attached"
+         printf "  Starting fresh drops those settings, and the next plan creates new ones\n"
+         printf "  instead of reusing yours. To keep attaching, copy them back from\n"
+         printf "  %s.bak when the wizard finishes.\n" "$OUTPUT"
+       fi ;;
+    3) echo "Aborted."; exit 0 ;;
+  esac
+fi
+
+_resolve_azure_environment
+_gov_redis_in_cluster
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Run sections — Enter advances, b goes back, r jumps to review, q saves & quits
 # ═══════════════════════════════════════════════════════════════════════════
 
-_run_section_1
-_run_section_2
-_run_section_3
-_run_section_4
-_run_section_5
-_run_section_6
-_run_section_7
-_run_section_8
-_run_section_9
-_run_section_10
+while (( SECTION <= TOTAL_SECTIONS )); do
+  "_run_section_$SECTION"
+  _mark_answered "$SECTION"
+  _save_state
+
+  echo ""
+  printf "  ${DIM}[Enter] next · [b] back · [r] jump to review · [q] save & quit${RESET}\n"
+  while true; do
+    printf "  Section %d/%d: " "$SECTION" "$TOTAL_SECTIONS"
+    read -r _NAV
+    case "$_NAV" in
+      "")
+        SECTION=$((SECTION + 1)); break ;;
+      b|B)
+        if (( SECTION > 1 )); then
+          SECTION=$((SECTION - 1)); break
+        fi
+        _red "  Already at the first section." ;;
+      r|R)
+        SECTION=$((TOTAL_SECTIONS + 1)); break ;;
+      q|Q)
+        _save_state
+        exit 0 ;;
+      *)
+        _red "  Press Enter, or type b, r, or q." ;;
+    esac
+  done
+done
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Review loop — show summary, let user redo any section
@@ -645,17 +1685,36 @@ while true; do
   printf "${BOLD}══════════════════════════════════════════════════════${RESET}\n"
   echo ""
   printf "  %-24s %s\n" "1. Profile:"         "$PROFILE"
-  printf "  %-24s %s\n" "2. Identifier:"      "$IDENTIFIER"
+  printf "  %-24s %s\n" "2. Deployment name:" "${NAME_PREFIX:-(none, no suffix)}"
   printf "  %-24s %s\n" "   Subscription:"    "$SUBSCRIPTION_ID"
+  printf "  %-24s %s\n" "   Azure cloud:"     "${AZURE_ENVIRONMENT:-public}"
   printf "  %-24s %s\n" "   Location:"        "$LOCATION"
-  printf "  %-24s %s\n" "   Environment:"     "$ENVIRONMENT"
+  # An unanswered environment tag falls back to the deployment name, then "dev",
+  # so show what the tag will actually say.
+  printf "  %-24s %s\n" "   Environment tag:" "${ENVIRONMENT:-${NAME_PREFIX:-dev}}"
+  [[ -n "$OWNER" ]]       && printf "  %-24s %s\n" "   Owner tag:"       "$OWNER"
+  [[ -n "$COST_CENTER" ]] && printf "  %-24s %s\n" "   Cost center tag:" "$COST_CENTER"
   printf "  %-24s %s\n" "3. VNet:"            "$( [[ "$CREATE_VNET" == "true" ]] && echo "new (auto-created)" || echo "existing" )"
-  printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX"
+  if [[ "$CREATE_VNET" == "false" ]]; then
+    printf "  %-24s %s\n" "   VNet ID:"           "$VNET_ID"
+    printf "  %-24s %s\n" "   AKS subnet:"        "$(_subnet_review "$AKS_SUBNET_ID" "$AKS_SUBNET_CIDR_LINE")"
+    printf "  %-24s %s\n" "   PostgreSQL subnet:" "$(_subnet_review "$POSTGRES_SUBNET_ID" "$POSTGRES_SUBNET_CIDR_LINE")"
+    printf "  %-24s %s\n" "   Redis subnet:"      "$(_subnet_review "$REDIS_SUBNET_ID" "$REDIS_SUBNET_CIDR_LINE")"
+    printf "  %-24s %s\n" "   Service CIDR:"      "$AKS_SERVICE_CIDR"
+    [[ -n "$AGIC_SUBNET_ID" ]]    && printf "  %-24s %s\n" "   AGIC subnet:"    "reuse   $AGIC_SUBNET_ID"
+    [[ -n "$BASTION_SUBNET_ID" ]] && printf "  %-24s %s\n" "   Bastion subnet:" "reuse   $BASTION_SUBNET_ID"
+  fi
+  printf "  %-24s %s\n" "4. Node size:"       "$NODE_VM_SIZE  min=$NODE_MIN  max=$NODE_MAX  max_pods=$NODE_MAX_PODS"
+  printf "  %-24s %s\n" "   Network / tier:"   "$NETWORK_MODE  tier=$AKS_SKU_TIER"
   printf "  %-24s %s\n" "5. Ingress:"         "$INGRESS_CONTROLLER"
-  [[ -n "$ISTIO_ADDON_REVISION_LINE" ]] && printf "  %-24s %s\n" "   Istio revision:"  "${ISTIO_ADDON_REVISION_LINE#*= }"
-  [[ -n "$AGW_SKU_TIER_LINE" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "${AGW_SKU_TIER_LINE#*= }"
-  printf "  %-24s %s\n" "6. TLS:"             "$TLS_SOURCE"
-  [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.cloudapp.azure.com"
+  [[ -n "$ISTIO_ADDON_REVISION" ]] && printf "  %-24s %s\n" "   Istio revision:"  "$ISTIO_ADDON_REVISION"
+  [[ -n "$AGW_SKU_TIER" ]]         && printf "  %-24s %s\n" "   AGW SKU:"         "$AGW_SKU_TIER"
+  # Both HTTPS values are Let's Encrypt, which "letsencrypt" and "dns01" hide.
+  _TLS_REVIEW="$TLS_SOURCE"
+  [[ "$TLS_SOURCE" == "letsencrypt" ]] && _TLS_REVIEW="letsencrypt  (Let's Encrypt, HTTP-01 challenge)"
+  [[ "$TLS_SOURCE" == "dns01" ]]       && _TLS_REVIEW="dns01  (Let's Encrypt, DNS-01 challenge)"
+  printf "  %-24s %s\n" "6. TLS:"             "$_TLS_REVIEW"
+  [[ -n "$DNS_LABEL" ]]         && printf "  %-24s %s\n" "   DNS label:"   "${DNS_LABEL}.${LOCATION}.$(_azure_cloudapp_suffix)"
   [[ -n "$LANGSMITH_DOMAIN" ]] && printf "  %-24s %s\n" "   Domain:"       "$LANGSMITH_DOMAIN"
   [[ -n "$LE_EMAIL" ]]         && printf "  %-24s %s\n" "   ACME email:"   "$LE_EMAIL"
   printf "  %-24s %s\n" "7. PostgreSQL:"      "$PG_SOURCE"
@@ -668,8 +1727,51 @@ while true; do
     printf "  %-24s %s\n" "    Log Analytics:"  "$CREATE_DIAGNOSTICS"
     printf "  %-24s %s\n" "    Bastion:"        "$CREATE_BASTION"
   fi
+  # What the answers add up to. The resource group and storage account are never
+  # asked about, so this is the only place they surface.
+  _derive_names
   echo ""
-  printf "  ${DIM}Press Enter to write terraform.tfvars, or enter a section number (1-10) to change it.${RESET}\n"
+  # An attached group is the operator's, so it is named as the target rather
+  # than as something this deployment owns.
+  if [[ "$CREATE_RESOURCE_GROUP" == "false" ]]; then
+    printf "  ${BOLD}Terraform creates, in your existing resource group %s:${RESET}\n" "${_RG_NAME:-(existing_resource_group_name is unset)}"
+  else
+    printf "  ${BOLD}Terraform creates, in resource group %s:${RESET}\n" "$_RG_NAME"
+  fi
+  # A BYO VNet is listed under section 3 by ID, so name only the created one.
+  [[ "$CREATE_VNET" == "true" ]] && printf "    %-18s %s\n" "Virtual network" "$_VNET_NAME"
+  # Attach mode is set by hand and carried across a re-run, so the wizard can
+  # reach this screen with a cluster or vault it will not create. This is the
+  # review before apply, so it must not list those as created.
+  if [[ "$CREATE_CLUSTER" == "false" ]]; then
+    printf "    %-18s %s\n" "AKS cluster"   "${_AKS_NAME:-(existing_cluster_name is unset)}  — attaches, does not create"
+  else
+    printf "    %-18s %s\n" "AKS cluster"   "$_AKS_NAME"
+  fi
+  if [[ "$CREATE_KEYVAULT" == "false" ]]; then
+    printf "    %-18s %s\n" "Key Vault"     "${_KV_NAME:-(existing_keyvault_name is unset)}  — attaches, writes its secrets there"
+  else
+    printf "    %-18s %s\n" "Key Vault"     "$_KV_NAME"
+  fi
+  printf "    %-18s %s\n" "Storage account" "$_BLOB_NAME  (LangSmith run artifacts)"
+  [[ "$PG_SOURCE" == "external" ]]    && printf "    %-18s %s\n" "PostgreSQL"     "$_PG_NAME"
+  [[ "$REDIS_SOURCE" == "external" ]] && printf "    %-18s %s\n" "Redis"          "$_REDIS_NAME  ($AMR_SKU)"
+  # 90 days is the log_retention_days default; the wizard does not ask for it.
+  [[ "$CREATE_DIAGNOSTICS" == "true" ]] && printf "    %-18s %s\n" "Log Analytics" "$_LAW_NAME  (90-day retention)"
+  if [[ "$BLOB_TTL_ENABLED" == "true" ]]; then
+    printf "    %-18s %s\n" "Blob retention" "short-lived ${BLOB_TTL_SHORT_DAYS}d, long-lived ${BLOB_TTL_LONG_DAYS}d"
+  else
+    printf "    %-18s %s\n" "Blob retention" "off — artifacts are kept until you delete them"
+  fi
+  if [[ "$CREATE_RESOURCE_GROUP" == "false" ]]; then
+    printf "  ${DIM}terraform destroy removes these and leaves the resource group in place.${RESET}\n"
+  else
+    printf "  ${DIM}Deleting that resource group deletes every one of them.${RESET}\n"
+  fi
+
+  echo ""
+  printf "  ${DIM}Press Enter to write terraform.tfvars, a section number (1-10) to change it,${RESET}\n"
+  printf "  ${DIM}or q to save your answers and quit without writing.${RESET}\n"
   printf "  Choice [Enter to confirm]: "
   read -r _REDO
 
@@ -678,25 +1780,21 @@ while true; do
     break
   fi
 
+  if [[ "$_REDO" == "q" || "$_REDO" == "Q" ]]; then
+    _save_state
+    exit 0
+  fi
+
   # Validate input is a number 1-10
   if ! [[ "$_REDO" =~ ^([1-9]|10)$ ]]; then
-    _red "  Enter a section number (1-10) or press Enter to confirm."
+    _red "  Enter a section number (1-10), q to quit, or press Enter to confirm."
     continue
   fi
 
   # Re-run the chosen section
-  case "$_REDO" in
-    1)  _run_section_1 ;;
-    2)  _run_section_2 ;;
-    3)  _run_section_3 ;;
-    4)  _run_section_4 ;;
-    5)  _run_section_5 ;;
-    6)  _run_section_6 ;;
-    7)  _run_section_7 ;;
-    8)  _run_section_8 ;;
-    9)  _run_section_9 ;;
-    10) _run_section_10 ;;
-  esac
+  "_run_section_$_REDO"
+  _mark_answered "$_REDO"
+  _save_state
 done
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -705,6 +1803,74 @@ done
 
 _section "Generating terraform.tfvars"
 
+# Every key the writer below can emit. Anything else in an existing tfvars was
+# put there by hand — a pinned name, a tuned SKU, an authorized-IP range — so it
+# is carried across rather than destroyed. `identifier` is listed as the retired
+# spelling of name_prefix: already read back, and carrying it forward would leave
+# two keys naming the deployment.
+_WRITER_KEYS="subscription_id azure_environment identifier name_prefix location unique_resource_names
+environment owner cost_center
+create_vnet vnet_id aks_subnet_id postgres_subnet_id redis_subnet_id
+aks_subnet_address_prefix postgres_subnet_address_prefix redis_subnet_address_prefix
+aks_service_cidr agic_subnet_id bastion_subnet_id
+default_node_pool_vm_size default_node_pool_min_count default_node_pool_max_count
+default_node_pool_max_pods aks_network_mode aks_sku_tier
+ingress_controller istio_addon_revision agw_sku_tier
+tls_certificate_source dns_label langsmith_domain letsencrypt_email create_dns_zone
+postgres_source redis_source clickhouse_source
+postgres_admin_username postgres_database_name
+amr_sku redis_high_availability keyvault_purge_protection
+blob_ttl_enabled blob_ttl_short_days blob_ttl_long_days
+langsmith_namespace langsmith_release_name sizing_profile
+enable_deployments enable_agent_builder enable_insights enable_polly
+create_waf create_diagnostics create_bastion"
+
+PRESERVED=""
+PRESERVED_PARTIAL=""
+if [[ -f "$OUTPUT" ]]; then
+  # The rewrite truncates, so the previous file is only recoverable from here.
+  cp "$OUTPUT" "$OUTPUT.bak"
+  if [[ "$PRESERVE_UNKNOWN" != "false" ]]; then
+    _depth=0
+    while IFS= read -r _line; do
+      # Brackets inside a string or comment do not open a block, so strip them
+      # before counting: `foo = "a { b"` would swallow the rest of the file.
+      _bare=$(printf '%s' "$_line" | sed 's/"[^"]*"//g; s/#.*//')
+      # The closing brace needs the backslash: an unescaped one inside a bracket
+      # expression still ends the ${...} expansion.
+      _open="${_bare//[^\[{]/}"
+      _close="${_bare//[^]\}]/}"
+      _delta=$(( ${#_open} - ${#_close} ))
+
+      # Inside a value opened on an earlier line. Its inner lines look like
+      # assignments (`foo = "bar"` inside a map), so consume them here.
+      if (( _depth > 0 )); then
+        _depth=$(( _depth + _delta ))
+        (( _depth < 0 )) && _depth=0
+        continue
+      fi
+      _depth=$_delta
+      (( _depth < 0 )) && _depth=0
+
+      [[ "$_line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*= ]] || continue
+      _key="${BASH_REMATCH[1]}"
+      _known=false
+      for _k in $_WRITER_KEYS; do
+        [[ "$_k" == "$_key" ]] && { _known=true; break; }
+      done
+      [[ "$_known" == "true" ]] && continue
+      # Only a value closing on its own line copies verbatim. A multi-line list
+      # or map would arrive as a fragment, worse than naming it and leaving the
+      # operator to paste it back from the .bak.
+      if [[ "$_line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(\"[^\"]*\"|\[[^][]*\]|\{[^{}]*\}|[A-Za-z0-9._-]+)[[:space:]]*(#.*)?$ ]]; then
+        PRESERVED="${PRESERVED}${_line}"$'\n'
+      else
+        PRESERVED_PARTIAL="${PRESERVED_PARTIAL} ${_key}"
+      fi
+    done < "$OUTPUT"
+  fi
+fi
+
 cat > "$OUTPUT" << TFVARS
 # Generated by quickstart.sh on $(date -u +"%Y-%m-%d %H:%M UTC")
 # Profile: ${PROFILE}
@@ -712,12 +1878,19 @@ cat > "$OUTPUT" << TFVARS
 #------------------------------------------------------------------------------
 # Subscription & Identity
 #------------------------------------------------------------------------------
-subscription_id = "${SUBSCRIPTION_ID}"
-identifier      = "${IDENTIFIER}"
-environment     = "${ENVIRONMENT}"
-location        = "${LOCATION}"
+subscription_id   = "${SUBSCRIPTION_ID}"
+azure_environment = "${AZURE_ENVIRONMENT:-public}"
+name_prefix       = "${NAME_PREFIX}"
+location          = "${LOCATION}"
+
+# Per-subscription hash on the globally-unique names (Postgres, Redis, Storage,
+# Key Vault) so they cannot collide with another LangSmith deployment.
+unique_resource_names = ${UNIQUE_NAMES}
 TFVARS
 
+# Written only when answered: the module omits an empty owner or cost_center tag,
+# and an empty environment falls back to the deployment name.
+[[ -n "$ENVIRONMENT" ]] && echo "environment     = \"${ENVIRONMENT}\"" >> "$OUTPUT"
 [[ -n "$OWNER" ]]       && echo "owner           = \"${OWNER}\"" >> "$OUTPUT"
 [[ -n "$COST_CENTER" ]] && echo "cost_center     = \"${COST_CENTER}\"" >> "$OUTPUT"
 
@@ -732,10 +1905,21 @@ if [[ "$CREATE_VNET" == "false" ]]; then
   cat >> "$OUTPUT" << TFVARS
 create_vnet        = false
 vnet_id            = "${VNET_ID}"
-aks_subnet_id      = "${AKS_SUBNET_ID}"
-postgres_subnet_id = "${POSTGRES_SUBNET_ID}"
-redis_subnet_id    = "${REDIS_SUBNET_ID}"
 TFVARS
+  # A subnet ID reuses an existing subnet; its absence plus a CIDR tells
+  # Terraform to create that subnet inside the VNet above.
+  [[ -n "$AKS_SUBNET_ID" ]]      && echo "aks_subnet_id      = \"${AKS_SUBNET_ID}\"" >> "$OUTPUT"
+  [[ -n "$POSTGRES_SUBNET_ID" ]] && echo "postgres_subnet_id = \"${POSTGRES_SUBNET_ID}\"" >> "$OUTPUT"
+  [[ -n "$REDIS_SUBNET_ID" ]]    && echo "redis_subnet_id    = \"${REDIS_SUBNET_ID}\"" >> "$OUTPUT"
+  [[ -n "$AKS_SUBNET_CIDR_LINE" ]]      && echo "$AKS_SUBNET_CIDR_LINE" >> "$OUTPUT"
+  [[ -n "$POSTGRES_SUBNET_CIDR_LINE" ]] && echo "$POSTGRES_SUBNET_CIDR_LINE" >> "$OUTPUT"
+  [[ -n "$REDIS_SUBNET_CIDR_LINE" ]]    && echo "$REDIS_SUBNET_CIDR_LINE" >> "$OUTPUT"
+  # Required on this path: the variable default is only safe against the VNet
+  # Terraform builds, so terraform plan rejects an empty value here.
+  printf '%-30s = "%s"\n' "aks_service_cidr" "$AKS_SERVICE_CIDR" >> "$OUTPUT"
+  # Also required on this path, whenever the feature that needs them is on.
+  [[ -n "$AGIC_SUBNET_ID" ]]    && printf '%-30s = "%s"\n' "agic_subnet_id" "$AGIC_SUBNET_ID" >> "$OUTPUT"
+  [[ -n "$BASTION_SUBNET_ID" ]] && printf '%-30s = "%s"\n' "bastion_subnet_id" "$BASTION_SUBNET_ID" >> "$OUTPUT"
 else
   echo "# Using auto-created VNet (default)" >> "$OUTPUT"
 fi
@@ -748,8 +1932,9 @@ cat >> "$OUTPUT" << TFVARS
 default_node_pool_vm_size   = "${NODE_VM_SIZE}"
 default_node_pool_min_count = ${NODE_MIN}
 default_node_pool_max_count = ${NODE_MAX}
-default_node_pool_max_pods  = 60
-aks_deletion_protection     = ${AKS_DELETION_PROTECTION}
+default_node_pool_max_pods  = ${NODE_MAX_PODS}
+aks_network_mode            = "${NETWORK_MODE}"
+aks_sku_tier                = "${AKS_SKU_TIER}"
 
 #------------------------------------------------------------------------------
 # Ingress
@@ -757,8 +1942,8 @@ aks_deletion_protection     = ${AKS_DELETION_PROTECTION}
 ingress_controller = "${INGRESS_CONTROLLER}"
 TFVARS
 
-[[ -n "$ISTIO_ADDON_REVISION_LINE" ]] && echo "$ISTIO_ADDON_REVISION_LINE" >> "$OUTPUT"
-[[ -n "$AGW_SKU_TIER_LINE" ]]         && echo "$AGW_SKU_TIER_LINE"         >> "$OUTPUT"
+[[ -n "$ISTIO_ADDON_REVISION" ]] && echo "istio_addon_revision = \"${ISTIO_ADDON_REVISION}\"" >> "$OUTPUT"
+[[ -n "$AGW_SKU_TIER" ]]         && echo "agw_sku_tier = \"${AGW_SKU_TIER}\""                 >> "$OUTPUT"
 
 cat >> "$OUTPUT" << TFVARS
 
@@ -789,15 +1974,17 @@ if [[ "$PG_SOURCE" == "external" ]]; then
 # PostgreSQL Flexible Server
 postgres_admin_username      = "${PG_ADMIN_USER}"
 postgres_database_name       = "${PG_DB_NAME}"
-postgres_deletion_protection = ${PG_DELETION_PROTECTION}
 TFVARS
 fi
 
 if [[ "$REDIS_SOURCE" == "external" ]]; then
   cat >> "$OUTPUT" << TFVARS
 
-# Azure Cache for Redis (P1 = 6 GB RAM — sufficient for most deployments)
-redis_capacity = ${REDIS_CAPACITY}
+# Azure Managed Redis (Microsoft.Cache/redisEnterprise, Redis 7.x, private endpoint)
+# B1 = 1 GB, B3 = 3 GB. Set redis_location if the region reports InsufficientCapacity,
+# and a new redis_name with it: the failed create keeps the old name reserved.
+amr_sku                 = "${AMR_SKU}"
+redis_high_availability = ${REDIS_HA}
 TFVARS
 fi
 
@@ -811,9 +1998,9 @@ keyvault_purge_protection = ${KV_PURGE_PROTECTION}
 #------------------------------------------------------------------------------
 # Blob Storage
 #------------------------------------------------------------------------------
-blob_ttl_enabled    = true
-blob_ttl_short_days = 14
-blob_ttl_long_days  = 400
+blob_ttl_enabled    = ${BLOB_TTL_ENABLED}
+blob_ttl_short_days = ${BLOB_TTL_SHORT_DAYS}
+blob_ttl_long_days  = ${BLOB_TTL_LONG_DAYS}
 
 #------------------------------------------------------------------------------
 # LangSmith
@@ -828,16 +2015,16 @@ langsmith_release_name = "langsmith"
 sizing_profile = "${SIZING_PROFILE}"
 
 # Pass 3 — LangGraph Platform (required before agent_builder, insights, polly)
-enable_deployments   = false
+enable_deployments   = ${ENABLE_DEPLOYMENTS}
 
 # Pass 4 — Agent Builder UI
-enable_agent_builder = false
+enable_agent_builder = ${ENABLE_AGENT_BUILDER}
 
 # Pass 5 — Insights (ClickHouse-backed analytics)
-enable_insights      = false
+enable_insights      = ${ENABLE_INSIGHTS}
 
 # Pass 5 — Polly
-enable_polly         = false
+enable_polly         = ${ENABLE_POLLY}
 TFVARS
 
 HAS_SECURITY=false
@@ -856,12 +2043,38 @@ TFVARS
   printf "%b" "$SECURITY_BLOCK" >> "$OUTPUT"
 fi
 
+if [[ -n "$PRESERVED" ]]; then
+  # Quoted delimiter and a literal printf: these lines come out of a file on
+  # disk and are never expanded on the way through.
+  cat >> "$OUTPUT" << 'TFVARS'
+
+#------------------------------------------------------------------------------
+# Kept from your previous terraform.tfvars
+# The wizard does not ask about these, so it carries them across a rewrite
+# rather than dropping them. Edit or delete them by hand.
+#------------------------------------------------------------------------------
+TFVARS
+  printf '%s' "$PRESERVED" >> "$OUTPUT"
+fi
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Done
 # ═══════════════════════════════════════════════════════════════════════════
 
+# terraform.tfvars is now the source of truth — drop the resume checkpoint so a
+# later run offers to edit the real file instead of replaying stale answers.
+rm -f "$STATE_FILE"
+
 echo ""
 printf "  $(_green "✔")  Written to: $(_bold "$OUTPUT")\n"
+[[ -f "$OUTPUT.bak" ]] && printf "     Previous file: $(_bold "$OUTPUT.bak")\n"
+if [[ -n "$PRESERVED_PARTIAL" ]]; then
+  echo ""
+  _yellow "  WARNING"
+  printf ": these were set in the previous file, span more than one line,\n"
+  printf "  and were not carried over:%s\n" "$PRESERVED_PARTIAL"
+  printf "  Copy them back from %s if you still need them.\n" "$OUTPUT.bak"
+fi
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
 echo ""
@@ -876,6 +2089,9 @@ printf "     ${CYAN}make preflight${RESET}\n"
 echo ""
 printf "  4. Deploy infrastructure (~15–20 min):\n"
 printf "     ${CYAN}make init && make apply${RESET}\n"
+# Silent on whether make plan works first: that depends on whether any
+# kubernetes_manifest is left in the config, which is in flux.
+printf "     ${DIM}apply runs in three stages and asks you to confirm each plan.${RESET}\n"
 echo ""
 printf "  5. Get cluster credentials + create K8s secrets:\n"
 printf "     ${CYAN}make kubeconfig && make k8s-secrets${RESET}\n"

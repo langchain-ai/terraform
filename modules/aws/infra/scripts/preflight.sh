@@ -173,7 +173,7 @@ run_post_infra_checks() {
   # ── 2. Cluster reachability ─────────────────────────────────────────────────
   info "--- Cluster Reachability ---"
   local version_out
-  version_out=$(kubectl version --short 2>&1 || kubectl version 2>&1 || true)
+  version_out=$(kubectl version 2>&1 || true)
   if echo "$version_out" | grep -qi "error\|unable to connect\|refused\|timed out"; then
     error "Cannot reach the cluster: $version_out"
     error "Check VPN/network access and re-run 'make kubeconfig'."
@@ -307,6 +307,19 @@ TF_VERSION=$(terraform version -json 2>/dev/null | grep -o '"terraform_version":
 AWS_VERSION=$(aws --version 2>&1 | grep -oE 'aws-cli/[0-9]+' | cut -d/ -f2)
 if [[ -n "$AWS_VERSION" && "$AWS_VERSION" -lt 2 ]]; then
   error "AWS CLI v2 required (found v${AWS_VERSION}). Upgrade: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
+  exit 1
+fi
+
+# The documented floor is Helm 3.12, and deploy.sh picks the apply mode from the
+# major, so 3.12+ and 4.x both work. Checked here rather than at the last step of
+# Pass 2, where a wrong version fails after every resource is already metered.
+HELM_VERSION=$(helm version --template '{{.Version}}' 2>/dev/null | sed 's/^v//') || HELM_VERSION=""
+HELM_MAJOR=${HELM_VERSION%%.*}
+HELM_MINOR=$(echo "$HELM_VERSION" | cut -s -d. -f2)
+if ! echo "${HELM_MAJOR}|${HELM_MINOR}" | grep -qE '^[0-9]+\|[0-9]+$'; then
+  info "helm: could not parse a version from '${HELM_VERSION:-no output}', so the 3.12 minimum is unverified"
+elif [[ "$HELM_MAJOR" -lt 3 ]] || { [[ "$HELM_MAJOR" -eq 3 ]] && [[ "$HELM_MINOR" -lt 12 ]]; }; then
+  error "Helm 3.12+ required (found ${HELM_VERSION}). Upgrade: https://helm.sh/docs/intro/install/"
   exit 1
 fi
 
@@ -559,13 +572,13 @@ fi
 # ── Cleanup trap (only registered when creating real resources) ───────────────
 cleanup() {
   info "Cleaning up test resources..."
-  for i in {1..3}; do
+  for _ in {1..3}; do
     [[ -n "${TEST_SG_ID:-}" ]] && aws ec2 delete-security-group --group-id "$TEST_SG_ID" --region "$REGION" 2>/dev/null && break || sleep 2
   done
-  for i in {1..3}; do
+  for _ in {1..3}; do
     [[ -n "${TEST_SUBNET_ID:-}" ]] && aws ec2 delete-subnet --subnet-id "$TEST_SUBNET_ID" --region "$REGION" 2>/dev/null && break || sleep 2
   done
-  for i in {1..3}; do
+  for _ in {1..3}; do
     [[ -n "${TEST_VPC_ID:-}" ]] && aws ec2 delete-vpc --vpc-id "$TEST_VPC_ID" --region "$REGION" 2>/dev/null && break || sleep 2
   done
   [[ -n "${TEST_ROLE_NAME:-}" ]] && aws iam delete-role --role-name "$TEST_ROLE_NAME" 2>/dev/null || true

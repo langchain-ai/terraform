@@ -30,7 +30,6 @@
     "Action": [
       "rds:ModifyDBInstance",
       "rds:RebootDBInstance",
-      "rds:DeleteDBInstance",
       "rds:AddTagsToResource",
       "rds:RemoveTagsFromResource"
     ],
@@ -57,7 +56,6 @@
     "Effect": "Allow",
     "Action": [
       "rds:ModifyDBSubnetGroup",
-      "rds:DeleteDBSubnetGroup",
       "rds:AddTagsToResource",
       "rds:RemoveTagsFromResource"
     ],

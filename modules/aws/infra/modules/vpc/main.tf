@@ -18,6 +18,25 @@ data "aws_availability_zones" "available" {
     name   = "opt-in-status"
     values = ["opt-in-not-required"]
   }
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.names) >= 2
+      error_message = "This deployment requires at least two available AZs for its internet-facing Application Load Balancer."
+    }
+  }
+}
+
+locals {
+  # Some regions, including us-west-1, expose only two standard AZs. Keep the
+  # subnet lists aligned with the selected AZs so the VPC module never reuses
+  # an AZ for an extra subnet.
+  az_count = min(
+    3,
+    length(data.aws_availability_zones.available.names),
+    length(var.private_subnets),
+    length(var.public_subnets),
+  )
 }
 
 module "vpc" {
@@ -27,10 +46,10 @@ module "vpc" {
   name = var.vpc_name
 
   cidr = var.cidr_block
-  azs  = slice(data.aws_availability_zones.available.names, 0, 3)
+  azs  = slice(data.aws_availability_zones.available.names, 0, local.az_count)
 
-  private_subnets         = var.private_subnets
-  public_subnets          = var.public_subnets
+  private_subnets         = slice(var.private_subnets, 0, local.az_count)
+  public_subnets          = slice(var.public_subnets, 0, local.az_count)
   map_public_ip_on_launch = true
 
   enable_nat_gateway   = true

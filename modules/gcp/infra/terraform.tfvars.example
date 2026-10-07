@@ -67,6 +67,11 @@ zone   = "us-west2-a"
 #------------------------------------------------------------------------------
 # Note: External PostgreSQL and Redis always use private connections (VPC peering)
 # Requires: servicenetworking.networksAdmin role (for VPC peering)
+#
+# Required egress: nodes reach the internet through the Cloud NAT this module
+# creates, and LangSmith must reach beacon.langchain.com:443 for license
+# verification. An egress firewall rule or proxy
+# you add must permit it. See "Required outbound access" in README.md.
 
 # Ensure these don't overlap with existing ranges in your project
 subnet_cidr   = "10.0.0.0/20"
@@ -109,7 +114,7 @@ postgres_version             = "POSTGRES_18"
 postgres_tier                = "db-custom-2-8192"  # 2 vCPU, 8GB RAM
 postgres_disk_size           = 50                   # GB
 postgres_high_availability   = true                 # REGIONAL for HA
-postgres_deletion_protection = true                 # Prevent accidental deletion
+postgres_deletion_protection = true                 # Blocks Terraform and the Cloud SQL API; set false before destroy
 
 # PostgreSQL password (sensitive — use environment variable, not this file)
 # Set via: export TF_VAR_postgres_password="your-secure-password"
@@ -140,6 +145,69 @@ redis_version           = "REDIS_7_2"
 redis_memory_size       = 5    # GB
 redis_high_availability = true # Standard HA tier
 redis_prevent_destroy   = true # Set true to block accidental Redis destruction
+
+#------------------------------------------------------------------------------
+# Optional: Sandboxes
+#------------------------------------------------------------------------------
+# Enables infrastructure prerequisites for LangSmith Sandboxes.
+#
+# Sandboxes use the sandbox-host architecture in the same GKE cluster and
+# namespace as LangSmith. This creates a dedicated Standard GKE node pool with
+# nested virtualization and the label/taint expected by the Helm chart:
+#   sandbox.langsmith.com/host=true
+#
+# Requirements:
+#   - gke_use_autopilot = false. Autopilot does not support the required
+#     dedicated nested-virtualization node pool.
+#   - enable_gcp_iam_module = true. The juicefs-format Job reaches the bucket
+#     through the langsmith-sandbox-host Workload Identity binding.
+#   - Dedicated sandbox-host nodes that expose usable Linux KVM (/dev/kvm).
+#     The machine type follows sizing_profile (see below). Other examples:
+#     n2-highmem-8, c3-standard-8. C4 accepts only Hyperdisk, and this pool
+#     uses a pd-ssd boot disk. GCP nested virtualization is not available on
+#     E2, memory-optimized, AMD-powered, Arm-powered, or H4D machine types.
+#
+# When sandboxes are enabled, the module creates a restricted sandbox-host node
+# service account with the standard GKE node and telemetry roles. sandbox-host
+# runs on the host network, so GKE gives it this node identity, not Workload
+# Identity. The module grants the node service account roles/storage.objectAdmin
+# on the bucket. An IAM condition limits the grant to objects under
+# <sandbox_juicefs_name>/.
+#
+# enable_sandboxes = true
+# sandbox_juicefs_redis_memory_size = 5
+# sandbox_juicefs_redis_high_availability = true
+# For SaaS-like production scale:
+# sandbox_juicefs_redis_memory_size = 20
+# sandbox_juicefs_redis_rdb_snapshot_period = "ONE_HOUR"
+# Node counts are per zone: the sandbox-host pool is regional. The default
+# minimum of 0 keeps only the nodes that sandbox-host needs. Set 1 to keep an
+# idle node in every zone for faster recovery after a node or zone failure.
+# sandbox_host_node_count = 1
+# sandbox_host_min_node_count = 0
+# sandbox_host_max_node_count = 5
+# The machine type follows sizing_profile when it stays unset:
+#   production, production-large -> n2-standard-32
+#   every other profile          -> n2-standard-8
+# sandbox_host_machine_type = "n2-standard-8"
+# Optional: requests injected into sandbox containers that omit them. These
+# values preserve namespace request-quota accounting without imposing limits
+# on sandbox-host and its Firecracker VM child cgroups.
+# sandbox_default_container_requests = {
+#   cpu    = "100m"
+#   memory = "128Mi"
+# }
+# Optional: local SSDs back kubelet and container runtime ephemeral storage on
+# sandbox-host nodes. The JuiceFS host cache stays on the boot disk. Compute
+# Engine accepts only specific counts: N2 with 2-10 vCPU takes 1, 2, 4, 8, 16 or
+# 24; 12-20 vCPU takes 2, 4, 8, 16 or 24; 22-40 vCPU takes 4, 8, 16 or 24.
+# sandbox_host_ephemeral_local_ssd_count = 0
+#
+# deploy.sh sets the sandbox-host image tag from the chart appVersion, so
+# sandbox_host_image_tag is ignored. Remove it from older tfvars files.
+# Optional: enables browser/programmatic service URLs for HTTP services running inside sandboxes.
+# Requires wildcard DNS and TLS for *.<host>.
+# sandbox_service_url_base_url = "https://sandbox-services.example.com"
 
 #------------------------------------------------------------------------------
 # Optional: Storage Configuration
@@ -180,6 +248,8 @@ langsmith_domain    = "langsmith.example.com"
 
 # License key (sensitive — use environment variable, not this file)
 # Set via: export TF_VAR_langsmith_license_key="your-license-key"
+# An lcl_ key is exchanged with beacon.langchain.com before platform-backend
+# starts, so a first install cannot start without that egress.
 # langsmith_license_key = ""
 
 # Optional: Pin Helm chart version (recommended for reproducible deploys)
@@ -196,7 +266,7 @@ langsmith_helm_chart_version = ""
 # Pass 1 — HTTP only (get the Gateway IP):
 #   tls_certificate_source = "none"
 #   terraform apply
-#   # Note the gateway IP from terraform output or: kubectl get gateway -n langsmith
+#   # Note the gateway IP from terraform output or: kubectl get gateway -n envoy-gateway-system
 #   # Point your DNS A record to the gateway IP, then wait for DNS to propagate.
 #
 # Pass 2 — Enable TLS:
@@ -251,6 +321,11 @@ ingress_type    = "envoy"  # "envoy" (implemented), "istio" or "other" (reserved
 # Enable Workload Identity + bucket IAM grants module (recommended).
 enable_gcp_iam_module = true
 
+# Grant the LangSmith service account read access to every Secret Manager secret
+# in the project. No module component needs it. Keep false; for a workload you
+# add, grant roles/secretmanager.secretAccessor on the secrets it reads.
+grant_project_secret_accessor = false
+
 # Enable Secret Manager secret creation for bootstrap credentials.
 # When true, postgres + redis passwords are stored in Secret Manager.
 # Use setup-env.sh to manage secrets — it reads/writes Secret Manager automatically.
@@ -296,10 +371,171 @@ enable_polly = false
 # Enables additional product analytics sent back to LangChain
 enable_usage_telemetry = false
 
+# SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID,
+# Okta, Auth0, Google Workspace, etc. all work through the same generic
+# client_id/secret/issuer_url.
+# Client ID/secret/issuer URL are stored in Secret Manager by setup-env.sh
+# (oauth-client-id, oauth-client-secret, oauth-issuer-url) and read into
+# TF_VAR_langsmith_oauth_client_id/secret/issuer_url — set this to true, then
+# re-source setup-env.sh, before running init-values.sh.
+# WARNING: enable only after the initial install has completed with basic
+# auth and you've confirmed org-admin access — this disables config.basicAuth,
+# and flipping it on before an admin account exists locks you out of the UI.
+# Set up SCIM (if you're using it) after this, since SCIM's user matching
+# depends on the OIDC provider this creates.
+enable_sso_oidc = false
+
+#------------------------------------------------------------------------------
+# Optional: SmithDB (chart 0.17, early access)
+#
+# SmithDB is the in-chart columnar store and query engine that runs alongside
+# ClickHouse. Enabling it provisions:
+#   - a dedicated Cloud SQL Postgres metastore on a private IP
+#   - a dedicated single-region GCS bucket for .vortex segments
+#   - a least-privilege GCP service account bound to the chart's SmithDB KSA
+#     via Workload Identity (objectAdmin on that bucket only)
+#   - two GKE node pools, cache and compute (none for smithdb_sizing = "minimal")
+#
+# Requires GKE Standard. Autopilot manages its own node pools, so the dedicated
+# SmithDB pools do not exist there and SmithDB pods would stay Pending.
+#
+# Pass 2 deploys on the pinned ~0.17.0 chart line, which already carries SmithDB,
+# so no chart version needs to be set. List what is published with:
+#   helm search repo langchain/langsmith --versions
+#------------------------------------------------------------------------------
+enable_smithdb = false
+
+# --- Sizing ----------------------------------------------------------------
+# minimal, small, medium, or large, and local-ssd or network-disk. Unset, the
+# size follows sizing_profile and the cache follows the size:
+#   minimum -> minimal, dev and default -> small, production -> medium,
+#   production-large -> large (12 SmithDB pods, about 350 vCPU).
+# small, medium, and large are for 10, 100, and 1000 ingest QPS. What each
+# size resolves to: modules/gcp/SMITHDB.md#sizing. Set both with
+#   make smithdb-configure SIZING=<size> CACHE=<mode>
+# smithdb_sizing        = "small"
+# smithdb_cache_storage = "local-ssd"
+
+# --- Staged rollout ---------------------------------------------------------
+# Migration and query both require ingestion, and Terraform enforces that.
+# ClickHouse stays enabled throughout. make smithdb-phase writes the three gates
+# for one phase: off, dual-write, backfill, or cutover (SMITHDB.md#staged-rollout).
+# The default stays false, so an existing install does not start dual write on
+# upgrade; make quickstart writes true for a new install.
+# smithdb_ingestion_enabled = true
+# smithdb_migration_enabled = false
+# smithdb_query_enabled     = false
+# Backfill start time, RFC 3339. Empty keeps the chart default window.
+# smithdb_migration_start_time = "2026-01-01T00:00:00Z"
+
+# Must match the Helm release name used in Pass 2. Chart-created service account
+# names derive from it, and the Workload Identity binding is scoped to that exact
+# name — a mismatch makes SmithDB's GCS access fail with 403.
+# langsmith_release_name = "langsmith"
+
+# --- Metastore --------------------------------------------------------------
+# "create"   — dedicated Cloud SQL instance (default)
+# "external" — bring your own Postgres 18+; for AlloyDB, run the Auth Proxy as a
+#              sidecar via smithdb.commonInitContainers and point the host at
+#              127.0.0.1 with smithdb_metastore_use_ssl = false.
+# Must be a dedicated, empty database. Never point this at the LangSmith
+# operational Postgres.
+# smithdb_metastore_source              = "create"
+# smithdb_metastore_database_version    = "POSTGRES_18"  # SmithDB requires PG 18+
+# Unset, the tier of a created metastore follows smithdb_sizing: minimal
+# db-custom-2-8192, small db-custom-4-16384, medium db-custom-6-32768, large
+# db-custom-10-65536. A tier change takes the instance offline for less than
+# 60 seconds. Set db-custom-2-8192 to keep the tier of an earlier install.
+# smithdb_metastore_tier                = "db-custom-4-16384"
+# smithdb_metastore_disk_size           = 50
+# smithdb_metastore_high_availability   = false
+
+# --- Metastore TLS ----------------------------------------------------------
+# Unset, both values follow smithdb_metastore_source: the Auth Proxy for
+# "create", direct TLS for "external".
+#
+# 1) Auth Proxy (default for a created metastore). A Cloud SQL Auth Proxy
+#    sidecar runs in every SmithDB Pod and holds the TLS session to Cloud SQL.
+#    SmithDB dials it on 127.0.0.1, so its own hop is plaintext by design and
+#    use_ssl must be false. Terraform grants the SmithDB service account
+#    roles/cloudsql.client and points the secret's host key at the loopback.
+#    Requires source = "create".
+# smithdb_metastore_use_auth_proxy      = true
+# smithdb_metastore_use_ssl             = false
+# Pin the tag. A floating one would change the proxy under a running release.
+# smithdb_auth_proxy_image              = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
+#
+# 2) Relaxed instance, no TLS (test and staging only). SmithDB does not trust
+#    the Cloud SQL server CA, so a direct TLS connection to an ENCRYPTED_ONLY
+#    instance fails the handshake. Without the proxy, relax the instance and
+#    turn TLS off:
+# smithdb_metastore_use_auth_proxy      = false
+# smithdb_metastore_ssl_mode            = "ALLOW_UNENCRYPTED_AND_ENCRYPTED"
+# smithdb_metastore_use_ssl             = false
+# See the metastore TLS section of SMITHDB.md.
+
+# Teardown controls. Protection covers both Terraform and the Cloud SQL API, so
+# a destroy fails until it is false and that change has been applied. Keep both
+# at the production values below; flip them for a disposable dev/test stack that
+# is destroyed and rebuilt.
+# smithdb_metastore_deletion_protection = true
+# smithdb_bucket_force_destroy          = false
+
+# External metastore (smithdb_metastore_source = "external"):
+# smithdb_external_metastore_host     = "10.0.0.5"
+# smithdb_external_metastore_port     = 5432
+# smithdb_external_metastore_database = "smithdb"
+# smithdb_external_metastore_username = "smithdb"
+# Password via: export TF_VAR_smithdb_external_metastore_password="..."
+
+# --- Object store -----------------------------------------------------------
+# Empty auto-generates {project_id}-{prefix}-{env}-smithdb{suffix}.
+# Keep it single-region and in the cluster's region: multi-region and dual-region
+# buckets add replication cost and unpredictable tail latency on segment reads.
+# No lifecycle deletion rules are created, deliberately — expiring objects
+# independently of SmithDB's own lifecycle makes data unavailable.
+# smithdb_bucket_name    = ""
+# CMEK; empty uses Google-managed keys. The module grants the Cloud Storage
+# service agent roles/cloudkms.cryptoKeyEncrypterDecrypter on the key — if the
+# key lives in another project, that project's IAM policy must allow it.
+# smithdb_bucket_kms_key = ""
+# Object versioning, off by default. SmithDB never overwrites a segment in
+# place, so versioning retains a noncurrent copy of everything compaction
+# deletes rather than protecting against overwrite. Enable only where a
+# retention policy demands it, and add a noncurrent-age lifecycle rule.
+# smithdb_bucket_versioning_enabled = false
+
+# --- Node pools -------------------------------------------------------------
+# Unset shape variables take the defaults for the size and cache mode
+# (SMITHDB.md#sizing). A value set here wins, also after a size change.
+#
+# In local-ssd mode the cache pool uses GKE's Local SSD-backed *ephemeral
+# storage* mode. That mode makes the capacity show up as node allocatable
+# ephemeral-storage and back the emptyDir cache. Raw block Local SSD does not.
+# C3 and Z3 "-lssd" types have a fixed disk count: set
+# smithdb_instance_store_local_ssd_count = 0 for them. network-disk requires a
+# C3 or C3D type with 0 Local SSD.
+#
+# The cluster is regional. An unpinned pool tries every zone in the region and
+# fails if the machine type or disk count is unavailable in any of them, so pin
+# smithdb_node_locations after checking availability with:
+#   gcloud compute machine-types list --filter="name=n2-standard-16 AND zone~^us-west2"
+# smithdb_node_locations = ["us-west2-a", "us-west2-b"]
+#
+# smithdb_instance_store_machine_type    = "n2-standard-16"
+# smithdb_instance_store_local_ssd_count = 2
+# smithdb_instance_store_min_nodes       = 0   # scale to zero when SmithDB is idle
+# smithdb_instance_store_max_nodes       = 3
+# smithdb_compute_machine_type           = "n2-standard-8"
+# smithdb_compute_min_nodes              = 0
+# smithdb_compute_max_nodes              = 3
+
 #------------------------------------------------------------------------------
 # Optional: Helm Sizing Profile
 # Controls which langsmith-values-sizing-{profile}.yaml overlay deploy.sh loads.
 # Run `make init-values` after changing this — it copies the sizing file from examples/.
+# With enable_smithdb = true and smithdb_sizing unset, it also sets the SmithDB
+# size (production-large gives SmithDB large), so run `make deploy-all` instead.
 #
 #   "default"          — chart defaults (no overlay); suitable for quick tests
 #   "minimum"          — absolute floor; fits e2-standard-4; not for production

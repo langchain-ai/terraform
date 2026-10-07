@@ -28,6 +28,8 @@ resource "kubernetes_secret" "postgres" {
   # External: connection_url only (chart reads it directly).
   # In-cluster: also include postgres_db/user/password so the Helm chart's
   # in-cluster StatefulSet can initialize the database without manual patching.
+  # Updating data does not restart LangSmith pods. Restart the Helm release's
+  # deployments after apply so their pods load the new URL.
   data = var.postgres_in_cluster_pass != "" ? {
     connection_url    = var.postgres_connection_url
     postgres_db       = var.postgres_in_cluster_db
@@ -189,21 +191,21 @@ MANIFEST
 #   2. Certificate   — triggers issuance; TLS secret lands in istio-system
 #   3. Istio Gateway — patched for HTTPS + HTTP redirect after secret is ready
 #
-# Context guard: when cluster_name is set, each provisioner verifies the active
-# kubeconfig context before applying manifests — protects against accidental
-# cross-cluster applies when managing multiple EKS clusters from one workstation.
+# Context guard: when cluster_name is set, each provisioner points kubectl at a
+# dedicated per-cluster kubeconfig file and unconditionally refreshes it before
+# applying manifests. This never touches the user's shared ~/.kube/config, and
+# never relies on matching the current context's *name* — a stale context can
+# share a name with a deleted-and-recreated cluster while pointing at a dead
+# endpoint, so name-matching alone doesn't guarantee the context is valid.
+# Mirrors the isolated-file pattern in aws/infra/scripts/set-kubeconfig.sh.
 
 locals {
   # Bash snippet injected at the top of each provisioner when cluster_name is set.
-  # Fails fast if the current context does not contain the cluster name.
   # Written with join() rather than a heredoc because HCL does not support
   # heredoc strings inside ternary conditional expressions.
   _ctx_check = var.cluster_name != "" ? join("\n", [
-    "_ctx=$(kubectl config current-context 2>/dev/null || echo \"\")",
-    "if ! echo \"$_ctx\" | grep -qF '${var.cluster_name}'; then",
-    "  echo \"INFO: kubectl context '$_ctx' does not match cluster '${var.cluster_name}' — auto-updating kubeconfig\"",
-    "  aws eks update-kubeconfig --name ${var.cluster_name} --region ${var.region}",
-    "fi",
+    "export KUBECONFIG=\"$HOME/.kube/langsmith-${var.cluster_name}\"",
+    "aws eks update-kubeconfig --name ${var.cluster_name} --region ${var.region} --alias ${var.cluster_name} --kubeconfig \"$KUBECONFIG\" > /dev/null",
   ]) : ""
 }
 
@@ -268,10 +270,8 @@ MANIFEST
     # Update kubeconfig before deleting — destroy provisioners cannot use
     # var.* so cluster_name and region are read from self.input.
     command = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete clusterissuer letsencrypt-prod --ignore-not-found=true 2>/dev/null || true
     EOT
   }
@@ -330,7 +330,10 @@ MANIFEST
     EOT
   }
 
-  depends_on = [terraform_data.letsencrypt_cluster_issuer_dns01]
+  depends_on = [
+    terraform_data.letsencrypt_cluster_issuer_dns01,
+    helm_release.istio_base,
+  ]
 }
 
 # Step 3: Patch Istio Gateway for HTTPS + HTTP redirect.
@@ -414,7 +417,10 @@ MANIFEST
     EOT
   }
 
-  depends_on = [terraform_data.langsmith_certificate]
+  depends_on = [
+    terraform_data.langsmith_certificate,
+    terraform_data.istio_gateway_resource,
+  ]
 }
 
 # ── Envoy Gateway (Kubernetes Gateway API controller) ──────────────────────
@@ -451,6 +457,11 @@ resource "helm_release" "envoy_gateway" {
 # (which normally creates it) runs with a short TTL and may not re-run on
 # subsequent applies. Without a GatewayClass, the Gateway stays in "Waiting
 # for controller" state indefinitely.
+#
+# Istio and NGINX keep their proxy Service internal with a one-line Helm value.
+# Envoy cannot: its Service is created per Gateway at runtime, so the override
+# must be an EnvoyProxy on the GatewayClass. Without it the Service defaults to
+# LoadBalancer and AWS provisions an NLB that never receives traffic.
 resource "terraform_data" "envoy_gateway_resource" {
   count = var.enable_envoy_gateway ? 1 : 0
 
@@ -470,12 +481,29 @@ resource "terraform_data" "envoy_gateway_resource" {
       ${local._ctx_check}
       kubectl create namespace ${var.namespace} --dry-run=client -o yaml | kubectl apply -f -
       cat <<'MANIFEST' | kubectl apply -f -
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: langsmith-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
   name: eg
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: langsmith-proxy
+    namespace: envoy-gateway-system
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -511,12 +539,11 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete gateway langsmith-gateway -n ${self.input.namespace} --ignore-not-found=true --wait=true --timeout=180s 2>/dev/null || true
       kubectl delete gatewayclass eg --ignore-not-found=true 2>/dev/null || true
+      kubectl delete envoyproxy langsmith-proxy -n envoy-gateway-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
 
@@ -532,7 +559,7 @@ MANIFEST
 # "envoy-<gateway-namespace>-<gateway-name>" in envoy-gateway-system.
 # For a Gateway named "langsmith-gateway" in the "langsmith" namespace:
 #   service: envoy-langsmith-langsmith-gateway (namespace: envoy-gateway-system)
-#   service port: 8080 (matches the Gateway resource's listener port)
+#   service port: 80 (matches the Gateway resource's listener port)
 #
 # The TargetGroupBinding is in envoy-gateway-system (same namespace as the service).
 # Cross-namespace TargetGroupBindings are not supported by the AWS LB controller.
@@ -592,7 +619,7 @@ metadata:
 spec:
   serviceRef:
     name: $_svc_name
-    port: 8080
+    port: 80
   targetGroupARN: ${var.gateway_target_group_arn}
   targetType: ip
 MANIFEST
@@ -603,10 +630,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete targetgroupbinding langsmith-envoy-tgb -n envoy-gateway-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
@@ -632,6 +657,32 @@ resource "helm_release" "istio_base" {
   namespace        = "istio-system"
   create_namespace = true
   version          = "1.23.0"
+}
+
+# Istio GatewayClasses are not removed by Helm. Use terraform_data so the
+# destroy provisioner can reference self.input (helm_release cannot use
+# var.* in destroy-time provisioners).
+resource "terraform_data" "istio_gatewayclass_cleanup" {
+  count = var.enable_istio_gateway ? 1 : 0
+
+  input = {
+    cluster_name = var.cluster_name
+    region       = var.region
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
+      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
+        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
+      fi
+      kubectl delete gatewayclass istio istio-remote --ignore-not-found=true 2>/dev/null || true
+    EOT
+  }
+
+  depends_on = [helm_release.istio_base]
 }
 
 resource "helm_release" "istiod" {
@@ -764,10 +815,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete targetgroupbinding langsmith-istio-tgb -n istio-system --ignore-not-found=true 2>/dev/null || true
     EOT
   }
@@ -846,10 +895,8 @@ MANIFEST
     when        = destroy
     interpreter = ["bash", "-c"]
     command     = <<-EOT
-      _ctx=$(kubectl config current-context 2>/dev/null || echo "")
-      if ! echo "$_ctx" | grep -qF '${self.input.cluster_name}'; then
-        aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} 2>/dev/null || true
-      fi
+      export KUBECONFIG="$HOME/.kube/langsmith-${self.input.cluster_name}"
+      aws eks update-kubeconfig --name ${self.input.cluster_name} --region ${self.input.region} --alias ${self.input.cluster_name} --kubeconfig "$KUBECONFIG" 2>/dev/null || true
       kubectl delete targetgroupbinding langsmith-nginx-tgb -n ingress-nginx --ignore-not-found=true 2>/dev/null || true
     EOT
   }

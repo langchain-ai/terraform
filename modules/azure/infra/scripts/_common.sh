@@ -9,8 +9,16 @@
 # Usage: source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"
 #
 # Provides:
-#   _parse_tfvar <key>        — Read a value from terraform.tfvars
-#   _tfvar_is_true <key>      — Return 0 if tfvar == true
+#   _parse_tfvar <key>              — Read a value from terraform.tfvars
+#   _parse_tfvar_quoted <key> <f>   — Read a quoted value, spaces intact, from <f>
+#   _tfvar_is_true <key>            — Return 0 if tfvar == true
+#   _tf_out <name>                  — Read one terraform output, or return 1
+#   _validate_admin_password <pw>   — Enforce the LangSmith admin password rules
+#   _values_input_stamp             — tfvars values baked into values-overrides.yaml
+#   _read_values_stamp <f> <k>      — Read one stamped value back out
+#   _name_suffix                    — Resource-name suffix derived from name_prefix
+#   _derive_kv_name                 — Key Vault name, mirroring local.keyvault_name
+#   _require_kv_name                — _derive_kv_name, or exit with the reason it could not
 #   Color helpers: _bold, _green, _red, _yellow, _cyan, _dim
 #   Status helpers: pass, warn, fail, skip, info, header, action
 
@@ -30,9 +38,27 @@ _parse_tfvar() {
   # Quoted string: key = "value"
   val=$(echo "$raw" | sed -n 's/.*=[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '[:space:]')
   if [[ -z "$val" ]]; then
-    # Unquoted value: key = true / key = 42 / key = {}
-    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | tr -d '[:space:]"')
+    # Unquoted value: key = true / key = 42 / key = {}. The trailing comment goes
+    # first, or "create_keyvault = false # attach" returns a value matching
+    # neither true nor false and every caller silently takes the other branch.
+    val=$(echo "$raw" | sed 's/.*=[[:space:]]*//' | sed 's/#.*//' | tr -d '[:space:]"')
   fi
+  [[ -n "$val" ]] || return 1
+  echo "$val"
+}
+
+# Read one quoted scalar out of a tfvars file, preserving spaces inside the
+# value. _parse_tfvar runs its result through `tr -d '[:space:]'`, which is right
+# for a region or a resource name and silently mangles a password that contains a
+# space. The file defaults to terraform.tfvars and is resolved against INFRA_DIR
+# unless absolute, so callers can read secrets.auto.tfvars the same way.
+_parse_tfvar_quoted() {
+  local key="$1"
+  local file="${2:-terraform.tfvars}"
+  [[ "$file" == /* ]] || file="${INFRA_DIR:-$(pwd)}/$file"
+  local val
+  val=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\(.*\)\"[[:space:]]*\$/\1/p" \
+    "$file" 2>/dev/null | head -1)
   [[ -n "$val" ]] || return 1
   echo "$val"
 }
@@ -42,6 +68,269 @@ _tfvar_is_true() {
   local val
   val=$(_parse_tfvar "$1") || return 1
   [[ "$val" == "true" ]]
+}
+
+# ── terraform output reader ──────────────────────────────────────────────────
+# `terraform output -raw <name>` exits 0 against a state with no outputs and
+# prints its warning to stdout, so an exit-code check alone captures the warning
+# as the value. Accept only a value shaped like a resource name, ID, or email;
+# the leading alphanumeric also stops a value being read as an az CLI flag.
+_tf_out() {
+  local name="$1" val
+  val=$(terraform -chdir="$INFRA_DIR" output -raw "$name" 2>/dev/null) || return 1
+  [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9._@+-]*$ ]] || return 1
+  printf '%s' "$val"
+}
+
+# ── Azure cloud ──────────────────────────────────────────────────────────────
+# The cloud this deployment targets. Once applied, the azure_environment output
+# is the value Terraform actually used, whichever of terraform.tfvars,
+# *.auto.tfvars or TF_VAR_azure_environment it came from, so read that first.
+# Before the first apply there is no output: fall back to terraform.tfvars, then
+# the environment variable, then public. The names below mirror
+# local.azure_clouds in infra/main.tf; keep the two in step.
+_azure_environment() {
+  local val=""
+  if command -v terraform >/dev/null 2>&1; then
+    val=$(terraform -chdir="$INFRA_DIR" output -raw azure_environment 2>/dev/null) || val=""
+  fi
+  case "$val" in
+    public|usgovernment) ;;
+    *) val=$(_parse_tfvar azure_environment) || val="${TF_VAR_azure_environment:-public}" ;;
+  esac
+  echo "$val"
+}
+
+# Suffix Azure appends to a public IP DNS label: <label>.<region>.<suffix>.
+_azure_cloudapp_suffix() {
+  case "$(_azure_environment)" in
+    usgovernment) echo "cloudapp.usgovcloudapi.net" ;;
+    *) echo "cloudapp.azure.com" ;;
+  esac
+}
+
+# cert-manager's azureDNS solver names the cloud its own way.
+_cert_manager_azure_environment() {
+  case "$(_azure_environment)" in
+    usgovernment) echo "AzureUSGovernmentCloud" ;;
+    *) echo "AzurePublicCloud" ;;
+  esac
+}
+
+# ── Entra ID sign-in for kubectl and Helm ───────────────────────────────────
+# On a cluster with Entra ID integration, `az aks get-credentials` writes a
+# kubeconfig whose user signs in interactively. Convert it to reuse the caller's
+# az session, the same sign-in the Terraform providers use (aks_kube_auth), so
+# scripts run unattended from a workstation, a pipeline, or a managed identity.
+# Run it right after get-credentials, which rewrites the user entry each time.
+# --context limits the conversion to this cluster's user: without it kubelogin
+# rewrites every kubelogin or legacy Azure user in the kubeconfig, switching the
+# operator's other AKS contexts to azurecli sign-in. get-credentials (without
+# --admin or --context) names the context after the cluster.
+# Returns 1 when the cluster needs kubelogin and it is not installed.
+_aks_kubelogin_convert() {
+  local cluster="$1" rg="$2" mode aad
+  mode=$(_parse_tfvar aks_kube_auth) || mode="auto"
+  [[ "$mode" == "certificate" ]] && return 0
+  if [[ "$mode" == "auto" ]]; then
+    # Same test as aks_kube_auth = "auto" in Terraform: any Entra profile,
+    # AKS-managed or legacy, is what makes azurerm drop the client certificate.
+    aad=$(az aks show --name "$cluster" --resource-group "$rg" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null) || aad=""
+    [[ "$aad" == "true" ]] || return 0
+  fi
+  if ! command -v kubelogin >/dev/null 2>&1; then
+    fail "Cluster '${cluster}' uses Entra ID and kubelogin is not on the PATH. Install it with 'az aks install-cli'"
+    return 1
+  fi
+  kubelogin convert-kubeconfig -l azurecli --context "$cluster"
+}
+
+# ── Admin password rules ─────────────────────────────────────────────────────
+# The LangSmith Helm chart's auth-bootstrap job rejects an initial org admin
+# password without a symbol, and it fails ~10 minutes into the release rather
+# than at the point the value was entered. Same rule set as the AWS module's
+# setup-env.sh, so a password valid on one cloud is valid on the other.
+#
+# Prints the reason and returns 1 on failure; returns 0 silently on success.
+_validate_admin_password() {
+  local pw="$1" err=""
+
+  if [[ ${#pw} -lt 12 ]]; then
+    err="must be at least 12 characters long"
+  elif ! printf '%s' "$pw" | grep -qE '[]!#$%()+,./:?@^_{~}[\-]'; then
+    err="must contain at least one symbol: !#\$%()+,-./:?@[\\]^_{~}"
+  elif ! printf '%s' "$pw" | grep -q '[a-z]'; then
+    err="must contain at least one lowercase letter"
+  elif ! printf '%s' "$pw" | grep -q '[A-Z]'; then
+    err="must contain at least one uppercase letter"
+  fi
+
+  if [[ -n "$err" ]]; then
+    echo "Admin password is invalid — ${err}."
+    return 1
+  fi
+}
+
+# ── License key validation ───────────────────────────────────────────────────
+# Two shapes reach platform-backend. An online key is `lcl_` plus the key body,
+# which the backend exchanges with Beacon at startup (smith-go tests only the
+# prefix). An offline key is a three-part JWT whose first part is a base64url
+# JSON header carrying the alg member RFC 7515 requires. Anything else is parsed
+# as a JWT and fails inside the pod with an error that names neither the prompt
+# nor licensing (#250), so the shape is checked here, where the operator still
+# has the right value in front of them. Shape only: no signature check, and the
+# body-length floor on lcl_ keys is a typo guard rather than a specification.
+_b64url_decode() {
+  local s="${1//-/+}"
+  s="${s//_//}"
+  case $(( ${#s} % 4 )) in
+    1) return 1 ;;
+    2) s="${s}==" ;;
+    3) s="${s}=" ;;
+  esac
+  printf '%s' "$s" | base64 -d 2>/dev/null
+}
+
+_validate_license_key() {
+  local key="$1" err="" header="" header_json="" dots=""
+  # A JWS header is a JSON object and must carry alg (RFC 7515 §4.1.1). Kept in
+  # a variable: bash 3.2 treats a quoted regex literally, and this one has quotes.
+  local header_re='^\{.*"alg"[[:space:]]*:.*\}$'
+
+  case "$key" in
+    "")                 err="cannot be empty" ;;
+    *[[:space:]]*)      err="contains whitespace; paste the key on its own" ;;
+    http://*|https://*) err="looks like a URL, not a license key. Paste the key itself, not the link it was shared in" ;;
+    lcl_*)
+      if [[ ! "${key#lcl_}" =~ ^[A-Za-z0-9_-]{16,}$ ]]; then
+        err="is too short, or has characters outside A-Z a-z 0-9 - _, for an lcl_ key"
+      fi ;;
+    *)
+      dots="${key//[^.]/}"
+      if [[ ${#dots} -ne 2 ]]; then
+        err="is not a LangSmith license key: expected lcl_<key>, or an offline token with exactly three dot-separated parts"
+      else
+        header="${key%%.*}"
+        if [[ ! "$header" =~ ^[A-Za-z0-9_-]+$ ]] || ! header_json=$(_b64url_decode "$header") \
+           || [[ ! "$header_json" =~ $header_re ]]; then
+          err="has three parts, but its first part is not a base64url JSON header with an alg member, so it is not an offline license token"
+        fi
+      fi ;;
+  esac
+
+  if [[ -n "$err" ]]; then
+    echo "License key ${err}."
+    return 1
+  fi
+}
+
+# ── values-overrides.yaml staleness stamp ────────────────────────────────────
+# terraform.tfvars keys whose value init-values.sh bakes into
+# values-overrides.yaml. That file is generated once and `make deploy` never
+# regenerates it, so editing terraform.tfvars afterwards leaves Terraform and
+# Helm deploying different configurations. init-values.sh writes these values
+# into the generated file's header; deploy.sh reads them back and compares.
+#
+# Keys deploy.sh re-reads from terraform.tfvars on every run — sizing_profile and
+# the enable_* flags, which select whole values files — are deliberately absent.
+# Those cannot go stale, so listing them would fail a deploy that is fine.
+_VALUES_INPUT_KEYS="ingress_controller tls_certificate_source postgres_source redis_source clickhouse_source langsmith_domain dns_label location langsmith_custom_ca_secret_name langsmith_custom_ca_secret_key"
+
+# Emit the stamp block, one comment line per key. Stamps the raw tfvars value and
+# leaves it empty when the key is absent — never the default a caller substitutes,
+# so both sides of the comparison are reading the same thing.
+_values_input_stamp() {
+  local key val
+  for key in $_VALUES_INPUT_KEYS; do
+    val=$(_parse_tfvar "$key") || val=""
+    printf '#   %s = %s\n' "$key" "$val"
+  done
+}
+
+# Read one stamped value back out of a generated values file. Prints the value and
+# returns 0 when the stamp line is present, including when the value is empty.
+# Returns 1 when the file carries no stamp for that key, which is how a file
+# written by an older init-values.sh is told apart from a genuine empty value.
+_read_values_stamp() {
+  local file="$1" key="$2" line
+  line=$(grep -E "^#   ${key} =" "$file" 2>/dev/null | head -1) || return 1
+  [[ -n "$line" ]] || return 1
+  printf '%s' "$line" | sed "s/^#   ${key} =[[:space:]]*//"
+}
+
+# Print ingress.ingressClassName from a values file, quotes stripped; nothing when
+# unset or empty. With ingress_controller = "none" this is the only place a class
+# comes from, so init-values.sh keeps it on re-run and deploy.sh checks it.
+_values_ingress_class() {
+  awk '
+    /^[A-Za-z_]/ { top = $1; sub(":", "", top) }
+    top == "ingress" && /^  ingressClassName:/ { v = $2; gsub(/["\047]/, "", v); cls = v }
+    END { print cls }
+  ' "$1" 2>/dev/null
+}
+
+# Resource-name suffix, mirroring local.name_suffix in main.tf.
+# name_prefix carries no hyphen ("prod") but every derived name needs one
+# ("langsmith-kv-prod"), so the separator is added here. Falls back to the
+# retired `identifier` key, hyphen and all, so these scripts can still resolve
+# names for a deployment whose tfvars predates the rename.
+# Returns 1 when neither key is set — callers treat that as "no suffix".
+_name_suffix() {
+  local val
+  val=$(_parse_tfvar "name_prefix") || val=$(_parse_tfvar "identifier") || return 1
+  printf -- '-%s' "${val#-}"
+}
+
+# Key Vault name, mirroring local.keyvault_name in main.tf including the
+# unique_resource_names hash. Keep the two in step.
+#
+# The attach branch comes first, as in main.tf: with create_keyvault = false a
+# derived name points at a vault that does not exist, and before the first
+# apply there is no terraform output to catch it — setup-env.sh would read no
+# secret and mint a fresh Postgres password over the real one. Returns 1 when
+# attach mode is on but existing_keyvault_name is unset.
+_derive_kv_name() {
+  local explicit suffix sub salt hash base create
+  create=$(_parse_tfvar create_keyvault || echo "true")
+  if [[ "$create" == "false" ]]; then
+    explicit=$(_parse_tfvar existing_keyvault_name || true)
+    [[ -n "$explicit" ]] || return 1
+    echo "$explicit"
+    return 0
+  fi
+  explicit=$(_parse_tfvar keyvault_name || true)
+  if [[ -n "$explicit" ]]; then
+    echo "$explicit"
+    return 0
+  fi
+  suffix=$(_name_suffix || true)
+  # name_base overrides the ls/langsmith switch outright, same as main.tf.
+  base=$(_parse_tfvar name_base || true)
+  if _tfvar_is_true unique_resource_names; then
+    sub=$(_parse_tfvar subscription_id || true)
+    salt=$(_parse_tfvar name_suffix_salt || true)
+    if command -v shasum &>/dev/null; then
+      hash=$(printf '%s' "${sub}${suffix}${salt}" | shasum -a 256 | cut -c1-6)
+    else
+      hash=$(printf '%s' "${sub}${suffix}${salt}" | sha256sum | cut -c1-6)
+    fi
+    echo "${base:-ls}-kv${suffix}-${hash}"
+  else
+    echo "${base:-langsmith}-kv${suffix}"
+  fi
+}
+
+# _derive_kv_name with its one failure spelled out. Every caller but status.sh
+# needs a real vault, so they exit here rather than carry an empty name into an
+# az command.
+_require_kv_name() {
+  local name
+  if ! name=$(_derive_kv_name); then
+    echo "  create_keyvault = false but existing_keyvault_name is unset in terraform.tfvars." >&2
+    echo "  Set it to the vault to attach to, or set create_keyvault = true." >&2
+    exit 1
+  fi
+  printf '%s' "$name"
 }
 
 # ── Color helpers ────────────────────────────────────────────────────────────

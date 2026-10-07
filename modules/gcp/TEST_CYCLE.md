@@ -12,19 +12,11 @@ checklist below.
 
 **Tools required** (all must be in PATH):
 - `gcloud` CLI — authenticated to the target project
-- `terraform` v1.5+
+- `terraform` v1.11.0+
 - `kubectl`
 - `helm` v3+
 
-**GCP roles required** (verify with `gcloud projects get-iam-policy <project-id>`):
-- `roles/container.admin` — GKE cluster create/delete
-- `roles/compute.networkAdmin` — VPC, subnets, Cloud NAT, firewall rules
-- `roles/iam.serviceAccountAdmin` + `roles/iam.workloadIdentityUser` — Workload Identity setup
-- `roles/cloudsql.admin` — Cloud SQL instance create/delete
-- `roles/redis.admin` — Memorystore instance create/delete
-- `roles/storage.admin` — GCS bucket create/delete
-- `roles/servicenetworking.networksAdmin` — VPC peering for Cloud SQL / Memorystore
-- `roles/secretmanager.admin` — Secret Manager (if `enable_secret_manager_module = true`)
+**GCP roles required**: see [PERMISSIONS.md](PERMISSIONS.md). Verify with `./infra/scripts/preflight.sh`.
 
 **Bootstrap requirement**: `cloudresourcemanager.googleapis.com` must be enabled before first apply:
 ```bash
@@ -44,6 +36,10 @@ environment                   = "dev"
 postgres_deletion_protection  = false           # required for clean terraform destroy after test
 gke_deletion_protection       = false           # required for clean terraform destroy after test
 tls_certificate_source        = "none"          # HTTP only — no cert-manager or Let's Encrypt needed
+
+# Required when testing SmithDB with a Terraform-created metastore
+smithdb_metastore_deletion_protection = false
+smithdb_bucket_force_destroy          = true
 ```
 
 All other defaults are fine for testing. A typical dev config:
@@ -92,7 +88,7 @@ Review the plan. Expected resource categories:
 - Cloud SQL PostgreSQL instance, database, user, private IP allocation
 - Memorystore Redis instance
 - Cloud Storage bucket + lifecycle rules
-- GCP service account + IAM bindings (storage.objectAdmin, secretmanager.secretAccessor)
+- GCP service account + IAM bindings (storage.objectAdmin; secretmanager.secretAccessor only with `grant_project_secret_accessor = true`)
 - Kubernetes namespace `langsmith`, K8s Secrets (`langsmith-postgres`, `langsmith-redis`)
 - Helm releases: ESO (external-secrets), optionally KEDA, optionally cert-manager
 - Envoy Gateway (GatewayClass + Gateway resources)
@@ -151,7 +147,7 @@ Both must be non-null if `enable_gcp_iam_module = true` (default).
 
 ### Gateway
 ```bash
-kubectl get gateway -n langsmith
+kubectl get gateway -n envoy-gateway-system
 ```
 Expected: `PROGRAMMED = True`. External IP may show as `pending` until a `HTTPRoute` (Helm) is deployed.
 
@@ -255,8 +251,50 @@ terraform -chdir=infra output keda_installed   # true
 | Cloud SQL private IP allocation fails | `Error: servicenetworking.services.addPeering ... quota exceeded` | The project may have hit the default limit for VPC peering connections. Check in GCP Console → VPC Network → VPC Network Peering. |
 | GKE node pool not ready during apply | Pods `Pending`, StorageClass creation fails | Wait for node pool to become active — typically resolves on re-apply. |
 | `redis_prevent_destroy = true` blocks destroy | `Error: Instance is protected from destroy` | Set `redis_prevent_destroy = false` in terraform.tfvars and re-apply before destroying. |
-| Envoy Gateway `Gateway` stuck Pending | `kubectl get gateway -n langsmith` shows no address | No HTTPRoute deployed yet — install LangSmith via Helm (Pass 2) to trigger route creation and external IP assignment. |
+| Envoy Gateway `Gateway` stuck Pending | `kubectl get gateway -n envoy-gateway-system` shows no address | No HTTPRoute deployed yet — install LangSmith via Helm (Pass 2) to trigger route creation and external IP assignment. |
 | GKE cluster deletion protection | `Error: Cluster has deletion protection enabled` | Set `gke_deletion_protection = false` in terraform.tfvars and re-apply before destroying. |
+
+---
+
+## SmithDB checks
+
+Plan three configurations: `enable_smithdb = false`, a managed Cloud SQL plus GCS
+metastore, and BYO PostgreSQL. For an applied environment, verify:
+
+```bash
+terraform -chdir=infra output smithdb_node_pools
+kubectl get nodes -L smithdb-local/instance-store,smithdb-local/compute
+kubectl get pods -n langsmith -l app.kubernetes.io/instance=langsmith -o wide
+
+# local-ssd: the cache mount must be Local SSD, not the boot disk.
+# network-disk and minimal: /data is a per-pod PVC (kubectl get pvc -n langsmith).
+kubectl exec -n langsmith deploy/langsmith-smithdb-query -- df -h /data
+```
+
+Deploy with all three integration gates disabled first. Confirm the metastore
+migration Job completes - on chart 0.17 it reads the same
+`smithdb.config.metastore.useSsl` value as the services. With the Auth Proxy
+(the default for a created metastore), also confirm the hook Job carried the
+sidecar and still reached Complete:
+
+```bash
+kubectl get job -n langsmith -l app.kubernetes.io/component=langsmith-smithdb-metastore-migration
+kubectl get pod -n langsmith -l job-name=langsmith-smithdb-metastore-migration \
+  -o jsonpath='{.items[*].spec.initContainers[*].name}'
+```
+
+Then confirm SmithDB can write to the bucket before enabling ingestion,
+historical migration, or the query cutover.
+
+Render checks worth running before any apply, one per gate state:
+
+```bash
+helm template langsmith langchain/langsmith --version "${CHART_VERSION:-~0.17.0}" -n langsmith \
+  -f helm/values/langsmith-values.yaml \
+  -f helm/values/langsmith-values-smithdb-sizing.yaml \
+  -f helm/values/langsmith-values-smithdb.yaml \
+  -f helm/values/langsmith-values-smithdb-overrides.yaml >/dev/null
+```
 
 ---
 
@@ -277,6 +315,8 @@ terraform -chdir=infra destroy
 - `postgres_deletion_protection = false` is set in `terraform.tfvars`
 - `gke_deletion_protection = false` is set in `terraform.tfvars`
 - `redis_prevent_destroy = false` (default) in `terraform.tfvars`
+- With SmithDB enabled: `smithdb_metastore_deletion_protection = false` and `smithdb_bucket_force_destroy = true`
+- The tfvars change has been applied, not just edited — deletion protection is enforced by Cloud SQL, not only by Terraform
 
 **If destroy hangs on the VPC**: Envoy Gateway or other controllers may have created load balancer resources with forwarding rules attached to the VPC. Check GCP Console → Network Services → Load Balancing and delete any LangSmith-related forwarding rules manually, then re-run destroy.
 
@@ -300,6 +340,6 @@ Secrets that must be provided for Helm (via `--set` or in `values-overrides.yaml
 | `config.basicAuth.jwtSecret` | `openssl rand -base64 32` | **Never** — invalidates all sessions |
 | `config.basicAuth.initialOrgAdminPassword` | User-defined | Yes |
 | `config.agentBuilder.encryptionKey` | `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` | Requires re-encryption |
-| `config.insights.encryptionKey` | Same as above | Requires re-encryption |
+| `insights.encryptionKey` | Same as above | Requires re-encryption |
 | `config.blobStorage.accessKey` | GCP Console → Cloud Storage → Interoperability → HMAC Keys | Yes |
 | `config.blobStorage.accessKeySecret` | Same | Yes |

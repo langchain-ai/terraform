@@ -41,9 +41,9 @@ resource "aws_iam_policy" "cert_manager_route53" {
         Resource = "arn:aws:route53:::hostedzone/${var.hosted_zone_id}"
       },
       {
-        Sid      = "ListZones"
-        Effect   = "Allow"
-        Action   = "route53:ListHostedZonesByName"
+        Sid    = "ListZones"
+        Effect = "Allow"
+        Action = "route53:ListHostedZonesByName"
         # Route 53 does not support resource-level permissions for
         # ListHostedZonesByName — must be * per AWS and cert-manager docs.
         Resource = "*"

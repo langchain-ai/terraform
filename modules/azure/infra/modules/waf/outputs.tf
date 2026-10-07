@@ -1,5 +1,5 @@
 output "waf_policy_id" {
-  description = "Resource ID of the WAF policy — attach to Application Gateway or Azure Front Door"
+  description = "Resource ID of the WAF policy — attach to an Application Gateway (Front Door cannot use this policy type)"
   value       = azurerm_web_application_firewall_policy.waf.id
 }
 

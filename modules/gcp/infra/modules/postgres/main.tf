@@ -17,6 +17,11 @@ resource "google_sql_database_instance" "postgres" {
     disk_type         = "PD_SSD"
     disk_autoresize   = true
 
+    # The resource-level deletion_protection above only stops Terraform. This
+    # flag is the one Cloud SQL enforces, so gcloud and the console refuse the
+    # delete too. Driven by the same variable to keep it a single decision.
+    deletion_protection_enabled = var.deletion_protection
+
     ip_configuration {
       ipv4_enabled                                  = false
       private_network                               = var.network_id
@@ -76,10 +81,17 @@ resource "google_sql_database_instance" "postgres" {
 #------------------------------------------------------------------------------
 # Database
 #------------------------------------------------------------------------------
+# depends_on on the user, not the reverse: destroy runs the graph backwards, so
+# this drops the database before the role. Without the edge the two are
+# unordered, and Cloud SQL refuses DROP ROLE while the role still owns objects
+# in the database ("cannot be dropped because some objects depend on it"),
+# which strands the instance mid-destroy.
 resource "google_sql_database" "langsmith" {
   name     = var.database_name
   project  = var.project_id
   instance = google_sql_database_instance.postgres.name
+
+  depends_on = [google_sql_user.langsmith]
 }
 
 #------------------------------------------------------------------------------

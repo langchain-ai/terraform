@@ -137,8 +137,12 @@ resource "azurerm_virtual_machine_extension" "aad_ssh" {
 
 # Grant the VM's system identity "Virtual Machine Administrator Login" so
 # the AAD SSH extension can issue login tokens.
+#
+# principal_type is set explicitly: subscriptions that delegate roleAssignments/write
+# with an ABAC condition on principalType return 403 when the request omits it.
 resource "azurerm_role_assignment" "vm_admin_login" {
   scope                = azurerm_linux_virtual_machine.bastion.id
   role_definition_name = "Virtual Machine Administrator Login"
   principal_id         = azurerm_linux_virtual_machine.bastion.identity[0].principal_id
+  principal_type       = "ServicePrincipal"
 }

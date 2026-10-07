@@ -63,7 +63,7 @@ terraform apply -var-file=terraform.tfvars
 
 **Symptom:** `kubectl get nodes` shows no nodes or nodes stuck in `NotReady`.
 
-**Cause:** Node pool service account lacks `roles/container.nodeServiceAccount`, or VPC firewall rules block node-to-control-plane communication.
+**Cause:** Node pool service account lacks `roles/container.defaultNodeServiceAccount`, or VPC firewall rules block node-to-control-plane communication.
 
 **Fix:**
 
@@ -76,7 +76,7 @@ gcloud container node-pools describe <pool-name> \
 # Grant required role if missing
 gcloud projects add-iam-policy-binding <project-id> \
   --member="serviceAccount:<node-sa-email>" \
-  --role="roles/container.nodeServiceAccount"
+  --role="roles/container.defaultNodeServiceAccount"
 
 # Check firewall rules
 gcloud compute firewall-rules list --filter="network:<vpc-name>"
@@ -228,7 +228,7 @@ kubectl get svc -n envoy-gateway-system \
 
 ```bash
 # Get the new IP
-kubectl get gateway -n langsmith -o jsonpath='{.items[0].status.addresses[0].value}'
+kubectl get gateway -n envoy-gateway-system -o jsonpath='{.items[0].status.addresses[0].value}'
 
 # Update your DNS record (Cloud DNS example)
 gcloud dns record-sets update <your-domain>. \
@@ -307,7 +307,7 @@ make deploy
 
 ### Issue #12 — `langsmith-ksa` missing Workload Identity annotation
 
-**Symptom:** Operator-spawned agent deployment pods fail to start or are stuck in `Pending`. Logs show permission errors or the agent bootstrap job hangs.
+**Symptom:** Operator-spawned agent deployment pods fail to start or are stuck in `Pending`. Logs show permission errors.
 
 **Cause:** `langsmith-ksa` is created by the LangSmith operator (not Helm) and does not survive namespace teardowns or fresh cluster rebuilds. `deploy.sh` re-annotates it post-deploy, but if a previous deploy was interrupted the annotation may be missing.
 
@@ -438,7 +438,7 @@ kubectl get clusterissuer
 ### Gateway and load balancer
 
 ```bash
-kubectl get gateway -n langsmith
+kubectl get gateway -n envoy-gateway-system
 kubectl get httproute -n langsmith
 kubectl get svc -n envoy-gateway-system -o wide
 kubectl get pods -n envoy-gateway-system
@@ -512,7 +512,7 @@ echo "=== Context ===" && kubectl config current-context
 echo "=== Nodes ===" && kubectl get nodes
 echo "=== Pods ===" && kubectl get pods -n langsmith
 echo "=== Certificate ===" && kubectl get certificate -n langsmith
-echo "=== Gateway ===" && kubectl get gateway -n langsmith
+echo "=== Gateway ===" && kubectl get gateway -n envoy-gateway-system
 echo "=== Secrets ===" && kubectl get secrets -n langsmith | grep -E "langsmith-postgres|langsmith-redis"
 echo "=== Helm ===" && helm status langsmith -n langsmith 2>/dev/null | grep -E "STATUS|LAST DEPLOYED"
 ```

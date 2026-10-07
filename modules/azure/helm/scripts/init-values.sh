@@ -10,7 +10,7 @@
 #   make init-values  (or: ./helm/scripts/init-values.sh)
 #
 # Reads:
-#   - infra/terraform.tfvars    → identifier, environment, location, tls_certificate_source,
+#   - infra/terraform.tfvars    → name_prefix, environment, location, tls_certificate_source,
 #                                 postgres_source, redis_source, sizing_profile
 #   - terraform output          → storage_account_name, storage_container_name,
 #                                 storage_account_k8s_managed_identity_client_id,
@@ -45,8 +45,8 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
-_identifier=$(_parse_tfvar "identifier") || _identifier=""
-_environment=$(_parse_tfvar "environment") || _environment="dev"
+_name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
+_environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
 _location=$(_parse_tfvar "location") || _location="eastus"
 _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _postgres_source=$(_parse_tfvar "postgres_source") || _postgres_source="external"
@@ -55,7 +55,17 @@ _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in
 _sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _dns_label=$(_parse_tfvar "dns_label") || _dns_label=""
-_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="nginx"
+_ingress_controller=$(_parse_tfvar "ingress_controller") || _ingress_controller="envoy-gateway"
+_enable_smithdb=$(_parse_tfvar "enable_smithdb") || _enable_smithdb="false"
+_langsmith_release_name=$(_parse_tfvar "langsmith_release_name") || _langsmith_release_name="langsmith"
+if [[ "$_langsmith_release_name" == *langsmith* ]]; then
+  _langsmith_release_fullname="$_langsmith_release_name"
+else
+  _langsmith_release_fullname="${_langsmith_release_name}-langsmith"
+fi
+_smithdb_ingestion_enabled=$(_parse_tfvar "smithdb_ingestion_enabled") || _smithdb_ingestion_enabled="false"
+_smithdb_migration_enabled=$(_parse_tfvar "smithdb_migration_enabled") || _smithdb_migration_enabled="false"
+_smithdb_query_enabled=$(_parse_tfvar "smithdb_query_enabled") || _smithdb_query_enabled="false"
 
 # Derive protocol from TLS source
 if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "dns01" || "$_tls_source" == "existing" ]]; then
@@ -70,7 +80,7 @@ _first_run="false"
 
 echo ""
 echo "Parsed terraform.tfvars:"
-info "identifier             = ${_identifier:-(empty)}"
+info "name_prefix            = ${_name_prefix:-(empty)}"
 info "environment            = $_environment"
 info "location               = $_location"
 info "tls_certificate_source = $_tls_source (protocol: $_protocol)"
@@ -84,24 +94,56 @@ echo ""
 # ── Read terraform outputs ─────────────────────────────────────────────────
 echo "Reading terraform outputs..."
 
-STORAGE_ACCOUNT=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_name 2>/dev/null) || {
+STORAGE_ACCOUNT=$(_tf_out storage_account_name) || {
   fail "Could not read storage_account_name. Is 'terraform apply' complete?"
   exit 1
 }
-STORAGE_CONTAINER=$(terraform -chdir="$INFRA_DIR" output -raw storage_container_name 2>/dev/null) || {
+STORAGE_CONTAINER=$(_tf_out storage_container_name) || {
   fail "Could not read storage_container_name."
   exit 1
 }
-WI_CLIENT_ID=$(terraform -chdir="$INFRA_DIR" output -raw storage_account_k8s_managed_identity_client_id 2>/dev/null) || {
+WI_CLIENT_ID=$(_tf_out storage_account_k8s_managed_identity_client_id) || {
   fail "Could not read storage_account_k8s_managed_identity_client_id."
   exit 1
 }
-NAMESPACE=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_namespace 2>/dev/null) || NAMESPACE="langsmith"
-ADMIN_EMAIL=$(terraform -chdir="$INFRA_DIR" output -raw langsmith_admin_email 2>/dev/null) || ADMIN_EMAIL=""
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-RG_NAME=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || RG_NAME=""
-# AMR (Azure Managed Redis) needs clusterSafeMode; classic cache does not. Driven by the TF output.
-REDIS_SAFE_MODE=$(terraform -chdir="$INFRA_DIR" output -raw redis_cluster_safe_mode 2>/dev/null) || REDIS_SAFE_MODE="false"
+# The chart builds https://<account>.blob.core.windows.net/ unless told otherwise,
+# which is the commercial hostname only. Outside commercial Azure, pass the
+# endpoint Azure reported for the account.
+AZURE_ENVIRONMENT=$(_azure_environment)
+STORAGE_BLOB_ENDPOINT=""
+if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
+  STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw storage_blob_endpoint 2>/dev/null) || {
+    fail "Could not read storage_blob_endpoint, which azure_environment = ${AZURE_ENVIRONMENT} needs. Run 'make apply' on this version of the module first."
+    exit 1
+  }
+fi
+NAMESPACE=$(_tf_out langsmith_namespace) || NAMESPACE="langsmith"
+ADMIN_EMAIL=$(_tf_out langsmith_admin_email) || ADMIN_EMAIL=""
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || CLUSTER_NAME=""
+# Redis client mode follows the AMR clustering policy. No default: guessing wrong pairs
+# the standalone client with an OSS cluster, which is the combination that 503s ingest.
+REDIS_CLUSTER_ENABLED=$(_tf_out redis_cluster_enabled) || REDIS_CLUSTER_ENABLED=""
+
+SMITHDB_STORAGE_ACCOUNT=""
+SMITHDB_STORAGE_CONTAINER=""
+SMITHDB_WI_CLIENT_ID=""
+SMITHDB_METASTORE_SECRET="smithdb-metastore"
+SMITHDB_METASTORE_AUTH_MODE="password"
+SMITHDB_METASTORE_USERNAME=""
+SMITHDB_CACHE_STORAGE_CLASS=""
+SMITHDB_STORAGE_BLOB_ENDPOINT=""
+if [[ "${_enable_smithdb:-false}" == "true" ]]; then
+  SMITHDB_STORAGE_ACCOUNT=$(_tf_out smithdb_storage_account_name) || SMITHDB_STORAGE_ACCOUNT=""
+  SMITHDB_STORAGE_CONTAINER=$(_tf_out smithdb_storage_container_name) || SMITHDB_STORAGE_CONTAINER=""
+  SMITHDB_WI_CLIENT_ID=$(_tf_out smithdb_workload_identity_client_id) || SMITHDB_WI_CLIENT_ID=""
+  SMITHDB_METASTORE_SECRET=$(_tf_out smithdb_metastore_secret_name) || SMITHDB_METASTORE_SECRET="smithdb-metastore"
+  SMITHDB_METASTORE_AUTH_MODE=$(_tf_out smithdb_metastore_auth_mode) || SMITHDB_METASTORE_AUTH_MODE="password"
+  SMITHDB_METASTORE_USERNAME=$(_tf_out smithdb_metastore_username) || SMITHDB_METASTORE_USERNAME=""
+  SMITHDB_CACHE_STORAGE_CLASS=$(_tf_out smithdb_cache_storage_class_name) || SMITHDB_CACHE_STORAGE_CLASS=""
+  if [[ "$AZURE_ENVIRONMENT" != "public" ]]; then
+    SMITHDB_STORAGE_BLOB_ENDPOINT=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_storage_blob_endpoint 2>/dev/null) || SMITHDB_STORAGE_BLOB_ENDPOINT=""
+  fi
+fi
 
 echo ""
 pass "Terraform outputs read"
@@ -109,6 +151,12 @@ info "storage_account = $STORAGE_ACCOUNT"
 info "storage_container = $STORAGE_CONTAINER"
 info "wi_client_id = $WI_CLIENT_ID"
 info "namespace = $NAMESPACE"
+if [[ "${_enable_smithdb:-false}" == "true" ]]; then
+  info "smithdb_storage_account = ${SMITHDB_STORAGE_ACCOUNT:-(not available)}"
+  info "smithdb_storage_container = ${SMITHDB_STORAGE_CONTAINER:-(not available)}"
+  info "smithdb_workload_identity = ${SMITHDB_WI_CLIENT_ID:-(not available)}"
+  info "smithdb_metastore_auth = $SMITHDB_METASTORE_AUTH_MODE"
+fi
 [[ -n "$CLUSTER_NAME" ]] && info "cluster = $CLUSTER_NAME"
 echo ""
 
@@ -116,6 +164,7 @@ echo ""
 # Priority order:
 #   1. langsmith_domain from terraform.tfvars (custom domain — DNS-01 or CNAME)
 #   2. dns_label from terraform.tfvars → <label>.<region>.cloudapp.azure.com
+#      (cloudapp.usgovcloudapi.net in Azure Government)
 #      Works for ALL ingress controllers (nginx, istio, istio-addon, envoy-gateway).
 #      Azure assigns the DNS label to whichever LB service has the annotation set.
 #   3. Existing value in values-overrides.yaml (keep on re-run)
@@ -130,14 +179,14 @@ fi
 
 # Azure Public IP DNS label — free, no extra resource, works for all ingress controllers
 if [[ -z "$HOSTNAME" && -n "$_dns_label" ]]; then
-  HOSTNAME="${_dns_label}.${_location}.cloudapp.azure.com"
+  HOSTNAME="${_dns_label}.${_location}.$(_azure_cloudapp_suffix)"
   info "Hostname from dns_label (${_ingress_controller}): $HOSTNAME"
   echo ""
 fi
 
 # AGIC: derive hostname from Application Gateway public IP FQDN (terraform output)
 if [[ -z "$HOSTNAME" && "$_ingress_controller" == "agic" ]]; then
-  _agw_fqdn=$(terraform -chdir="$INFRA_DIR" output -raw agw_public_ip_fqdn 2>/dev/null) || _agw_fqdn=""
+  _agw_fqdn=$(_tf_out agw_public_ip_fqdn) || _agw_fqdn=""
   if [[ -n "$_agw_fqdn" ]]; then
     HOSTNAME="$_agw_fqdn"
     info "Hostname from AGW public IP FQDN: $HOSTNAME"
@@ -160,9 +209,12 @@ if [[ -z "$HOSTNAME" ]]; then
   warn "No hostname found — set dns_label or langsmith_domain in terraform.tfvars"
   echo ""
   printf "  Enter hostname (e.g. langsmith.example.com): "
-  read -r HOSTNAME
+  read -r HOSTNAME || HOSTNAME=""
   if [[ -z "$HOSTNAME" ]]; then
+    echo ""
     fail "Hostname is required"
+    info "Set dns_label or langsmith_domain in terraform.tfvars and re-apply,"
+    info "or pipe the value in: printf '%s\\n' host.example.com | $(basename "$0")"
     exit 1
   fi
 fi
@@ -179,11 +231,25 @@ if [[ -z "$ADMIN_EMAIL" ]]; then
   fi
 fi
 
+if [[ -z "$ADMIN_EMAIL" && -n "${LANGSMITH_ADMIN_EMAIL:-}" ]]; then
+  ADMIN_EMAIL="$LANGSMITH_ADMIN_EMAIL"
+  info "Admin email (from LANGSMITH_ADMIN_EMAIL): $ADMIN_EMAIL"
+fi
+
 if [[ -z "$ADMIN_EMAIL" ]]; then
+  # `read` returns 1 at EOF and set -euo pipefail aborts the script there, so a
+  # headless run exits 1 with nothing printed. Tolerate the failure and report on
+  # the empty value instead, which also keeps `printf '...' | init-values.sh`
+  # working — several prompts below have no env override, so piped stdin is the
+  # only way to drive them.
   printf "  Initial org admin email: "
-  read -r ADMIN_EMAIL
+  read -r ADMIN_EMAIL || ADMIN_EMAIL=""
   if [[ -z "$ADMIN_EMAIL" ]]; then
+    echo ""
     fail "Admin email is required"
+    info "Supply it without a prompt using either:"
+    info "  export LANGSMITH_ADMIN_EMAIL=you@example.com"
+    info "  langsmith_admin_email = \"you@example.com\"  in terraform.tfvars, then re-apply"
     exit 1
   fi
 fi
@@ -198,7 +264,10 @@ if [[ "$_sizing_profile" == "default" ]]; then
   echo "    4) production — HA production (3+ replicas, higher CPU/mem)"
   echo ""
   printf "  Sizing choice [1]: "
-  read -r _sizing_choice
+  # EOF here is not an error: the block only runs when sizing_profile is already
+  # "default" in terraform.tfvars, so falling through to 1 preserves exactly what
+  # was configured rather than aborting a headless run.
+  read -r _sizing_choice || _sizing_choice=""
   case "${_sizing_choice:-1}" in
     2) _sizing_profile="minimum" ;;
     3) _sizing_profile="dev" ;;
@@ -211,14 +280,111 @@ fi
 _enable_deployments=$(_parse_tfvar "enable_deployments") || _enable_deployments="false"
 _enable_agent_builder=$(_parse_tfvar "enable_agent_builder") || _enable_agent_builder="false"
 _enable_insights=$(_parse_tfvar "enable_insights") || _enable_insights="false"
+_enable_fleet=$(_parse_tfvar "enable_fleet") || _enable_fleet="false"
+_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
+_enable_sso_oidc=$(_parse_tfvar "enable_sso_oidc") || _enable_sso_oidc="false"
+_enable_llm_gateway=$(_parse_tfvar "enable_llm_gateway") || _enable_llm_gateway="false"
+_enable_gateway_pii_redaction=$(_parse_tfvar "enable_gateway_pii_redaction") || _enable_gateway_pii_redaction="false"
 
 echo ""
 echo "  Product tier (from terraform.tfvars enable_* flags):"
 info "enable_deployments   = $_enable_deployments"
 info "enable_agent_builder = $_enable_agent_builder"
 info "enable_insights      = $_enable_insights"
+info "enable_polly         = $_enable_polly"
+info "enable_fleet         = $_enable_fleet"
+info "enable_smithdb       = $_enable_smithdb"
+info "enable_sso_oidc      = $_enable_sso_oidc"
+info "enable_llm_gateway   = $_enable_llm_gateway"
+info "enable_gateway_pii_redaction = $_enable_gateway_pii_redaction"
 echo ""
-echo "  To change: set enable_deployments / enable_agent_builder / enable_insights in terraform.tfvars → make init-values"
+echo "  To change: set enable_deployments / enable_agent_builder / enable_insights / enable_fleet in terraform.tfvars → make init-values"
+
+# ── LLM Gateway dependency guard ───────────────────────────────────────────
+# Checked here, before any values file is written, so a refused combination
+# leaves the existing files as they were.
+if [[ "$_enable_gateway_pii_redaction" == "true" && "$_enable_llm_gateway" != "true" ]]; then
+  fail "enable_gateway_pii_redaction = true requires enable_llm_gateway = true"
+  exit 1
+fi
+
+# ── Fleet dependency guards ────────────────────────────────────────────────
+# Fleet is the standalone successor to Agent Builder. It needs host-backend
+# (deployments) for its OAuth endpoints, and it must not run alongside the
+# legacy config.agentBuilder path — the two manage the same data with different
+# schemas.
+if [[ "$_enable_fleet" == "true" && "$_enable_deployments" != "true" ]]; then
+  fail "enable_fleet = true requires enable_deployments = true in terraform.tfvars"
+  exit 1
+fi
+if [[ "$_enable_fleet" == "true" && "$_enable_agent_builder" == "true" ]]; then
+  fail "enable_fleet and enable_agent_builder are mutually exclusive — Fleet replaces the legacy Agent Builder path. Set enable_agent_builder = false."
+  exit 1
+fi
+# Fleet needs the dedicated langsmith_fleet database, which infra only creates on
+# the external PostgreSQL server; the langsmith-fleet-postgres secret is likewise
+# only created for external Postgres. In-cluster Postgres has no fleet database, so
+# the deploy would fail later resolving the missing secret.
+if [[ "$_enable_fleet" == "true" && "$_postgres_source" != "external" ]]; then
+  fail "enable_fleet = true requires postgres_source = external in terraform.tfvars"
+  exit 1
+fi
+if [[ "$_enable_smithdb" != "true" && ("$_smithdb_ingestion_enabled" == "true" || "$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
+  fail "SmithDB integration gates require enable_smithdb = true"
+  exit 1
+fi
+if [[ "$_smithdb_ingestion_enabled" != "true" && ("$_smithdb_migration_enabled" == "true" || "$_smithdb_query_enabled" == "true") ]]; then
+  fail "smithdb_migration_enabled and smithdb_query_enabled require smithdb_ingestion_enabled = true"
+  exit 1
+fi
+
+# ── SSO/OIDC secret guard ───────────────────────────────────────────────────
+# Fail fast rather than let this surface later as a CreateContainerConfigError.
+# create-k8s-secrets.sh only adds oauth_client_id/secret/issuer_url to
+# langsmith-config-secret when they exist in Key Vault — but this script
+# unconditionally disables config.basicAuth the moment enable_sso_oidc is true,
+# regardless of Key Vault state. With no admin login path and secretKeyRef
+# optional: false on the missing key, backend/platformBackend would otherwise
+# just fail to start with no message pointing back at the actual cause.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  if ! KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) || [[ -z "$KV_NAME" ]]; then
+    KV_NAME=$(_derive_kv_name)
+  fi
+  _sso_timeout_bin=""
+  for _t in timeout gtimeout; do
+    if command -v "$_t" >/dev/null 2>&1; then _sso_timeout_bin="$_t"; break; fi
+  done
+  _sso_az() {
+    if [[ -n "$_sso_timeout_bin" ]]; then
+      "$_sso_timeout_bin" 10 az "$@"
+    else
+      az "$@"
+    fi
+  }
+  _sso_check() {
+    _sso_az keyvault secret show --vault-name "$KV_NAME" --name "$1" --query name --output tsv >/dev/null 2>&1
+  }
+  _sso_missing=""
+  for _key in langsmith-oauth-client-id langsmith-oauth-client-secret langsmith-oauth-issuer-url; do
+    _sso_check "$_key" || _sso_missing="$_sso_missing $_key"
+  done
+  if [[ -n "$_sso_missing" ]]; then
+    fail "enable_sso_oidc = true but the following Key Vault secrets are missing from '$KV_NAME':"
+    for _m in $_sso_missing; do
+      echo "         $_m" >&2
+    done
+    echo "" >&2
+    echo "       basicAuth is disabled the moment this flag is on, so without these," >&2
+    echo "       backend/platformBackend would fail to start (CreateContainerConfigError)" >&2
+    echo "       instead of failing here with a clear reason." >&2
+    echo "" >&2
+    echo "       Populate all three, then re-run:" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-client-id '<value>'" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-client-secret '<value>'" >&2
+    echo "         ./infra/scripts/manage-keyvault.sh set langsmith-oauth-issuer-url '<value>'" >&2
+    exit 1
+  fi
+fi
 
 # ── Generate values-overrides.yaml ────────────────────────────────────────
 echo ""
@@ -230,14 +396,19 @@ info "Generating values-overrides.yaml..."
 #   istio         → "istio"  (self-managed via Helm)
 #   istio-addon   → "istio"  (AKS managed add-on)
 #   agic          → "azure-application-gateway"  (IngressClass created by AKS add-on)
-#   envoy-gateway → ""     (uses Gateway API, not Ingress — configure manually)
-#   none          → ""       (bring your own)
+#   envoy-gateway → ""     (uses Gateway API, not Ingress — see the gateway block below)
+#   none          → ""       (the cluster's default IngressClass, or one set by
+#                             hand in this file, kept on re-run)
 case "$_ingress_controller" in
   istio|istio-addon) _ingress_class="istio" ;;
   nginx)             _ingress_class="nginx" ;;
   agic)              _ingress_class="azure-application-gateway" ;;
   *)                 _ingress_class="" ;;
 esac
+if [[ "$_ingress_controller" == "none" && -f "$OUT_FILE" ]]; then
+  _ingress_class=$(_values_ingress_class "$OUT_FILE")
+  [[ -n "$_ingress_class" ]] && info "Keeping ingressClassName from values-overrides.yaml: $_ingress_class"
+fi
 
 if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
   _ingress_block='ingress:
@@ -249,10 +420,56 @@ if [[ "$_tls_source" == "dns01" || "$_tls_source" == "letsencrypt" ]]; then
     - secretName: langsmith-tls
       hosts:
         - "'"${HOSTNAME}"'"'
+elif [[ "$_tls_source" == "existing" ]]; then
+  # The operator supplies the Secret (deploy.sh checks it before the Helm
+  # upgrade). No cert-manager annotation: nothing here issues or renews it.
+  _ingress_block='ingress:
+  enabled: true'"${_ingress_class:+
+  ingressClassName: \"${_ingress_class}\"}"'
+  tls:
+    - secretName: langsmith-tls
+      hosts:
+        - "'"${HOSTNAME}"'"'
 else
   _ingress_block='ingress:
   enabled: true'"${_ingress_class:+
   ingressClassName: \"${_ingress_class}\"}"
+fi
+
+# Build auth block — basicAuth (chart default) and oauth (SSO) are mutually
+# exclusive per chart validation. Client id/secret/issuer URL are never
+# written here: the chart reads them from the langsmith-config-secret K8s
+# secret (config.existingSecretName, set below) at keys oauth_client_id /
+# oauth_client_secret / oauth_issuer_url, which create-k8s-secrets.sh
+# populates from Key Vault. Works with any standard OIDC provider (Entra ID,
+# Okta, Auth0, Google Workspace, etc.) — nothing here is Entra-specific.
+# WARNING: only set enable_sso_oidc = true after the initial install —
+# confirm org-admin login with basic auth first. Enabling this before an
+# admin account exists locks you out of the UI the moment basicAuth is
+# disabled below. Set up SCIM (if you're using it) after this, not before —
+# SCIM's user matching depends on the OIDC provider this creates.
+if [[ "$_enable_sso_oidc" == "true" ]]; then
+  _auth_block='  basicAuth:
+    enabled: false
+  oauth:
+    enabled: true'
+else
+  _auth_block='  basicAuth:
+    enabled: true'
+fi
+
+# A CA bundle for endpoints a private CA signed. The chart (config.customCa)
+# mounts it in the pods that include langsmith.tlsVolumes: backend,
+# platform-backend, host-backend, the queues, listener, playground and the agent
+# features. The operator and the agent deployments it creates do not get it.
+_custom_ca_secret=$(_parse_tfvar "langsmith_custom_ca_secret_name") || _custom_ca_secret=""
+_custom_ca_key=$(_parse_tfvar "langsmith_custom_ca_secret_key") || _custom_ca_key="ca.crt"
+_custom_ca_block=""
+if [[ -n "$_custom_ca_secret" ]]; then
+  _custom_ca_block="
+  customCa:
+    secretName: \"${_custom_ca_secret}\"
+    secretKey: \"${_custom_ca_key}\""
 fi
 
 # Build postgres block
@@ -268,20 +485,54 @@ fi
 
 # Build redis block
 if [[ "$_redis_source" == "external" ]]; then
-  _redis_block='redis:
+  # terraform prints its "no outputs" warning to stdout and still exits 0, so check the
+  # value parses as a bool rather than trusting the read.
+  if [[ "$REDIS_CLUSTER_ENABLED" != "true" && "$REDIS_CLUSTER_ENABLED" != "false" ]]; then
+    fail "Could not read redis_cluster_enabled. Run terraform apply in $INFRA_DIR first."
+    exit 1
+  fi
+  if [[ "$REDIS_CLUSTER_ENABLED" == "true" ]]; then
+    # OSSCluster: the endpoint answers MOVED redirects, so the cluster client. Node
+    # URIs and password come from the secret's default keys. Needs chart 0.13.33+.
+    _redis_block='redis:
   external:
     enabled: true
     existingSecretName: "langsmith-redis-secret"
-    connectionUrlSecretKey: "connection_url"'
-  # AMR is an OSS cluster reached over TLS by hostname — LangSmith must use a
-  # standalone client (clusterSafeMode), not a cluster client (whose node-IP TLS
-  # verification fails). Classic cache leaves this false.
-  if [[ "$REDIS_SAFE_MODE" == "true" ]]; then
-    _redis_block="${_redis_block}
-    clusterSafeMode: true"
+    cluster:
+      enabled: true
+      tlsEnabled: true'
+  else
+    # EnterpriseCluster: one proxied endpoint — standalone client, cluster-safe ops only.
+    _redis_block='redis:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-redis-secret"
+    connectionUrlSecretKey: "connection_url"
+    clusterSafeMode: true'
   fi
 else
   _redis_block='# redis: in-cluster (managed by Helm chart)'
+fi
+
+# Build clickhouse block
+# Driven by clickhouse_source alone — not enable_insights. ClickHouse is the trace
+# and run store, so "external" must suppress the chart's ClickHouse StatefulSet
+# whether or not the insights add-on is on. The chart reads every connection field
+# (host, ports, user, password, db, tls) from the secret, so the values file only
+# carries the pointer to it.
+if [[ "$_clickhouse_source" == "external" ]]; then
+  _clickhouse_block='clickhouse:
+  external:
+    enabled: true
+    existingSecretName: "langsmith-clickhouse"'
+else
+  _clickhouse_block='# clickhouse: in-cluster (managed by Helm chart)'
+fi
+
+if [[ -n "$STORAGE_BLOB_ENDPOINT" ]]; then
+  _blob_endpoint_line="    azureStorageServiceUrlOverride: \"${STORAGE_BLOB_ENDPOINT}\""
+else
+  _blob_endpoint_line="    # azureStorageServiceUrlOverride: unset, commercial Azure (<account>.blob.core.windows.net)"
 fi
 
 cat > "$OUT_FILE" << EOF
@@ -289,30 +540,37 @@ cat > "$OUT_FILE" << EOF
 # Auto-generated by init-values.sh — edit to customize, re-run to refresh from terraform outputs.
 # values-overrides.yaml is gitignored — never commit it.
 #
-# Values chain: values.yaml (base) → this file → sizing overlay → addon overlays
+# Values chain: values.yaml (base) → this file → addon overlays → sizing overlay
+#
+# Generated from these terraform.tfvars values. deploy.sh reads them back and
+# stops the deploy if any has changed since this file was written — editing
+# terraform.tfvars does not regenerate this file. Re-run make init-values.
+$(_values_input_stamp)
 
 config:
   hostname: "${HOSTNAME}"
   authType: "mixed"
   initialOrgAdminEmail: "${ADMIN_EMAIL}"
   existingSecretName: "langsmith-config-secret"
-  basicAuth:
-    enabled: true
+${_auth_block}
   blobStorage:
     enabled: true
     engine: "Azure"
     azureStorageAccountName: "${STORAGE_ACCOUNT}"
     azureStorageContainerName: "${STORAGE_CONTAINER}"
+${_blob_endpoint_line}
   telemetry:
     usageReporting: true
   deployment:
     # Full URL used by the operator to build agent deployment endpoints.
     # Must include protocol — wrong value keeps deployments stuck in DEPLOYING state.
-    url: "${_protocol}://${HOSTNAME}"
+    url: "${_protocol}://${HOSTNAME}"${_custom_ca_block}
 
 ${_postgres_block}
 
 ${_redis_block}
+
+${_clickhouse_block}
 
 # ── Workload Identity — pods that access Azure Blob Storage ───────────────────
 # These service accounts are federated to the managed identity via AKS OIDC.
@@ -322,6 +580,8 @@ backend:
     labels:
       azure.workload.identity/use: "true"
   serviceAccount:
+    create: false
+    name: "${_langsmith_release_fullname}-backend"
     annotations:
       azure.workload.identity/client-id: "${WI_CLIENT_ID}"
 
@@ -415,6 +675,16 @@ else
   echo "istioGateway:"
   echo "  enabled: false"
 fi)
+
+# Chart 0.16 ships insights.enabled and polly.enabled as true. This module sets
+# config.existingSecretName, so the chart finds an encryption key and deploys both
+# agents without complaint — a base install would quietly grow workloads nobody
+# asked for. Make the terraform enable_* flags authoritative. The addon overlays
+# load after this file, so an enabled feature still turns itself back on.
+insights:
+  enabled: ${_enable_insights}
+polly:
+  enabled: ${_enable_polly}
 EOF
 
 pass "Generated: ${OUT_FILE}"
@@ -461,31 +731,76 @@ open('${_dst}', 'w').write(content)
 
 [[ "$_enable_deployments"   == "true" ]] && _copy_addon "agent-deploys"
 [[ "$_enable_agent_builder" == "true" ]] && _copy_addon "agent-builder"
+# Fleet reuses the agent_builder encryption key already in langsmith-config-secret
+# (see infra/scripts/create-k8s-secrets.sh) — no key injection needed here.
+[[ "$_enable_fleet"         == "true" ]] && _copy_addon "fleet"
 
-# Insights: generate file based on clickhouse_source
-# For in-cluster ClickHouse, just enable insights — no external connection block needed.
-# For external ClickHouse, copy the full example (requires manual ClickHouse config).
+# Insights: this overlay only turns the feature on. The ClickHouse connection is
+# configured in values-overrides.yaml from clickhouse_source, so insights no
+# longer decides whether ClickHouse runs in-cluster or points at an external one.
 if [[ "$_enable_insights" == "true" ]]; then
-  _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
-  if [[ "$_clickhouse_source" == "in-cluster" ]]; then
-    cat > "$VALUES_DIR/langsmith-values-insights.yaml" << 'INSIGHTS_EOF'
-# Insights — ClickHouse-backed analytics (in-cluster ClickHouse).
-# clickhouse_source = "in-cluster" — the Helm chart manages ClickHouse.
-# No external ClickHouse configuration needed.
+  cat > "$VALUES_DIR/langsmith-values-insights.yaml" << 'INSIGHTS_EOF'
+# Insights — ClickHouse-backed analytics.
+# Auto-generated by init-values.sh.
+#
+# ClickHouse connection (in-cluster vs external) lives in values-overrides.yaml,
+# driven by clickhouse_source in terraform.tfvars — not this file.
+#
 # Chart 0.15.1 removed config.insights → top-level insights block. encryptionKey read from
 # langsmith-config-secret (insights_encryption_key) via config.existingSecretName.
 insights:
   enabled: true
 INSIGHTS_EOF
-    pass "Generated: langsmith-values-insights.yaml (in-cluster ClickHouse mode)"
-  else
-    _copy_addon "insights"
-    warn "External ClickHouse: edit langsmith-values-insights.yaml and set host/credentials before deploying."
-  fi
+  pass "Generated: langsmith-values-insights.yaml"
 fi
 
-_enable_polly=$(_parse_tfvar "enable_polly") || _enable_polly="false"
 [[ "$_enable_polly"         == "true" ]] && _copy_addon "polly"
+
+# LLM Gateway — generated rather than copied, because it carries the Workload
+# Identity client ID. The longer ingress timeout for /gateway/ is not set here:
+# deploy.sh gives /gateway/ an Ingress of its own, so that no other path gets it
+# (see helm/scripts/llm-gateway-ingress.py). Both pods take
+# langsmith.commonEnv (the blob storage settings), so both get the identity label
+# and the service account annotation that k8s-cluster federates for them.
+# Presidio has an overlay of its own, gated by enable_gateway_pii_redaction in
+# deploy.sh, so turning redaction off takes effect at the next make deploy.
+_llm_gateway_file="$VALUES_DIR/langsmith-values-llm-gateway.yaml"
+if [[ "$_enable_llm_gateway" == "true" ]]; then
+  {
+    cat << LLMGW_EOF
+# LLM Gateway (chart agentGateway, private beta). Auto-generated by init-values.sh
+# from enable_llm_gateway in terraform.tfvars.
+# Clients: https://${HOSTNAME}/gateway/v1 (OpenAI formats) or /gateway (Anthropic).
+agentGateway:
+  enabled: true
+  deployment:
+    labels:
+      azure.workload.identity/use: "true"
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "${WI_CLIENT_ID}"
+LLMGW_EOF
+  } > "$_llm_gateway_file"
+  pass "Generated: langsmith-values-llm-gateway.yaml"
+  if [[ "$_enable_gateway_pii_redaction" == "true" ]]; then
+    cat > "$VALUES_DIR/langsmith-values-gateway-pii.yaml" << LLMGW_EOF
+# LLM Gateway PII redaction (chart presidioAnalyzer). Auto-generated by
+# init-values.sh from enable_gateway_pii_redaction in terraform.tfvars.
+presidioAnalyzer:
+  enabled: true
+  deployment:
+    labels:
+      azure.workload.identity/use: "true"
+  serviceAccount:
+    annotations:
+      azure.workload.identity/client-id: "${WI_CLIENT_ID}"
+LLMGW_EOF
+    pass "Generated: langsmith-values-gateway-pii.yaml"
+  fi
+  if [[ "$_ingress_controller" == "envoy-gateway" || "$_ingress_controller" == "none" ]]; then
+    warn "enable_llm_gateway with ingress_controller = ${_ingress_controller}: model calls longer than that controller's request timeout will fail at the ingress. Raise it there to 900 s to match the gateway."
+  fi
+fi
 
 # Patch tlsEnabled in agent-deploys — derive from tls_certificate_source.
 # Example file defaults to false; patch so operator builds https:// agent URLs.
@@ -493,6 +808,202 @@ _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 if [[ -f "$_deploys_file" && "$_enable_deployments" == "true" ]]; then
   if [[ "$_tls_source" == "letsencrypt" || "$_tls_source" == "acm" ]]; then
     sed -i.bak 's/tlsEnabled: false/tlsEnabled: true/' "$_deploys_file" && rm -f "$_deploys_file.bak"
+  fi
+fi
+
+# ── SmithDB ───────────────────────────────────────────────────────────────
+if [[ "$_enable_smithdb" == "true" ]]; then
+  _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
+  _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
+
+  if [[ ! -f "$_smithdb_base" ]]; then
+    cp "$EXAMPLES_DIR/langsmith-values-smithdb.yaml" "$_smithdb_base"
+    pass "Generated: langsmith-values-smithdb.yaml"
+  fi
+
+  if [[ -z "$SMITHDB_STORAGE_ACCOUNT" || -z "$SMITHDB_STORAGE_CONTAINER" || -z "$SMITHDB_WI_CLIENT_ID" || -z "$SMITHDB_CACHE_STORAGE_CLASS" ]]; then
+    fail "enable_smithdb = true but the SmithDB Terraform outputs are missing"
+    action "Run terraform apply with enable_smithdb = true, then re-run make init-values"
+    exit 1
+  fi
+
+  # Outside the public cloud the chart needs the account's blob endpoint: left
+  # empty, SmithDB falls back to the commercial blob suffix and cannot reach a
+  # Government account.
+  if [[ "$AZURE_ENVIRONMENT" != "public" && -z "$SMITHDB_STORAGE_BLOB_ENDPOINT" ]]; then
+    fail "enable_smithdb = true in Azure ${AZURE_ENVIRONMENT} but the smithdb_storage_blob_endpoint Terraform output is missing"
+    action "Run terraform apply so the output is recorded, then re-run make init-values"
+    exit 1
+  fi
+
+  _smithdb_password_secret_key='"smithdb_metastore_db_password"'
+  _smithdb_iam_auth_provider='""'
+  _smithdb_iam_username='""'
+  if [[ "$SMITHDB_METASTORE_AUTH_MODE" == "entra" ]]; then
+    if [[ -z "$SMITHDB_METASTORE_USERNAME" ]]; then
+      fail "SmithDB Entra authentication is enabled but its metastore username output is missing"
+      exit 1
+    fi
+    _smithdb_password_secret_key='""'
+    _smithdb_iam_auth_provider='"azure"'
+    _smithdb_iam_username="\"$SMITHDB_METASTORE_USERNAME\""
+  fi
+
+  cat > "$_smithdb_overrides" <<SMITHDB_YAML
+# Auto-generated by init-values.sh — do not edit auto-filled fields manually.
+smithdb:
+  cache:
+    storageClassName: "${SMITHDB_CACHE_STORAGE_CLASS}"
+  serviceAccount:
+    create: false
+    name: "${_langsmith_release_fullname}-smithdb"
+    annotations:
+      azure.workload.identity/client-id: "${SMITHDB_WI_CLIENT_ID}"
+  config:
+    existingSecretName: "${SMITHDB_METASTORE_SECRET}"
+    objectStore:
+      type: "azure"
+      bucket: "${SMITHDB_STORAGE_CONTAINER}"
+      azure:
+        accountName: "${SMITHDB_STORAGE_ACCOUNT}"
+        endpoint: "${SMITHDB_STORAGE_BLOB_ENDPOINT}"
+        accessKeySecretKey: ""
+    metastore:
+      hostSecretKey: "smithdb_metastore_db_host"
+      databaseSecretKey: "smithdb_metastore_db_name"
+      usernameSecretKey: "smithdb_metastore_db_username"
+      passwordSecretKey: ${_smithdb_password_secret_key}
+      iamAuthProvider: ${_smithdb_iam_auth_provider}
+      iamUsername: ${_smithdb_iam_username}
+      port: "5432"
+      useSsl: true
+  query:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+  ingestion:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+  compaction:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+  compactionWorker:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+  clusterManager:
+    deployment:
+      labels:
+        azure.workload.identity/use: "true"
+  metastoreMigration:
+    job:
+      labels:
+        azure.workload.identity/use: "true"
+  migration:
+    job:
+      labels:
+        azure.workload.identity/use: "true"
+  langsmith:
+    ingestion:
+      enabled: ${_smithdb_ingestion_enabled}
+    migration:
+      enabled: ${_smithdb_migration_enabled}
+    query:
+      enabled: ${_smithdb_query_enabled}
+SMITHDB_YAML
+  pass "Generated: langsmith-values-smithdb-overrides.yaml"
+fi
+
+# ── External ClickHouse secret ────────────────────────────────────────────
+# Terraform does not provision ClickHouse, so the connection details come from
+# whoever runs it (Altinity operator, LangChain Managed, Azure Marketplace). The
+# chart resolves all seven fields through secretKeyRef with optional=false, so a
+# missing secret or a missing key leaves every LangSmith pod in
+# CreateContainerConfigError. Collect them here; deploy.sh re-checks before deploy.
+#
+# Runs last on purpose: it is the only part of this script that needs cluster
+# access, and bailing out here must not cost the caller the generated values files.
+if [[ "$_clickhouse_source" == "external" ]]; then
+  header "External ClickHouse"
+
+  # Probe before prompting — discovering an unreachable cluster after the
+  # operator has typed a password is a bad trade.
+  if ! kubectl auth can-i create secret -n "$NAMESPACE" &>/dev/null; then
+    warn "clickhouse_source = \"external\" needs a langsmith-clickhouse secret, but kubectl cannot create secrets in namespace $NAMESPACE."
+    info "Values files are written and complete — only the secret is outstanding."
+    action "Run: make kubeconfig   (then re-run: make init-values)"
+    info "make deploy will refuse to run until the secret exists."
+  elif kubectl get secret langsmith-clickhouse -n "$NAMESPACE" &>/dev/null; then
+    pass "langsmith-clickhouse secret already exists — leaving it as-is"
+    info "To re-enter: kubectl delete secret langsmith-clickhouse -n $NAMESPACE && make init-values"
+  else
+    echo ""
+    info "clickhouse_source = \"external\" — enter the connection details for your ClickHouse."
+    echo ""
+    printf "  Host: "
+    read -r _ch_host
+    if [[ -z "$_ch_host" ]]; then
+      fail "Host is required."
+      exit 1
+    fi
+    printf "  HTTP port [8123]: "
+    read -r _ch_port
+    _ch_port="${_ch_port:-8123}"
+    printf "  Native port [9000]: "
+    read -r _ch_native_port
+    _ch_native_port="${_ch_native_port:-9000}"
+    if ! [[ "$_ch_port" =~ ^[0-9]+$ && "$_ch_native_port" =~ ^[0-9]+$ ]]; then
+      fail "Ports must be numeric."
+      exit 1
+    fi
+    printf "  Database [default]: "
+    read -r _ch_db
+    _ch_db="${_ch_db:-default}"
+    printf "  Username [default]: "
+    read -r _ch_user
+    _ch_user="${_ch_user:-default}"
+    printf "  Password: "
+    read -rs _ch_pass
+    echo ""
+    if [[ -z "$_ch_pass" ]]; then
+      fail "Password is required."
+      exit 1
+    fi
+    printf "  TLS? [Y/n]: "
+    read -r _ch_tls
+    if [[ "${_ch_tls:-Y}" =~ ^[Nn] ]]; then _ch_tls_val="false"; else _ch_tls_val="true"; fi
+
+    # The password goes through a 0600 temp file, never --from-literal: argv is
+    # world-readable in the process list for as long as kubectl runs.
+    _ch_pass_file=$(mktemp "${TMPDIR:-/tmp}/langsmith-ch.XXXXXX")
+    trap 'rm -f "$_ch_pass_file"' EXIT
+    printf '%s' "$_ch_pass" > "$_ch_pass_file"
+    unset _ch_pass
+
+    echo ""
+    # Plain create, not create --dry-run | apply: the exists-check above already
+    # ruled out an update, and this keeps kubectl's own error message intact.
+    if _ch_err=$(kubectl create secret generic langsmith-clickhouse -n "$NAMESPACE" \
+      --from-literal=clickhouse_host="$_ch_host" \
+      --from-literal=clickhouse_port="$_ch_port" \
+      --from-literal=clickhouse_native_port="$_ch_native_port" \
+      --from-literal=clickhouse_user="$_ch_user" \
+      --from-literal=clickhouse_db="$_ch_db" \
+      --from-literal=clickhouse_tls="$_ch_tls_val" \
+      --from-file=clickhouse_password="$_ch_pass_file" 2>&1 >/dev/null); then
+      pass "Created secret langsmith-clickhouse in namespace $NAMESPACE"
+      info "${_ch_user}@${_ch_host}:${_ch_port} (native ${_ch_native_port}), db=${_ch_db}, tls=${_ch_tls_val}"
+    else
+      fail "Could not create the langsmith-clickhouse secret."
+      [[ -n "$_ch_err" ]] && info "kubectl: ${_ch_err}"
+      action "Fix the error above and re-run: make init-values"
+      exit 1
+    fi
+
+    rm -f "$_ch_pass_file"
+    trap - EXIT
   fi
 fi
 

@@ -2,19 +2,40 @@
 # Credentials are passed in from the root module via variables (not from a local
 # kubeconfig) so this module works in CI/CD pipelines without file system access.
 
+# On an Entra ID cluster (kube_auth = "entra") the client certificate is empty and
+# the providers sign in through kubelogin with the caller's az session instead.
+
 provider "kubernetes" {
   host                   = var.host
-  client_certificate     = base64decode(var.client_certificate)
-  client_key             = base64decode(var.client_key)
+  client_certificate     = var.kube_auth == "entra" ? null : base64decode(var.client_certificate)
+  client_key             = var.kube_auth == "entra" ? null : base64decode(var.client_key)
   cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
+
+  dynamic "exec" {
+    for_each = var.kube_auth == "entra" ? [1] : []
+    content {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "kubelogin"
+      args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
+    }
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = var.host
-    client_certificate     = base64decode(var.client_certificate)
-    client_key             = base64decode(var.client_key)
+    client_certificate     = var.kube_auth == "entra" ? null : base64decode(var.client_certificate)
+    client_key             = var.kube_auth == "entra" ? null : base64decode(var.client_key)
     cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
+
+    dynamic "exec" {
+      for_each = var.kube_auth == "entra" ? [1] : []
+      content {
+        api_version = "client.authentication.k8s.io/v1beta1"
+        command     = "kubelogin"
+        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
+      }
+    }
   }
 }
 
@@ -45,6 +66,54 @@ resource "kubernetes_service_account_v1" "langsmith" {
     annotations = {
       "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
     }
+  }
+}
+
+# Helm pre-install hooks run before ordinary chart resources are created. Own
+# the hook ServiceAccounts here so the Jobs can start on the first install.
+resource "kubernetes_service_account_v1" "backend" {
+  metadata {
+    name      = var.backend_service_account_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    annotations = {
+      "azure.workload.identity/client-id" = var.blob_managed_identity_client_id
+    }
+  }
+}
+
+resource "kubernetes_service_account_v1" "smithdb" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = var.smithdb_service_account_name
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+    annotations = {
+      "azure.workload.identity/client-id" = var.smithdb_managed_identity_client_id
+    }
+  }
+}
+
+# SmithDB's disk-backed caches use per-pod generic ephemeral PVCs. Premium SSD
+# v2 exposes provisioned IOPS and throughput independently of volume capacity,
+# so the chart's 100-200 GiB cache sizes can meet SmithDB's performance target
+# without being inflated solely to buy more disk performance.
+resource "kubernetes_storage_class_v1" "smithdb_cache" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name = var.smithdb_cache_storage_class_name
+  }
+
+  storage_provisioner    = "disk.csi.azure.com"
+  reclaim_policy         = "Delete"
+  volume_binding_mode    = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+
+  parameters = {
+    skuName           = "PremiumV2_LRS"
+    cachingMode       = "None"
+    DiskIOPSReadWrite = tostring(var.smithdb_cache_disk_iops)
+    DiskMBpsReadWrite = tostring(var.smithdb_cache_disk_throughput)
   }
 }
 
@@ -118,8 +187,9 @@ resource "kubernetes_network_policy_v1" "langsmith_default_deny" {
 # Namespace the selected ingress controller's data plane runs in. The
 # NetworkPolicy below must allow ingress from this namespace, or the controller's
 # proxy cannot reach LangSmith pods (default-deny drops it → 503 with ~10s
-# connection timeout). AGIC is intentionally excluded: Application Gateway routes
-# from its dedicated subnet (an ip_block), not an in-cluster pod namespace.
+# connection timeout). AGIC resolves to "" and is allowed by ip_block instead:
+# Application Gateway routes from its dedicated subnet, not an in-cluster pod
+# namespace, so there is no namespace to name here.
 locals {
   ingress_namespace = lookup({
     "nginx"         = "ingress-nginx"
@@ -157,6 +227,22 @@ resource "kubernetes_network_policy_v1" "langsmith_allow_internal" {
       }
     }
 
+    # Application Gateway subnet — the AGIC counterpart to the namespace rule
+    # above. In Azure CNI mode the gateway puts pod IPs straight into its backend
+    # pool and connects from its own subnet, so there is no source namespace to
+    # match and only an address range identifies it. Azure requires that subnet be
+    # exclusive to the gateway, so the range admits nothing else.
+    dynamic "ingress" {
+      for_each = var.ingress_controller == "agic" ? var.agic_subnet_cidrs : []
+      content {
+        from {
+          ip_block {
+            cidr = ingress.value
+          }
+        }
+      }
+    }
+
     ingress {
       from {
         namespace_selector {
@@ -188,12 +274,33 @@ resource "kubernetes_secret_v1" "postgres" {
   }
 
   data = {
-    connection_url    = var.postgres_connection_url
+    connection_url = var.postgres_connection_url
     # POSTGRES_URI and POSTGRES_PASSWORD are required by the listener's deploy_image
     # task (host.platforms.k8s_operator.database_k8s.add_postgres_uri_secret) to
     # provision per-deployment databases for LangSmith Deployments (Pass 3+).
     POSTGRES_URI      = var.postgres_connection_url
     POSTGRES_PASSWORD = var.postgres_admin_password
+  }
+
+  type = "Opaque"
+}
+
+# Fleet Postgres connection URL — the dedicated langsmith_fleet database.
+# Referenced by the chart via fleet.postgres.external.existingSecretName. Only the
+# Postgres secret is created for Fleet: its Redis is the chart's in-cluster bundled
+# StatefulSet (Azure Managed Redis can't provide the logical-DB isolation the
+# AWS/GCP Fleet uses, and Fleet has no clusterSafeMode knob), so there is no
+# langsmith-fleet-redis secret.
+resource "kubernetes_secret_v1" "fleet_postgres" {
+  count = var.enable_fleet && var.use_external_postgres ? 1 : 0
+
+  metadata {
+    name      = "langsmith-fleet-postgres"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = {
+    postgres_connection_url = var.fleet_postgres_connection_url
   }
 
   type = "Opaque"
@@ -209,9 +316,32 @@ resource "kubernetes_secret_v1" "redis" {
     namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
   }
 
+  # All three keys in both modes — the chart reads only the pair its mode needs, so
+  # switching modes is a values-file edit, not a terraform apply.
   data = {
-    connection_url = var.redis_connection_url
+    connection_url          = var.redis_connection_url
+    redis_cluster_node_uris = var.redis_cluster_node_uris
+    redis_cluster_password  = var.redis_cluster_password
   }
+
+  type = "Opaque"
+}
+
+resource "kubernetes_secret_v1" "smithdb_metastore" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-metastore"
+    namespace = kubernetes_namespace_v1.langsmith.metadata[0].name
+  }
+
+  data = merge({
+    smithdb_metastore_db_host     = var.smithdb_metastore_host
+    smithdb_metastore_db_name     = var.smithdb_metastore_database
+    smithdb_metastore_db_username = var.smithdb_metastore_username
+    }, var.smithdb_metastore_password == null ? {} : {
+    smithdb_metastore_db_password = var.smithdb_metastore_password
+  })
 
   type = "Opaque"
 }
@@ -235,10 +365,20 @@ resource "kubernetes_secret_v1" "license" {
 
 # ── cert-manager ──────────────────────────────────────────────────────────────
 # TLS automation infrastructure. Manages Let's Encrypt certificates.
-# ClusterIssuers are applied separately via:
-#   bash helm/scripts/apply-cluster-issuers.sh
+# ClusterIssuers are applied separately by helm/scripts/deploy.sh.
+
+# Orders cert-manager after the Envoy Gateway release. cert-manager looks for the
+# Gateway API CRDs only at startup, so one started before them never serves
+# Gateways even with the feature gate below.
+resource "terraform_data" "gateway_api_crds" {
+  input = var.envoy_gateway_version
+}
 
 resource "helm_release" "cert_manager" {
+  count = var.install_cert_manager ? 1 : 0
+
+  depends_on = [terraform_data.gateway_api_crds]
+
   name             = "cert-manager"
   namespace        = "cert-manager"
   create_namespace = true
@@ -269,6 +409,18 @@ resource "helm_release" "cert_manager" {
     value = "256Mi"
   }
 
+  # Envoy Gateway: the HTTP-01 gatewayHTTPRoute solver, and the Gateway shim that
+  # issues the certificate a Gateway's cluster-issuer annotation asks for, both
+  # need Gateway API support. On the pinned v1.14 that is this feature gate;
+  # v1.15 and later replace it with config.enableGatewayAPI.
+  dynamic "set" {
+    for_each = var.ingress_controller == "envoy-gateway" ? [1] : []
+    content {
+      name  = "featureGates"
+      value = "ExperimentalGatewayAPISupport=true"
+    }
+  }
+
   # DNS-01 via Azure Workload Identity: annotate the cert-manager service account
   # with the Managed Identity client ID so it can call the Azure DNS API.
   # The federated credential (created in k8s-cluster module) allows the OIDC
@@ -290,56 +442,19 @@ resource "helm_release" "cert_manager" {
   }
 }
 
-# HTTP-01 ClusterIssuer is NOT created here.
+# No ClusterIssuer is created here, for either HTTP-01 or DNS-01.
 # kubernetes_manifest requires a live API connection during plan, which fails on fresh
-# deploy (no cluster exists yet). It is applied by helm/scripts/deploy.sh instead,
-# after the cluster is up, via kubectl apply.
-
-# DNS-01 ClusterIssuer — created by Terraform when tls_certificate_source = "dns01".
-# Uses Azure DNS + Workload Identity: no static service principal needed.
-# cert-manager controller calls the Azure DNS API to create/delete TXT records
-# for ACME challenge verification.
-resource "kubernetes_manifest" "cluster_issuer_dns01" {
-  count = var.tls_certificate_source == "dns01" ? 1 : 0
-
-  manifest = {
-    apiVersion = "cert-manager.io/v1"
-    kind       = "ClusterIssuer"
-    metadata = {
-      name = "letsencrypt-prod"
-    }
-    spec = {
-      acme = {
-        server = "https://acme-v02.api.letsencrypt.org/directory"
-        email  = var.letsencrypt_email
-        privateKeySecretRef = {
-          name = "letsencrypt-prod-account-key"
-        }
-        solvers = [{
-          dns01 = {
-            azureDNS = {
-              subscriptionID    = var.subscription_id
-              resourceGroupName = var.dns_resource_group_name
-              hostedZoneName    = var.dns_zone_name
-              environment       = "AzurePublicCloud"
-              managedIdentity = {
-                clientID = var.cert_manager_identity_client_id
-              }
-            }
-          }
-        }]
-      }
-    }
-  }
-
-  depends_on = [helm_release.cert_manager]
-}
+# deploy (no cluster exists yet). Both issuers are applied by helm/scripts/deploy.sh
+# after the cluster is up, via kubectl apply. The DNS-01 issuer needs the pod labels
+# and service account annotation set on the cert-manager release above.
 
 # ── KEDA ──────────────────────────────────────────────────────────────────────
 # Kubernetes Event-Driven Autoscaling. Scales LangSmith queue workers
 # based on Redis queue depth.
 
 resource "helm_release" "keda" {
+  count = var.install_keda ? 1 : 0
+
   name             = "keda"
   namespace        = "keda"
   create_namespace = true

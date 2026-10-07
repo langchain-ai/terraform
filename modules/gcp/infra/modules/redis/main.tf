@@ -22,7 +22,7 @@ resource "google_redis_instance" "langsmith" {
 
   # Redis configuration
   redis_configs = {
-    maxmemory-policy       = "allkeys-lru"
+    maxmemory-policy       = var.maxmemory_policy
     notify-keyspace-events = "Ex"
   }
 
@@ -37,10 +37,19 @@ resource "google_redis_instance" "langsmith" {
     }
   }
 
+  dynamic "persistence_config" {
+    for_each = var.rdb_snapshot_period == null ? [] : [var.rdb_snapshot_period]
+
+    content {
+      persistence_mode    = "RDB"
+      rdb_snapshot_period = persistence_config.value
+    }
+  }
+
   # Labels
-  labels = merge(var.labels, {
+  labels = merge({
     "component" = "cache"
-  })
+  }, var.labels)
 
   lifecycle {
     prevent_destroy = false
@@ -73,7 +82,7 @@ resource "google_redis_instance" "langsmith_protected" {
 
   # Redis configuration
   redis_configs = {
-    maxmemory-policy       = "allkeys-lru"
+    maxmemory-policy       = var.maxmemory_policy
     notify-keyspace-events = "Ex"
   }
 
@@ -88,10 +97,19 @@ resource "google_redis_instance" "langsmith_protected" {
     }
   }
 
+  dynamic "persistence_config" {
+    for_each = var.rdb_snapshot_period == null ? [] : [var.rdb_snapshot_period]
+
+    content {
+      persistence_mode    = "RDB"
+      rdb_snapshot_period = persistence_config.value
+    }
+  }
+
   # Labels
-  labels = merge(var.labels, {
+  labels = merge({
     "component" = "cache"
-  })
+  }, var.labels)
 
   lifecycle {
     prevent_destroy = true

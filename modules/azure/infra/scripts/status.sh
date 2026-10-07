@@ -22,7 +22,6 @@ source "$SCRIPT_DIR/_common.sh"
 AZURE_DIR="$INFRA_DIR/.."
 HELM_DIR="$AZURE_DIR/helm"
 VALUES_DIR="$HELM_DIR/values"
-APP_DIR="$AZURE_DIR/app"
 
 QUICK=false
 [[ "${1:-}" == "--quick" ]] && QUICK=true
@@ -37,7 +36,7 @@ header "1. Configuration (terraform.tfvars)"
 
 if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   pass "terraform.tfvars exists"
-  _identifier=$(_read_tfvar identifier)
+  _name_prefix=$(_read_tfvar name_prefix)
   _environment=$(_read_tfvar environment)
   _location=$(_read_tfvar location)
   _subscription=$(_read_tfvar subscription_id)
@@ -45,10 +44,12 @@ if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _pg_source=$(_read_tfvar postgres_source)
   _redis_source=$(_read_tfvar redis_source)
   _sizing=$(_read_tfvar sizing_profile)
-  _kv_name="langsmith-kv${_identifier}"
+  # status.sh reports rather than acts, so a missing name is blank here instead
+  # of fatal; the Key Vault section below already handles an empty name.
+  _kv_name=$(_derive_kv_name) || _kv_name=""
 
   if [[ -n "$_subscription" ]]; then
-    pass "Required fields: subscription_id set  identifier=${_identifier:-'(empty)'}  environment=${_environment:-dev}"
+    pass "Required fields: subscription_id set  name_prefix=${_name_prefix:-'(empty)'}  environment=${_environment:-${_name_prefix:-dev}}"
   else
     fail "Missing required field: subscription_id"
     action "Edit infra/terraform.tfvars — fill in subscription_id"
@@ -76,8 +77,8 @@ if [[ -f "$_secrets_file" ]]; then
   [[ -n "$_pg_pw" ]] && pass "postgres_admin_password is set" || fail "postgres_admin_password is empty"
 else
   fail "secrets.auto.tfvars not found"
-  action "bash infra/setup-env.sh"
-  set_next "bash infra/setup-env.sh"
+  action "make setup-env"
+  set_next "make setup-env"
 fi
 
 # ── 3. Azure Credentials ──────────────────────────────────────────────────────
@@ -111,11 +112,11 @@ header "4. Key Vault Secrets (${_kv_name:-?})"
 if [[ "$QUICK" == "true" ]]; then
   skip "Skipped (--quick mode)"
 elif [[ -z "${_kv_name:-}" || "$_kv_name" == "langsmith-kv" ]]; then
-  skip "Cannot check — identifier not set in terraform.tfvars"
+  skip "Cannot check — name_prefix not set in terraform.tfvars"
 elif ! az keyvault show --name "$_kv_name" --output none 2>/dev/null; then
   skip "Key Vault '${_kv_name}' not found (created by terraform apply)"
-  action "terraform -chdir=infra apply"
-  set_next "terraform -chdir=infra apply"
+  action "make apply"
+  set_next "make apply"
 else
   _required_kv_secrets=(
     langsmith-license-key
@@ -151,8 +152,8 @@ else
   done
 
   if [[ "$_kv_ok" == "false" ]]; then
-    action "bash infra/setup-env.sh  (re-run after terraform apply)"
-    set_next "Resolve missing Key Vault secrets"
+    action "make seed-secrets  (writes the app secrets into Key Vault)"
+    set_next "make seed-secrets"
   fi
 fi
 
@@ -228,13 +229,28 @@ else
       fi
     fi
 
-    # Bootstrap components
-    for ns in cert-manager keda ingress-nginx; do
+    # Bootstrap components, plus the namespace of the ingress controller in use.
+    # agic and none run no controller pods in the cluster.
+    _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+    case "$_ingress_controller" in
+      envoy-gateway) _ingress_ns="envoy-gateway-system" ;;
+      nginx)         _ingress_ns="ingress-nginx" ;;
+      istio)         _ingress_ns="istio-system" ;;
+      istio-addon)   _ingress_ns="aks-istio-ingress" ;;
+      *)             _ingress_ns="" ;;
+    esac
+    for ns in cert-manager keda $_ingress_ns; do
       if kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -v "Running\|Completed" | grep -q .; then
         warn "$ns: some pods not Running"
       else
-        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || echo 0)
-        pass "$ns: ${_running_count} pod(s) Running"
+        _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || true)
+        # A cluster that already ran cert-manager or KEDA (install_* = false) may
+        # run it in another namespace, so an empty one here is not a pass.
+        if [[ "$_running_count" == "0" ]]; then
+          warn "$ns: no pods Running"
+        else
+          pass "$ns: ${_running_count} pod(s) Running"
+        fi
       fi
     done
   else
@@ -322,6 +338,16 @@ else
   else
     skip "langsmith-ksa WI annotation not set (set by Terraform k8s-bootstrap)"
   fi
+
+  _smithdb_ingestion=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_INGESTION_ENABLED}' 2>/dev/null) || _smithdb_ingestion=""
+  _smithdb_query=$(kubectl get configmap langsmith-config -n "$_NAMESPACE" \
+    -o jsonpath='{.data.SMITHDB_QUERY_ENABLED}' 2>/dev/null) || _smithdb_query=""
+  if [[ -n "$_smithdb_ingestion" || -n "$_smithdb_query" ]]; then
+    info "SmithDB status: ingestion=${_smithdb_ingestion:-not set}  query=${_smithdb_query:-not set}"
+  else
+    skip "SmithDB status — not present in langsmith-config"
+  fi
 fi
 
 # ── 9. Helm Release ───────────────────────────────────────────────────────────
@@ -387,8 +413,8 @@ else
   fi
 
   # Ingress LoadBalancer IP — check the right service per ingress_controller
-  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="nginx"
-  case "${_ingress_controller:-nginx}" in
+  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+  case "${_ingress_controller:-envoy-gateway}" in
     nginx)
       _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
@@ -396,7 +422,12 @@ else
     istio)
       _lb_svc="istio-ingressgateway"; _lb_ns="istio-system" ;;
     envoy-gateway)
-      _lb_svc="envoy-langsmith-langsmith-gateway"; _lb_ns="langsmith" ;;
+      # Envoy Gateway names the proxy Service with a hash suffix; find it by its Gateway.
+      _lb_ns="envoy-gateway-system"
+      _lb_svc=$(kubectl get svc -n "$_lb_ns" \
+        -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || _lb_svc=""
+      [[ -z "$_lb_svc" ]] && skip "Ingress IP (envoy-gateway): no proxy Service for langsmith-gateway yet (run make deploy)" ;;
     *)
       _lb_svc=""; _lb_ns="" ;;
   esac
@@ -450,8 +481,12 @@ else
     fi
   fi
 
-  # Ingress and TLS certificate
-  kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  # Ingress (or Gateway API routes) and TLS certificate
+  if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+    kubectl get gateway,httproute -n "$_NAMESPACE" 2>/dev/null || true
+  else
+    kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  fi
   CERT_STATUS=$(kubectl get certificate -n "$_NAMESPACE" --no-headers 2>/dev/null) || CERT_STATUS=""
   if [[ -n "$CERT_STATUS" ]]; then
     echo "$CERT_STATUS" | while read -r line; do
@@ -476,37 +511,6 @@ else
       set_next "make k8s-secrets"
     fi
   fi
-fi
-
-# ── 10. Terraform Helm App (alternative Pass 2 path) ─────────────────────────
-header "10. Terraform Helm App (alternative path)"
-
-if [[ -d "$APP_DIR" ]]; then
-  if [[ -f "$APP_DIR/infra.auto.tfvars.json" ]]; then
-    pass "infra.auto.tfvars.json exists (make init-app was run)"
-  else
-    skip "infra.auto.tfvars.json — not generated"
-    action "make init-app  (if using Terraform Helm path instead of scripts)"
-  fi
-
-  _app_output=""
-  if [[ -d "$APP_DIR/.terraform" ]]; then
-    _app_output=$(terraform -chdir="$APP_DIR" output -json 2>/dev/null) || _app_output=""
-  fi
-
-  if [[ -n "$_app_output" ]] && echo "$_app_output" | grep -q '"value"'; then
-    pass "app/ terraform — applied"
-    _app_chart=$(echo "$_app_output" | grep -A2 '"helm_chart_version"' \
-      | grep '"value"' | sed 's/.*"value":[[:space:]]*"\(.*\)".*/\1/') || _app_chart=""
-    [[ -n "$_app_chart" ]] && info "Chart version: ${_app_chart}"
-  elif [[ -d "$APP_DIR/.terraform" ]]; then
-    skip "app/ terraform — initialized but not applied"
-    action "make apply-app"
-  else
-    skip "app/ terraform — not initialized (using shell deploy path, or not started)"
-  fi
-else
-  skip "app/ directory not present"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

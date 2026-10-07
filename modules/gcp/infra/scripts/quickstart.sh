@@ -12,6 +12,16 @@
 #   ./infra/scripts/quickstart.sh
 #
 # Also available as: make quickstart
+# Sourced directly, the `set -euo pipefail` below would leak into the caller's
+# shell and leave it armed to exit on the next non-zero command, and any `exit`
+# here would close that shell outright. So when sourced, hand off to a child
+# process and return its status - `source` then behaves exactly like running it.
+# Keep this above `set`.
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  bash "${BASH_SOURCE[0]}" ${@+"$@"}
+  return $?
+fi
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -284,8 +294,6 @@ _ask_choice "ClickHouse:" \
 
 CH_SOURCE="in-cluster"
 CH_HOST=""
-CH_PASSWORD=""
-CH_TLS="true"
 [[ "$_CHOICE" == "2" ]] && CH_SOURCE="langsmith-managed"
 
 if [[ "$PROFILE" == "prod" && "$CH_SOURCE" == "in-cluster" ]]; then
@@ -298,8 +306,12 @@ if [[ "$CH_SOURCE" != "in-cluster" ]]; then
   echo ""
   _ask "ClickHouse host" ""
   CH_HOST="$_REPLY"
-  _ask "ClickHouse password (or set TF_VAR_clickhouse_password later)" ""
-  CH_PASSWORD="$_REPLY"
+  # Not prompted for: a password belongs in the environment, not in tfvars.
+  # infra/main.tf requires it whenever clickhouse_source != "in-cluster", so
+  # apply hard-fails without it. Keep this loud.
+  echo ""
+  _yellow "REQUIRED"; printf ": export TF_VAR_clickhouse_password before running apply.\n"
+  printf "  clickhouse_source=%s has no default password.\n" "$CH_SOURCE"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -356,6 +368,19 @@ _section "6. Product Features (LangGraph Platform)"
 ENABLE_DEPLOYMENTS="false"
 ENABLE_AGENT_BUILDER="false"
 ENABLE_INSIGHTS="false"
+ENABLE_SMITHDB="false"
+SMITHDB_SIZING_LINES=""
+
+# SmithDB teardown posture follows the same split as the LangSmith metastore:
+# production protects the data, a dev stack stays disposable so the test cycle
+# does not need manual gcloud steps between runs.
+if [[ "$PROFILE" == "prod" ]]; then
+  SMITHDB_DELETION_PROTECTION="true"
+  SMITHDB_BUCKET_FORCE_DESTROY="false"
+else
+  SMITHDB_DELETION_PROTECTION="false"
+  SMITHDB_BUCKET_FORCE_DESTROY="true"
+fi
 
 if [[ "$PROFILE" == "prod" ]]; then
   echo ""
@@ -370,6 +395,36 @@ if [[ "$PROFILE" == "prod" ]]; then
     && ENABLE_INSIGHTS="true" || true
 else
   printf "  $(_dim "Dev profile: all features disabled. Edit terraform.tfvars to enable.")\n"
+fi
+
+# SmithDB needs its own node pools (or the general pool for minimal), which
+# Autopilot cannot provide, so only offer it on Standard clusters.
+if [[ "$USE_AUTOPILOT" == "false" ]]; then
+  echo ""
+  _ask_yn "Enable SmithDB? (columnar trace store, adds SmithDB node pools)" "n" \
+    && ENABLE_SMITHDB="true" || true
+  if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+    _ask_choice "SmithDB size (see SMITHDB.md#sizing)" \
+      "minimal — development only, no SmithDB node pools" \
+      "small   — 10 ingest / 10 query QPS" \
+      "medium  — 100 ingest / 40 query QPS" \
+      "large   — 1000 ingest / 100 query QPS, about 350 vCPU"
+    _smithdb_sizing=$(echo "minimal small medium large" | cut -d' ' -f"$_CHOICE")
+    # minimal writes null: null gives network-disk for minimal, and a later
+    # size change gets local-ssd.
+    _smithdb_cache="network-disk"
+    _smithdb_cache_value="null"
+    if [[ "$_smithdb_sizing" != "minimal" ]]; then
+      _ask_choice "SmithDB cache storage" \
+        "local-ssd    — node Local SSD (recommended)" "network-disk — Hyperdisk Balanced on C3 nodes"
+      [[ "$_CHOICE" == "1" ]] && _smithdb_cache="local-ssd"
+      _smithdb_cache_value="\"${_smithdb_cache}\""
+    fi
+    SMITHDB_SIZING_LINES="
+smithdb_sizing            = \"${_smithdb_sizing}\"
+smithdb_cache_storage     = ${_smithdb_cache_value}"
+    printf "  $(_dim "SmithDB starts in dual write: LangSmith writes to SmithDB and ClickHouse, reads stay on ClickHouse.")\n"
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -519,6 +574,22 @@ enable_agent_builder = ${ENABLE_AGENT_BUILDER}
 enable_insights      = ${ENABLE_INSIGHTS}
 
 #------------------------------------------------------------------------------
+# SmithDB
+# The three gates below are a staged rollout, and a new install starts with
+# ingestion (dual write). Move on with make smithdb-phase PHASE=backfill, then
+# PHASE=cutover. ClickHouse stays enabled throughout.
+#------------------------------------------------------------------------------
+enable_smithdb            = ${ENABLE_SMITHDB}
+smithdb_ingestion_enabled = ${ENABLE_SMITHDB}
+smithdb_migration_enabled = false
+smithdb_query_enabled     = false${SMITHDB_SIZING_LINES}
+
+# Teardown controls for the metastore and object store. Production keeps both
+# protected; a dev stack stays destroyable and rebuildable without manual steps.
+smithdb_metastore_deletion_protection = ${SMITHDB_DELETION_PROTECTION}
+smithdb_bucket_force_destroy          = ${SMITHDB_BUCKET_FORCE_DESTROY}
+
+#------------------------------------------------------------------------------
 # Labels
 #------------------------------------------------------------------------------
 labels = {}
@@ -544,6 +615,7 @@ printf "  %-22s %s\n" "ClickHouse:" "$CH_SOURCE"
 printf "  %-22s %s\n" "TLS:"        "$TLS_SOURCE"
 [[ -n "$DOMAIN" ]] && printf "  %-22s %s\n" "Domain:" "$DOMAIN"
 printf "  %-22s %s\n" "Features:"   "deployments=${ENABLE_DEPLOYMENTS}  agent_builder=${ENABLE_AGENT_BUILDER}  insights=${ENABLE_INSIGHTS}"
+printf "  %-22s %s\n" "SmithDB:"    "$ENABLE_SMITHDB${_smithdb_sizing:+ (${_smithdb_sizing}, ${_smithdb_cache}, dual write)}"
 
 echo ""
 printf "${BOLD}── Next Steps ──${RESET}\n"
@@ -560,4 +632,9 @@ printf "     ${CYAN}make apply${RESET}\n"
 echo ""
 printf "  4. Deploy LangSmith:\n"
 printf "     ${CYAN}make init-values && make deploy${RESET}\n"
+if [[ "$ENABLE_SMITHDB" == "true" ]]; then
+  echo ""
+  printf "  ${DIM}SmithDB phase, pods, and backfill progress:${RESET}\n"
+  printf "     ${CYAN}make smithdb-status${RESET}\n"
+fi
 echo ""

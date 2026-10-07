@@ -5,6 +5,18 @@ variable "project_id" {
   type        = string
 }
 
+# Needed so the kubectl provisioners can fetch credentials for this specific
+# cluster rather than relying on the ambient kubeconfig context.
+variable "region" {
+  description = "Region of the GKE cluster. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name of the GKE cluster being bootstrapped. Used to fetch cluster credentials for the kubectl provisioners."
+  type        = string
+}
+
 variable "environment" {
   description = "Environment name"
   type        = string
@@ -21,6 +33,96 @@ variable "langsmith_namespace" {
 
 variable "workload_identity_gsa_email" {
   description = "Optional GCP service account email to annotate on the LangSmith Kubernetes service account for Workload Identity."
+  type        = string
+  default     = ""
+}
+
+variable "resource_quota_include_limits" {
+  description = "Include aggregate CPU and memory limits in the LangSmith namespace ResourceQuota. Disable for sandbox-host, whose Firecracker VMs use child cgroups beneath the pod cgroup."
+  type        = bool
+  default     = true
+}
+
+variable "resource_quota_extra_cpu" {
+  description = "Additional CPU added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. The root uses this to make room for optional features that add large pods, so the base figures stay the same for a plain install. Zero keeps the base quota."
+  type        = number
+  default     = 0
+
+  # SmithDB large with the backfill needs 414.
+  validation {
+    condition     = var.resource_quota_extra_cpu >= 0 && var.resource_quota_extra_cpu <= 1024
+    error_message = "resource_quota_extra_cpu must be between 0 and 1024. A namespace quota is a guardrail against a runaway HPA, so it must stay bounded rather than being raised until every pod fits."
+  }
+}
+
+variable "resource_quota_extra_memory_gi" {
+  description = "Additional memory in GiB added to the LangSmith namespace ResourceQuota, on both the requests and the limits side. Counterpart to resource_quota_extra_cpu."
+  type        = number
+  default     = 0
+
+  # SmithDB large with the backfill needs 906.
+  validation {
+    condition     = var.resource_quota_extra_memory_gi >= 0 && var.resource_quota_extra_memory_gi <= 2048
+    error_message = "resource_quota_extra_memory_gi must be between 0 and 2048."
+  }
+}
+
+variable "resource_quota_extra_pods" {
+  description = "Additional pod count added to the LangSmith namespace ResourceQuota. Counterpart to resource_quota_extra_cpu."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.resource_quota_extra_pods >= 0 && var.resource_quota_extra_pods <= 400
+    error_message = "resource_quota_extra_pods must be between 0 and 400."
+  }
+}
+
+variable "create_smithdb_cache_storage_class" {
+  description = "Create the SmithDB cache StorageClass (Hyperdisk Balanced) for SmithDB network-disk mode."
+  type        = bool
+  default     = false
+}
+
+variable "smithdb_cache_storage_class_name" {
+  description = "Name of the SmithDB cache StorageClass. StorageClass is cluster-scoped, so the root adds the resource suffix."
+  type        = string
+  default     = "smithdb-cache"
+}
+
+variable "allow_critical_priority_pods" {
+  description = "Create a PriorityClass-scoped ResourceQuota admitting system-node-critical and system-cluster-critical pods into the LangSmith namespace. Required for the chart 0.16 JuiceFS CSI driver used by sandboxes: GKE limits those priority classes to namespaces holding a matching scoped quota, and without one the CSI DaemonSet and controller are rejected at admission. Chart 0.17 has no CSI driver; keep it through the upgrade from chart 0.16. Leave false when sandboxes are disabled."
+  type        = bool
+  default     = false
+}
+
+variable "default_container_requests" {
+  description = "Default CPU and memory requests injected by a LimitRange into containers that omit them. An empty map disables the LimitRange. No default limits are imposed."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = (
+      length(var.default_container_requests) == 0 ||
+      (
+        length(var.default_container_requests) == 2 &&
+        contains(keys(var.default_container_requests), "cpu") &&
+        contains(keys(var.default_container_requests), "memory") &&
+        alltrue([for value in values(var.default_container_requests) : trimspace(value) != ""])
+      )
+    )
+    error_message = "default_container_requests must be empty or contain exactly non-empty cpu and memory values."
+  }
+}
+
+variable "sandbox_host_ingress_cidrs" {
+  description = "Node-network CIDRs admitted to LangSmith pods for the host-networked sandbox-host. Used on CALICO, where an ipBlock matches node IPs. On GKE Dataplane V2 an ipBlock does not match node-sourced traffic, so the root leaves this empty and scopes the default-deny (default_deny_excluded_component) instead. Empty disables the policy."
+  type        = list(string)
+  default     = []
+}
+
+variable "default_deny_excluded_component" {
+  description = "app.kubernetes.io/component label value to EXCLUDE from the langsmith-default default-deny ingress policy, leaving that one pod reachable while every other pod stays denied. Used on GKE Dataplane V2 to let the host-networked sandbox-host reach platform-backend without dropping namespace isolation (an ipBlock cannot match node-sourced traffic on Cilium). Empty selects all pods (full default-deny)."
   type        = string
   default     = ""
 }

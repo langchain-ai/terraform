@@ -12,6 +12,8 @@ provider "aws" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -34,6 +36,21 @@ provider "helm" {
   }
 }
 
+# kubectl provider — used for the SmithDB Karpenter CRs (EC2NodeClass, NodePool).
+# kubectl_manifest defers schema validation to apply time, so terraform plan
+# succeeds on a fresh cluster before the Karpenter CRDs are installed (the
+# controller is deployed by the eks module's blueprints add-on).
+provider "kubectl" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  load_config_file       = false
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
+  }
+}
+
 # ── Input validation ──────────────────────────────────────────────────────────
 # Cross-variable checks that can't be expressed in variable validation blocks.
 # These fire at plan time with a clear error message.
@@ -51,8 +68,23 @@ resource "terraform_data" "validate_inputs" {
     }
 
     precondition {
+      condition     = !var.enable_sandboxes || var.sandbox_juicefs_redis_instance_type != ""
+      error_message = "sandbox_juicefs_redis_instance_type is required when enable_sandboxes = true."
+    }
+
+    precondition {
+      condition     = !var.enable_sandboxes || (var.sandbox_juicefs_redis_auth_token != "" && length(var.sandbox_juicefs_redis_auth_token) >= 16)
+      error_message = "sandbox_juicefs_redis_auth_token is required (min 16 chars) when enable_sandboxes = true. Run: source ./scripts/setup-env.sh, or set TF_VAR_sandbox_juicefs_redis_auth_token."
+    }
+
+    precondition {
       condition     = var.tls_certificate_source != "acm" || var.acm_certificate_arn != "" || var.langsmith_domain != ""
       error_message = "When tls_certificate_source = 'acm', either acm_certificate_arn (existing cert) or langsmith_domain (auto-provision via Route 53) is required."
+    }
+
+    precondition {
+      condition     = !local.dns_enabled || var.dns_create_zone || var.dns_existing_zone_id != ""
+      error_message = "dns_existing_zone_id is required when the DNS module is enabled and dns_create_zone = false."
     }
 
     precondition {
@@ -75,40 +107,21 @@ resource "terraform_data" "validate_inputs" {
       error_message = "When create_vpc = false and alb_scheme = 'internet-facing', public_subnets must be provided."
     }
 
+    # External Fleet storage uses a dedicated database and logical Redis index on
+    # the shared RDS and ElastiCache instances.
     precondition {
-      condition     = !var.enable_agent_builder || var.enable_deployments
-      error_message = "enable_agent_builder requires enable_deployments = true. Agent Builder depends on the Deployments feature."
+      condition     = !var.enable_fleet || var.fleet_storage != "external" || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "fleet_storage = \"external\" requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_polly || var.enable_deployments
-      error_message = "enable_polly requires enable_deployments = true. Polly depends on the Deployments feature."
-    }
-
-    # Standalone agent features (chart v0.15+) run their own api-server + queue against
-    # per-feature databases on the shared RDS/ElastiCache. They do NOT require
-    # enable_deployments, but they DO require external Postgres and Redis to exist.
-    precondition {
-      condition     = !var.enable_fleet || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_fleet requires postgres_source = \"external\" and redis_source = \"external\" (standalone Fleet uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
-    }
-
-    # Fleet's chat UI resolves OAuth provider/token connections through host-backend,
-    # which only exists when Deployments is enabled. Without it the UI 500s on
-    # /v1/platform/fleet/providers/.../connection ("host-backend ... no such host").
-    precondition {
-      condition     = !var.enable_fleet || var.enable_deployments
-      error_message = "enable_fleet requires enable_deployments = true. The Fleet chat UI resolves OAuth provider/token connections via host-backend, which is only deployed when Deployments is enabled."
+      condition     = !local.polly_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External LangSmith Chat storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
-      condition     = !var.enable_standalone_polly || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_polly requires postgres_source = \"external\" and redis_source = \"external\" (standalone Polly uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
-    }
-
-    precondition {
-      condition     = !var.enable_standalone_insights || (var.postgres_source == "external" && var.redis_source == "external")
-      error_message = "enable_standalone_insights requires postgres_source = \"external\" and redis_source = \"external\" (standalone Insights uses a per-feature database on the shared RDS and a logical DB index on the shared ElastiCache)."
+      condition     = !local.insights_external_storage || (var.postgres_source == "external" && var.redis_source == "external")
+      error_message = "External Insights storage requires postgres_source = \"external\" and redis_source = \"external\"."
     }
 
     precondition {
@@ -125,6 +138,40 @@ resource "terraform_data" "validate_inputs" {
       condition     = !var.create_cert_manager_irsa || var.letsencrypt_email != ""
       error_message = "letsencrypt_email is required when create_cert_manager_irsa = true (DNS-01 Let's Encrypt path)."
     }
+
+    # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
+    # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
+    precondition {
+      condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
+      error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
+    }
+
+    precondition {
+      condition     = var.enable_smithdb || !(var.smithdb_ingestion_enabled || var.smithdb_migration_enabled || var.smithdb_query_enabled)
+      error_message = "SmithDB integration gates require enable_smithdb = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_migration_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_migration_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    precondition {
+      condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
+      error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # Two gateway controllers share one ALB target group (all three
+    # TargetGroupBindings in k8s-bootstrap reference gateway_target_group_arn), and
+    # gateway_target_port can only describe one of them, so a second controller
+    # leaves both permanently unhealthy. init-values.sh rejects this combination
+    # too, but only after apply — fail at plan time instead.
+    precondition {
+      condition = length([
+        for enabled in [local.enable_envoy_gateway, var.enable_istio_gateway, var.enable_nginx_ingress] : true if enabled
+      ]) <= 1
+      error_message = "Only one of enable_envoy_gateway / enable_istio_gateway / enable_nginx_ingress can be true. Envoy Gateway is the default when enable_envoy_gateway is unset, so set enable_envoy_gateway = false explicitly to run Istio or NGINX."
+    }
   }
 }
 
@@ -138,6 +185,10 @@ module "vpc" {
 
   private_subnets = length(var.vpc_private_subnets) > 0 ? var.vpc_private_subnets : ["10.0.0.0/21", "10.0.8.0/21", "10.0.16.0/21"]
   public_subnets  = length(var.vpc_public_subnets) > 0 ? var.vpc_public_subnets : ["10.0.40.0/21", "10.0.48.0/21", "10.0.56.0/21"]
+
+  # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
+  # over subnet IDs that are unknown until apply.
+  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
 }
 
 module "firewall" {
@@ -166,7 +217,9 @@ module "eks" {
   tags                            = local.common_tags
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
-  eks_managed_node_groups         = var.eks_managed_node_groups
+  eks_managed_node_groups         = local.eks_managed_node_groups
+  enable_karpenter                = var.enable_smithdb
+  karpenter_chart_version         = var.smithdb_karpenter_chart_version
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
@@ -192,13 +245,44 @@ module "redis" {
   source = "./modules/redis"
   count  = var.redis_source == "external" ? 1 : 0
 
-  name           = local.redis_name
-  vpc_id         = local.vpc_id
-  subnet_ids     = local.private_subnets
-  instance_type  = var.redis_instance_type
-  ingress_cidrs  = [local.vpc_cidr_block]
-  vpc_cidr_block = local.vpc_cidr_block
-  auth_token     = var.redis_auth_token
+  name                 = local.redis_name
+  vpc_id               = local.vpc_id
+  subnet_ids           = local.private_subnets
+  instance_type        = var.redis_instance_type
+  ingress_cidrs        = [local.vpc_cidr_block]
+  vpc_cidr_block       = local.vpc_cidr_block
+  auth_token           = var.redis_auth_token
+  parameter_group_name = "default.redis7"
+
+  existing_security_group_id = var.redis_existing_security_group_id
+}
+
+resource "aws_elasticache_parameter_group" "sandbox_juicefs_redis" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  name        = "${local.sandbox_juicefs_redis_name}-redis7"
+  family      = "redis7"
+  description = "Redis 7 parameters for sandbox JuiceFS metadata."
+
+  parameter {
+    name  = "maxmemory-policy"
+    value = "noeviction"
+  }
+}
+
+module "sandbox_juicefs_redis" {
+  source = "./modules/redis"
+  count  = var.enable_sandboxes ? 1 : 0
+
+  name                     = local.sandbox_juicefs_redis_name
+  vpc_id                   = local.vpc_id
+  subnet_ids               = local.private_subnets
+  instance_type            = var.sandbox_juicefs_redis_instance_type
+  ingress_cidrs            = [local.vpc_cidr_block]
+  vpc_cidr_block           = local.vpc_cidr_block
+  auth_token               = var.sandbox_juicefs_redis_auth_token
+  parameter_group_name     = aws_elasticache_parameter_group.sandbox_juicefs_redis[0].name
+  snapshot_retention_limit = var.sandbox_juicefs_redis_snapshot_retention_limit
 }
 
 module "storage" {
@@ -236,7 +320,10 @@ module "postgres" {
   iam_database_user                   = var.postgres_iam_database_user
   iam_auth_role_name                  = module.eks.langsmith_irsa_role_name
   deletion_protection                 = var.postgres_deletion_protection
+  skip_final_snapshot                 = var.postgres_skip_final_snapshot
   backup_retention_period             = var.postgres_backup_retention_period
+
+  existing_security_group_id = var.postgres_existing_security_group_id
 
   depends_on = [module.eks]
 }
@@ -263,6 +350,53 @@ resource "aws_iam_role_policy" "langsmith_s3" {
           module.storage.bucket_arn,
           "${module.storage.bucket_arn}/*",
         ]
+      }
+    ]
+  })
+}
+
+# Lets backend/platformBackend/queue/etc. pods (all sharing the langsmith IRSA
+# role) call Bedrock models directly via workload identity instead of static
+# AWS keys. Not scoped to specific model IDs, since self-hosted customers pick
+# models at runtime via LangSmith config, not Terraform.
+#
+# foundation-model is granted across all regions (not just var.region): a
+# cross-region inference profile (the "us."/"global." prefix on model IDs like
+# us.anthropic.claude-opus-5) fans requests out to underlying foundation models
+# in whichever region it lands the request, e.g. us-east-1, even when called
+# from us-west-2 — confirmed by AccessDeniedException naming a foundation-model
+# ARN outside var.region. inference-profile is also wildcarded across regions
+# for the same reason (covers "global." profiles alongside geography-scoped
+# ones like "us.", "eu.").
+resource "aws_iam_role_policy" "langsmith_bedrock" {
+  count = var.create_langsmith_irsa_role && var.enable_bedrock_access ? 1 : 0
+
+  name = "langsmith-bedrock-access"
+  role = module.eks.langsmith_irsa_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*",
+        ]
+      },
+      {
+        Sid    = "BedrockListModels"
+        Effect = "Allow"
+        Action = [
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -334,18 +468,28 @@ module "cert_manager" {
 
 # ── DNS / ACM ────────────────────────────────────────────────────────────────
 # Activates whenever langsmith_domain is set (regardless of tls_certificate_source).
-# This lets you deploy with tls_certificate_source = "none" first, delegate
-# NS records at your leisure, then flip to "acm" in a later apply.
+# This lets you deploy with tls_certificate_source = "none" first, finish the
+# selected zone's DNS setup at your leisure, then flip to "acm" in a later apply.
 #
-# When tls_certificate_source != "acm": creates the Route 53 zone, requests
-# the ACM certificate, writes DNS validation records, and creates the alias
-# record — but does NOT block waiting for certificate validation.
+# By default, creates a hosted zone exactly matching langsmith_domain. Set
+# dns_create_zone = false to put the certificate validation and ALB alias
+# records in an existing public parent or same-name hosted zone instead.
+# Only a newly created hosted zone needs NS delegation from its parent.
+#
+# When tls_certificate_source != "acm": requests the ACM certificate, writes
+# DNS validation records, and creates the alias record — but does NOT block
+# waiting for certificate validation.
 #
 # When tls_certificate_source == "acm": additionally blocks until the ACM
-# certificate is validated (NS delegation must be complete), then wires the
-# validated cert into the ALB HTTPS listener.
+# certificate is validated (the selected zone must be authoritative), then
+# wires the validated cert into the ALB HTTPS listener.
 
 locals {
+  insights_enabled          = var.enable_insights || var.enable_standalone_insights
+  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
+  polly_enabled             = var.enable_polly || var.enable_standalone_polly
+  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
 
@@ -354,7 +498,8 @@ module "dns" {
   count  = local.dns_enabled ? 1 : 0
 
   domain_name          = var.langsmith_domain
-  create_zone          = true
+  create_zone          = var.dns_create_zone
+  existing_zone_id     = var.dns_existing_zone_id
   create_certificate   = true
   wait_for_validation  = var.tls_certificate_source == "acm"
   include_wildcard_san = var.dns_include_wildcard_san
@@ -362,6 +507,8 @@ module "dns" {
 
 # Alias record lives here (not in the dns module) to avoid a circular
 # dependency: dns needs nothing from alb, and alb needs dns's cert ARN.
+# The record's zone_id is the selected Route 53 zone; alias.zone_id is the
+# ALB's canonical hosted zone ID required by Route 53 for the alias target.
 resource "aws_route53_record" "langsmith_alb_alias" {
   count   = local.dns_enabled ? 1 : 0
   zone_id = module.dns[0].zone_id
@@ -388,10 +535,12 @@ module "alb" {
   acm_certificate_arn    = var.acm_certificate_arn != "" ? var.acm_certificate_arn : (local.dns_enabled && var.tls_certificate_source == "acm" ? module.dns[0].certificate_arn : "")
   access_logs_enabled    = var.alb_access_logs_enabled
   bucket_suffix          = random_id.bucket_suffix.hex
-  enable_envoy_gateway   = var.enable_envoy_gateway
+  enable_envoy_gateway   = local.enable_envoy_gateway
   enable_istio_gateway   = var.enable_istio_gateway
   enable_nginx_ingress   = var.enable_nginx_ingress
   tags                   = local.common_tags
+
+  existing_security_group_id = var.alb_existing_security_group_id
 
   depends_on = [module.vpc]
 }
@@ -407,14 +556,14 @@ module "alb" {
 # NGINX Ingress:  port 80    (ingress-nginx-controller)
 
 resource "aws_vpc_security_group_ingress_rule" "alb_to_envoy" {
-  count = var.enable_envoy_gateway ? 1 : 0
+  count = local.enable_envoy_gateway ? 1 : 0
 
   # Target the NODE security group (attached to EC2 instances and pod ENIs via VPC-CNI).
   # The cluster primary SG is on the control plane only — not on worker nodes.
   security_group_id            = module.eks.node_security_group_id
   referenced_security_group_id = module.alb.security_group_id
-  from_port                    = 8080
-  to_port                      = 8080
+  from_port                    = 10080
+  to_port                      = 10080
   ip_protocol                  = "tcp"
   description                  = "Allow ALB to reach Envoy Gateway proxy pods on HTTP (target-type: ip)"
 
@@ -487,6 +636,8 @@ module "bastion" {
   root_volume_size_gb = var.bastion_root_volume_size_gb
   tags                = local.common_tags
 
+  existing_security_group_id = var.bastion_existing_security_group_id
+
   depends_on = [module.vpc, module.eks]
 }
 
@@ -519,6 +670,11 @@ locals {
   redis_connection_url = var.redis_source == "external" ? module.redis[0].connection_url : (
     "redis://langsmith-redis:6379"
   )
+
+  # DB 0 is reserved for the main LangSmith install.
+  redis_db_fleet    = 1
+  redis_db_polly    = 2
+  redis_db_insights = 3
 }
 
 module "k8s_bootstrap" {
@@ -538,7 +694,7 @@ module "k8s_bootstrap" {
 
   eso_irsa_role_arn = aws_iam_role.eso.arn
 
-  enable_envoy_gateway     = var.enable_envoy_gateway
+  enable_envoy_gateway     = local.enable_envoy_gateway
   enable_istio_gateway     = var.enable_istio_gateway
   enable_nginx_ingress     = var.enable_nginx_ingress
   gateway_target_group_arn = module.alb.gateway_target_group_arn != null ? module.alb.gateway_target_group_arn : ""
@@ -558,6 +714,28 @@ module "k8s_bootstrap" {
   depends_on = [time_sleep.wait_for_alb_webhook, module.cert_manager]
 }
 
+resource "kubernetes_secret_v1" "sandbox_juicefs_csi_config" {
+  count = var.enable_sandboxes ? 1 : 0
+
+  metadata {
+    name      = var.sandbox_juicefs_csi_config_secret_name
+    namespace = var.langsmith_namespace
+  }
+
+  type = "Opaque"
+
+  data_wo = {
+    name    = var.sandbox_juicefs_name
+    metaurl = "${trimsuffix(module.sandbox_juicefs_redis[0].connection_url, "/")}/0"
+    storage = "s3"
+    bucket  = local.sandbox_juicefs_bucket_url
+  }
+
+  data_wo_revision = var.sandbox_juicefs_csi_config_secret_revision
+
+  depends_on = [module.k8s_bootstrap]
+}
+
 #------------------------------------------------------------------------------
 # Standalone Agent Features (chart v0.15+) — Fleet / Polly / Insights
 #------------------------------------------------------------------------------
@@ -568,16 +746,18 @@ module "k8s_bootstrap" {
 #   - RDS has no Terraform resource to create a logical database, so a one-shot
 #     in-cluster psql Job runs CREATE DATABASE (it has a network path to the
 #     private RDS instance; a local Terraform runner does not).
-#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes /1 /2 /3.
-#     DB index 0 is reserved for the main LangSmith install.
+#   - ElastiCache (cluster-mode-disabled) supports logical DB indexes.
+#     DB 0 is reserved for the main LangSmith install, DB 1 for Fleet, DB 2
+#     for Polly, and DB 3 for Insights.
 # The K8s Secrets below feed the chart's fleet/polly/insights
 # postgres.external.existingSecretName / redis.external.existingSecretName.
 
 locals {
-  # Admin base URL (no database) for the shared RDS instance. Guarded by the
-  # external check so module.postgres[0] is only referenced when it exists.
+  # Encoded admin URL for the shared RDS instance, without a database name.
+  # Spaces are rejected by postgres_password validation, so urlencode() cannot
+  # emit "+" for a space in URI userinfo.
   standalone_pg_base = var.postgres_source == "external" ? (
-    "postgresql://${var.postgres_username}:${var.postgres_password}@${module.postgres[0].address}:${module.postgres[0].port}"
+    "postgresql://${var.postgres_username}:${urlencode(var.postgres_password)}@${module.postgres[0].address}:${module.postgres[0].port}"
   ) : ""
 
   standalone_fleet_pg_url    = "${local.standalone_pg_base}/langsmith_fleet?sslmode=require"
@@ -589,9 +769,17 @@ locals {
   # when it exists.
   standalone_redis_base = var.redis_source == "external" ? module.redis[0].connection_url : ""
 
-  standalone_fleet_redis_url    = "${local.standalone_redis_base}/1"
-  standalone_polly_redis_url    = "${local.standalone_redis_base}/2"
-  standalone_insights_redis_url = "${local.standalone_redis_base}/3"
+  standalone_fleet_redis_url    = "${local.standalone_redis_base}/${local.redis_db_fleet}"
+  standalone_polly_redis_url    = "${local.standalone_redis_base}/${local.redis_db_polly}"
+  standalone_insights_redis_url = "${local.standalone_redis_base}/${local.redis_db_insights}"
+}
+
+# Recreate standalone_db Jobs when the encoded admin URL changes. Kubernetes
+# Jobs do not rerun when Secret data changes, so a Job that failed on a broken
+# (unencoded) URL would otherwise stay failed. SQL in the Job is idempotent.
+resource "terraform_data" "postgres_connection_url_revision" {
+  count = var.postgres_source == "external" ? 1 : 0
+  input = sha256(local.postgres_connection_url)
 }
 
 # ── Per-feature logical database creation (in-cluster psql Job) ───────────────
@@ -601,9 +789,9 @@ locals {
 resource "kubernetes_job_v1" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet
-      polly    = var.enable_standalone_polly
-      insights = var.enable_standalone_insights
+      fleet    = var.enable_fleet && var.fleet_storage == "external"
+      polly    = local.polly_external_storage
+      insights = local.insights_external_storage
     } : k => v if v && var.postgres_source == "external"
   }
 
@@ -614,6 +802,9 @@ resource "kubernetes_job_v1" "standalone_db" {
 
   spec {
     backoff_limit = 6
+    # Keep the result available briefly, then let Kubernetes remove this
+    # Terraform-managed, idempotent database bootstrap Job.
+    ttl_seconds_after_finished = 3600
     template {
       metadata {
         labels = {
@@ -662,15 +853,23 @@ resource "kubernetes_job_v1" "standalone_db" {
     update = "5m"
   }
 
+  lifecycle {
+    replace_triggered_by = [
+      terraform_data.postgres_connection_url_revision[0]
+    ]
+  }
+
   depends_on = [module.postgres, module.k8s_bootstrap]
 }
 
 # ── Per-feature connection-URL Secrets ────────────────────────────────────────
 # Keys postgres_connection_url / redis_connection_url match what the chart's
 # standalone fleet/polly/insights blocks read via existingSecretName.
+# Secret data updates in place. Restart the Helm release's deployments after
+# apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.postgres_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -683,7 +882,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.redis_source == "external" ? 1 : 0
+  count = var.enable_fleet && var.fleet_storage == "external" && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -696,7 +895,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = var.enable_standalone_polly && var.postgres_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -709,7 +908,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = var.enable_standalone_polly && var.redis_source == "external" ? 1 : 0
+  count = local.polly_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -722,7 +921,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = var.enable_standalone_insights && var.postgres_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.postgres_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -735,7 +934,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = var.enable_standalone_insights && var.redis_source == "external" ? 1 : 0
+  count = local.insights_external_storage && var.redis_source == "external" ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace
@@ -744,5 +943,322 @@ resource "kubernetes_secret" "standalone_insights_redis" {
     redis_connection_url = local.standalone_insights_redis_url
   }
   type       = "Opaque"
+  depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.16+) — dedicated metastore, object store, IRSA, and the
+# Kubernetes secrets the chart consumes. Node groups are wired into module.eks
+# above. The Helm release (smithdb.enabled) is deployed in Pass 2.
+#------------------------------------------------------------------------------
+
+locals {
+  smithdb_name        = "${local.base_name}-smithdb"
+  smithdb_bucket_name = var.smithdb_bucket_name != "" ? var.smithdb_bucket_name : "${local.base_name}-smithdb-${random_id.bucket_suffix.hex}"
+}
+
+module "smithdb" {
+  source = "./modules/smithdb"
+  count  = var.enable_smithdb ? 1 : 0
+
+  name         = local.smithdb_name
+  region       = var.region
+  tags         = local.common_tags
+  namespace    = var.langsmith_namespace
+  release_name = var.langsmith_release_name
+
+  vpc_id                     = local.vpc_id
+  private_subnet_ids         = local.private_subnets
+  eks_node_security_group_id = module.eks.node_security_group_id
+  eks_oidc_provider_arn      = module.eks.oidc_provider_arn
+  eks_oidc_provider_url      = module.eks.oidc_provider
+
+  # Metastore
+  metastore_source                  = var.smithdb_metastore_source
+  metastore_instance_class          = var.smithdb_metastore_instance_class
+  metastore_engine_version          = var.smithdb_metastore_engine_version
+  metastore_allocated_storage       = var.smithdb_metastore_allocated_storage
+  metastore_multi_az                = var.smithdb_metastore_multi_az
+  metastore_deletion_protection     = var.smithdb_metastore_deletion_protection
+  metastore_backup_retention_period = var.smithdb_metastore_backup_retention_period
+  metastore_skip_final_snapshot     = var.smithdb_metastore_skip_final_snapshot
+  metastore_master_username         = var.smithdb_metastore_master_username
+
+  external_metastore_host     = var.smithdb_external_metastore_host
+  external_metastore_port     = var.smithdb_external_metastore_port
+  external_metastore_database = var.smithdb_external_metastore_database
+  external_metastore_username = var.smithdb_external_metastore_username
+  external_metastore_password = var.smithdb_external_metastore_password
+
+  # Object store
+  bucket_name           = local.smithdb_bucket_name
+  s3_kms_key_arn        = var.s3_kms_key_arn
+  s3_versioning_enabled = var.smithdb_s3_versioning_enabled
+  s3_force_destroy      = var.smithdb_s3_force_destroy
+
+  existing_metastore_security_group_id = var.smithdb_existing_metastore_security_group_id
+  manage_byo_security_group_rules      = var.smithdb_manage_byo_security_group_rules
+
+  depends_on = [module.eks]
+}
+
+# Metastore connection secret consumed by smithdb.config.existingSecretName.
+# S3 credentials are intentionally absent — SmithDB pods use IRSA instead.
+resource "kubernetes_secret" "smithdb_local" {
+  count = var.enable_smithdb ? 1 : 0
+
+  metadata {
+    name      = "smithdb-local"
+    namespace = var.langsmith_namespace
+  }
+  data = {
+    smithdb_metastore_db_host     = module.smithdb[0].metastore_host
+    smithdb_metastore_db_name     = module.smithdb[0].metastore_database
+    smithdb_metastore_db_username = module.smithdb[0].metastore_username
+    smithdb_metastore_db_password = module.smithdb[0].metastore_password
+  }
+  type       = "Opaque"
+  depends_on = [module.k8s_bootstrap]
+}
+
+#------------------------------------------------------------------------------
+# SmithDB Karpenter provisioning
+#
+# The Karpenter controller is installed by module.eks (blueprints add-on). Here
+# we tag the discovery targets and create the SmithDB NodePools/EC2NodeClasses:
+#   - instance-store: local-NVMe nodes, RAID0'd by Karpenter (instanceStorePolicy)
+#     for the SmithDB emptyDir caches. Hosts query / ingestion / compaction-worker.
+#   - compute: no local NVMe. Hosts compaction / cluster-manager and the transient
+#     metastore-migration job.
+# Labels/taints (smithdb-local/instance-store, smithdb-local/compute) match the
+# nodeSelectors/tolerations in langsmith-values-smithdb.yaml.
+#------------------------------------------------------------------------------
+
+locals {
+  # Subnets are discovered by the karpenter.sh/discovery tag (applied to the
+  # private subnets at creation via the vpc module's extra_private_subnet_tags).
+  smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
+
+  # Security groups are discovered by the EKS-managed cluster tag
+  # (kubernetes.io/cluster/<cluster> = owned), which is stable and always present
+  # on the cluster security group. We deliberately do NOT put karpenter.sh/discovery
+  # on the node SG ourselves: the EKS module reconciles node-SG tags and can drop
+  # an out-of-band tag, leaving the EC2NodeClass with SecurityGroupsReady=False.
+  smithdb_karpenter_sg_selector = { "kubernetes.io/cluster/${local.cluster_name}" = "owned" }
+}
+
+# EC2NodeClass subnet discovery for a bring-your-own VPC: tag the existing private
+# subnets here (a for_each is safe because their IDs are known statically). For a
+# Terraform-created VPC the tag is applied at creation via the vpc module's
+# extra_private_subnet_tags (above).
+resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
+  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+
+  resource_id = each.value
+  key         = "karpenter.sh/discovery"
+  value       = local.cluster_name
+}
+
+resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.k8s.aws/v1"
+    kind       = "EC2NodeClass"
+    metadata   = { name = "smithdb-instance-store" }
+    spec = {
+      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
+      role                       = module.eks.karpenter_node_iam_role_name
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
+      associatePublicIPAddress   = false
+      # Karpenter RAID0s the local NVMe and points kubelet at it — no userdata.
+      instanceStorePolicy = "RAID0"
+      metadataOptions = {
+        httpEndpoint            = "enabled"
+        httpProtocolIPv6        = "disabled"
+        httpPutResponseHopLimit = 1
+        httpTokens              = "required"
+      }
+      blockDeviceMappings = [{
+        deviceName = "/dev/xvda"
+        ebs = {
+          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
+          volumeType = "gp3"
+          encrypted  = true
+        }
+      }]
+    }
+  })
+
+  depends_on = [module.eks]
+}
+
+resource "kubectl_manifest" "smithdb_ec2nc_compute" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.k8s.aws/v1"
+    kind       = "EC2NodeClass"
+    metadata   = { name = "smithdb-compute" }
+    spec = {
+      amiSelectorTerms           = [{ alias = var.smithdb_karpenter_ami_alias }]
+      role                       = module.eks.karpenter_node_iam_role_name
+      subnetSelectorTerms        = [{ tags = local.smithdb_karpenter_discovery }]
+      securityGroupSelectorTerms = [{ tags = local.smithdb_karpenter_sg_selector }]
+      associatePublicIPAddress   = false
+      metadataOptions = {
+        httpEndpoint            = "enabled"
+        httpProtocolIPv6        = "disabled"
+        httpPutResponseHopLimit = 1
+        httpTokens              = "required"
+      }
+      blockDeviceMappings = [{
+        deviceName = "/dev/xvda"
+        ebs = {
+          volumeSize = "${var.smithdb_node_root_volume_size_gb}Gi"
+          volumeType = "gp3"
+          encrypted  = true
+        }
+      }]
+    }
+  })
+
+  depends_on = [module.eks]
+}
+
+resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.sh/v1"
+    kind       = "NodePool"
+    metadata   = { name = "smithdb-instance-store" }
+    spec = {
+      template = {
+        metadata = { labels = { "smithdb-local/instance-store" = "true" } }
+        spec = {
+          taints = [{ key = "smithdb-local/instance-store", value = "true", effect = "NoSchedule" }]
+          requirements = [
+            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
+            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
+            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
+            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
+            { key = "karpenter.k8s.aws/instance-local-nvme", operator = "Gt", values = [tostring(var.smithdb_instance_store_min_local_nvme_gib - 1)] },
+            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_instance_store_sizes },
+          ]
+          nodeClassRef = {
+            group = "karpenter.k8s.aws"
+            kind  = "EC2NodeClass"
+            name  = "smithdb-instance-store"
+          }
+          expireAfter = "720h"
+        }
+      }
+      limits = {
+        cpu    = tostring(var.smithdb_instance_store_limits.cpu)
+        memory = var.smithdb_instance_store_limits.memory
+      }
+      # Avoid churn for nodes holding large local caches.
+      disruption = {
+        consolidationPolicy = "WhenEmpty"
+        consolidateAfter    = "2m"
+        budgets             = [{ nodes = "10%" }]
+      }
+    }
+  })
+
+  depends_on = [kubectl_manifest.smithdb_ec2nc_instance_store]
+}
+
+resource "kubectl_manifest" "smithdb_nodepool_compute" {
+  count = var.enable_smithdb ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "karpenter.sh/v1"
+    kind       = "NodePool"
+    metadata   = { name = "smithdb-compute" }
+    spec = {
+      template = {
+        metadata = { labels = { "smithdb-local/compute" = "true" } }
+        spec = {
+          taints = [{ key = "smithdb-local/compute", value = "true", effect = "NoSchedule" }]
+          requirements = [
+            { key = "kubernetes.io/os", operator = "In", values = ["linux"] },
+            { key = "kubernetes.io/arch", operator = "In", values = [var.smithdb_node_arch] },
+            { key = "karpenter.sh/capacity-type", operator = "In", values = var.smithdb_capacity_type },
+            { key = "karpenter.k8s.aws/instance-generation", operator = "Gt", values = ["2"] },
+            { key = "karpenter.k8s.aws/instance-size", operator = "In", values = var.smithdb_compute_sizes },
+          ]
+          nodeClassRef = {
+            group = "karpenter.k8s.aws"
+            kind  = "EC2NodeClass"
+            name  = "smithdb-compute"
+          }
+          expireAfter = "720h"
+        }
+      }
+      limits = {
+        cpu    = tostring(var.smithdb_compute_limits.cpu)
+        memory = var.smithdb_compute_limits.memory
+      }
+      disruption = {
+        consolidationPolicy = "WhenEmptyOrUnderutilized"
+        consolidateAfter    = "2m"
+        budgets             = [{ nodes = "10%" }]
+      }
+    }
+  })
+
+  depends_on = [kubectl_manifest.smithdb_ec2nc_compute]
+}
+
+# ── Long-lived-stream timeout override ───────────────────────────────────────
+# Envoy Gateway applies an effective 15s response timeout to the LangSmith
+# chart's own catch-all HTTPRoute (chart's http_route.yaml has no timeouts
+# field and no way to set one via values). Several SSE/streaming surfaces
+# regularly run longer than that, so Envoy resets the HTTP/2 stream mid-response
+# (response_flags=UT, response_code_details=response_timeout) even though the
+# backend already returned 200 and is still streaming — the browser sees
+# net::ERR_HTTP2_PROTOCOL_ERROR. Covers:
+#   - Fleet run streams: POST /api/v1/fleet/threads/{id}/runs/stream,
+#     GET /api/v1/fleet/lg/threads/{id}/runs/{run_id}/stream
+#   - LangGraph Deployments proxy (host-backend): /api-host/v2/*
+#
+# A second HTTPRoute on the same Gateway+hostname with more specific path
+# matches takes precedence over the chart's "/" catch-all per Gateway API
+# merge/precedence rules (longer prefix wins), without touching the chart's
+# own route. timeouts.request: 0s disables the request timeout for just
+# these path prefixes; every other path keeps Envoy Gateway's default.
+#
+# kubectl_manifest (not kubernetes_manifest) for the same reason as the
+# SmithDB Karpenter CRs above: it defers schema validation to apply time, so
+# terraform plan succeeds even before the Gateway API CRDs are installed
+# (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+resource "kubectl_manifest" "fleet_stream_httproute" {
+  count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
+
+  yaml_body = yamlencode({
+    apiVersion = "gateway.networking.k8s.io/v1"
+    kind       = "HTTPRoute"
+    metadata = {
+      name      = "langsmith-fleet-streams"
+      namespace = var.langsmith_namespace
+    }
+    spec = {
+      parentRefs = [{ name = "langsmith-gateway" }]
+      hostnames  = [var.langsmith_domain]
+      rules = [{
+        matches = [
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },
+          { path = { type = "PathPrefix", value = "/api/v1/fleet/lg" } },
+          { path = { type = "PathPrefix", value = "/api-host/v2" } },
+        ]
+        backendRefs = [{ name = "langsmith-frontend", port = 80 }]
+        timeouts    = { request = "0s" }
+      }]
+    }
+  })
+
   depends_on = [module.k8s_bootstrap]
 }

@@ -3,6 +3,24 @@ variable "network_name" {
   description = "Name of the virtual network"
 }
 
+variable "create_vnet" {
+  type        = bool
+  description = "Create the VNet. When false, subnets are created inside the VNet identified by existing_vnet_id."
+  default     = true
+}
+
+variable "existing_vnet_id" {
+  type        = string
+  description = "Resource ID of an existing VNet to create subnets in. Required when create_vnet = false."
+  default     = ""
+}
+
+variable "create_main_subnet" {
+  type        = bool
+  description = "Create the main (AKS) subnet. False when an existing AKS subnet is supplied."
+  default     = true
+}
+
 variable "location" {
   type        = string
   description = "Location of the virtual network"
@@ -25,15 +43,15 @@ variable "main_subnet_address_prefix" {
   default     = ["10.0.0.0/19"] # 8k IP addresses
 }
 
-variable "enable_external_postgres" {
+variable "create_postgres_subnet" {
   type        = bool
-  description = "Enable external Postgres"
+  description = "Create the delegated Postgres subnet. False when Postgres is in-cluster, or when an existing Postgres subnet is supplied."
   default     = true
 }
 
-variable "enable_external_redis" {
+variable "create_redis_subnet" {
   type        = bool
-  description = "Enable external Redis"
+  description = "Create the Redis subnet. False when Redis is in-cluster, or when an existing Redis subnet is supplied."
   default     = true
 }
 
@@ -67,12 +85,6 @@ variable "bastion_subnet_address_prefix" {
   default     = ["10.0.80.0/27"] # 32 IPs — sufficient for a single jump VM
 }
 
-variable "availability_zones" {
-  type        = list(string)
-  description = "Availability zones to spread resources across. Use [\"1\",\"2\",\"3\"] for zone-redundant HA. Default [\"1\"] for single-zone (lower cost)."
-  default     = ["1"]
-}
-
 variable "enable_agic" {
   type        = bool
   description = "Create a dedicated subnet for AGIC (Application Gateway Ingress Controller). Required when ingress_controller = 'agic'."
@@ -83,4 +95,16 @@ variable "agic_subnet_address_prefix" {
   type        = list(string)
   description = "CIDR prefix for the Application Gateway subnet. Must be /24 or larger (Azure AGW requirement). Must not overlap with other subnets."
   default     = ["10.0.96.0/24"] # 256 IPs — min size for App Gateway v2
+}
+
+variable "enable_subnet_nsgs" {
+  type        = bool
+  description = "Attach a network security group to each AKS, Postgres, and Redis subnet this module creates. Subnets supplied by the operator are left alone."
+  default     = false
+}
+
+variable "aks_source_prefixes" {
+  type        = list(string)
+  description = "Address prefixes of the AKS node subnet, whether created here or supplied. The Postgres and Redis NSGs admit these and nothing else from the VNet."
+  default     = []
 }

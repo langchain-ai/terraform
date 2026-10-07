@@ -41,7 +41,7 @@ create_vpc = true
 # EKS — public API for easy kubectl access
 #------------------------------------------------------------------------------
 enable_public_eks_cluster = true
-eks_cluster_version       = "1.31"
+eks_cluster_version       = "1.34"
 
 # Single node, autoscales to 2 during deploys when bootstrap inflates
 # operator-managed pods temporarily.
@@ -64,7 +64,11 @@ postgres_storage_gb    = 20
 postgres_max_storage_gb = 50
 
 # Deletion protection OFF so you can `terraform destroy` without extra steps.
+# Final snapshots are also skipped for this minimum profile.
 postgres_deletion_protection = false
+postgres_skip_final_snapshot = true
+smithdb_metastore_deletion_protection = false
+smithdb_metastore_skip_final_snapshot = true
 
 redis_source        = "external"
 redis_instance_type = "cache.t3.small"    # 2 vCPU, 1.5 GB — bare minimum

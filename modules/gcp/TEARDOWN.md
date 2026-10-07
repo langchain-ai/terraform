@@ -76,22 +76,34 @@ kubectl delete crd lgps.apps.langchain.ai
 
 ## A2 — Uninstall LangSmith Helm Release
 
+Use the provided script. The script removes the Helm release and operator-managed resources.
+
 ```bash
 cd terraform/gcp
 make uninstall
 ```
 
-Or manually:
+You can also run the same script directly:
 
 ```bash
-helm uninstall langsmith -n langsmith
-kubectl get pods -n langsmith   # verify all pods removed
+cd terraform/gcp
+./helm/scripts/uninstall.sh
 ```
 
-After uninstalling:
+**Sandboxes and JuiceFS (chart 0.16 releases):** Chart 0.16 ships the JuiceFS CSI driver in the LangSmith Helm release. A Helm-first uninstall removes the controller before it can clear `juicefs.com/finalizer`. The uninstall script deletes the sandbox-host workload and JuiceFS claims first. The script then clears finalizers from any remaining `Terminating` pods. Chart 0.17 has no CSI driver: sandbox-host mounts JuiceFS itself, so these steps find no claims or mount pods and change nothing.
+
+**In-cluster data disks:** In-cluster ClickHouse, Postgres, and Redis keep their data on StatefulSet claims: `data-langsmith-clickhouse-*`, `data-langsmith-postgres-*`, and `data-langsmith-redis-*`. The in-cluster Postgres and Redis of the Fleet, Insights, and Polly add-ons have claims too, for example `data-langsmith-standalone-polly-redis-0`. The GCE PD CSI driver provisions each Persistent Disk, so Terraform does not track the disks. `helm uninstall` does not delete these claims. The uninstall script keeps the claims by default to support a clean Helm reinstall. During a SmithDB backfill, the taskdb has a claim too (`data-langsmith-smithdb-taskdb-postgres-*`). The chart deletes the taskdb claim with its StatefulSet. The script deletes the taskdb claim if the claim is still there. For Postgres and Redis, the script deletes only the chart claims of the release in `RELEASE_NAME`. The claims of another release in the namespace do not match, for example the claims of `langsmith-dev` when `RELEASE_NAME` is `langsmith`. When the release name is longer than 13 characters, the chart can shorten the add-on claim names. The script does not delete a claim with a shortened name, so check for `pvc-*` disks in A8.
+
+For full infrastructure teardown, delete the claims during uninstall. The CSI driver can then reclaim the disks before Terraform destroys GKE:
 
 ```bash
-# Delete the namespace if it wasn't removed automatically
+cd terraform/gcp
+DELETE_DATA_PVCS=true make uninstall
+```
+
+After a full teardown uninstall, delete the namespace if it still exists:
+
+```bash
 kubectl delete namespace langsmith
 ```
 
@@ -111,6 +123,13 @@ kubectl delete namespace cert-manager
 helm uninstall keda -n keda
 kubectl delete namespace keda
 
+# Delete the Gateway before Envoy Gateway. Envoy Gateway then deletes the
+# LoadBalancer Service, and GKE deletes the load balancer and releases its IP.
+# Run the get command again until it shows no Service. GKE can still leave the
+# shared k8s-<cluster-id>-node-http-hc firewall rule. A8 checks for it.
+kubectl -n envoy-gateway-system delete gateway --all
+kubectl -n envoy-gateway-system get svc -l gateway.envoyproxy.io/owning-gateway-name
+
 # Uninstall Envoy Gateway
 helm uninstall envoy-gateway -n envoy-gateway-system
 kubectl delete namespace envoy-gateway-system
@@ -120,7 +139,9 @@ kubectl delete namespace envoy-gateway-system
 
 ## A4 — Handle KEDA ScaledObject Finalizers (if namespace stuck)
 
-If the `langsmith` namespace gets stuck in `Terminating`, KEDA ScaledObject finalizers are the likely cause — the KEDA controller is already gone so it can't clear them. Fix:
+If the `langsmith` namespace gets stuck in `Terminating` after A2, JuiceFS finalizers are the first cause to check (`kubectl get pods -n langsmith | grep juicefs`). Use the uninstall script on a current checkout rather than patching PVCs by hand.
+
+If JuiceFS is already gone, KEDA ScaledObject finalizers are the next cause — the KEDA controller is already gone so it cannot clear them. Fix:
 
 ```bash
 for obj in $(kubectl get scaledobjects -n langsmith -o name 2>/dev/null); do
@@ -128,14 +149,54 @@ for obj in $(kubectl get scaledobjects -n langsmith -o name 2>/dev/null); do
 done
 ```
 
-## A5 — Pre-Destroy: Disable Deletion Protection
+## A5 — Pre-Destroy: Export Data, Then Disable Deletion Protection
 
-Two tfvars must be set to `false` before `terraform destroy` will succeed on GKE and Cloud SQL:
+### 5a — Export anything you need to keep
+
+Cloud SQL has no final-snapshot-on-delete. Automated backups, on-demand backups,
+and PITR logs are all deleted along with the instance, so an export to GCS is the
+only copy that survives teardown. Skip this step for a disposable dev/test stack.
+
+```bash
+PROJECT_ID=your-project
+BACKUP_BUCKET=gs://your-export-bucket
+PG=$(terraform -chdir=infra output -raw postgres_instance_name)
+
+# Cloud SQL exports run as the instance's own service agent, which needs write
+# access to the target bucket first.
+SA=$(gcloud sql instances describe "$PG" --project "$PROJECT_ID" \
+  --format="value(serviceAccountEmailAddress)")
+gcloud storage buckets add-iam-policy-binding "$BACKUP_BUCKET" \
+  --member="serviceAccount:$SA" --role=roles/storage.objectAdmin
+
+gcloud sql export sql "$PG" "$BACKUP_BUCKET/${PG}-final.sql.gz" \
+  --database=langsmith --project "$PROJECT_ID"
+```
+
+Repeat for the SmithDB metastore when `enable_smithdb = true` and
+`smithdb_metastore_source = "create"`. Its trace segments live in the SmithDB GCS
+bucket, which is separate from the metastore and survives unless
+`smithdb_bucket_force_destroy = true`.
+
+```bash
+META=$(terraform -chdir=infra output -raw smithdb_metastore_instance_name)
+gcloud sql export sql "$META" "$BACKUP_BUCKET/${META}-final.sql.gz" \
+  --database=smithdb --project "$PROJECT_ID"
+```
+
+### 5b — Disable deletion protection
+
+Protection covers both Terraform and the Cloud SQL API, so flipping the tfvars is
+not enough on its own — the change has to be applied before the destroy.
 
 ```hcl
 # terraform.tfvars
 gke_deletion_protection      = false
 postgres_deletion_protection = false
+
+# Only when enable_smithdb = true and smithdb_metastore_source = "create"
+smithdb_metastore_deletion_protection = false
+smithdb_bucket_force_destroy          = true   # skip if you want to keep the segments
 ```
 
 Apply the change first (targeted — avoids reconciling in-cluster addons like KEDA/cert-manager/ingress):
@@ -144,8 +205,17 @@ Apply the change first (targeted — avoids reconciling in-cluster addons like K
 cd terraform/gcp
 terraform -chdir=infra apply \
   -target=module.gke_cluster \
-  -target=module.cloudsql
+  -target=module.cloudsql \
+  -target=module.smithdb \
+  -target=module.networking
 ```
+
+Drop the `module.smithdb` target when SmithDB was never enabled. The
+`module.networking` target writes `deletion_policy = "ABANDON"` for the private
+service connection to state (see A6). A destroy reads that setting from state,
+not from the code. The update makes no change in GCP. Run this apply also when
+deletion protection is already off. Do not rerun the production quickstart
+profile after this edit — it regenerates the tfvars with protection back on.
 
 > Why not `make apply` here? A full infra apply can re-run Kubernetes/Helm bootstrap paths and recreate components you just removed.
 
@@ -158,36 +228,81 @@ make destroy
 ```
 
 Terraform destroys in dependency order:
+- The Envoy Gateway `Gateway`, before the Envoy Gateway release and the cluster (only when `install_ingress = true` and `ingress_type = "envoy"`). The step waits up to 5 minutes for the LoadBalancer Service to go, so that GKE deletes the load balancer while the cluster exists. When the cluster is not reachable, the step does nothing.
 - k8s-bootstrap (KEDA, cert-manager Helm releases)
 - Cloud SQL PostgreSQL instance
+- SmithDB metastore Cloud SQL instance and its GCS bucket (only when `enable_smithdb = true`)
 - Memorystore Redis instance
 - GCS bucket (only if `storage_force_destroy = true` or bucket is empty)
-- Workload Identity service account + IAM bindings
-- GKE cluster and node pools
+- Workload Identity service accounts + IAM bindings (LangSmith and SmithDB)
+- GKE cluster and node pools, including the SmithDB cache and compute pools
+- Private service connection (only when `postgres_source` or `redis_source` is `"external"`, when `enable_sandboxes = true`, or when the module creates the SmithDB metastore): removed from state only (`deletion_policy = "ABANDON"`). The VPC delete removes its peering.
 - VPC, subnet, Cloud Router, Cloud NAT
 
 > **Note on `source infra/scripts/setup-env.sh`:** Terraform needs `TF_VAR_postgres_password` even during destroy for provider validation. If the Secret Manager secret no longer exists, set it manually: `export TF_VAR_postgres_password="any-placeholder"`
+
+> **Stacks applied before this module version:** A destroy reads the Gateway step and `deletion_policy` from state, not from the code. Both are in state only after an apply of this module version. If you did not run the A5b apply, run `terraform -chdir=infra apply -target=module.networking` once before `make destroy`. If the Gateway step is not in state, do the Gateway delete in A3 before `make destroy`. If the destroy still stops on the connection itself, follow "Known issue — private service connection will not delete" in B8.
+
+### Known issue — the VPC delete stops
+
+Two leftovers can stop the VPC delete. Look at the resource that the error names.
+
+**A `k8s-*` firewall rule.** GKE can leave the shared `k8s-<cluster-id>-node-http-hc` rule on the VPC, also after the Gateway delete. Find the rule with the firewall check in A8. Delete the rule as in B8 step 3. Run `make destroy` again.
+
+**The private service connection peering.** After a Cloud SQL or Memorystore delete, Google keeps the producer resources for some time. During that time, the connection delete fails with `Producer services (e.g. CloudSQL, Cloud Memstore, etc.) are still using this connection`. When the state has `deletion_policy = "ABANDON"`, `terraform destroy` removes the connection from state with no API call. The reserved range and the VPC then delete with the peering `servicenetworking-googleapis-com` still active, and the VPC delete removes the peering. A test with no producer instances confirmed that the VPC delete removes the peering. The test did not delete Cloud SQL or Memorystore first.
+
+If the destroy stops on the VPC or on the reserved range `<name_prefix>-<environment>-vpc-private-ip`, and the error names the peering, set these variables first:
+
+```bash
+PROJECT_ID="<your-project-id>"
+VPC_NAME="<name_prefix>-<environment>-vpc"
+```
+
+Then do these steps before you run `make destroy` again:
+
+1. Do the producer checks in B8 ("Known issue — private service connection will not delete"). The checks use a substring match, so they can also show instances on other VPCs. Delete an instance only when the last part of its network value is exactly `$VPC_NAME`.
+2. Remove the peering. After the producer wait, use the supported command:
+
+   ```bash
+   gcloud services vpc-peerings delete --network="$VPC_NAME" \
+     --service=servicenetworking.googleapis.com --project "$PROJECT_ID"
+   ```
+
+   During the producer wait (up to four days after a Cloud SQL delete), that command fails with the same error. If the VPC is deleted permanently and nothing will use its name again, remove the peering at the Compute Engine layer. Read "Last resort — remove the peering at the Compute Engine layer" in B8 first:
+
+   ```bash
+   gcloud compute networks peerings delete servicenetworking-googleapis-com \
+     --network="$VPC_NAME" --project "$PROJECT_ID"
+   ```
+
+3. Run `make destroy` again.
 
 ## A7 — Clean Up Secret Manager Secrets (if enabled)
 
 If `enable_secret_manager_module = true` was set, the Secret Manager secrets are destroyed by Terraform. If you stored additional secrets manually (via `setup-env.sh`), clean them up:
 
+`setup-env.sh` names its secrets `langsmith-<name_prefix>-<environment>-<key>`. In a shared
+project, scope the listing to your own stack — `name~langsmith` alone matches every tenant.
+
 ```bash
 PROJECT_ID="<your-project-id>"
 PREFIX="<name_prefix>-<environment>"
 
-# List all LangSmith secrets
-gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith"
+# List this stack's secrets — review before deleting
+gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith-$PREFIX-" \
+  --format="value(name)"
 
-# Delete each one
-gcloud secrets delete "${PREFIX}-postgres-password" --project "$PROJECT_ID" --quiet
-gcloud secrets delete "${PREFIX}-langsmith-license-key" --project "$PROJECT_ID" --quiet
-gcloud secrets delete "${PREFIX}-langsmith-jwt-secret" --project "$PROJECT_ID" --quiet
-gcloud secrets delete "${PREFIX}-langsmith-api-key-salt" --project "$PROJECT_ID" --quiet
-gcloud secrets delete "${PREFIX}-langsmith-admin-password" --project "$PROJECT_ID" --quiet
-gcloud secrets delete "${PREFIX}-deployments-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
-gcloud secrets delete "${PREFIX}-agent-builder-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
-gcloud secrets delete "${PREFIX}-insights-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+# Delete each one (explicit names — do not widen the filter)
+gcloud secrets delete "langsmith-${PREFIX}-postgres-password" --project "$PROJECT_ID" --quiet
+gcloud secrets delete "langsmith-${PREFIX}-langsmith-license-key" --project "$PROJECT_ID" --quiet
+gcloud secrets delete "langsmith-${PREFIX}-jwt-secret" --project "$PROJECT_ID" --quiet
+gcloud secrets delete "langsmith-${PREFIX}-api-key-salt" --project "$PROJECT_ID" --quiet
+gcloud secrets delete "langsmith-${PREFIX}-admin-password" --project "$PROJECT_ID" --quiet
+gcloud secrets delete "langsmith-${PREFIX}-sandbox-callback-signing-jwk" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+gcloud secrets delete "langsmith-${PREFIX}-deployments-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+gcloud secrets delete "langsmith-${PREFIX}-agent-builder-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+gcloud secrets delete "langsmith-${PREFIX}-insights-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+gcloud secrets delete "langsmith-${PREFIX}-polly-encryption-key" --project "$PROJECT_ID" --quiet 2>/dev/null || true
 ```
 
 ## A8 — Verify Cleanup
@@ -198,6 +313,7 @@ Replace `<name_prefix>` and `<environment>` with your values from `terraform.tfv
 PROJECT_ID="<your-project-id>"
 REGION="<region>"
 PREFIX="<name_prefix>-<environment>"
+NAME_PREFIX="<name_prefix>"          # without environment — for the service account
 
 # GKE cluster
 gcloud container clusters list --project "$PROJECT_ID"
@@ -209,16 +325,30 @@ gcloud sql instances list --project "$PROJECT_ID"
 gcloud redis instances list --region "$REGION" --project "$PROJECT_ID"
 
 # GCS bucket
-gsutil ls 2>/dev/null | grep "$PREFIX" || echo "No matching buckets"
+gcloud storage ls --project "$PROJECT_ID" 2>/dev/null | grep "$PREFIX" || echo "No matching buckets"
 
 # VPC
 gcloud compute networks list --project "$PROJECT_ID" --filter="name~$PREFIX"
 
-# Service accounts
-gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX"
+# Firewall rules left on the VPC (for example k8s-*-node-http-hc from a
+# LoadBalancer Service). A rule on the VPC blocks the VPC delete. network~ is a
+# regex, so it can also match other VPCs: read the NETWORK column, then delete
+# as in B8 step 3.
+gcloud compute firewall-rules list --project "$PROJECT_ID" --filter="network~$PREFIX-vpc" \
+  --format="table(name,network.basename())"
 
-# Secret Manager
-gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith"
+# Service accounts (WI uses name_prefix only; sandbox-node and SmithDB use PREFIX)
+gcloud iam service-accounts list --project "$PROJECT_ID" \
+  --filter="email~$NAME_PREFIX-langsmith OR email~$PREFIX-sbox-node OR email~$PREFIX-smithdb-sa"
+
+# Secret Manager (scoped to this stack)
+gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith-$PREFIX-"
+
+# GCE Persistent Disks. Terraform does not track the in-cluster ClickHouse,
+# Postgres, and Redis disks. The GCE PD CSI driver names them pvc-<uid>. In a
+# shared project, other clusters can own pvc-* disks too.
+gcloud compute disks list --project "$PROJECT_ID" --filter="name~$PREFIX OR name~clickhouse OR name~^pvc-" \
+  --format='value(name,zone,sizeGb,status)'
 ```
 
 ---
@@ -229,51 +359,189 @@ Use this when Terraform state is lost (deleted, corrupted, or never configured a
 
 **How this happens:** State loss typically occurs when using a local backend (`terraform.tfstate` file) and the file is deleted during a directory restructure, or a remote GCS backend was never configured.
 
+> ### ⚠️ Shared projects — scope every delete
+>
+> A GCP project frequently hosts more than one LangSmith stack (several engineers'
+> test deployments, or test alongside prod). Broad filters such as
+> `--filter="name~langsmith"` match **every** tenant. Filter-based delete loops
+> (firewall, subnets) are not interactive. B6 asks for confirmation and deletes
+> only the captured list.
+>
+> Before running anything below, list what else lives in the project:
+>
+> ```bash
+> gcloud container clusters list --project "$PROJECT_ID"
+> gcloud sql instances list --project "$PROJECT_ID"
+> ```
+>
+> If anything other than your own stack appears, delete by **explicit resource name**
+> rather than by filter. Each step below is scoped to `$PREFIX`; do not widen it.
+
 ## B0 — Inventory What Exists
 
-Before deleting anything, build a complete inventory using the naming convention `<name_prefix>-<environment>-{resource}`:
+### Naming reference
+
+Resource names come from `infra/locals.tf`. The random `unique_suffix` is **not** applied
+uniformly — getting this wrong is the most common source of "resource not found" errors.
+`unique_suffix` defaults to `true`. When it is `false`, the rows marked "if enabled"
+have no `-<suffix>` (for example Cloud SQL is `$PREFIX-pg`).
+
+| Resource | Name | Suffix? |
+|---|---|---|
+| GKE cluster | `$PREFIX-gke` | no |
+| Node pool | `$PREFIX-nodepool` | no |
+| VPC | `$PREFIX-vpc` | no |
+| Subnet | `$PREFIX-subnet` | no |
+| Cloud Router | `$PREFIX-router` | no |
+| Cloud NAT | `$PREFIX-nat` | no |
+| PSA reserved range | `$PREFIX-vpc-private-ip` | no |
+| Cloud SQL | `$PREFIX-pg` or `$PREFIX-pg-<suffix>` | if `unique_suffix=true` (default) |
+| Memorystore Redis | `$PREFIX-redis` or `$PREFIX-redis-<suffix>` | if enabled |
+| JuiceFS Redis | `$PREFIX-jfs-redis` or `$PREFIX-jfs-redis-<suffix>` | if enabled |
+| GCS traces bucket | `$PROJECT_ID-$PREFIX-traces` or `...-traces-<suffix>` | if enabled; always prefixed with the project ID |
+| SmithDB object-store bucket | `$PROJECT_ID-$PREFIX-smithdb` or `...-smithdb-<suffix>` | if enabled; only when `enable_smithdb=true` |
+| SmithDB metastore | `$PREFIX-smithdb-pg` or `$PREFIX-smithdb-pg-<suffix>` | if enabled |
+| Workload Identity SA | `<name_prefix>-langsmith` | no — **`name_prefix` only, no `environment`** |
+| Sandbox-host node SA | `$PREFIX-sbox-node` | no — only when `enable_sandboxes=true` |
+| SmithDB SA | `$PREFIX-smithdb-sa` | no — only when `enable_smithdb=true` |
+| Secret Manager (`setup-env.sh`) | `langsmith-$PREFIX-<key>` | no |
+| Secret Manager (`secrets` module) | `$PREFIX-langsmith` | no |
+
+Two names break the `$PREFIX-*` pattern and are easy to miss: GCS buckets are prefixed
+with the **project ID**, and the Workload Identity SA uses **`name_prefix` alone** — for
+`name_prefix=acme`, `environment=test`, the SA is `acme-langsmith`, not `acme-test-langsmith`.
+The sandbox-host node SA and the SmithDB SA do include `environment` (`$PREFIX-...`).
+
+### Build the inventory
 
 ```bash
 PROJECT_ID="<your-project-id>"
 REGION="<region>"
 PREFIX="<name_prefix>-<environment>"
+NAME_PREFIX="<name_prefix>"          # without environment — for the service account
 
-echo "=== GKE ===" && gcloud container clusters list --project "$PROJECT_ID"
-echo "=== Cloud SQL ===" && gcloud sql instances list --project "$PROJECT_ID"
-echo "=== Memorystore ===" && gcloud redis instances list --region "$REGION" --project "$PROJECT_ID"
-echo "=== GCS ===" && gsutil ls 2>/dev/null | grep "$PREFIX"
+echo "=== GKE ===" && gcloud container clusters list --project "$PROJECT_ID" --filter="name~$PREFIX"
+echo "=== Cloud SQL ===" && gcloud sql instances list --project "$PROJECT_ID" --filter="name~$PREFIX"
+echo "=== Memorystore ===" && gcloud redis instances list --region "$REGION" --project "$PROJECT_ID" --filter="name~$PREFIX"
+echo "=== GCS ===" && gcloud storage ls --project "$PROJECT_ID" 2>/dev/null | grep "$PREFIX"
 echo "=== VPC ===" && gcloud compute networks list --project "$PROJECT_ID" --filter="name~$PREFIX"
-echo "=== Service Accounts ===" && gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX"
-echo "=== Secret Manager ===" && gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith"
+echo "=== Subnets ===" && gcloud compute networks subnets list --project "$PROJECT_ID" --filter="network~$PREFIX-vpc"
+echo "=== Firewall ===" && gcloud compute firewall-rules list --project "$PROJECT_ID" --filter="network~$PREFIX-vpc"
+echo "=== PSA range ===" && gcloud compute addresses list --project "$PROJECT_ID" --global --filter="name~$PREFIX"
+echo "=== Peerings ===" && gcloud services vpc-peerings list --network="$PREFIX-vpc" --project "$PROJECT_ID"
+echo "=== Service Accounts ===" && gcloud iam service-accounts list --project "$PROJECT_ID" \
+  --filter="email~$NAME_PREFIX-langsmith OR email~$PREFIX-sbox-node OR email~$PREFIX-smithdb-sa"
+echo "=== Secret Manager ===" && gcloud secrets list --project "$PROJECT_ID" \
+  --filter="name~langsmith-$PREFIX- OR name=$PREFIX-langsmith"
+```
+
+Also record the dynamically provisioned Persistent Disks before touching the cluster —
+they are not Terraform-managed and are orphaned if the cluster goes first (see B1):
+
+```bash
+kubectl get pv -o custom-columns='PV:.metadata.name,SIZE:.spec.capacity.storage,CLAIM:.spec.claimRef.name'
 ```
 
 ## B1 — Remove Kubernetes Resources
 
-Get cluster credentials first:
+Get cluster credentials first, then **confirm the context** — every command below is
+destructive and `kubectl` silently targets whatever context is active:
 
 ```bash
-gcloud container clusters get-credentials "$PREFIX-gke-<suffix>" \
+gcloud container clusters get-credentials "$PREFIX-gke" \
   --region "$REGION" --project "$PROJECT_ID"
+
+kubectl config current-context     # must be gke_<project>_<region>_<PREFIX>-gke
 ```
 
-Then remove Kubernetes resources in order:
+> **`./helm/scripts/uninstall.sh` works in this scenario.** It treats
+> `infra/terraform.tfvars` and `terraform output` as optional: when neither resolves it
+> keeps the active `kubectl` context, prints the context it is about to act on, and asks
+> for confirmation. It removes the JuiceFS and sandbox volumes before the Helm release,
+> while the CSI driver can still unmount them, and it keeps the in-cluster ClickHouse,
+> Postgres, and Redis data PVCs unless `DELETE_DATA_PVCS=true`. `RELEASE_NAME` and
+> `NAMESPACE` override the defaults.
+>
+> ```bash
+> gcloud container clusters get-credentials "$PREFIX-gke" \
+>   --region "$REGION" --project "$PROJECT_ID"
+> DELETE_DATA_PVCS=true ./helm/scripts/uninstall.sh
+> ```
+>
+> Prefer the script. Use the manual sequence below when the script is not available,
+> when it reports resources it could not remove, or to confirm what it did.
+
+Remove Kubernetes resources in this order:
 
 ```bash
-# Delete LGP CRD (retained by resource policy)
+# 1. LangGraph Platform deployments. The operator reclaims their PVCs, so let it
+#    finish before deleting the CRD.
+kubectl delete lgp --all -n langsmith --timeout=300s 2>/dev/null || true
 kubectl delete crd lgps.apps.langchain.ai 2>/dev/null || true
 
-# Delete ScaledObjects before KEDA (clears finalizers)
-kubectl delete scaledobjects --all -A 2>/dev/null || true
+# 2. ScaledObjects before KEDA (clears finalizers)
+kubectl delete scaledobjects --all -n langsmith 2>/dev/null || true
 
-# Uninstall Helm releases
-helm uninstall langsmith -n langsmith 2>/dev/null || true
+# 3. Sandboxes / JuiceFS — ONLY if enabled. Delete the consumer and its claims while
+#    the CSI driver is still running, or mount pods hang on juicefs.com/finalizer with
+#    no controller left to clear it.
+#    Use while-read (not xargs -r): -r is GNU-only and macOS xargs rejects it, so
+#    the deletes would be skipped and helm uninstall would hang on JuiceFS finalizers.
+while IFS= read -r _obj; do
+  [[ -z "$_obj" ]] && continue
+  kubectl delete "$_obj" -n langsmith --timeout=120s
+done < <(kubectl get deployments,statefulsets -n langsmith -o name 2>/dev/null | grep -i 'sandbox-host' || true)
+while IFS= read -r _obj; do
+  [[ -z "$_obj" ]] && continue
+  kubectl delete "$_obj" -n langsmith --timeout=120s
+done < <(kubectl get pvc -n langsmith -o name 2>/dev/null | grep -Ei 'juicefs|smithbox' || true)
+
+# 4. LangSmith release
+helm uninstall langsmith -n langsmith --timeout=10m
+
+# 5. Operator-managed leftovers (no Helm owner reference). Label-scoped so other
+#    teams' workloads in a shared namespace are untouched.
+kubectl delete deployments,services,pods,jobs,statefulsets,replicasets \
+  -l "app.kubernetes.io/instance=langsmith" -n langsmith --ignore-not-found --timeout=120s
+kubectl delete deployments,pods \
+  -l "langsmith.dev/managed-by=operator" -n langsmith --ignore-not-found --timeout=120s
+
+# 6. In-cluster data PVCs (ClickHouse, Postgres, Redis, add-on Postgres and Redis,
+#    SmithDB taskdb) — reclaims the GCE PDs while CSI is alive. DATA IS DELETED.
+kubectl delete pvc -n langsmith -l app.kubernetes.io/component=clickhouse --ignore-not-found --timeout=120s
+while IFS= read -r _obj; do
+  [[ -z "$_obj" ]] && continue
+  kubectl delete "$_obj" -n langsmith --timeout=120s
+done < <(kubectl get pvc -n langsmith -o name 2>/dev/null \
+  | grep -Ei 'clickhouse|/data-langsmith-((standalone-(fleet|insights|polly)|smithdb-taskdb)-)?(postgres|redis)-[0-9]+$' \
+  || true)
+
+# 7. Remaining bootstrap releases. Delete the Gateway first, so that GKE deletes
+#    its load balancer. Run the get command again until it shows no Service.
+#    GKE can still leave the shared k8s-<cluster-id>-node-http-hc rule (B8 step 3).
+kubectl -n envoy-gateway-system delete gateway --all 2>/dev/null || true
+kubectl -n envoy-gateway-system get svc -l gateway.envoyproxy.io/owning-gateway-name
 helm uninstall cert-manager -n cert-manager 2>/dev/null || true
 helm uninstall keda -n keda 2>/dev/null || true
 helm uninstall envoy-gateway -n envoy-gateway-system 2>/dev/null || true
 
-# Delete namespaces
+# 8. Namespaces
 kubectl delete namespace langsmith cert-manager keda envoy-gateway-system 2>/dev/null || true
 ```
+
+**Verify the disks were reclaimed before deleting the cluster.** PVs use reclaim policy
+`Delete`, so the CSI driver removes the backing PD when the claim goes — but only while the
+cluster still exists. Anything left here becomes an untracked orphan that is very hard to
+attribute later:
+
+```bash
+kubectl get pv 2>/dev/null            # expect: no resources
+gcloud compute disks list --project "$PROJECT_ID" --filter="name~^pvc-" \
+  --format="table(name,zone,sizeGb,users)"
+```
+
+Cross-check any remaining `pvc-*` disks against the PV list captured in B0. A disk with no
+`users` and no matching PV is an orphan from this stack.
 
 **Known issue — KEDA finalizers:** If the `langsmith` namespace gets stuck in `Terminating`, patch out the finalizers:
 
@@ -289,14 +557,24 @@ done
 # List clusters to find the exact name
 gcloud container clusters list --project "$PROJECT_ID"
 
-# Delete the cluster (this also deletes node pools)
-gcloud container clusters delete "$PREFIX-gke-<suffix>" \
+# Delete the cluster (this also deletes node pools). The cluster name carries no suffix.
+gcloud container clusters delete "$PREFIX-gke" \
   --region "$REGION" --project "$PROJECT_ID" --quiet
 ```
 
 > GKE cluster deletion takes ~5 minutes. It automatically releases the external IP used by the Envoy Gateway.
 
-## B3 — Delete Cloud SQL Instance
+Deleting the cluster also removes its node boot disks, the GKE-managed private-endpoint
+subnet (`gke-$PREFIX-gke-<hash>-pe-subnet`), and the `gke-$PREFIX-gke-<hash>-*` firewall
+rules. It does **not** reliably remove the `k8s-*` firewall rules created for
+LoadBalancer services — check for leftovers in B8, since a rule still attached to the VPC
+blocks the VPC delete.
+
+## B3 — Delete Cloud SQL Instances
+
+Export anything you need first (see A5a). Deleting the instance deletes its
+on-demand backups, its automated backups and its PITR logs with it — a backup
+retention policy does not survive the instance.
 
 ```bash
 # Check deletion protection
@@ -312,6 +590,32 @@ gcloud sql instances delete "$PREFIX-pg-<suffix>" \
   --project "$PROJECT_ID" --quiet
 ```
 
+When the data still matters, take a final backup as part of the delete instead.
+It outlives the instance and can rebuild it later:
+
+```bash
+gcloud sql instances delete "$PREFIX-pg-<suffix>" \
+  --project "$PROJECT_ID" --quiet \
+  --enable-final-backup --final-backup-retention-days 30
+```
+
+If an instance is deleted by mistake with no final backup, Cloud Customer Care
+can restore it within four days of the deletion.
+
+Repeat all three commands for `$PREFIX-smithdb-pg-<suffix>` when SmithDB was
+enabled with a Terraform-created metastore. List both with:
+
+```bash
+gcloud sql instances list --project "$PROJECT_ID" --filter="name~$PREFIX"
+```
+
+The deleted name is free immediately, so a rebuild under the identical name
+succeeds. What lingers is the instance's underlying resources: Google waits four
+days before releasing them, which is what holds the private service connection
+in B8. The module appends a random suffix by default (`unique_suffix = true`);
+with `unique_suffix = false` the instance is `$PREFIX-pg` with no suffix — list
+first and use the exact name.
+
 ## B4 — Delete Memorystore Redis Instance
 
 ```bash
@@ -319,87 +623,335 @@ gcloud redis instances delete "$PREFIX-redis-<suffix>" \
   --region "$REGION" --project "$PROJECT_ID" --quiet
 ```
 
-## B5 — Empty and Delete GCS Bucket
+If sandboxes were enabled, a second instance exists for JuiceFS metadata (`$PREFIX-jfs-redis-<suffix>`). Delete that too:
 
 ```bash
-# Delete all objects (including versioned objects)
-gsutil -m rm -r gs://"$PREFIX-traces-<suffix>"
-
-# Delete the bucket
-gsutil rb gs://"$PREFIX-traces-<suffix>"
+gcloud redis instances list --region "$REGION" --project "$PROJECT_ID" --filter="name~$PREFIX"
+gcloud redis instances delete "$PREFIX-jfs-redis-<suffix>" \
+  --region "$REGION" --project "$PROJECT_ID" --quiet
 ```
 
-If the bucket has versioned objects, use:
+## B5 — Empty and Delete GCS Bucket
+
+The bucket name is prefixed with the **project ID**, unlike every other resource — confirm
+it before deleting:
 
 ```bash
-gsutil -m rm -a gs://"$PREFIX-traces-<suffix>"/**
-gsutil rb gs://"$PREFIX-traces-<suffix>"
+gcloud storage ls --project "$PROJECT_ID" | grep "$PREFIX"
+```
+
+Use the exact names from that listing. Default names when `unique_suffix=true`:
+
+```bash
+TRACES_BUCKET="gs://$PROJECT_ID-$PREFIX-traces-<suffix>"
+# unique_suffix=false: gs://$PROJECT_ID-$PREFIX-traces
+
+# Remove all objects including noncurrent versions, then the bucket itself
+gcloud storage rm -r --all-versions "$TRACES_BUCKET" --project "$PROJECT_ID"
+```
+
+When `enable_smithdb=true`, a second bucket holds SmithDB segments. Delete it the same way:
+
+```bash
+SMITHDB_BUCKET="gs://$PROJECT_ID-$PREFIX-smithdb-<suffix>"
+# unique_suffix=false: gs://$PROJECT_ID-$PREFIX-smithdb
+gcloud storage rm -r --all-versions "$SMITHDB_BUCKET" --project "$PROJECT_ID"
+```
+
+`gcloud storage rm -r` removes the bucket along with its contents, so a separate
+`buckets delete` is normally unnecessary. If a bucket survives (objects added mid-delete),
+remove it explicitly:
+
+```bash
+gcloud storage buckets delete "$TRACES_BUCKET" --project "$PROJECT_ID"
+# gcloud storage buckets delete "$SMITHDB_BUCKET" --project "$PROJECT_ID"
 ```
 
 ## B6 — Delete Secret Manager Secrets
 
+> ### 🛑 Do not filter on `langsmith` alone
+>
+> Secrets are named `langsmith-<name_prefix>-<environment>-<key>`, so **every** stack in
+> the project starts with `langsmith-`. A filter of `name~langsmith` matches all of them,
+> and piping that into `gcloud secrets delete --quiet` destroys other tenants' credentials
+> with no prompt and no undo. Always include `$PREFIX` **and** the trailing hyphen:
+> `name~langsmith-$PREFIX-`.
+>
+> Without the trailing hyphen, `PREFIX=acme-test` also matches `acme-test2`. The hyphen
+> is not a boundary either: `~` is a regex match, not a prefix test, so
+> `name~langsmith-acme-test-` still matches every secret of a stack whose own prefix is
+> `acme-test-dev`. That is why the sequence below prints the list and waits — read the
+> names before you answer.
+
+Two naming patterns exist. The `setup-env.sh` / `manage-secrets.sh` scripts create
+`langsmith-$PREFIX-<key>`; the Terraform `secrets` module creates a single
+`$PREFIX-langsmith`. Capture the list once, read it, confirm, then delete **that**
+list — do not re-run the filter into `delete`.
+
 ```bash
-for secret in $(gcloud secrets list --project "$PROJECT_ID" \
-  --filter="name~langsmith" --format="value(name)"); do
-  gcloud secrets delete "$secret" --project "$PROJECT_ID" --quiet
-done
+# Capture and review — do not delete yet
+SECRETS=$(gcloud secrets list --project "$PROJECT_ID" \
+  --filter="name~langsmith-$PREFIX- OR name=$PREFIX-langsmith" \
+  --format="value(name)")
+printf '%s\n' "$SECRETS"
+
+printf "Delete only the secrets printed above? [y/N] "
+read -r _confirm
+if [[ "$_confirm" != "y" && "$_confirm" != "Y" ]]; then
+  echo "Skipped secret deletion."
+else
+  while IFS= read -r secret; do
+    [[ -z "$secret" ]] && continue
+    echo "deleting $secret"
+    gcloud secrets delete "$secret" --project "$PROJECT_ID" --quiet
+  done <<< "$SECRETS"
+fi
 ```
+
+If `enable_secret_manager_module = false` and secrets were never seeded, this step returns
+nothing — that is expected, not an error.
 
 ## B7 — Delete Workload Identity Service Account
 
-```bash
-# Find the SA
-gcloud iam service-accounts list --project "$PROJECT_ID" \
-  --filter="email~$PREFIX"
+The Workload Identity SA uses **`name_prefix` only** — it does not include `environment`.
+For `name_prefix=acme`, `environment=test`, the account is `acme-langsmith`, not
+`acme-test-langsmith`, so a `$PREFIX`-based filter finds nothing. The sandbox-host node
+SA and the SmithDB SA **do** include environment (`$PREFIX-sbox-node`, `$PREFIX-smithdb-sa`).
 
-# Delete it
-gcloud iam service-accounts delete "$PREFIX-langsmith@$PROJECT_ID.iam.gserviceaccount.com" \
-  --project "$PROJECT_ID" --quiet
+Remove the project-level role bindings **before** the account. Deleting a service
+account does not withdraw the roles granted to it: the binding stays in the project
+policy as `deleted:serviceAccount:<email>?uid=<numeric-id>`, and it is far harder to
+attribute once the readable email is gone.
+
+```bash
+SA="$NAME_PREFIX-langsmith@$PROJECT_ID.iam.gserviceaccount.com"
+
+# Which project roles does it hold?
+gcloud projects get-iam-policy "$PROJECT_ID" \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:serviceAccount:$SA" \
+  --format="value(bindings.role)"
+
+# Remove each role that command prints
+gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA" --role="<role>" --condition=None
 ```
+
+`--condition=None` is required as soon as the project policy holds any conditional
+binding; without it the command refuses to guess which binding you mean. If the account
+is already deleted, use the `deleted:` member string, quoted — it contains a `?`:
+
+```bash
+gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" \
+  --filter="bindings.members~^deleted:" --format="value(bindings.members,bindings.role)"
+```
+
+Then delete the accounts themselves.
+
+```bash
+# List first — confirm each email belongs to this stack
+gcloud iam service-accounts list --project "$PROJECT_ID" \
+  --filter="email~$NAME_PREFIX-langsmith OR email~$PREFIX-sbox-node OR email~$PREFIX-smithdb-sa" \
+  --format="value(email)"
+
+# Workload Identity (enable_gcp_iam_module=true)
+gcloud iam service-accounts delete "$NAME_PREFIX-langsmith@$PROJECT_ID.iam.gserviceaccount.com" \
+  --project "$PROJECT_ID" --quiet
+
+# Sandbox-host node (enable_sandboxes=true)
+gcloud iam service-accounts delete "$PREFIX-sbox-node@$PROJECT_ID.iam.gserviceaccount.com" \
+  --project "$PROJECT_ID" --quiet 2>/dev/null || true
+
+# SmithDB (enable_smithdb=true)
+gcloud iam service-accounts delete "$PREFIX-smithdb-sa@$PROJECT_ID.iam.gserviceaccount.com" \
+  --project "$PROJECT_ID" --quiet 2>/dev/null || true
+```
+
+Nothing is returned when the matching module flag is false. In a shared project take care
+that `$NAME_PREFIX` is specific enough — a short prefix can substring-match another
+stack's Workload Identity account.
 
 ## B8 — Delete VPC and Networking
 
 **Must be done last.** Order matters — subnets cannot be deleted while GKE is still running.
 
+The VPC, subnet, router, and NAT names carry **no** random suffix.
+
 ```bash
-VPC_NAME="$PREFIX-vpc-<suffix>"
+VPC_NAME="$PREFIX-vpc"
 
 # 1. Delete Cloud NAT
-gcloud compute routers nats delete "$PREFIX-nat-<suffix>" \
-  --router="$PREFIX-router-<suffix>" \
+gcloud compute routers nats delete "$PREFIX-nat" \
+  --router="$PREFIX-router" \
   --region="$REGION" --project "$PROJECT_ID" --quiet
 
 # 2. Delete Cloud Router
-gcloud compute routers delete "$PREFIX-router-<suffix>" \
+gcloud compute routers delete "$PREFIX-router" \
   --region="$REGION" --project "$PROJECT_ID" --quiet
 
-# 3. Delete subnets
+# 3. Delete firewall rules. A rule still attached to the VPC blocks the VPC delete.
+#    This catches both the module's own rules and any k8s-* LoadBalancer leftovers.
+#    Compare the rule's own network, do not filter on it: --filter="network~$VPC_NAME"
+#    is a regex, so it also selects rules on "$VPC_NAME-2" and on any other VPC whose
+#    name contains this one, and this loop deletes what it selects.
+while IFS='|' read -r fw net; do
+  [[ -z "$fw" || "$net" != "$VPC_NAME" ]] && continue
+  echo "deleting firewall rule $fw"
+  gcloud compute firewall-rules delete "$fw" --project "$PROJECT_ID" --quiet
+done < <(gcloud compute firewall-rules list --project "$PROJECT_ID" \
+  --format="value[separator='|'](name,network.basename())")
+
+# 4. Delete subnets
 for subnet in $(gcloud compute networks subnets list \
   --network="$VPC_NAME" --project "$PROJECT_ID" --format="value(name)"); do
   gcloud compute networks subnets delete "$subnet" \
     --region="$REGION" --project "$PROJECT_ID" --quiet
 done
 
-# 4. Remove private service connection (VPC peering for Cloud SQL / Memorystore)
+# 5. Remove private service connection (VPC peering for Cloud SQL / Memorystore)
 gcloud services vpc-peerings delete \
-  --network="$VPC_NAME" --project "$PROJECT_ID" --quiet 2>/dev/null || true
+  --network="$VPC_NAME" --project "$PROJECT_ID" --quiet
 
-# 5. Delete the VPC
+# 6. Release the PSA reserved range. Terraform creates this global address for the
+#    private service connection; it is not removed with the peering.
+gcloud compute addresses delete "$VPC_NAME-private-ip" \
+  --global --project "$PROJECT_ID" --quiet
+
+# 7. Delete the VPC
 gcloud compute networks delete "$VPC_NAME" --project "$PROJECT_ID" --quiet
 ```
 
-**Known issue — private service connection:** If the VPC deletion fails with `"has active peerings"`, the private service peering for Cloud SQL / Memorystore is still attached. The `gcloud services vpc-peerings delete` command above handles it. If that fails, wait ~2 minutes for the Cloud SQL instance deletion to propagate and retry.
+### Known issue — private service connection will not delete
+
+Step 5 commonly fails with:
+
+```
+Failed to delete connection; Producer services (e.g. CloudSQL, Cloud Memstore, etc.)
+are still using this connection.   [FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION]
+```
+
+Read this as a wait, not as a stuck backend. Deleting a Cloud SQL instance returns
+success immediately, but Google waits **four days** before it releases the producer-side
+resources, and the private connection cannot be deleted until then. A teardown that
+deletes Cloud SQL in B3 and reaches this step minutes later is inside that window by
+definition.
+
+**Rule out an actual leftover first** — note that `--region=-` searches all regions, which
+matters if an instance was created outside `$REGION`:
+
+```bash
+gcloud sql instances list --project "$PROJECT_ID" \
+  --format="value(name,settings.ipConfiguration.privateNetwork)" | grep "$VPC_NAME"
+gcloud redis instances list --region=- --project "$PROJECT_ID" \
+  --format="value(name,authorizedNetwork)" | grep "$VPC_NAME"
+gcloud filestore instances list --project "$PROJECT_ID" \
+  --format="value(name,networks.network)" | grep "$VPC_NAME"
+```
+
+If a producer instance is listed, delete it and retry. If all three return nothing, the
+producer resources of an instance you already deleted are still holding the connection.
+The three checks cannot see them: the instance is gone from your project while its
+backing resources are not yet released.
+
+Nothing shortens the producer-side wait, including the last resort below. Retry step 5
+periodically, or stop here and finish B8 on a later pass — a VPC with no subnets and no
+rules costs nothing and blocks nothing. Record it as an open item so it is not forgotten.
+
+### Last resort — remove the peering at the Compute Engine layer
+
+Google's documentation says not to delete a private connection by deleting its VPC
+Network Peering connection, so treat this as unsupported rather than as a second
+procedure:
+
+```bash
+gcloud compute networks peerings delete servicenetworking-googleapis-com \
+  --network="$VPC_NAME" --project "$PROJECT_ID"
+```
+
+It clears the route immediately and the VPC then deletes. What it does not do is release
+the connection on the producer side, and the cost lands later: creating a private
+connection again in a network of this name can fail with a `Cannot modify allocated
+ranges` error, which is harder to clear than the wait would have been.
+
+Use it only when all of these hold:
+
+- The three producer checks above return nothing.
+- The VPC is being deleted for good in this pass, not repaired.
+- Neither the VPC name nor its allocated range will be reused in this project.
+- Waiting has a real cost — a closing account, a billing cutoff, a quota that blocks
+  other work.
+
+Otherwise wait. A stack rebuilt under the same `name_prefix` and `environment` takes the
+same VPC name, and that is the case this breaks.
+
+### Verifying peering removal
+
+Check **both** sides. `gcloud compute networks peerings list --format="value(name)"` is a
+trap: `name` there is the *network* name, not the peering name, so grepping it for
+`servicenetworking` never matches and an unfinished delete looks complete. Use:
+
+```bash
+# Service-networking side — empty output means removed
+gcloud services vpc-peerings list --network="$VPC_NAME" --project "$PROJECT_ID" \
+  --format="value(peering)"
+
+# Compute side — "Listed 0 items." means removed
+gcloud compute networks peerings list --project "$PROJECT_ID" --network="$VPC_NAME"
+```
 
 ## B9 — Verify Cleanup
 
 ```bash
-gcloud container clusters list --project "$PROJECT_ID" | grep "$PREFIX" || echo "GKE: clean"
-gcloud sql instances list --project "$PROJECT_ID" | grep "$PREFIX" || echo "Cloud SQL: clean"
-gcloud redis instances list --region "$REGION" --project "$PROJECT_ID" | grep "$PREFIX" || echo "Redis: clean"
-gsutil ls 2>/dev/null | grep "$PREFIX" || echo "GCS: clean"
-gcloud compute networks list --project "$PROJECT_ID" --filter="name~$PREFIX" | grep "$PREFIX" || echo "VPC: clean"
-gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX" | grep "$PREFIX" || echo "IAM SA: clean"
-gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith" | grep langsmith || echo "Secrets: clean"
+chk() {
+  local label="$1"
+  shift
+  local r
+  r=$("$@" 2>&1) || true
+  if [[ -z "$r" ]]; then
+    echo "OK $label: clean"
+  else
+    echo "FAIL $label: still present"
+    echo "$r"
+  fi
+}
+
+chk "GKE"       gcloud container clusters list --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+chk "Cloud SQL" gcloud sql instances list --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+chk "Redis"     gcloud redis instances list --region=- --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+# GCS: grep the listing yourself in a shared project — other buckets must remain.
+_gcs=$(gcloud storage ls --project "$PROJECT_ID" 2>/dev/null | grep "$PREFIX" || true)
+if [[ -z "$_gcs" ]]; then echo "OK GCS: clean"; else echo "FAIL GCS: still present"; echo "$_gcs"; fi
+chk "VPC"       gcloud compute networks list --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+chk "Subnets"   gcloud compute networks subnets list --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+chk "Firewall"  gcloud compute firewall-rules list --project "$PROJECT_ID" --filter="network~$PREFIX-vpc" --format="value(name)"
+chk "Routers"   gcloud compute routers list --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+chk "Addresses" gcloud compute addresses list --project "$PROJECT_ID" --global --filter="name~$PREFIX" --format="value(name)"
+chk "Disks (named)" gcloud compute disks list --project "$PROJECT_ID" --filter="name~$PREFIX" --format="value(name)"
+chk "Disks (pvc-*)" gcloud compute disks list --project "$PROJECT_ID" --filter="name~^pvc-" --format="value(name)"
+chk "IAM SA (WI)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$NAME_PREFIX-langsmith" --format="value(email)"
+chk "IAM SA (sandbox node)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX-sbox-node" --format="value(email)"
+chk "IAM SA (SmithDB)" gcloud iam service-accounts list --project "$PROJECT_ID" --filter="email~$PREFIX-smithdb-sa" --format="value(email)"
+chk "IAM bindings (deleted principals)" gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" --filter="bindings.members~^deleted:" --format="value(bindings.members,bindings.role)"
+chk "Secrets"   gcloud secrets list --project "$PROJECT_ID" --filter="name~langsmith-$PREFIX- OR name=$PREFIX-langsmith" --format="value(name)"
+```
+
+`Firewall` is filtered by **network**, not by rule name. `k8s-*` LoadBalancer rules
+do not contain `$PREFIX` in the name; a name filter would report clean while B8 still
+fails. `Disks (pvc-*)` lists every dynamically provisioned disk in the project. In a
+shared project that is not proof of ownership — compare against the B0 PV inventory.
+`IAM bindings (deleted principals)` catches a role left granted to a service account
+that no longer exists (see B7). In a shared project it also reports other teams'
+leftovers, so read the emails before acting on any of them.
+
+### Blast-radius check (shared projects)
+
+Confirm you removed only your own stack. Compare against the inventory taken before
+teardown — everything else should still be there:
+
+```bash
+gcloud container clusters list --project "$PROJECT_ID" --format="value(name)"
+gcloud sql instances list --project "$PROJECT_ID" --format="value(name)"
+gcloud secrets list --project "$PROJECT_ID" --format="value(name)" | wc -l
 ```
 
 ---
@@ -418,9 +970,21 @@ Several resources can be deleted in parallel since they have no dependencies on 
 ## Lessons Learned
 
 - **Always configure a remote backend** (GCS bucket) before `terraform apply` — local state is fragile and easily lost. See `backend.tf.example` in `infra/`.
+- **Scope every filter in a shared project.** `--filter="name~langsmith"` matches every tenant's secrets, not just yours. Scope to `langsmith-$PREFIX-`, capture the list, confirm, then delete that captured list — do not re-run the filter into `gcloud secrets delete --quiet`.
+- **`unique_suffix` is not applied uniformly.** Cluster, VPC, subnet, router, and NAT never carry a suffix. Cloud SQL, Redis, and buckets get `-<suffix>` only when `unique_suffix=true` (the default). The GCS buckets are additionally prefixed with the project ID. The Workload Identity SA uses `name_prefix` **without** `environment`; the sandbox-host node SA and SmithDB SA use `$PREFIX`. See the naming table in B0.
+- **`./helm/scripts/uninstall.sh` cannot run without state.** It resolves the cluster from `terraform.tfvars` plus `terraform output`, so it fails in the very scenario Option B describes. B1 carries the manual equivalent.
+- **Delete PVCs before the cluster, and verify the disks are gone.** Reclaim is the CSI driver's job and it dies with the cluster. Orphaned `pvc-*` disks carry no stack identifier — only a `created-for` namespace annotation — so when two clusters in a project share a namespace name, ownership becomes unprovable and the disks are stranded indefinitely.
+- **`k8s-*` LoadBalancer firewall rules can survive cluster deletion** and will block the VPC delete. Delete the Gateway before the cluster (A3, B1 step 7). The shared `k8s-<cluster-id>-node-http-hc` rule can still survive, so check for it (A8). B8 step 3 sweeps every rule attached to the VPC.
+- **The PSA reserved range is a separate resource.** `$PREFIX-vpc-private-ip` is not removed with the peering and must be deleted before the VPC.
+- **Verify peering removal on both sides.** `gcloud compute networks peerings list --format="value(name)"` returns the *network* name, not the peering name — grepping it for `servicenetworking` silently reports success on an unfinished delete. Use `gcloud services vpc-peerings list --format="value(peering)"`.
+- **The PSA delete can stay blocked well past "a couple of minutes."** `FLOW_SN_DC_RESOURCE_PREVENTING_DELETE_CONNECTION` persists after the producer instances are gone. Once Cloud SQL, Redis (all regions), and Filestore all come back empty for the VPC, drop to `gcloud compute networks peerings delete`.
+- **On chart 0.16, JuiceFS CSI lives in the LangSmith Helm release.** Uninstall the sandbox-host workload and JuiceFS claims before `helm uninstall`, or mount pods stay `Terminating` with `juicefs.com/finalizer` and namespace delete hangs. Use `./helm/scripts/uninstall.sh`. Chart 0.17 has no CSI driver, so the same script is safe on either line.
+- **In-cluster ClickHouse, Postgres, and Redis use dynamically provisioned GCE PDs.** Terraform does not track them. Run `DELETE_DATA_PVCS=true make uninstall` before `terraform destroy`, or the disks are orphaned.
+- **Terraform validates `postgres_password` on destroy.** Source `infra/scripts/setup-env.sh` first. If the Secret Manager secret is already gone, set `export TF_VAR_postgres_password="any-placeholder"`.
+- **The Cloud SQL database is destroyed before its user.** `google_sql_database` carries a `depends_on` for the matching `google_sql_user`, because Cloud SQL rejects `DROP ROLE` while the role owns objects (`role "langsmith" cannot be dropped because some objects depend on it`). On a stack built before that edge existed, re-run `terraform destroy` once the database is gone.
 - **KEDA finalizers block namespace deletion** if the KEDA controller is uninstalled first — delete ScaledObjects before uninstalling KEDA, or patch out finalizers manually.
 - **The LGP CRD is kept by resource policy** — `helm uninstall` will not remove it; delete it manually with `kubectl delete crd lgps.apps.langchain.ai`.
 - **GKE deletion releases the external IP** — if you re-deploy, a new IP is issued. Update your DNS A record. To avoid this, use a static regional IP (not currently wired in this stack).
-- **Private service connection peering** (`servicenetworking-googleapis-com`) must be removed before the VPC can be deleted. It's not created by Terraform directly — it's managed by the `servicenetworking` API. The `gcloud services vpc-peerings delete` command removes it.
+- **Private service connection peering** (`servicenetworking-googleapis-com`) is managed by the `servicenetworking` API, not by Terraform directly. With `deletion_policy = "ABANDON"`, `terraform destroy` leaves the peering, and the VPC delete removes it. In a manual teardown, `gcloud services vpc-peerings delete` removes it.
 - **Cloud SQL deletion takes ~2 minutes** — the VPC peering is not released until the instance is fully gone. Wait before attempting VPC cleanup.
-- **GCS bucket with versioned objects** — requires `gsutil rm -a` (all versions) before `gsutil rb` will succeed.
+- **GCS bucket with versioned objects** — requires `gcloud storage rm -r --all-versions` (noncurrent versions included); a plain recursive delete leaves them behind and the bucket delete then fails.

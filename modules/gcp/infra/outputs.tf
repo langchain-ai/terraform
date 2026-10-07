@@ -125,6 +125,31 @@ output "redis_port" {
   value       = var.redis_source == "external" ? module.redis[0].port : null
 }
 
+output "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name for the sandbox JuiceFS config when sandboxes are enabled"
+  value       = var.enable_sandboxes ? var.sandbox_juicefs_csi_config_secret_name : null
+}
+
+output "sandbox_juicefs_redis_instance_name" {
+  description = "Dedicated Memorystore Redis instance name for sandbox JuiceFS metadata"
+  value       = var.enable_sandboxes ? module.sandbox_juicefs_redis[0].instance_name : null
+}
+
+output "sandbox_juicefs_bucket_url" {
+  description = "GCS bucket URL passed to JuiceFS for sandbox object storage"
+  value       = var.enable_sandboxes ? module.storage.bucket_url : null
+}
+
+output "sandbox_host_machine_type" {
+  description = "Resolved sandbox-host machine type (from sizing_profile unless set explicitly)"
+  value       = var.enable_sandboxes ? local.sandbox_host_machine_type : null
+}
+
+output "sandbox_host_node_service_account_email" {
+  description = "Restricted GCP service account email assigned to sandbox-host GKE nodes"
+  value       = var.enable_sandboxes ? google_service_account.sandbox_host_node[0].email : null
+}
+
 #------------------------------------------------------------------------------
 # ClickHouse Outputs
 #------------------------------------------------------------------------------
@@ -284,6 +309,145 @@ output "letsencrypt_issuer" {
 }
 
 #------------------------------------------------------------------------------
+# SmithDB Outputs (chart 0.17)
+# Consumed by Pass 2 (helm/scripts/init-values.sh) to generate the SmithDB
+# values overrides. The metastore password is deliberately not exposed
+# here — it only ever lands in the smithdb-metastore Kubernetes secret.
+#------------------------------------------------------------------------------
+output "enable_smithdb" {
+  description = "Whether SmithDB supporting infrastructure is enabled"
+  value       = var.enable_smithdb
+}
+
+output "smithdb_object_store_bucket" {
+  description = "SmithDB object-store GCS bucket name"
+  value       = var.enable_smithdb ? module.smithdb[0].object_store_bucket_name : null
+}
+
+output "smithdb_gsa_email" {
+  description = "GCP service account email for SmithDB pods. Becomes the iam.gke.io/gcp-service-account annotation on the SmithDB service account."
+  value       = var.enable_smithdb ? module.smithdb[0].gsa_email : null
+}
+
+output "smithdb_ksa_name" {
+  description = "Kubernetes service account name the chart creates for SmithDB, which the Workload Identity binding is scoped to"
+  value       = var.enable_smithdb ? module.smithdb[0].ksa_name : null
+}
+
+output "smithdb_metastore_host" {
+  description = "SmithDB metastore private IP or hostname"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_host : null
+}
+
+output "smithdb_metastore_instance_name" {
+  description = "Cloud SQL instance name for the SmithDB metastore, or null for an external metastore. Needed to export the metastore before teardown, since Cloud SQL backups are deleted with the instance."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_instance_name : null
+}
+
+output "smithdb_metastore_tier" {
+  description = "Cloud SQL tier of the created SmithDB metastore (resolved from smithdb_metastore_tier and smithdb_sizing), or null for an external metastore or when SmithDB is disabled"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_tier : null
+}
+
+output "smithdb_metastore_port" {
+  description = "SmithDB metastore port"
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_port : null
+}
+
+output "smithdb_metastore_use_ssl" {
+  description = "Whether SmithDB connects to the metastore over TLS directly (resolved; null when SmithDB is disabled)"
+  value       = var.enable_smithdb ? local.smithdb_metastore_use_ssl : null
+}
+
+output "smithdb_metastore_use_auth_proxy" {
+  description = "Whether SmithDB reaches the metastore through a Cloud SQL Auth Proxy sidecar on the Pod loopback (resolved; null when SmithDB is disabled)"
+  value       = var.enable_smithdb ? local.smithdb_metastore_use_auth_proxy : null
+}
+
+output "smithdb_metastore_connection_name" {
+  description = "Cloud SQL connection name (PROJECT:REGION:INSTANCE) for the SmithDB metastore. The positional argument for the Auth Proxy sidecar; null for an external metastore."
+  value       = var.enable_smithdb ? module.smithdb[0].metastore_connection_name : null
+}
+
+output "smithdb_auth_proxy_image" {
+  description = "Pinned Cloud SQL Auth Proxy image the generated SmithDB values use for the sidecar"
+  value       = var.smithdb_auth_proxy_image
+}
+
+output "smithdb_metastore_secret_name" {
+  description = "Kubernetes secret holding the SmithDB metastore credentials (smithdb.config.existingSecretName)"
+  value       = var.enable_smithdb ? "smithdb-metastore" : null
+}
+
+output "smithdb_taskdb_secret_name" {
+  description = "Kubernetes secret holding the in-chart taskdb Postgres password used by the historical migration"
+  value       = var.enable_smithdb ? "smithdb-taskdb" : null
+}
+
+output "smithdb_ingestion_enabled" {
+  description = "Whether LangSmith writes are routed to SmithDB as well as ClickHouse"
+  value       = var.smithdb_ingestion_enabled
+}
+
+output "smithdb_migration_enabled" {
+  description = "Whether the historical ClickHouse-to-SmithDB migration integration is enabled"
+  value       = var.smithdb_migration_enabled
+}
+
+output "smithdb_query_enabled" {
+  description = "Whether LangSmith reads are served from SmithDB"
+  value       = var.smithdb_query_enabled
+}
+
+output "smithdb_node_pools" {
+  description = "SmithDB node pool names, or null on Autopilot, for smithdb_sizing = minimal, or when disabled"
+  value = local.smithdb_dedicated_pools ? {
+    instance_store = module.smithdb_nodes[0].instance_store_pool_name
+    compute        = module.smithdb_nodes[0].compute_pool_name
+  } : null
+}
+
+output "smithdb_local_ssd_capacity_gb" {
+  description = "Raw Local SSD capacity per cache node in GB. Allocatable ephemeral-storage is lower after filesystem and kubelet reservations."
+  value       = local.smithdb_dedicated_pools ? module.smithdb_nodes[0].local_ssd_capacity_gb : null
+}
+
+output "smithdb_node_pool_config" {
+  description = "Resolved SmithDB node pool shapes, or null when there are no SmithDB node pools"
+  value = local.smithdb_dedicated_pools ? {
+    instance_store_machine_type    = local.smithdb_instance_store_machine_type
+    instance_store_local_ssd_count = local.smithdb_instance_store_local_ssd_count
+    instance_store_disk_size_gb    = local.smithdb_instance_store_disk_size
+    compute_machine_type           = local.smithdb_compute_machine_type
+  } : null
+}
+
+output "smithdb_sizing" {
+  description = "Resolved SmithDB size, or null when SmithDB is disabled"
+  value       = var.enable_smithdb ? local.smithdb_sizing : null
+}
+
+output "smithdb_cache_storage" {
+  description = "Resolved SmithDB cache storage, or null when SmithDB is disabled"
+  value       = var.enable_smithdb ? local.smithdb_cache_storage : null
+}
+
+output "smithdb_quota_extra" {
+  description = "SmithDB headroom that k8s-bootstrap adds to the LangSmith namespace ResourceQuota"
+  value = {
+    cpu       = local.smithdb_quota_extra_cpu
+    memory_gi = local.smithdb_quota_extra_memory_gi
+    pods      = local.smithdb_quota_extra_pods
+  }
+}
+
+# helm/scripts/init-values.sh writes this to langsmith-values-smithdb-sizing.yaml.
+output "smithdb_helm_values" {
+  description = "SmithDB sizing and placement Helm values as YAML, or null when SmithDB is disabled"
+  value       = local.smithdb_helm_values
+}
+
+#------------------------------------------------------------------------------
 # Resource Summary
 #------------------------------------------------------------------------------
 output "resource_summary" {
@@ -301,6 +465,12 @@ output "resource_summary" {
     clickhouse           = var.clickhouse_source == "in-cluster" ? "in-cluster (Helm)" : "${var.clickhouse_source} (${var.clickhouse_host})"
     storage_bucket       = module.storage.bucket_name
     kubernetes_namespace = var.langsmith_namespace
+    smithdb = var.enable_smithdb ? join(" ", [
+      "enabled (metastore:",
+      var.smithdb_metastore_source == "create" ? "Cloud SQL ${module.smithdb[0].metastore_instance_name}," : "external,",
+      "bucket: ${module.smithdb[0].object_store_bucket_name},",
+      "sizing: ${local.smithdb_sizing}, cache: ${local.smithdb_cache_storage})",
+    ]) : "disabled"
   }
 }
 

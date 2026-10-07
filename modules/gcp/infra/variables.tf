@@ -163,6 +163,12 @@ variable "gke_disk_size" {
   }
 }
 
+variable "gke_node_service_account_email" {
+  description = "Service account email to run standard-mode GKE nodes. Null keeps the GKE default; production deployments should pass a minimally privileged node service account. Pods use Workload Identity separately."
+  type        = string
+  default     = null
+}
+
 variable "gke_release_channel" {
   description = "GKE release channel: RAPID, REGULAR, or STABLE"
   type        = string
@@ -238,7 +244,7 @@ variable "postgres_high_availability" {
 }
 
 variable "postgres_deletion_protection" {
-  description = "Enable deletion protection for Cloud SQL (recommended for production)"
+  description = "Prevent deletion of the LangSmith Cloud SQL instance, both from Terraform and from the Cloud SQL API. Keep true for production. Set false for dev/test environments that are destroyed and rebuilt, and apply that change before running destroy."
   type        = bool
   default     = true
 }
@@ -265,6 +271,14 @@ variable "postgres_database_flags" {
     {
       name  = "log_disconnections"
       value = "on"
+    },
+    {
+      name  = "log_lock_waits"
+      value = "on"
+    },
+    {
+      name  = "log_temp_files"
+      value = "0"
     }
   ]
 }
@@ -352,6 +366,148 @@ variable "redis_prevent_destroy" {
 }
 
 #------------------------------------------------------------------------------
+# Sandboxes
+#------------------------------------------------------------------------------
+variable "enable_sandboxes" {
+  description = "Enable infrastructure prerequisites for LangSmith Sandboxes. Requires Standard GKE, external Redis, Workload Identity, and sandbox-host nodes with usable Linux KVM (/dev/kvm)."
+  type        = bool
+  default     = false
+}
+
+variable "platform_backend_component_label" {
+  description = "app.kubernetes.io/component label of the chart's platform-backend pods, excluded from the langsmith-default default-deny on GKE Dataplane V2 when sandboxes are enabled so the host-networked sandbox-host can reach it. The label is '<helm-release>-platform-backend'; the default matches the standard 'langsmith' release, so override this if your Helm release name differs."
+  type        = string
+  default     = "langsmith-platform-backend"
+}
+
+variable "sandbox_host_node_count" {
+  description = "Initial number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 1
+}
+
+variable "sandbox_host_min_node_count" {
+  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true. The pool is regional, so a minimum of 1 keeps one node in every zone. The default of 0 lets the autoscaler keep only the nodes that sandbox-host needs, one for each replica. When sandbox-host is Pending, the autoscaler adds a node in a healthy zone."
+  type        = number
+  default     = 0
+  nullable    = false
+}
+
+variable "sandbox_host_max_node_count" {
+  description = "Maximum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  type        = number
+  default     = 5
+}
+
+variable "sandbox_host_machine_type" {
+  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). null (default) follows sizing_profile: production and production-large use n2-standard-32, every other profile uses n2-standard-8. Other examples: n2-highmem-8, c3-standard-8. C4 accepts only Hyperdisk, and this pool uses a pd-ssd boot disk."
+  type        = string
+  default     = null
+}
+
+variable "sandbox_host_disk_size_gb" {
+  description = "Boot disk size in GB for sandbox-host nodes."
+  type        = number
+  default     = 200
+}
+
+variable "sandbox_host_ephemeral_local_ssd_count" {
+  description = "Number of 375 GB local SSDs that back kubelet and container runtime ephemeral storage on sandbox-host nodes. The JuiceFS host cache stays on the boot disk (/var/cache/juicefs), so these disks do not speed up sandbox file I/O. Compute Engine accepts only specific counts per machine type: N2 with 2-10 vCPU takes 1, 2, 4, 8, 16 or 24; 12-20 vCPU takes 2, 4, 8, 16 or 24; 22-40 vCPU takes 4, 8, 16 or 24. Standard C3 types take none."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.sandbox_host_ephemeral_local_ssd_count)
+    error_message = "sandbox_host_ephemeral_local_ssd_count must be one of 0, 1, 2, 4, 8, 16 or 24 (the N2 set), and the machine type must accept that count."
+  }
+}
+
+variable "sandbox_default_container_requests" {
+  description = "Default CPU and memory requests injected into sandbox namespace containers that omit them. This preserves ResourceQuota request accounting without imposing default limits on sandbox-host."
+  type        = map(string)
+  default = {
+    cpu    = "100m"
+    memory = "128Mi"
+  }
+
+  validation {
+    condition = (
+      length(var.sandbox_default_container_requests) == 2 &&
+      contains(keys(var.sandbox_default_container_requests), "cpu") &&
+      contains(keys(var.sandbox_default_container_requests), "memory") &&
+      alltrue([for value in values(var.sandbox_default_container_requests) : trimspace(value) != ""])
+    )
+    error_message = "sandbox_default_container_requests must contain exactly non-empty cpu and memory values."
+  }
+}
+
+variable "sandbox_juicefs_name" {
+  description = "JuiceFS volume name used for sandbox snapshots and filesystem state."
+  type        = string
+  default     = "sandbox-juicefs"
+}
+
+variable "sandbox_juicefs_redis_memory_size" {
+  description = "Memory size in GB for the dedicated JuiceFS metadata Redis created when enable_sandboxes = true. Use 20 GB or higher for SaaS-like production scale."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_memory_size >= 1 && var.sandbox_juicefs_redis_memory_size <= 300
+    error_message = "sandbox_juicefs_redis_memory_size must be between 1 and 300 GB."
+  }
+}
+
+variable "sandbox_juicefs_redis_high_availability" {
+  description = "Enable Standard HA tier for the dedicated JuiceFS metadata Redis."
+  type        = bool
+  default     = true
+}
+
+variable "sandbox_juicefs_redis_prevent_destroy" {
+  description = "Prevent accidental Terraform destroy of the dedicated JuiceFS metadata Redis."
+  type        = bool
+  default     = false
+}
+
+variable "sandbox_juicefs_redis_rdb_snapshot_period" {
+  description = "Optional RDB snapshot period for the dedicated JuiceFS metadata Redis. Use ONE_HOUR for SaaS-like production durability; null disables RDB persistence."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.sandbox_juicefs_redis_rdb_snapshot_period == null ? true : contains(["ONE_HOUR", "SIX_HOURS", "TWELVE_HOURS", "TWENTY_FOUR_HOURS"], var.sandbox_juicefs_redis_rdb_snapshot_period)
+    error_message = "sandbox_juicefs_redis_rdb_snapshot_period must be null, ONE_HOUR, SIX_HOURS, TWELVE_HOURS, or TWENTY_FOUR_HOURS."
+  }
+}
+
+variable "sandbox_juicefs_csi_config_secret_name" {
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
+  type        = string
+  default     = "juicefs-csi-config"
+}
+
+variable "sandbox_juicefs_csi_config_secret_revision" {
+  description = "Revision for the write-only sandbox JuiceFS config Secret. Increment to intentionally rewrite the secret. The chart does not restart sandbox-host for an in-place rewrite, so restart it after the apply."
+  type        = number
+  default     = 1
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_host_image_tag" {
+  type        = string
+  description = "Deprecated and ignored. deploy.sh sets images.sandboxHostImage.tag from the resolved chart appVersion, so the sandbox-host image cannot lag a chart upgrade. Kept so that older terraform.tfvars files still plan; remove it from tfvars."
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_service_url_base_url" {
+  type        = string
+  description = "Optional base URL used by init-values.sh to generate browser/programmatic service URLs for HTTP services running inside sandboxes. Requires wildcard DNS and TLS for the host when set."
+  default     = ""
+}
+
+#------------------------------------------------------------------------------
 # Cloud Storage Configuration
 #------------------------------------------------------------------------------
 variable "storage_ttl_short_days" {
@@ -415,6 +571,12 @@ variable "langsmith_helm_chart_version" {
   default     = ""
 }
 
+variable "langsmith_release_name" {
+  description = "Helm release name for LangSmith. Must match what Pass 2 installs, because chart-created service account names derive from it (see the SmithDB Workload Identity binding)."
+  type        = string
+  default     = "langsmith"
+}
+
 #------------------------------------------------------------------------------
 # Optional GCP modules
 #------------------------------------------------------------------------------
@@ -426,6 +588,12 @@ variable "enable_gcp_iam_module" {
 
 variable "enable_secret_manager_module" {
   description = "Enable Secret Manager module to store generated/bootstrap credentials."
+  type        = bool
+  default     = false
+}
+
+variable "grant_project_secret_accessor" {
+  description = "Grant the LangSmith service account roles/secretmanager.secretAccessor on the whole project. No module component needs it. Set true only for a workload you added that reads Secret Manager as that service account; a per-secret grant is safer."
   type        = bool
   default     = false
 }
@@ -458,7 +626,7 @@ variable "dns_create_certificate" {
 # Ingress Configuration
 #------------------------------------------------------------------------------
 variable "install_ingress" {
-  description = "Whether to install ingress controller via Terraform. Note: Gateway uses HTTPS only, so TLS must be configured (tls_certificate_source must be 'letsencrypt' or 'existing')."
+  description = "Whether to install ingress through Terraform. For the Envoy Gateway path, tls_certificate_source = 'none' (the default) creates an HTTP-only listener, 'letsencrypt' creates HTTP and HTTPS listeners, and 'existing' creates an HTTPS-only listener."
   type        = bool
   default     = true
 }
@@ -639,6 +807,13 @@ variable "enable_agent_builder" {
   default     = false
 }
 
+# No Terraform resource reads this one, and unlike enable_deployments and
+# enable_agent_builder above it is not referenced in a precondition either (the
+# "enable_agent_builder requires enable_deployments" precondition in main.tf is
+# what keeps those two out of this rule), so tflint sees nothing using it.
+# helm/scripts/deploy.sh and init-values.sh parse it out of terraform.tfvars to
+# pick the values overlay.
+# tflint-ignore: terraform_unused_declarations
 variable "enable_insights" {
   type        = bool
   description = "Enable Insights (ClickHouse-backed analytics). Requires Insights entitlement in license."
@@ -646,11 +821,47 @@ variable "enable_insights" {
 }
 
 #------------------------------------------------------------------------------
+# Secret Manager-managed core secrets
+# Declared so setup-env.sh can export TF_VAR_* values without Terraform
+# discarding them as undeclared. Helm reads the same values from the environment.
+#------------------------------------------------------------------------------
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_api_key_salt" {
+  type        = string
+  description = "API key salt for LangSmith. Auto-generated by setup-env.sh and stored in Secret Manager. Must never change after first deployment."
+  sensitive   = true
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_jwt_secret" {
+  type        = string
+  description = "JWT signing secret for LangSmith. Auto-generated by setup-env.sh and stored in Secret Manager. Must never change after first deployment."
+  sensitive   = true
+  default     = ""
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "langsmith_admin_password" {
+  type        = string
+  description = "Initial LangSmith admin password. Collected by setup-env.sh and stored in Secret Manager."
+  sensitive   = true
+  default     = ""
+}
+
+#------------------------------------------------------------------------------
 # LangGraph Platform Encryption Keys
 # Fernet keys for optional feature modules. Generate once and never change.
 # Set via TF_VAR_* environment variables — do not commit to terraform.tfvars.
 # Required only when enabling the corresponding feature overlay in Helm.
+#
+# Never read by Terraform: infra/scripts/manage-secrets.sh puts them in Secret
+# Manager and helm/scripts/init-values.sh injects them into the values files.
+# They stay declared so the module states the full set of inputs an operator has
+# to supply, and so setting one in terraform.tfvars is legal rather than a
+# "value for undeclared variable" warning on every plan.
 #------------------------------------------------------------------------------
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_deployments_encryption_key" {
   type        = string
   description = "Fernet key for LangSmith Deployments. Generate once: python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'."
@@ -658,6 +869,7 @@ variable "langsmith_deployments_encryption_key" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_agent_builder_encryption_key" {
   type        = string
   description = "Fernet key for Agent Builder. Generate once and keep stable — changing requires re-encrypting all Agent Builder configs."
@@ -665,6 +877,7 @@ variable "langsmith_agent_builder_encryption_key" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_insights_encryption_key" {
   type        = string
   description = "Fernet key for Insights. Generate once — changing breaks existing Insights data. Shared by enable_insights and enable_standalone_insights."
@@ -672,6 +885,7 @@ variable "langsmith_insights_encryption_key" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
 variable "langsmith_polly_encryption_key" {
   type        = string
   description = "Fernet key for Polly. Generate once — changing breaks existing Polly data. Shared by enable_polly and enable_standalone_polly."
@@ -679,12 +893,24 @@ variable "langsmith_polly_encryption_key" {
   default     = ""
 }
 
+# tflint-ignore: terraform_unused_declarations
+variable "sandbox_callback_signing_jwk" {
+  type        = string
+  description = "Sandbox callback signing private JWK. Generate once and keep stable. Used by init-values.sh when sandboxes are enabled."
+  sensitive   = true
+  default     = ""
+}
+
 #------------------------------------------------------------------------------
 # Helm Sizing Profile
+# Sizing is a chart concern. deploy.sh, init-values.sh, and
+# patch-lgp-resources.sh parse it out of terraform.tfvars; the validation block
+# below is what keeps a typo from reaching them. Terraform also reads it for
+# the SmithDB sizing default (smithdb_sizing).
 #------------------------------------------------------------------------------
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file). With enable_smithdb = true, it also sets the default of smithdb_sizing."
   default     = "default"
 
   validation {
@@ -720,8 +946,321 @@ variable "enable_standalone_insights" {
   default     = false
 }
 
+# Read by helm/scripts/init-values.sh out of terraform.tfvars, not by Terraform.
+# tflint-ignore: terraform_unused_declarations
 variable "enable_usage_telemetry" {
   type        = bool
   description = "Enable extended usage telemetry reporting (PHONE_HOME_USAGE_REPORTING_ENABLED)."
   default     = false
+}
+
+# tflint-ignore: terraform_unused_declarations
+variable "enable_sso_oidc" {
+  type        = bool
+  description = "Enable SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID, Okta, Auth0, Google Workspace, etc. all work through the same generic client_id/secret/issuer_url. Client ID/secret/issuer URL are read by init-values.sh from TF_VAR_langsmith_oauth_client_id/secret/issuer_url (populated by setup-env.sh from Secret Manager), not from this variable. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
+  default     = false
+}
+
+#------------------------------------------------------------------------------
+# SmithDB (chart 0.17, optional)
+#
+# SmithDB is the in-chart columnar store/query engine that runs alongside
+# ClickHouse. Enabling it provisions a dedicated Cloud SQL metastore, its own GCS
+# bucket, a Workload Identity service account, and two GKE node pools (cache and
+# compute, none for smithdb_sizing = minimal). Off by default — no effect on
+# existing deployments.
+#
+# Enabling the infrastructure never changes the chart line on its own: Pass 2
+# uses the pinned 0.17 chart line, and every LangSmith integration gate below
+# defaults to false.
+#------------------------------------------------------------------------------
+variable "enable_smithdb" {
+  type        = bool
+  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, cache + compute node pools). Pass 2 uses the repository's pinned 0.17 chart line. Requires GKE Standard rather than Autopilot."
+  default     = false
+}
+
+# --- Staged rollout gates ---------------------------------------------------
+# SmithDB services deploy fully detached from LangSmith. Each gate is a separate
+# validated stage: stand the services up, confirm they reach the metastore and
+# the bucket, then enable ingestion, then optionally backfill, then move reads.
+# Keep ClickHouse enabled throughout.
+variable "smithdb_ingestion_enabled" {
+  type        = bool
+  description = "Route new LangSmith writes to SmithDB as well as ClickHouse. Enable only after the SmithDB services pass readiness checks."
+  default     = false
+}
+
+variable "smithdb_migration_enabled" {
+  type        = bool
+  description = "Enable the historical ClickHouse-to-SmithDB migration integration. Requires smithdb_ingestion_enabled. Also spins up an in-chart taskdb Postgres for migration task state."
+  default     = false
+}
+
+variable "smithdb_query_enabled" {
+  type        = bool
+  description = "Serve LangSmith UI and API reads from SmithDB. Requires smithdb_ingestion_enabled, and any historical migration you need, to be validated first."
+  default     = false
+}
+
+variable "smithdb_migration_start_time" {
+  type        = string
+  description = "Backfill start time (smithdb.migration.startTime), RFC 3339, for example 2026-01-01T00:00:00Z. Empty keeps the chart default window; see SMITHDB.md#staged-rollout."
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.smithdb_migration_start_time == "" || can(formatdate("YYYY", var.smithdb_migration_start_time))
+    error_message = "smithdb_migration_start_time must be empty or an RFC 3339 timestamp, for example 2026-01-01T00:00:00Z."
+  }
+}
+
+# --- Sizing -------------------------------------------------------------------
+# See SMITHDB.md#sizing for what each size and cache mode resolves to.
+variable "smithdb_sizing" {
+  type        = string
+  description = "SmithDB size: minimal, small, medium, or large. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large. minimal uses the chart small tier with reduced resources and runs on the general node pool, with no SmithDB node pools."
+  default     = null
+
+  validation {
+    condition     = contains(["minimal", "small", "medium", "large"], coalesce(var.smithdb_sizing, "small"))
+    error_message = "smithdb_sizing must be one of: minimal, small, medium, large."
+  }
+}
+
+variable "smithdb_cache_storage" {
+  type        = string
+  description = "SmithDB cache storage: local-ssd (emptyDir on node Local SSD) or network-disk. network-disk is a per-pod Hyperdisk Balanced volume on a C3 or C3D cache pool, or standard-rwo for minimal. Null gives network-disk for minimal and local-ssd for the other sizes. A change replaces the cache node pool."
+  default     = null
+
+  validation {
+    condition     = contains(["local-ssd", "network-disk"], coalesce(var.smithdb_cache_storage, "local-ssd"))
+    error_message = "smithdb_cache_storage must be local-ssd or network-disk."
+  }
+}
+
+# --- Metastore --------------------------------------------------------------
+variable "smithdb_metastore_source" {
+  type        = string
+  description = "SmithDB metastore Postgres: 'create' (dedicated Cloud SQL instance) or 'external' (bring your own, e.g. AlloyDB behind the Auth Proxy). Must be a dedicated, empty database — never the LangSmith operational Postgres."
+  default     = "create"
+
+  validation {
+    condition     = contains(["create", "external"], var.smithdb_metastore_source)
+    error_message = "smithdb_metastore_source must be 'create' or 'external'."
+  }
+}
+
+variable "smithdb_metastore_database_version" {
+  type        = string
+  description = "Cloud SQL Postgres version for the SmithDB metastore. SmithDB requires Postgres 18 or later."
+  default     = "POSTGRES_18"
+
+  validation {
+    condition     = can(regex("^POSTGRES_(1[89]|[2-9][0-9])$", var.smithdb_metastore_database_version))
+    error_message = "SmithDB requires Postgres 18 or later, e.g. POSTGRES_18."
+  }
+}
+
+variable "smithdb_metastore_tier" {
+  type        = string
+  description = "Cloud SQL machine tier for a created SmithDB metastore (smithdb_metastore_source = 'create'). Null follows the resolved smithdb_sizing: minimal gives db-custom-2-8192, small gives db-custom-4-16384, medium gives db-custom-6-32768, and large gives db-custom-10-65536. A tier change takes the instance offline for less than 60 seconds. An external metastore does not use this variable."
+  default     = null
+}
+
+variable "smithdb_metastore_disk_size" {
+  type        = number
+  description = "Disk size in GB for the SmithDB metastore. Autoresize is on, so this is a floor."
+  default     = 50
+}
+
+variable "smithdb_metastore_high_availability" {
+  type        = bool
+  description = "Run the SmithDB metastore as a REGIONAL (HA) Cloud SQL instance."
+  default     = false
+}
+
+variable "smithdb_metastore_deletion_protection" {
+  type        = bool
+  description = "Prevent deletion of the SmithDB metastore instance, both from Terraform and from the Cloud SQL API. Keep true for production. Set false for dev/test environments that are destroyed and rebuilt, and apply that change before running destroy."
+  default     = true
+}
+
+variable "smithdb_metastore_ssl_mode" {
+  type        = string
+  description = "Cloud SQL SSL enforcement for the SmithDB metastore. ENCRYPTED_ONLY requires TLS on every connection."
+  default     = "ENCRYPTED_ONLY"
+
+  validation {
+    condition     = contains(["ALLOW_UNENCRYPTED_AND_ENCRYPTED", "ENCRYPTED_ONLY", "TRUSTED_CLIENT_CERTIFICATE_REQUIRED"], var.smithdb_metastore_ssl_mode)
+    error_message = "smithdb_metastore_ssl_mode must be one of ALLOW_UNENCRYPTED_AND_ENCRYPTED, ENCRYPTED_ONLY, TRUSTED_CLIENT_CERTIFICATE_REQUIRED."
+  }
+}
+
+variable "smithdb_metastore_use_ssl" {
+  type        = bool
+  description = "Tell SmithDB to connect to the metastore over TLS directly. Null resolves to the opposite of the resolved smithdb_metastore_use_auth_proxy. Must be false with the Auth Proxy, because the proxy terminates TLS and the SmithDB hop is loopback."
+  default     = null
+}
+
+variable "smithdb_metastore_use_auth_proxy" {
+  type        = bool
+  description = "Run a Cloud SQL Auth Proxy sidecar in every SmithDB Pod and connect through it on 127.0.0.1. The proxy holds the TLS session to Cloud SQL, so the instance stays at ENCRYPTED_ONLY while SmithDB itself speaks plaintext over the Pod loopback. Null resolves to true for smithdb_metastore_source = 'create', because direct TLS from SmithDB to Cloud SQL fails with UnknownIssuer, and to false for 'external'. Requires smithdb_metastore_source = 'create' and smithdb_metastore_use_ssl = false."
+  default     = null
+}
+
+variable "smithdb_auth_proxy_image" {
+  type        = string
+  description = "Cloud SQL Auth Proxy image for the sidecar. Pin an exact tag; a floating tag would change the proxy under a running release."
+  default     = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0"
+
+  validation {
+    condition     = can(regex(":[^:/]+$", var.smithdb_auth_proxy_image))
+    error_message = "smithdb_auth_proxy_image must carry an explicit tag or digest, e.g. gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.0."
+  }
+}
+
+variable "smithdb_metastore_master_username" {
+  type        = string
+  description = "Master username for the SmithDB metastore."
+  default     = "smithdb"
+}
+
+variable "smithdb_metastore_master_password" {
+  type        = string
+  description = "Master password for the SmithDB metastore. Leave null to auto-generate. Use TF_VAR_smithdb_metastore_master_password if setting explicitly."
+  default     = null
+  sensitive   = true
+}
+
+variable "smithdb_external_metastore_host" {
+  type        = string
+  description = "Hostname of an existing Postgres instance for the SmithDB metastore. Use 127.0.0.1 when fronting AlloyDB with the Auth Proxy sidecar."
+  default     = null
+}
+
+variable "smithdb_external_metastore_port" {
+  type        = number
+  description = "Port of the existing SmithDB metastore Postgres instance."
+  default     = 5432
+}
+
+variable "smithdb_external_metastore_database" {
+  type        = string
+  description = "Database name on the existing SmithDB metastore Postgres instance."
+  default     = "smithdb"
+}
+
+variable "smithdb_external_metastore_username" {
+  type        = string
+  description = "Username for the existing SmithDB metastore Postgres instance."
+  default     = null
+}
+
+variable "smithdb_external_metastore_password" {
+  type        = string
+  description = "Password for the existing SmithDB metastore. Empty when using AlloyDB IAM database authentication. Use TF_VAR_smithdb_external_metastore_password."
+  default     = null
+  sensitive   = true
+}
+
+# --- Object store -----------------------------------------------------------
+variable "smithdb_bucket_name" {
+  type        = string
+  description = "Name of the SmithDB object-store bucket. Empty auto-generates {project_id}-{prefix}-{env}-smithdb{suffix}. Single-region is strongly recommended to avoid replication cost and unpredictable tail latency."
+  default     = ""
+}
+
+variable "smithdb_bucket_kms_key" {
+  type        = string
+  description = "Cloud KMS key for CMEK on the SmithDB bucket. Empty uses Google-managed encryption."
+  default     = ""
+}
+
+variable "smithdb_bucket_versioning_enabled" {
+  type        = bool
+  description = "Enable object versioning on the SmithDB object-store bucket. Off by default: SmithDB never overwrites a segment in place, so versioning only retains a noncurrent copy of everything compaction deletes."
+  default     = false
+}
+
+variable "smithdb_bucket_force_destroy" {
+  type        = bool
+  description = "Allow Terraform to delete a non-empty SmithDB bucket on destroy. Set true only for test stacks."
+  default     = false
+}
+
+variable "smithdb_service_account_email" {
+  type        = string
+  description = "Existing GCP service account email for the SmithDB pods. Leave null to create a dedicated least-privilege one."
+  default     = null
+}
+
+# --- Node pools -------------------------------------------------------------
+variable "smithdb_node_locations" {
+  type        = list(string)
+  description = "Zones for the SmithDB node pools. Empty uses every zone in the region, which fails if the machine type or Local SSD count is unavailable in any of them. Pin this after verifying availability."
+  default     = []
+}
+
+# The four shape variables below default to null, which takes the default for
+# the resolved smithdb_sizing and smithdb_cache_storage (local.smithdb_pool_defaults).
+variable "smithdb_instance_store_machine_type" {
+  type        = string
+  description = "Machine type for the SmithDB cache pool. Null takes the default for the size and cache mode. N2/N2D take an explicit disk count; C3 and Z3 '-lssd' types bundle a fixed count and require smithdb_instance_store_local_ssd_count = 0. network-disk requires a C3 or C3D type."
+  default     = null
+}
+
+variable "smithdb_instance_store_local_ssd_count" {
+  type        = number
+  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Null takes the default for the size, and 0 for network-disk. Compute Engine accepts only specific counts per machine type; see SMITHDB.md#sizing."
+  default     = null
+
+  validation {
+    # coalesce, because Terraform 1.11 evaluates both sides of || and a null
+    # guard does not keep null out of contains().
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], coalesce(var.smithdb_instance_store_local_ssd_count, 0))
+    error_message = "smithdb_instance_store_local_ssd_count must be one of 0, 1, 2, 4, 8, 16, 24. Counts in between (3, 5, 6, ...) are rejected by Compute Engine at node pool creation. For n2-standard-16, use 2, 4, 8, 16 or 24."
+  }
+}
+
+variable "smithdb_instance_store_disk_size" {
+  type        = number
+  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd and 300 for network-disk, where the backfill Job takes its 100Gi of ephemeral storage from the boot disk. network-disk with the backfill requires at least 300."
+  default     = null
+}
+
+variable "smithdb_instance_store_min_nodes" {
+  type        = number
+  description = "Minimum nodes per zone in the cache pool. 0 lets the autoscaler scale to zero when SmithDB is idle."
+  default     = 0
+}
+
+variable "smithdb_instance_store_max_nodes" {
+  type        = number
+  description = "Maximum nodes per zone in the cache pool."
+  default     = 3
+}
+
+variable "smithdb_compute_machine_type" {
+  type        = string
+  description = "Machine type for the SmithDB compute pool (compaction, clusterManager, backfill taskdb). Null takes the default for the size."
+  default     = null
+}
+
+variable "smithdb_compute_disk_size" {
+  type        = number
+  description = "Boot disk size in GB for compute pool nodes."
+  default     = 100
+}
+
+variable "smithdb_compute_min_nodes" {
+  type        = number
+  description = "Minimum nodes per zone in the SmithDB compute pool."
+  default     = 0
+}
+
+variable "smithdb_compute_max_nodes" {
+  type        = number
+  description = "Maximum nodes per zone in the SmithDB compute pool."
+  default     = 3
 }
