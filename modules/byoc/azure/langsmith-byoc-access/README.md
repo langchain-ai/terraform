@@ -112,17 +112,16 @@ After `terraform apply`, read the outputs:
 terraform output -json langsmith_byoc_access
 ```
 
-Send this body to the LangSmith API to create the data plane. The example uses the data plane key `prod` as `name`.
+Send this body to the LangSmith API to create the data plane. The example uses the data plane key `prod` as `name`. `vpc_cidr` is the VNet that LangSmith creates: a private range from `/16` to `/18`.
 
 ```json
 {
-  "cloud": "azure",
+  "cloud": "AZURE",
   "name": "prod",
   "region": "<data_planes.prod.region>",
   "tenant_id": "<tenant_id>",
-  "subscription_id": "<subscription_id>",
-  "service_principal_object_id": "<service_principal_object_id>",
-  "resource_group_name": "<data_planes.prod.resource_group_name>"
+  "resource_group_id": "<data_planes.prod.resource_group_id>",
+  "vpc_cidr": "10.80.0.0/16"
 }
 ```
 
@@ -130,13 +129,12 @@ This `jq` command makes the body from the outputs:
 
 ```bash
 terraform output -json langsmith_byoc_access | jq --arg dp prod '{
-  cloud: "azure",
+  cloud: "AZURE",
   name: $dp,
   region: .data_planes[$dp].region,
   tenant_id: .tenant_id,
-  subscription_id: .subscription_id,
-  service_principal_object_id: .service_principal_object_id,
-  resource_group_name: .data_planes[$dp].resource_group_name
+  resource_group_id: .data_planes[$dp].resource_group_id,
+  vpc_cidr: "10.80.0.0/16"
 }'
 ```
 
@@ -165,9 +163,7 @@ A `data_planes` key must have 1 to 63 characters. Use only lowercase letters, di
 | Output | Description |
 |--------|-------------|
 | `tenant_id` | Entra tenant ID of the subscription. |
-| `subscription_id` | Azure subscription ID that holds the data plane resource groups. |
-| `service_principal_object_id` | Object ID of the LangSmith service principal in your tenant. |
-| `data_planes` | Map of data plane key to `resource_group_name`, `region`, and `key_vault_name`. |
+| `data_planes` | Map of data plane key to `resource_group_id`, `region`, and `key_vault_name`. |
 
 ## Security model
 
@@ -194,7 +190,7 @@ Terraform writes nothing into the vault. Do not add other secrets to it.
 
 ## Operational notes
 
-- Run `terraform apply` with credentials in the **target** tenant and subscription. The `tenant_id` and `subscription_id` outputs come from these credentials.
+- Run `terraform apply` with credentials in the **target** tenant and subscription. The `tenant_id` output and the subscription in each `resource_group_id` come from these credentials.
 - `use_existing = true` adopts the LangSmith service principal if it is already in your tenant, for example after an earlier admin consent. `terraform destroy` deletes that service principal in all cases.
 - When you remove this module, Terraform deletes the service principal and all role assignments. LangSmith then loses access to all data planes. Speak with LangChain before you destroy.
 
