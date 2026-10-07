@@ -1,4 +1,6 @@
-# LangSmith BYOC - GCP Customer Service Account
+# LangSmith BYOC - GCP Customer Service Account (Beta)
+
+> **Beta:** GCP BYOC is in beta. This module's inputs, outputs, and granted roles may change between releases. Pin a release tag, and check the release notes before upgrading.
 
 Provisions the service account in **your GCP project** that the LangSmith control plane impersonates to stand up and manage BYOC data planes in your project.
 

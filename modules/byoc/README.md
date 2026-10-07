@@ -10,6 +10,6 @@ These modules provision customer-owned resources used with LangSmith Bring Your 
 
 | GCP module | Purpose |
 | --- | --- |
-| [`gcp/langsmith-byoc-service-account`](gcp/langsmith-byoc-service-account/README.md) | Customer-side service account that the LangSmith control plane impersonates to provision BYOC data planes. |
+| [`gcp/langsmith-byoc-service-account`](gcp/langsmith-byoc-service-account/README.md) | **Beta.** Customer-side service account that the LangSmith control plane impersonates to provision BYOC data planes. |
 
 Use the BYOVPC module when supplying your own network for a BYOC data plane. You own the network lifecycle, and provide VPC and subnet IDs when creating the data plane in LangSmith.
