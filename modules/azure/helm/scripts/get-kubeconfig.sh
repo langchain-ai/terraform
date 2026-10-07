@@ -35,10 +35,14 @@ info "Cluster       : $CLUSTER_NAME"
 info "Resource group: $RESOURCE_GROUP"
 echo ""
 
+# With no private DNS zone, only the public FQDN resolves (to the private IP).
+_gc_flags=()
+[[ "$(_tf_out aks_kubeconfig_public_fqdn || true)" == "true" ]] && _gc_flags=(--public-fqdn)
+
 az aks get-credentials \
   --name "$CLUSTER_NAME" \
   --resource-group "$RESOURCE_GROUP" \
-  --overwrite-existing
+  --overwrite-existing ${_gc_flags[@]+"${_gc_flags[@]}"}
 _aks_kubelogin_convert "$CLUSTER_NAME" "$RESOURCE_GROUP"
 
 echo ""

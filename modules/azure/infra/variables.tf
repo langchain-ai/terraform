@@ -309,7 +309,7 @@ variable "aks_private_cluster_enabled" {
 
 variable "aks_private_dns_zone_id" {
   type        = string
-  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and resolving the API server is left to the caller's DNS. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
+  description = "Private DNS zone for a private API server. Empty (default) or \"System\": AKS creates the zone in the node resource group. \"None\": AKS creates no private zone, and the module turns on the public FQDN, which Azure requires with None: the API server's name then resolves through public DNS to its private IP, so the nodes' and operators' DNS must resolve public names. A zone resource ID: AKS registers the API server there, which requires aks_control_plane_identity = \"user\" with Private DNS Zone Contributor on the zone. Set before the first apply."
   default     = ""
 
   validation {
