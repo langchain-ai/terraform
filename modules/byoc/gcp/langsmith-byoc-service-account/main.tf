@@ -57,11 +57,3 @@ resource "google_service_account_iam_member" "crossplane" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${var.crossplane_service_account}"
 }
-
-resource "google_service_account_iam_member" "control_plane" {
-  for_each = var.control_plane_service_accounts
-
-  service_account_id = google_service_account.provisioner.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${each.key}"
-}

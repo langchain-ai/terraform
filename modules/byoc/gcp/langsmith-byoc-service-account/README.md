@@ -7,14 +7,14 @@ Provisions the service account in **your GCP project** that the LangSmith contro
 | Resource | Purpose |
 |----------|---------|
 | `var.service_account_id` (default `langsmith-byoc-provisioner`) | Holds the project roles that data plane provisioning needs. |
-| Token Creator on that service account | Lets `var.crossplane_service_account`, and any `var.control_plane_service_accounts`, impersonate it. |
+| Token Creator on that service account | Lets `var.crossplane_service_account`, the LangSmith control plane, impersonate it. No other LangSmith identity is trusted. |
 | Project APIs | Enables the APIs data planes use. Set `enable_apis = false` if you manage the project's APIs elsewhere. |
 
 ## Prerequisites
 
 1. A GCP project for the LangSmith data plane, and credentials with permission to create service accounts, grant project IAM roles, and enable APIs in it.
 2. Terraform `>= 1.11.0` and the Google provider `~> 6.0`.
-3. The `crossplane_service_account` (and any `control_plane_service_accounts`) provided by LangChain.
+3. The `crossplane_service_account` provided by LangChain.
 
 ## Usage
 
@@ -52,7 +52,6 @@ The provisioner holds project-level admin roles for Cloud SQL, Compute, GKE, Clo
 |------|-------------|---------|
 | `project_id` | The GCP project that hosts the LangSmith data planes. | required |
 | `crossplane_service_account` | LangSmith control plane Crossplane service account that impersonates the provisioner. | required |
-| `control_plane_service_accounts` | Additional LangSmith control plane service accounts that impersonate the provisioner to manage data plane secrets. | `[]` |
 | `service_account_id` | Account ID of the provisioner service account. | `langsmith-byoc-provisioner` |
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
 

@@ -14,12 +14,6 @@ variable "crossplane_service_account" {
   type        = string
 }
 
-variable "control_plane_service_accounts" {
-  description = "Additional LangSmith control plane service accounts that impersonate the provisioner to manage data plane secrets. Provided by LangChain."
-  type        = set(string)
-  default     = []
-}
-
 variable "enable_apis" {
   description = "Enable the GCP APIs that data planes use. Disable when the project's APIs are managed elsewhere."
   type        = bool
