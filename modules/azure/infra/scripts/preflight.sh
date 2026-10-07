@@ -18,6 +18,7 @@
 #      Key Vault it attaches to rather than creates is really there
 #   8. The configured Postgres version and SKU are offered in the region
 #   9. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#  10. An attached cluster has a node large enough to hold ClickHouse
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -1271,6 +1272,21 @@ else
       warn "create_cluster = false — cannot confirm cluster '${EXISTING_AKS}' exists without an active az login"
     elif az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --only-show-errors -o none 2>/dev/null; then
       pass "Attaching to AKS cluster '${EXISTING_AKS}' in resource group '${EXISTING_AKS_RG}'"
+      # An Entra ID cluster returns no client certificate, so the Kubernetes and
+      # Helm providers sign in through kubelogin (aks_kube_auth = auto or entra).
+      KUBE_AUTH=$(_tfvar aks_kube_auth || echo "auto")
+      AAD_PROFILE=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null || echo "")
+      if [ "$KUBE_AUTH" = "entra" ] && [ "$AAD_PROFILE" = "false" ]; then
+        fail "aks_kube_auth = \"entra\" but cluster '${EXISTING_AKS}' has no Entra ID integration, so it accepts no Entra token — use \"auto\""
+      elif [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_PROFILE" = "true" ]; }; then
+        if command -v kubelogin >/dev/null 2>&1; then
+          pass "Entra ID cluster: kubelogin found, the providers sign in with your az session"
+        else
+          fail "Cluster '${EXISTING_AKS}' uses Entra ID and kubelogin is not on the PATH — install it with 'az aks install-cli'. The identity running apply also needs cluster-admin rights: an Azure Kubernetes Service RBAC role under Azure RBAC, or an admin group or ClusterRoleBinding under Kubernetes RBAC"
+        fi
+      elif [ "$KUBE_AUTH" = "certificate" ] && [ "$AAD_PROFILE" = "true" ]; then
+        fail "aks_kube_auth = \"certificate\" but cluster '${EXISTING_AKS}' uses Entra ID, where azurerm returns no client certificate — use \"auto\""
+      fi
     else
       fail "AKS cluster '${EXISTING_AKS}' not found in resource group '${EXISTING_AKS_RG}' — check both names and the subscription"
     fi
@@ -1287,6 +1303,20 @@ else
       pass "Attaching to Key Vault '${EXISTING_KV}' in resource group '${EXISTING_KV_RG}'"
     else
       fail "Key Vault '${EXISTING_KV}' not found in resource group '${EXISTING_KV_RG}' — check both names and the subscription"
+    fi
+  fi
+
+  # The private endpoint turns the vault's public network access off, so every
+  # data-plane call has to come from inside the network. Nothing here can tell
+  # whether this machine is, before the vault exists, so this is a reminder
+  # rather than a check. Terraform refuses the flag with create_keyvault = false.
+  KV_PRIVATE_ENDPOINT=$(_tfvar keyvault_private_endpoint_enabled || echo "false")
+  if [ "$KV_PRIVATE_ENDPOINT" = "true" ] && [ "$CREATE_KEYVAULT" != "false" ]; then
+    KV_MANAGE_SECRETS=$(_tfvar keyvault_manage_secrets || echo "true")
+    if [ "$KV_MANAGE_SECRETS" = "false" ]; then
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network)"
+    else
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. terraform plan and apply (which read and write two secrets on every run), make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network), or set keyvault_manage_secrets = false"
     fi
   fi
 fi
@@ -1672,7 +1702,115 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 fi
 
-# ── 10. Other tooling ──────────────────────────────────────────────────────────
+# ── 10. Existing-cluster node capacity ────────────────────────────────────────
+# Attach mode only. Nothing else checks that some node in an attached cluster
+# can hold ClickHouse, the largest pod LangSmith schedules. It is one replica, so
+# cluster-wide totals don't answer it; only the node's allocatable does, and
+# allocatable is below the VM size (a Standard_D4s_v3 sells 4 vCPU / 16 GiB and
+# allocates 3860m / 14.3 GiB). This asks whether the pod can ever fit: a node
+# that is big enough but full is the autoscaler's problem, while a node too small
+# needs a new pool.
+echo ""
+echo "── Existing Cluster Capacity ─────────────────────────"
+
+CH_SOURCE=$(_tfvar clickhouse_source || echo "in-cluster")
+POOLS_MANAGED=$(_tfvar existing_cluster_node_pools_managed || echo "false")
+CLUSTER_NAME=$(_tfvar existing_cluster_name || echo "")
+
+# The ClickHouse request in each helm/values/examples sizing overlay. With none,
+# init-values.sh applies no overlay and the chart default holds.
+case "$(_tfvar sizing_profile || echo "default")" in
+  minimum)          REQ_CPU_M=1000; REQ_MEM_MI=2048;  REQ_LABEL="minimum" ;;
+  dev)              REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="dev" ;;
+  production)       REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="production" ;;
+  production-large) REQ_CPU_M=4000; REQ_MEM_MI=16384; REQ_LABEL="production-large" ;;
+  *)                REQ_CPU_M=3500; REQ_MEM_MI=12288; REQ_LABEL="chart default" ;;
+esac
+
+if [ "$CREATE_CLUSTER" != "false" ]; then
+  pass "create_cluster = true — Terraform builds the large pool ClickHouse runs on"
+elif [ "$CH_SOURCE" = "external" ]; then
+  pass "clickhouse_source = external — no ClickHouse pod to schedule"
+elif [ "$POOLS_MANAGED" = "true" ]; then
+  pass "existing_cluster_node_pools_managed = true — Terraform adds the large pool"
+elif ! command -v kubectl &>/dev/null; then
+  warn "kubectl not found — cannot read node allocatable, so ClickHouse capacity is unchecked"
+elif ! [[ "$CLUSTER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$ ]]; then
+  warn "existing_cluster_name is empty or not a valid AKS name — ClickHouse capacity is unchecked"
+else
+  # A kubeconfig pointed at another cluster would return its nodes and a
+  # confidently wrong verdict. get-credentials names the context after the
+  # cluster, with -admin appended for --admin.
+  KUBE_CTX=$(kubectl config current-context 2>/dev/null || echo "")
+  if [ "$KUBE_CTX" != "$CLUSTER_NAME" ] && [ "$KUBE_CTX" != "${CLUSTER_NAME}-admin" ]; then
+    warn "kubectl context is '${KUBE_CTX:-unset}', not '${CLUSTER_NAME}', so ClickHouse capacity is unchecked. Run: az aks get-credentials --resource-group ${EXISTING_AKS_RG:-<rg>} --name ${CLUSTER_NAME}"
+  elif ! NODES_JSON=$(kubectl get nodes -o json --request-timeout=10s 2>/dev/null); then
+    warn "Could not read nodes from '${KUBE_CTX}', so ClickHouse capacity is unchecked"
+  else
+    VERDICT=$(printf '%s' "$NODES_JSON" | python3 -c '
+import json, sys
+
+req_cpu, req_mem = int(sys.argv[1]), int(sys.argv[2])
+
+def cpu_m(v):
+    return int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
+
+# The suffixes kubelet emits for allocatable memory; a bare number is bytes.
+UNITS = {"Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1024 * 1024}
+
+def mem_mi(v):
+    for suffix, factor in UNITS.items():
+        if v.endswith(suffix):
+            return int(float(v[: -len(suffix)]) * factor)
+    return int(v) // (1024 * 1024)
+
+try:
+    nodes = json.load(sys.stdin).get("items", [])
+except (ValueError, AttributeError):
+    print("ERR unreadable node JSON")
+    sys.exit(0)
+
+best = None
+for n in nodes:
+    if n.get("spec", {}).get("unschedulable"):
+        continue
+    if not any(c.get("type") == "Ready" and c.get("status") == "True"
+               for c in n.get("status", {}).get("conditions", [])):
+        continue
+    alloc = n.get("status", {}).get("allocatable", {})
+    try:
+        c, m = cpu_m(alloc["cpu"]), mem_mi(alloc["memory"])
+    except (KeyError, ValueError):
+        continue
+    # Rank by the tighter dimension, so the reported node is the one closest to
+    # holding the pod rather than the widest on one axis.
+    score = min(c / req_cpu, m / req_mem)
+    if best is None or score > best[0]:
+        best = (score, c, m)
+
+if best is None:
+    print("ERR no schedulable Ready nodes")
+else:
+    _, c, m = best
+    print("%s %d %d" % ("FIT" if c >= req_cpu and m >= req_mem else "NOFIT", c, m))
+' "$REQ_CPU_M" "$REQ_MEM_MI" || echo "ERR node parse failed")
+
+    read -r VERDICT_KIND BEST_CPU_M BEST_MEM_MI <<<"$VERDICT"
+    case "$VERDICT_KIND" in
+      FIT)
+        pass "ClickHouse (${REQ_LABEL}: ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi) fits — the largest node allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi"
+        ;;
+      NOFIT)
+        fail "No node in '${CLUSTER_NAME}' can hold ClickHouse: the largest allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi, and the ${REQ_LABEL} sizing requests ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi. More nodes of this size won't help. Add a larger pool (az aks nodepool add --node-vm-size Standard_D16s_v5), set existing_cluster_node_pools_managed = true so Terraform adds one, or pick a smaller sizing_profile."
+        ;;
+      *)
+        warn "ClickHouse capacity check inconclusive: ${VERDICT#ERR }"
+        ;;
+    esac
+  fi
+fi
+
+# ── 11. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do

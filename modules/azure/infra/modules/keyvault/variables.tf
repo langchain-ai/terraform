@@ -146,3 +146,21 @@ variable "tags" {
   description = "Common Azure resource tags to apply to all resources in this module"
   default     = {}
 }
+
+variable "private_endpoint_enabled" {
+  type        = bool
+  description = "Create a Private Endpoint for the vault and turn its public network access off. Only applies when create_keyvault is true."
+  default     = false
+}
+
+variable "private_endpoint_subnet_id" {
+  type        = string
+  description = "Subnet for the vault's Private Endpoint. Required when private_endpoint_enabled is true."
+  default     = ""
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "privatelink.vaultcore zone the endpoint registers its record in. Required when private_endpoint_enabled is true."
+  default     = ""
+}
