@@ -42,10 +42,10 @@ help: ## Show available targets
 	@echo "    make tf      ARGS=\"state list\"               # inspect infra state"
 	@echo ""
 
-quickstart: ## Interactive setup wizard — generates terraform.tfvars
-	$(INFRA_DIR)/scripts/quickstart.sh
+quickstart: ## Interactive setup wizard — generates terraform.tfvars (ARGS="--yes" skips the prompts)
+	$(INFRA_DIR)/scripts/quickstart.sh $(ARGS)
 
-test-quickstart: ## Unit-test the quickstart wizard's resume layer (no Azure, no prompts)
+test-quickstart: ## Unit-test the quickstart wizard's resume layer and --yes (no Azure, no prompts)
 	$(INFRA_DIR)/scripts/test-quickstart-state.sh
 
 test-license-key: ## Unit-test the license key check shared by setup-env, k8s-secrets and keyvault set (no Azure)

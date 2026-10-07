@@ -16,6 +16,11 @@ cd terraform/modules/azure
 # 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
 make quickstart
 
+# No prompts: dev defaults (in-cluster Postgres, Redis, ClickHouse; HTTP), current az subscription
+# make quickstart ARGS="--yes"
+# Production sizing and HTTPS on your own domain (flags: infra/scripts/quickstart.sh --help)
+# make quickstart ARGS="--yes --profile prod --location westus2 --domain langsmith.example.com --email ops@example.com"
+
 # Prefer editing manually? Copy the example instead:
 # cp infra/terraform.tfvars.example infra/terraform.tfvars
 # vi infra/terraform.tfvars
@@ -598,15 +603,16 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 - Supports all 5 ingress options: `envoy-gateway` (default), `nginx`, `istio-addon`, `istio`, `agic`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
+- `ARGS="--yes"` skips the prompts and writes the profile's defaults. Dev runs Postgres, Redis, and ClickHouse in-cluster over HTTP at `langsmith-<name>.<region>.cloudapp.azure.com`; `--profile prod` uses external Postgres and Redis with production sizing. `--subscription`, `--location`, `--name`, `--dns-label`, and `--domain` with `--email` override the defaults; `--help` lists them. It writes new deployments only and refuses to run over an existing `terraform.tfvars` or checkpoint
 
 > **Run this first** on a new deployment. After it completes, run `source infra/scripts/setup-env.sh` to set up secrets.
 
 ---
 
-### `make test-quickstart` — Unit tests for the wizard's resume layer
+### `make test-quickstart` — Unit tests for the wizard's resume layer and `--yes`
 **Script:** `infra/scripts/test-quickstart-state.sh`
 
-Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, and seeding the wizard from an existing `terraform.tfvars`. Runs in a temp directory with no Azure calls and no prompts, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
+Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, seeding the wizard from an existing `terraform.tfvars`, and the `--yes` path's output and input validation. Runs in a temp directory with no Azure calls and no prompts, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
 
 One check is worth knowing about when you rename a wizard variable: `_load_state` silently drops any key missing from `_STATE_KEYS`, so a rename that lands in `_load_tfvars` but not in the whitelist loses that answer on resume with no error. The test scrapes every variable `_load_tfvars` assigns and fails if one is not whitelisted.
 

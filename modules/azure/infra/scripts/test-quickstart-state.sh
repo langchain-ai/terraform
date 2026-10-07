@@ -4,11 +4,11 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# test-quickstart-state.sh — Unit tests for the quickstart wizard's resume layer.
+# test-quickstart-state.sh — Unit tests for the quickstart wizard's resume layer and --yes.
 #
 # Covers the checkpoint round-trip (_save_state / _load_state), the whitelist
 # that guards it, and seeding the wizard from an existing terraform.tfvars
-# (_load_tfvars). Runs entirely in a temp directory — no Azure, no terraform,
+# (_load_tfvars), and the files --yes writes or refuses. Runs entirely in a temp directory — no Azure, no terraform,
 # no prompts, and your own terraform.tfvars is never read or written.
 #
 # Usage:
@@ -247,6 +247,85 @@ eq "TF_VAR_ outranks the CLI when unset" "$AZURE_ENVIRONMENT" "public"
 AZURE_ENVIRONMENT=""
 _resolve_azure_environment > out.txt 2>&1
 eq "the CLI fills an unset cloud"        "$AZURE_ENVIRONMENT" "usgovernment"
+
+echo "9. --yes writes a new deployment with no prompts"
+# The whole script, against a scratch INFRA_DIR and the stub az. stdin is
+# /dev/null, so a prompt that slipped into this path fails the run instead of
+# hanging it.
+printf 'AzureCloud' > fix/cloud_name
+NI="$TMP/ni"
+qs() { rm -rf "$NI"; mkdir -p "$NI"; INFRA_DIR="$NI" "$SRC" "$@" < /dev/null > qs.out 2>&1; }
+has() { grep -qE "^$2[[:space:]]*=[[:space:]]*$3\$" "$NI/terraform.tfvars" && ok "$1" || bad "$1 (no $2 = $3)"; }
+
+qs --yes
+eq "dev run exits 0"                  "$?" "0"
+has "dev subscription from az"        subscription_id   '"11111111-1111-1111-1111-111111111111"'
+has "dev name is the profile"         name_prefix       '"dev"'
+has "dev serves HTTP"                 tls_certificate_source '"none"'
+has "dev DNS label from the name"     dns_label         '"langsmith-dev"'
+has "dev Postgres in-cluster"         postgres_source   '"in-cluster"'
+has "dev sizing"                      sizing_profile    '"dev"'
+[[ ! -e "$NI/.quickstart-state" ]] && ok "no checkpoint left behind" || bad "checkpoint left behind"
+
+qs --yes --profile prod --location westus2 --domain langsmith.example.com --email ops@example.com
+eq "prod run exits 0"                 "$?" "0"
+grep -q '^# Profile: prod' "$NI/terraform.tfvars" && ok "prod stamped in the header" || bad "prod not stamped in the header"
+has "prod name is the profile"        name_prefix       '"prod"'
+has "prod location"                   location          '"westus2"'
+has "prod D8s_v5 nodes"               default_node_pool_vm_size '"Standard_D8s_v5"'
+has "prod Postgres external"          postgres_source   '"external"'
+has "prod Redis B3"                   amr_sku           '"Balanced_B3"'
+has "prod Redis HA"                   redis_high_availability true
+has "prod purge protection"           keyvault_purge_protection true
+has "prod diagnostics"                create_diagnostics true
+has "prod sizing"                     sizing_profile    '"production"'
+has "domain switches TLS on"          tls_certificate_source '"letsencrypt"'
+has "domain written"                  langsmith_domain  '"langsmith.example.com"'
+has "domain gets a zone"              create_dns_zone   true
+grep -q '^dns_label' "$NI/terraform.tfvars" && bad "dns_label written beside a domain" || ok "no dns_label beside a domain"
+
+printf 'AzureUSGovernment' > fix/cloud_name
+qs --yes --profile prod
+has "Government keeps prod Redis in-cluster" redis_source '"in-cluster"'
+has "Government cloud written"        azure_environment '"usgovernment"'
+printf 'AzureCloud' > fix/cloud_name
+
+qs --yes --name none
+has "none means no suffix"            name_prefix       '""'
+has "no-suffix DNS label"             dns_label         '"langsmith"'
+
+rm -rf "$NI"; mkdir -p "$NI"; echo 'location = "keep"' > "$NI/terraform.tfvars"
+INFRA_DIR="$NI" "$SRC" --yes < /dev/null > qs.out 2>&1
+eq "existing tfvars refused"          "$?" "1"
+eq "existing tfvars untouched"        "$(cat "$NI/terraform.tfvars")" 'location = "keep"'
+
+rm -rf "$NI"; mkdir -p "$NI"; echo 'SECTION=3' > "$NI/.quickstart-state"
+INFRA_DIR="$NI" "$SRC" --yes < /dev/null > qs.out 2>&1
+eq "existing checkpoint refused"      "$?" "1"
+
+# Each of these lands inside a quoted HCL string, so anything off the
+# allow-list is refused before a file is written.
+for bad_args in "--location east\$us" "--location \${x}" "--name Prod" "--name a--b" \
+                "--profile staging" "--subscription not-a-guid" "--dns-label 1abc" \
+                "--domain langsmith.example.com" "--email a@b.co" \
+                "--dns-label ab --domain a.example.com --email a@b.co" \
+                "--name abcdefghijklmnopq"; do
+  # shellcheck disable=SC2086  # split the case into its flags on purpose
+  qs --yes $bad_args
+  rc=$?
+  [[ "$rc" -ne 0 && ! -e "$NI/terraform.tfvars" ]] && ok "refused: $bad_args" \
+    || bad "accepted: $bad_args (exit $rc)"
+done
+
+# A quote would close the HCL string early, and the loop above splits on spaces.
+qs --yes --domain 'x"y.example.com' --email a@b.co
+[[ "$?" -ne 0 && ! -e "$NI/terraform.tfvars" ]] && ok "refused: a quote in --domain" \
+  || bad "accepted: a quote in --domain"
+
+qs --profile prod
+eq "a flag without --yes is refused"  "$?" "2"
+qs --bogus
+eq "an unknown flag is refused"       "$?" "2"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"
