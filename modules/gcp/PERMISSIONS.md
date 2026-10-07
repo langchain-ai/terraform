@@ -95,7 +95,7 @@ It adds these for the matching configuration:
 | `enable_secret_manager_module = true` | `secretmanager.secrets.create` |
 | `enable_dns_module = true` | `dns.managedZones.create`, `dns.resourceRecordSets.create` |
 | `tls_certificate_source = "google-managed"` | `certificatemanager.certs.create`, `certificatemanager.certmaps.create`, `certificatemanager.certmapentries.create`, `certificatemanager.dnsauthorizations.create` |
-| `ingress_type = "gke"` with a global `gke_gateway_class` (the default) | `compute.globalAddresses.create` |
+| `ingress_type = "gke"` | `compute.globalAddresses.create` |
 | `enable_smithdb = true` with `smithdb_metastore_source = "create"` | `cloudsql.instances.create`, `cloudsql.databases.create` |
 | `enable_smithdb = true` with `smithdb_metastore_use_auth_proxy = true` | `resourcemanager.projects.setIamPolicy` |
 

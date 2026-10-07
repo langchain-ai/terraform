@@ -61,9 +61,6 @@ locals {
     local.tls_external_secret ? var.tls_existing_secret_name : var.tls_secret_name
   )
 
-  # Only global GKE Gateway classes read a certificate map.
-  gke_gateway_global_class = startswith(var.gke_gateway_class, "gke-l7-global")
-
   # Gateway API CRDs for Envoy Gateway. cert-manager with Gateway API support on
   # (Let's Encrypt HTTP-01) needs them before it starts, so k8s-bootstrap applies
   # the same file ahead of cert-manager. Keep one URL for both. Envoy Gateway v1.9

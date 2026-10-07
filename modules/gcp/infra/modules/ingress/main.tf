@@ -496,7 +496,7 @@ locals {
 
   # Only global classes can use a global static IP. Regional classes (for example
   # gke-l7-rilb) need a regional address and a proxy-only subnet, which this
-  # module does not create.
+  # module does not create. The root accepts only the global class.
   gke_gateway_global_ip    = local.gke_gateway_enabled && startswith(var.gke_gateway_class, "gke-l7-global")
   gke_gateway_address_name = "${var.gateway_name}-ip"
 

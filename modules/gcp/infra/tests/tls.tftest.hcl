@@ -140,20 +140,6 @@ run "google_managed_with_the_example_domain_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
-run "google_managed_on_a_regional_class_is_rejected" {
-  command = plan
-
-  variables {
-    install_ingress        = false
-    ingress_type           = "gke"
-    gke_gateway_class      = "gke-l7-rilb"
-    tls_certificate_source = "google-managed"
-    langsmith_domain       = "langsmith.acme.test"
-  }
-
-  expect_failures = [terraform_data.validate_inputs]
-}
-
 # ── Root: existing, cert-manager, letsencrypt ────────────────────────────────
 
 run "existing_with_a_precreated_secret_references_it" {

@@ -643,9 +643,14 @@ variable "ingress_type" {
 }
 
 variable "gke_gateway_class" {
-  description = "GatewayClass to use when ingress_type = \"gke\" — e.g. 'gke-l7-global-external-managed' (public) or 'gke-l7-rilb' (internal-only regional)."
+  description = "GatewayClass to use when ingress_type = \"gke\". Only 'gke-l7-global-external-managed' (global external Application Load Balancer) is supported. Regional classes such as 'gke-l7-rilb' need a proxy-only subnet, and NetworkPolicy access from its range, which this stack does not create."
   type        = string
   default     = "gke-l7-global-external-managed"
+
+  validation {
+    condition     = var.gke_gateway_class == "gke-l7-global-external-managed"
+    error_message = "gke_gateway_class must be 'gke-l7-global-external-managed'. Regional classes such as 'gke-l7-rilb' need a proxy-only subnet, and NetworkPolicy access from its range, which this stack does not create. Multi-cluster (-mc) classes need a fleet."
+  }
 }
 
 #------------------------------------------------------------------------------

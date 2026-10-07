@@ -292,3 +292,30 @@ run "smithdb_disabled_ignores_the_metastore_tls_variables" {
     error_message = "With SmithDB disabled, the metastore TLS outputs, the metastore tier, the Helm values, or the quota headroom are not empty"
   }
 }
+
+# The stack does not create the proxy-only subnet that a regional class needs,
+# and the namespace NetworkPolicy admits only Google's front-end ranges, so a
+# regional class would never receive traffic.
+run "gke_regional_gateway_class_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_type      = "gke"
+    gke_gateway_class = "gke-l7-rilb"
+  }
+
+  expect_failures = [var.gke_gateway_class]
+}
+
+# A gke-l7-global prefix also matches the multi-cluster class, which needs a
+# fleet, so the rule matches the one class by name.
+run "gke_multi_cluster_gateway_class_is_rejected" {
+  command = plan
+
+  variables {
+    ingress_type      = "gke"
+    gke_gateway_class = "gke-l7-global-external-managed-mc"
+  }
+
+  expect_failures = [var.gke_gateway_class]
+}

@@ -325,13 +325,13 @@ ingress_type    = "envoy"  # "envoy" (default), "gke" (GKE Gateway), "istio" or 
 
 # ingress_type = "gke" uses the GKE Gateway controller instead of Envoy Gateway.
 #   - tls_certificate_source can be "none", "google-managed", "existing", or
-#     "cert-manager". "letsencrypt" is Envoy-only. "google-managed" needs a
-#     global class.
+#     "cert-manager". "letsencrypt" is Envoy-only.
 #   - The default class reserves a global static IP (<name>-gateway-ip) for DNS.
 #     The Envoy Gateway's IP is not reserved: do not delete and recreate its
 #     Gateway once DNS points at it, or the IP changes.
-#     Regional classes such as "gke-l7-rilb" need a proxy-only subnet that this
-#     stack does not create, and get an ephemeral IP.
+#   - Only the default class is supported. Regional classes such as
+#     "gke-l7-rilb" need a proxy-only subnet, and NetworkPolicy access from its
+#     range, which this stack does not create. Terraform rejects them.
 # gke_gateway_class = "gke-l7-global-external-managed"
 
 #------------------------------------------------------------------------------

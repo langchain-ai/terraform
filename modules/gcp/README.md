@@ -414,7 +414,7 @@ helm upgrade langsmith langchain/langsmith \
 | `langsmith_helm_chart_version` | `""` | no | Pin Helm chart version (empty = the pinned `~0.17.0` line; must be on the 0.17 line) |
 | `install_ingress` | `true` | no | Install the Gateway via Terraform (Envoy Gateway by default, or the GKE Gateway) |
 | `ingress_type` | `envoy` | no | Ingress type: `envoy` (default), `gke`, `istio`, or `other` |
-| `gke_gateway_class` | `gke-l7-global-external-managed` | no | GatewayClass when `ingress_type = "gke"`. Global classes reserve a static IP |
+| `gke_gateway_class` | `gke-l7-global-external-managed` | no | GatewayClass when `ingress_type = "gke"`. Only this global class is supported. It reserves a static IP |
 | `tls_certificate_source` | `none` | no | `none`, `google-managed` (GKE Gateway), `existing`, `cert-manager`, or `letsencrypt` (Envoy, evaluation). See [TLS.md](TLS.md) |
 | `tls_existing_secret_name` | `""` | with `existing` | A `kubernetes.io/tls` Secret you create; keeps the key out of Terraform state |
 | `tls_google_managed_include_wildcard` | `false` | no | With `google-managed`, also cover `*.<langsmith_domain>` |

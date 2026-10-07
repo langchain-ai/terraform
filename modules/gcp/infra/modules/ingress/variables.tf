@@ -44,7 +44,7 @@ variable "ingress_type" {
 }
 
 variable "gke_gateway_class" {
-  description = "GatewayClass to use when ingress_type = \"gke\" — e.g. 'gke-l7-global-external-managed' (public) or 'gke-l7-rilb' (internal-only regional)."
+  description = "GatewayClass to use when ingress_type = \"gke\". The root module accepts only 'gke-l7-global-external-managed'. This module plans a regional class without a global address, but the stack does not create the proxy-only subnet that a regional class needs."
   type        = string
   default     = "gke-l7-global-external-managed"
 }

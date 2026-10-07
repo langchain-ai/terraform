@@ -380,7 +380,9 @@ resource "kubernetes_network_policy" "langsmith_default" {
         }
       }
       # The GKE Gateway's load balancer and its health checks reach pods directly
-      # from Google's front-end ranges, not from a namespace.
+      # from Google's front-end ranges, not from a namespace. A regional class
+      # sends requests from its proxy-only subnet instead, which is not admitted
+      # here; the root accepts only the global class.
       dynamic "from" {
         for_each = var.allow_gke_gateway_traffic ? ["130.211.0.0/22", "35.191.0.0/16"] : []
         content {

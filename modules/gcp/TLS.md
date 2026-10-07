@@ -99,9 +99,10 @@ trust your CA.
 
 ### Limits
 
-- Global GKE Gateway classes only (`gke-l7-global-*`). A regional class, such as
-  the internal `gke-l7-rilb`, needs a regional certificate, which this module
-  does not create yet. Terraform rejects the combination at plan time.
+- The GKE Gateway supports only the global class `gke-l7-global-external-managed`.
+  A regional class, such as the internal `gke-l7-rilb`, needs a proxy-only
+  subnet and a regional certificate, which this module does not create yet.
+  Terraform rejects other classes at plan time.
 - Envoy Gateway terminates TLS in the cluster behind a passthrough load
   balancer, so it cannot use a Google-managed certificate. Use `existing` or
   `cert-manager` with Envoy.
