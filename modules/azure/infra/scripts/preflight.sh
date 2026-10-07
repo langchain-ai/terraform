@@ -1743,7 +1743,12 @@ else
   # cluster, with -admin appended for --admin.
   KUBE_CTX=$(kubectl config current-context 2>/dev/null || echo "")
   if [ "$KUBE_CTX" != "$CLUSTER_NAME" ] && [ "$KUBE_CTX" != "${CLUSTER_NAME}-admin" ]; then
-    warn "kubectl context is '${KUBE_CTX:-unset}', not '${CLUSTER_NAME}', so ClickHouse capacity is unchecked. Run: az aks get-credentials --resource-group ${EXISTING_AKS_RG:-<rg>} --name ${CLUSTER_NAME}"
+    # With no private DNS zone, only the public FQDN resolves (to the private IP).
+    GC_FLAG=""
+    if [ -n "${EXISTING_AKS_RG:-}" ] && [ "$(az aks show -n "$CLUSTER_NAME" -g "$EXISTING_AKS_RG" --query "apiServerAccessProfile.privateDnsZone" -o tsv --only-show-errors 2>/dev/null | tr '[:upper:]' '[:lower:]')" = "none" ]; then
+      GC_FLAG=" --public-fqdn"
+    fi
+    warn "kubectl context is '${KUBE_CTX:-unset}', not '${CLUSTER_NAME}', so ClickHouse capacity is unchecked. Run: az aks get-credentials --resource-group ${EXISTING_AKS_RG:-<rg>} --name ${CLUSTER_NAME}${GC_FLAG}"
   elif ! NODES_JSON=$(kubectl get nodes -o json --request-timeout=10s 2>/dev/null); then
     warn "Could not read nodes from '${KUBE_CTX}', so ClickHouse capacity is unchecked"
   else
