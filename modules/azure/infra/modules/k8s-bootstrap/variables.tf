@@ -18,6 +18,17 @@ variable "client_key" {
   sensitive   = true
 }
 
+variable "kube_auth" {
+  type        = string
+  description = "'entra' signs the providers in through kubelogin with the caller's az session; 'certificate' uses client_certificate and client_key. Set from the k8s-cluster module's kube_auth output."
+  default     = "certificate"
+
+  validation {
+    condition     = contains(["entra", "certificate"], var.kube_auth)
+    error_message = "kube_auth must be 'entra' or 'certificate'."
+  }
+}
+
 variable "cluster_ca_certificate" {
   type        = string
   description = "Base64-encoded cluster CA certificate from AKS kube_config"
@@ -199,8 +210,14 @@ variable "cert_manager_version" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (nginx → ingress-nginx, envoy-gateway → envoy-gateway-system, istio → istio-system, istio-addon → aks-istio-ingress). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
-  default     = "nginx"
+  description = "Ingress controller in use. Determines which namespace the NetworkPolicy allows ingress from (envoy-gateway → envoy-gateway-system, nginx → ingress-nginx, istio → istio-system, istio-addon → aks-istio-ingress), and whether cert-manager runs with Gateway API support (envoy-gateway only). 'agic' has no in-cluster namespace and is allowed by agic_subnet_cidrs instead."
+  default     = "envoy-gateway"
+}
+
+variable "envoy_gateway_version" {
+  type        = string
+  description = "Version of the Envoy Gateway release, empty without one. Read only to install cert-manager after the Gateway API CRDs that release ships: cert-manager checks for them once, at startup."
+  default     = ""
 }
 
 variable "agic_subnet_cidrs" {
@@ -211,12 +228,12 @@ variable "agic_subnet_cidrs" {
 
 variable "tls_certificate_source" {
   type        = string
-  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via Azure DNS + Workload Identity. 'none' = skip. Both ClusterIssuers are created by helm/scripts/deploy.sh; this module only sets up cert-manager to support them."
+  description = "TLS certificate source. 'letsencrypt' = HTTP-01 via cert-manager. 'dns01' = DNS-01 via Azure DNS + Workload Identity. 'existing' = your own certificate in the langsmith-tls Secret; nothing here. 'none' = skip. Both ClusterIssuers are created by helm/scripts/deploy.sh; this module only sets up cert-manager to support them."
   default     = "letsencrypt"
 
   validation {
-    condition     = contains(["letsencrypt", "dns01", "none"], var.tls_certificate_source)
-    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', or 'none'."
+    condition     = contains(["letsencrypt", "dns01", "existing", "none"], var.tls_certificate_source)
+    error_message = "tls_certificate_source must be 'letsencrypt', 'dns01', 'existing', or 'none'."
   }
 }
 

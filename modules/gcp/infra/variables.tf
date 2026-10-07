@@ -387,9 +387,10 @@ variable "sandbox_host_node_count" {
 }
 
 variable "sandbox_host_min_node_count" {
-  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true."
+  description = "Minimum number of sandbox-host nodes per zone when enable_sandboxes = true. The pool is regional, so a minimum of 1 keeps one node in every zone. The default of 0 lets the autoscaler keep only the nodes that sandbox-host needs, one for each replica. When sandbox-host is Pending, the autoscaler adds a node in a healthy zone."
   type        = number
-  default     = 1
+  default     = 0
+  nullable    = false
 }
 
 variable "sandbox_host_max_node_count" {
@@ -399,9 +400,9 @@ variable "sandbox_host_max_node_count" {
 }
 
 variable "sandbox_host_machine_type" {
-  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). Defaults to n2-standard-8; other examples include n2-highmem-8, n1-standard-8, c3-standard-8, and c4-standard-8."
+  description = "GCE machine type for sandbox-host nodes. Must support nested virtualization and expose usable Linux KVM (/dev/kvm). null (default) follows sizing_profile: production and production-large use n2-standard-32, every other profile uses n2-standard-8. Other examples: n2-highmem-8, c3-standard-8. C4 accepts only Hyperdisk, and this pool uses a pd-ssd boot disk."
   type        = string
-  default     = "n2-standard-8"
+  default     = null
 }
 
 variable "sandbox_host_disk_size_gb" {
@@ -411,13 +412,13 @@ variable "sandbox_host_disk_size_gb" {
 }
 
 variable "sandbox_host_ephemeral_local_ssd_count" {
-  description = "Number of local SSDs backing sandbox-host ephemeral storage, used by the JuiceFS host cache. 0 keeps ephemeral storage on the boot disk."
+  description = "Number of 375 GB local SSDs that back kubelet and container runtime ephemeral storage on sandbox-host nodes. The JuiceFS host cache stays on the boot disk (/var/cache/juicefs), so these disks do not speed up sandbox file I/O. Compute Engine accepts only specific counts per machine type: N2 with 2-10 vCPU takes 1, 2, 4, 8, 16 or 24; 12-20 vCPU takes 2, 4, 8, 16 or 24; 22-40 vCPU takes 4, 8, 16 or 24. Standard C3 types take none."
   type        = number
   default     = 0
 
   validation {
-    condition     = var.sandbox_host_ephemeral_local_ssd_count >= 0 && floor(var.sandbox_host_ephemeral_local_ssd_count) == var.sandbox_host_ephemeral_local_ssd_count
-    error_message = "sandbox_host_ephemeral_local_ssd_count must be a non-negative integer."
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.sandbox_host_ephemeral_local_ssd_count)
+    error_message = "sandbox_host_ephemeral_local_ssd_count must be one of 0, 1, 2, 4, 8, 16 or 24 (the N2 set), and the machine type must accept that count."
   }
 }
 
@@ -481,13 +482,13 @@ variable "sandbox_juicefs_redis_rdb_snapshot_period" {
 }
 
 variable "sandbox_juicefs_csi_config_secret_name" {
-  description = "Kubernetes Secret name containing JuiceFS CSI config. Created in the LangSmith namespace when enable_sandboxes = true."
+  description = "Kubernetes Secret name holding the sandbox JuiceFS config (name, metaurl, storage, bucket). Created in the LangSmith namespace when enable_sandboxes = true and passed to the chart as sandboxes.juicefs.existingSecretName."
   type        = string
   default     = "juicefs-csi-config"
 }
 
 variable "sandbox_juicefs_csi_config_secret_revision" {
-  description = "Revision for the write-only JuiceFS CSI config Secret. Increment to intentionally rewrite the secret."
+  description = "Revision for the write-only sandbox JuiceFS config Secret. Increment to intentionally rewrite the secret. The chart does not restart sandbox-host for an in-place rewrite, so restart it after the apply."
   type        = number
   default     = 1
 }
@@ -495,7 +496,7 @@ variable "sandbox_juicefs_csi_config_secret_revision" {
 # tflint-ignore: terraform_unused_declarations
 variable "sandbox_host_image_tag" {
   type        = string
-  description = "sandbox-host image tag. Required by init-values.sh when enable_sandboxes = true."
+  description = "Deprecated and ignored. deploy.sh sets images.sandboxHostImage.tag from the resolved chart appVersion, so the sandbox-host image cannot lag a chart upgrade. Kept so that older terraform.tfvars files still plan; remove it from tfvars."
   default     = ""
 }
 
@@ -587,6 +588,12 @@ variable "enable_gcp_iam_module" {
 
 variable "enable_secret_manager_module" {
   description = "Enable Secret Manager module to store generated/bootstrap credentials."
+  type        = bool
+  default     = false
+}
+
+variable "grant_project_secret_accessor" {
+  description = "Grant the LangSmith service account roles/secretmanager.secretAccessor on the whole project. No module component needs it. Set true only for a workload you added that reads Secret Manager as that service account; a per-secret grant is safer."
   type        = bool
   default     = false
 }
@@ -902,14 +909,14 @@ variable "sandbox_callback_signing_jwk" {
 
 #------------------------------------------------------------------------------
 # Helm Sizing Profile
-# Sizing is a chart concern, so no Terraform resource reads this. deploy.sh,
-# init-values.sh, and patch-lgp-resources.sh parse it out of terraform.tfvars;
-# the validation block below is what keeps a typo from reaching them.
+# Sizing is a chart concern. deploy.sh, init-values.sh, and
+# patch-lgp-resources.sh parse it out of terraform.tfvars; the validation block
+# below is what keeps a typo from reaching them. Terraform also reads it for
+# the SmithDB sizing default (smithdb_sizing).
 #------------------------------------------------------------------------------
-# tflint-ignore: terraform_unused_declarations
 variable "sizing_profile" {
   type        = string
-  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file)."
+  description = "Helm sizing profile. See https://docs.langchain.com/langsmith/self-host-scale for workload patterns. 'production' (~20 users, ~100 traces/sec), 'production-large' (~50 users, ~1000 traces/sec), 'dev' (single-replica, minimal resources for dev/CI/demos), 'minimum' (absolute floor for cost parking/demos), or 'default' (chart defaults, no sizing file). With enable_smithdb = true, it also sets the default of smithdb_sizing."
   default     = "default"
 
   validation {
@@ -953,21 +960,29 @@ variable "enable_usage_telemetry" {
   default     = false
 }
 
+# tflint-ignore: terraform_unused_declarations
+variable "enable_sso_oidc" {
+  type        = bool
+  description = "Enable SSO login via any standard OIDC provider (config.oauth.enabled) — Entra ID, Okta, Auth0, Google Workspace, etc. all work through the same generic client_id/secret/issuer_url. Client ID/secret/issuer URL are read by init-values.sh from TF_VAR_langsmith_oauth_client_id/secret/issuer_url (populated by setup-env.sh from Secret Manager), not from this variable. Requires authType 'mixed' (already the default in the base values). WARNING: enable only after the initial install has completed with basic auth and you've confirmed org-admin access — this disables config.basicAuth, and flipping it on before an admin account exists locks you out of the UI. Set up SCIM (if you're using it) after this, since SCIM's user matching depends on the OIDC provider this creates."
+  default     = false
+}
+
 #------------------------------------------------------------------------------
-# SmithDB (chart 0.16+, optional)
+# SmithDB (chart 0.17, optional)
 #
 # SmithDB is the in-chart columnar store/query engine that runs alongside
 # ClickHouse. Enabling it provisions a dedicated Cloud SQL metastore, its own GCS
-# bucket, a Workload Identity service account, and two GKE node pools (one Local
-# SSD-backed for the cache). Off by default — no effect on existing deployments.
+# bucket, a Workload Identity service account, and two GKE node pools (cache and
+# compute, none for smithdb_sizing = minimal). Off by default — no effect on
+# existing deployments.
 #
 # Enabling the infrastructure never changes the chart line on its own: Pass 2
-# requires an explicit chart version, and every LangSmith integration gate below
-# starts disabled.
+# uses the pinned 0.17 chart line, and every LangSmith integration gate below
+# defaults to false.
 #------------------------------------------------------------------------------
 variable "enable_smithdb" {
   type        = bool
-  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, Local SSD + compute node pools). Requires an explicit chart version of 0.16 or newer in Pass 2, and GKE Standard rather than Autopilot."
+  description = "Provision the SmithDB cloud dependencies (Cloud SQL metastore, GCS object store, Workload Identity service account, cache + compute node pools). Pass 2 uses the repository's pinned 0.17 chart line. Requires GKE Standard rather than Autopilot."
   default     = false
 }
 
@@ -992,6 +1007,42 @@ variable "smithdb_query_enabled" {
   type        = bool
   description = "Serve LangSmith UI and API reads from SmithDB. Requires smithdb_ingestion_enabled, and any historical migration you need, to be validated first."
   default     = false
+}
+
+variable "smithdb_migration_start_time" {
+  type        = string
+  description = "Backfill start time (smithdb.migration.startTime), RFC 3339, for example 2026-01-01T00:00:00Z. Empty keeps the chart default window; see SMITHDB.md#staged-rollout."
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.smithdb_migration_start_time == "" || can(formatdate("YYYY", var.smithdb_migration_start_time))
+    error_message = "smithdb_migration_start_time must be empty or an RFC 3339 timestamp, for example 2026-01-01T00:00:00Z."
+  }
+}
+
+# --- Sizing -------------------------------------------------------------------
+# See SMITHDB.md#sizing for what each size and cache mode resolves to.
+variable "smithdb_sizing" {
+  type        = string
+  description = "SmithDB size: minimal, small, medium, or large. Null follows sizing_profile: minimum gives minimal, dev and default give small, production gives medium, and production-large gives large. minimal uses the chart small tier with reduced resources and runs on the general node pool, with no SmithDB node pools."
+  default     = null
+
+  validation {
+    condition     = contains(["minimal", "small", "medium", "large"], coalesce(var.smithdb_sizing, "small"))
+    error_message = "smithdb_sizing must be one of: minimal, small, medium, large."
+  }
+}
+
+variable "smithdb_cache_storage" {
+  type        = string
+  description = "SmithDB cache storage: local-ssd (emptyDir on node Local SSD) or network-disk. network-disk is a per-pod Hyperdisk Balanced volume on a C3 or C3D cache pool, or standard-rwo for minimal. Null gives network-disk for minimal and local-ssd for the other sizes. A change replaces the cache node pool."
+  default     = null
+
+  validation {
+    condition     = contains(["local-ssd", "network-disk"], coalesce(var.smithdb_cache_storage, "local-ssd"))
+    error_message = "smithdb_cache_storage must be local-ssd or network-disk."
+  }
 }
 
 # --- Metastore --------------------------------------------------------------
@@ -1019,8 +1070,8 @@ variable "smithdb_metastore_database_version" {
 
 variable "smithdb_metastore_tier" {
   type        = string
-  description = "Cloud SQL machine tier for the SmithDB metastore."
-  default     = "db-custom-2-8192"
+  description = "Cloud SQL machine tier for a created SmithDB metastore (smithdb_metastore_source = 'create'). Null follows the resolved smithdb_sizing: minimal gives db-custom-2-8192, small gives db-custom-4-16384, medium gives db-custom-6-32768, and large gives db-custom-10-65536. A tier change takes the instance offline for less than 60 seconds. An external metastore does not use this variable."
+  default     = null
 }
 
 variable "smithdb_metastore_disk_size" {
@@ -1054,14 +1105,14 @@ variable "smithdb_metastore_ssl_mode" {
 
 variable "smithdb_metastore_use_ssl" {
   type        = bool
-  description = "Tell SmithDB to connect to the metastore over TLS directly. Keep true with ENCRYPTED_ONLY when not using the Auth Proxy. Set false when smithdb_metastore_use_auth_proxy = true, because the proxy terminates TLS and the SmithDB hop is loopback."
-  default     = true
+  description = "Tell SmithDB to connect to the metastore over TLS directly. Null resolves to the opposite of the resolved smithdb_metastore_use_auth_proxy. Must be false with the Auth Proxy, because the proxy terminates TLS and the SmithDB hop is loopback."
+  default     = null
 }
 
 variable "smithdb_metastore_use_auth_proxy" {
   type        = bool
-  description = "Run a Cloud SQL Auth Proxy sidecar in every SmithDB Pod and connect through it on 127.0.0.1. The proxy holds the TLS session to Cloud SQL, so the instance stays at ENCRYPTED_ONLY while SmithDB itself speaks plaintext over the Pod loopback. Requires smithdb_metastore_source = 'create' and smithdb_metastore_use_ssl = false."
-  default     = false
+  description = "Run a Cloud SQL Auth Proxy sidecar in every SmithDB Pod and connect through it on 127.0.0.1. The proxy holds the TLS session to Cloud SQL, so the instance stays at ENCRYPTED_ONLY while SmithDB itself speaks plaintext over the Pod loopback. Null resolves to true for smithdb_metastore_source = 'create', because direct TLS from SmithDB to Cloud SQL fails with UnknownIssuer, and to false for 'external'. Requires smithdb_metastore_source = 'create' and smithdb_metastore_use_ssl = false."
+  default     = null
 }
 
 variable "smithdb_auth_proxy_image" {
@@ -1157,27 +1208,31 @@ variable "smithdb_node_locations" {
   default     = []
 }
 
+# The four shape variables below default to null, which takes the default for
+# the resolved smithdb_sizing and smithdb_cache_storage (local.smithdb_pool_defaults).
 variable "smithdb_instance_store_machine_type" {
   type        = string
-  description = "Machine type for the Local SSD (cache) pool. N2/N2D take an explicit disk count; C3/C4/Z3 '-lssd' types bundle a fixed count and require smithdb_instance_store_local_ssd_count = 0. At chart defaults the three cache workloads request 4 CPU each, which fits within the ~15.9 allocatable vCPU of an n2-standard-16."
-  default     = "n2-standard-16"
+  description = "Machine type for the SmithDB cache pool. Null takes the default for the size and cache mode. N2/N2D take an explicit disk count; C3 and Z3 '-lssd' types bundle a fixed count and require smithdb_instance_store_local_ssd_count = 0. network-disk requires a C3 or C3D type."
+  default     = null
 }
 
 variable "smithdb_instance_store_local_ssd_count" {
   type        = number
-  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Compute Engine accepts only specific counts per machine type: N2 types with 12-20 vCPU, including the default n2-standard-16, take 2, 4, 8, 16 or 24. At chart defaults the three cache workloads request 200Gi (query) + 100Gi (ingestion) + 100Gi (compactionWorker), so a node holding all of them needs roughly 430 GB allocatable, which the default 2 disks (750 GB raw) covers with headroom. Step up to 4 if you raise the resource requests."
-  default     = 2
+  description = "Number of 375 GB Local SSDs per cache node, combined into one ephemeral-storage filesystem. Null takes the default for the size, and 0 for network-disk. Compute Engine accepts only specific counts per machine type; see SMITHDB.md#sizing."
+  default     = null
 
   validation {
-    condition     = contains([0, 1, 2, 4, 8, 16, 24], var.smithdb_instance_store_local_ssd_count)
+    # coalesce, because Terraform 1.11 evaluates both sides of || and a null
+    # guard does not keep null out of contains().
+    condition     = contains([0, 1, 2, 4, 8, 16, 24], coalesce(var.smithdb_instance_store_local_ssd_count, 0))
     error_message = "smithdb_instance_store_local_ssd_count must be one of 0, 1, 2, 4, 8, 16, 24. Counts in between (3, 5, 6, ...) are rejected by Compute Engine at node pool creation. For n2-standard-16, use 2, 4, 8, 16 or 24."
   }
 }
 
 variable "smithdb_instance_store_disk_size" {
   type        = number
-  description = "Boot disk size in GB for cache pool nodes. The cache itself lives on Local SSD."
-  default     = 100
+  description = "Boot disk size in GB for cache pool nodes. Null gives 100 for local-ssd and 300 for network-disk, where the backfill Job takes its 100Gi of ephemeral storage from the boot disk. network-disk with the backfill requires at least 300."
+  default     = null
 }
 
 variable "smithdb_instance_store_min_nodes" {
@@ -1194,8 +1249,8 @@ variable "smithdb_instance_store_max_nodes" {
 
 variable "smithdb_compute_machine_type" {
   type        = string
-  description = "Machine type for the SmithDB compute pool (compaction, clusterManager)."
-  default     = "n2-standard-8"
+  description = "Machine type for the SmithDB compute pool (compaction, clusterManager, backfill taskdb). Null takes the default for the size."
+  default     = null
 }
 
 variable "smithdb_compute_disk_size" {

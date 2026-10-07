@@ -42,7 +42,7 @@ one collide in the same region. Everything this cycle checks below assumes
 that file, so edit it rather than copying settings into a new one. What it gives
 you:
 
-- One `Standard_D4s_v3` node (4 vCPU, 16 GiB), autoscaling to 3, no additional pools
+- One `Standard_D4s_v5` node (4 vCPU, 16 GiB), autoscaling to 3, no additional pools
 - Postgres, Redis and ClickHouse **in-cluster**: no Flexible Server, no Managed Redis, and no data subnets or private DNS zones for them
 - `unique_resource_names = true`, so the globally unique names carry a six-character hash (see [Terraform outputs](#terraform-outputs))
 - `keyvault_purge_protection = false`, which a clean `make destroy` needs
@@ -109,7 +109,7 @@ Review the plan. Expected resource categories with `terraform.tfvars.minimum`:
 - AKS cluster and its default node pool, OIDC issuer, managed identities, federated credentials
 - Azure Blob storage account + container
 - Azure Key Vault, its RBAC role assignments, and two secrets (`postgres-admin-password`, `langsmith-license-key`)
-- cert-manager, KEDA and NGINX ingress Helm releases
+- cert-manager, KEDA, and Envoy Gateway Helm releases
 - Kubernetes namespace `langsmith` with its ServiceAccounts, ResourceQuota, LimitRange, NetworkPolicies and the `langsmith-license` secret
 
 With external Postgres and Redis the plan also has the Postgres and Redis subnets, a
@@ -180,7 +180,7 @@ aks-default-<id>-vmss000000       Ready    <none>   18m   v1.<minor>.<patch>
 ```bash
 kubectl get pods -n cert-manager    # cert-manager controller + cainjector + webhook
 kubectl get pods -n keda            # KEDA operator + metrics adapter
-kubectl get pods -n ingress-nginx   # NGINX ingress controller
+kubectl get pods -n envoy-gateway-system   # Envoy Gateway controller
 ```
 Expected output:
 ```
@@ -196,10 +196,12 @@ keda-admission-webhooks-59489d5cf6-q4h9q          1/1     Running   0          9
 keda-operator-78875c99-kktmk                      1/1     Running   0          97s
 keda-operator-metrics-apiserver-5bd8f8bb6-vvblq   1/1     Running   0          97s
 
-# ingress-nginx (deployed by k8s-cluster module)
-NAME                                        READY   STATUS    RESTARTS   AGE
-ingress-nginx-controller-7558b45cf6-k8q9l   1/1     Running   0          16m
-ingress-nginx-controller-7558b45cf6-tf9cq   1/1     Running   0          16m
+# envoy-gateway-system (deployed by k8s-cluster module)
+NAME                    READY   STATUS    RESTARTS   AGE
+envoy-gateway-<hash>    1/1     Running   0          16m
+
+# With ingress_controller = "nginx", check ingress-nginx instead:
+# kubectl get pods -n ingress-nginx
 ```
 
 #### LangSmith namespace
@@ -310,11 +312,11 @@ regions.
 create_waf = true
 ```
 
-**Expected plan**: `+1` resource — `azurerm_cdn_frontdoor_firewall_policy.waf`.
+**Expected plan**: `+1` resource — `azurerm_web_application_firewall_policy.waf`.
 
 **Verify**:
 ```bash
-az network front-door waf-policy list -g <resource-group> --query '[].name'
+az network application-gateway waf-policy list -g <resource-group> --query '[].name'
 ```
 
 ---
@@ -383,14 +385,15 @@ zone to Azure.
 | Issue | Symptom | Fix |
 |-------|---------|-----|
 | `letsencrypt-prod` ClusterIssuer missing after apply | `clusterissuers.cert-manager.io "letsencrypt-prod" not found` on the langsmith-tls certificate | Terraform does not create the issuer. `make deploy` applies it, so run Pass 2 before checking the certificate. See TROUBLESHOOTING.md. |
-| vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv3Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv3 → Request 32. Or: `az quota update --resource-name standardDSv3Family ...` See TROUBLESHOOTING.md. |
+| vCPU quota exceeded | `ErrCode_InsufficientVCPUQuota: Insufficient vcpu quota... remaining 2 for standardDSv5Family` | Request quota increase: Portal → Subscriptions → Usage + Quotas → DSv5 → Request 32. Or: `az quota update --resource-name standardDSv5Family ...` See TROUBLESHOOTING.md. |
 | `max_pods` too low — autoscaler backoff | `pod didn't trigger scale-up: in backoff after failed scale-up` | Set `default_node_pool_max_pods = 60` **before** first apply — this field is immutable. With 30 pods/node, Pass 2's ~37 pods trigger autoscaler which hits quota. |
-| Pass 2 pods `Pending` while the autoscaler adds nodes | The first deploy waits on scale-ups when the node floor is below what the chosen sizing needs | Not seen with `terraform.tfvars.minimum`: one `Standard_D4s_v3` schedules a minimum-profile Pass 2 (about 1,560m CPU requested against about 3,920m allocatable). With a larger `sizing_profile` or addons enabled, raise `default_node_pool_min_count` so the floor already fits the requests. |
+| Pass 2 pods `Pending` while the autoscaler adds nodes | The first deploy waits on scale-ups when the node floor is below what the chosen sizing needs | Not seen with `terraform.tfvars.minimum`: one `Standard_D4s_v5` schedules a minimum-profile Pass 2 (about 1,560m CPU requested against about 3,920m allocatable). With a larger `sizing_profile` or addons enabled, raise `default_node_pool_min_count` so the floor already fits the requests. |
 | Istio addon revision not supported | `Revision asm-1-XX is not supported by the service mesh add-on` | Check supported revisions: `az aks mesh get-revisions --location eastus -o table`. Update `istio_addon_revision` in tfvars. |
 | Key Vault soft-delete conflict | `VaultAlreadyExists: A vault with the same name already exists in deleted state` | Purge the old vault: `az keyvault purge --name <name> --location eastus`. Or use `keyvault_name` in tfvars to pick a new name. |
 | cert-manager or KEDA Helm timeout | `context deadline exceeded` on k8s-bootstrap module | Uninstall the stuck release and re-apply: `helm uninstall cert-manager -n cert-manager` |
 | PostgreSQL provisioning takes >20 min | `apply` appears hung on postgres module | Normal for Azure DB for PostgreSQL — it can take 10–15 min. Wait for it to complete. |
 | `secrets.auto.tfvars` not found | `terraform plan` fails: variables have no value | Run `make setup-env` first. The file is gitignored and must be generated locally. |
+| Envoy LB IP pending | `kubectl get gateway langsmith-gateway -n langsmith` shows no address | Wait 1–3 min for Azure LB provisioning. Check the proxy service: `kubectl get svc -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway`. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
 | NGINX LB IP pending | `kubectl get svc -n ingress-nginx` shows `<pending>` for EXTERNAL-IP | Wait 1–3 min for Azure LB provisioning. If still pending after 5 min, check AKS node status: `kubectl get nodes`. |
 
 ---
@@ -417,7 +420,7 @@ make clean
 **Before destroy, verify this is set in `terraform.tfvars`:**
 - `keyvault_purge_protection    = false`
 
-**If destroy hangs on the VNet**: the NGINX ingress controller may have created Azure LB rules
+**If destroy hangs on the VNet**: the ingress controller's LoadBalancer service (the Envoy proxy service, or ingress-nginx with `nginx`) may have created Azure LB rules
 that hold the subnet. Delete the LB manually from Azure Portal → Load Balancers → find the
 `kubernetes` LB → delete, then re-run `make destroy`.
 

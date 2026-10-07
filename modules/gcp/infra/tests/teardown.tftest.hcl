@@ -72,10 +72,24 @@ run "envoy_ingress_plans_the_gateway_delete" {
     error_message = "The Gateway delete triggers do not hold the project, region, cluster, and Gateway name"
   }
 
-  # v1.2.8 has the fixes for CVE-2025-24030 and CVE-2025-25294.
   assert {
-    condition     = helm_release.envoy_gateway[0].version == "v1.2.8"
-    error_message = "The Envoy Gateway chart is not pinned to v1.2.8"
+    condition     = helm_release.envoy_gateway[0].version == "v1.9.2"
+    error_message = "The Envoy Gateway chart is not pinned to v1.9.2"
+  }
+
+  # Helm does not upgrade CRDs, so the module applies them and the chart skips its copy.
+  assert {
+    condition     = anytrue([for s in helm_release.envoy_gateway[0].set : s.name == "crds.enabled" && s.value == "false"])
+    error_message = "The Envoy Gateway chart installs its own CRDs"
+  }
+
+  # The URL triggers run the CRD steps again on an existing cluster after a version change.
+  assert {
+    condition = (
+      strcontains(null_resource.install_gateway_api_crds[0].triggers["crds_url"], "/v1.6.1/standard-install.yaml")
+      && strcontains(null_resource.install_envoy_gateway_crds[0].triggers["crds_url"], "/v1.9.2/envoy-gateway-crds.yaml")
+    )
+    error_message = "The CRD steps do not pin Gateway API v1.6.1 and the Envoy Gateway v1.9.2 CRDs"
   }
 }
 

@@ -39,12 +39,14 @@ override_module {
   outputs = {
     cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
     cluster_name                       = "ls-aks-test"
+    node_subnet_ids                    = []
     oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
     host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
     kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
     client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
     client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
     cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+    kube_auth                          = "certificate"
     workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
     workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
     cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -83,12 +85,14 @@ run "no_cluster_yet_plans_clean_in_either_mode" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -142,12 +146,14 @@ run "a_cluster_without_a_policy_engine_does_not_migrate_either" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -182,12 +188,14 @@ run "installing_a_policy_engine_where_none_runs_passes_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -220,12 +228,14 @@ run "overlay_does_not_go_back_to_node_subnet_even_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -261,12 +271,14 @@ run "a_data_plane_change_is_refused_without_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -299,12 +311,14 @@ run "the_azure_data_plane_moves_to_cilium_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -335,12 +349,14 @@ run "cilium_does_not_go_back_to_azure_even_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -375,12 +391,14 @@ run "a_pod_range_change_on_an_overlay_cluster_is_refused" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -417,12 +435,14 @@ run "an_imported_calico_cluster_does_not_move_to_azure_even_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"
@@ -456,12 +476,14 @@ run "a_cluster_without_a_policy_engine_moves_to_cilium_with_the_flag" {
     outputs = {
       cluster_id                         = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/ls-rg-test/providers/Microsoft.ContainerService/managedClusters/ls-aks-test"
       cluster_name                       = "ls-aks-test"
+      node_subnet_ids                    = []
       oidc_issuer_url                    = "https://eastus.oic.prod-aks.azure.com/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/"
       host                               = "https://ls-aks-test-00000000.hcp.eastus.azmk8s.io:443"
       kube_config_raw                    = "apiVersion: v1\nkind: Config\n"
       client_certificate                 = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
       client_key                         = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ=="
       cluster_ca_certificate             = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"
+      kube_auth                          = "certificate"
       workload_identity_client_id        = "11111111-1111-1111-1111-111111111111"
       workload_identity_principal_id     = "22222222-2222-2222-2222-222222222222"
       cert_manager_identity_client_id    = "33333333-3333-3333-3333-333333333333"

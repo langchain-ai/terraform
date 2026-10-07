@@ -49,18 +49,14 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; DIM='\033[0;90m'; NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # _validate_admin_password lives here so `make keyvault set` enforces the same
 # rules as this script.
 source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name ─────────────────────────────────────────────────────
-# Priority: terraform output → derived from terraform.tfvars. The -n guard is not
-# redundant: `terraform output -raw` exits 0 against an empty state and prints its
-# "no outputs" warning to stdout, so an exit-code-only check assigns the warning
-# text as the vault name.
-if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
+# Priority: terraform output → derived from terraform.tfvars.
+if KV_NAME=$(_tf_out keyvault_name); then
   : # got it from terraform output
 else
   KV_NAME=$(_require_kv_name) || exit 1

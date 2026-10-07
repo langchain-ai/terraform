@@ -2,7 +2,7 @@
 
 Self-hosted LangSmith on Amazon EKS, managed with Terraform.
 
-> **Deploy from a release tag, not `main`.** Check out the latest `v0.16.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.16.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.16.0` = latest `0.16.x`, never `0.17`). See [Versioning and releases](../../README.md#versioning-and-releases).
+> **Deploy from a release tag, not `main`.** Check out the latest `v0.17.*` tag before deploying (don't hardcode a patch): `git fetch --tags && git checkout "$(git tag -l 'v0.17.*' --sort=-v:refname | head -1)"`. Tags pin the LangSmith chart line (`~0.17.0` = latest `0.17.x`, never `0.18`). See [Versioning and releases](../../README.md#versioning-and-releases).
 
 ---
 
@@ -57,17 +57,7 @@ brew install eksctl
 
 ### Required AWS IAM permissions
 
-The IAM user or role running Terraform needs the following managed policies (or equivalent inline policies):
-
-| Policy | Purpose |
-|--------|---------|
-| `AmazonEKSClusterPolicy` | Create and manage EKS clusters |
-| `AmazonVPCFullAccess` | Create VPC, subnets, route tables, NAT |
-| `AmazonRDSFullAccess` | Create and manage RDS instances |
-| `AmazonElastiCacheFullAccess` | Create ElastiCache clusters |
-| `AmazonS3FullAccess` | Create S3 buckets and VPC endpoints |
-| `IAMFullAccess` | Create IRSA roles and policies |
-| `ElasticLoadBalancingFullAccess` | Create ALB via Terraform |
+The IAM user or role running Terraform needs `AdministratorAccess`, or `PowerUserAccess` plus `IAMFullAccess`. `PowerUserAccess` alone fails at the first IAM role the apply creates. For a custom policy, the IAM roles the deployment creates, and how to test access before the first apply, refer to [PERMISSIONS.md](PERMISSIONS.md).
 
 ### Authenticate
 
@@ -108,7 +98,7 @@ aws sts get-caller-identity   # verify
 
 After this, `terraform`, `kubectl`, `helm`, and all the `make` targets in this repo pick up the SSO credentials automatically via `AWS_PROFILE`.
 
-**IAM permissions note:** the policies listed in the table above must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
+**IAM permissions note:** the policies in [PERMISSIONS.md](PERMISSIONS.md) must be attached to the **SSO permission set** (or federated role) you assume — not to you directly. Ask your AWS admin which permission set to use and confirm it covers those policies. The LangChain training account's `AdministratorAccessTraining` permission set already does.
 
 **Optional helper:** some sub-tooling in this repo (parallel test workers, scripts that assume a `[default]` block in `~/.aws/credentials`) doesn't honor `AWS_PROFILE`. For those, run `./infra/scripts/hydrate-creds.sh` after `aws sso login` to dump the temporary key/secret/session-token triple into `~/.aws/credentials [default]`. Re-run it whenever your SSO session expires.
 
@@ -525,7 +515,7 @@ make deploy
 
 ### Important notes
 
-- The bastion's IAM role has `AmazonSSMManagedInstanceCore` and `AmazonEKSClusterPolicy` attached. Add additional policies if you need the bastion to manage other AWS resources.
+- The bastion's IAM role has `AmazonSSMManagedInstanceCore` attached, plus an inline policy that allows `eks:DescribeCluster` and `eks:ListClusters`. Add additional policies if you need the bastion to manage other AWS resources.
 - The bastion lives in a **public subnet** (for SSM agent connectivity). It does not need a public IP if your VPC has VPC endpoints for SSM (`ssm`, `ssmmessages`, `ec2messages`).
 - When the EKS API is private, `terraform plan/apply` targeting EKS resources **must** be run from within the VPC (i.e., the bastion). Running from your laptop will timeout.
 
@@ -1059,7 +1049,7 @@ aws eks update-kubeconfig --name <cluster_name> --region <region>
 | `enable_polly` | `false` | no | Enable LangSmith Chat (formerly Polly); does not require `enable_deployments` |
 | `polly_storage` | `external` | no | LangSmith Chat storage: `external` uses shared RDS/ElastiCache; `in-cluster` uses chart-managed PostgreSQL/Redis |
 | `enable_usage_telemetry` | `false` | no | Enable extended usage telemetry reporting |
-| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.16.x chart pin. See [SMITHDB.md](SMITHDB.md). |
+| `enable_smithdb` | `false` | no | Provision SmithDB v16 dependencies: dedicated/BYO PostgreSQL, dedicated S3, private S3 routing, IRSA, and Karpenter NodePools. Pass 2 uses the repository's compatible 0.17.x chart pin. See [SMITHDB.md](SMITHDB.md). |
 | `smithdb_metastore_source` | `create` | no | SmithDB metastore Postgres: `create` (dedicated RDS) or `external` (BYO) |
 | `smithdb_metastore_engine_version` | `18` | no | PostgreSQL major version for the managed SmithDB metastore |
 | `smithdb_existing_metastore_security_group_id` | `null` | no | Attach an existing SG to the metastore RDS instance instead of creating one (only when `smithdb_metastore_source = "create"`). See [bring your own security groups](#bring-your-own-security-groups) |

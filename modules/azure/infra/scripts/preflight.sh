@@ -18,6 +18,7 @@
 #      Key Vault it attaches to rather than creates is really there
 #   8. The configured Postgres version and SKU are offered in the region
 #   9. Globally-unique names (Postgres, Storage, Key Vault, dns_label) are free
+#  10. An attached cluster has a node large enough to hold ClickHouse
 #
 # Run before: terraform init / terraform apply
 # Usage: bash infra/scripts/preflight.sh
@@ -192,7 +193,16 @@ if [ "$UNIQUE_NAMES" = "true" ]; then NAME_BASE="ls"; else NAME_BASE="langsmith"
 # name_base overrides the ls/langsmith switch outright, same as main.tf.
 NAME_BASE=$(_tfvar name_base || echo "$NAME_BASE")
 
-RESOURCE_GROUP_NAME=$(_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
+# create_resource_group = false deploys into a group someone else created, often
+# with the deployer's rights granted on that group alone.
+CREATE_RG=$(_tfvar create_resource_group || echo "true")
+if [ "$CREATE_RG" = "false" ]; then
+  RG_KEY="existing_resource_group_name"
+  RESOURCE_GROUP_NAME=$(_tfvar existing_resource_group_name || echo "")
+else
+  RG_KEY="${NAME_KEY}, name_base and resource_group_name"
+  RESOURCE_GROUP_NAME=$(_tfvar resource_group_name || echo "${NAME_BASE}-rg${NAME_SUFFIX}")
+fi
 
 # ── 4. Deployer identity and RBAC ─────────────────────────────────────────────
 # Terraform does not necessarily authenticate as your az login. The azurerm
@@ -294,25 +304,41 @@ trap 'rm -rf "$RBAC_TMP"' EXIT
 
 if [ -z "$PRINCIPAL_ID" ] || [ -z "$SUB_ID_CHECK" ]; then
   warn "Skipping RBAC check — no principal object ID to query"
+elif [ "$CREATE_RG" = "false" ] && [ -z "$RESOURCE_GROUP_NAME" ]; then
+  # Without a group there is no scope to ask about, and the subscription
+  # fallback would judge rights an attached deployment never uses.
+  fail "terraform.tfvars: create_resource_group = false needs existing_resource_group_name, the group to deploy into"
 else
   # Every scope the deployment writes a role assignment at is knowable before
   # apply. The subscription covers everything created beneath it by inheritance.
   # The resource group is where every LangSmith resource lands, and one of the
-  # AGIC assignments names it literally. A bring-your-own VNet can sit in a
+  # AGIC assignments names it literally. An attached group is the whole
+  # footprint, so the subscription is not asked about: a deployer scoped to the
+  # group would fail there for rights the deployment never uses. A bring-your-own VNet can sit in a
   # platform-managed resource group, which is where a landing zone puts its deny
   # assignments, so it gets checked on its own when one is configured.
   #
   # Both values come out of terraform.tfvars and end up in a request URL, so each
   # is held to the pattern its Terraform variable already validates and dropped
   # if it does not fit. An unchecked value here could aim the request elsewhere.
-  SCOPES=("/subscriptions/${SUB_ID_CHECK}")
+  SCOPES=()
+  RG_SCOPE=""
+  [ "$CREATE_RG" = "false" ] || SCOPES+=("/subscriptions/${SUB_ID_CHECK}")
 
   # Azure's resource-group grammar, so a hand-edited terraform.tfvars cannot aim
   # the request elsewhere. printf gives grep the newline it needs to see a line.
   if printf '%s\n' "$RESOURCE_GROUP_NAME" | grep -qE '^[A-Za-z0-9._()-]{1,90}$'; then
-    SCOPES+=("/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}")
+    RG_SCOPE="/subscriptions/${SUB_ID_CHECK}/resourceGroups/${RESOURCE_GROUP_NAME}"
+    SCOPES+=("$RG_SCOPE")
+    if [ "$CREATE_RG" = "false" ]; then
+      if az group show --name "$RESOURCE_GROUP_NAME" --query id -o tsv >/dev/null 2>&1; then
+        pass "Resource group ${RESOURCE_GROUP_NAME} exists"
+      else
+        fail "Resource group ${RESOURCE_GROUP_NAME} could not be read. It does not exist in this subscription or this identity cannot read it, and plan reads it before creating anything."
+      fi
+    fi
   else
-    warn "terraform.tfvars: '${RESOURCE_GROUP_NAME}' is not a legal resource group name (check ${NAME_KEY}, name_base and resource_group_name), so the deployment resource group was not checked"
+    warn "terraform.tfvars: '${RESOURCE_GROUP_NAME}' is not a legal resource group name (check ${RG_KEY}), so the deployment resource group was not checked"
   fi
 
   EXISTING_VNET=$(_tfvar vnet_id || echo "")
@@ -330,7 +356,7 @@ else
   # is what plan exercises before any write, so an applied deployment fails there
   # first. checkAccess batches them into one request per scope. The subject
   # attributes go through json.dumps into a file rather than onto a command line.
-  python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" > "${RBAC_TMP}/body.json" <<'PY'
+  python3 - "$PRINCIPAL_ID" "$GROUPS_RESOLVED" "$GROUP_IDS" "$CREATE_RG" > "${RBAC_TMP}/body.json" <<'PY'
 import json, sys
 
 ACTIONS = [
@@ -347,6 +373,9 @@ ACTIONS = [
     # Microsoft.Cache/redis is classic Azure Cache and a separate RBAC action.
     "Microsoft.Cache/redisEnterprise/write",
 ]
+# An attached group already exists, so nothing writes it.
+if sys.argv[4] == "false":
+    ACTIONS.remove("Microsoft.Resources/subscriptions/resourceGroups/write")
 
 attributes = {"ObjectId": sys.argv[1]}
 if sys.argv[2] == "1":
@@ -360,7 +389,8 @@ PY
 
   : > "${RBAC_TMP}/scopes.txt"
   SCOPE_COUNT=0
-  for SCOPE in "${SCOPES[@]}"; do
+  # bash 3.2 treats an empty array as unset under set -u, hence the guard.
+  for SCOPE in ${SCOPES[@]+"${SCOPES[@]}"}; do
     SCOPE_COUNT=$((SCOPE_COUNT + 1))
     printf '%s\n' "$SCOPE" >> "${RBAC_TMP}/scopes.txt"
     az rest --method post \
@@ -698,8 +728,17 @@ PY
 
   if [ "$RBAC_VERDICT" = "unavailable" ]; then
     warn "checkAccess (Microsoft.Authorization/checkAccess, 2018-09-01-preview) did not answer at any scope. It is an unversioned preview API, so it may have changed or this tenant may refuse it. Falling back to a role-name check, which cannot see deny assignments, ABAC conditions, or custom roles."
+    # The attach path's deployer may hold its roles on the group alone, so ask
+    # there; --include-inherited still picks up anything from above it.
+    if [ "$CREATE_RG" = "false" ] && [ -n "$RG_SCOPE" ]; then
+      FALLBACK_SCOPE="$RG_SCOPE"
+      FALLBACK_LABEL="the resource group"
+    else
+      FALLBACK_SCOPE="/subscriptions/${SUB_ID_CHECK}"
+      FALLBACK_LABEL="the subscription"
+    fi
     HELD=$(az role assignment list \
-      --scope "/subscriptions/${SUB_ID_CHECK}" \
+      --scope "$FALLBACK_SCOPE" \
       --include-inherited \
       --assignee-object-id "$PRINCIPAL_ID" \
       --include-groups \
@@ -707,11 +746,11 @@ PY
     HELD_FLAT=$(printf '%s' "$HELD" | tr '\n' ',' | sed 's/,$//')
     case ",${HELD_FLAT}," in
       *,Owner,*|*,"User Access Administrator",*|*,"Role Based Access Control Administrator",*)
-        pass "Holds ${HELD_FLAT} at or above the subscription, which carries roleAssignments/write" ;;
+        pass "Holds ${HELD_FLAT} at or above ${FALLBACK_LABEL}, which carries roleAssignments/write" ;;
       ,,)
         fail "No role assignments could be read for this principal, and checkAccess did not answer. Nothing here can tell you whether apply will succeed — check the identity by hand before applying." ;;
       *)
-        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above the subscription. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
+        fail "No Owner, User Access Administrator, or Role Based Access Control Administrator grant found at or above ${FALLBACK_LABEL}. Roles held: ${HELD_FLAT}. A custom role carrying roleAssignments/write would also work and is not detected on this path." ;;
     esac
   else
     if [ "$GROUPS_RESOLVED" -eq 1 ]; then
@@ -885,7 +924,7 @@ REDIS_SOURCE=$(_tfvar redis_source || echo "external")
 QUOTA_LOCATION=$(_tfvar location || echo "eastus")
 POSTGRES_SKU=$(_tfvar postgres_sku_name || echo "GP_Standard_D2ds_v4")
 CREATE_CLUSTER=$(_tfvar create_cluster || echo "true")
-NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v3")
+NODE_VM_SIZE=$(_tfvar default_node_pool_vm_size || echo "Standard_D8s_v5")
 NODE_MIN=$(_tfvar default_node_pool_min_count || echo "1")
 NODE_MAX=$(_tfvar default_node_pool_max_count || echo "10")
 
@@ -950,7 +989,7 @@ _quota_row() {
 # for a shape it cannot read, such as the whole map on one line.
 _additional_pools() {
   if ! grep -qE '^[[:space:]]*additional_node_pools[[:space:]]*=' "$TFVARS" 2>/dev/null; then
-    printf 'large\tStandard_D16s_v3\t0\t2\n'
+    printf 'large\tStandard_D16s_v5\t0\t2\n'
     return 0
   fi
   local rows
@@ -1233,6 +1272,21 @@ else
       warn "create_cluster = false — cannot confirm cluster '${EXISTING_AKS}' exists without an active az login"
     elif az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --only-show-errors -o none 2>/dev/null; then
       pass "Attaching to AKS cluster '${EXISTING_AKS}' in resource group '${EXISTING_AKS_RG}'"
+      # An Entra ID cluster returns no client certificate, so the Kubernetes and
+      # Helm providers sign in through kubelogin (aks_kube_auth = auto or entra).
+      KUBE_AUTH=$(_tfvar aks_kube_auth || echo "auto")
+      AAD_PROFILE=$(az aks show -n "$EXISTING_AKS" -g "$EXISTING_AKS_RG" --query "aadProfile != \`null\`" -o json --only-show-errors 2>/dev/null || echo "")
+      if [ "$KUBE_AUTH" = "entra" ] && [ "$AAD_PROFILE" = "false" ]; then
+        fail "aks_kube_auth = \"entra\" but cluster '${EXISTING_AKS}' has no Entra ID integration, so it accepts no Entra token — use \"auto\""
+      elif [ "$KUBE_AUTH" = "entra" ] || { [ "$KUBE_AUTH" = "auto" ] && [ "$AAD_PROFILE" = "true" ]; }; then
+        if command -v kubelogin >/dev/null 2>&1; then
+          pass "Entra ID cluster: kubelogin found, the providers sign in with your az session"
+        else
+          fail "Cluster '${EXISTING_AKS}' uses Entra ID and kubelogin is not on the PATH — install it with 'az aks install-cli'. The identity running apply also needs cluster-admin rights: an Azure Kubernetes Service RBAC role under Azure RBAC, or an admin group or ClusterRoleBinding under Kubernetes RBAC"
+        fi
+      elif [ "$KUBE_AUTH" = "certificate" ] && [ "$AAD_PROFILE" = "true" ]; then
+        fail "aks_kube_auth = \"certificate\" but cluster '${EXISTING_AKS}' uses Entra ID, where azurerm returns no client certificate — use \"auto\""
+      fi
     else
       fail "AKS cluster '${EXISTING_AKS}' not found in resource group '${EXISTING_AKS_RG}' — check both names and the subscription"
     fi
@@ -1249,6 +1303,20 @@ else
       pass "Attaching to Key Vault '${EXISTING_KV}' in resource group '${EXISTING_KV_RG}'"
     else
       fail "Key Vault '${EXISTING_KV}' not found in resource group '${EXISTING_KV_RG}' — check both names and the subscription"
+    fi
+  fi
+
+  # The private endpoint turns the vault's public network access off, so every
+  # data-plane call has to come from inside the network. Nothing here can tell
+  # whether this machine is, before the vault exists, so this is a reminder
+  # rather than a check. Terraform refuses the flag with create_keyvault = false.
+  KV_PRIVATE_ENDPOINT=$(_tfvar keyvault_private_endpoint_enabled || echo "false")
+  if [ "$KV_PRIVATE_ENDPOINT" = "true" ] && [ "$CREATE_KEYVAULT" != "false" ]; then
+    KV_MANAGE_SECRETS=$(_tfvar keyvault_manage_secrets || echo "true")
+    if [ "$KV_MANAGE_SECRETS" = "false" ]; then
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network)"
+    else
+      warn "keyvault_private_endpoint_enabled = true: the vault's public network access goes off. terraform plan and apply (which read and write two secrets on every run), make seed-secrets and make k8s-secrets must run from a machine that resolves the vault's privatelink.vaultcore record (a jump host or self-hosted runner in the VNet or a peered network), or set keyvault_manage_secrets = false"
     fi
   fi
 fi
@@ -1588,8 +1656,8 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 
   if [ -n "$DNS_LABEL" ]; then
-    # State carries the label only under ingress_controller = "agic". The
-    # default nginx path sets it as a Service annotation on an AKS-managed IP,
+    # State carries the label only under ingress_controller = "agic". Every
+    # other controller sets it as a Service annotation on an AKS-managed IP,
     # so _in_state cannot see it — ask the subscription who holds it instead.
     DNS_OWNED=0
     if _name_is_safe "$DNS_LABEL"; then
@@ -1634,7 +1702,115 @@ print(m if len(m) <= 110 else m[:110].rsplit(' ', 1)[0] + ' …')" 2>/dev/null |
   fi
 fi
 
-# ── 10. Other tooling ──────────────────────────────────────────────────────────
+# ── 10. Existing-cluster node capacity ────────────────────────────────────────
+# Attach mode only. Nothing else checks that some node in an attached cluster
+# can hold ClickHouse, the largest pod LangSmith schedules. It is one replica, so
+# cluster-wide totals don't answer it; only the node's allocatable does, and
+# allocatable is below the VM size (a Standard_D4s_v3 sells 4 vCPU / 16 GiB and
+# allocates 3860m / 14.3 GiB). This asks whether the pod can ever fit: a node
+# that is big enough but full is the autoscaler's problem, while a node too small
+# needs a new pool.
+echo ""
+echo "── Existing Cluster Capacity ─────────────────────────"
+
+CH_SOURCE=$(_tfvar clickhouse_source || echo "in-cluster")
+POOLS_MANAGED=$(_tfvar existing_cluster_node_pools_managed || echo "false")
+CLUSTER_NAME=$(_tfvar existing_cluster_name || echo "")
+
+# The ClickHouse request in each helm/values/examples sizing overlay. With none,
+# init-values.sh applies no overlay and the chart default holds.
+case "$(_tfvar sizing_profile || echo "default")" in
+  minimum)          REQ_CPU_M=1000; REQ_MEM_MI=2048;  REQ_LABEL="minimum" ;;
+  dev)              REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="dev" ;;
+  production)       REQ_CPU_M=2000; REQ_MEM_MI=8192;  REQ_LABEL="production" ;;
+  production-large) REQ_CPU_M=4000; REQ_MEM_MI=16384; REQ_LABEL="production-large" ;;
+  *)                REQ_CPU_M=3500; REQ_MEM_MI=12288; REQ_LABEL="chart default" ;;
+esac
+
+if [ "$CREATE_CLUSTER" != "false" ]; then
+  pass "create_cluster = true — Terraform builds the large pool ClickHouse runs on"
+elif [ "$CH_SOURCE" = "external" ]; then
+  pass "clickhouse_source = external — no ClickHouse pod to schedule"
+elif [ "$POOLS_MANAGED" = "true" ]; then
+  pass "existing_cluster_node_pools_managed = true — Terraform adds the large pool"
+elif ! command -v kubectl &>/dev/null; then
+  warn "kubectl not found — cannot read node allocatable, so ClickHouse capacity is unchecked"
+elif ! [[ "$CLUSTER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$ ]]; then
+  warn "existing_cluster_name is empty or not a valid AKS name — ClickHouse capacity is unchecked"
+else
+  # A kubeconfig pointed at another cluster would return its nodes and a
+  # confidently wrong verdict. get-credentials names the context after the
+  # cluster, with -admin appended for --admin.
+  KUBE_CTX=$(kubectl config current-context 2>/dev/null || echo "")
+  if [ "$KUBE_CTX" != "$CLUSTER_NAME" ] && [ "$KUBE_CTX" != "${CLUSTER_NAME}-admin" ]; then
+    warn "kubectl context is '${KUBE_CTX:-unset}', not '${CLUSTER_NAME}', so ClickHouse capacity is unchecked. Run: az aks get-credentials --resource-group ${EXISTING_AKS_RG:-<rg>} --name ${CLUSTER_NAME}"
+  elif ! NODES_JSON=$(kubectl get nodes -o json --request-timeout=10s 2>/dev/null); then
+    warn "Could not read nodes from '${KUBE_CTX}', so ClickHouse capacity is unchecked"
+  else
+    VERDICT=$(printf '%s' "$NODES_JSON" | python3 -c '
+import json, sys
+
+req_cpu, req_mem = int(sys.argv[1]), int(sys.argv[2])
+
+def cpu_m(v):
+    return int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
+
+# The suffixes kubelet emits for allocatable memory; a bare number is bytes.
+UNITS = {"Ki": 1 / 1024, "Mi": 1, "Gi": 1024, "Ti": 1024 * 1024}
+
+def mem_mi(v):
+    for suffix, factor in UNITS.items():
+        if v.endswith(suffix):
+            return int(float(v[: -len(suffix)]) * factor)
+    return int(v) // (1024 * 1024)
+
+try:
+    nodes = json.load(sys.stdin).get("items", [])
+except (ValueError, AttributeError):
+    print("ERR unreadable node JSON")
+    sys.exit(0)
+
+best = None
+for n in nodes:
+    if n.get("spec", {}).get("unschedulable"):
+        continue
+    if not any(c.get("type") == "Ready" and c.get("status") == "True"
+               for c in n.get("status", {}).get("conditions", [])):
+        continue
+    alloc = n.get("status", {}).get("allocatable", {})
+    try:
+        c, m = cpu_m(alloc["cpu"]), mem_mi(alloc["memory"])
+    except (KeyError, ValueError):
+        continue
+    # Rank by the tighter dimension, so the reported node is the one closest to
+    # holding the pod rather than the widest on one axis.
+    score = min(c / req_cpu, m / req_mem)
+    if best is None or score > best[0]:
+        best = (score, c, m)
+
+if best is None:
+    print("ERR no schedulable Ready nodes")
+else:
+    _, c, m = best
+    print("%s %d %d" % ("FIT" if c >= req_cpu and m >= req_mem else "NOFIT", c, m))
+' "$REQ_CPU_M" "$REQ_MEM_MI" || echo "ERR node parse failed")
+
+    read -r VERDICT_KIND BEST_CPU_M BEST_MEM_MI <<<"$VERDICT"
+    case "$VERDICT_KIND" in
+      FIT)
+        pass "ClickHouse (${REQ_LABEL}: ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi) fits — the largest node allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi"
+        ;;
+      NOFIT)
+        fail "No node in '${CLUSTER_NAME}' can hold ClickHouse: the largest allocates ${BEST_CPU_M}m / ${BEST_MEM_MI}Mi, and the ${REQ_LABEL} sizing requests ${REQ_CPU_M}m / ${REQ_MEM_MI}Mi. More nodes of this size won't help. Add a larger pool (az aks nodepool add --node-vm-size Standard_D16s_v5), set existing_cluster_node_pools_managed = true so Terraform adds one, or pick a smaller sizing_profile."
+        ;;
+      *)
+        warn "ClickHouse capacity check inconclusive: ${VERDICT#ERR }"
+        ;;
+    esac
+  fi
+fi
+
+# ── 11. Other tooling ──────────────────────────────────────────────────────────
 echo ""
 echo "── Tooling ───────────────────────────────────────────"
 for TOOL in terraform kubectl helm; do

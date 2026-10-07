@@ -14,9 +14,9 @@
 # Removes: Helm release, operator-managed LGP resources.
 # Leaves: AKS cluster, Key Vault, Blob Storage, Postgres, Redis (infrastructure intact).
 #
-# NOTE: Uninstall Helm BEFORE running terraform destroy.
-#   The Azure Load Balancer created by NGINX blocks VNet deletion.
-#   Running terraform destroy while NGINX is still deployed causes a stall.
+# NOTE: Uninstall BEFORE running terraform destroy.
+#   The Azure Load Balancer in front of the ingress controller blocks VNet deletion.
+#   Running terraform destroy while it is still deployed causes a stall.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,15 +36,26 @@ echo "════════════════════════�
 echo ""
 
 # ── Resolve cluster from terraform outputs ─────────────────────────────────
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || CLUSTER_NAME=""
-RESOURCE_GROUP=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || RESOURCE_GROUP=""
+# Stop without both outputs, or if the credential fetch fails: kubectl would
+# otherwise act on whatever its current context is, which may be another cluster.
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || {
+  fail "Could not read aks_cluster_name. Is 'terraform apply' complete?"
+  exit 1
+}
+RESOURCE_GROUP=$(_tf_out aks_resource_group_name) || {
+  fail "Could not read aks_resource_group_name. Run 'make apply' to record it."
+  exit 1
+}
 
-if [[ -n "$CLUSTER_NAME" && -n "$RESOURCE_GROUP" ]]; then
-  info "Cluster: $CLUSTER_NAME"
-  info "Resource group: $RESOURCE_GROUP"
-  echo ""
-  az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing 2>/dev/null || true
-fi
+info "Cluster: $CLUSTER_NAME"
+info "Resource group: $RESOURCE_GROUP"
+echo ""
+az aks get-credentials --name "$CLUSTER_NAME" --resource-group "$RESOURCE_GROUP" --overwrite-existing >/dev/null || {
+  fail "Could not fetch credentials for cluster '${CLUSTER_NAME}'."
+  action "make kubeconfig  (to retry once the error above is fixed)"
+  exit 1
+}
+_aks_kubelogin_convert "$CLUSTER_NAME" "$RESOURCE_GROUP" || true
 
 # ── Validate cluster connectivity ───────────────────────────────────────────
 if ! kubectl cluster-info --request-timeout=5s &>/dev/null; then
@@ -63,11 +74,24 @@ fi
 # ── Uninstall Helm release ──────────────────────────────────────────────────
 if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --short 2>/dev/null | grep -q "^${RELEASE_NAME}$"; then
   info "Uninstalling Helm release: ${RELEASE_NAME}..."
+  # deploy.sh creates the LLM Gateway's Ingress outside the release.
+  kubectl delete ingress -n "$NAMESPACE" -l app.kubernetes.io/managed-by=langsmith-azure-deploy --ignore-not-found 2>/dev/null || true
   helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" --wait --timeout 5m 2>/dev/null || \
     helm uninstall "$RELEASE_NAME" -n "$NAMESPACE" 2>/dev/null || true
   pass "Helm release '${RELEASE_NAME}' uninstalled"
 else
   skip "Helm release '${RELEASE_NAME}' not found in namespace '${NAMESPACE}'"
+fi
+
+# ── Remove the Envoy Gateway resources deploy.sh created ────────────────────
+# They sit outside the Helm release. Deleting the Gateway removes the proxy
+# Service and with it the Azure Load Balancer IP.
+_ingress_controller=$(_parse_tfvar ingress_controller) || _ingress_controller="envoy-gateway"
+if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+  kubectl delete gateway langsmith-gateway -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s >/dev/null 2>&1 || true
+  kubectl delete gatewayclass langsmith-eg --ignore-not-found >/dev/null 2>&1 || true
+  kubectl delete envoyproxy langsmith-proxy -n envoy-gateway-system --ignore-not-found >/dev/null 2>&1 || true
+  pass "Envoy Gateway resources removed (Gateway, GatewayClass, EnvoyProxy)"
 fi
 
 # ── Optionally delete namespace ─────────────────────────────────────────────
@@ -87,7 +111,8 @@ echo "  Uninstall complete."
 echo "══════════════════════════════════════════════════════"
 echo ""
 echo "To destroy infrastructure:"
-echo "  helm uninstall ingress-nginx -n ingress-nginx --wait  # remove Azure LB"
+[[ "$_ingress_controller" == "nginx" ]] && \
+  echo "  helm uninstall ingress-nginx -n ingress-nginx --wait  # remove Azure LB"
 echo "  make destroy"
 warn "Then: make clean    (removes local secrets and generated files)"
 echo ""

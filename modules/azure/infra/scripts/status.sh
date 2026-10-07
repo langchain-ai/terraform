@@ -229,15 +229,24 @@ else
       fi
     fi
 
-    # Bootstrap components
-    for ns in cert-manager keda ingress-nginx; do
+    # Bootstrap components, plus the namespace of the ingress controller in use.
+    # agic and none run no controller pods in the cluster.
+    _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+    case "$_ingress_controller" in
+      envoy-gateway) _ingress_ns="envoy-gateway-system" ;;
+      nginx)         _ingress_ns="ingress-nginx" ;;
+      istio)         _ingress_ns="istio-system" ;;
+      istio-addon)   _ingress_ns="aks-istio-ingress" ;;
+      *)             _ingress_ns="" ;;
+    esac
+    for ns in cert-manager keda $_ingress_ns; do
       if kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -v "Running\|Completed" | grep -q .; then
         warn "$ns: some pods not Running"
       else
         _running_count=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c Running || true)
         # A cluster that already ran cert-manager or KEDA (install_* = false) may
         # run it in another namespace, so an empty one here is not a pass.
-        if [[ "$_running_count" == "0" && "$ns" != "ingress-nginx" ]]; then
+        if [[ "$_running_count" == "0" ]]; then
           warn "$ns: no pods Running"
         else
           pass "$ns: ${_running_count} pod(s) Running"
@@ -404,8 +413,8 @@ else
   fi
 
   # Ingress LoadBalancer IP — check the right service per ingress_controller
-  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="nginx"
-  case "${_ingress_controller:-nginx}" in
+  _ingress_controller=$(_read_tfvar ingress_controller 2>/dev/null) || _ingress_controller="envoy-gateway"
+  case "${_ingress_controller:-envoy-gateway}" in
     nginx)
       _lb_svc="ingress-nginx-controller"; _lb_ns="ingress-nginx" ;;
     istio-addon)
@@ -413,7 +422,12 @@ else
     istio)
       _lb_svc="istio-ingressgateway"; _lb_ns="istio-system" ;;
     envoy-gateway)
-      _lb_svc="envoy-langsmith-langsmith-gateway"; _lb_ns="langsmith" ;;
+      # Envoy Gateway names the proxy Service with a hash suffix; find it by its Gateway.
+      _lb_ns="envoy-gateway-system"
+      _lb_svc=$(kubectl get svc -n "$_lb_ns" \
+        -l "gateway.envoyproxy.io/owning-gateway-name=langsmith-gateway" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || _lb_svc=""
+      [[ -z "$_lb_svc" ]] && skip "Ingress IP (envoy-gateway): no proxy Service for langsmith-gateway yet (run make deploy)" ;;
     *)
       _lb_svc=""; _lb_ns="" ;;
   esac
@@ -467,8 +481,12 @@ else
     fi
   fi
 
-  # Ingress and TLS certificate
-  kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  # Ingress (or Gateway API routes) and TLS certificate
+  if [[ "$_ingress_controller" == "envoy-gateway" ]]; then
+    kubectl get gateway,httproute -n "$_NAMESPACE" 2>/dev/null || true
+  else
+    kubectl get ingress -n "$_NAMESPACE" 2>/dev/null || true
+  fi
   CERT_STATUS=$(kubectl get certificate -n "$_NAMESPACE" --no-headers 2>/dev/null) || CERT_STATUS=""
   if [[ -n "$CERT_STATUS" ]]; then
     echo "$CERT_STATUS" | while read -r line; do

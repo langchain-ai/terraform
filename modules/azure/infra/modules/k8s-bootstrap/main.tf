@@ -2,19 +2,40 @@
 # Credentials are passed in from the root module via variables (not from a local
 # kubeconfig) so this module works in CI/CD pipelines without file system access.
 
+# On an Entra ID cluster (kube_auth = "entra") the client certificate is empty and
+# the providers sign in through kubelogin with the caller's az session instead.
+
 provider "kubernetes" {
   host                   = var.host
-  client_certificate     = base64decode(var.client_certificate)
-  client_key             = base64decode(var.client_key)
+  client_certificate     = var.kube_auth == "entra" ? null : base64decode(var.client_certificate)
+  client_key             = var.kube_auth == "entra" ? null : base64decode(var.client_key)
   cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
+
+  dynamic "exec" {
+    for_each = var.kube_auth == "entra" ? [1] : []
+    content {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "kubelogin"
+      args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
+    }
+  }
 }
 
 provider "helm" {
   kubernetes {
     host                   = var.host
-    client_certificate     = base64decode(var.client_certificate)
-    client_key             = base64decode(var.client_key)
+    client_certificate     = var.kube_auth == "entra" ? null : base64decode(var.client_certificate)
+    client_key             = var.kube_auth == "entra" ? null : base64decode(var.client_key)
     cluster_ca_certificate = base64decode(var.cluster_ca_certificate)
+
+    dynamic "exec" {
+      for_each = var.kube_auth == "entra" ? [1] : []
+      content {
+        api_version = "client.authentication.k8s.io/v1beta1"
+        command     = "kubelogin"
+        args        = ["get-token", "--login", "azurecli", "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"]
+      }
+    }
   }
 }
 
@@ -346,8 +367,17 @@ resource "kubernetes_secret_v1" "license" {
 # TLS automation infrastructure. Manages Let's Encrypt certificates.
 # ClusterIssuers are applied separately by helm/scripts/deploy.sh.
 
+# Orders cert-manager after the Envoy Gateway release. cert-manager looks for the
+# Gateway API CRDs only at startup, so one started before them never serves
+# Gateways even with the feature gate below.
+resource "terraform_data" "gateway_api_crds" {
+  input = var.envoy_gateway_version
+}
+
 resource "helm_release" "cert_manager" {
   count = var.install_cert_manager ? 1 : 0
+
+  depends_on = [terraform_data.gateway_api_crds]
 
   name             = "cert-manager"
   namespace        = "cert-manager"
@@ -377,6 +407,18 @@ resource "helm_release" "cert_manager" {
   set {
     name  = "controller.resources.limits.memory"
     value = "256Mi"
+  }
+
+  # Envoy Gateway: the HTTP-01 gatewayHTTPRoute solver, and the Gateway shim that
+  # issues the certificate a Gateway's cluster-issuer annotation asks for, both
+  # need Gateway API support. On the pinned v1.14 that is this feature gate;
+  # v1.15 and later replace it with config.enableGatewayAPI.
+  dynamic "set" {
+    for_each = var.ingress_controller == "envoy-gateway" ? [1] : []
+    content {
+      name  = "featureGates"
+      value = "ExperimentalGatewayAPISupport=true"
+    }
   }
 
   # DNS-01 via Azure Workload Identity: annotate the cert-manager service account

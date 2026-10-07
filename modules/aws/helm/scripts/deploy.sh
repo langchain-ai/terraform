@@ -32,13 +32,13 @@ source "$INFRA_DIR/scripts/_common.sh"
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
-# Pin the chart *line*: deploy the latest 0.16.x, never auto-jump to 0.17.
+# Pin the chart *line*: deploy the latest 0.17.x, never auto-jump to 0.18.
 # Override with the CHART_VERSION env var for an exact patch if needed.
 # An exported CHART_VERSION outlives the command that set it, so a value left over
 # from an earlier session silently wins over the pin. Say so rather than deploying
 # a different chart than the branch intends.
 if [[ -n "${CHART_VERSION:-}" ]]; then
-  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.16.0 pin."
+  echo "NOTE: CHART_VERSION='${CHART_VERSION}' comes from your environment and overrides the ~0.17.0 pin."
   echo "      Run 'unset CHART_VERSION' to deploy the pinned chart line."
 fi
 # Fall back to the langsmith_helm_chart_version tfvar before the line default, so
@@ -49,7 +49,7 @@ if [[ -z "${CHART_VERSION:-}" ]]; then
   [[ -n "$CHART_VERSION" ]] && \
     echo "Chart version pinned by langsmith_helm_chart_version: ${CHART_VERSION}"
 fi
-CHART_VERSION="${CHART_VERSION:-~0.16.0}"
+CHART_VERSION="${CHART_VERSION:-~0.17.0}"
 
 _chart_version_supports_sandboxes() {
   local version
@@ -64,41 +64,55 @@ _chart_version_supports_sandboxes() {
   esac
 }
 
+# Prints "legacy" when the sandboxes block still carries the chart 0.16
+# sandboxes.juicefs.csi keys, "ok" when it has the generated chart 0.17 keys, and
+# "missing" otherwise. Chart 0.17 ignores a leftover csi block, and its own
+# validation then fails the release on sandboxes.juicefs.redis.metaURL, which names
+# neither the values file nor the fix. Keep identical to the GCP copy.
+_sandbox_values_state() {
+  awk '
+    /^[^ \t#]/ { top = $1; child = "" }
+    top != "sandboxes:" { next }
+    /^  [^ \t#]/ { child = $1 }
+    /^  enabled:[ \t]*true[ \t]*$/ { enabled = 1 }
+    child == "juicefs:" && /^    csi:/ { legacy = 1 }
+    child == "juicefs:" && /^    existingSecretName:[ \t]*"?[^" \t]+"?[ \t]*$/ { secret = 1 }
+    END { print (legacy ? "legacy" : (enabled && secret ? "ok" : "missing")) }
+  ' "$1"
+}
+
 _validate_sandbox_values_file() {
   local values_file="$1"
 
-  if ! grep -Eq '^sandboxes:[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{2}enabled:[[:space:]]*true[[:space:]]*$' "$values_file" \
-    || ! grep -Eq '^[[:space:]]{6}existingSecretName:[[:space:]]*"?[^"]+"?[[:space:]]*$' "$values_file"; then
-    echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
-    echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
-    exit 1
-  fi
+  case "$(_sandbox_values_state "$values_file")" in
+    ok) ;;
+    legacy)
+      echo "ERROR: $(basename "$values_file") carries sandboxes.juicefs.csi, the chart 0.16 sandbox schema." >&2
+      echo "       Chart 0.17 has no JuiceFS CSI driver and ignores that block." >&2
+      echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) to regenerate it." >&2
+      exit 1
+      ;;
+    *)
+      echo "ERROR: enable_sandboxes = true, but $(basename "$values_file") does not contain generated sandbox values." >&2
+      echo "       Run: make init-values  (or: ./helm/scripts/init-values.sh) after applying infra." >&2
+      exit 1
+      ;;
+  esac
 }
 
-# These values use the chart 0.16 schema: engineInsightsAgent, the top-level
-# insights/polly blocks, and no backend.agentBootstrap. Chart 0.15 ignores those
-# keys instead of rejecting them, so it renders cleanly while silently dropping
-# the external Insights Postgres/Redis wiring and falling back to in-cluster
-# StatefulSets. Chart 0.17 has not been validated against them. Refuse both
-# rather than deploy a half-configured release.
+# These values use the chart 0.17 schema: the 0.16 layout (engineInsightsAgent,
+# top-level insights/polly, no backend.agentBootstrap) plus the sandbox-host
+# JuiceFS mount that replaced sandboxes.juicefs.csi. Chart 0.16 has no host-mount
+# keys, and chart 0.15 silently drops the external Insights Postgres/Redis wiring.
+# Chart 0.18 has not been validated against them. Refuse anything off the 0.17
+# line rather than deploy a half-configured release.
 _chart_line="$(printf '%s' "$CHART_VERSION" | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
-if [[ "$_chart_line" != "0.16" ]]; then
-  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.16 line." >&2
-  echo "       These values require chart 0.16 (engineInsightsAgent, top-level insights/polly)." >&2
-  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.16 patch explicitly:" >&2
-  echo "         CHART_VERSION=0.16.0 make deploy" >&2
+if [[ "$_chart_line" != "0.17" ]]; then
+  echo "ERROR: CHART_VERSION '$CHART_VERSION' does not resolve to the chart 0.17 line." >&2
+  echo "       These values require chart 0.17 (sandbox-host JuiceFS mounts, engineInsightsAgent)." >&2
+  echo "       Leave CHART_VERSION unset to use the pin, or name a 0.17 patch explicitly:" >&2
+  echo "         CHART_VERSION=0.17.0 make deploy" >&2
   exit 1
-fi
-# engineInsightsAgent only exists from 0.16.0-rc.24 onwards. Earlier prereleases
-# are on the 0.16 line but still drop the block silently.
-if [[ "$CHART_VERSION" == *-* ]]; then
-  _rc="${CHART_VERSION##*-rc.}"
-  if [[ "$CHART_VERSION" != *-rc.* || ! "$_rc" =~ ^[0-9]+$ || "$_rc" -lt 24 ]]; then
-    echo "ERROR: CHART_VERSION '$CHART_VERSION' predates the engineInsightsAgent block (chart 0.16.0-rc.24)." >&2
-    echo "       Chart 0.16.0 is GA — use a released 0.16.x." >&2
-    exit 1
-  fi
 fi
 
 # Preflight: reject values files still carrying the chart 0.15 schema. init-values.sh
@@ -181,6 +195,34 @@ echo ""
 # ── Preflight checks ──────────────────────────────────────────────────────────
 "$SCRIPT_DIR/preflight-check.sh"
 echo ""
+
+# Chart 0.16 mounted sandbox volumes through a bundled JuiceFS CSI driver, which
+# chart 0.17 deletes. If the upgrade removes the driver while those volumes are
+# mounted, kubelet can no longer unmount them and the old sandbox-host pods hang in
+# Terminating on juicefs.com/finalizer. Draining needs the driver alive, so stop
+# here until no JuiceFS claim or mount pod is left. Checked whatever
+# enable_sandboxes says: turning the flag off does not remove a running driver.
+# Keep identical to the GCP copy.
+if kubectl get daemonset juicefs-csi-node -n "$NAMESPACE" >/dev/null 2>&1; then
+  _jfs_workloads=$(kubectl get deployments,statefulsets -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -E 'sandbox-host$' || true)
+  _jfs_pvcs=$(kubectl get pvc -n "$NAMESPACE" -o name 2>/dev/null | grep -Ei 'juicefs|smithbox' || true)
+  _jfs_mount_pods=$(kubectl get pods -n "$NAMESPACE" -o name 2>/dev/null \
+    | grep -i 'juicefs' | grep -Eiv '/juicefs-csi-(node|controller)' || true)
+  if [[ -n "${_jfs_pvcs}${_jfs_mount_pods}" ]]; then
+    echo "ERROR: namespace $NAMESPACE still mounts sandbox volumes through the chart 0.16 JuiceFS CSI driver." >&2
+    echo "       Chart 0.17 removes that driver, and upgrading now leaves the old sandbox-host pods" >&2
+    echo "       stuck in Terminating. Drain the volumes while the driver still runs, then re-run:" >&2
+    while IFS= read -r _obj; do
+      [[ -z "$_obj" ]] && continue
+      echo "         kubectl delete -n $NAMESPACE $_obj" >&2
+    done < <(printf '%s\n%s\n' "$_jfs_workloads" "$_jfs_pvcs")
+    echo "         kubectl get pods -n $NAMESPACE | grep juicefs   # wait until only juicefs-csi-* pods remain" >&2
+    echo "       Running sandboxes stop. Their data stays in object storage and Redis, and chart 0.17" >&2
+    echo "       mounts the same JuiceFS volume." >&2
+    exit 1
+  fi
+fi
 
 # ── Apply ESO ClusterSecretStore + ExternalSecret (or direct secret for workers) ──
 # SKIP_ESO=true bypasses SSM/ESO and creates langsmith-config directly from env vars.

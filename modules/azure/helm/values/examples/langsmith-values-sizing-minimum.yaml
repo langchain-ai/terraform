@@ -4,7 +4,7 @@
 # This profile exists to keep LangSmith alive at the lowest possible cost.
 # Single replica, rock-bottom resource requests sized from actual kubectl-top
 # measurements on an idle cluster. The goal is to fit everything
-# on a single small node (e.g. Standard_D4s_v3 — 4 vCPU, 16 GiB).
+# on a single small node (e.g. Standard_D4s_v5 — 4 vCPU, 16 GiB).
 #
 # WILL break under any meaningful traffic. OOM kills, timeouts, and degraded
 # UX are expected and acceptable. Do not file bugs against this profile.
@@ -18,7 +18,7 @@
 # Requests start from those idle measurements, raised where a
 # component could not start at the measured idle figure.
 # With Deployments and Fleet on, the requests come to ~3.2 vCPU before system
-# pods, so plan on two D4s_v3 nodes rather than one.
+# pods, so plan on two D4s_v5 nodes rather than one.
 # ============================================================================
 
 # -- Application components ----------------------------------------------------

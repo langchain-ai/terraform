@@ -222,6 +222,29 @@ USAGE_DEFAULT = [
     ("standardDDSv4Family", 0, 10),
 ]
 
+# An attached cluster, and nodes in the shape `kubectl get nodes -o json` returns.
+# The D4 figures are a real Standard_D4s_v3's allocatable, not its VM size.
+ATTACHED = "\n".join([
+    "create_cluster                       = false",
+    'existing_cluster_name                = "platform-aks"',
+    'existing_cluster_resource_group_name = "platform-rg"',
+])
+
+
+def node(cpu, memory, ready=True, unschedulable=False):
+    return {
+        "spec": {"unschedulable": True} if unschedulable else {},
+        "status": {
+            "allocatable": {"cpu": cpu, "memory": memory},
+            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+        },
+    }
+
+
+D2_NODE = node("1900m", "5160636Ki")
+D4_NODE = node("3860m", "14995576Ki")
+D16_NODE = node("15820m", "59Gi")
+
 CASES = [
     {
         "name": "Postgres capabilities validate the configured version and SKU",
@@ -624,6 +647,42 @@ CASES = [
         "ca_all": ALL_GOOD,
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/platform-shared-rg/providers"],
     },
+    # An attached group is the deployment's whole footprint, and its deployer may
+    # hold rights there alone. Asking the subscription would fail that deployer
+    # for rights the deployment never uses.
+    {
+        "name": "an attached resource group is probed alone, without the subscription",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] Resource group platform-langsmith-rg exists"],
+        "expect_calls": [
+            f"{SUB_SCOPE}/resourceGroups/platform-langsmith-rg/providers",
+            "group show --name platform-langsmith-rg",
+        ],
+        "reject_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+    },
+    {
+        "name": "an attached resource group that cannot be read fails",
+        "tfvars_extra": 'create_resource_group = false\nexisting_resource_group_name = "platform-langsmith-rg"',
+        "group_missing": True,
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] Resource group platform-langsmith-rg could not be read"],
+    },
+    {
+        "name": "an attached resource group without a name fails before any RBAC call",
+        "tfvars_extra": "create_resource_group = false",
+        "ca_all": ALL_GOOD,
+        "expect": ["[✗] terraform.tfvars: create_resource_group = false needs existing_resource_group_name"],
+        "reject_calls": ["checkAccess", "role assignment list"],
+    },
+    {
+        "name": "a created resource group is still checked for resourceGroups/write",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Resources/subscriptions/resourceGroups/write"],
+        "expect_calls": [f"{SUB_SCOPE}/providers/Microsoft.Authorization/checkAccess"],
+        "reject_calls": ["group show"],
+    },
     {
         # name_suffix_salt exists so a deployment whose four global names got
         # burned can rotate them. Preflight has to mix it into the hash the same
@@ -723,8 +782,8 @@ CASES = [
     },
     {
         # domain_name_label only reaches state through azurerm_public_ip.agw,
-        # which exists under ingress_controller = "agic" alone. On the default
-        # nginx path the label rides a Service annotation on an AKS-managed IP,
+        # which exists under ingress_controller = "agic" alone. On every other
+        # path the label rides a Service annotation on an AKS-managed IP,
         # so state cannot vouch for it and the subscription has to.
         "name": "a DNS label held by this subscription is not a collision",
         "tfvars_extra": f'dns_label = "{DNS}"',
@@ -930,15 +989,16 @@ CASES = [
         ],
     },
     {
-        # Left unset, additional_node_pools is the variable's default: one D16s_v3
-        # pool scaling 0-2, in the same family as the D4s_v3 default pool.
+        # Left unset, additional_node_pools is the variable's default: one D16s_v5
+        # pool scaling 0-2, in its own family beside the D4s_v3 default pool.
         "name": "the default large pool counts toward its family and cores",
         "tfvars_extra": "\n".join(NODE_POOL_D4.splitlines()[:3]),
         "ca_all": ALL_GOOD,
-        "vm_usage": [("standardDSv3Family", 0, 64), ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
+        "vm_usage": [("standardDSv3Family", 0, 64), ("standardDSv5Family", 0, 64),
+                     ("cores", 0, 288), ("standardDDSv4Family", 0, 10)],
         "expect": [
-            "[✓] standardDSv3Family quota in eastus: 64 of 64 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 needs up to 52)",
-            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v3 plus Postgres needs up to 54)",
+            "[✓] standardDSv5Family quota in eastus: 64 of 64 vCPUs free (large 0-2 × Standard_D16s_v5 needs up to 32)",
+            "[✓] cores quota in eastus: 288 of 288 vCPUs free (2-5 × Standard_D4s_v3, large 0-2 × Standard_D16s_v5 plus Postgres needs up to 54)",
         ],
     },
     {
@@ -1058,6 +1118,70 @@ CASES = [
         "expect": ["[✓] Custom domain ls.example.com — no public IP DNS label to check"],
         "reject": ["dns_label not set"],
     },
+    {
+        # With no sizing_profile the chart default (3500m / 12Gi) applies, and a
+        # D4's allocatable clears it on both axes.
+        "name": "an attached cluster with a node big enough for ClickHouse passes",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE, D4_NODE],
+        "expect": ["[✓] ClickHouse (chart default: 3500m / 12288Mi) fits — the largest node allocates 3860m / 14644Mi"],
+    },
+    {
+        "name": "an attached cluster with no node big enough for ClickHouse fails",
+        "tfvars_extra": ATTACHED + '\nsizing_profile = "production-large"',
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks-admin",
+        "nodes": [D2_NODE, D4_NODE],
+        "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 3860m / 14644Mi, and the production-large sizing requests 4000m / 16384Mi"],
+        "exit_code": 1,
+    },
+    {
+        # A node that could hold the pod but is cordoned or NotReady is no
+        # evidence it ever will, so it is not the one measured.
+        "name": "a cordoned or NotReady large node does not count toward ClickHouse capacity",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE, node("15820m", "59Gi", ready=False),
+                  node("15820m", "59Gi", unschedulable=True)],
+        "expect": ["[✗] No node in 'platform-aks' can hold ClickHouse: the largest allocates 1900m / 5039Mi"],
+    },
+    {
+        "name": "a kubectl context on another cluster skips the ClickHouse capacity check",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "some-other-aks",
+        "nodes": [D16_NODE],
+        "expect": ["[!] kubectl context is 'some-other-aks', not 'platform-aks', so ClickHouse capacity is unchecked"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    {
+        "name": "unreachable nodes leave ClickHouse capacity unchecked",
+        "tfvars_extra": ATTACHED,
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "expect": ["[!] Could not read nodes from 'platform-aks', so ClickHouse capacity is unchecked"],
+    },
+    {
+        "name": "managed pools on an attached cluster skip the ClickHouse capacity check",
+        "tfvars_extra": ATTACHED + "\nexisting_cluster_node_pools_managed = true",
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE],
+        "expect": ["[✓] existing_cluster_node_pools_managed = true — Terraform adds the large pool"],
+        "reject_calls": ["kubectl get nodes"],
+    },
+    {
+        "name": "external ClickHouse skips the capacity check",
+        "tfvars_extra": ATTACHED + '\nclickhouse_source = "external"',
+        "ca_all": ALL_GOOD,
+        "kube_ctx": "platform-aks",
+        "nodes": [D2_NODE],
+        "expect": ["[✓] clickhouse_source = external — no ClickHouse pod to schedule"],
+        "reject_calls": ["kubectl get nodes"],
+    },
 ]
 
 
@@ -1116,7 +1240,10 @@ def build_case(case, index):
         )
     if "amr_regions" in case:
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
-    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment"):
+    if "nodes" in case:
+        (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
+    for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
+                "kube_ctx"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
@@ -1138,7 +1265,8 @@ def build_case(case, index):
         (fixture / "group_ids").write_text("\n".join(case["group_ids"]))
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
-                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr"):
+                 "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr",
+                 "group_missing"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 

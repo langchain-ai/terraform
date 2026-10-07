@@ -24,11 +24,11 @@ echo ""
 echo "Fetching AKS credentials..."
 echo ""
 
-CLUSTER_NAME=$(terraform -chdir="$INFRA_DIR" output -raw aks_cluster_name 2>/dev/null) || {
+CLUSTER_NAME=$(_tf_out aks_cluster_name) || {
   echo "ERROR: Could not read aks_cluster_name. Is 'terraform apply' complete?" >&2; exit 1
 }
-RESOURCE_GROUP=$(terraform -chdir="$INFRA_DIR" output -raw resource_group_name 2>/dev/null) || {
-  echo "ERROR: Could not read resource_group_name." >&2; exit 1
+RESOURCE_GROUP=$(_tf_out aks_resource_group_name) || {
+  echo "ERROR: Could not read aks_resource_group_name. Run 'make apply' to record it." >&2; exit 1
 }
 
 info "Cluster       : $CLUSTER_NAME"
@@ -39,6 +39,7 @@ az aks get-credentials \
   --name "$CLUSTER_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --overwrite-existing
+_aks_kubelogin_convert "$CLUSTER_NAME" "$RESOURCE_GROUP"
 
 echo ""
 pass "kubeconfig updated"

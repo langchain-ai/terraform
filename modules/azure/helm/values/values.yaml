@@ -2,8 +2,8 @@
 #
 # Applied on every deploy by helm/scripts/deploy.sh, which loads this as the base values file.
 #
-# Holds the Azure-native defaults that do NOT vary per deployment: NGINX ingress,
-# the Azure Blob Storage engine, and auth/secret conventions. Everything that
+# Holds the Azure-native defaults that do NOT vary per deployment: the Azure Blob
+# Storage engine and auth/secret conventions. Everything that
 # varies per environment is layered on top:
 #   Hostname, admin email, storage account/container, Workload Identity client ID,
 #     ingress class + TLS  → values-overrides.yaml
@@ -16,9 +16,11 @@
 
 ingress:
   enabled: true
-  # Default class. Overridden per ingress_controller in the overrides layer
-  # (istio, azure-application-gateway, or disabled for envoy-gateway/istio-addon).
-  ingressClassName: nginx
+  # No class here. The overrides layer sets one (nginx, istio,
+  # azure-application-gateway) or disables Ingress (envoy-gateway, the default,
+  # and istio-addon). With ingress_controller = "none" the cluster's default
+  # IngressClass serves it; set ingressClassName in values-overrides.yaml to
+  # pick another.
 
 istioGateway:
   enabled: false

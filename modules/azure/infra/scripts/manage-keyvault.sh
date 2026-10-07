@@ -22,7 +22,7 @@ source "$SCRIPT_DIR/_common.sh"
 
 # ── Resolve Key Vault name ───────────────────────────────────────────────────
 # Priority: terraform output → derived from terraform.tfvars
-if KV_NAME=$(cd "$INFRA_DIR" && terraform output -raw keyvault_name 2>/dev/null) && [[ -n "$KV_NAME" ]]; then
+if KV_NAME=$(_tf_out keyvault_name); then
   : # got it from terraform output
 else
   KV_NAME=$(_require_kv_name) || exit 1
@@ -43,6 +43,9 @@ OPTIONAL_SECRETS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-oauth-client-id"
+  "langsmith-oauth-client-secret"
+  "langsmith-oauth-issuer-url"
 )
 
 # Stable secrets — changing them breaks active sessions/API keys
@@ -61,6 +64,9 @@ DIFF_KV_KEYS=(
   "langsmith-agent-builder-encryption-key"
   "langsmith-insights-encryption-key"
   "langsmith-polly-encryption-key"
+  "langsmith-oauth-client-id"
+  "langsmith-oauth-client-secret"
+  "langsmith-oauth-issuer-url"
 )
 DIFF_K8S_KEYS=(
   "langsmith_license_key"
@@ -71,6 +77,9 @@ DIFF_K8S_KEYS=(
   "agent_builder_encryption_key"
   "insights_encryption_key"
   "polly_encryption_key"
+  "oauth_client_id"
+  "oauth_client_secret"
+  "oauth_issuer_url"
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

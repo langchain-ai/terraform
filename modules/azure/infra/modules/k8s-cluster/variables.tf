@@ -8,6 +8,17 @@ variable "cluster_name" {
   description = "Name of the cluster"
 }
 
+variable "kube_auth" {
+  type        = string
+  description = "How the module's Kubernetes and Helm providers sign in to the cluster. 'auto' uses Entra ID through kubelogin when the cluster has an Entra profile and the kube_config client certificate otherwise; 'entra' and 'certificate' force one."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "entra", "certificate"], var.kube_auth)
+    error_message = "kube_auth must be 'auto', 'entra', or 'certificate'."
+  }
+}
+
 variable "create_cluster" {
   type        = bool
   description = "Whether to create a new AKS cluster. Set false to attach to a pre-existing cluster (BYOC) — Terraform reads it via a data source instead of managing it, while still creating the Managed Identities, federated credentials, and (optionally) additional node pools in this module. 'istio-addon' requires create_cluster = true, since service_mesh_profile is only settable on a Terraform-owned cluster resource. 'agic' works on an attached cluster only when the ingress-appgw add-on is already enabled on it, because enabling it is the same kind of resource-only argument."
@@ -51,12 +62,12 @@ variable "kubernetes_version" {
 variable "default_node_pool_vm_size" {
   type        = string
   description = "VM size of the default node pool"
-  default     = "Standard_D8s_v3" # 8 vCPU, 32GB RAM — Dsv3 family; matches the root module's production default
+  default     = "Standard_D8s_v5" # 8 vCPU, 32GB RAM — Dsv5 family; matches the root module's production default
 }
 
 variable "default_node_pool_min_count" {
   type        = number
-  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v3 provides 18,870m allocatable."
+  description = "Min count of the default node pool. Autoscaler never scales below this. Set to 3 for production — Pass 2 needs ~14.4 vCPU and 3× Standard_D8s_v5 provides 18,870m allocatable."
   default     = 1
 }
 
@@ -103,7 +114,7 @@ variable "additional_node_pools" {
   description = "Node pools to be created. os_sku falls back to default_node_pool_os_sku."
   default = {
     large = {
-      vm_size   = "Standard_D16s_v3" # 16 vCPU, 64GB RAM — Dsv3 family; matches the root module's production default
+      vm_size   = "Standard_D16s_v5" # 16 vCPU, 64GB RAM — Dsv5 family; matches the root module's production default
       min_count = 0
       max_count = 2
     }
@@ -112,8 +123,8 @@ variable "additional_node_pools" {
 
 variable "ingress_controller" {
   type        = string
-  description = "Ingress controller to install. 'nginx' = NGINX ingress via Helm, the current default and the only option with every TLS path validated. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'envoy-gateway' = Envoy Gateway via Helm (Gateway API). 'none' = skip."
-  default     = "nginx"
+  description = "Ingress controller to install. 'envoy-gateway' = Envoy Gateway via Helm (Gateway API), the default. 'nginx' = NGINX ingress via Helm, for legacy Ingress compatibility. 'istio' = Istio via Helm (self-managed). 'istio-addon' = Azure managed Istio (AKS service mesh add-on); use for mTLS or multi-dataplane. 'agic' = Application Gateway Ingress Controller (requires agic_subnet_id). 'none' = skip."
+  default     = "envoy-gateway"
 
   validation {
     condition     = contains(["nginx", "istio", "istio-addon", "agic", "envoy-gateway", "none"], var.ingress_controller)
@@ -221,6 +232,23 @@ variable "network_policy" {
   }
 }
 
+variable "egress_dependencies" {
+  type        = list(string)
+  description = "IDs of resources the cluster's egress needs in place before it is created, such as the association of a NAT gateway the root module creates with the node subnet. Only orders the create; the values are not read."
+  default     = []
+}
+
+variable "outbound_type" {
+  type        = string
+  description = "How nodes reach the internet: \"loadBalancer\" (an AKS-managed public IP on the Standard Load Balancer), \"userDefinedRouting\" (the node subnet's route table) or \"userAssignedNATGateway\" (the NAT gateway on the node subnet). The root module checks the subnet before passing either of the last two."
+  default     = "loadBalancer"
+
+  validation {
+    condition     = contains(["loadBalancer", "userDefinedRouting", "userAssignedNATGateway"], var.outbound_type)
+    error_message = "outbound_type must be \"loadBalancer\", \"userDefinedRouting\" or \"userAssignedNATGateway\"."
+  }
+}
+
 variable "sku_tier" {
   type        = string
   description = "AKS pricing tier for the control plane: \"Free\" (no SLA), \"Standard\" (financially backed uptime SLA; 99.95% with availability zones) or \"Premium\" (Standard plus long-term support). Updated in place."
@@ -245,7 +273,7 @@ variable "support_plan" {
 
 variable "dns_label" {
   type        = string
-  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with nginx, istio, istio-addon, envoy-gateway. Leave empty to skip."
+  description = "Azure Public IP DNS label for the ingress LoadBalancer service. Results in <label>.<region>.cloudapp.azure.com. Works with envoy-gateway, nginx, istio, istio-addon; for envoy-gateway, deploy.sh sets it through the EnvoyProxy. Leave empty to skip."
   default     = ""
 }
 
@@ -305,4 +333,60 @@ variable "authorized_ip_ranges" {
   type        = list(string)
   description = "External CIDRs permitted to reach the AKS API server. Empty list (default) omits the api_server_access_profile block, leaving the master publicly reachable so the apply host's Helm/kubectl steps work from any operator. Production deployments populate this with operator/CI egress CIDRs."
   default     = []
+}
+
+variable "private_cluster_enabled" {
+  type        = bool
+  description = "Give the API server a private endpoint in the cluster's VNet and no public address. The apply host then needs a network path to that endpoint."
+  default     = false
+}
+
+variable "private_dns_zone_id" {
+  type        = string
+  description = "Private DNS zone for the API server: empty or \"System\" (AKS creates the zone in the node resource group), \"None\", or the resource ID of an existing zone. Only read when private_cluster_enabled = true."
+  default     = ""
+}
+
+# ── Identity and authentication ───────────────────────────────────────────────
+
+variable "entra_only" {
+  type        = bool
+  description = "Authenticate to the cluster with Entra ID only: Entra integration with Azure RBAC for Kubernetes authorization, and local accounts disabled. The Helm and Kubernetes providers then fetch tokens through kubelogin instead of a client certificate."
+  default     = false
+}
+
+variable "entra_admin_group_object_ids" {
+  type        = list(string)
+  description = "Object IDs of Entra groups granted cluster-admin when entra_only = true."
+  default     = []
+}
+
+variable "control_plane_identity" {
+  type        = string
+  description = "Identity the control plane runs as: \"system\" (default) or \"user\"."
+  default     = "system"
+}
+
+variable "control_plane_identity_id" {
+  type        = string
+  description = "Resource ID of an existing user-assigned identity for the control plane. Empty (default) with control_plane_identity = \"user\": the module creates <cluster_name>-control-plane."
+  default     = ""
+}
+
+variable "control_plane_identity_manage_grants" {
+  type        = bool
+  description = "With control_plane_identity = \"user\": true grants the identity Network Contributor on subnet_id, or on vnet_id with a custom private_dns_zone_id, and Private DNS Zone Contributor on that zone; false checks the identity holds a role on subnet_id, on subnet_route_table_id when set, and on that zone, and stops before the cluster is created when it does not. The check skips the VNet, which a zone its owner already linked does not need."
+  default     = true
+}
+
+variable "vnet_id" {
+  type        = string
+  description = "Resource ID of the cluster VNet. Read only with control_plane_identity = \"user\" and a custom private_dns_zone_id, as the scope of its Network Contributor grant."
+  default     = ""
+}
+
+variable "subnet_route_table_id" {
+  type        = string
+  description = "Resource ID of the route table on subnet_id, empty when it has none. Read only with control_plane_identity = \"user\" and control_plane_identity_manage_grants = false, as a scope the identity must hold a role on."
+  default     = ""
 }

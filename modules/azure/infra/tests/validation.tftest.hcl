@@ -184,16 +184,57 @@ run "attach_names_are_rejected_on_the_create_path" {
   command = plan
 
   variables {
-    create_cluster         = true
-    existing_cluster_name  = "ls-aks-prod"
-    create_keyvault        = true
-    existing_keyvault_name = "ls-kv-prod"
+    create_cluster               = true
+    existing_cluster_name        = "ls-aks-prod"
+    create_keyvault              = true
+    existing_keyvault_name       = "ls-kv-prod"
+    create_resource_group        = true
+    existing_resource_group_name = "platform-langsmith-rg"
   }
 
   expect_failures = [
     var.existing_cluster_name,
     var.existing_keyvault_name,
+    var.existing_resource_group_name,
   ]
+}
+
+# The resource group's pair runs the other way too: a pinned create-side name
+# on the attach path would be ignored, so it is refused.
+run "a_resource_group_name_is_rejected_on_the_attach_path" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = "platform-langsmith-rg"
+    resource_group_name          = "langsmith-rg-prod"
+  }
+
+  expect_failures = [var.resource_group_name]
+}
+
+run "attaching_a_resource_group_requires_its_name" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = ""
+  }
+
+  expect_failures = [var.existing_resource_group_name]
+}
+
+# preflight.sh puts this name into a request URL, so a character outside
+# Azure's grammar is refused here as well as there.
+run "an_existing_resource_group_name_outside_azure_grammar_is_refused" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = "rg/../other"
+  }
+
+  expect_failures = [var.existing_resource_group_name]
 }
 
 # blob_ttl_long_days carries two validations, and the second reads
@@ -341,6 +382,28 @@ run "aks_dns_service_ip_rejects_a_non_address" {
   expect_failures = [var.aks_dns_service_ip]
 }
 
+# Presidio only serves the LLM Gateway, so asking for redaction without the
+# gateway is refused, and the pair together plans.
+run "gateway_pii_redaction_requires_the_gateway" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = false
+    enable_gateway_pii_redaction = true
+  }
+
+  expect_failures = [var.enable_gateway_pii_redaction]
+}
+
+run "gateway_pii_redaction_with_the_gateway_plans" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = true
+    enable_gateway_pii_redaction = true
+  }
+}
+
 # ── VNet address space ───────────────────────────────────────────────────────
 
 run "vnet_address_space_rejects_a_non_cidr" {
@@ -472,7 +535,7 @@ run "byo_vnet_plans_beside_a_clear_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -496,7 +559,7 @@ run "byo_vnet_rejects_a_prefix_on_a_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   # Inside the default aks_subnet_address_prefix, 10.0.0.0/19.
   override_data {
@@ -520,7 +583,7 @@ run "byo_vnet_skips_the_subnets_terraform_carved" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -747,10 +810,10 @@ run "aks_dns_service_ip_outside_the_service_cidr_is_refused" {
 }
 
 # ── Derived name lengths ─────────────────────────────────────────────────────
-# Azure's per-service name limits are preconditions on the resource group, the
+# Azure's per-service name limits are a precondition on the resource group, the
 # first resource created, so an overlong name fails the plan instead of the
-# apply partway through. One run per name, since expect_failures names the
-# resource and cannot tell the preconditions apart.
+# apply partway through. One run per name, since the one precondition covers
+# every name and expect_failures cannot tell them apart.
 
 run "a_storage_account_name_over_24_characters_is_refused" {
   command = plan
@@ -760,6 +823,20 @@ run "a_storage_account_name_over_24_characters_is_refused" {
   }
 
   expect_failures = [azurerm_resource_group.resource_group]
+}
+
+# Attaching creates no resource group, so the same check sits on the read of
+# the existing one.
+run "a_long_name_is_refused_when_attaching_a_resource_group" {
+  command = plan
+
+  variables {
+    create_resource_group        = false
+    existing_resource_group_name = "platform-langsmith-rg"
+    storage_account_name         = "lsblobprodeastus2contoso01"
+  }
+
+  expect_failures = [data.azurerm_resource_group.existing]
 }
 
 run "a_keyvault_name_over_24_characters_is_refused" {
@@ -830,7 +907,7 @@ run "additional_pool_os_sku_rejects_an_unknown_value" {
   expect_failures = [var.additional_node_pools]
 }
 
-# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.59.0, where the
+# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.65.0, where the
 # provider rejects it; refused here until the floor moves.
 run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
   command = plan
