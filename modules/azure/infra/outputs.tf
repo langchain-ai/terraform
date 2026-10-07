@@ -295,6 +295,6 @@ output "smithdb_storage_blob_endpoint" {
 }
 
 output "aks_kubeconfig_public_fqdn" {
-  description = "true when az aks get-credentials needs --public-fqdn: a private cluster with aks_private_dns_zone_id = \"None\". The helm scripts read it."
+  description = "true when az aks get-credentials needs --public-fqdn: a private cluster with no private DNS zone, from aks_private_dns_zone_id = \"None\" or, when attaching, from the cluster. The helm scripts read it."
   value       = module.aks.api_server_public_fqdn == true
 }

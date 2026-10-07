@@ -620,7 +620,8 @@ data "azapi_resource" "byo_agic_subnet_delegations" {
 # No 0.0.0.0/0 route at all is only a warning: a default route learned over
 # BGP from ExpressRoute or VPN never appears in the table.
 # aks_network_owner_checks = false skips the read, for a deploying identity
-# that may not read the route table; Azure still checks at create.
+# that may not read the route table; Azure still checks the next hop at create,
+# but nothing replaces the two warnings below that read it.
 locals {
   aks_outbound_custom   = var.aks_outbound_type != "loadBalancer"
   aks_subnet_route_tbl  = try(one(data.azurerm_subnet.byo_aks_subnet[*].route_table_id), null)
