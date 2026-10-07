@@ -157,28 +157,6 @@ fleetTriggerServer:
         cpu: "500m"
         memory: "1Gi"
 
-# The chart sets no resources on these two, so they otherwise get the namespace
-# LimitRange default request while each uses ~500m starting up.
-fleet:
-  apiServer:
-    deployment:
-      resources:
-        requests:
-          cpu: "500m"
-          memory: "1Gi"
-        limits:
-          cpu: "1"
-          memory: "2Gi"
-  queue:
-    deployment:
-      resources:
-        requests:
-          cpu: "500m"
-          memory: "1Gi"
-        limits:
-          cpu: "1"
-          memory: "2Gi"
-
 # -- In-cluster data services (Tier 1 only) -----------------------------------
 # These apply when using in-cluster postgres, redis, and clickhouse.
 # If pointing at managed services (Azure DB for PostgreSQL, Azure Managed Redis),

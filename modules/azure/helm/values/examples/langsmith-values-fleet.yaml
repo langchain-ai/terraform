@@ -46,6 +46,29 @@ fleet:
   # fleet.enabled. Do NOT set it inline — do not change once data exists.
   # encryptionKey: ""
 
+  # The chart sets no resources on these two, so without this block they get the
+  # namespace LimitRange default request while each uses ~500m starting up. The
+  # minimum sizing profile, loaded after this file, overrides these values.
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+
   postgres:
     external:
       enabled: true
