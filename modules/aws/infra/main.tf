@@ -140,10 +140,21 @@ resource "terraform_data" "validate_inputs" {
     }
 
     # SmithDB shares the LangSmith namespace/release (it cannot run standalone),
-    # requires a dedicated metastore Postgres, and needs local-NVMe nodes.
+    # requires a dedicated metastore Postgres, and needs nodes matching the
+    # smithdb-local/* nodeSelectors (Karpenter pools or labeled node groups).
     precondition {
       condition     = !var.enable_smithdb || var.smithdb_metastore_source == "create" || (var.smithdb_external_metastore_host != null && var.smithdb_external_metastore_username != null && var.smithdb_external_metastore_password != null)
       error_message = "enable_smithdb with smithdb_metastore_source = \"external\" requires smithdb_external_metastore_host, smithdb_external_metastore_username, and smithdb_external_metastore_password."
+    }
+
+    # Without Karpenter nothing else creates nodes for the SmithDB nodeSelectors,
+    # so a missing label would leave every SmithDB pod Pending after deploy.
+    precondition {
+      condition = !var.enable_smithdb || var.smithdb_node_provisioner != "node_group" || (
+        anytrue([for g in values(var.eks_managed_node_groups) : lookup(g.labels, "smithdb-local/instance-store", "") == "true"]) &&
+        anytrue([for g in values(var.eks_managed_node_groups) : lookup(g.labels, "smithdb-local/compute", "") == "true"])
+      )
+      error_message = "smithdb_node_provisioner = \"node_group\" requires eks_managed_node_groups entries labeled smithdb-local/instance-store = \"true\" and smithdb-local/compute = \"true\" (one group may carry both)."
     }
 
     precondition {
@@ -159,6 +170,13 @@ resource "terraform_data" "validate_inputs" {
     precondition {
       condition     = !var.smithdb_query_enabled || var.smithdb_ingestion_enabled
       error_message = "smithdb_query_enabled requires smithdb_ingestion_enabled = true."
+    }
+
+    # Without ClickHouse, SmithDB is the only ingestion and query backend (the
+    # chart refuses to render with neither), and there is no history to migrate.
+    precondition {
+      condition     = var.clickhouse_source != "none" || (var.enable_smithdb && var.smithdb_ingestion_enabled && var.smithdb_query_enabled && !var.smithdb_migration_enabled)
+      error_message = "clickhouse_source = \"none\" requires enable_smithdb, smithdb_ingestion_enabled, and smithdb_query_enabled = true, and smithdb_migration_enabled = false (SmithDB is the only trace store; there is no ClickHouse history to migrate)."
     }
 
     # Two gateway controllers share one ALB target group (all three
@@ -188,7 +206,7 @@ module "vpc" {
 
   # SmithDB Karpenter subnet discovery. Tag at creation so we avoid a for_each
   # over subnet IDs that are unknown until apply.
-  extra_private_subnet_tags = var.enable_smithdb ? { "karpenter.sh/discovery" = local.cluster_name } : {}
+  extra_private_subnet_tags = local.smithdb_karpenter ? { "karpenter.sh/discovery" = local.cluster_name } : {}
 }
 
 module "firewall" {
@@ -218,8 +236,9 @@ module "eks" {
   create_gp3_storage_class        = var.create_gp3_storage_class
   eks_managed_node_group_defaults = var.eks_managed_node_group_defaults
   eks_managed_node_groups         = local.eks_managed_node_groups
-  enable_karpenter                = var.enable_smithdb
+  enable_karpenter                = local.smithdb_karpenter
   karpenter_chart_version         = var.smithdb_karpenter_chart_version
+  node_subnet_ids                 = var.eks_node_groups_private_subnets_only ? local.private_subnets : null
   public_cluster_enabled          = var.enable_public_eks_cluster
   public_access_cidrs             = var.eks_public_access_cidrs
   create_langsmith_irsa_role      = var.create_langsmith_irsa_role
@@ -641,6 +660,24 @@ module "bastion" {
   depends_on = [module.vpc, module.eks]
 }
 
+# Bastion → EKS API. The control plane's private endpoint ENIs carry the cluster
+# primary SG, which only admits cluster members, so with
+# enable_public_eks_cluster = false kubectl/terraform/helm on the bastion time out
+# without this rule. Network reachability only: Kubernetes access still needs an
+# IAM identity with an EKS access entry (the cluster creator by default).
+resource "aws_vpc_security_group_ingress_rule" "bastion_to_cluster_api" {
+  count = var.create_bastion ? 1 : 0
+
+  security_group_id            = module.eks.cluster_primary_security_group_id
+  referenced_security_group_id = module.bastion[0].security_group_id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Allow the bastion to reach the EKS private API endpoint"
+
+  tags = local.common_tags
+}
+
 # The ALB controller (installed by EKS blueprints) registers a mutating webhook
 # that intercepts Service creation. Its pods need time to become ready after the
 # EKS module completes. Without this delay, k8s-bootstrap Helm releases (ESO,
@@ -1035,6 +1072,11 @@ resource "kubernetes_secret" "smithdb_local" {
 #------------------------------------------------------------------------------
 
 locals {
+  # Karpenter, its discovery tags, and the NodePools/EC2NodeClasses below exist
+  # only in the default provisioner mode. With smithdb_node_provisioner =
+  # "node_group", SmithDB schedules onto labeled eks_managed_node_groups instead.
+  smithdb_karpenter = var.enable_smithdb && var.smithdb_node_provisioner == "karpenter"
+
   # Subnets are discovered by the karpenter.sh/discovery tag (applied to the
   # private subnets at creation via the vpc module's extra_private_subnet_tags).
   smithdb_karpenter_discovery = { "karpenter.sh/discovery" = local.cluster_name }
@@ -1052,7 +1094,7 @@ locals {
 # Terraform-created VPC the tag is applied at creation via the vpc module's
 # extra_private_subnet_tags (above).
 resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
-  for_each = var.enable_smithdb && !var.create_vpc ? toset(var.private_subnets) : toset([])
+  for_each = local.smithdb_karpenter && !var.create_vpc ? toset(var.private_subnets) : toset([])
 
   resource_id = each.value
   key         = "karpenter.sh/discovery"
@@ -1060,7 +1102,7 @@ resource "aws_ec2_tag" "smithdb_karpenter_subnet" {
 }
 
 resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
+  count = local.smithdb_karpenter ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.k8s.aws/v1"
@@ -1095,7 +1137,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_instance_store" {
 }
 
 resource "kubectl_manifest" "smithdb_ec2nc_compute" {
-  count = var.enable_smithdb ? 1 : 0
+  count = local.smithdb_karpenter ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.k8s.aws/v1"
@@ -1128,7 +1170,7 @@ resource "kubectl_manifest" "smithdb_ec2nc_compute" {
 }
 
 resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
-  count = var.enable_smithdb ? 1 : 0
+  count = local.smithdb_karpenter ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.sh/v1"
@@ -1172,7 +1214,7 @@ resource "kubectl_manifest" "smithdb_nodepool_instance_store" {
 }
 
 resource "kubectl_manifest" "smithdb_nodepool_compute" {
-  count = var.enable_smithdb ? 1 : 0
+  count = local.smithdb_karpenter ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "karpenter.sh/v1"
@@ -1235,8 +1277,12 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 # SmithDB Karpenter CRs above: it defers schema validation to apply time, so
 # terraform plan succeeds even before the Gateway API CRDs are installed
 # (Envoy Gateway's helm_release, deployed inside module.k8s_bootstrap).
+# The chart's route binds hostnames to config.hostname, which init-values.sh sets
+# to langsmith_domain or, without one, the Terraform ALB's DNS name. This route
+# must carry the same hostname to share the chart route's virtual host, so it
+# follows the same fallback rather than being skipped when no domain is set.
 resource "kubectl_manifest" "fleet_stream_httproute" {
-  count = local.enable_envoy_gateway && var.langsmith_domain != "" ? 1 : 0
+  count = local.enable_envoy_gateway ? 1 : 0
 
   yaml_body = yamlencode({
     apiVersion = "gateway.networking.k8s.io/v1"
@@ -1247,7 +1293,7 @@ resource "kubectl_manifest" "fleet_stream_httproute" {
     }
     spec = {
       parentRefs = [{ name = "langsmith-gateway" }]
-      hostnames  = [var.langsmith_domain]
+      hostnames  = [var.langsmith_domain != "" ? var.langsmith_domain : module.alb.alb_dns_name]
       rules = [{
         matches = [
           { path = { type = "PathPrefix", value = "/api/v1/fleet/threads" } },

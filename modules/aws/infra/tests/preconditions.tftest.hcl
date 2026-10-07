@@ -237,6 +237,47 @@ run "smithdb_migration_without_ingestion_is_rejected" {
   expect_failures = [terraform_data.validate_inputs]
 }
 
+# The default node group carries no smithdb-local labels, so nothing would
+# satisfy the SmithDB nodeSelectors once Karpenter is out of the picture.
+run "smithdb_node_group_without_labeled_group_is_rejected" {
+  command = plan
+
+  variables {
+    enable_smithdb           = true
+    smithdb_node_provisioner = "node_group"
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+# SmithDB-only: ClickHouse off, so SmithDB must take both reads and writes.
+run "no_clickhouse_without_smithdb_query_is_rejected" {
+  command = plan
+
+  variables {
+    clickhouse_source         = "none"
+    enable_smithdb            = true
+    smithdb_ingestion_enabled = true
+    smithdb_query_enabled     = false
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
+run "no_clickhouse_with_migration_is_rejected" {
+  command = plan
+
+  variables {
+    clickhouse_source         = "none"
+    enable_smithdb            = true
+    smithdb_ingestion_enabled = true
+    smithdb_query_enabled     = true
+    smithdb_migration_enabled = true
+  }
+
+  expect_failures = [terraform_data.validate_inputs]
+}
+
 run "smithdb_query_without_ingestion_is_rejected" {
   command = plan
 

@@ -546,8 +546,10 @@ fi
 _live_lb=""
 _live_lb=$(_resolve_entry_hostname 1) || true
 if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
+  # Strip only through the key's own colon: a greedy `.*:` would also eat the
+  # scheme's colon and turn http://host into //host, which never matches.
   _configured_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
-    | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _configured_hostname=""
+    | head -1 | sed 's/^[^:]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d '[:space:]') || _configured_hostname=""
   # Compare host-only: config.hostname carries a scheme (http(s)://) so the chart
   # emits correct browser URLs, but _live_lb is the bare ALB DNS.
   _configured_host_only="${_configured_hostname#*://}"
@@ -558,7 +560,7 @@ if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
     echo "  Updating $(basename "$ENV_FILE") before deploy..."
 
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
-      | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""
+      | head -1 | sed 's/^[^:]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d '[:space:]') || _current_url=""
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
@@ -760,12 +762,12 @@ _active_host=$(_resolve_entry_hostname 10) || true
 if [[ -n "$_active_host" ]]; then
   echo ""
   _current_hostname=$(grep -E '^\s*hostname:' "$ENV_FILE" 2>/dev/null \
-    | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_hostname=""
+    | sed 's/^[^:]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d '[:space:]') || _current_hostname=""
   # Compare host-only: config.hostname carries a scheme; _active_host is bare DNS.
   _current_host_only="${_current_hostname#*://}"
   if [[ "$_current_host_only" != "$_active_host" && -z "$_langsmith_domain" ]]; then
     _current_url=$(grep -E '^\s*url:' "$ENV_FILE" 2>/dev/null \
-      | head -1 | sed 's/.*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}/\1/' | tr -d '[:space:]') || _current_url=""
+      | head -1 | sed 's/^[^:]*:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}.*/\1/' | tr -d '[:space:]') || _current_url=""
     _protocol="http"
     [[ "$_current_url" == https://* ]] && _protocol="https"
 
