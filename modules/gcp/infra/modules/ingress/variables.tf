@@ -104,7 +104,7 @@ variable "tls_certificate_map_name" {
 variable "gateway_api_crds_url" {
   description = "Gateway API CRD bundle that Envoy Gateway needs. k8s-bootstrap applies the same file ahead of cert-manager when Let's Encrypt is on, so the root passes one URL to both."
   type        = string
-  default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml"
+  default     = "https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml"
 
   validation {
     condition     = startswith(var.gateway_api_crds_url, "https://")

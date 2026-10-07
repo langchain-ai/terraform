@@ -4,6 +4,10 @@
 # Gateway API CRDs
 #------------------------------------------------------------------------------
 locals {
+  envoy_gateway_version = "v1.9.2"
+  # The Envoy Gateway CRDs of that release, without the Gateway API CRDs.
+  envoy_gateway_crds_url = "https://github.com/envoyproxy/gateway/releases/download/${local.envoy_gateway_version}/envoy-gateway-crds.yaml"
+
   # Every kubectl provisioner in this module starts with this. Without it kubectl
   # uses whatever context the operator's kubeconfig happens to have selected,
   # which may be an unrelated cluster in another cloud, or nothing at all on a
@@ -35,6 +39,11 @@ locals {
 resource "null_resource" "install_gateway_api_crds" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
+  # A new URL runs the step again, so an existing cluster gets the new CRDs.
+  triggers = {
+    crds_url = var.gateway_api_crds_url
+  }
+
   provisioner "local-exec" {
     environment = merge(local.kubectl_env, { LS_GATEWAY_API_CRDS_URL = var.gateway_api_crds_url })
     command     = <<-EOT
@@ -48,26 +57,48 @@ resource "null_resource" "install_gateway_api_crds" {
         sleep 2
       done
       
-      # Install Gateway API CRDs
-      kubectl apply -f "$LS_GATEWAY_API_CRDS_URL"
+      # Install Gateway API CRDs. Server-side apply with --force-conflicts takes
+      # over the fields that an earlier client-side apply or Helm wrote.
+      kubectl apply --server-side --force-conflicts -f "$LS_GATEWAY_API_CRDS_URL"
     EOT
   }
 
 }
 
+# Helm installs CRDs only on the first install and never upgrades them, so a
+# chart version bump alone leaves the old Envoy Gateway CRDs in place. This step
+# applies the CRDs of the pinned release, and runs again when the version
+# changes. Two of the CRDs are too large for a client-side apply.
+resource "null_resource" "install_envoy_gateway_crds" {
+  count = var.ingress_type == "envoy" ? 1 : 0
+
+  triggers = {
+    crds_url = local.envoy_gateway_crds_url
+  }
+
+  provisioner "local-exec" {
+    environment = merge(local.kubectl_env, { LS_ENVOY_GATEWAY_CRDS_URL = local.envoy_gateway_crds_url })
+    command     = <<-EOT
+      ${local.kubectl_creds}
+      kubectl apply --server-side --force-conflicts -f "$LS_ENVOY_GATEWAY_CRDS_URL"
+    EOT
+  }
+
+  depends_on = [null_resource.install_gateway_api_crds]
+}
+
 #------------------------------------------------------------------------------
 # Envoy Gateway
 #------------------------------------------------------------------------------
-# v1.2.8 is the last v1.2 patch release. v1.2.6 fixes CVE-2025-24030 and v1.2.7
-# fixes CVE-2025-25294. The v1.2 line is end of life, so a later change must
-# move to a supported line.
+# v1.9 supports Kubernetes 1.33 to 1.36. Upgrade from v1.2 in one step: stops on
+# v1.8.0 to v1.8.3 or v1.9.0 break the controller or TLS listeners.
 resource "helm_release" "envoy_gateway" {
   count = var.ingress_type == "envoy" ? 1 : 0
 
   name             = "envoy-gateway"
   repository       = "oci://docker.io/envoyproxy"
   chart            = "gateway-helm"
-  version          = "v1.2.8"
+  version          = local.envoy_gateway_version
   namespace        = "envoy-gateway-system"
   create_namespace = true
 
@@ -77,10 +108,24 @@ resource "helm_release" "envoy_gateway" {
     value = "ClusterIP"
   }
 
+  # The two CRD steps above own the CRDs. With the chart copy on, the chart also
+  # adds a Gateway API admission policy.
+  set {
+    name  = "crds.enabled"
+    value = "false"
+  }
+
+  # The module does not use zone-aware routing, and the control plane of a
+  # private cluster may not reach the injector webhook port (9443).
+  set {
+    name  = "topologyInjector.enabled"
+    value = "false"
+  }
+
   wait    = true
   timeout = 600
 
-  depends_on = [null_resource.install_gateway_api_crds]
+  depends_on = [null_resource.install_gateway_api_crds, null_resource.install_envoy_gateway_crds]
 }
 
 #------------------------------------------------------------------------------

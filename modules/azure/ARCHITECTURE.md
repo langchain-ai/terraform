@@ -79,7 +79,7 @@ Exact pod topology from `kubectl get pods -n langsmith` after successful Pass 2 
 | `nginx` | `ingress_controller = "nginx"` | yes | NGINX via Helm, standard Kubernetes Ingress. For clusters standardized on classic Ingress. |
 | `istio-addon` | `ingress_controller = "istio-addon"` | yes | AKS managed Istio service mesh. Use `istio_addon_revision` to pin revision. |
 | `istio` | `ingress_controller = "istio"` | yes | Self-managed Istio via Helm. Full control over revision and config. |
-| `none` | `ingress_controller = "none"` | — | Bring your own ingress. |
+| `none` | `ingress_controller = "none"` | — | Bring your own ingress. The Ingress goes to the cluster's default IngressClass unless `ingress.ingressClassName` is set in `values-overrides.yaml`; `deploy.sh` checks for one. |
 
 Azure Public IP DNS labels (`dns_label`) work with all controllers. `deploy.sh` applies the `service.beta.kubernetes.io/azure-dns-label-name` annotation to the correct LoadBalancer service based on the chosen controller. For `envoy-gateway`, it sets the annotation on the EnvoyProxy `langsmith-proxy`, so the proxy service has the label from creation.
 
@@ -362,6 +362,8 @@ Every pod that reads blob storage env vars (`langsmith.commonEnv` in the Helm ch
 | `langsmith-listener` | 3 | yes |
 | `langsmith-agent-builder-tool-server` | 4 | yes |
 | `langsmith-agent-builder-trigger-server` | 4 | yes |
+| `langsmith-agent-gateway` | LLM Gateway (`enable_llm_gateway`) | yes |
+| `langsmith-presidio-analyzer` | LLM Gateway PII redaction (`enable_gateway_pii_redaction`) | yes |
 | `langsmith-frontend` | 2 | no |
 | `langsmith-playground` | 2 | no |
 | `langsmith-ace-backend` | 2 | no |

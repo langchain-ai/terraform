@@ -382,6 +382,28 @@ run "aks_dns_service_ip_rejects_a_non_address" {
   expect_failures = [var.aks_dns_service_ip]
 }
 
+# Presidio only serves the LLM Gateway, so asking for redaction without the
+# gateway is refused, and the pair together plans.
+run "gateway_pii_redaction_requires_the_gateway" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = false
+    enable_gateway_pii_redaction = true
+  }
+
+  expect_failures = [var.enable_gateway_pii_redaction]
+}
+
+run "gateway_pii_redaction_with_the_gateway_plans" {
+  command = plan
+
+  variables {
+    enable_llm_gateway           = true
+    enable_gateway_pii_redaction = true
+  }
+}
+
 # ── VNet address space ───────────────────────────────────────────────────────
 
 run "vnet_address_space_rejects_a_non_cidr" {
@@ -513,7 +535,7 @@ run "byo_vnet_plans_beside_a_clear_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -537,7 +559,7 @@ run "byo_vnet_rejects_a_prefix_on_a_sibling" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["app-subnet"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["app-subnet"] }
   }
   # Inside the default aks_subnet_address_prefix, 10.0.0.0/19.
   override_data {
@@ -561,7 +583,7 @@ run "byo_vnet_skips_the_subnets_terraform_carved" {
 
   override_data {
     target = data.azurerm_virtual_network.byo_vnet
-    values = { address_space = ["10.0.0.0/16"], subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
+    values = { address_space = ["10.0.0.0/16"], location = "eastus", subnets = ["langsmith-vnet-subnet-0", "langsmith-vnet-subnet-postgres"] }
   }
   override_data {
     target = data.azurerm_subnet.byo_vnet_siblings
@@ -885,7 +907,7 @@ run "additional_pool_os_sku_rejects_an_unknown_value" {
   expect_failures = [var.additional_node_pools]
 }
 
-# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.59.0, where the
+# Ubuntu2404 arrived in azurerm 4.67.0 and versions.tf allows 4.65.0, where the
 # provider rejects it; refused here until the floor moves.
 run "aks_os_sku_rejects_ubuntu2404_below_the_provider_floor" {
   command = plan
