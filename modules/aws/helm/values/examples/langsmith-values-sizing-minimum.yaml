@@ -69,7 +69,7 @@ queue:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
@@ -104,7 +104,7 @@ hostBackend:
     replicas: 1
     resources:
       requests:
-        cpu: "100m"
+        cpu: "250m"
         memory: "384Mi"
       limits:
         cpu: "500m"
@@ -118,7 +118,7 @@ listener:
     replicas: 1
     resources:
       requests:
-        cpu: "250m"
+        cpu: "500m"
         memory: "768Mi"
       limits:
         cpu: "1"
