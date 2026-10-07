@@ -204,6 +204,28 @@ fleetTriggerServer:
         cpu: "2"
         memory: "4Gi"
 
+# The chart sets no resources on these two, so they otherwise get the namespace
+# LimitRange default request while each uses ~500m starting up.
+fleet:
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "2"
+          memory: "4Gi"
+
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 # High/High pattern: 14+ CPU / 24+ Gi per node, 3-node cluster recommended.
 # In-cluster ClickHouse is a single StatefulSet pod — it cannot do 3-node.

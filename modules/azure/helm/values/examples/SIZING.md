@@ -32,10 +32,10 @@ Totals from rendering chart 0.16.34 with each profile, at minimum replica counts
 | Minimum | Core | 8 | 1.6 vCPU | 3.9Gi | 5.5 vCPU | 8.0Gi |
 | Minimum | + Deployments and Fleet | 16 | 3.2 vCPU | 7.3Gi | 11.5 vCPU | 17.4Gi |
 | Dev | Core | 8 | 4.0 vCPU | 12.2Gi | 10.0 vCPU | 24.5Gi |
-| Dev | + Deployments and Fleet | 16 | 5.8 vCPU | 15.8Gi | 14.0 vCPU | 31.5Gi |
+| Dev | + Deployments and Fleet | 16 | 6.8 vCPU | 17.8Gi | 16.0 vCPU | 35.5Gi |
 | Production | Core | 16 | 13.7 vCPU | 32.0Gi | 28.0 vCPU | 70.0Gi |
-| Production | + Deployments and Fleet | 26 | 17.2 vCPU | 39.0Gi | 35.0 vCPU | 84.0Gi |
+| Production | + Deployments and Fleet | 26 | 18.2 vCPU | 41.0Gi | 37.0 vCPU | 88.0Gi |
 | Prod Large | Core | 36 | 35.0 vCPU | 78.0Gi | 122.0 vCPU | 268.0Gi |
-| Prod Large | + Deployments and Fleet | 50 | 40.5 vCPU | 89.0Gi | 144.0 vCPU | 312.0Gi |
+| Prod Large | + Deployments and Fleet | 50 | 41.5 vCPU | 91.0Gi | 148.0 vCPU | 320.0Gi |
 
-Fleet's Redis sets no resources in any profile, and its api-server and queue set none outside Minimum. Those containers get the namespace LimitRange default, which these totals leave out.
+Fleet's Redis sets no resources in any profile. It gets the namespace LimitRange default, which these totals leave out.

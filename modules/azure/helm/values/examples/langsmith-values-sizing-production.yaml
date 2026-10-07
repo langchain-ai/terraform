@@ -197,6 +197,28 @@ fleetTriggerServer:
         cpu: "1"
         memory: "2Gi"
 
+# The chart sets no resources on these two, so they otherwise get the namespace
+# LimitRange default request while each uses ~500m starting up.
+fleet:
+  apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1"
+          memory: "2Gi"
+  queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "1Gi"
+        limits:
+          cpu: "1"
+          memory: "2Gi"
+
 # -- In-cluster ClickHouse (dev/POC only — production should use external) -----
 
 clickhouse:
