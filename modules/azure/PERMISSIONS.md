@@ -120,6 +120,8 @@ Who makes the grants follows `aks_control_plane_identity_manage_grants`, which d
 
 The check covers the subnet, its route table when it has one, and the zone. It does not check the VNet, which needs a grant only when the zone is not linked yet. It accepts any role at the scope or above it, so a custom role passes, and so does a grant on the VNet's resource group or subscription. A grant at management-group scope is reported missing, because a management group's path is not a prefix of the subscription's: grant at the subnet, the route table, and the zone as well. Azure decides whether the role carries enough permissions when it creates the cluster, and fails the create if it does not.
 
+The check reads only roles assigned to the identity itself. A network owner who grants it through group membership, which works for AKS, should set `aks_network_owner_checks = false`: the plan then skips the check, and Azure validates the grants at create.
+
 To deploy with `false`:
 
 1. Create the identity, and give its principal ID to the network's owner:
