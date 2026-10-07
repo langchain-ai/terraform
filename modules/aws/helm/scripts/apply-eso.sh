@@ -146,6 +146,24 @@ $(if _ssm_key_exists "${_ssm_prefix}/oauth-client-secret"; then cat <<OEOF
         key: ${_ssm_prefix}/oauth-issuer-url
 OEOF
 fi)
+$(if _ssm_key_exists "${_ssm_prefix}/smithdb-taskdb-password"; then cat <<TEOF
+    - secretKey: smithdb_taskdb_password
+      remoteRef:
+        key: ${_ssm_prefix}/smithdb-taskdb-password
+TEOF
+fi)
+$(if _ssm_key_exists "${_ssm_prefix}/smithdb-taskdb-host"; then cat <<XEOF
+    - secretKey: smithdb_taskdb_host
+      remoteRef:
+        key: ${_ssm_prefix}/smithdb-taskdb-host
+    - secretKey: smithdb_taskdb_database
+      remoteRef:
+        key: ${_ssm_prefix}/smithdb-taskdb-database
+    - secretKey: smithdb_taskdb_username
+      remoteRef:
+        key: ${_ssm_prefix}/smithdb-taskdb-username
+XEOF
+fi)
 EOF
 
 # ── Wait for sync ────────────────────────────────────────────────────────────

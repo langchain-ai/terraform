@@ -15,7 +15,7 @@
 
 .PHONY: help quickstart test-quickstart status status-quick setup-env init plan apply destroy teardown-byo-sg purge-secrets tf \
         preflight preflight-post preflight-ssm kubeconfig ssm secrets secrets-list tls \
-        init-values deploy apply-eso uninstall clean deploy-all \
+        init-values deploy apply-eso smithdb-migration-job-start smithdb-migration-job-end uninstall clean deploy-all \
         test-e2e test-permutations test-parallel \
         quickdeploy quickdeploy-auto
 
@@ -149,6 +149,12 @@ deploy: ## Deploy LangSmith via Helm
 
 apply-eso: ## Re-apply ESO ClusterSecretStore + ExternalSecret (no Helm redeploy)
 	$(HELM_DIR)/scripts/apply-eso.sh
+
+smithdb-migration-job-start: ## Set up the SmithDB historical migration (TaskDB, sizing), then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-start.sh
+
+smithdb-migration-job-end: ## Remove the migration setup once the Job is Complete, then make apply, init-values, deploy
+	$(HELM_DIR)/scripts/smithdb-migration-job-end.sh
 
 uninstall: ## Uninstall LangSmith Helm release
 	$(HELM_DIR)/scripts/uninstall.sh

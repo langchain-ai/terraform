@@ -77,6 +77,10 @@ make init-values
 # Re-sync ESO secrets without redeploying
 make apply-eso
 
+# SmithDB historical migration: start, then make apply, init-values, deploy; end once the Job is Complete
+make smithdb-migration-job-start
+make smithdb-migration-job-end
+
 # Check SSM secrets status + TF_VAR_* export status (read-only)
 make secrets
 
