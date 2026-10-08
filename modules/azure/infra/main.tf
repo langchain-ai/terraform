@@ -1719,7 +1719,7 @@ module "smithdb" {
   replication_type     = var.smithdb_storage_replication_type
   container_name       = var.smithdb_storage_container_name
 
-  shared_access_key_enabled = var.storage_shared_access_key_enabled
+  shared_access_key_enabled = var.smithdb_storage_shared_access_key_enabled
   allowed_copy_scope        = var.storage_allowed_copy_scope == "" ? null : var.storage_allowed_copy_scope
 
   # Prefixed to keep it apart from private_dns_zone_id above, which is the

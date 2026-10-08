@@ -1614,7 +1614,7 @@ closed:
 
 | Setting | Default | Variable |
 |---|---|---|
-| Shared Key (access key) authorization | Off | `storage_shared_access_key_enabled` |
+| Shared Key (access key) authorization | Off | `storage_shared_access_key_enabled` (trace blobs), `smithdb_storage_shared_access_key_enabled` (SmithDB) |
 | Anonymous blob access | Off | none (always off) |
 | Copy operations | Same Entra tenant only (`AAD`) | `storage_allowed_copy_scope` (`AAD`, `PrivateLink`, or `""` for any) |
 
@@ -1626,8 +1626,9 @@ Terraform never calls the storage data plane. That also lets an install machine
 outside the VNet create an account whose public access is off: without it, the
 provider waits after creating the account for endpoints it cannot reach.
 
-Set `storage_shared_access_key_enabled = true` only for SmithDB's optional
-static-key authentication (`smithdb.config.objectStore.azure.accessKeySecretKey`).
+Set `smithdb_storage_shared_access_key_enabled = true` only for SmithDB's optional
+static-key authentication (`smithdb.config.objectStore.azure.accessKeySecretKey`);
+the trace-blob account keeps its own setting and stays closed.
 On an existing deployment, upgrading to this release turns Shared Key off and sets
 the copy scope in place; plan shows both as in-place updates.
 

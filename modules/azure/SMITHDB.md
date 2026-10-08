@@ -45,7 +45,7 @@ The Terraform root creates:
 - a dedicated Blob Storage account and private container, with Shared Key off
   by default. The chart's optional static-key path
   (`smithdb.config.objectStore.azure.accessKeySecretKey`) needs
-  `storage_shared_access_key_enabled = true`; the default runtime path does not
+  `smithdb_storage_shared_access_key_enabled = true`; the default runtime path does not
   use a key (README "Storage security defaults");
 - a SmithDB-only user-assigned identity, federated to the chart-owned SmithDB
   Kubernetes ServiceAccount and scoped to `Storage Blob Data Contributor` on

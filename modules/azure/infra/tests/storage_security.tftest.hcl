@@ -118,7 +118,29 @@ run "smithdb_account_gets_the_same_defaults" {
   }
 }
 
-run "smithdb_static_key_opt_in" {
+# SmithDB's static-key opt-in must not loosen the trace-blob account, which
+# never uses a key.
+run "smithdb_static_key_opt_in_leaves_trace_blob_closed" {
+  command = plan
+
+  variables {
+    enable_smithdb                            = true
+    availability_zones                        = ["1", "2", "3"]
+    smithdb_storage_shared_access_key_enabled = true
+  }
+
+  assert {
+    condition     = module.smithdb[0].storage_shared_access_key_enabled == true
+    error_message = "smithdb_storage_shared_access_key_enabled = true did not reach the SmithDB account"
+  }
+
+  assert {
+    condition     = module.blob.shared_access_key_enabled == false
+    error_message = "SmithDB's static-key opt-in turned Shared Key on for the trace-blob account"
+  }
+}
+
+run "trace_blob_opt_in_leaves_smithdb_closed" {
   command = plan
 
   variables {
@@ -128,7 +150,7 @@ run "smithdb_static_key_opt_in" {
   }
 
   assert {
-    condition     = module.smithdb[0].storage_shared_access_key_enabled == true
-    error_message = "storage_shared_access_key_enabled = true did not reach the SmithDB account"
+    condition     = module.blob.shared_access_key_enabled == true && module.smithdb[0].storage_shared_access_key_enabled == false
+    error_message = "storage_shared_access_key_enabled reached the SmithDB account, or did not reach the trace-blob account"
   }
 }

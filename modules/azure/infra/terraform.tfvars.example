@@ -239,7 +239,8 @@ blob_ttl_enabled    = true
 blob_ttl_short_days = 14    # short-lived trace payloads
 blob_ttl_long_days  = 400   # run attachments (~13 months)
 # storage_replication_type = "LRS" # LRS | ZRS (zone loss) | GRS/RAGRS (region) | GZRS/RAGZRS (both). Choose before the first apply: README "Storage redundancy"
-# storage_shared_access_key_enabled = false  # true only for SmithDB static-key auth; README "Storage security defaults"
+# storage_shared_access_key_enabled = false  # trace-blob account; nothing in LangSmith uses a key
+# smithdb_storage_shared_access_key_enabled = false  # true only for SmithDB static-key auth; README "Storage security defaults"
 # storage_allowed_copy_scope        = "AAD"  # AAD | PrivateLink | "" (any)
 
 # ── LangSmith ─────────────────────────────────────────────────────────────────

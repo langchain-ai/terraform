@@ -795,7 +795,13 @@ variable "storage_allowed_ips" {
 
 variable "storage_shared_access_key_enabled" {
   type        = bool
-  description = "Whether the LangSmith and SmithDB storage accounts accept Shared Key (access key) authorization. Off by default: LangSmith and SmithDB reach their accounts through Workload Identity, and Terraform manages them through the management plane, so nothing uses a key. Policies built on the Azure security benchmark deny accounts that allow it. Set true only for SmithDB's optional static-key authentication (objectStore.azure.accessKeySecretKey). Changing it updates the accounts in place."
+  description = "Whether the LangSmith trace-blob account accepts Shared Key (access key) authorization. Off by default: LangSmith reaches it through Workload Identity, and Terraform manages it through the management plane, so nothing uses a key. Policies built on the Azure security benchmark deny accounts that allow it. SmithDB's account has its own setting, smithdb_storage_shared_access_key_enabled. Changing it updates the account in place."
+  default     = false
+}
+
+variable "smithdb_storage_shared_access_key_enabled" {
+  type        = bool
+  description = "Whether SmithDB's storage account accepts Shared Key (access key) authorization. Off by default: SmithDB reaches it through Workload Identity. Set true only for SmithDB's optional static-key authentication (smithdb.config.objectStore.azure.accessKeySecretKey); the trace-blob account stays as storage_shared_access_key_enabled sets it. Changing it updates the account in place."
   default     = false
 }
 
