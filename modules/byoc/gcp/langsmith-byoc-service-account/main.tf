@@ -133,6 +133,7 @@ locals {
     "compute.googleapis.com",
     "container.googleapis.com",
     "dns.googleapis.com",
+    "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "networkconnectivity.googleapis.com",
     "redis.googleapis.com",
