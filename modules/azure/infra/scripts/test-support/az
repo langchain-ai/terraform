@@ -132,6 +132,11 @@ case "$ARGS" in
     emit_file "$FIX/redis_hit" "0" ;;
   "network public-ip list"*)
     emit_file "$FIX/dns_held" "0" ;;
+  "rest --method get --url "*"/providers/Microsoft.Authorization/roleDefinitions/"*)
+    # A role definition, read when a direct grant on the route table is not a
+    # built-in preflight knows by name.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/role_definition.json" ]; then cat "$FIX/role_definition.json"; else exit 1; fi ;;
   *roleEligibilityScheduleInstances*)
     printf '%s\n' "$ARGS" >> "$FIX/calls.log"
     emit_file "$FIX/eligibilities.json" '{"value":[]}' ;;

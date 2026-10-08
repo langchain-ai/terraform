@@ -215,6 +215,21 @@ def abac_role_list(roles):
     )
 
 
+def abac_role_exclusion(roles, action="write"):
+    """A role list negated with !(...GuidEquals), the exclusion spelled without NotEquals."""
+    attribute = "@Request" if action == "write" else "@Resource"
+    return ("((!(ActionMatches{'Microsoft.Authorization/roleAssignments/%s'})) OR "
+            "(!(%s[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+            "ForAnyOfAnyValues:GuidEquals{%s})))" % (action, attribute, ", ".join(roles)))
+
+
+def abac_delete_only(roles):
+    """A role list on delete alone; write is left unconstrained by it."""
+    return ("((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+            "(@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+            "ForAnyOfAnyValues:GuidEquals{%s}))" % ", ".join(roles))
+
+
 def rbac_admin(condition, scope=SUB_SCOPE):
     """One row of `az role assignment list -o json`: RBAC Administrator, held
     through a group, with a condition."""
@@ -937,6 +952,43 @@ CASES = [
         "reject": [f"at {SUB_SCOPE} and {RG_SCOPE} comes only through"],
     },
     {
+        # !(...GuidEquals{X}) excludes X. Read as an allow-list, excluding Owner
+        # would report a false failure.
+        "name": "a negated role list excluding Owner is unconfirmed, not a failure",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_exclusion([OWNER_GUID]))],
+        "expect": ["[?] roleAssignments/write at"],
+        "reject": ["[✗] roleAssignments/write"],
+        "exit_code": 0,
+    },
+    {
+        # Excluding a role the deployment assigns must not read as permitting it.
+        "name": "a negated role list excluding an assigned role is not read as a pass",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_exclusion([STORAGE_BLOB_CONTRIB]))],
+        "expect": ["[?] roleAssignments/write at"],
+        "reject": ["[✓] roleAssignments/write permitted"],
+    },
+    {
+        # A condition on delete alone leaves write unconstrained, so it cannot
+        # explain a write refusal, which stands.
+        "name": "a delete-only condition does not soften a write refusal",
+        "ca_all": response(write=False),
+        "role_assignments": [rbac_admin(abac_delete_only(DEFAULT_ROLES))],
+        "expect": ["[✗] roleAssignments/write is not permitted at"],
+        "reject": ["[?] roleAssignments/write"],
+        "exit_code": 1,
+    },
+    {
+        # The holder is named even when the list matches none of the roles.
+        "name": "a role list naming none of the assigned roles names its holder",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list([OWNER_GUID]))],
+        "expect": ["lists the roles it allows (Role Based Access Control Administrator held at"],
+        "reject": ["lists the roles it allows ()"],
+        "exit_code": 1,
+    },
+    {
         # A conditioned grant held on a different resource group says nothing
         # about this one, so the refusal stands.
         "name": "a conditioned grant at an unrelated scope does not excuse a refusal",
@@ -981,6 +1033,52 @@ CASES = [
         "direct_assignments": [{"scope": RT_ID, "roleDefinitionName": "Network Contributor"}],
         "expect": [f"[✓] routeTables/join/action is permitted on {RT_ID}"],
         "reject": ["only through a group"],
+    },
+    {
+        # A direct Reader at the subscription carries no join, so the join still
+        # comes only through a group.
+        "name": "a direct grant without join does not hide a group-only join",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "direct_assignments": [{"scope": SUB_SCOPE, "roleDefinitionName": "Reader"}],
+        "expect": [f"[!] routeTables/join/action is permitted on {RT_ID}, but only through a group"],
+    },
+    {
+        "name": "a direct custom role carrying join passes after reading its definition",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "direct_assignments": [{
+            "scope": RT_ID, "roleDefinitionName": "Network User",
+            "roleDefinitionId": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{CUSTOM_GUID}",
+        }],
+        "role_definition": {"properties": {"permissions": [{
+            "actions": ["Microsoft.Network/*/join/action"], "notActions": []}]}},
+        "expect": [f"[✓] routeTables/join/action is permitted on {RT_ID}"],
+        "expect_calls": [f"roleDefinitions/{CUSTOM_GUID}"],
+        "reject": ["only through a group"],
+    },
+    {
+        "name": "unreadable direct assignments on the route table are unconfirmed",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "assignments_fail": True,
+        "expect": [f"[?] routeTables/join/action is permitted on {RT_ID}, but this identity's direct assignments"],
+        "reject": ["[✓] routeTables/join/action"],
+    },
+    {
+        # Managing the supplied subnet's service endpoints writes it on an
+        # attached cluster too.
+        "name": "an attached cluster that manages the subnet's endpoints checks the route table",
+        "tfvars_extra": ATTACHED + f'\ncreate_vnet = false\nvnet_id = "{VNET_ID}"\n'
+                        f'aks_subnet_id = "{AKS_SUBNET}"\nmanage_byo_subnet_service_endpoints = true',
+        "ca_all": ALL_GOOD,
+        "expect_calls": [f"network vnet subnet show --ids {AKS_SUBNET}"],
     },
     {
         "name": "a subnet with no route table needs no join",
@@ -1078,6 +1176,19 @@ CASES = [
         "dig_soa": "azure.net. 3600 IN SOA ns1-01.azure-dns.com. "
                    "azuredns-hostmaster.microsoft.com. 1 3600 300 2419200 300",
         "expect": ["[!] This machine resolves privatelink.vaultcore.azure.net from public DNS"],
+    },
+    {
+        # Your own DNS servers answering the zone are not public DNS.
+        "name": "a vault zone answered by non-Azure DNS is unconfirmed, not public",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true\n"
+                        f'keyvault_private_dns_zone_id = "{SUB_SCOPE}/resourceGroups/dns-rg/providers/'
+                        'Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"',
+        "ca_all": ALL_GOOD,
+        "dig_soa": "privatelink.vaultcore.azure.net. 300 IN SOA dns1.corp.example. "
+                   "hostmaster.corp.example. 1 3600 300 2419200 300",
+        "expect": ["[?] This machine resolves privatelink.vaultcore.azure.net from DNS servers that are neither",
+                   "nslookup <vault name>.vault.azure.net"],
+        "reject": ["from public DNS"],
     },
     {
         "name": "a Government vault checks the usgovcloudapi privatelink zone",
@@ -1580,6 +1691,7 @@ def build_case(case, index):
     for key, name in (
         ("role_assignments", "role_assignments.json"),
         ("direct_assignments", "direct_assignments.json"),
+        ("role_definition", "role_definition.json"),
         ("ca_rt", "ca_rt.json"),
     ):
         if key in case:

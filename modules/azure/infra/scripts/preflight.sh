@@ -665,6 +665,13 @@ ROLE_DEF_ATTR = "microsoft.authorization/roleassignments:roledefinitionid"
 ROLE_DEF_LIST = re.compile(
     r"roledefinitionid\]\s*(?:[a-z]+:)?guidequals\s*\{([^}]*)\}")
 GUID = re.compile(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}")
+# The negations every delegation condition carries by design: the action test
+# that scopes the clause, and the sub-operation carve-out Azure adds to it. Any
+# negation left once these are gone applies to the constraint itself.
+ACTION_NEGATIONS = (
+    re.compile(r"(?:\band\s+)?(?:\bnot\b|!)\s*suboperationmatches\s*\{[^}]*\}"),
+    re.compile(r"!\s*\(\s*actionmatches\s*\{[^}]*\}\s*\)"),
+)
 
 
 def load(path, default):
@@ -839,10 +846,18 @@ def condition_role_list(condition, action):
     if action in flat:
         clause = action_clause(flat, action)
     elif "actionmatches" in flat:
+        # Constrains only other actions; conditioned() skips these before here.
         return None
     else:
         clause = flat
     if clause is None or "notequals" in clause or "principalid" in clause:
+        return None
+    # A negated GuidEquals is an exclusion list in another spelling: read as an
+    # allow-list it inverts the verdict, so leave it to plan and apply.
+    rest = clause
+    for pattern in ACTION_NEGATIONS:
+        rest = pattern.sub(" ", rest)
+    if "!" in rest or re.search(r"\bnot\b", rest):
         return None
     guids = {guid.replace("-", "")
              for found in ROLE_DEF_LIST.findall(clause) for guid in GUID.findall(found)}
@@ -899,7 +914,13 @@ def conditioned(index, scope, action):
         if not isinstance(assignment, dict):
             continue
         condition = " ".join((assignment.get("condition") or "").split())
-        if ROLE_DEF_ATTR not in condition.lower():
+        lowered = condition.lower()
+        if ROLE_DEF_ATTR not in lowered:
+            continue
+        # A condition that tests other actions and not this one, such as one on
+        # delete alone, leaves this action unconstrained, so it cannot explain
+        # this refusal.
+        if "actionmatches" in lowered and action not in lowered:
             continue
         if not scope_covers(assignment.get("scope") or "", scope):
             continue
@@ -911,15 +932,13 @@ def conditioned(index, scope, action):
             continue
         guids, widened = parsed
         widened_any = widened_any or widened
-        hit = set(needed) & guids
-        if hit:
-            covered |= hit
-            role_guid = (assignment.get("roleDefinitionId") or "").rsplit("/", 1)[-1]
-            name = (assignment.get("roleDefinitionName")
-                    or ROLE_NAMES.get(role_guid.replace("-", "").lower())
-                    or "role %s" % (role_guid or "?"))
-            holders.append("%s held at %s" % (name, assignment.get("scope") or "?"))
-            conditions.append(condition)
+        role_guid = (assignment.get("roleDefinitionId") or "").rsplit("/", 1)[-1]
+        name = (assignment.get("roleDefinitionName")
+                or ROLE_NAMES.get(role_guid.replace("-", "").lower())
+                or "role %s" % (role_guid or "?"))
+        holders.append("%s held at %s" % (name, assignment.get("scope") or "?"))
+        conditions.append(condition)
+        covered |= set(needed) & guids
     if not found:
         return None
     missing = ", ".join(name for guid, name in needed.items() if guid not in covered)
@@ -1246,10 +1265,11 @@ EOF
   # refusal surfaces as LinkedAuthorizationFailed partway through the apply.
   # Terraform writes aks_subnet_id when it attaches the NAT gateway it creates
   # (aks_nat_gateway = "create") or adds service endpoints
-  # (manage_byo_subnet_service_endpoints = true). Neither checkAccess call above
-  # asks about the route table, which usually sits in the network owner's group.
-  if [ "$CREATE_VNET" = "false" ] && [ "$RBAC_CREATE_CLUSTER" != "false" ] \
-    && { [ "$(_tfvar aks_nat_gateway || echo "none")" = "create" ] \
+  # (manage_byo_subnet_service_endpoints = true, which applies to an attached
+  # cluster too). Neither checkAccess call above asks about the route table,
+  # which usually sits in the network owner's group.
+  if [ "$CREATE_VNET" = "false" ] \
+    && { { [ "$RBAC_CREATE_CLUSTER" != "false" ] && [ "$(_tfvar aks_nat_gateway || echo "none")" = "create" ]; } \
       || [ "$(_tfvar manage_byo_subnet_service_endpoints || echo "false")" = "true" ]; }; then
     if ! printf '%s\n' "$AKS_SUBNET_ID" \
       | grep -qE '^/subscriptions/[0-9a-fA-F-]+/resourceGroups/[A-Za-z0-9._()-]+/providers/Microsoft\.Network/virtualNetworks/[A-Za-z0-9._-]+/subnets/[A-Za-z0-9._-]+$'; then
@@ -1279,15 +1299,55 @@ PY
         -o json > "${RBAC_TMP}/response-rt.json" 2>/dev/null || true
       # Direct assignments only, no --include-groups: the lab case this catches
       # had the action through a group and was still refused 13 minutes later,
-      # while a direct grant worked within minutes.
-      DIRECT_RT=$(az role assignment list --scope "$RT_ID" --include-inherited \
-        --assignee-object-id "$PRINCIPAL_ID" --fill-principal-name false -o json 2>/dev/null \
-        | python3 -c 'import json, sys
+      # while a direct grant worked within minutes. Only a direct grant whose role
+      # carries the action counts, so a Reader at the subscription does not hide
+      # a join that comes through a group. Prints how many carry it, or unknown.
+      az role assignment list --scope "$RT_ID" --include-inherited \
+        --assignee-object-id "$PRINCIPAL_ID" --fill-principal-name false -o json \
+        > "${RBAC_TMP}/direct-rt.json" 2>/dev/null || rm -f "${RBAC_TMP}/direct-rt.json"
+      DIRECT_RT=$(python3 - "${RBAC_TMP}/direct-rt.json" "$ARM" <<'PY' 2>/dev/null || true
+import fnmatch, json, subprocess, sys
+
+ACTION = "microsoft.network/routetables/join/action"
+# Built-ins decided by name; anything else is read from its definition.
+KNOWN = {"owner": True, "contributor": True, "network contributor": True, "reader": False}
+
+def carries(definition):
+    for permission in (definition.get("properties") or {}).get("permissions") or []:
+        allowed = any(fnmatch.fnmatchcase(ACTION, a.lower()) for a in permission.get("actions") or [])
+        denied = any(fnmatch.fnmatchcase(ACTION, n.lower()) for n in permission.get("notActions") or [])
+        if allowed and not denied:
+            return True
+    return False
+
 try:
-    data = json.load(sys.stdin)
-except ValueError:
-    data = None
-print(len(data) if isinstance(data, list) else "unknown")' 2>/dev/null || echo "unknown")
+    assignments = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    assignments = None
+if not isinstance(assignments, list):
+    print("unknown")
+    raise SystemExit(0)
+count = 0
+for assignment in assignments:
+    if not isinstance(assignment, dict):
+        continue
+    known = KNOWN.get((assignment.get("roleDefinitionName") or "").lower())
+    if known is None:
+        role_id = assignment.get("roleDefinitionId") or ""
+        try:
+            out = subprocess.run(
+                ["az", "rest", "--method", "get",
+                 "--url", sys.argv[2] + role_id + "?api-version=2022-04-01", "-o", "json"],
+                capture_output=True, text=True, check=True).stdout
+            known = carries(json.loads(out))
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            print("unknown")
+            raise SystemExit(0)
+    count += 1 if known else 0
+print(count)
+PY
+      )
+      [ -n "$DIRECT_RT" ] || DIRECT_RT="unknown"
       RT_DECISION=$(python3 -c 'import json, sys
 try:
     data = json.load(open(sys.argv[1]))
@@ -1299,7 +1359,9 @@ print(decisions[0].get("accessDecision") or "unknown" if decisions else "unknown
       LINKED="aks_subnet_id's route table. Terraform writes that subnet, which makes the route table part of the write"
       case "$RT_DECISION" in
         Allowed)
-          if [ "$DIRECT_RT" = "0" ]; then
+          if [ "$DIRECT_RT" = "unknown" ]; then
+            unconfirmed "routeTables/join/action is permitted on ${RT_ID}, but this identity's direct assignments there could not be read, so whether it comes only through a group is unknown. A group grant may take a long time to apply; a direct assignment worked within minutes in testing."
+          elif [ "$DIRECT_RT" = "0" ]; then
             warn "routeTables/join/action is permitted on ${RT_ID}, but only through a group. Terraform's write to aks_subnet_id needs it, and a group grant may take a long time to apply; a direct assignment worked within minutes in testing. Ask for Network Contributor (or a role carrying routeTables/join/action) on the route table, assigned to this identity directly."
           else
             pass "routeTables/join/action is permitted on ${RT_ID}, which Terraform's write to aks_subnet_id needs"
@@ -1796,8 +1858,8 @@ else
     # it through the management plane, so this machine's DNS does not decide
     # whether apply reaches it.
     case "$AZURE_ENVIRONMENT" in
-      usgovernment) KV_ZONE="privatelink.vaultcore.usgovcloudapi.net" ;;
-      *)            KV_ZONE="privatelink.vaultcore.azure.net" ;;
+      usgovernment) KV_ZONE="privatelink.vaultcore.usgovcloudapi.net"; KV_HOST_SUFFIX="vault.usgovcloudapi.net" ;;
+      *)            KV_ZONE="privatelink.vaultcore.azure.net"; KV_HOST_SUFFIX="vault.azure.net" ;;
     esac
     KV_ZONE_SUPPLIED=$(_tfvar keyvault_private_dns_zone_id || echo "")
     KV_RUN_HINT="Run make preflight from a machine in the VNet or a peered network to check."
@@ -1808,6 +1870,8 @@ else
       unconfirmed "Could not resolve ${KV_ZONE} from this machine (3-second limit), so whether it sees a private zone is unknown. ${KV_RUN_HINT}"
     elif printf '%s\n' "$KV_SOA" | grep -qi 'azureprivatedns\.net'; then
       pass "This machine resolves ${KV_ZONE} from an Azure private DNS zone, so it reaches the vault over its private endpoint"
+    elif ! printf '%s\n' "$KV_SOA" | grep -qiE 'azure-dns\.(com|net|org|info|us)'; then
+      unconfirmed "This machine resolves ${KV_ZONE} from DNS servers that are neither an Azure private zone nor Azure's public DNS, likely your own forwarders. Whether they return the vault's private endpoint is unknown: once the vault exists, nslookup <vault name>.${KV_HOST_SUFFIX} should return an address in the private-endpoint subnet."
     elif [ -n "$KV_ZONE_SUPPLIED" ]; then
       warn "This machine resolves ${KV_ZONE} from public DNS, not the private zone in keyvault_private_dns_zone_id, so it will reach for the vault's public endpoint, which the private endpoint turns off. ${KV_RUN_HINT}"
     else
