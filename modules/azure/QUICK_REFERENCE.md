@@ -198,7 +198,7 @@ sizing_profile = "dev"                # single-replica, minimal resources (dev/C
 sizing_profile = "minimum"            # absolute minimum (demos, very low resource budget)
 ```
 
-Then re-run `make init-values && make deploy`.
+Then run `make apply`, which sizes the namespace ResourceQuota to the profile, and `make init-values && make deploy`.
 
 ---
 
