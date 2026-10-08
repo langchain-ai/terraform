@@ -4,12 +4,13 @@
 # NOTICE: Actively being tested and subject to change. Not officially supported by LangChain.
 # See LICENSE at the root of this repository for full license text.
 
-# test-quickstart-state.sh — Unit tests for the quickstart wizard's resume layer and --yes.
+# test-quickstart-state.sh — Unit tests for the quickstart wizard's resume layer, --yes, and quick setup.
 #
 # Covers the checkpoint round-trip (_save_state / _load_state), the whitelist
 # that guards it, and seeding the wizard from an existing terraform.tfvars
-# (_load_tfvars), and the files --yes writes or refuses. Runs entirely in a temp directory — no Azure, no terraform,
-# no prompts, and your own terraform.tfvars is never read or written.
+# (_load_tfvars), the files --yes writes or refuses, and quick setup driven from
+# scripted answers. Runs entirely in a temp directory — no Azure, no terraform,
+# and your own terraform.tfvars is never read or written.
 #
 # Usage:
 #   ./infra/scripts/test-quickstart-state.sh
@@ -326,6 +327,44 @@ qs --profile prod
 eq "a flag without --yes is refused"  "$?" "2"
 qs --bogus
 eq "an unknown flag is refused"       "$?" "2"
+
+echo "10. Quick setup takes the profile's defaults from a few answers"
+# Answers on stdin, one per line: quick y/n, profile, cloud, subscription, name,
+# region, domain (then email when a domain is given), and the review choice.
+quick() { rm -rf "$NI"; mkdir -p "$NI"; printf '%s\n' "$@" | INFRA_DIR="$NI" "$SRC" > qs.out 2>&1; }
+
+quick "" 1 "" "" "" "" "" ""
+eq "quick dev exits 0"                "$?" "0"
+has "quick dev name is the profile"   name_prefix       '"dev"'
+has "quick dev D4s_v5 nodes"          default_node_pool_vm_size '"Standard_D4s_v5"'
+has "quick dev serves HTTP"           tls_certificate_source '"none"'
+has "quick dev DNS label"             dns_label         '"langsmith-dev"'
+has "quick dev Postgres in-cluster"   postgres_source   '"in-cluster"'
+has "quick dev purgeable vault"       keyvault_purge_protection false
+[[ ! -e "$NI/.quickstart-state" ]] && ok "quick leaves no checkpoint" || bad "quick left a checkpoint"
+
+# A bad domain and a bad email are each asked again, not written.
+quick "" 2 "" "" "" westus2 Bad_Domain langsmith.example.com notanemail ops@example.com ""
+eq "quick prod exits 0"               "$?" "0"
+eq "bad domain and email re-asked"    "$(grep -c 'ERROR' qs.out)" "2"
+has "quick prod location"             location          '"westus2"'
+has "quick prod D8s_v5 nodes"         default_node_pool_vm_size '"Standard_D8s_v5"'
+has "quick prod Postgres external"    postgres_source   '"external"'
+has "quick prod purge protection"     keyvault_purge_protection true
+has "quick prod sizing"               sizing_profile    '"production"'
+has "quick domain switches TLS on"    tls_certificate_source '"letsencrypt"'
+has "quick email written"             letsencrypt_email '"ops@example.com"'
+
+# Switching to dev at review moves every section quick setup did not ask.
+quick "" 2 "" "" "" "" "" 1 1 ""
+has "review switch keeps the name"    name_prefix       '"prod"'
+has "review switch resizes nodes"     default_node_pool_vm_size '"Standard_D4s_v5"'
+has "review switch moves Postgres"    postgres_source   '"in-cluster"'
+has "review switch drops purge prot." keyvault_purge_protection false
+
+# Declining quick setup opens the full wizard, which asks for the tags.
+quick n 1 "" "" "" "" "" "" ""
+grep -q 'Environment tag (blank' qs.out && ok "n opens the full section 2" || bad "n skipped the tag prompts"
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

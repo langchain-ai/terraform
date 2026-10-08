@@ -13,10 +13,11 @@ Install the [required tools](#required-tools) and [authenticate](#authenticate) 
 ```bash
 cd terraform/modules/azure
 
-# 1. Generate terraform.tfvars (interactive wizard — subscription, region, ingress, TLS, sizing)
+# 1. Generate terraform.tfvars. Quick setup asks for the profile, subscription, name, region, and an
+#    optional domain, then takes the profile's defaults. Answer n to walk through all 10 sections.
 make quickstart
 
-# No prompts: dev defaults (in-cluster Postgres, Redis, ClickHouse; HTTP), current az subscription
+# No prompts, for CI and scripts: dev defaults (in-cluster Postgres, Redis, ClickHouse; HTTP)
 # make quickstart ARGS="--yes"
 # Production sizing and HTTPS on your own domain (flags: infra/scripts/quickstart.sh --help)
 # make quickstart ARGS="--yes --profile prod --location westus2 --domain langsmith.example.com --email ops@example.com"
@@ -590,12 +591,13 @@ All commands run from `terraform/azure/`. Run `make help` to see the list at any
 ### `make quickstart` — Interactive setup wizard
 **Script:** `infra/scripts/quickstart.sh`
 
-Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scratch. Mirrors the AWS quickstart experience.
+Guided questionnaire that generates `infra/terraform.tfvars` from scratch. Mirrors the AWS quickstart experience.
 
+- Quick setup is the default. It asks for the profile, cloud, subscription, deployment name, region, and an optional custom domain with its Let's Encrypt email, then takes the profile's defaults for everything else and opens the review summary. Answer `n` to walk through all 10 sections instead
 - Sections: profile → subscription/naming → networking → AKS sizing → ingress controller → DNS/TLS → backend services → Key Vault → sizing profile → security add-ons
 - Each section has explanatory context (`_hint` lines) to guide the right decision — cost estimates, compatibility notes, trade-offs
 - Between sections: `Enter` continues, `b` goes back a section, `r` jumps to the review summary, `q` saves and quits
-- After all sections: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
+- After the last section, or after quick setup: shows a full summary table and lets you re-run any section by number before writing the file (no need to restart from scratch)
 - Answers are checkpointed to `infra/.quickstart-state` after every section, so quitting or losing the terminal costs at most the section you were on. The next run offers to resume, and every prompt is prefilled with your previous answer. The checkpoint is deleted once `terraform.tfvars` is written
 - Re-running against an existing `terraform.tfvars` offers to load its values as answers, so you can change one setting without retyping the rest
 - Auto-detects Azure subscription ID from `az account show`
@@ -603,16 +605,16 @@ Guided 10-section questionnaire that generates `infra/terraform.tfvars` from scr
 - Supports all 5 ingress options: `envoy-gateway` (default), `nginx`, `istio-addon`, `istio`, `agic`
 - Incompatibility warnings for `istio-addon + letsencrypt` and `agic + letsencrypt` with option to go back
 - Prints a Next Steps summary with exact commands, including dns01 NS delegation steps when applicable
-- `ARGS="--yes"` skips the prompts and writes the profile's defaults. Dev runs Postgres, Redis, and ClickHouse in-cluster over HTTP at `langsmith-<name>.<region>.cloudapp.azure.com`; `--profile prod` uses external Postgres and Redis with production sizing. `--subscription`, `--location`, `--name`, `--dns-label`, and `--domain` with `--email` override the defaults; `--help` lists them. It writes new deployments only and refuses to run over an existing `terraform.tfvars` or checkpoint
+- `ARGS="--yes"` is for CI and scripts: it skips the prompts and writes the profile's defaults. Dev runs Postgres, Redis, and ClickHouse in-cluster over HTTP at `langsmith-<name>.<region>.cloudapp.azure.com`; `--profile prod` uses external Postgres and Redis with production sizing. `--subscription`, `--location`, `--name`, `--dns-label`, and `--domain` with `--email` override the defaults; `--help` lists them. It writes new deployments only and refuses to run over an existing `terraform.tfvars` or checkpoint
 
 > **Run this first** on a new deployment. After it completes, run `source infra/scripts/setup-env.sh` to set up secrets.
 
 ---
 
-### `make test-quickstart` — Unit tests for the wizard's resume layer and `--yes`
+### `make test-quickstart` — Unit tests for the wizard's resume layer, `--yes`, and quick setup
 **Script:** `infra/scripts/test-quickstart-state.sh`
 
-Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, seeding the wizard from an existing `terraform.tfvars`, and the `--yes` path's output and input validation. Runs in a temp directory with no Azure calls and no prompts, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
+Exercises the checkpoint round-trip, the `_STATE_KEYS` whitelist that guards it, seeding the wizard from an existing `terraform.tfvars`, the `--yes` path's output and input validation, and quick setup driven by scripted answers. Runs in a temp directory with no Azure calls, so it is safe to run anywhere; your own `terraform.tfvars` is never read or written.
 
 One check is worth knowing about when you rename a wizard variable: `_load_state` silently drops any key missing from `_STATE_KEYS`, so a rename that lands in `_load_tfvars` but not in the whitelist loses that answer on resume with no error. The test scrapes every variable `_load_tfvars` assigns and fails if one is not whitelisted.
 
