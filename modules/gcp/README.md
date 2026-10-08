@@ -391,6 +391,10 @@ helm upgrade langsmith langchain/langsmith \
 | `enable_fleet` | `false` | no | Enable Fleet standalone (chart v0.15+) — replaces `enable_agent_builder`; does not require `enable_deployments` |
 | `enable_standalone_polly` | `false` | no | Enable Polly standalone (chart v0.15+) — replaces `enable_polly`; does not require `enable_deployments` |
 | `enable_standalone_insights` | `false` | no | Enable Insights standalone (chart v0.15+) — replaces `enable_insights`; does not require `enable_deployments` |
+| `enable_engine` | `false` | no | Enable Engine (chart v0.17+) — requires `enable_sandboxes`; shares the standalone Insights deployment and database. See [ENGINE.md](ENGINE.md) |
+| `engine_vertex_workload_identity` | `false` | no | With `enable_engine`: run Engine's models on Vertex AI through a dedicated service account and Workload Identity |
+| `engine_sandbox_tenant_id` | `""` | when the shared organization has more than one workspace | Workspace ID that owns Engine's sandboxes |
+| `engine_intelligence_base_url` | `""` | no | Empty keeps the chart default (usage reporting only); `https://beacon.aws.langchain.com/intelligence` runs Engine's models on LangSmith Intelligence |
 | `enable_agent_builder` | `false` | no | Deprecated (chart v0.15+) — `config.agentBuilder.*` is superseded by `enable_fleet` (`fleet.*`) |
 | `enable_insights` | `false` | no | Enables Insights without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_insights` is preferred |
 | `enable_polly` | `false` | no | Enables Polly without the dedicated Cloud SQL/Memorystore wiring; `enable_standalone_polly` is preferred |

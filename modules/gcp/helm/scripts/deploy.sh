@@ -17,9 +17,10 @@
 #   8. langsmith-values-fleet.yaml                      — Fleet standalone v0.15+ (if enable_fleet)
 #   9. langsmith-values-standalone-polly.yaml           — Polly standalone v0.15+ (if enable_standalone_polly)
 #  10. langsmith-values-standalone-insights.yaml        — Insights standalone v0.15+ (if enable_standalone_insights)
-#  11. langsmith-values-smithdb-sizing.yaml             — SmithDB sizing and placement, from terraform output (if enable_smithdb)
-#  12. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
-#  13. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
+#  11. langsmith-values-engine.yaml                     — Engine v0.17+ (if enable_engine)
+#  12. langsmith-values-smithdb-sizing.yaml             — SmithDB sizing and placement, from terraform output (if enable_smithdb)
+#  13. langsmith-values-smithdb.yaml                    — SmithDB overlay (if enable_smithdb)
+#  14. langsmith-values-smithdb-overrides.yaml          — SmithDB env-specific: bucket, WI, metastore (if enable_smithdb)
 #
 # Generate values files: ./helm/scripts/init-values.sh
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -105,6 +106,20 @@ _chart_version_supports_sandboxes() {
 
   case "$version" in
     0.1[6-9].*|0.[2-9][0-9].*|[1-9].*|[1-9][0-9]*.*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Engine on your own model providers needs chart 0.17.0 or newer.
+_chart_version_supports_engine() {
+  local version
+  version="$(printf '%s' "$1" | tr -d '[:space:]')"
+  version="${version#\~>}"
+  version="${version#\~}"
+  version="${version#v}"
+
+  case "$version" in
+    0.1[7-9].*|0.[2-9][0-9].*|[1-9].*|[1-9][0-9]*.*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -207,6 +222,19 @@ _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
     echo "ERROR: enable_sandboxes = true requires chart 0.16.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
+    exit 1
+  fi
+fi
+
+_enable_engine=false
+_tfvar_is_true "enable_engine" && _enable_engine=true
+if [[ "$_enable_engine" == "true" ]]; then
+  if [[ "$_enable_sandboxes" != "true" ]]; then
+    echo "ERROR: enable_engine = true requires enable_sandboxes = true. Every Engine run executes in a sandbox." >&2
+    exit 1
+  fi
+  if ! _chart_version_supports_engine "$CHART_VERSION"; then
+    echo "ERROR: enable_engine = true requires chart 0.17.0 or newer; got CHART_VERSION=$CHART_VERSION." >&2
     exit 1
   fi
 fi
@@ -414,13 +442,14 @@ _tfvar_is_true "enable_polly"              && { _enable_polly=true;             
 _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;               _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;    _any_flag_set=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _any_flag_set=true; }
+_tfvar_is_true "enable_engine"             && _any_flag_set=true
 _tfvar_is_true "enable_sandboxes"          && _enable_sandboxes=true
 _tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
 
 # An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
 # addon keys falls back to loading every addon file on disk.
 for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
-          enable_fleet enable_standalone_polly enable_standalone_insights; do
+          enable_fleet enable_standalone_polly enable_standalone_insights enable_engine; do
   if [[ -n "$(_parse_tfvar "$_k")" ]]; then _any_flag_set=true; fi
 done
 
@@ -477,6 +506,10 @@ if ! _langsmith_config_env=$(
   if [[ "$_enable_polly" == "true" || "$_enable_standalone_polly" == "true" ]]; then
     printf 'polly_encryption_key=%s\n' "${TF_VAR_langsmith_polly_encryption_key:?}"
   fi
+  if [[ "$_enable_engine" == "true" ]]; then
+    printf 'engine_encryption_key=%s\n' "${TF_VAR_langsmith_engine_encryption_key:?}"
+    printf 'engine_usage_signing_secret=%s\n' "${TF_VAR_langsmith_engine_usage_signing_secret:?}"
+  fi
   if [[ "$_enable_sandboxes" == "true" ]]; then
     printf 'sandbox_callback_signing_jwk=%s\n' "${TF_VAR_sandbox_callback_signing_jwk:?}"
   fi
@@ -504,6 +537,8 @@ VALUES_ARGS+=(
   --set-string "fleet.encryptionKey="
   --set-string "insights.encryptionKey="
   --set-string "polly.encryptionKey="
+  --set-string "engine.encryptionKey="
+  --set-string "engine.usageSigningSecret="
   --set-string "sandboxes.callbackSigningJwk="
   --set-string "config.oauth.oauthClientSecret="
 )
@@ -517,6 +552,7 @@ _addon_gate=(
   "fleet:fleet:$_enable_fleet"
   "standalone-polly:standalone_polly:$_enable_standalone_polly"
   "standalone-insights:standalone_insights:$_enable_standalone_insights"
+  "engine:engine:$_enable_engine"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"

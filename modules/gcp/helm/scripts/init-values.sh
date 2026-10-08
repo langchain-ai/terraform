@@ -14,7 +14,8 @@
 #                                     tls_certificate_source, langsmith_domain,
 #                                     postgres_source, redis_source
 #   - terraform output              → storage_bucket_name, workload_identity_annotation,
-#                                     cluster_name, ingress_ip
+#                                     cluster_name, ingress_ip,
+#                                     engine_service_account_email
 #
 # Prompts for (on first run):
 #   - Admin email
@@ -26,6 +27,7 @@
 #   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
 #   - values/langsmith-values-agent-*.yaml      (based on product tier)
 #   - values/langsmith-values-insights.yaml     (if Insights tier chosen)
+#   - values/langsmith-values-engine.yaml       (if enable_engine)
 #   - values/langsmith-values-smithdb-sizing.yaml    (if enable_smithdb; from terraform output)
 #   - values/langsmith-values-smithdb.yaml           (if enable_smithdb)
 #   - values/langsmith-values-smithdb-overrides.yaml (if enable_smithdb)
@@ -411,6 +413,7 @@ _enable_usage_telemetry=false
 _enable_fleet=false
 _enable_standalone_polly=false
 _enable_standalone_insights=false
+_enable_engine=false
 _enable_sandboxes=false
 _enable_sso_oidc=false
 _tfvars_drive_addons=false
@@ -420,6 +423,8 @@ _tfvars_drive_addons=false
 _agent_builder_key="${TF_VAR_langsmith_agent_builder_encryption_key:-}"
 _insights_key="${TF_VAR_langsmith_insights_encryption_key:-}"
 _polly_key="${TF_VAR_langsmith_polly_encryption_key:-}"
+_engine_key="${TF_VAR_langsmith_engine_encryption_key:-}"
+_engine_signing_secret="${TF_VAR_langsmith_engine_usage_signing_secret:-}"
 
 # Read enable_* flags from terraform.tfvars if set
 _tfvar_is_true "enable_deployments"        && { _enable_deployments=true;        _tfvars_drive_addons=true; }
@@ -431,13 +436,14 @@ _tfvar_is_true "enable_fleet"              && { _enable_fleet=true;             
 _tfvar_is_true "enable_standalone_polly"   && { _enable_standalone_polly=true;   _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_standalone_insights" && { _enable_standalone_insights=true; _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_sandboxes"          && { _enable_sandboxes=true;          _tfvars_drive_addons=true; }
+_tfvar_is_true "enable_engine"             && { _enable_engine=true;             _tfvars_drive_addons=true; }
 _tfvar_is_true "enable_sso_oidc"           && _enable_sso_oidc=true
 
 # An explicit `enable_* = false` is still a flag. Only a tfvars with none of the
 # addon keys falls back to the interactive prompt or the files already on disk.
 for _k in enable_deployments enable_agent_builder enable_insights enable_polly \
           enable_usage_telemetry enable_fleet enable_standalone_polly \
-          enable_standalone_insights enable_sandboxes; do
+          enable_standalone_insights enable_sandboxes enable_engine; do
   if [[ -n "$(_parse_tfvar "$_k")" ]]; then _tfvars_drive_addons=true; fi
 done
 
@@ -453,6 +459,12 @@ if [[ "$_enable_sandboxes" == "true" ]]; then
     echo "ERROR: enable_sandboxes requires Workload Identity. Set enable_gcp_iam_module = true and re-run terraform apply." >&2
     exit 1
   fi
+fi
+
+# Engine runs every analysis in a sandbox, and the chart rejects Engine without them.
+if [[ "$_enable_engine" == "true" && "$_enable_sandboxes" != "true" ]]; then
+  echo "ERROR: enable_engine requires enable_sandboxes = true in terraform.tfvars." >&2
+  exit 1
 fi
 
 echo "Product addons (from terraform.tfvars):"
@@ -553,6 +565,18 @@ if [[ "$_tfvars_drive_addons" == "true" ]]; then
     echo "  ✗ Standalone Insights (enable_standalone_insights = false)"
   fi
 
+  if [[ "$_enable_engine" == "true" ]]; then
+    _engine_file="$VALUES_DIR/langsmith-values-engine.yaml"
+    if [[ ! -f "$_engine_file" ]]; then
+      cp "$EXAMPLES_DIR/langsmith-values-engine.yaml" "$_engine_file"
+      echo "  ✔ Engine (created langsmith-values-engine.yaml; keys written to values-overrides.yaml)"
+    else
+      echo "  ✔ Engine (existing; keys in values-overrides.yaml)"
+    fi
+  else
+    echo "  ✗ Engine (enable_engine = false)"
+  fi
+
   if [[ "$_enable_sandboxes" == "true" ]]; then
     echo "  ✔ Sandboxes (sandbox-host; JuiceFS config secret: ${SANDBOX_JUICEFS_CSI_CONFIG_SECRET_NAME})"
   else
@@ -614,6 +638,7 @@ else
   [[ -f "$VALUES_DIR/langsmith-values-fleet.yaml" ]]               && echo "  ✔ Fleet (existing file)"               || echo "  ✗ Fleet"
   [[ -f "$VALUES_DIR/langsmith-values-standalone-polly.yaml" ]]    && echo "  ✔ Standalone Polly (existing file)"    || echo "  ✗ Standalone Polly"
   [[ -f "$VALUES_DIR/langsmith-values-standalone-insights.yaml" ]] && echo "  ✔ Standalone Insights (existing file)" || echo "  ✗ Standalone Insights"
+  [[ -f "$VALUES_DIR/langsmith-values-engine.yaml" ]]              && echo "  ✔ Engine (existing file)"              || echo "  ✗ Engine"
 fi
 
 if [[ "$_tfvars_drive_addons" != "true" ]]; then
@@ -1018,6 +1043,66 @@ insights:
   fi
 fi
 
+# ── Engine (enable_engine) ────────────────────────────────────────────────────
+# langsmith-values-engine.yaml turns Engine on and wires its shared deployment to
+# the Insights database. The keys come from setup-env.sh (Secret Manager); deploy.sh
+# also puts them in the langsmith-config Secret. With engine_vertex_workload_identity,
+# Engine's API server and queue run as the Engine service account from terraform
+# apply and call Vertex AI in this project.
+_engine_block=""
+if [[ "$_enable_engine" == "true" ]]; then
+  if [[ -z "$_engine_key" || -z "$_engine_signing_secret" ]]; then
+    echo "ERROR: TF_VAR_langsmith_engine_encryption_key and TF_VAR_langsmith_engine_usage_signing_secret must be set when enable_engine = true." >&2
+    echo "       Run: source infra/scripts/setup-env.sh" >&2
+    exit 1
+  fi
+  _engine_extra=""
+  _engine_tenant=$(_parse_tfvar "engine_sandbox_tenant_id") || _engine_tenant=""
+  _engine_intel_url=$(_parse_tfvar "engine_intelligence_base_url") || _engine_intel_url=""
+  if [[ -n "$_engine_tenant" ]]; then
+    _engine_extra+="
+  sandboxTenantId: \"${_engine_tenant}\""
+  fi
+  if [[ -n "$_engine_intel_url" ]]; then
+    _engine_extra+="
+  intelligenceBaseUrl: \"${_engine_intel_url}\""
+  fi
+  _engine_wi_block=""
+  if _tfvar_is_true "engine_vertex_workload_identity"; then
+    ENGINE_GSA=$(terraform -chdir="$INFRA_DIR" output -raw engine_service_account_email 2>/dev/null) || ENGINE_GSA=""
+    if [[ -z "$ENGINE_GSA" ]]; then
+      echo "ERROR: engine_vertex_workload_identity = true but terraform output engine_service_account_email is empty." >&2
+      echo "       Run: make apply" >&2
+      exit 1
+    fi
+    _engine_extra+="
+  workloadIdentityProviders:
+    - vertex"
+    _engine_wi_block="
+engineInsightsAgent:
+  apiServer:
+    serviceAccount:
+      annotations:
+        iam.gke.io/gcp-service-account: \"${ENGINE_GSA}\"
+    deployment:
+      extraEnv:
+        - name: GOOGLE_CLOUD_PROJECT
+          value: \"${_project_id}\"
+  queue:
+    serviceAccount:
+      annotations:
+        iam.gke.io/gcp-service-account: \"${ENGINE_GSA}\"
+    deployment:
+      extraEnv:
+        - name: GOOGLE_CLOUD_PROJECT
+          value: \"${_project_id}\""
+  fi
+  _engine_block="
+engine:
+  encryptionKey: \"${_engine_key}\"
+  usageSigningSecret: \"${_engine_signing_secret}\"${_engine_extra}${_engine_wi_block}"
+fi
+
 # ── SSO/OIDC login (optional) ─────────────────────────────────────────────────
 # WARNING: enable only after the initial install has completed with basic auth
 # and you've confirmed org-admin access — flipping this on before an admin
@@ -1153,6 +1238,7 @@ ${_external_services_block}
 ${_fleet_key_block}
 ${_standalone_polly_key_block}
 ${_standalone_insights_key_block}
+${_engine_block}
 ${_agent_defaults_block}
 YAML
 
