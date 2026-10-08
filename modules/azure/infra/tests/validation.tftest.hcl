@@ -60,6 +60,7 @@ run "enums_reject_an_unlisted_value" {
     agic_network_contributor_scope = "resourcegroup"
     terraform_principal_type       = "user"
     redis_clustering_policy        = "Enterprise"
+    sizing_profile                 = "production_large"
   }
 
   expect_failures = [
@@ -73,6 +74,7 @@ run "enums_reject_an_unlisted_value" {
     var.agic_network_contributor_scope,
     var.terraform_principal_type,
     var.redis_clustering_policy,
+    var.sizing_profile,
   ]
 }
 

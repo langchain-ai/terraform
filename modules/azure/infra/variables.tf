@@ -1567,6 +1567,12 @@ variable "sizing_profile" {
   type        = string
   description = "Helm sizing overlay. One of: minimum | dev | production | production-large. Read by helm/scripts/init-values.sh and deploy.sh. Terraform uses it to size the namespace ResourceQuota."
   default     = "production"
+
+  # "default" is the scripts' value for the chart's base values with no overlay.
+  validation {
+    condition     = contains(["default", "minimum", "dev", "production", "production-large"], var.sizing_profile)
+    error_message = "sizing_profile must be 'default', 'minimum', 'dev', 'production', or 'production-large'."
+  }
 }
 
 # tflint-ignore: terraform_unused_declarations
