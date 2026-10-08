@@ -19,3 +19,14 @@ variable "enable_apis" {
   type        = bool
   default     = true
 }
+
+variable "custom_role_id_prefix" {
+  description = "Prefix of the custom role IDs the module creates in the project (Provisioner, ProjectIamGranter, ServiceAccountUser)."
+  type        = string
+  default     = "langsmithByoc"
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9_.]{3,40}$", var.custom_role_id_prefix))
+    error_message = "custom_role_id_prefix must be 3 to 40 letters, digits, underscores or periods."
+  }
+}

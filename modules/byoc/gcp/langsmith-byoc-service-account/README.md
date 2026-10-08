@@ -6,7 +6,8 @@ Provisions the service account in **your GCP project** that the LangSmith contro
 
 | Resource | Purpose |
 |----------|---------|
-| `var.service_account_id` (default `langsmith-byoc-provisioner`) | Holds the project roles that data plane provisioning needs. |
+| `var.service_account_id` (default `langsmith-byoc-provisioner`) | The identity the control plane provisions data planes as. |
+| Custom roles `<prefix>Provisioner`, `<prefix>ProjectIamGranter`, `<prefix>ServiceAccountUser` | Exactly the permissions data plane provisioning and teardown use, bound to the service account. See [Permissions](#permissions). |
 | Token Creator on that service account | Lets `var.crossplane_service_account`, the LangSmith control plane, impersonate it. No other LangSmith identity is trusted. |
 | Project APIs | Enables the APIs data planes use. Set `enable_apis = false` if you manage the project's APIs elsewhere. |
 
@@ -44,7 +45,13 @@ Share the `provisioner_service_account` output with LangChain when you create a 
 
 ## Permissions
 
-The provisioner holds project-level admin roles for Cloud SQL, Compute, GKE, Cloud DNS, IAM, Private Service Connect, Memorystore, Secret Manager, Service Directory, service networking, and Cloud Storage. Deploy into a project dedicated to LangSmith.
+The provisioner holds three custom roles, not predefined admin roles:
+
+- **`<prefix>Provisioner`**: the permissions for creating, updating and deleting data plane resources. These are the VPC, subnets, Cloud NAT, the Private Service Connect endpoint, GKE, Cloud SQL, Memorystore, Cloud Storage, Cloud DNS, Secret Manager and the data plane service accounts. It also has the list and get permissions that teardown needs to confirm deletions. The list comes from provisioning and tearing down data planes with nothing more.
+- **`<prefix>ProjectIamGranter`**: reads and sets the project IAM policy. The binding has an IAM condition so the provisioner can only add or remove grants of the project roles the data planes use: `artifactregistry.reader`, `cloudsql.admin`, `cloudsql.client`, `container.admin`, `container.defaultNodeServiceAccount`, `dns.admin`, `redis.dbConnectionUser` and `secretmanager.secretAccessor`.
+- **`<prefix>ServiceAccountUser`**: `iam.serviceAccounts.actAs`, so GKE nodes and workloads can run as the data plane service accounts. IAM conditions are not evaluated for actAs, so this binding is unconditional.
+
+Deploy into a project dedicated to LangSmith. Custom role IDs are unique per project, so set `custom_role_id_prefix` when more than one copy of the module targets a project.
 
 ## Inputs
 
@@ -54,6 +61,7 @@ The provisioner holds project-level admin roles for Cloud SQL, Compute, GKE, Clo
 | `crossplane_service_account` | LangSmith control plane Crossplane service account that impersonates the provisioner. | required |
 | `service_account_id` | Account ID of the provisioner service account. | `langsmith-byoc-provisioner` |
 | `enable_apis` | Enable the GCP APIs that data planes use. | `true` |
+| `custom_role_id_prefix` | Prefix of the custom role IDs the module creates. | `langsmithByoc` |
 
 ## Outputs
 
