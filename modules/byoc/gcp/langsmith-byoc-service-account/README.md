@@ -51,7 +51,11 @@ The provisioner holds three custom roles, not predefined admin roles:
 - **`<prefix>ProjectIamGranter`**: reads and sets the project IAM policy. The binding has an IAM condition so the provisioner can only add or remove grants of the project roles the data planes use: `artifactregistry.reader`, `cloudsql.admin`, `cloudsql.client`, `container.admin`, `container.defaultNodeServiceAccount`, `dns.admin`, `redis.dbConnectionUser` and `secretmanager.secretAccessor`.
 - **`<prefix>ServiceAccountUser`**: `iam.serviceAccounts.actAs`, so GKE nodes and workloads can run as the data plane service accounts. IAM conditions are not evaluated for actAs, so this binding is unconditional.
 
-Deploy into a project dedicated to LangSmith. Custom role IDs are unique per project, so set `custom_role_id_prefix` when more than one copy of the module targets a project.
+### Use a project that holds only LangSmith resources
+
+The project is the boundary of the provisioner's access, as the data plane resource group is on Azure. GCP IAM conditions cannot limit service account permissions by account name; they see only the account's numeric ID. So the provisioner's service account permissions (`iam.serviceAccounts.setIamPolicy`, `actAs`) apply to every service account in the project. Through them, the provisioner could act as any of those accounts. Keep other workloads and service accounts out of the project.
+
+Custom role IDs are unique per project, so set `custom_role_id_prefix` when more than one copy of the module targets a project.
 
 ## Inputs
 
