@@ -260,7 +260,7 @@ Some landing zones' Azure Policy requires a private API server, Entra ID with Az
 
 ```hcl
 aks_private_cluster_enabled = true
-aks_private_dns_zone_id     = "/subscriptions/.../resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.<region>.azmk8s.io"
+aks_private_dns_zone_id     = "/subscriptions/.../resourceGroups/<dns-rg>/providers/Microsoft.Network/privateDnsZones/privatelink.<region>.azmk8s.io"   # Government: privatelink.<region>.cx.aks.containerservice.azure.us
 
 aks_entra_only                   = true
 aks_entra_admin_group_object_ids = ["<entra-group-object-id>"]
@@ -279,7 +279,7 @@ aks_control_plane_identity = "user"
 | `aks_control_plane_identity_manage_grants` | Whether Terraform grants the user-assigned identity its roles. Defaults to `create_vnet`: Terraform grants on a VNet it built, and leaves a supplied VNet's grants to its owner |
 | `aks_network_owner_checks` | Default `true`. `false` skips two plan-time reads of a supplied network: the route table's default route, and the control-plane identity's direct role assignments. Use it when the deploying identity cannot read the route table, or when the owner grants the identity through group membership, which the direct-assignment check cannot see. Azure still checks both at create |
 
-In Azure Government, confirm the private zone's name before you create your own. Microsoft's private-endpoint DNS table gives `privatelink.<region>.azmk8s.io`, but Government API servers use the `cx.aks.containerservice.azure.us` suffix. With `aks_private_dns_zone_id = "System"`, AKS creates the zone in the node resource group, and that zone's name is the one to copy.
+The zone's name has to match the cloud and `location`, and plan refuses one that doesn't: `privatelink.<location>.azmk8s.io` in commercial Azure, and `privatelink.<location>.cx.aks.containerservice.azure.us` in Azure Government (for example `privatelink.usgovvirginia.cx.aks.containerservice.azure.us`). Either may carry a subzone prefix of up to 32 letters, digits or hyphens, and `private.` replaces `privatelink.` with API Server VNet integration. Microsoft's private-endpoint DNS table lists `privatelink.<region>.azmk8s.io` for Government too, but AKS in Government refuses that name at cluster create.
 
 AKS uses the user-assigned identity's roles while it creates the cluster. [PERMISSIONS.md](PERMISSIONS.md#control-plane-identity-grants) lists them and the steps for a VNet whose owner grants them.
 
