@@ -21,6 +21,7 @@ All commands run from `modules/gcp/`. Run `make help` to see all targets.
 | **3** | LangSmith Deployments — host-backend, listener, operator (optional LGP) | `make apply && make init-values && make deploy` |
 | **4** | Fleet standalone — api-server, queue, tool-server, trigger-server (chart v0.15+, no LGP required) | `make apply && make init-values && make deploy` |
 | **5** | Standalone Polly + Insights — dedicated api-server + queue each (chart v0.15+, no LGP required) | `make apply && make init-values && make deploy` |
+| **6** | Engine — on the standalone Insights api-server + queue (chart v0.17+, requires Sandboxes; see [ENGINE.md](ENGINE.md)) | `make apply && make init-values && make deploy` |
 
 Each pass builds on the previous. Verify pods are healthy before enabling the next pass.
 
@@ -91,6 +92,10 @@ enable_deployments = true
 enable_fleet               = true   # standalone Agent Builder (replaces enable_agent_builder)
 enable_standalone_polly    = true   # standalone Polly        (replaces enable_polly)
 enable_standalone_insights = true   # standalone Insights     (replaces enable_insights)
+
+# Engine (chart v0.17+; requires enable_sandboxes = true; see ENGINE.md)
+enable_engine                   = true
+engine_vertex_workload_identity = true   # Engine's models on Vertex AI through Workload Identity
 
 # Usage telemetry (optional)
 enable_usage_telemetry = true

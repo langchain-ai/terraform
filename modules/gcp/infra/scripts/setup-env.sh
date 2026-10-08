@@ -506,6 +506,14 @@ _sm_secret "insights-encryption-key" "TF_VAR_langsmith_insights_encryption_key" 
 _sm_secret "polly-encryption-key" "TF_VAR_langsmith_polly_encryption_key" \
   "$_fernet_gen" "" "true"
 
+# Engine: a Fernet key for the run payloads LangSmith passes to Engine, and at
+# least 32 random characters that sign Engine's usage reports.
+_sm_secret "engine-encryption-key" "TF_VAR_langsmith_engine_encryption_key" \
+  "$_fernet_gen" "" "true"
+
+_sm_secret "engine-usage-signing-secret" "TF_VAR_langsmith_engine_usage_signing_secret" \
+  "openssl rand -hex 32 | tr -d '\n'" "" "true"
+
 # ── Unreadable secrets ────────────────────────────────────────────────────────
 # A stored value may exist for these, so stop before the summary. With the
 # variable unset, init-values.sh can generate a new apiKeySalt or jwtSecret.
@@ -558,6 +566,8 @@ echo "  deploy_key        = (hidden — SM: ${_sm_prefix}-deployments-encryption
 echo "  ab_key            = (hidden — SM: ${_sm_prefix}-agent-builder-encryption-key)"
 echo "  insights_key      = (hidden — SM: ${_sm_prefix}-insights-encryption-key)"
 echo "  polly_key         = (hidden — SM: ${_sm_prefix}-polly-encryption-key)"
+echo "  engine_key        = (hidden — SM: ${_sm_prefix}-engine-encryption-key)"
+echo "  engine_signing    = (hidden — SM: ${_sm_prefix}-engine-usage-signing-secret)"
 echo "  sm_prefix         = ${_sm_prefix}"
 echo ""
 echo "Next:  terraform -chdir=infra init"

@@ -210,6 +210,27 @@ redis_prevent_destroy   = true # Set true to block accidental Redis destruction
 # sandbox_service_url_base_url = "https://sandbox-services.example.com"
 
 #------------------------------------------------------------------------------
+# Optional: Engine (chart v0.17+) — see ENGINE.md
+#------------------------------------------------------------------------------
+# Engine finds recurring failures in your traces, diagnoses them against your
+# code, and proposes fixes. It needs enable_sandboxes = true and a license with
+# the Engine entitlement. It shares a deployment, database, and Memorystore DB
+# with standalone Insights. Its keys come from infra/scripts/setup-env.sh.
+#
+# enable_engine = true
+# Run Engine's models on Vertex AI in this project through Workload Identity.
+# Creates <name_prefix>-<environment>-engine with roles/aiplatform.user.
+# Provider API keys (Anthropic, OpenAI, and others) are added in LangSmith instead,
+# under Settings > Engine > Model providers.
+# engine_vertex_workload_identity = true
+# Required when the shared organization has more than one workspace: the
+# workspace that owns Engine's sandboxes. Use a workspace reserved for Engine.
+# engine_sandbox_tenant_id = "00000000-0000-0000-0000-000000000000"
+# Empty keeps the chart default, which only records usage. To run Engine's
+# models on LangSmith Intelligence instead:
+# engine_intelligence_base_url = "https://beacon.aws.langchain.com/intelligence"
+
+#------------------------------------------------------------------------------
 # Optional: Storage Configuration
 #------------------------------------------------------------------------------
 storage_ttl_short_days = 14    # Short-lived trace TTL (ttl_s/ prefix, default: 14 days)

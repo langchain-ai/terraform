@@ -136,6 +136,8 @@ The deployment creates the following service accounts and grants. Project-level 
 | `roles/iam.workloadIdentityUser` | SmithDB service account | The SmithDB Kubernetes service account | `enable_smithdb = true` |
 | `roles/storage.objectViewer` | LangSmith bucket | SmithDB service account | `smithdb_migration_enabled = true` |
 | `roles/cloudsql.client` | Project | SmithDB service account | `smithdb_metastore_use_auth_proxy = true` |
+| `roles/aiplatform.user` | Project | `<name_prefix>-<environment>-engine` service account | `enable_engine = true` and `engine_vertex_workload_identity = true` |
+| `roles/iam.workloadIdentityUser` | `<name_prefix>-<environment>-engine` service account | Engine's API server and queue Kubernetes service accounts | `enable_engine = true` and `engine_vertex_workload_identity = true` |
 | `roles/cloudkms.cryptoKeyEncrypterDecrypter` | KMS key | Cloud Storage service agent | `smithdb_bucket_kms_key` is set |
 
 `roles/secretmanager.secretAccessor` is granted whenever the IAM module is on, including when `enable_secret_manager_module = false`. The grant is project-wide, so the LangSmith service account can read every secret in the project.

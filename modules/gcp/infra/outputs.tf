@@ -502,3 +502,8 @@ output "next_steps" {
     (HMAC key required — create in GCP Console: Storage → Settings → Interoperability)
   EOT
 }
+
+output "engine_service_account_email" {
+  description = "Google service account for Engine's Vertex AI access. init-values.sh writes it as the iam.gke.io/gcp-service-account annotation on engineInsightsAgent.apiServer and .queue. Empty unless enable_engine and engine_vertex_workload_identity are on."
+  value       = local.engine_vertex_enabled ? google_service_account.engine[0].email : ""
+}
