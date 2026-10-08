@@ -1229,7 +1229,8 @@ resource "kubectl_manifest" "smithdb_nodepool_compute" {
 # matches takes precedence over the chart's "/" catch-all per Gateway API
 # merge/precedence rules (longer prefix wins), without touching the chart's
 # own route. timeouts.request: 0s disables the request timeout for just
-# these path prefixes; every other path keeps Envoy Gateway's default.
+# these path prefixes; every other path keeps the Gateway's request timeout,
+# which helm/scripts/deploy.sh sets to the frontend's proxyReadTimeout.
 #
 # kubectl_manifest (not kubernetes_manifest) for the same reason as the
 # SmithDB Karpenter CRs above: it defers schema validation to apply time, so

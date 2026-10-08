@@ -31,7 +31,6 @@ infra/.admin_email
 infra/modules/**/external-ip.txt
 infra/modules/**/gateway-class.yaml
 infra/modules/**/gateway.yaml
-infra/modules/**/gateway-timeout-policy.yaml
 infra/modules/**/reference-grant.yaml
 infra/modules/**/certificate.yaml
 infra/modules/**/letsencrypt-issuer.yaml

@@ -861,6 +861,53 @@ if ! helm upgrade --install "$RELEASE_NAME" langchain/langsmith \
   exit 1
 fi
 
+# ── Envoy Gateway request timeout ─────────────────────────────────────────────
+# Envoy cuts a request at 15 s by default, and the chart's HTTPRoute sets no
+# timeout. Give the Gateway the frontend nginx's proxy_read_timeout instead,
+# read from the release's computed values so an override carries through.
+# ingress_type reads "not installed" when install_ingress = false.
+_ingress_type=$(terraform -chdir="$INFRA_DIR" output -raw ingress_type 2>/dev/null) || _ingress_type=""
+if [[ "$_ingress_type" == "envoy" ]]; then
+  _release_values=$(helm get values "$RELEASE_NAME" -n "$NAMESPACE" --all)
+  # Prints <key> from the top-level <section> of the release values.
+  _release_value() {
+    awk -v section="$1:" -v key="  $2:" '
+      $0 == section { in_section = 1; next }
+      /^[^ ]/ { in_section = 0 }
+      in_section && index($0, key) == 1 {
+        v = substr($0, length(key) + 1); gsub(/^[[:space:]]+|"/, "", v); print v; exit
+      }
+    ' <<<"$_release_values"
+  }
+  _gw_name=$(_release_value gateway name)
+  _gw_namespace=$(_release_value gateway namespace)
+  _request_timeout=$(_release_value frontend proxyReadTimeout)
+  [[ "$_request_timeout" =~ ^[0-9]+$ ]] && _request_timeout="${_request_timeout}s"
+  if [[ "$_request_timeout" =~ ^([0-9]{1,5}(h|m|s|ms)){1,4}$ ]]; then
+    kubectl apply -f - >/dev/null <<EOF
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: ${_gw_name}-timeout
+  namespace: ${_gw_namespace:-$NAMESPACE}
+  labels:
+    app.kubernetes.io/instance: ${RELEASE_NAME}
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ${_gw_name}
+  timeout:
+    http:
+      requestTimeout: ${_request_timeout}
+EOF
+    echo "Envoy Gateway request timeout: ${_request_timeout} (frontend.proxyReadTimeout)"
+  else
+    echo "WARNING: frontend.proxyReadTimeout '${_request_timeout}' is not a duration the Gateway API accepts," >&2
+    echo "         so Envoy keeps its 15 s request timeout. Set it in seconds, such as \"300\"." >&2
+  fi
+fi
+
 echo ""
 echo "LangSmith deployed. Waiting for core pods..."
 echo ""

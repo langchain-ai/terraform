@@ -188,6 +188,8 @@ if helm list -n "$NAMESPACE" --filter "^${RELEASE_NAME}$" --output json 2>/dev/n
 else
   echo "Helm release '$RELEASE_NAME' not found in namespace '$NAMESPACE' — skipping."
 fi
+# deploy.sh creates the Gateway's timeout policy outside the release.
+kubectl delete backendtrafficpolicy -A -l "app.kubernetes.io/instance=${RELEASE_NAME}" --ignore-not-found >/dev/null 2>&1 || true
 echo ""
 
 # ── Clean up operator-managed resources ──────────────────────────────────────
