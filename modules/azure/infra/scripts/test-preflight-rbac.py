@@ -188,6 +188,65 @@ def eligibility(role, scope=SUB_SCOPE):
 
 DENY = {"id": "deny-1", "displayName": "Landing zone RBAC lock"}
 
+# The roles the default fixture assigns: blob storage always, and both Key Vault
+# grants because create_keyvault defaults to true.
+STORAGE_BLOB_CONTRIB = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+DEFAULT_ROLES = [
+    STORAGE_BLOB_CONTRIB,
+    "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",  # Key Vault Secrets Officer
+    "4633458b-17de-408a-b874-0445c86b69e6",  # Key Vault Secrets User
+]
+RBAC_ADMIN_GUID = "f58310d9-a9f6-439a-9e8d-f62e7b41a168"
+
+
+def abac_role_list(roles):
+    """The delegation condition: write and delete only for the listed roles."""
+    listed = ", ".join(roles)
+    return (
+        "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+        "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+        "ForAnyOfAnyValues:GuidEquals{%s})) AND "
+        "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR "
+        "(@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+        "ForAnyOfAnyValues:GuidEquals{%s}))" % (listed, listed)
+    )
+
+
+def rbac_admin(condition, scope=SUB_SCOPE):
+    """One row of `az role assignment list -o json`: RBAC Administrator, held
+    through a group, with a condition."""
+    return {
+        "scope": scope,
+        "roleDefinitionId": f"{SUB_SCOPE}/providers/Microsoft.Authorization/roleDefinitions/{RBAC_ADMIN_GUID}",
+        "roleDefinitionName": "Role Based Access Control Administrator",
+        "principalId": GROUP_OID,
+        "principalType": "Group",
+        "condition": condition,
+        "conditionVersion": "2.0",
+    }
+
+
+# A supplied VNet that AGIC grants Network Contributor on.
+AGIC_SUBNET = f"{VNET_ID}/subnets/agic"
+AGIC_ON_BYO_VNET = "\n".join([
+    "create_vnet        = false",
+    f'vnet_id            = "{VNET_ID}"',
+    'ingress_controller = "agic"',
+    f'agic_subnet_id     = "{AGIC_SUBNET}"',
+])
+
+# A supplied node subnet that Terraform attaches its own NAT gateway to.
+AKS_SUBNET = f"{VNET_ID}/subnets/aks"
+RT_ID = f"{SUB_SCOPE}/resourceGroups/platform-network-rg/providers/Microsoft.Network/routeTables/hub-udr"
+RT_JOIN = "Microsoft.Network/routeTables/join/action"
+NAT_ON_BYO_SUBNET = "\n".join([
+    "create_vnet       = false",
+    f'vnet_id           = "{VNET_ID}"',
+    f'aks_subnet_id     = "{AKS_SUBNET}"',
+    'aks_outbound_type = "userAssignedNATGateway"',
+    'aks_nat_gateway   = "create"',
+])
+
 # What checkNameAvailability returns for a name that exists — byte-identical
 # whether the resource belongs to this deployment or to a stranger's tenant.
 TAKEN = {
@@ -369,7 +428,7 @@ CASES = [
         "groups_fail": True,
         "ca_all": response(write=False, deny=DENY),
         "expect": [
-            "[!] roleAssignments/write is denied at",
+            "[?] roleAssignments/write is denied at",
             'deny assignment "Landing zone RBAC lock"',
             "This denial could not be confirmed because group-based permissions were unavailable.",
         ],
@@ -418,7 +477,7 @@ CASES = [
         "ca_all": response(assignment=granted(condition=ABAC)),
         "expect": [
             "[!] That grant carries an ABAC condition",
-            "The modules assign: Storage Blob Data Contributor",
+            "This configuration assigns: Storage Blob Data Contributor",
             "GuidEquals",
         ],
     },
@@ -738,19 +797,253 @@ CASES = [
         "expect_calls": [f"{SUB_SCOPE}/resourceGroups/langsmith-rg-legacy/providers"],
     },
     {
-        "name": "a bring-your-own VNet is checked as its own scope",
-        "tfvars_extra": f'vnet_id = "{VNET_ID}"',
+        # AGIC's Network Contributor grant lands on the supplied VNet, so that is
+        # a scope the deployment writes a role assignment at, and roleAssignments
+        # is all it is asked about there.
+        "name": "a bring-your-own VNet the deployment grants a role on is checked as its own scope",
+        "tfvars_extra": AGIC_ON_BYO_VNET,
         "ca_all": ALL_GOOD,
         "ca_vnet": response(write=False, deny=DENY),
         "expect": [f"[✗] roleAssignments/write is denied at {VNET_ID}"],
         "expect_calls": [VNET_ID],
+        "assert_actions": [ROLE_WRITE, ROLE_DELETE],
+        "reject_actions": ["Microsoft.ContainerService/managedClusters/write",
+                           "Microsoft.Network/virtualNetworks/write"],
     },
     {
         "name": "a malformed vnet_id is dropped rather than interpolated",
-        "tfvars_extra": 'vnet_id = "https://evil.example.com/x"',
+        "tfvars_extra": AGIC_ON_BYO_VNET.replace(VNET_ID, "https://evil.example.com/x"),
         "ca_all": ALL_GOOD,
         "expect": ["[!] terraform.tfvars: vnet_id is not a VNet resource ID"],
         "reject_calls": ["evil.example.com"],
+    },
+    {
+        # With create_vnet = false the module joins the VNet's subnets and never
+        # writes the VNet, so asking about virtualNetworks/write reported a
+        # blocker that apply never meets. With no grant on the VNet either, the
+        # VNet is not a scope at all.
+        "name": "a supplied VNet is not checked for virtualNetworks/write",
+        "tfvars_extra": f'create_vnet = false\nvnet_id = "{VNET_ID}"',
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.ContainerService/managedClusters/write"],
+        "reject_actions": ["Microsoft.Network/virtualNetworks/write"],
+        "reject_calls": [VNET_ID],
+        "exit_code": 0,
+    },
+    {
+        "name": "a VNet Terraform builds is still checked for virtualNetworks/write",
+        "ca_all": ALL_GOOD,
+        "assert_actions": ["Microsoft.Network/virtualNetworks/write"],
+    },
+    # The delegation pattern: RBAC Administrator, conditioned so it may assign
+    # only listed roles. checkAccess asks without naming a role, so ARM refuses
+    # write and delete at every scope, and apply then succeeds.
+    {
+        "name": "a role-list ABAC condition naming every assigned role passes",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list(DEFAULT_ROLES))],
+        "eligibilities": [eligibility("Owner")],
+        "expect": [
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE} for Storage Blob "
+            "Data Contributor, Key Vault Secrets Officer, Key Vault Secrets User through a "
+            "conditioned assignment (Role Based Access Control Administrator held at",
+            f"[✓] roleAssignments/delete permitted at {SUB_SCOPE} and {RG_SCOPE}",
+            "All checks passed.",
+        ],
+        "expect_calls": ["--include-groups --fill-principal-name false -o json"],
+        "reject": ["[✗]", "[?]", "Eligible in PIM"],
+        "exit_code": 0,
+    },
+    {
+        "name": "a role-list ABAC condition missing an assigned role fails and names it",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list([STORAGE_BLOB_CONTRIB]))],
+        "expect": [
+            "[✗] roleAssignments/write at",
+            "does not list Key Vault Secrets Officer, Key Vault Secrets User, which this configuration assigns",
+            "[!] roleAssignments/delete at",
+        ],
+        "reject": ["through a conditioned assignment"],
+        "exit_code": 1,
+    },
+    {
+        # Turning off what assigns the missing roles is the other way through,
+        # and the list follows the configuration.
+        "name": "the role list follows the configuration",
+        "tfvars_extra": "keyvault_manage_terraform_admin_assignment = false\n"
+                        "keyvault_manage_managed_identity_assignment = false",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list([STORAGE_BLOB_CONTRIB]))],
+        "expect": ["for Storage Blob Data Contributor through a conditioned assignment"],
+        "reject": ["[✗]"],
+    },
+    {
+        # An exclusion list cannot be read as an allow-list, so the refusal
+        # becomes a question for plan and apply, and the run does not fail on it.
+        "name": "an ABAC condition preflight cannot read is unconfirmed and does not fail the run",
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(
+            "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR "
+            "(@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] "
+            "ForAnyOfAllValues:GuidNotEquals{%s}))" % OWNER_GUID)],
+        "expect": [
+            "[?] roleAssignments/write at",
+            "No check failed.",
+            "check(s) could not be confirmed; make plan and make apply test them exactly.",
+        ],
+        "reject": ["[✗]", "Fix the issues above"],
+        "exit_code": 0,
+    },
+    {
+        # A conditioned grant held on a different resource group says nothing
+        # about this one, so the refusal stands.
+        "name": "a conditioned grant at an unrelated scope does not excuse a refusal",
+        "ca_all": response(write=False),
+        "role_assignments": [rbac_admin(abac_role_list(DEFAULT_ROLES),
+                                        scope=f"{SUB_SCOPE}/resourceGroups/elsewhere")],
+        "expect": ["[✗] roleAssignments/write is not permitted at"],
+    },
+    # Attaching a NAT gateway writes aks_subnet_id, and a route table on that
+    # subnet turns the write into a linked one that needs routeTables/join/action.
+    {
+        "name": "a refused route table join fails with the LinkedAuthorizationFailed explanation",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, False)],
+        "expect": [
+            f"[✗] routeTables/join/action is not permitted on {RT_ID}",
+            "LinkedAuthorizationFailed",
+        ],
+        "expect_calls": [f"network vnet subnet show --ids {AKS_SUBNET}", f"{RT_ID}/providers"],
+        "exit_code": 1,
+    },
+    {
+        "name": "a route table join granted only through a group warns",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "expect": [
+            f"[!] routeTables/join/action is permitted on {RT_ID}, but only through a group",
+            "a direct assignment worked within minutes in testing",
+        ],
+        "exit_code": 0,
+    },
+    {
+        "name": "a route table join granted directly passes",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "subnet_route_table": RT_ID,
+        "ca_rt": [decision(RT_JOIN, True, granted(scope=RT_ID))],
+        "direct_assignments": [{"scope": RT_ID, "roleDefinitionName": "Network Contributor"}],
+        "expect": [f"[✓] routeTables/join/action is permitted on {RT_ID}"],
+        "reject": ["only through a group"],
+    },
+    {
+        "name": "a subnet with no route table needs no join",
+        "tfvars_extra": NAT_ON_BYO_SUBNET,
+        "ca_all": ALL_GOOD,
+        "expect": ["[✓] aks_subnet_id has no route table"],
+        "reject_calls": ["routeTables"],
+    },
+    {
+        "name": "no NAT gateway to attach means no route table check",
+        "tfvars_extra": f'create_vnet = false\nvnet_id = "{VNET_ID}"\naks_subnet_id = "{AKS_SUBNET}"',
+        "ca_all": ALL_GOOD,
+        "reject_calls": ["network vnet subnet show"],
+    },
+    {
+        # Azure's family for a size is not always the one its name suggests. The
+        # transform gives standardDASv6Family; list-skus is the authority.
+        "name": "the quota family comes from list-skus when it answers",
+        "tfvars_extra": "\n".join([
+            'default_node_pool_vm_size   = "Standard_D8as_v6"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_skus": [("Standard_D8as_v6", "standardDav6Family"),
+                    ("Standard_D2ds_v4", "standardDDSv4Family")],
+        "vm_usage": [("standardDav6Family", 0, 32), ("standardDDSv4Family", 0, 10), ("cores", 0, 100)],
+        "expect": ["[✓] standardDav6Family quota in eastus: 32 of 32 vCPUs free (1-2 × Standard_D8as_v6 needs up to 16)"],
+        "reject": ["standardDASv6Family", "reports no"],
+        "expect_calls": ["vm list-skus -l eastus"],
+    },
+    {
+        "name": "a quota family with no usage row is unconfirmed, not failed",
+        "tfvars_extra": "\n".join([
+            'default_node_pool_vm_size   = "Standard_D8as_v6"',
+            "default_node_pool_min_count = 1",
+            "default_node_pool_max_count = 2",
+            "additional_node_pools       = {}",
+        ]),
+        "ca_all": ALL_GOOD,
+        "vm_usage": [("standardDDSv4Family", 0, 10), ("cores", 0, 100)],
+        "expect": ["[?] eastus reports no standardDASv6Family quota entry"],
+        "exit_code": 0,
+    },
+    {
+        # az identity show prints /resourcegroups/; the variable's validation
+        # ignores case and the provider does not.
+        "name": "a lower-case resourcegroups in the control-plane identity ID fails with the fix",
+        "tfvars_extra": "\n".join([
+            'aks_control_plane_identity = "user"',
+            f'aks_control_plane_identity_id = "{SUB_SCOPE}/resourcegroups/id-rg/providers/'
+            'Microsoft.ManagedIdentity/userAssignedIdentities/cp"',
+        ]),
+        "ca_all": ALL_GOOD,
+        "expect": [
+            "[✗] terraform.tfvars: aks_control_plane_identity_id has /resourcegroups/ in lower case",
+            f"Change it to /resourceGroups/: {SUB_SCOPE}/resourceGroups/id-rg/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/cp",
+        ],
+        "exit_code": 1,
+    },
+    {
+        "name": "a lower-case resourcegroups in a subnet ID warns",
+        "tfvars_extra": f'create_vnet = false\nvnet_id = "{VNET_ID}"\n'
+                        f'aks_subnet_id = "{AKS_SUBNET.replace("resourceGroups", "resourcegroups")}"',
+        "ca_all": ALL_GOOD,
+        "expect": ["[!] terraform.tfvars: aks_subnet_id has /resourcegroups/ in lower case"],
+        "reject": ["aks_control_plane_identity_id has"],
+    },
+    {
+        "name": "a vault privatelink zone answered by a private zone passes",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true",
+        "ca_all": ALL_GOOD,
+        "dig_soa": "privatelink.vaultcore.azure.net. 10 IN SOA azureprivatedns.net. "
+                   "azureprivatedns-host.microsoft.com. 1 3600 300 2419200 10",
+        "expect": ["[✓] This machine resolves privatelink.vaultcore.azure.net from an Azure private DNS zone"],
+    },
+    {
+        "name": "a vault privatelink zone that cannot be resolved is unconfirmed",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true",
+        "ca_all": ALL_GOOD,
+        "expect": [
+            "[?] Could not resolve privatelink.vaultcore.azure.net from this machine",
+            "from a machine in the VNet",
+        ],
+        "exit_code": 0,
+    },
+    {
+        "name": "a supplied vault zone answered from public DNS warns",
+        "tfvars_extra": "keyvault_private_endpoint_enabled = true\n"
+                        f'keyvault_private_dns_zone_id = "{SUB_SCOPE}/resourceGroups/dns-rg/providers/'
+                        'Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"',
+        "ca_all": ALL_GOOD,
+        "dig_soa": "azure.net. 3600 IN SOA ns1-01.azure-dns.com. "
+                   "azuredns-hostmaster.microsoft.com. 1 3600 300 2419200 300",
+        "expect": ["[!] This machine resolves privatelink.vaultcore.azure.net from public DNS"],
+    },
+    {
+        "name": "a Government vault checks the usgovcloudapi privatelink zone",
+        "tfvars_extra": 'keyvault_private_endpoint_enabled = true\nazure_environment = "usgovernment"\n'
+                        'redis_source = "in-cluster"',
+        "cloud_name": "AzureUSGovernment",
+        "ca_all": ALL_GOOD,
+        "expect_calls": ["SOA privatelink.vaultcore.usgovcloudapi.net"],
     },
     {
         "name": "an unresolvable principal skips the RBAC check entirely",
@@ -1242,8 +1535,19 @@ def build_case(case, index):
         (fixture / "amr_regions.json").write_text(json.dumps(case["amr_regions"]))
     if "nodes" in case:
         (fixture / "nodes.json").write_text(json.dumps({"items": case["nodes"]}))
+    for key, name in (
+        ("role_assignments", "role_assignments.json"),
+        ("direct_assignments", "direct_assignments.json"),
+        ("ca_rt", "ca_rt.json"),
+    ):
+        if key in case:
+            (fixture / name).write_text(json.dumps(case[key]))
+    if "vm_skus" in case:
+        (fixture / "vm_skus").write_text(
+            "".join(f"{size}\t{family}\n" for size, family in case["vm_skus"])
+        )
     for key in ("kv_deleted", "redis_hit", "dns_held", "cloud_name", "tf_azure_environment",
-                "kube_ctx"):
+                "kube_ctx", "subnet_route_table", "dig_soa"):
         if key in case:
             (fixture / key).write_text(str(case[key]))
 
@@ -1266,7 +1570,7 @@ def build_case(case, index):
 
     for flag in ("no_graph", "ca_fail", "ca_rg_fail", "ca_sub_fail", "ca_vnet_fail",
                  "assignments_fail", "groups_fail", "pg_caps_fail", "pg_caps_stderr",
-                 "group_missing"):
+                 "group_missing", "subnet_show_fail"):
         if case.get(flag):
             (fixture / flag).write_text("1")
 
@@ -1357,7 +1661,7 @@ def run_case(case, index):
     if problems:
         rendered = [
             line for line in output.splitlines()
-            if any(mark in line for mark in ("[✓]", "[!]", "[✗]"))
+            if any(mark in line for mark in ("[✓]", "[!]", "[✗]", "[?]"))
             and "Microsoft." not in line.split("]")[-1][:30]
         ]
         problems.append("--- rendered ---")

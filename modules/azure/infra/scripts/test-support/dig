@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stub `dig` for preflight.sh's private endpoint DNS check. Models one call:
+#   dig ... SOA <zone> -> $FIXTURE_DIR/dig_soa, else no reply (dig's exit 9)
+# Anything else exits non-zero with a STUB marker, so an unmodeled call fails loudly.
+set -uo pipefail
+FIX="${FIXTURE_DIR:?FIXTURE_DIR must be set}"
+ARGS="$*"
+case "$ARGS" in
+  *" SOA "*)
+    printf 'dig %s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/dig_soa" ]; then cat "$FIX/dig_soa"; exit 0; fi
+    echo ";; connection timed out; no servers could be reached"; exit 9 ;;
+esac
+echo "STUB: unmodeled dig call: $ARGS" >&2
+exit 97

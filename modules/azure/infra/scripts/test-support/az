@@ -89,6 +89,8 @@ case "$ARGS" in
 
     if [ -f "$FIX/ca_fail" ]; then exit 1; fi
     case "$ARGS" in
+      *routeTables*)
+        pick "$FIX/ca_rt.json" ;;
       *virtualNetworks*)
         if [ -f "$FIX/ca_vnet_fail" ]; then exit 1; fi
         pick "$FIX/ca_vnet.json" "$FIX/ca_all.json" ;;
@@ -100,12 +102,26 @@ case "$ARGS" in
         pick "$FIX/ca_sub.json" "$FIX/ca_all.json" ;;
     esac ;;
   "role assignment list --scope"*)
-    # Only the fallback path reaches this, and only for the role-name list.
+    # Three callers: the fallback's role-name list, the ABAC re-check of a
+    # refused scope (groups included), and the route table's direct grants.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
     if [ -f "$FIX/assignments_fail" ]; then exit 1; fi
     case "$ARGS" in
       *roleDefinitionName*) emit_file "$FIX/held" "" ;;
+      *"--include-groups"*"-o json"*) emit_file "$FIX/role_assignments.json" "[]" ;;
+      *"-o json"*) emit_file "$FIX/direct_assignments.json" "[]" ;;
       *) echo "STUB: unexpected role assignment query: $ARGS" >&2; exit 1 ;;
     esac ;;
+  "vm list-skus -l "*)
+    # size<TAB>family rows. Without a fixture the call fails and preflight
+    # derives the family from the size name.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/vm_skus" ]; then cat "$FIX/vm_skus"; else exit 1; fi ;;
+  "network vnet subnet show --ids "*)
+    # The route table on aks_subnet_id; empty when it has none.
+    printf '%s\n' "$ARGS" >> "$FIX/calls.log"
+    if [ -f "$FIX/subnet_show_fail" ]; then exit 1; fi
+    emit_file "$FIX/subnet_route_table" "" ;;
   *checkNameAvailability*|*CheckDnsNameAvailability*)
     # Global name checks. Default is "free" so only ownership cases need a
     # fixture.
