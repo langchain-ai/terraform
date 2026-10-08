@@ -316,9 +316,18 @@ _role_line() {
     "Private DNS Zone Contributor")        echo "b12aa53e-6015-4669-85d0-8515ebb3ae7f $1" ;;
   esac
 }
+# ASSIGNED_ROLES is every role apply assigns, for messages; DEPLOY_ROLES the
+# ones it assigns at the subscription or deployment group, which is what a
+# condition at those scopes has to admit. A role granted only on a supplied
+# network (_net_grant) is held to that network's scope alone.
 ASSIGNED_ROLES=$(_role_line "Storage Blob Data Contributor")
-_assigns() { ASSIGNED_ROLES="${ASSIGNED_ROLES}
-$(_role_line "$1")"; }
+DEPLOY_ROLES="$ASSIGNED_ROLES"
+_assigns() {
+  ASSIGNED_ROLES="${ASSIGNED_ROLES}
+$(_role_line "$1")"
+  DEPLOY_ROLES="${DEPLOY_ROLES}
+$(_role_line "$1")"
+}
 [ "$KV_ADMIN_GRANT" = "false" ] || _assigns "Key Vault Secrets Officer"
 [ "$(_tfvar keyvault_manage_managed_identity_assignment || _tfvar create_keyvault || echo "true")" = "false" ] \
   || _assigns "Key Vault Secrets User"
@@ -336,7 +345,8 @@ fi
 # checked below anyway.
 NET_GRANTS=""
 _net_grant() {
-  _assigns "$3"
+  ASSIGNED_ROLES="${ASSIGNED_ROLES}
+$(_role_line "$3")"
   NET_GRANTS="${NET_GRANTS}$(printf '%s\t%s\t%s' "$1" "$2" "$3")
 "
 }
@@ -380,6 +390,7 @@ if [ "$RBAC_CREATE_CLUSTER" != "false" ] && [ "$(_tfvar ingress_load_balancer ||
 fi
 # One line per role, and the names alone for messages.
 ASSIGNED_ROLES=$(printf '%s\n' "$ASSIGNED_ROLES" | awk 'NF && !seen[$0]++')
+DEPLOY_ROLES=$(printf '%s\n' "$DEPLOY_ROLES" | awk 'NF && !seen[$0]++')
 ASSIGNED_ROLE_NAMES=$(printf '%s\n' "$ASSIGNED_ROLES" | cut -d' ' -f2- | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $0 }')
 
 if [ -n "$PRINCIPAL_ID" ]; then
@@ -541,7 +552,7 @@ PY
       printf '%s' "$NET_GRANTS" | awk -F'\t' -v s="$SCOPE" '$2 == s { print $3 }' | sort -u \
         | while IFS= read -r ROLE; do _role_line "$ROLE"; done > "${RBAC_TMP}/roles-${SCOPE_COUNT}.txt"
     else
-      printf '%s\n' "$ASSIGNED_ROLES" > "${RBAC_TMP}/roles-${SCOPE_COUNT}.txt"
+      printf '%s\n' "$DEPLOY_ROLES" > "${RBAC_TMP}/roles-${SCOPE_COUNT}.txt"
     fi
     az rest --method post \
       --url "${ARM}${SCOPE}/providers/Microsoft.Authorization/checkAccess?api-version=2018-09-01-preview" \
@@ -589,7 +600,8 @@ PY
       --assignee-object-id "$PRINCIPAL_ID" --include-groups \
       --fill-principal-name false -o json \
       > "${RBAC_TMP}/assignments-${REFUSED_INDEX}.json" 2>/dev/null \
-      || rm -f "${RBAC_TMP}/assignments-${REFUSED_INDEX}.json"
+      || { rm -f "${RBAC_TMP}/assignments-${REFUSED_INDEX}.json"
+           : > "${RBAC_TMP}/assignments-${REFUSED_INDEX}.failed"; }
   done <<EOF
 $RBAC_REFUSED
 EOF
@@ -868,11 +880,18 @@ def conditioned(index, scope, action):
     checkAccess asks without naming a role, so a grant conditioned on
     RoleDefinitionId always answers NotAllowed. Returns None when there is no
     such grant to explain the refusal, which leaves it standing, or a hashable
-    ("pass" | "fail" | "unconfirmed", detail, holders, conditions) verdict.
+    ("pass" | "fail" | "unconfirmed" | "unlisted", detail, holders, conditions)
+    verdict; "unlisted" means the principal's assignments could not be read.
     """
     assignments = load(os.path.join(tmp, "assignments-%d.json" % index), None)
     needed = roles_for(index)
-    if not isinstance(assignments, list) or not needed:
+    if not needed:
+        return None
+    # The listing that would show a conditioned grant failed, so the refusal
+    # may be the role-less question and may not; it cannot be confirmed.
+    if os.path.exists(os.path.join(tmp, "assignments-%d.failed" % index)):
+        return ("unlisted", ", ".join(needed.values()), "", ())
+    if not isinstance(assignments, list):
         return None
     covered, holders, conditions = set(), [], []
     found = unreadable = widened_any = False
@@ -1026,6 +1045,11 @@ for (deny_name, verdict), scopes in by_verdict(write_no):
                    "assignment (%s). %s." % (scope_list(scopes), verdict[1], verdict[2], NO_ROLE))
         for condition in verdict[3]:
             out.extend(principal_type_advice(condition))
+    elif verdict[0] == "unlisted":
+        out.append("unconfirmed roleAssignments/write was refused at %s, and this principal's "
+                   "role assignments there could not be listed to see whether an ABAC condition "
+                   "explains it. %s. It needs to be able to assign: %s."
+                   % (scope_list(scopes), NO_ROLE, verdict[1]))
     elif verdict[0] == "fail":
         out.append("fail roleAssignments/write at %s comes only through an ABAC condition that "
                    "lists the roles it allows (%s), and it does not list %s, which this "
@@ -1053,6 +1077,11 @@ for verdict, scopes in by_verdict(delete_no):
     elif verdict[0] == "pass":
         out.append("pass roleAssignments/delete permitted at %s for %s through a conditioned "
                    "assignment (%s)." % (scope_list(scopes), verdict[1], verdict[2]))
+    elif verdict[0] == "unlisted":
+        out.append("unconfirmed roleAssignments/delete was refused at %s, and this principal's "
+                   "role assignments there could not be listed. It matters to terraform destroy "
+                   "and to changes that replace an assignment, not to a first apply."
+                   % scope_list(scopes))
     elif verdict[0] == "fail":
         out.append("warn roleAssignments/delete at %s comes only through an ABAC condition that "
                    "does not list %s. Apply can create those assignments, but terraform destroy "

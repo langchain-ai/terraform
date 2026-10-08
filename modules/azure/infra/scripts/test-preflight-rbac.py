@@ -197,6 +197,9 @@ DEFAULT_ROLES = [
     "4633458b-17de-408a-b874-0445c86b69e6",  # Key Vault Secrets User
 ]
 RBAC_ADMIN_GUID = "f58310d9-a9f6-439a-9e8d-f62e7b41a168"
+# A central AKS private zone in another group, for the control-plane grants.
+CP_ZONE_ID = (f"{SUB_SCOPE}/resourceGroups/platform-dns-rg/providers/Microsoft.Network/"
+              "privateDnsZones/privatelink.eastus.azmk8s.io")
 
 
 def abac_role_list(roles):
@@ -893,6 +896,45 @@ CASES = [
         ],
         "reject": ["[✗]", "Fix the issues above"],
         "exit_code": 0,
+    },
+    {
+        # The listing that would show a conditioned grant failed, so the refusal
+        # may be checkAccess's role-less question; it is not confirmed either way.
+        "name": "a refusal whose assignments cannot be listed is unconfirmed, not a failure",
+        "ca_all": response(write=False, delete=False),
+        "assignments_fail": True,
+        "expect": [
+            "[?] roleAssignments/write was refused at",
+            "could not be listed to see whether an ABAC condition explains it",
+            "[?] roleAssignments/delete was refused at",
+        ],
+        "reject": ["[✗] roleAssignments/write is not permitted"],
+        "exit_code": 0,
+    },
+    {
+        # Network Contributor and Private DNS Zone Contributor are granted on the
+        # supplied VNet and zone only, so a condition at the subscription and the
+        # deployment group does not need to list them there.
+        "name": "roles granted only on a supplied network are not required at the deployment scopes",
+        "tfvars_extra": "\n".join([
+            "create_vnet = false",
+            f'vnet_id = "{VNET_ID}"',
+            'aks_control_plane_identity = "user"',
+            f'aks_control_plane_identity_id = "{SUB_SCOPE}/resourceGroups/id-rg/providers/'
+            'Microsoft.ManagedIdentity/userAssignedIdentities/cp"',
+            "aks_control_plane_identity_manage_grants = true",
+            "aks_private_cluster_enabled = true",
+            f'aks_private_dns_zone_id = "{CP_ZONE_ID}"',
+        ]),
+        "ca_all": response(write=False, delete=False),
+        "role_assignments": [rbac_admin(abac_role_list(DEFAULT_ROLES))],
+        "expect": [
+            f"[✓] roleAssignments/write permitted at {SUB_SCOPE} and {RG_SCOPE} for Storage Blob "
+            "Data Contributor, Key Vault Secrets Officer, Key Vault Secrets User through",
+            "does not list Network Contributor",
+            "does not list Private DNS Zone Contributor",
+        ],
+        "reject": [f"at {SUB_SCOPE} and {RG_SCOPE} comes only through"],
     },
     {
         # A conditioned grant held on a different resource group says nothing
