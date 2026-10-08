@@ -277,6 +277,36 @@ variable "dns_label" {
   default     = ""
 }
 
+variable "ingress_load_balancer" {
+  type        = string
+  description = "'public' or 'internal': whether the ingress controller's load balancer gets a public IP or a private one in the cluster's VNet. Validated at the root."
+  default     = "public"
+}
+
+variable "ingress_load_balancer_subnet_id" {
+  type        = string
+  description = "Subnet for the internal load balancer's private IP. Empty uses the node subnet."
+  default     = ""
+}
+
+variable "ingress_load_balancer_ip" {
+  type        = string
+  description = "Static private IPv4 address for the internal load balancer. Empty lets Azure pick one."
+  default     = ""
+}
+
+variable "ingress_load_balancer_needs_subnet_grant" {
+  type        = bool
+  description = "Whether the internal load balancer takes its IP from a subnet other than the node subnet, so the cluster identity needs a grant there. Computed by the root from inputs known at plan."
+  default     = false
+}
+
+variable "ingress_load_balancer_manage_subnet_assignment" {
+  type        = bool
+  description = "Whether Terraform grants the cluster identity Network Contributor on ingress_load_balancer_subnet_id when it is not the node subnet."
+  default     = true
+}
+
 # ── AGIC (Application Gateway Ingress Controller) ─────────────────────────────
 
 variable "subscription_id" {
@@ -325,6 +355,24 @@ variable "envoy_gateway_version" {
   type        = string
   description = "Envoy Gateway Helm chart version (e.g. 'v1.2.0'). See: https://gateway.envoyproxy.io/releases"
   default     = "v1.2.0"
+}
+
+variable "envoy_gateway_image_registry" {
+  type        = string
+  description = "Registry that mirrors Docker Hub for Envoy Gateway's controller and proxy images, with docker.io as the first path segment under it. Empty pulls from docker.io."
+  default     = ""
+}
+
+variable "envoy_proxy_default_image" {
+  type        = string
+  description = "Envoy proxy image the controller uses by default for envoy_gateway_version, without a registry (e.g. 'envoyproxy/envoy:distroless-v1.32.1'). Mirrored with envoy_gateway_image_registry."
+  default     = ""
+}
+
+variable "envoy_gateway_image_pull_secret_name" {
+  type        = string
+  description = "Pull Secret in envoy-gateway-system for the controller and proxy pods. Empty pulls without credentials."
+  default     = ""
 }
 
 # ── API server access ─────────────────────────────────────────────────────────
