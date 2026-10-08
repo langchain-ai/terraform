@@ -93,13 +93,17 @@ _parse_tfvar() {
 _project_id=""; _name_prefix=""; _environment=""; _region=""
 if [[ -f "$INFRA_DIR/terraform.tfvars" ]]; then
   _project_id=$(_parse_tfvar "project_id")
+  # Same order Terraform uses: terraform.tfvars, then TF_VAR_*, then the
+  # variables.tf default. Keep identical across the GCP scripts.
   _name_prefix=$(_parse_tfvar "name_prefix")
+  _name_prefix="${_name_prefix:-${TF_VAR_name_prefix:-ls}}"
   _environment=$(_parse_tfvar "environment")
+  _environment="${_environment:-${TF_VAR_environment:-prod}}"
   _region=$(_parse_tfvar "region")
   _region="${_region:-us-west2}"
   echo "Resolved from terraform.tfvars:"
-  echo "  name_prefix  = ${_name_prefix:-(empty)}"
-  echo "  environment  = ${_environment:-(empty)}"
+  echo "  name_prefix  = $_name_prefix"
+  echo "  environment  = $_environment"
   echo "  project_id   = ${_project_id:-(empty)}"
   echo "  region       = $_region"
 else
